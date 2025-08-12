@@ -1,10 +1,10 @@
 # PaperAgent 项目任务清单
 
 ### 第一阶段：基础架构搭建
-- [ ] 前端项目初始化 (Vue + Tailwind CSS)
+- [ ] 前端项目初始化 (Vue + Tailwind CSS + Element Plus)
 - [ ] 后端项目初始化 (Python FastAPI)
-- [ ] 数据库设计和搭建 (PostgreSQL)
 - [ ] 创建 `.env.example` 配置文件
+- [ ] 数据库设计和搭建 (PostgreSQL)
 - [ ] 基础API接口设计
 - [ ] 用户认证系统
 
