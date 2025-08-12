@@ -1,5 +1,5 @@
 # 前端
 
-Vue+Tailwind CSS+Element Plus组件
+Vue3+TDesign
 
 前端设计风格：主色调黑白色。
