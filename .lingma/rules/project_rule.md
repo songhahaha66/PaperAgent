@@ -44,6 +44,11 @@
 
 # git与记录相关
 
+- commit示例：
+  - feat(backend): 实现xxx功能
+  - fix(frontend): 修复xxx问题
+  - docs(project): 更新项目规则
+  - chore/refactor等
 - 每次实现新功能时，注意在feature/xxx上实现，而不是main上。
 - 当我认可后再提交PR。
 - 你每次不用完成太多，完成我指定给你的任务后就请让我查看一下完成情况，让我审阅一下。
