@@ -4,7 +4,8 @@
 - [ ] 前端项目初始化 (Vue + Tailwind CSS + Element Plus)
 - [ ] 后端项目初始化 (Python FastAPI)
 - [ ] 创建 `.env.example` 配置文件
-- [ ] 数据库设计和搭建 (PostgreSQL)
+- [ ] 数据库设计 (PostgreSQL)
+- [ ] 连接数据库应用设计
 - [ ] 基础API接口设计
 - [ ] 用户认证系统
 
