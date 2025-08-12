@@ -66,7 +66,7 @@ const goToLogin = () => {
 }
 
 const goToRegister = () => {
-  router.push('/login')
+  router.push('/login?mode=register')
 }
 </script>
 

@@ -78,13 +78,19 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { MailIcon, LockOnIcon } from 'tdesign-icons-vue-next'
 
 const router = useRouter()
+const route = useRoute()
 const isLogin = ref(true)
 const loading = ref(false)
+
+// 检查URL参数，如果是注册模式则自动切换
+if (route.query.mode === 'register') {
+  isLogin.value = false
+}
 
 const formData = reactive({
   email: '',
