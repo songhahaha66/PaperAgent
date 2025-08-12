@@ -44,6 +44,7 @@
 
 # git与记录相关
 
+- 使用命令行`git`和`gh`进行git操作。
 - commit示例：
   - feat(backend): 实现xxx功能
   - fix(frontend): 修复xxx问题
