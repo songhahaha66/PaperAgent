@@ -66,8 +66,7 @@ const goToLogin = () => {
 }
 
 const goToRegister = () => {
-  // 注册功能待实现
-  console.log('注册功能')
+  router.push('/login?mode=register')
 }
 </script>
 
