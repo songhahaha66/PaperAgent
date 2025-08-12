@@ -4,6 +4,7 @@ import * as TDesign from 'tdesign-vue-next'
 import App from './App.vue'
 import router from './router'
 import 'tdesign-vue-next/es/style/index.css'
+import 'tdesign-icons-vue-next/esm/style/index.css'
 
 const app = createApp(App)
 
