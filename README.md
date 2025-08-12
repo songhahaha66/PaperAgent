@@ -26,7 +26,7 @@
 
 ## 技术架构
 
-### 前端架构 (Vue + Tailwind CSS)
+### 前端架构 (Vue + TDesign)
 
 - **聊天界面**：参考ChatGPT设计，支持markdown渲染
 - **实时状态显示**：任务进度条、当前操作提示
