@@ -340,7 +340,7 @@ const router = useRouter();
 const authStore = useAuthStore();
 
 // 用户信息
-const userName = computed(() => authStore.currentUser?.value?.username || '用户');
+const userName = computed(() => authStore.currentUser?.username || '用户');
 const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
 
 // 检查用户认证状态
