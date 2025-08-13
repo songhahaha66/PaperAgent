@@ -82,7 +82,7 @@
         <div class="chat-section">
           <div class="chat-container">
             <div class="chat-messages">
-              <div v-for="message in chatMessages" :key="message.id" class="chat-message-wrapper">
+              <div v-for="(message, index) in chatMessages" :key="message.id" class="chat-message-wrapper">
                 <ChatItem
                   :role="message.role"
                   :content="message.content"
@@ -96,6 +96,19 @@
                 />
                 <div v-if="message.systemType" :class="['system-label', message.systemType]">
                   {{ getSystemName(message) }}
+                </div>
+                
+                <!-- 对话分割线 -->
+                <div 
+                  v-if="index < chatMessages.length - 1" 
+                  class="message-divider"
+                  @mouseenter="showDivider(index)"
+                  @mouseleave="hideDivider(index)"
+                >
+                  <div class="divider-line"></div>
+                  <div class="divider-icon" :class="{ 'show': hoveredDivider === index }">
+                    <t-icon name="arrow-up" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -207,6 +220,19 @@ const chatMessages = ref<ChatMessage[]>([
 
 // 输入框内容
 const inputValue = ref('')
+
+// 分割线悬停状态
+const hoveredDivider = ref<number | null>(null)
+
+// 显示分割线
+const showDivider = (index: number) => {
+  hoveredDivider.value = index
+}
+
+// 隐藏分割线
+const hideDivider = (index: number) => {
+  hoveredDivider.value = null
+}
 
 // 获取系统头像
 const getSystemAvatar = (message: ChatMessage) => {
@@ -627,5 +653,72 @@ html, body {
   background: rgba(237, 123, 47, 0.1);
   color: #ed7b2f;
   border: 1px solid rgba(237, 123, 47, 0.2);
+}
+
+/* 对话分割线样式 */
+.message-divider {
+  position: relative;
+  height: 40px;
+  margin: 12px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.message-divider:hover {
+  height: 50px;
+  margin: 6px 0;
+}
+
+.divider-line {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #e0e0e0;
+  transition: all 0.3s ease;
+}
+
+.message-divider:hover .divider-line {
+  background: #c0c0c0;
+  height: 2px;
+}
+
+.divider-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.3s ease;
+  z-index: 1;
+}
+
+.divider-icon.show {
+  opacity: 1;
+  transform: scale(1);
+  background: #f0f0f0;
+  border-color: #c0c0c0;
+}
+
+.divider-icon .t-icon {
+  font-size: 16px;
+  color: #666;
+}
+
+.message-divider:hover .divider-icon {
+  opacity: 1;
+  transform: scale(1);
+  background: #e8e8e8;
+  border-color: #b0b0b0;
 }
 </style>
