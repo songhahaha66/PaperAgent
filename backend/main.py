@@ -38,6 +38,14 @@ async def health_check():
 @app.post("/register", response_model=schemas.UserResponse)
 async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     """用户注册接口"""
+    # 检查系统配置是否允许注册
+    system_config = crud.get_system_config(db)
+    if not system_config.is_allow_register:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User registration is currently disabled"
+        )
+    
     return crud.create_user(db=db, user=user)
 
 @app.post("/login", response_model=schemas.Token)
