@@ -1,8 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
-import models, schemas, crud, auth, database
-from database import engine, get_db
+from models import models
+from schemas import schemas
+from services import crud
+from auth import auth
+from database import database
+from database.database import engine, get_db
 from fastapi.middleware.cors import CORSMiddleware
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)

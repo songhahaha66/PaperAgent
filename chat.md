@@ -15,3 +15,5 @@
 [LangQi99][08-13 21:15:00]：不是放在线上触发 是回退按钮上面
 [songhahaha66][12:19 15:30:00]：仔细阅读project_rule.md,前后端规则文件，为项目完成后端任务3：用户登录认证系统，后端需要在backend文件夹操作，请参考前端代码设计后端
 [LangQi99][08-13 22:02:00]: /home论文展示区暂时渲染这个frontend\public\main.pdf
+[songhahaha66][08:13 22:23]：项目规则文件：project_rule.md，请仔细阅读。现在后端应该非常庞大，分一下文件夹吧，main.py就放在backend文件夹就行，不用app文件夹
+[songhahaha66][08:13 22:23]：api文件夹没有意义，整个后端都是api
