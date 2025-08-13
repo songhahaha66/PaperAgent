@@ -3,7 +3,7 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 import models, schemas, crud, auth, database
 from database import engine, get_db
-
+from fastapi.middleware.cors import CORSMiddleware
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)
 
@@ -12,7 +12,17 @@ app = FastAPI(
     description="API for PaperAgent - an AI-powered paper generation system",
     version="0.1.0"
 )
+origins = [
+    "*",  # * 表示允许所有来源（生产环境最好不要用 *）
+]
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,         # 允许访问的域名列表
+    allow_credentials=True,        # 是否允许携带 cookie
+    allow_methods=["*"],           # 允许的 HTTP 方法，比如 ["GET", "POST"]
+    allow_headers=["*"],           # 允许的 HTTP 请求头
+)
 @app.get("/")
 async def root():
     return {"message": "Welcome to PaperAgent API"}

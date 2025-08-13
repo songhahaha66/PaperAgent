@@ -25,6 +25,18 @@
           </t-input>
         </t-form-item>
 
+        <t-form-item v-if="!isLogin" name="username">
+          <t-input
+            v-model="formData.username"
+            placeholder="用户名"
+            clearable
+          >
+            <template #prefix-icon>
+              <UserIcon />
+            </template>
+          </t-input>
+        </t-form-item>
+
         <t-form-item name="password">
           <t-input
             v-model="formData.password"
@@ -55,7 +67,7 @@
             theme="primary"
             size="large"
             block
-            :loading="loading"
+            :loading="authStore.loading"
           >
             {{ isLogin ? '登录' : '注册' }}
           </t-button>
@@ -80,12 +92,14 @@
 import { ref, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { MailIcon, LockOnIcon } from 'tdesign-icons-vue-next'
+import { MailIcon, LockOnIcon, UserIcon } from 'tdesign-icons-vue-next'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const route = useRoute()
+const authStore = useAuthStore()
+
 const isLogin = ref(true)
-const loading = ref(false)
 
 // 检查URL参数，如果是注册模式则自动切换
 if (route.query.mode === 'register') {
@@ -94,6 +108,7 @@ if (route.query.mode === 'register') {
 
 const formData = reactive({
   email: '',
+  username: '',
   password: '',
   confirmPassword: ''
 })
@@ -102,6 +117,11 @@ const rules = {
   email: [
     { required: true, message: '邮箱地址必填', type: 'error' },
     { email: true, message: '请输入正确的邮箱地址', type: 'error' }
+  ],
+  username: [
+    { required: true, message: '用户名必填', type: 'error' },
+    { min: 2, message: '用户名至少2位', type: 'error' },
+    { max: 50, message: '用户名最多50位', type: 'error' }
   ],
   password: [
     { required: true, message: '密码必填', type: 'error' },
@@ -119,25 +139,54 @@ const rules = {
 
 const switchMode = () => {
   isLogin.value = !isLogin.value
+  // 清空表单数据
+  formData.email = ''
+  formData.username = ''
   formData.password = ''
   formData.confirmPassword = ''
 }
 
-const onSubmit = ({ validateResult }: { validateResult: any }) => {
+const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   if (validateResult === true) {
-    loading.value = true
-    
-    // 模拟登录/注册过程
-    setTimeout(() => {
-      loading.value = false
+    try {
       if (isLogin.value) {
-        MessagePlugin.success('登录成功')
-        router.push('/')
+        // 登录逻辑
+        const result = await authStore.login({
+          email: formData.email,
+          password: formData.password
+        })
+        
+        if (result.success) {
+          MessagePlugin.success('登录成功')
+          router.push('/home')
+        } else {
+          MessagePlugin.error(result.error || '登录失败')
+        }
       } else {
-        MessagePlugin.success('注册成功，请登录')
-        isLogin.value = true
+        // 注册逻辑
+        const result = await authStore.register({
+          email: formData.email,
+          username: formData.username,
+          password: formData.password
+        })
+        
+        if (result.success) {
+          MessagePlugin.success('注册成功，请登录')
+          // 切换到登录模式
+          isLogin.value = true
+          // 清空表单
+          formData.email = ''
+          formData.username = ''
+          formData.password = ''
+          formData.confirmPassword = ''
+        } else {
+          MessagePlugin.error(result.error || '注册失败')
+        }
       }
-    }, 1000)
+    } catch (error) {
+      console.error('操作失败:', error)
+      MessagePlugin.error('操作失败，请重试')
+    }
   }
 }
 </script>
@@ -187,5 +236,4 @@ const onSubmit = ({ validateResult }: { validateResult: any }) => {
   margin: 0;
   color: #7f8c8d;
 }
-
 </style>

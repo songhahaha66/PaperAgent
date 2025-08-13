@@ -151,10 +151,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { BrowseIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
+import { useAuthStore } from '@/stores/auth';
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false);
@@ -322,9 +324,20 @@ const toggleSidebar = () => {
   isSidebarCollapsed.value = !isSidebarCollapsed.value;
 };
 
+const router = useRouter();
+const authStore = useAuthStore();
+
 // 用户信息
-const userName = ref('用户123');
+const userName = computed(() => authStore.currentUser?.username || '用户');
 const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
+
+// 检查用户认证状态
+onMounted(() => {
+  if (!authStore.isAuthenticated) {
+    router.push('/login');
+    return;
+  }
+});
 
 // 新建工作
 const createNewTask = () => {
@@ -381,8 +394,9 @@ const userOptions = [
     content: '退出登录',
     value: 'logout',
     onClick: () => {
-      // 执行退出登录逻辑
+      authStore.logout();
       MessagePlugin.success('已退出登录');
+      router.push('/login');
     }
   }
 ];
