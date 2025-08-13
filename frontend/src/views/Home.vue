@@ -140,8 +140,20 @@
           </div>
           
           <div v-else>
-            <t-card title="论文预览">
-              <p>与AI对话生成论文内容后，将在此处预览论文。</p>
+            <t-card title="论文展示区">
+              <div class="pdf-container">
+                <iframe 
+                  src="/main.pdf" 
+                  width="100%" 
+                  height="600px"
+                  style="border: none; border-radius: 8px;"
+                  title="论文PDF预览"
+                ></iframe>
+              </div>
+              <div class="pdf-info">
+                <p>正在展示：main.pdf</p>
+                <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
+              </div>
             </t-card>
           </div>
         </div>
@@ -759,5 +771,30 @@ html, body {
 
 .message-dimmed .system-label {
   opacity: 0.4;
+}
+
+/* PDF展示区域样式 */
+.pdf-container {
+  margin-bottom: 16px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.pdf-info {
+  padding: 12px 0;
+  border-top: 1px solid #eee;
+}
+
+.pdf-info p {
+  margin: 4px 0;
+  color: #666;
+  font-size: 14px;
+}
+
+.pdf-info p:first-child {
+  font-weight: 500;
+  color: #333;
 }
 </style>
