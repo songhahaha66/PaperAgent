@@ -109,11 +109,14 @@
                 <div 
                   v-if="index < chatMessages.length - 1" 
                   class="message-divider"
-                  @mouseenter="showDivider(index)"
-                  @mouseleave="hideDivider(index)"
                 >
                   <div class="divider-line"></div>
-                  <div class="divider-icon" :class="{ 'show': hoveredDivider === index }">
+                  <div 
+                    class="divider-icon" 
+                    :class="{ 'show': hoveredDivider === index }"
+                    @mouseenter="showDivider(index)"
+                    @mouseleave="hideDivider(index)"
+                  >
                     <t-icon name="arrow-up" />
                   </div>
                 </div>
@@ -670,7 +673,6 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   transition: all 0.3s ease;
 }
 
@@ -708,6 +710,7 @@ html, body {
   transform: scale(0.8);
   transition: all 0.3s ease;
   z-index: 1;
+  cursor: pointer;
 }
 
 .divider-icon.show {
