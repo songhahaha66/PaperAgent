@@ -1,6 +1,8 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-import models, schemas, auth
+from models import models
+from schemas import schemas
+from auth import auth
 from fastapi import HTTPException, status
 
 def get_user_by_email(db: Session, email: str):

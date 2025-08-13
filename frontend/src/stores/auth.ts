@@ -7,14 +7,31 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<UserResponse | null>(null)
   const token = ref<string | null>(localStorage.getItem('auth_token'))
   const loading = ref(false)
+  const initialized = ref(false) // 新增：标记是否已初始化
 
   // 计算属性
   const isAuthenticated = computed(() => !!token.value && !!user.value)
   const currentUser = computed(() => user.value)
 
-  // 初始化时如果有token，尝试获取用户信息
-  if (token.value) {
-    loadCurrentUser()
+  // 初始化认证状态
+  async function initializeAuth() {
+    if (!token.value) {
+      initialized.value = true
+      return
+    }
+    
+    try {
+      loading.value = true
+      const userData = await authAPI.getCurrentUser(token.value)
+      user.value = userData
+    } catch (error) {
+      console.error('获取用户信息失败:', error)
+      // Token无效，清除本地存储
+      logout()
+    } finally {
+      loading.value = false
+      initialized.value = true
+    }
   }
 
   // 加载当前用户信息
@@ -79,6 +96,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     token.value = null
     localStorage.removeItem('auth_token')
+    initialized.value = false
   }
 
   return {
@@ -86,6 +104,7 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     token,
     loading,
+    initialized, // 新增：导出初始化状态
     
     // 计算属性
     isAuthenticated,
@@ -96,6 +115,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     logout,
     loadCurrentUser,
+    initializeAuth, // 新增：导出初始化方法
   }
 }, {
   persist: {

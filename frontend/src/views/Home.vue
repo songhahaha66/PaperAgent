@@ -340,15 +340,13 @@ const router = useRouter();
 const authStore = useAuthStore();
 
 // 用户信息
-const userName = computed(() => authStore.currentUser?.username || '用户');
+const userName = computed(() => authStore.currentUser?.value?.username || '用户');
 const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
 
 // 检查用户认证状态
 onMounted(() => {
-  if (!authStore.isAuthenticated) {
-    router.push('/login');
-    return;
-  }
+  // 移除重复的认证检查，路由守卫已经处理
+  // 这里可以添加其他初始化逻辑
 });
 
 // 新建工作

@@ -28,8 +28,13 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
+  
+  // 等待认证状态初始化完成
+  if (!authStore.initialized) {
+    await authStore.initializeAuth()
+  }
   
   // 需要认证的路由
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
