@@ -82,7 +82,14 @@
         <div class="chat-section">
           <div class="chat-container">
             <div class="chat-messages">
-              <div v-for="(message, index) in chatMessages" :key="message.id" class="chat-message-wrapper">
+              <div 
+                v-for="(message, index) in chatMessages" 
+                :key="message.id" 
+                :class="[
+                  'chat-message-wrapper',
+                  { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider }
+                ]"
+              >
                 <ChatItem
                   :role="message.role"
                   :content="message.content"
@@ -720,5 +727,20 @@ html, body {
   transform: scale(1);
   background: #e8e8e8;
   border-color: #b0b0b0;
+}
+
+/* 对话变灰效果 */
+.message-dimmed {
+  opacity: 0.4;
+  filter: grayscale(0.6);
+  transition: all 0.3s ease;
+}
+
+.message-dimmed .t-chat__message {
+  opacity: 0.4;
+}
+
+.message-dimmed .system-label {
+  opacity: 0.4;
 }
 </style>
