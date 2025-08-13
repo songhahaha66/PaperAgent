@@ -19,3 +19,4 @@
 [songhahaha66][08:13 22:23]：api文件夹没有意义，整个后端都是api
 [songhahaha66][12:19 15:30]：项目规则文件：project_rule.md，请仔细阅读。完成前端任务：现在每次刷新home都会返回登录页面，修改bug
 [songhahaha66][12:00:00]：项目规则文件：project_rule.md，请仔细阅读。你需要完成前端任务：现在const userName = computed(() => authStore.currentUser?.value?.username || '用户');无法正常读取数据，直接显示用户
+[songhahaha66][12:19:00]：项目规则文件：project_rule.md，请仔细阅读。你需要完成后端任务，数据库基本配置表如果禁止注册，就请不要润许用户进一步注册

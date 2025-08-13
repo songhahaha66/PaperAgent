@@ -12,7 +12,9 @@ api：采用Python Fastapi
 
 ## 配置文件
 
-`.env.example` 填写数据库有关配置
+`.env.example` 是示例文件，里面是示例写法
+
+`.env`才是配置文件
 
 ## 数据库
 

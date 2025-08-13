@@ -27,3 +27,12 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: Optional[str] = None
+
+class SystemConfigResponse(BaseModel):
+    id: int
+    is_allow_register: bool
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True

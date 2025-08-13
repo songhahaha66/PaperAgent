@@ -53,3 +53,16 @@ def authenticate_user(db: Session, email: str, password: str):
     if not auth.verify_password(password, user.password_hash):
         return False
     return user
+
+def get_system_config(db: Session):
+    """获取系统配置"""
+    config = db.query(models.SystemConfig).first()
+    return config
+
+def update_system_config(db: Session, is_allow_register: bool):
+    """更新系统配置"""
+    config = get_system_config(db)
+    config.is_allow_register = is_allow_register
+    db.commit()
+    db.refresh(config)
+    return config
