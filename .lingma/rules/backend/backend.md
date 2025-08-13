@@ -15,3 +15,5 @@ api：采用Python Fastapi
 `.env.example` 填写数据库有关配置
 
 ## 数据库
+
+数据库设计文件在`.lingma/rules/backend/DATABASE_DESIGN.md`
