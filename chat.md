@@ -17,3 +17,4 @@
 [LangQi99][08-13 22:02:00]: /home论文展示区暂时渲染这个frontend\public\main.pdf
 [songhahaha66][08:13 22:23]：项目规则文件：project_rule.md，请仔细阅读。现在后端应该非常庞大，分一下文件夹吧，main.py就放在backend文件夹就行，不用app文件夹
 [songhahaha66][08:13 22:23]：api文件夹没有意义，整个后端都是api
+[songhahaha66][12:19 15:30]：项目规则文件：project_rule.md，请仔细阅读。完成前端任务：现在每次刷新home都会返回登录页面，修改bug
