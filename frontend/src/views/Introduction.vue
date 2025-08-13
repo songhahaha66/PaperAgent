@@ -58,8 +58,18 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { onMounted } from 'vue'
 
 const router = useRouter()
+const authStore = useAuthStore()
+
+// 如果用户已登录，直接跳转到主页
+onMounted(() => {
+  if (authStore.isAuthenticated) {
+    router.push('/home')
+  }
+})
 
 const goToLogin = () => {
   router.push('/login')
