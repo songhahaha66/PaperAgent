@@ -86,25 +86,37 @@
             </div>
             
             <!-- 模板列表 -->
-            <div v-else-if="availableTemplates.length > 0" class="template-grid">
-              <div 
-                v-for="template in availableTemplates" 
-                :key="template.id"
-                :class="['template-card', { 'selected': selectedTemplateId === template.id }]"
-                @click="selectTemplate(template.id)"
-              >
-                <div class="template-icon">
-                  <t-icon name="file" theme="primary" />
-                </div>
-                <div class="template-info">
-                  <h4>{{ template.name }}</h4>
-                  <p>{{ template.description || '标准学术论文模板' }}</p>
-                  <span class="template-category">{{ template.category || '未分类' }}</span>
-                </div>
-                <div class="template-check" v-if="selectedTemplateId === template.id">
-                  <t-icon name="check" theme="success" />
-                </div>
-              </div>
+            <div v-else-if="availableTemplates.length > 0" class="template-list-container">
+              <t-list>
+                <t-list-item
+                  v-for="template in availableTemplates"
+                  :key="template.id"
+                  :class="{ 'selected': selectedTemplateId === template.id }"
+                  @click="selectTemplate(template.id)"
+                >
+                  <t-list-item-meta
+                    :title="template.name"
+                    :description="template.description||'暂无描述'"
+                  >
+                    
+                  </t-list-item-meta>
+                  
+                  <template #action>
+                    <div v-if="selectedTemplateId === template.id">
+                      <t-icon name="check-circle-filled" theme="success" />
+                    </div>
+                    <t-button 
+                      v-else
+                      theme="primary" 
+                      variant="text" 
+                      size="small"
+                      @click.stop="selectTemplate(template.id)"
+                    >
+                      选择
+                    </t-button>
+                  </template>
+                </t-list-item>
+              </t-list>
             </div>
             
             <!-- 无模板状态 -->
@@ -451,6 +463,19 @@ onMounted(() => {
   color: #7f8c8d;
 }
 
+/* 模板列表容器 */
+.template-list-container {
+  width: 100%;
+  margin: 24px 0;
+}
+
+/* 模板列表项选中状态 */
+.t-list-item.selected {
+  background-color: #e6f4ff;
+  border: 2px solid #0052d9;
+  border-radius: 8px;
+}
+
 /* 无模板状态 */
 .no-template-state {
   text-align: center;
@@ -478,7 +503,7 @@ onMounted(() => {
 .step-actions {
   display: flex;
   gap: 16px;
-  justify-content: center;
+  justify-content: space-between;
 }
 
 
@@ -500,9 +525,7 @@ onMounted(() => {
     padding: 24px;
   }
   
-  .template-grid {
-    grid-template-columns: 1fr;
-  }
+
   
   .step-actions {
     flex-direction: column;
