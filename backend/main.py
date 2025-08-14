@@ -10,6 +10,7 @@ from database import database
 from database.database import engine, get_db
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
+from pathlib import Path
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)
 
@@ -78,13 +79,23 @@ async def get_current_user_info(current_user_email: str = Depends(auth.get_curre
 # 模板相关的API接口
 @app.post("/templates", response_model=schemas.PaperTemplateResponse)
 async def create_template(
-    template: schemas.PaperTemplateCreate,
+    template: schemas.PaperTemplateCreateWithContent,
     current_user_email: str = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """创建论文模板"""
     user = crud.get_user_by_email(db, current_user_email)
-    return crud.create_paper_template(db, template, user.id)
+    # 提取文件内容
+    content = template.content
+    # 创建模板数据（不包含content字段）
+    template_data = schemas.PaperTemplateCreate(
+        name=template.name,
+        description=template.description,
+        category=template.category,
+        file_path=template.file_path,
+        is_public=template.is_public
+    )
+    return crud.create_paper_template(db, template_data, user.id, content)
 
 @app.get("/templates", response_model=List[schemas.PaperTemplateResponse])
 async def get_user_templates(
@@ -149,127 +160,76 @@ async def delete_template(
 ):
     """删除模板"""
     user = crud.get_user_by_email(db, current_user_email)
-    result = crud.delete_paper_template(db, template_id, user.id)
-    
-    # 删除模板文件
-    template_file_service.delete_template_directory(template_id)
-    
-    return result
+    return crud.delete_paper_template(db, template_id, user.id)
 
-# 模板文件管理接口
-@app.post("/templates/{template_id}/files")
-async def upload_template_file(
+# 简化的模板文件管理接口 - 一个模板对应一个文件
+@app.get("/templates/{template_id}/content")
+async def get_template_content(
     template_id: int,
-    file: UploadFile = File(...),
-    current_user_email: str = Depends(auth.get_current_user),
-    db: Session = Depends(get_db)
-):
-    """上传模板文件"""
-    # 检查模板权限
-    template = crud.get_paper_template(db, template_id)
-    if not template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    user = crud.get_user_by_email(db, current_user_email)
-    if template.created_by != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to modify this template"
-        )
-    
-    # 读取文件内容
-    content = await file.read()
-    content_str = content.decode('utf-8')
-    
-    # 保存文件
-    file_path = template_file_service.save_template_file(template_id, file.filename, content_str)
-    
-    return {"message": "File uploaded successfully", "file_path": file_path}
-
-@app.get("/templates/{template_id}/files")
-async def list_template_files(
-    template_id: int,
-    current_user_email: str = Depends(auth.get_current_user),
-    db: Session = Depends(get_db)
-):
-    """列出模板文件"""
-    # 检查模板权限
-    template = crud.get_paper_template(db, template_id)
-    if not template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    user = crud.get_user_by_email(db, current_user_email)
-    if not template.is_public and template.created_by != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this template"
-        )
-    
-    files = template_file_service.list_template_files(template_id)
-    return {"files": files}
-
-@app.get("/templates/{template_id}/files/{filename}")
-async def get_template_file(
-    template_id: int,
-    filename: str,
     current_user_email: str = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取模板文件内容"""
-    # 检查模板权限
-    template = crud.get_paper_template(db, template_id)
-    if not template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
     user = crud.get_user_by_email(db, current_user_email)
-    if not template.is_public and template.created_by != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this template"
-        )
-    
-    content = template_file_service.get_template_file_content(template_id, filename)
-    return {"filename": filename, "content": content}
+    content = crud.get_template_file_content(db, template_id, user.id)
+    return {"content": content}
 
-@app.delete("/templates/{template_id}/files/{filename}")
-async def delete_template_file(
+@app.put("/templates/{template_id}/content")
+async def update_template_content(
     template_id: int,
-    filename: str,
+    content: str,
     current_user_email: str = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    """删除模板文件"""
-    # 检查模板权限
-    template = crud.get_paper_template(db, template_id)
-    if not template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
+    """更新模板文件内容"""
     user = crud.get_user_by_email(db, current_user_email)
-    if template.created_by != user.id:
+    result = crud.update_template_file_content(db, template_id, user.id, content)
+    return result
+
+# 文件上传接口（用于创建模板时解析文件）
+@app.post("/templates/upload")
+async def upload_template_file(
+    file: UploadFile = File(...),
+    current_user_email: str = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """上传模板文件并解析内容"""
+    # 检查文件类型
+    allowed_extensions = ['.tex', '.md', '.txt', '.doc', '.docx']
+    file_extension = Path(file.filename).suffix.lower()
+    
+    if file_extension not in allowed_extensions:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to modify this template"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的文件类型。支持的类型: {', '.join(allowed_extensions)}"
         )
     
-    success = template_file_service.delete_template_file(template_id, filename)
-    if success:
-        return {"message": "File deleted successfully"}
-    else:
+    try:
+        # 读取文件内容
+        content = await file.read()
+        
+        # 根据文件类型处理内容
+        if file_extension in ['.tex', '.md', '.txt']:
+            # 文本文件直接解码
+            content_str = content.decode('utf-8')
+        elif file_extension in ['.doc', '.docx']:
+            # Word文档需要特殊处理（这里简化处理）
+            content_str = f"[Word文档内容 - {file.filename}]"
+            # 在实际应用中，可以使用python-docx等库来解析Word文档
+        
+        # 生成文件路径
+        file_path = file.filename
+        
+        return {
+            "message": "文件上传成功",
+            "file_path": file_path,
+            "content": content_str
+        }
+        
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"文件处理失败: {str(e)}"
         )
 
 if __name__ == "__main__":

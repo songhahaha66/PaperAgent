@@ -31,6 +31,7 @@ class PaperTemplate(Base):
     name = Column(String(100), nullable=False)
     description = Column(Text)
     category = Column(String(50))
+    file_path = Column(String(500), nullable=False)  # 模板文件路径
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     is_public = Column(Boolean, default=False)

@@ -80,8 +80,8 @@
                 <t-button theme="primary" variant="text" @click="editTemplate(row)">
                   编辑
                 </t-button>
-                <t-button theme="default" variant="text" @click="viewTemplateFiles(row)">
-                  查看文件
+                <t-button theme="default" variant="text" @click="viewTemplateContent(row)">
+                  查看内容
                 </t-button>
                 <t-button theme="danger" variant="text" @click="deleteTemplate(row)">
                   删除
@@ -99,7 +99,7 @@
       :header="editingTemplate ? '编辑模板' : '新建模板'"
       @confirm="saveTemplate"
       @cancel="cancelTemplate"
-      width="600px"
+      width="800px"
     >
       <t-form :data="templateForm" label-align="top">
         <t-form-item label="模板名称" name="name">
@@ -120,11 +120,11 @@
             action="#"
             :auto-upload="false"
             :max="1"
-            accept=".tex,.md,.txt"
+            accept=".tex,.md,.txt,.doc,.docx"
             @change="onFileChange"
             :show-upload-progress="false"
             :draggable="false"
-            tips="支持 .tex, .md, .txt 文件"
+            tips="支持 .tex, .md, .txt, .doc, .docx 文件，一个模板对应一个文件"
           >
             <t-button variant="outline">选择文件</t-button>
           </t-upload>
@@ -132,76 +132,43 @@
       </t-form>
     </t-dialog>
 
-    <!-- 模板文件列表对话框 -->
+    <!-- 模板内容查看对话框 -->
     <t-dialog
-      v-model:visible="showFilesDialog"
-      :header="`模板文件 - ${selectedTemplate?.name}`"
-      width="800px"
+      v-model:visible="showContentDialog"
+      :header="`模板内容 - ${selectedTemplate?.name}`"
+      width="900px"
     >
-      <div class="files-content">
-        <div class="files-header">
-          <t-button theme="primary" @click="showUploadFileDialog = true">
-            上传文件
+      <div class="content-viewer">
+        <div class="content-header">
+          <t-button theme="primary" @click="editTemplateContent">
+            编辑内容
           </t-button>
         </div>
         
-        <t-table
-          :data="templateFiles"
-          :columns="fileColumns"
-          row-key="filename"
-          :loading="filesLoading"
-        >
-          <template #operation="{ row }">
-            <t-space>
-              <t-button theme="primary" variant="text" @click="viewFileContent(row)">
-                查看
-              </t-button>
-              <t-button theme="danger" variant="text" @click="deleteFile(row)">
-                删除
-              </t-button>
-            </t-space>
-          </template>
-        </t-table>
+        <div class="content-display">
+          <t-textarea
+            v-model="templateContent"
+            readonly
+            :autosize="{ minRows: 15, maxRows: 25 }"
+            placeholder="模板内容加载中..."
+          />
+        </div>
       </div>
     </t-dialog>
 
-    <!-- 上传文件对话框 -->
+    <!-- 编辑模板内容对话框 -->
     <t-dialog
-      v-model:visible="showUploadFileDialog"
-      header="上传文件"
-      @confirm="uploadFile"
-      @cancel="cancelUploadFile"
-      width="500px"
-    >
-      <t-upload
-        v-model="uploadFileList"
-        action="#"
-        :auto-upload="true"
-        :max="1"
-        accept=".tex,.md,.txt"
-        @change="onUploadFileChange"
-        :show-upload-progress="false"
-        :draggable="false"
-        tips="支持 .tex, .md, .txt 文件"
-      >
-        <t-button variant="outline">选择文件</t-button>
-      </t-upload>
-    </t-dialog>
-
-    <!-- 文件内容查看对话框 -->
-    <t-dialog
-      v-model:visible="showFileContentDialog"
-      :header="`文件内容 - ${selectedFile?.filename}`"
+      v-model:visible="showEditContentDialog"
+      header="编辑模板内容"
+      @confirm="saveTemplateContent"
+      @cancel="cancelEditContent"
       width="900px"
     >
-      <div class="file-content">
-        <t-textarea
-          v-model="fileContent"
-          readonly
-          :autosize="{ minRows: 10, maxRows: 20 }"
-          placeholder="文件内容加载中..."
-        />
-      </div>
+      <t-textarea
+        v-model="editingContent"
+        placeholder="请输入模板内容"
+        :autosize="{ minRows: 15, maxRows: 25 }"
+      />
     </t-dialog>
     
     <!-- API Key 设置弹窗 -->
@@ -226,7 +193,7 @@ import { useRouter } from 'vue-router';
 import { AddIcon, BrowseIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useAuthStore } from '@/stores/auth';
-import { templateAPI, type PaperTemplate, type PaperTemplateCreate, type PaperTemplateUpdate, type TemplateFile } from '@/api/template';
+import { templateAPI, type PaperTemplate, type PaperTemplateCreate, type PaperTemplateUpdate } from '@/api/template';
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false);
@@ -317,6 +284,7 @@ const columns = ref([
   { colKey: 'name', title: '模板名称', width: '150px' },
   { colKey: 'description', title: '描述', width: '200px' },
   { colKey: 'category', title: '分类', width: '100px' },
+  { colKey: 'file_path', title: '文件路径', width: '150px' },
   { colKey: 'is_public', title: '是否公开', width: '100px' },
   { colKey: 'created_at', title: '创建时间', width: '150px' },
   { colKey: 'operation', title: '操作', width: '200px' }
@@ -369,11 +337,28 @@ const templateForm = reactive<PaperTemplateCreate>({
   name: '',
   description: '',
   category: '',
+  file_path: '',
   is_public: false
 });
 
 // 文件相关
 const templateFormFileList = ref<Array<any>>([]);
+
+// 文件变更处理
+const onFileChange = (fileList: Array<any>) => {
+  console.log('文件变更:', fileList);
+  if (fileList && fileList.length > 0) {
+    console.log('选择的文件:', fileList[0]);
+    // 自动设置文件路径
+    const fileName = fileList[0].name || fileList[0].raw?.name;
+    if (fileName) {
+      templateForm.file_path = fileName;
+    }
+  } else {
+    console.log('没有选择文件');
+    templateForm.file_path = '';
+  }
+};
 
 // 控制API Key对话框显示
 const showApiKeyDialog = ref(false);
@@ -383,29 +368,17 @@ const apiKeyForm = ref({
   apiKey: ''
 });
 
-// 文件变更处理
-const onFileChange = (fileList: Array<any>) => {
-  console.log('文件变更:', fileList);
-  // 直接使用文件列表，不需要额外的templateFormFile变量
-  if (fileList && fileList.length > 0) {
-    console.log('选择的文件:', fileList[0]);
-  } else {
-    console.log('没有选择文件');
-  }
-};
 
-// 清除已选择的文件
-const clearSelectedFile = () => {
-  templateFormFileList.value = [];
-};
 
 // 编辑模板
-const editTemplate = (template: PaperTemplate) => {
+const editTemplate = async (template: PaperTemplate) => {
   editingTemplate.value = template;
   templateForm.name = template.name;
   templateForm.description = template.description || '';
   templateForm.category = template.category || '';
+  templateForm.file_path = template.file_path || '';
   templateForm.is_public = template.is_public;
+  
   showCreateTemplateDialog.value = true;
 };
 
@@ -427,7 +400,6 @@ const deleteTemplate = async (template: PaperTemplate) => {
 const saveTemplate = async () => {
   console.log('开始保存模板...');
   console.log('表单数据:', templateForm);
-  console.log('文件列表:', templateFormFileList.value);
   console.log('认证状态:', !!authStore.token);
   console.log('编辑状态:', !!editingTemplate.value);
   
@@ -453,6 +425,7 @@ const saveTemplate = async () => {
       if (templateForm.name) updateData.name = templateForm.name;
       if (templateForm.description !== '') updateData.description = templateForm.description;
       if (templateForm.category !== '') updateData.category = templateForm.category;
+      if (templateForm.file_path !== '') updateData.file_path = templateForm.file_path;
       updateData.is_public = templateForm.is_public;
       
       console.log('更新数据:', updateData);
@@ -462,6 +435,7 @@ const saveTemplate = async () => {
         editingTemplate.value.id,
         updateData
       );
+      
       MessagePlugin.success('模板更新成功');
     } else {
       // 新建模板
@@ -469,45 +443,48 @@ const saveTemplate = async () => {
       console.log('创建模板数据:', templateForm);
       console.log('模板文件:', templateFormFileList.value);
       
-      // 创建符合后端期望的数据对象
-      const createData = {
-        name: templateForm.name,
-        description: templateForm.description || undefined,
-        category: templateForm.category || undefined,
-        is_public: templateForm.is_public
-      };
-      
-      console.log('发送给后端的数据:', createData);
-      
-      const newTemplate = await templateAPI.createTemplate(
-        authStore.token,
-        createData
-      );
-      
-      console.log('模板创建成功:', newTemplate);
-      
-      // 如果有文件，上传文件
-      if (templateFormFileList.value.length > 0) {
-        console.log('开始上传文件:', templateFormFileList.value[0]);
-        try {
-          const fileToUpload = templateFormFileList.value[0].raw || templateFormFileList.value[0];
-          console.log('准备上传的文件:', fileToUpload);
-          
-          await templateAPI.uploadTemplateFile(
-            authStore.token,
-            newTemplate.id,
-            fileToUpload
-          );
-          console.log('文件上传成功');
-        } catch (fileError) {
-          console.error('文件上传失败:', fileError);
-          MessagePlugin.warning('模板创建成功，但文件上传失败');
-        }
-      } else {
-        console.log('没有选择文件');
+      // 检查是否选择了文件
+      if (templateFormFileList.value.length === 0) {
+        MessagePlugin.warning('请选择模板文件');
+        return;
       }
       
-      MessagePlugin.success('模板创建成功');
+      // 先上传文件获取内容
+      const fileToUpload = templateFormFileList.value[0].raw || templateFormFileList.value[0];
+      console.log('准备上传的文件:', fileToUpload);
+      
+      try {
+        const uploadResult = await templateAPI.uploadTemplateFile(
+          authStore.token,
+          fileToUpload
+        );
+        
+        console.log('文件上传成功:', uploadResult);
+        
+        // 创建符合后端期望的数据对象
+        const createData = {
+          name: templateForm.name,
+          description: templateForm.description || undefined,
+          category: templateForm.category || undefined,
+          file_path: uploadResult.file_path,
+          is_public: templateForm.is_public,
+          content: uploadResult.content
+        };
+        
+        console.log('发送给后端的数据:', createData);
+        
+        const newTemplate = await templateAPI.createTemplate(
+          authStore.token,
+          createData
+        );
+        
+        console.log('模板创建成功:', newTemplate);
+        MessagePlugin.success('模板创建成功');
+      } catch (fileError) {
+        console.error('文件处理失败:', fileError);
+        MessagePlugin.error('模板创建失败：文件处理错误');
+        return;
+      }
     }
     
     console.log('保存完成，重新加载模板列表...');
@@ -527,6 +504,7 @@ const cancelTemplate = () => {
   templateForm.name = '';
   templateForm.description = '';
   templateForm.category = '';
+  templateForm.file_path = '';
   templateForm.is_public = false;
   templateFormFileList.value = [];
 };
@@ -544,156 +522,59 @@ const cancelApiKey = () => {
   showApiKeyDialog.value = false;
 };
 
-// 模板文件相关
-const showFilesDialog = ref(false);
+// 模板内容相关
+const showContentDialog = ref(false);
 const selectedTemplate = ref<PaperTemplate | null>(null);
-const templateFiles = ref<TemplateFile[]>([]);
-const filesLoading = ref(false);
+const templateContent = ref('');
 
-// 文件表格列配置
-const fileColumns = ref([
-  { colKey: 'filename', title: '文件名', width: '200px' },
-  { colKey: 'size', title: '大小', width: '100px' },
-  { colKey: 'modified', title: '修改时间', width: '150px' },
-  { colKey: 'operation', title: '操作', width: '150px' }
-]);
-
-// 查看模板文件
-const viewTemplateFiles = async (template: PaperTemplate) => {
+const viewTemplateContent = async (template: PaperTemplate) => {
   if (!authStore.token) return;
   
   selectedTemplate.value = template;
-  showFilesDialog.value = true;
-  await loadTemplateFiles();
-};
-
-// 加载模板文件列表
-const loadTemplateFiles = async () => {
-  if (!authStore.token || !selectedTemplate.value) return;
-  
-  filesLoading.value = true;
-  try {
-    const result = await templateAPI.getTemplateFiles(
-      authStore.token,
-      selectedTemplate.value.id
-    );
-    templateFiles.value = result.files.map(file => ({
-      ...file,
-      size: `${(file.size / 1024).toFixed(1)} KB`
-    }));
-  } catch (error) {
-    MessagePlugin.error('加载文件列表失败');
-    console.error('加载文件列表失败:', error);
-  } finally {
-    filesLoading.value = false;
-  }
-};
-
-// 上传文件相关
-const showUploadFileDialog = ref(false);
-const uploadFileList = ref<Array<any>>([]);
-
-const onUploadFileChange = (fileList: Array<any>) => {
-  console.log('上传文件变更:', fileList);
-  if (fileList && fileList.length > 0) {
-    // TDesign Upload组件的文件对象结构
-    const fileObj = fileList[0];
-    console.log('上传文件对象:', fileObj);
-    
-    // 检查文件对象的结构
-    if (fileObj.raw) {
-      uploadFileList.value = [fileObj];
-    } else if (fileObj instanceof File) {
-      uploadFileList.value = [{ raw: fileObj }];
-    } else {
-      console.log('未知的上传文件对象格式:', fileObj);
-      uploadFileList.value = [];
-    }
-  } else {
-    uploadFileList.value = [];
-  }
-};
-
-const uploadFile = async () => {
-  console.log('开始上传文件，文件列表:', uploadFileList.value);
-  if (!authStore.token || !selectedTemplate.value || uploadFileList.value.length === 0) {
-    console.log('上传条件检查失败:', {
-      hasToken: !!authStore.token,
-      hasTemplate: !!selectedTemplate.value,
-      fileCount: uploadFileList.value.length
-    });
-    return;
-  }
+  showContentDialog.value = true;
   
   try {
-    const file = uploadFileList.value[0].raw;
-    console.log('准备上传文件:', file);
-    
-    await templateAPI.uploadTemplateFile(
+    const result = await templateAPI.getTemplateContent(
       authStore.token,
-      selectedTemplate.value.id,
-      file
+      template.id
     );
-    MessagePlugin.success('文件上传成功');
-    await loadTemplateFiles();
-    cancelUploadFile();
+    templateContent.value = result.content;
   } catch (error) {
-    MessagePlugin.error('文件上传失败');
-    console.error('文件上传失败:', error);
+    MessagePlugin.error('加载模板内容失败');
+    console.error('加载模板内容失败:', error);
+    templateContent.value = '模板内容加载失败';
   }
 };
 
-const cancelUploadFile = () => {
-  showUploadFileDialog.value = false;
-  uploadFileList.value = [];
+// 编辑模板内容
+const showEditContentDialog = ref(false);
+const editingContent = ref('');
+
+const editTemplateContent = () => {
+  editingContent.value = templateContent.value;
+  showEditContentDialog.value = true;
 };
 
-// 文件内容查看相关
-const showFileContentDialog = ref(false);
-const selectedFile = ref<TemplateFile | null>(null);
-const fileContent = ref('');
-
-const viewFileContent = async (file: TemplateFile) => {
-  if (!authStore.token || !selectedTemplate.value) return;
-  
-  selectedFile.value = file;
-  showFileContentDialog.value = true;
-  
-  try {
-    const result = await templateAPI.getTemplateFileContent(
-      authStore.token,
-      selectedTemplate.value.id,
-      file.filename
-    );
-    fileContent.value = result.content;
-  } catch (error) {
-    MessagePlugin.error('加载文件内容失败');
-    console.error('加载文件内容失败:', error);
-    fileContent.value = '文件内容加载失败';
-  }
-};
-
-// 删除文件
-const deleteFile = async (file: TemplateFile) => {
+const saveTemplateContent = async () => {
   if (!authStore.token || !selectedTemplate.value) return;
   
   try {
-    await templateAPI.deleteTemplateFile(
+    await templateAPI.updateTemplateContent(
       authStore.token,
       selectedTemplate.value.id,
-      file.filename
+      editingContent.value
     );
-    MessagePlugin.success('文件删除成功');
-    await loadTemplateFiles();
+    MessagePlugin.success('模板内容更新成功');
+    templateContent.value = editingContent.value;
+    showEditContentDialog.value = false;
   } catch (error) {
-    MessagePlugin.error('删除文件失败');
-    console.error('删除文件失败:', error);
+    MessagePlugin.error('更新模板内容失败');
+    console.error('更新模板内容失败:', error);
   }
 };
 
-// 清除上传文件列表
-const clearUploadFile = () => {
-  uploadFileList.value = [];
+const cancelEditContent = () => {
+  showEditContentDialog.value = false;
 };
 
 // 检查用户认证状态
@@ -864,18 +745,30 @@ onMounted(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.files-content {
-  padding: 20px 0;
-}
-
-.files-header {
-  margin-bottom: 20px;
-}
-
-.file-content {
-  max-height: 500px;
-  overflow-y: auto;
-}
 
 /* 新增样式 */
+.content-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.content-header {
+  margin-bottom: 20px;
+  text-align: right;
+}
+
+.content-display {
+  flex: 1;
+  overflow-y: auto;
+  background-color: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  padding: 15px;
+}
+
+.content-display .t-textarea {
+  min-height: 100%;
+  box-sizing: border-box;
+}
 </style>

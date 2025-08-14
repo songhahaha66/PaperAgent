@@ -1,17 +1,12 @@
 // 模板管理API服务
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
-export interface TemplateFile {
-  filename: string
-  size: number
-  modified: number
-}
-
 export interface PaperTemplate {
   id: number
   name: string
   description?: string
   category?: string
+  file_path: string  // 添加文件路径字段
   created_at: string
   updated_at: string
   is_public: boolean
@@ -22,13 +17,24 @@ export interface PaperTemplateCreate {
   name: string
   description?: string
   category?: string
+  file_path: string  // 添加文件路径字段
   is_public: boolean
+}
+
+export interface PaperTemplateCreateWithContent {
+  name: string
+  description?: string
+  category?: string
+  file_path: string
+  is_public: boolean
+  content: string  // 添加文件内容字段
 }
 
 export interface PaperTemplateUpdate {
   name?: string
   description?: string
   category?: string
+  file_path?: string  // 允许更新文件路径
   is_public?: boolean
 }
 
@@ -90,8 +96,8 @@ class TemplateAPI {
     })
   }
 
-  // 创建模板
-  async createTemplate(token: string, template: PaperTemplateCreate): Promise<PaperTemplate> {
+  // 创建模板（包含文件内容）
+  async createTemplate(token: string, template: PaperTemplateCreateWithContent): Promise<PaperTemplate> {
     return this.request<PaperTemplate>('/templates', {
       method: 'POST',
       headers: {
@@ -122,12 +128,32 @@ class TemplateAPI {
     })
   }
 
-  // 上传模板文件
-  async uploadTemplateFile(token: string, templateId: number, file: File): Promise<{ message: string; file_path: string }> {
+  // 获取模板文件内容
+  async getTemplateContent(token: string, templateId: number): Promise<{ content: string }> {
+    return this.request<{ content: string }>(`/templates/${templateId}/content`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    })
+  }
+
+  // 更新模板文件内容
+  async updateTemplateContent(token: string, templateId: number, content: string): Promise<{ message: string; file_path: string }> {
+    return this.request<{ message: string; file_path: string }>(`/templates/${templateId}/content`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ content }),
+    })
+  }
+
+  // 上传模板文件（创建模板时使用）
+  async uploadTemplateFile(token: string, file: File): Promise<{ message: string; file_path: string; content: string }> {
     const formData = new FormData()
     formData.append('file', file)
 
-    const url = `${API_BASE_URL}/templates/${templateId}/files`
+    const url = `${API_BASE_URL}/templates/upload`
     
     try {
       const response = await fetch(url, {
@@ -150,34 +176,6 @@ class TemplateAPI {
       }
       throw new Error('网络请求失败')
     }
-  }
-
-  // 获取模板文件列表
-  async getTemplateFiles(token: string, templateId: number): Promise<{ files: TemplateFile[] }> {
-    return this.request<{ files: TemplateFile[] }>(`/templates/${templateId}/files`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    })
-  }
-
-  // 获取模板文件内容
-  async getTemplateFileContent(token: string, templateId: number, filename: string): Promise<{ filename: string; content: string }> {
-    return this.request<{ filename: string; content: string }>(`/templates/${templateId}/files/${filename}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    })
-  }
-
-  // 删除模板文件
-  async deleteTemplateFile(token: string, templateId: number, filename: string): Promise<{ message: string }> {
-    return this.request<{ message: string }>(`/templates/${templateId}/files/${filename}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-    })
   }
 }
 
