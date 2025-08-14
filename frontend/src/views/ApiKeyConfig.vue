@@ -41,9 +41,11 @@
               />
             </t-form-item>
             <t-form-item>
-              <t-button theme="primary" type="submit" :loading="saving.brain" block>
-                保存配置
-              </t-button>
+              <div class="button-container">
+                <t-button theme="primary" type="submit" :loading="saving.brain" size="middle">
+                  保存配置
+                </t-button>
+              </div>
             </t-form-item>
           </t-form>
         </t-card>
@@ -73,9 +75,11 @@
               />
             </t-form-item>
             <t-form-item>
-              <t-button theme="primary" type="submit" :loading="saving.code" block>
-                保存配置
-              </t-button>
+              <div class="button-container">
+                <t-button theme="primary" type="submit" :loading="saving.code" size="middle">
+                  保存配置
+                </t-button>
+              </div>
             </t-form-item>
           </t-form>
         </t-card>
@@ -105,9 +109,11 @@
               />
             </t-form-item>
             <t-form-item>
-              <t-button theme="primary" type="submit" :loading="saving.writing" block>
-                保存配置
-              </t-button>
+              <div class="button-container">
+                <t-button theme="primary" type="submit" :loading="saving.writing" size="middle">
+                  保存配置
+                </t-button>
+              </div>
             </t-form-item>
           </t-form>
         </t-card>
@@ -314,17 +320,21 @@ onMounted(async () => {
 }
 
 .config-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-  gap: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
   margin-bottom: 40px;
-  max-width: 1200px;
-  margin-left: auto;
-  margin-right: auto;
 }
 
 .config-card {
-  min-height: 300px;
+  width: 100%;
+  min-height: 320px;
+}
+
+.button-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
 }
 
 .global-actions {
