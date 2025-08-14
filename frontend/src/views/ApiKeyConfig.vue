@@ -16,102 +16,42 @@
       </div>
 
       <div class="config-grid">
-        <t-card class="config-card" header="中枢大脑">
-          <t-form :data="brainConfig" @submit="saveBrainConfig" layout="vertical">
+        <t-card 
+          v-for="config in configs" 
+          :key="config.type"
+          class="config-card" 
+          :header="config.title"
+        >
+          <t-form :data="config.data" @submit="() => saveConfig(config.type)" layout="vertical">
             <t-form-item label="API Key" name="apiKey" :rules="[{ required: true, message: '请输入API Key' }]">
               <t-input 
-                v-model="brainConfig.apiKey" 
+                v-model="config.data.apiKey" 
                 type="password" 
-                placeholder="请输入中枢大脑的API Key"
+                :placeholder="`请输入${config.title}的API Key`"
                 clearable
               />
             </t-form-item>
             <t-form-item label="Base URL" name="baseUrl" :rules="[{ required: true, message: '请输入Base URL' }]">
               <t-input 
-                v-model="brainConfig.baseUrl" 
+                v-model="config.data.baseUrl" 
                 placeholder="例如: https://api.openai.com/v1"
                 clearable
               />
             </t-form-item>
             <t-form-item label="Model ID" name="modelId" :rules="[{ required: true, message: '请输入Model ID' }]">
               <t-input 
-                v-model="brainConfig.modelId" 
+                v-model="config.data.modelId" 
                 placeholder="例如: gpt-4"
                 clearable
               />
             </t-form-item>
             <t-form-item>
               <div class="button-container">
-                <t-button theme="primary" type="submit" :loading="saving.brain" size="middle">
-                  保存配置
+                <t-button theme="primary" type="submit" :loading="saving[config.type]" size="middle">
+                  {{ config.data.id ? '更新配置' : '保存配置' }}
                 </t-button>
-              </div>
-            </t-form-item>
-          </t-form>
-        </t-card>
-
-        <t-card class="config-card" header="代码实验">
-          <t-form :data="codeConfig" @submit="saveCodeConfig" layout="vertical">
-            <t-form-item label="API Key" name="apiKey" :rules="[{ required: true, message: '请输入API Key' }]">
-              <t-input 
-                v-model="codeConfig.apiKey" 
-                type="password" 
-                placeholder="请输入代码实验的API Key"
-                clearable
-              />
-            </t-form-item>
-            <t-form-item label="Base URL" name="baseUrl" :rules="[{ required: true, message: '请输入Base URL' }]">
-              <t-input 
-                v-model="codeConfig.baseUrl" 
-                placeholder="例如: https://api.openai.com/v1"
-                clearable
-              />
-            </t-form-item>
-            <t-form-item label="Model ID" name="modelId" :rules="[{ required: true, message: '请输入Model ID' }]">
-              <t-input 
-                v-model="codeConfig.modelId" 
-                placeholder="例如: gpt-4"
-                clearable
-              />
-            </t-form-item>
-            <t-form-item>
-              <div class="button-container">
-                <t-button theme="primary" type="submit" :loading="saving.code" size="middle">
-                  保存配置
-                </t-button>
-              </div>
-            </t-form-item>
-          </t-form>
-        </t-card>
-
-        <t-card class="config-card" header="论文写作">
-          <t-form :data="writingConfig" @submit="saveWritingConfig" layout="vertical">
-            <t-form-item label="API Key" name="apiKey" :rules="[{ required: true, message: '请输入API Key' }]">
-              <t-input 
-                v-model="writingConfig.apiKey" 
-                type="password" 
-                placeholder="请输入论文写作的API Key"
-                clearable
-              />
-            </t-form-item>
-            <t-form-item label="Base URL" name="baseUrl" :rules="[{ required: true, message: '请输入Base URL' }]">
-              <t-input 
-                v-model="writingConfig.baseUrl" 
-                placeholder="例如: https://api.openai.com/v1"
-                clearable
-              />
-            </t-form-item>
-            <t-form-item label="Model ID" name="modelId" :rules="[{ required: true, message: '请输入Model ID' }]">
-              <t-input 
-                v-model="writingConfig.modelId" 
-                placeholder="例如: gpt-4"
-                clearable
-              />
-            </t-form-item>
-            <t-form-item>
-              <div class="button-container">
-                <t-button theme="primary" type="submit" :loading="saving.writing" size="middle">
-                  保存配置
+                <t-button v-if="config.data.id" theme="danger" @click="() => deleteConfig(config.type)" size="middle">
+                  删除配置
                 </t-button>
               </div>
             </t-form-item>
@@ -132,13 +72,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
+import { modelConfigAPI } from '@/api/modelConfig'
 
 // 配置数据结构
-interface ModelConfig {
+interface ModelConfigForm {
+  id?: number
   apiKey: string
   baseUrl: string
   modelId: string
@@ -174,27 +116,39 @@ const historyItems = ref([
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null)
 
-// 三个模型的配置
-const brainConfig = ref<ModelConfig>({
-  apiKey: '',
-  baseUrl: '',
-  modelId: ''
-})
-
-const codeConfig = ref<ModelConfig>({
-  apiKey: '',
-  baseUrl: '',
-  modelId: ''
-})
-
-const writingConfig = ref<ModelConfig>({
-  apiKey: '',
-  baseUrl: '',
-  modelId: ''
-})
+// 配置数据 - 使用循环渲染，大大减少重复代码
+const configs = reactive([
+  {
+    type: 'brain' as const,
+    title: '中枢大脑',
+    data: reactive<ModelConfigForm>({
+      apiKey: '',
+      baseUrl: '',
+      modelId: ''
+    })
+  },
+  {
+    type: 'code' as const,
+    title: '代码实验',
+    data: reactive<ModelConfigForm>({
+      apiKey: '',
+      baseUrl: '',
+      modelId: ''
+    })
+  },
+  {
+    type: 'writing' as const,
+    title: '论文写作',
+    data: reactive<ModelConfigForm>({
+      apiKey: '',
+      baseUrl: '',
+      modelId: ''
+    })
+  }
+])
 
 // 保存状态
-const saving = ref({
+const saving = reactive({
   brain: false,
   code: false,
   writing: false
@@ -215,66 +169,88 @@ const selectHistory = (id: number) => {
   router.push(`/work/${id}`)
 }
 
-// 保存配置方法（暂时为空，等待后端API）
-const saveBrainConfig = async () => {
-  saving.value.brain = true
+// 通用保存配置方法
+const saveConfig = async (type: 'brain' | 'code' | 'writing') => {
+  const config = configs.find(c => c.type === type)
+  if (!config) return
+
+  saving[type] = true
   try {
-    // TODO: 调用后端API保存配置
-    MessagePlugin.success('中枢大脑配置保存成功')
-  } catch (error) {
-    MessagePlugin.error('保存失败，请重试')
+    if (config.data.id) {
+      // 更新配置
+      await modelConfigAPI.updateModelConfig(config.data.id, {
+        model_id: config.data.modelId,
+        base_url: config.data.baseUrl,
+        api_key: config.data.apiKey
+      })
+      MessagePlugin.success(`${config.title}配置更新成功`)
+    } else {
+      // 创建配置
+      const result = await modelConfigAPI.createConfig(type, {
+        model_id: config.data.modelId,
+        base_url: config.data.baseUrl,
+        api_key: config.data.apiKey
+      })
+      config.data.id = result.id
+      MessagePlugin.success(`${config.title}配置保存成功`)
+    }
+  } catch (error: any) {
+    MessagePlugin.error(error.message || '保存失败，请重试')
   } finally {
-    saving.value.brain = false
+    saving[type] = false
   }
 }
 
-const saveCodeConfig = async () => {
-  saving.value.code = true
+// 通用删除配置方法
+const deleteConfig = async (type: 'brain' | 'code' | 'writing') => {
+  const config = configs.find(c => c.type === type)
+  if (!config || !config.data.id) return
+
   try {
-    // TODO: 调用后端API保存配置
-    MessagePlugin.success('代码实验配置保存成功')
-  } catch (error) {
-    MessagePlugin.error('保存失败，请重试')
-  } finally {
-    saving.value.code = false
+    await modelConfigAPI.deleteModelConfig(config.data.id)
+    config.data = { apiKey: '', baseUrl: '', modelId: '' }
+    MessagePlugin.success(`${config.title}配置已删除`)
+  } catch (error: any) {
+    MessagePlugin.error(error.message || '删除失败')
   }
 }
 
-const saveWritingConfig = async () => {
-  saving.value.writing = true
-  try {
-    // TODO: 调用后端API保存配置
-    MessagePlugin.success('论文写作配置保存成功')
-  } catch (error) {
-    MessagePlugin.error('保存失败，请重试')
-  } finally {
-    saving.value.writing = false
-  }
-}
-
-// 加载配置方法（暂时为空，等待后端API）
+// 加载配置方法
 const loadAllConfigs = async () => {
   loading.value = true
   try {
-    // TODO: 调用后端API加载配置
+    // 加载各个配置
+    for (const config of configs) {
+      try {
+        const result = await modelConfigAPI.getConfig(config.type)
+        config.data = {
+          id: result.id,
+          apiKey: '', // 安全考虑，不显示api_key
+          baseUrl: result.base_url,
+          modelId: result.model_id
+        }
+      } catch (error) {
+        config.data = { apiKey: '', baseUrl: '', modelId: '' }
+      }
+    }
     MessagePlugin.success('配置加载成功')
-  } catch (error) {
-    MessagePlugin.error('配置加载失败')
+  } catch (error: any) {
+    MessagePlugin.error(error.message || '配置加载失败')
   } finally {
     loading.value = false
   }
 }
 
-// 清空配置方法（暂时为空，等待后端API）
-const clearAllConfigs = () => {
+// 清空配置方法
+const clearAllConfigs = async () => {
   try {
-    // TODO: 调用后端API清空配置
-    brainConfig.value = { apiKey: '', baseUrl: '', modelId: '' }
-    codeConfig.value = { apiKey: '', baseUrl: '', modelId: '' }
-    writingConfig.value = { apiKey: '', baseUrl: '', modelId: '' }
+    await modelConfigAPI.clearAllModelConfigs()
+    for (const config of configs) {
+      config.data = { apiKey: '', baseUrl: '', modelId: '' }
+    }
     MessagePlugin.success('所有配置已清空')
-  } catch (error) {
-    MessagePlugin.error('清空配置失败')
+  } catch (error: any) {
+    MessagePlugin.error(error.message || '清空配置失败')
   }
 }
 
@@ -334,6 +310,7 @@ onMounted(async () => {
 .button-container {
   display: flex;
   justify-content: center;
+  gap: 10px;
   margin-top: 16px;
 }
 

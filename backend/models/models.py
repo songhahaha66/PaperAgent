@@ -24,6 +24,17 @@ class SystemConfig(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+class ModelConfig(Base):
+    __tablename__ = "model_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    type = Column(String(50), nullable=False)  # 模型种类：brain(中枢大脑), code(代码实验), writing(论文写作)
+    model_id = Column(String(50), nullable=False)  # 模型ID
+    base_url = Column(String(100), nullable=False)  # 模型URL
+    api_key = Column(String(255), nullable=False)  # API密钥
+    is_active = Column(Boolean, default=True)  # 是否激活
+    created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间
+
 class PaperTemplate(Base):
     __tablename__ = "paper_templates"
     

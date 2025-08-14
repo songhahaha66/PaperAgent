@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from models import models
 from database.database import engine
-from routers import auth_router, template_router, file_router
+from routers import auth_router, template_router, file_router, model_config_router
 
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)
@@ -39,6 +39,7 @@ async def health_check():
 app.include_router(auth_router.router)
 app.include_router(template_router.router)
 app.include_router(file_router.router)
+app.include_router(model_config_router.router)
 
 if __name__ == "__main__":
     import uvicorn

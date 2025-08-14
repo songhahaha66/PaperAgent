@@ -68,6 +68,112 @@ def update_system_config(db: Session, is_allow_register: bool):
     db.refresh(config)
     return config
 
+# ModelConfig相关的CRUD操作
+def create_model_config(db: Session, config: schemas.ModelConfigCreate):
+    """创建模型配置"""
+    try:
+        # 检查是否已存在相同类型的配置
+        existing_config = db.query(models.ModelConfig).filter(
+            models.ModelConfig.type == config.type
+        ).first()
+        
+        if existing_config:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model config for type '{config.type}' already exists"
+            )
+        
+        db_config = models.ModelConfig(
+            type=config.type,
+            model_id=config.model_id,
+            base_url=config.base_url,
+            api_key=config.api_key
+        )
+        
+        db.add(db_config)
+        db.commit()
+        db.refresh(db_config)
+        return db_config
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model config creation failed: {str(e)}"
+        )
+
+def get_model_config(db: Session, config_id: int):
+    """根据ID获取模型配置（不包含api_key）"""
+    return db.query(models.ModelConfig).filter(models.ModelConfig.id == config_id).first()
+
+def get_model_config_by_type(db: Session, config_type: str):
+    """根据类型获取模型配置（不包含api_key）"""
+    return db.query(models.ModelConfig).filter(models.ModelConfig.type == config_type).first()
+
+def get_all_model_configs(db: Session, skip: int = 0, limit: int = 100):
+    """获取所有模型配置（不包含api_key）"""
+    return db.query(models.ModelConfig).offset(skip).limit(limit).all()
+
+def update_model_config(db: Session, config_id: int, config_update: schemas.ModelConfigUpdate):
+    """更新模型配置"""
+    db_config = get_model_config(db, config_id)
+    if not db_config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model config not found"
+        )
+    
+    try:
+        # 使用model_dump()替代dict()以兼容新版本Pydantic
+        update_data = config_update.model_dump(exclude_unset=True) if hasattr(config_update, 'model_dump') else config_update.dict(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            setattr(db_config, field, value)
+        
+        db.commit()
+        db.refresh(db_config)
+        return db_config
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model config update failed: {str(e)}"
+        )
+
+def delete_model_config(db: Session, config_id: int):
+    """删除模型配置"""
+    db_config = get_model_config(db, config_id)
+    if not db_config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model config not found"
+        )
+    
+    try:
+        db.delete(db_config)
+        db.commit()
+        return {"message": "Model config deleted successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model config deletion failed: {str(e)}"
+        )
+
+def clear_all_model_configs(db: Session):
+    """清空所有模型配置"""
+    try:
+        db.query(models.ModelConfig).delete()
+        db.commit()
+        return {"message": "All model configs cleared successfully"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to clear model configs: {str(e)}"
+        )
+
 # 模板相关的CRUD操作
 def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, user_id: int, file_content: str = ""):
     """创建论文模板"""

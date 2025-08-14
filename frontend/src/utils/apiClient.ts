@@ -25,14 +25,28 @@ export class ApiClient {
       ...options,
     }
 
+    // 自动添加Authorization header
+    const authStore = useAuthStore()
+    const token = authStore.token
+    
+    if (token) {
+      config.headers = {
+        'Authorization': `Bearer ${token}`,
+        ...config.headers,
+      }
+    }
+
     // 只有在有body且没有明确设置Content-Type时才设置默认的Content-Type
     if (options.body && !(options.headers && 'Content-Type' in options.headers)) {
       config.headers = {
         'Content-Type': 'application/json',
-        ...options.headers,
+        ...config.headers,
       }
     } else if (options.headers) {
-      config.headers = options.headers
+      config.headers = {
+        ...config.headers,
+        ...config.headers,
+      }
     }
 
     try {
