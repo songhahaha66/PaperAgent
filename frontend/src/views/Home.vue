@@ -1,71 +1,13 @@
 <template>
   <div class="home-page">
-    <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
-      <div class="sidebar-header">
-        <h2 v-if="!isSidebarCollapsed">PaperAgent</h2>
-        <t-button 
-          theme="default" 
-          shape="square" 
-          variant="text" 
-          @click="toggleSidebar"
-          class="sidebar-toggle-btn"
-        >
-          <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-        </t-button>
-      </div>
-      
-      <div class="sidebar-content" v-if="!isSidebarCollapsed">
-        <div class="menu-section">
-          <t-button theme="primary" block @click="createNewTask">
-            新建工作
-          </t-button>
-        </div>
-        
-        <div class="menu-section">
-          <div class="menu-title">
-            <browse-icon />
-            <span>历史工作</span>
-          </div>
-          <div class="history-list">
-            <t-card 
-              v-for="item in historyItems" 
-              :key="item.id" 
-              class="history-item"
-              :class="{ 'active': activeHistoryId === item.id }"
-              @click="selectHistory(item.id)"
-            >
-              <div class="history-item-content">
-                <h4>{{ item.title }}</h4>
-                <p>{{ item.date }}</p>
-              </div>
-            </t-card>
-          </div>
-        </div>
-      </div>
-      
-      <div class="sidebar-footer" v-if="!isSidebarCollapsed">
-        <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-          <div class="user-info">
-            <t-avatar class="user-avatar" :image="userAvatar"></t-avatar>
-            <span class="user-name">{{ userName }}</span>
-          </div>
-        </t-dropdown>
-        
-        <!-- API Key 设置弹窗 -->
-        <t-dialog 
-          v-model:visible="showApiKeyDialog" 
-          header="API Key 设置"
-          @confirm="saveApiKey"
-          @cancel="cancelApiKey"
-        >
-          <t-form :data="apiKeyForm" @submit="saveApiKey">
-            <t-form-item label="API Key" name="apiKey">
-              <t-input v-model="apiKeyForm.apiKey" type="password" placeholder="请输入您的 API Key"></t-input>
-            </t-form-item>
-          </t-form>
-        </t-dialog>
-      </div>
-    </div>
+    <Sidebar
+      :is-sidebar-collapsed="isSidebarCollapsed"
+      :active-history-id="activeHistoryId"
+      :history-items="historyItems"
+      @toggle-sidebar="toggleSidebar"
+      @create-new-task="createNewTask"
+      @select-history="selectHistory"
+    />
     
     <div class="main-content">
       <div class="workspace-header" v-if="activeHistoryId">
@@ -165,10 +107,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { BrowseIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 import { useAuthStore } from '@/stores/auth';
+import Sidebar from '@/components/Sidebar.vue';
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false);
@@ -339,10 +281,6 @@ const toggleSidebar = () => {
 const router = useRouter();
 const authStore = useAuthStore();
 
-// 用户信息
-const userName = computed(() => authStore.currentUser?.username || '用户');
-const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
-
 // 检查用户认证状态
 onMounted(() => {
   // 移除重复的认证检查，路由守卫已经处理
@@ -390,54 +328,6 @@ const selectedHistory = computed(() => {
 const selectHistory = (id: number) => {
   activeHistoryId.value = id;
 };
-
-// 用户菜单选项
-const userOptions = [
-  {
-    content: '我的模板',
-    value: 'template',
-    onClick: () => {
-      router.push('/template');
-    }
-  },
-  {
-    content: 'API Key 设置',
-    value: 'api-key',
-    onClick: () => {
-      showApiKeyDialog.value = true;
-    }
-  },
-  {
-    content: '退出登录',
-    value: 'logout',
-    onClick: () => {
-      authStore.logout();
-      MessagePlugin.success('已退出登录');
-      router.push('/login');
-    }
-  }
-];
-
-// 控制API Key对话框显示
-const showApiKeyDialog = ref(false);
-
-// API Key表单数据
-const apiKeyForm = ref({
-  apiKey: ''
-});
-
-// 保存API Key
-const saveApiKey = () => {
-  // 这里可以添加保存API Key的逻辑
-  console.log('保存API Key:', apiKeyForm.value.apiKey);
-  showApiKeyDialog.value = false;
-  MessagePlugin.success('API Key 保存成功');
-};
-
-// 取消API Key设置
-const cancelApiKey = () => {
-  showApiKeyDialog.value = false;
-};
 </script>
 
 <style>
@@ -462,123 +352,6 @@ html, body {
   width: 100vw;
   background: #f5f7fa;
   overflow: hidden;
-}
-
-.sidebar {
-  width: 300px;
-  background: white;
-  border-right: 1px solid #eee;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
-  transition: width 0.3s ease;
-  overflow: hidden;
-}
-
-.sidebar-collapsed {
-  width: 60px;
-}
-
-.sidebar-header {
-  padding: 10px;
-  border-bottom: 1px solid #eee;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.sidebar-content {
-  flex: 1;
-  padding: 20px 15px;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.menu-section {
-  margin-bottom: 25px;
-}
-
-.menu-title {
-  display: flex;
-  align-items: center;
-  font-weight: 500;
-  color: #2c3e50;
-  margin-bottom: 12px;
-  padding: 5px 10px;
-}
-
-.menu-title .t-icon {
-  margin-right: 8px;
-}
-
-.new-task-button {
-    width: 100%;
-    text-align: center;
-    vertical-align: middle;
-}
-
-.history-list {
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.history-item {
-  margin-bottom: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.history-item:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.history-item.active {
-  border-left: 4px solid #3498db;
-}
-
-.history-item-content h4 {
-  margin: 0 0 5px 0;
-  font-size: 14px;
-  color: #2c3e50;
-}
-
-.history-item-content p {
-  margin: 0;
-  font-size: 12px;
-  color: #7f8c8d;
-}
-
-.sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid #eee;
-}
-
-/* 用户信息样式 */
-.user-info {
-  display: flex;
-  align-items: center;
-  padding: 10px 15px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.user-info:hover {
-  background-color: #f0f0f0;
-}
-
-.user-avatar {
-  margin-right: 10px;
-}
-
-.user-name {
-  font-size: 14px;
-  color: #2c3e50;
-}
-
-/* 侧边栏折叠按钮 */
-.sidebar-toggle-btn {
-  margin-left: auto;
 }
 
 .main-content {
