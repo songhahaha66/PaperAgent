@@ -109,12 +109,14 @@ const toggleSidebar = () => {
 
 // 新建工作
 const createNewTask = () => {
-  emit('create-new-task');
+  // 跳转到home页面
+  router.push('/home');
 };
 
 // 选择历史工作
 const selectHistory = (id: number) => {
-  emit('select-history', id);
+  // 跳转到对应的工作页面
+  router.push(`/work/${id}`);
 };
 
 // 用户信息
