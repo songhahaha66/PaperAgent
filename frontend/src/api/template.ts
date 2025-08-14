@@ -144,7 +144,7 @@ class TemplateAPI {
     const formData = new FormData()
     formData.append('file', file)
 
-    const url = `${API_BASE_URL}/templates/upload`
+    const url = `${API_BASE_URL}/files/upload`
     
     try {
       const response = await fetch(url, {
