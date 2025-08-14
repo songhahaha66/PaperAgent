@@ -13,6 +13,7 @@
       <div class="page-header">
         <h1>API Key 配置</h1>
         <p>配置不同模型服务的API密钥和连接信息</p>
+        <p>此页面不回显api-key，这是正常现象</p>
       </div>
 
       <div class="config-grid">
@@ -22,8 +23,14 @@
           class="config-card" 
           :header="config.title"
         >
-          <t-form :data="config.data" @submit="() => saveConfig(config.type)" layout="vertical">
-            <t-form-item label="API Key" name="apiKey" :rules="[{ required: true, message: '请输入API Key' }]">
+          <t-form 
+            :ref="(el) => setFormRef(el, config.type)"
+            :data="config.data" 
+            @submit="() => saveConfig(config.type)" 
+            layout="vertical"
+            :rules="formRules"
+          >
+            <t-form-item label="API Key" name="apiKey" :rules="formRules.apiKey">
               <t-input 
                 v-model="config.data.apiKey" 
                 type="password" 
@@ -31,14 +38,14 @@
                 clearable
               />
             </t-form-item>
-            <t-form-item label="Base URL" name="baseUrl" :rules="[{ required: true, message: '请输入Base URL' }]">
+            <t-form-item label="Base URL" name="baseUrl" :rules="formRules.baseUrl">
               <t-input 
                 v-model="config.data.baseUrl" 
                 placeholder="例如: https://api.openai.com/v1"
                 clearable
               />
             </t-form-item>
-            <t-form-item label="Model ID" name="modelId" :rules="[{ required: true, message: '请输入Model ID' }]">
+            <t-form-item label="Model ID" name="modelId" :rules="formRules.modelId">
               <t-input 
                 v-model="config.data.modelId" 
                 placeholder="例如: gpt-4"
@@ -47,7 +54,13 @@
             </t-form-item>
             <t-form-item>
               <div class="button-container">
-                <t-button theme="primary" type="submit" :loading="saving[config.type]" size="middle">
+                <t-button 
+                  theme="primary" 
+                  type="submit" 
+                  :loading="saving[config.type]" 
+                  size="middle"
+                  :disabled="!isFormValid(config.type)"
+                >
                   {{ config.data.id ? '更新配置' : '保存配置' }}
                 </t-button>
                 <t-button v-if="config.data.id" theme="danger" @click="() => deleteConfig(config.type)" size="middle">
@@ -75,6 +88,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
+import type { FormInstanceFunctions } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
 import { modelConfigAPI } from '@/api/modelConfig'
 
@@ -116,6 +130,27 @@ const historyItems = ref([
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null)
 
+// 表单引用
+const formRefs = reactive<Record<string, FormInstanceFunctions | null>>({
+  brain: null,
+  code: null,
+  writing: null
+})
+
+// 表单验证规则
+const formRules = {
+  apiKey: [{ required: true, message: '请输入API Key', trigger: 'blur' }],
+  baseUrl: [
+    { required: true, message: '请输入Base URL', trigger: 'blur' },
+    { 
+      pattern: /^https?:\/\/.+/, 
+      message: '请输入有效的URL地址', 
+      trigger: 'blur' 
+    }
+  ],
+  modelId: [{ required: true, message: '请输入Model ID', trigger: 'blur' }]
+}
+
 // 配置数据 - 使用循环渲染，大大减少重复代码
 const configs = reactive([
   {
@@ -156,6 +191,37 @@ const saving = reactive({
 
 const loading = ref(false)
 
+// 设置表单引用
+const setFormRef = (el: any, type: string) => {
+  if (el) {
+    formRefs[type] = el
+  }
+}
+
+// 检查表单是否有效
+const isFormValid = (type: string): boolean => {
+  const config = configs.find(c => c.type === type)
+  if (!config) return false
+  
+  return config.data.apiKey.trim() !== '' && 
+         config.data.baseUrl.trim() !== '' && 
+         config.data.modelId.trim() !== '' &&
+         /^https?:\/\/.+/.test(config.data.baseUrl.trim())
+}
+
+// 验证表单
+const validateForm = async (type: string): Promise<boolean> => {
+  const formRef = formRefs[type]
+  if (!formRef) return false
+  
+  try {
+    const result = await formRef.validate()
+    return result === true
+  } catch (error) {
+    return false
+  }
+}
+
 // 侧边栏事件处理
 const toggleSidebar = () => {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
@@ -173,6 +239,13 @@ const selectHistory = (id: number) => {
 const saveConfig = async (type: 'brain' | 'code' | 'writing') => {
   const config = configs.find(c => c.type === type)
   if (!config) return
+
+  // 先验证表单
+  const isValid = await validateForm(type)
+  if (!isValid) {
+    MessagePlugin.warning('请检查表单输入，确保所有必填字段都已填写且格式正确')
+    return
+  }
 
   saving[type] = true
   try {
