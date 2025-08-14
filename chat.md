@@ -41,3 +41,4 @@
 [songhahaha66][12:19 15:20:00]：.step-actions {两个按钮在两头显示
 [songhahaha66][08-14 23:39:45]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：现在如果所有api都放在main里边会显得太乱了，请你做一下拆分
 [songhahaha66][08-14 23:54]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在侧边栏user-info不显示头像了，显示用户名 然后小标题邮箱
+[songhahaha66][08-14 23:58]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在template.vue没有引用sidebar组件请你修改
