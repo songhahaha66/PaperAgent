@@ -10,104 +10,148 @@
     />
     
     <div class="home-container">
-      <div class="welcome-section">
-        <h1>欢迎使用论文Agent</h1>
+      <!-- 欢迎标题 -->
+      <div class="welcome-header">
+        <h1>你好，{{ userName }}</h1>
         <p>智能论文生成助手，让学术写作更高效</p>
       </div>
       
-      <div class="action-section">
-        <t-card title="快速开始" class="action-card">
-          <div class="action-buttons">
-            <t-button 
-              theme="primary" 
-              size="large" 
-              @click="createNewWork"
-              class="action-button"
-            >
-              <template #icon>
-                <t-icon name="add" />
-              </template>
-              创建新工作
-            </t-button>
-            
-            <t-button 
-              theme="default" 
-              size="large" 
-              @click="viewHistory"
-              class="action-button"
-            >
-              <template #icon>
-                <t-icon name="time" />
-              </template>
-              查看历史工作
-            </t-button>
-          </div>
-        </t-card>
-      </div>
-      
-      <div class="features-section">
-        <t-row :gutter="[16, 16]">
-          <t-col :span="8">
-            <t-card title="智能建模" class="feature-card">
-              <template #icon>
-                <t-icon name="chart" theme="primary" />
-              </template>
-              <p>基于AI的智能建模系统，自动分析研究问题并建立数学模型</p>
-            </t-card>
-          </t-col>
-          
-          <t-col :span="8">
-            <t-card title="代码执行" class="feature-card">
-              <template #icon>
-                <t-icon name="code" theme="success" />
-              </template>
-              <p>自动生成并执行Python代码，进行数值模拟和数据分析</p>
-            </t-card>
-          </t-col>
-          
-          <t-col :span="8">
-            <t-card title="论文生成" class="feature-card">
-              <template #icon>
-                <t-icon name="file" theme="warning" />
-              </template>
-              <p>智能生成结构化的学术论文，包含摘要、引言、方法等完整章节</p>
-            </t-card>
-          </t-col>
-        </t-row>
-      </div>
-      
-      <div class="recent-section" v-if="recentWorks.length > 0">
-        <t-card title="最近工作" class="recent-card">
-          <t-list>
-            <t-list-item 
-              v-for="work in recentWorks" 
-              :key="work.id"
-              @click="openWork(work.id)"
-              class="recent-work-item"
-            >
-              <template #content>
-                <div class="work-info">
-                  <h4>{{ work.title }}</h4>
-                  <p>{{ work.date }}</p>
-                </div>
-              </template>
-              <template #action>
-                <t-button theme="primary" variant="text" size="small">
-                  继续工作
+      <!-- 主要任务创建区域 -->
+      <div class="main-task-area">
+        <div class="input-container">
+          <!-- 第一阶段：输入问题和上传附件 -->
+          <div v-if="currentStep === 1" class="step-content">
+            <div class="input-wrapper">
+              <t-textarea
+                v-model="researchQuestion"
+                placeholder="请详细描述您要研究的学术问题，例如：计算100平方米家庭使用空调的降温速率研究..."
+                :autosize="{ minRows: 4, maxRows: 8 }"
+                class="question-input"
+              />
+              
+              <!-- 附件按钮 - 左下角 -->
+              <div class="attachment-btn">
+                <t-upload
+                  v-model="uploadedFiles"
+                  :action="uploadAction"
+                  :headers="uploadHeaders"
+                  :data="uploadData"
+                  :multiple="true"
+                  :accept="'.pdf,.doc,.docx,.tex,.txt'"
+                  :max="5"
+                  :format-response="formatUploadResponse"
+                  @success="onUploadSuccess"
+                  @fail="onUploadFail"
+                  class="file-upload"
+                >
+                  <t-button theme="default" variant="text" size="small">
+                    <template #icon>
+                      <t-icon name="attach" />
+                    </template>
+                    附件
+                  </t-button>
+                </t-upload>
+                <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
+              </div>
+              
+              <!-- 下一步按钮 - 右下角 -->
+              <div class="next-btn-wrapper">
+                <t-button 
+                  theme="primary" 
+                  size="small" 
+                  @click="nextStep"
+                  :disabled="!researchQuestion.trim()"
+                  class="next-btn"
+                >
+                  下一步
+                  <template #icon>
+                    <t-icon name="arrow-right" />
+                  </template>
                 </t-button>
-              </template>
-            </t-list-item>
-          </t-list>
-        </t-card>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 第二阶段：选择模板 -->
+          <div v-if="currentStep === 2" class="step-content">
+            <h3>选择论文模板</h3>
+            
+            <!-- 加载状态 -->
+            <div v-if="loading" class="loading-state">
+              <t-loading size="large" />
+              <p>正在加载您的模板...</p>
+            </div>
+            
+            <!-- 模板列表 -->
+            <div v-else-if="availableTemplates.length > 0" class="template-grid">
+              <div 
+                v-for="template in availableTemplates" 
+                :key="template.id"
+                :class="['template-card', { 'selected': selectedTemplateId === template.id }]"
+                @click="selectTemplate(template.id)"
+              >
+                <div class="template-icon">
+                  <t-icon name="file" theme="primary" />
+                </div>
+                <div class="template-info">
+                  <h4>{{ template.name }}</h4>
+                  <p>{{ template.description || '标准学术论文模板' }}</p>
+                  <span class="template-category">{{ template.category || '未分类' }}</span>
+                </div>
+                <div class="template-check" v-if="selectedTemplateId === template.id">
+                  <t-icon name="check" theme="success" />
+                </div>
+              </div>
+            </div>
+            
+            <!-- 无模板状态 -->
+            <div v-else class="no-template-state">
+              <div class="no-template-icon">
+                <t-icon name="file" theme="default" size="48px" />
+              </div>
+              <h4>暂无模板</h4>
+              <p>您还没有创建任何论文模板</p>
+              <t-button theme="primary" variant="outline" @click="goToTemplatePage">
+                去创建模板
+              </t-button>
+            </div>
+            
+            <div class="step-actions">
+              <t-button 
+                theme="default" 
+                size="large" 
+                @click="prevStep"
+                class="prev-btn"
+              >
+                上一步
+              </t-button>
+              
+              <t-button 
+                theme="success" 
+                size="large" 
+                @click="startWork"
+                :disabled="!selectedTemplateId"
+                class="start-btn"
+              >
+                <template #icon>
+                  <t-icon name="play" />
+                </template>
+                开始工作
+              </t-button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
+import { MessagePlugin } from 'tdesign-vue-next';
+import { templateAPI, type PaperTemplate } from '@/api/template';
 import Sidebar from '@/components/Sidebar.vue';
 
 const router = useRouter();
@@ -115,6 +159,27 @@ const authStore = useAuthStore();
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false);
+
+// 任务创建步骤
+const currentStep = ref(1);
+
+// 研究问题
+const researchQuestion = ref('');
+
+// 选择的模板ID
+const selectedTemplateId = ref<number | null>(null);
+
+// 上传的文件
+const uploadedFiles = ref([]);
+
+// 可用模板列表
+const availableTemplates = ref<PaperTemplate[]>([]);
+
+// 加载状态
+const loading = ref(false);
+
+// 用户名
+const userName = computed(() => authStore.currentUser?.username || '用户');
 
 // 历史工作数据
 const historyItems = ref([
@@ -141,60 +206,123 @@ const historyItems = ref([
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
 
-// 最近工作数据
-const recentWorks = ref([
-  {
-    id: 1,
-    title: '计算100平方的家庭使用空调降温速率研究',
-    date: '2024-08-10 14:30'
-  },
-  {
-    id: 2,
-    title: '区块链技术在金融领域的创新',
-    date: '2024-08-05 09:15'
-  },
-  {
-    id: 3,
-    title: '可再生能源与可持续发展',
-    date: '2024-07-28 16:45'
+// 上传相关配置
+const uploadAction = 'http://localhost:8000/upload'; // 替换为实际的上传接口
+const uploadHeaders = {
+  'Authorization': `Bearer ${authStore.token}`
+};
+const uploadData = {
+  type: 'research_attachment'
+};
+
+// 加载用户模板
+const loadUserTemplates = async () => {
+  if (!authStore.token) return;
+  
+  loading.value = true;
+  try {
+    const templates = await templateAPI.getUserTemplates(authStore.token);
+    availableTemplates.value = templates;
+  } catch (error) {
+    console.error('加载模板失败:', error);
+    MessagePlugin.error('加载模板失败');
+  } finally {
+    loading.value = false;
   }
-]);
+};
+
+// 下一步
+const nextStep = () => {
+  if (currentStep.value === 1) {
+    // 进入第二步时加载模板
+    loadUserTemplates();
+  }
+  
+  if (currentStep.value < 2) {
+    currentStep.value++;
+  }
+};
+
+// 上一步
+const prevStep = () => {
+  if (currentStep.value > 1) {
+    currentStep.value--;
+  }
+};
+
+// 选择模板
+const selectTemplate = (templateId: number) => {
+  selectedTemplateId.value = templateId;
+};
+
+// 跳转到模板页面
+const goToTemplatePage = () => {
+  router.push('/template');
+};
+
+// 上传成功回调
+const onUploadSuccess = (response: any, file: any) => {
+  MessagePlugin.success(`文件 ${file.name} 上传成功`);
+};
+
+// 上传失败回调
+const onUploadFail = (error: any, file: any) => {
+  MessagePlugin.error(`文件 ${file.name} 上传失败`);
+};
+
+// 格式化上传响应
+const formatUploadResponse = (response: any) => {
+  return {
+    name: response.filename,
+    url: response.file_url,
+    status: 'success'
+  };
+};
+
+// 开始工作
+const startWork = () => {
+  if (researchQuestion.value.trim() && selectedTemplateId.value) {
+    // 生成新的工作ID
+    const newWorkId = Date.now();
+    
+    // 创建新的工作记录
+    const newWork = {
+      id: newWorkId,
+      title: researchQuestion.value.length > 50 ? researchQuestion.value.substring(0, 50) + '...' : researchQuestion.value,
+      date: new Date().toLocaleString(),
+      content: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n附件数量：${uploadedFiles.value.length}`
+    };
+    
+    // 添加到历史记录
+    historyItems.value.unshift(newWork);
+    
+    // 跳转到工作页面
+    router.push(`/work/${newWorkId}`);
+  }
+};
+
+// 获取选中的模板名称
+const getSelectedTemplateName = () => {
+  const template = availableTemplates.value.find(t => t.id === selectedTemplateId.value);
+  return template ? template.name : '未选择';
+};
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
   isSidebarCollapsed.value = !isSidebarCollapsed.value;
 };
 
-// 创建新工作
-const createNewWork = () => {
-  // 生成新的工作ID（这里简单使用时间戳）
-  const newWorkId = Date.now();
-  router.push(`/work/${newWorkId}`);
-};
-
-// 查看历史工作
-const viewHistory = () => {
-  // 跳转到第一个历史工作
-  if (recentWorks.value.length > 0) {
-    router.push(`/work/${recentWorks.value[0].id}`);
-  }
-};
-
-// 打开特定工作
-const openWork = (workId: number) => {
-  router.push(`/work/${workId}`);
-};
-
-// 新建工作（侧边栏调用）
+// 创建新工作（侧边栏调用）
 const createNewTask = () => {
-  // 这个方法现在由Sidebar组件直接处理路由跳转
-  console.log('创建新任务');
+  currentStep.value = 1;
+  researchQuestion.value = '';
+  selectedTemplateId.value = null;
+  uploadedFiles.value = [];
 };
 
 // 选择历史工作（侧边栏调用）
 const selectHistory = (id: number) => {
-  // 这个方法现在由Sidebar组件直接处理路由跳转
-  console.log('选择历史工作:', id);
+  activeHistoryId.value = id;
 };
 
 // 检查用户认证状态
@@ -208,118 +336,251 @@ onMounted(() => {
   display: flex;
   height: 100vh;
   width: 100vw;
-  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  background: #ffffff;
   overflow: hidden;
 }
 
 .home-container {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
   padding: 40px 20px;
   overflow-y: auto;
+  max-width: 800px;
+  margin: 0 auto;
 }
 
-.welcome-section {
+.welcome-header {
   text-align: center;
   margin-bottom: 60px;
 }
 
-.welcome-section h1 {
+.welcome-header h1 {
   font-size: 3rem;
   color: #2c3e50;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   font-weight: 700;
 }
 
-.welcome-section p {
+.welcome-header p {
   font-size: 1.2rem;
   color: #7f8c8d;
   margin: 0;
 }
 
-.action-section {
-  margin-bottom: 60px;
+.main-task-area {
+  width: 100%;
+  max-width: 600px;
 }
 
-.action-card {
+.input-container {
+  background: #f8f9fa;
+  border-radius: 12px;
+  padding: 40px;
   text-align: center;
+  border: 2px solid transparent;
+  transition: all 0.3s ease;
 }
 
-.action-buttons {
+.input-container:focus-within {
+  border-color: #0052d9;
+  background: white;
+}
+
+.step-content h3 {
+  color: #2c3e50;
+  margin-bottom: 24px;
+  font-size: 1.5rem;
+}
+
+.input-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.question-input {
+  width: 100%;
+  margin-bottom: 0;
+}
+
+/* 附件按钮 - 左下角 */
+.attachment-btn {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
   display: flex;
-  gap: 20px;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-upload {
+  display: inline-block;
+}
+
+.file-count {
+  background: #0052d9;
+  color: white;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
   justify-content: center;
-  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 600;
 }
 
-.action-button {
-  min-width: 160px;
+/* 下一步按钮 - 右下角 */
+.next-btn-wrapper {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
 }
 
-.features-section {
-  margin-bottom: 60px;
+.next-btn {
+  min-width: 80px;
 }
 
-.feature-card {
-  height: 100%;
+/* 加载状态 */
+.loading-state {
   text-align: center;
+  padding: 40px 20px;
 }
 
-.feature-card .t-card__header {
-  justify-content: center;
+.loading-state p {
+  margin-top: 16px;
+  color: #7f8c8d;
 }
 
-.feature-card .t-icon {
-  font-size: 2rem;
+/* 无模板状态 */
+.no-template-state {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.no-template-icon {
+  margin-bottom: 16px;
+  color: #c0c4cc;
+}
+
+.no-template-state h4 {
+  color: #2c3e50;
+  margin: 0 0 8px 0;
+  font-size: 1.2rem;
+}
+
+.no-template-state p {
+  color: #7f8c8d;
+  margin: 0 0 24px 0;
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.template-card {
+  background: white;
+  border: 2px solid #e9ecef;
+  border-radius: 8px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  position: relative;
+}
+
+.template-card:hover {
+  border-color: #0052d9;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 82, 217, 0.1);
+}
+
+.template-card.selected {
+  border-color: #0052d9;
+  background: rgba(0, 82, 217, 0.05);
+}
+
+.template-icon {
   margin-bottom: 16px;
 }
 
-.feature-card p {
-  color: #666;
-  line-height: 1.6;
-  margin: 0;
+.template-icon .t-icon {
+  font-size: 2rem;
 }
 
-.recent-section {
-  margin-bottom: 40px;
-}
-
-.recent-card {
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.recent-work-item {
-  cursor: pointer;
-  transition: background-color 0.2s ease;
-}
-
-.recent-work-item:hover {
-  background-color: #f8f9fa;
-}
-
-.work-info h4 {
+.template-info h4 {
   margin: 0 0 8px 0;
   color: #2c3e50;
-  font-size: 1rem;
+  font-size: 1.1rem;
 }
 
-.work-info p {
-  margin: 0;
+.template-info p {
+  margin: 0 0 8px 0;
   color: #7f8c8d;
   font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.template-category {
+  display: inline-block;
+  background: #f0f0f0;
+  color: #666;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+}
+
+.template-check {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+
+.step-actions {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+.prev-btn,
+.start-btn {
+  min-width: 120px;
+  height: 48px;
+  font-size: 1.1rem;
+}
+
+.start-btn {
+  min-width: 140px;
 }
 
 @media (max-width: 768px) {
-  .welcome-section h1 {
+  .home-container {
+    padding: 20px 16px;
+  }
+  
+  .welcome-header h1 {
     font-size: 2rem;
   }
   
-  .action-buttons {
+  .input-container {
+    padding: 24px;
+  }
+  
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .step-actions {
     flex-direction: column;
     align-items: center;
   }
   
-  .action-button {
+  .prev-btn,
+  .start-btn {
     width: 100%;
     max-width: 300px;
   }
