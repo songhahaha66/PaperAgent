@@ -17,7 +17,7 @@ class User(Base):
     is_active = Column(Boolean, default=True)
 
 class SystemConfig(Base):
-    __tablename__ = "system_configs"
+    __tablename__ = "system_config"
     
     id = Column(Integer, primary_key=True, index=True)
     is_allow_register = Column(Boolean, nullable=False, default=True)
