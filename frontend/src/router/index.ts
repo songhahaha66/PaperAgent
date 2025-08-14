@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Introduction from '@/views/Introduction.vue'
 import Login from '@/views/Login.vue'
 import Home from '@/views/Home.vue'
+import Work from '@/views/Work.vue'
 import Template from '@/views/Template.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -23,6 +24,12 @@ const router = createRouter({
       path: '/home',
       name: 'Home',
       component: Home,
+      meta: { requiresAuth: true } // 需要登录才能访问
+    },
+    {
+      path: '/work/:work_id',
+      name: 'Work',
+      component: Work,
       meta: { requiresAuth: true } // 需要登录才能访问
     },
     {
