@@ -25,49 +25,52 @@
               <t-textarea
                 v-model="researchQuestion"
                 placeholder="请详细描述您要研究的学术问题，例如：计算100平方米家庭使用空调的降温速率研究..."
-                :autosize="{ minRows: 4, maxRows: 8 }"
+                :autosize="{ minRows: 5, maxRows: 8 }"
                 class="question-input"
               />
               
-              <!-- 附件按钮 - 左下角 -->
-              <div class="attachment-btn">
-                <t-upload
-                  v-model="uploadedFiles"
-                  :action="uploadAction"
-                  :headers="uploadHeaders"
-                  :data="uploadData"
-                  :multiple="true"
-                  :accept="'.pdf,.doc,.docx,.tex,.txt'"
-                  :max="5"
-                  :format-response="formatUploadResponse"
-                  @success="onUploadSuccess"
-                  @fail="onUploadFail"
-                  class="file-upload"
-                >
-                  <t-button theme="default" variant="text" size="small">
+              <!-- 按钮容器 -->
+              <div class="button-container">
+                <!-- 附件按钮 - 左下角 -->
+                <div class="attachment-btn">
+                  <t-upload
+                    v-model="uploadedFiles"
+                    :action="uploadAction"
+                    :headers="uploadHeaders"
+                    :data="uploadData"
+                    :multiple="true"
+                    :accept="'.pdf,.doc,.docx,.tex,.txt'"
+                    :max="5"
+                    :format-response="formatUploadResponse"
+                    @success="onUploadSuccess"
+                    @fail="onUploadFail"
+                    class="file-upload"
+                  >
+                    <t-button theme="default" variant="text" size="middle">
+                      <template #icon>
+                        <t-icon name="attach" />
+                      </template>
+                      附件
+                    </t-button>
+                  </t-upload>
+                  <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
+                </div>
+                
+                <!-- 下一步按钮 - 右下角 -->
+                <div class="next-btn-wrapper">
+                  <t-button 
+                    theme="primary" 
+                    size="middle" 
+                    @click="nextStep"
+                    :disabled="!researchQuestion.trim()"
+                    class="next-btn"
+                  >
+                    下一步
                     <template #icon>
-                      <t-icon name="attach" />
+                      <t-icon name="arrow-right" />
                     </template>
-                    附件
                   </t-button>
-                </t-upload>
-                <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
-              </div>
-              
-              <!-- 下一步按钮 - 右下角 -->
-              <div class="next-btn-wrapper">
-                <t-button 
-                  theme="primary" 
-                  size="small" 
-                  @click="nextStep"
-                  :disabled="!researchQuestion.trim()"
-                  class="next-btn"
-                >
-                  下一步
-                  <template #icon>
-                    <t-icon name="arrow-right" />
-                  </template>
-                </t-button>
+                </div>
               </div>
             </div>
           </div>
@@ -372,44 +375,39 @@ onMounted(() => {
 
 .main-task-area {
   width: 100%;
-  max-width: 600px;
+  max-width: 800px;
 }
 
-.input-container {
-  background: #f8f9fa;
-  border-radius: 12px;
-  padding: 40px;
-  text-align: center;
-  border: 2px solid transparent;
-  transition: all 0.3s ease;
-}
+
 
 .input-container:focus-within {
   border-color: #0052d9;
   background: white;
 }
 
-.step-content h3 {
-  color: #2c3e50;
-  margin-bottom: 24px;
-  font-size: 1.5rem;
-}
+
 
 .input-wrapper {
   position: relative;
-  width: 100%;
 }
 
 .question-input {
   width: 100%;
+  flex: 1;
   margin-bottom: 0;
+}
+
+/* 按钮容器 */
+.button-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  width: 100%;
 }
 
 /* 附件按钮 - 左下角 */
 .attachment-btn {
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -434,9 +432,8 @@ onMounted(() => {
 
 /* 下一步按钮 - 右下角 */
 .next-btn-wrapper {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .next-btn {
@@ -476,69 +473,7 @@ onMounted(() => {
   margin: 0 0 24px 0;
 }
 
-.template-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
 
-.template-card {
-  background: white;
-  border: 2px solid #e9ecef;
-  border-radius: 8px;
-  padding: 20px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  position: relative;
-}
-
-.template-card:hover {
-  border-color: #0052d9;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 82, 217, 0.1);
-}
-
-.template-card.selected {
-  border-color: #0052d9;
-  background: rgba(0, 82, 217, 0.05);
-}
-
-.template-icon {
-  margin-bottom: 16px;
-}
-
-.template-icon .t-icon {
-  font-size: 2rem;
-}
-
-.template-info h4 {
-  margin: 0 0 8px 0;
-  color: #2c3e50;
-  font-size: 1.1rem;
-}
-
-.template-info p {
-  margin: 0 0 8px 0;
-  color: #7f8c8d;
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-.template-category {
-  display: inline-block;
-  background: #f0f0f0;
-  color: #666;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 0.8rem;
-}
-
-.template-check {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-}
 
 .step-actions {
   display: flex;
@@ -546,12 +481,7 @@ onMounted(() => {
   justify-content: center;
 }
 
-.prev-btn,
-.start-btn {
-  min-width: 120px;
-  height: 48px;
-  font-size: 1.1rem;
-}
+
 
 .start-btn {
   min-width: 140px;
