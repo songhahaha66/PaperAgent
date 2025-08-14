@@ -60,12 +60,12 @@ PaperAgent 是一个AI驱动的论文生成系统，数据库设计需要支持�
 | id | SERIAL | PRIMARY KEY | 模板ID |
 | name | VARCHAR(100) | NOT NULL | 模板名称 |
 | description | TEXT |  | 模板描述 |
-| content | TEXT | NOT NULL | 模板内容(LaTeX格式) |
 | category | VARCHAR(50) |  | 模板分类 |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 更新时间 |
 | is_public | BOOLEAN | DEFAULT FALSE | 是否公开模板 |
 | created_by | INTEGER | FOREIGN KEY (users.id) | 创建者ID |
+| file_path | VARCHAR(50) | NOT NULL | 内容路径 |
 
 ### 5. 模型配置表 (model_configs)
 

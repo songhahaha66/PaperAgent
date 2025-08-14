@@ -394,6 +394,13 @@ const selectHistory = (id: number) => {
 // 用户菜单选项
 const userOptions = [
   {
+    content: '我的模板',
+    value: 'template',
+    onClick: () => {
+      router.push('/template');
+    }
+  },
+  {
     content: 'API Key 设置',
     value: 'api-key',
     onClick: () => {
