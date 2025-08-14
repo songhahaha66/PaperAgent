@@ -36,3 +36,27 @@ class SystemConfigResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class PaperTemplateBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    category: Optional[str] = None
+    is_public: bool = False
+
+class PaperTemplateCreate(PaperTemplateBase):
+    pass
+
+class PaperTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    is_public: Optional[bool] = None
+
+class PaperTemplateResponse(PaperTemplateBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    created_by: int
+    
+    class Config:
+        from_attributes = True
