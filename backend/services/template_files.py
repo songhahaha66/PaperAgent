@@ -68,10 +68,7 @@ class TemplateFileService:
         except Exception:
             return False
     
-    def file_exists(self, template_id: int, filename: str = None) -> bool:
-        """检查模板文件是否存在"""
-        file_path = self.generate_file_path(template_id, filename)
-        return Path(file_path).exists()
+
 
 # 创建全局实例
 template_file_service = TemplateFileService()

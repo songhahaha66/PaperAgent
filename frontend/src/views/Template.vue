@@ -137,14 +137,10 @@
       v-model:visible="showContentDialog"
       :header="`模板内容 - ${selectedTemplate?.name}`"
       width="900px"
+      @confirm="closeContentDialog"
+      @cancel="closeContentDialog"
     >
       <div class="content-viewer">
-        <div class="content-header">
-          <t-button theme="primary" @click="editTemplateContent">
-            编辑内容
-          </t-button>
-        </div>
-        
         <div class="content-display">
           <t-textarea
             v-model="templateContent"
@@ -154,22 +150,12 @@
           />
         </div>
       </div>
+      <template #footer>
+        <t-button theme="primary" @click="closeContentDialog">关闭</t-button>
+      </template>
     </t-dialog>
 
-    <!-- 编辑模板内容对话框 -->
-    <t-dialog
-      v-model:visible="showEditContentDialog"
-      header="编辑模板内容"
-      @confirm="saveTemplateContent"
-      @cancel="cancelEditContent"
-      width="900px"
-    >
-      <t-textarea
-        v-model="editingContent"
-        placeholder="请输入模板内容"
-        :autosize="{ minRows: 15, maxRows: 25 }"
-      />
-    </t-dialog>
+
     
     <!-- API Key 设置弹窗 -->
     <t-dialog 
@@ -546,36 +532,13 @@ const viewTemplateContent = async (template: PaperTemplate) => {
   }
 };
 
-// 编辑模板内容
-const showEditContentDialog = ref(false);
-const editingContent = ref('');
-
-const editTemplateContent = () => {
-  editingContent.value = templateContent.value;
-  showEditContentDialog.value = true;
+const closeContentDialog = () => {
+  showContentDialog.value = false;
+  selectedTemplate.value = null;
+  templateContent.value = '';
 };
 
-const saveTemplateContent = async () => {
-  if (!authStore.token || !selectedTemplate.value) return;
-  
-  try {
-    await templateAPI.updateTemplateContent(
-      authStore.token,
-      selectedTemplate.value.id,
-      editingContent.value
-    );
-    MessagePlugin.success('模板内容更新成功');
-    templateContent.value = editingContent.value;
-    showEditContentDialog.value = false;
-  } catch (error) {
-    MessagePlugin.error('更新模板内容失败');
-    console.error('更新模板内容失败:', error);
-  }
-};
 
-const cancelEditContent = () => {
-  showEditContentDialog.value = false;
-};
 
 // 检查用户认证状态
 onMounted(() => {
@@ -753,10 +716,7 @@ onMounted(() => {
   height: 100%;
 }
 
-.content-header {
-  margin-bottom: 20px;
-  text-align: right;
-}
+
 
 .content-display {
   flex: 1;

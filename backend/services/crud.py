@@ -202,34 +202,4 @@ def get_template_file_content(db: Session, template_id: int, user_id: int) -> st
             detail="Template file not found"
         )
 
-def update_template_file_content(db: Session, template_id: int, user_id: int, content: str) -> dict:
-    """更新模板文件内容"""
-    db_template = get_paper_template(db, template_id)
-    if not db_template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    # 检查权限：只有创建者可以修改
-    if db_template.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to modify this template"
-        )
-    
-    try:
-        # 更新文件内容
-        file_path = template_file_service.save_template_file(template_id, content)
-        
-        # 更新数据库中的文件路径
-        db_template.file_path = file_path
-        db.commit()
-        db.refresh(db_template)
-        
-        return {"message": "Template file updated successfully", "file_path": file_path}
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update template file: {str(e)}"
-        )
+

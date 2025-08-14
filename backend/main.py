@@ -174,17 +174,7 @@ async def get_template_content(
     content = crud.get_template_file_content(db, template_id, user.id)
     return {"content": content}
 
-@app.put("/templates/{template_id}/content")
-async def update_template_content(
-    template_id: int,
-    content: str,
-    current_user_email: str = Depends(auth.get_current_user),
-    db: Session = Depends(get_db)
-):
-    """更新模板文件内容"""
-    user = crud.get_user_by_email(db, current_user_email)
-    result = crud.update_template_file_content(db, template_id, user.id, content)
-    return result
+
 
 # 文件上传接口（用于创建模板时解析文件）
 @app.post("/templates/upload")
