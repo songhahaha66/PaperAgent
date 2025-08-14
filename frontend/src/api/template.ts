@@ -1,5 +1,5 @@
 // 模板管理API服务
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+import { apiClient } from '@/utils/apiClient'
 
 export interface PaperTemplate {
   id: number
@@ -40,37 +40,7 @@ export interface PaperTemplateUpdate {
 
 class TemplateAPI {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${API_BASE_URL}${endpoint}`
-    
-    const config: RequestInit = {
-      ...options,
-    }
-
-    // 只有在有body且没有明确设置Content-Type时才设置默认的Content-Type
-    if (options.body && !(options.headers && 'Content-Type' in options.headers)) {
-      config.headers = {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      }
-    } else if (options.headers) {
-      config.headers = options.headers
-    }
-
-    try {
-      const response = await fetch(url, config)
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
-      }
-      
-      return await response.json()
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error
-      }
-      throw new Error('网络请求失败')
-    }
+    return apiClient.request<T>(endpoint, options)
   }
 
   // 获取用户模板列表
@@ -141,32 +111,7 @@ class TemplateAPI {
 
   // 上传模板文件（创建模板时使用）
   async uploadTemplateFile(token: string, file: File): Promise<{ message: string; file_path: string; content: string }> {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const url = `${API_BASE_URL}/files/upload`
-    
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-        body: formData,
-      })
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
-      }
-      
-      return await response.json()
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error
-      }
-      throw new Error('网络请求失败')
-    }
+    return apiClient.uploadFile<{ message: string; file_path: string; content: string }>('/files/upload', file, token)
   }
 }
 

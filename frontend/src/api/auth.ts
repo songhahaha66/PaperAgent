@@ -1,5 +1,5 @@
 // 用户认证API服务
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+import { apiClient } from '@/utils/apiClient'
 
 export interface UserRegisterData {
   email: string
@@ -27,31 +27,7 @@ export interface TokenResponse {
 
 class AuthAPI {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-    const url = `${API_BASE_URL}/auth${endpoint}`
-    
-    const config: RequestInit = {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-      ...options,
-    }
-
-    try {
-      const response = await fetch(url, config)
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
-      }
-      
-      return await response.json()
-    } catch (error) {
-      if (error instanceof Error) {
-        throw error
-      }
-      throw new Error('网络请求失败')
-    }
+    return apiClient.request<T>(`/auth${endpoint}`, options)
   }
 
   // 用户注册
