@@ -137,16 +137,7 @@ class TemplateAPI {
     })
   }
 
-  // 更新模板文件内容
-  async updateTemplateContent(token: string, templateId: number, content: string): Promise<{ message: string; file_path: string }> {
-    return this.request<{ message: string; file_path: string }>(`/templates/${templateId}/content`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({ content }),
-    })
-  }
+
 
   // 上传模板文件（创建模板时使用）
   async uploadTemplateFile(token: string, file: File): Promise<{ message: string; file_path: string; content: string }> {
