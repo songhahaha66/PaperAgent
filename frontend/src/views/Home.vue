@@ -135,7 +135,7 @@
             <div class="step-actions">
               <t-button 
                 theme="default" 
-                size="large" 
+                size="middle" 
                 @click="prevStep"
                 class="prev-btn"
               >
@@ -144,7 +144,7 @@
               
               <t-button 
                 theme="success" 
-                size="large" 
+                size="middle" 
                 @click="startWork"
                 :disabled="!selectedTemplateId"
                 class="start-btn"
@@ -473,7 +473,7 @@ onMounted(() => {
 /* 模板列表项选中状态 */
 .t-list-item.selected {
   background-color: #e6f4ff;
-  border: 2px solid #0052d9;
+  border: 2px solid #000000;
   border-radius: 8px;
 }
 
@@ -507,11 +507,6 @@ onMounted(() => {
   justify-content: space-between;
 }
 
-
-
-.start-btn {
-  min-width: 140px;
-}
 
 @media (max-width: 768px) {
   .home-container {
