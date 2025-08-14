@@ -37,6 +37,30 @@ class SystemConfigResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# ModelConfig相关schemas
+class ModelConfigBase(BaseModel):
+    type: str  # brain(中枢大脑), code(代码实验), writing(论文写作)
+    model_id: str
+    base_url: str
+
+class ModelConfigCreate(ModelConfigBase):
+    api_key: str  # 创建时必须提供api_key
+
+class ModelConfigUpdate(BaseModel):
+    model_id: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None  # 更新时可以选择性提供api_key
+    is_active: Optional[bool] = None
+
+class ModelConfigResponse(ModelConfigBase):
+    id: int
+    is_active: bool
+    created_at: datetime
+    # 注意：响应中不包含api_key，确保安全性
+    
+    class Config:
+        from_attributes = True
+
 class PaperTemplateBase(BaseModel):
     name: str
     description: Optional[str] = None
