@@ -38,6 +38,7 @@
                     :action="uploadAction"
                     :headers="uploadHeaders"
                     :data="uploadData"
+                    :auto-upload="false"
                     :multiple="true"
                     :accept="'.pdf,.doc,.docx,.tex,.txt'"
                     :max="5"

@@ -45,8 +45,13 @@
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
       <t-dropdown :options="userOptions" placement="top-left" trigger="click">
         <div class="user-info">
-          <t-avatar class="user-avatar" :image="userAvatar"></t-avatar>
-          <span class="user-name">{{ userName }}</span>
+          <div class="user-avatar">
+            <span class="user-avatar-text">{{ userName.charAt(0).toUpperCase() }}</span>
+          </div>
+          <div class="user-details">
+            <div class="user-name">{{ userName }}</div>
+            <div class="user-email">{{ userEmail }}</div>
+          </div>
         </div>
       </t-dropdown>
       
@@ -121,6 +126,7 @@ const selectHistory = (id: number) => {
 
 // 用户信息
 const userName = computed(() => authStore.currentUser?.username || '用户');
+const userEmail = computed(() => authStore.currentUser?.email || '');
 const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
 
 // 历史工作数据
@@ -283,12 +289,36 @@ const cancelApiKey = () => {
 }
 
 .user-avatar {
-  margin-right: 10px;
+  width: 40px;
+  height: 40px;
+  background-color: #3498db;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-right: 15px;
+}
+
+.user-avatar-text {
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.user-details {
+  display: flex;
+  flex-direction: column;
 }
 
 .user-name {
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: 600;
   color: #2c3e50;
+}
+
+.user-email {
+  font-size: 12px;
+  color: #7f8c8d;
 }
 
 /* 侧边栏折叠按钮 */
