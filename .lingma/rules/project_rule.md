@@ -54,4 +54,4 @@
 - 保证最后创建新PR前你要提交全部修改的文件，这样才完整。
 - 当我认可后再进行commit并提交PR。
 - 你每次不用完成太多，完成我指定给你的任务后就请让我查看一下完成情况，让我审阅一下。
-- 每次与你对话后，请立刻先把我说的话追加到 `chat.md`中，用于记录ai对话(不记录ai的回复)。每一行的格式是 `[username][MM:DD HH:MM:SS]：[我说的话]`，至于username是什么，调用 `git config user.name`获取并记住它。注意：chat.md请采用append模式，即在文件末尾附加内容，不要改动之前内容
+- 每次与你对话后，请立刻先把我说的话追加到 `chat.md`中，用于记录ai对话(不记录ai的回复)。每一行的格式是 `[username][MM:DD HH:MM:SS]：[我说的话]`，至于username是什么，调用 `git config user.name`获取并记住它。时间获取调用指令win:`echo %date:~5,2%-%date:~8,2% %time:~0,8%` linux:`date +"%m-%d %H:%M:%S"` 注意：chat.md请采用append模式，即在文件末尾附加内容，不要改动之前内容
