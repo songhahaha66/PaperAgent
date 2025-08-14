@@ -55,19 +55,7 @@
         </div>
       </t-dropdown>
       
-      <!-- API Key 设置弹窗 -->
-      <t-dialog 
-        v-model:visible="showApiKeyDialog" 
-        header="API Key 设置"
-        @confirm="saveApiKey"
-        @cancel="cancelApiKey"
-      >
-        <t-form :data="apiKeyForm" @submit="saveApiKey">
-          <t-form-item label="API Key" name="apiKey">
-            <t-input v-model="apiKeyForm.apiKey" type="password" placeholder="请输入您的 API Key"></t-input>
-          </t-form-item>
-        </t-form>
-      </t-dialog>
+
     </div>
   </div>
 </template>
@@ -145,10 +133,10 @@ const userOptions = [
     }
   },
   {
-    content: 'API Key 设置',
+    content: 'API Key 配置',
     value: 'api-key',
     onClick: () => {
-      showApiKeyDialog.value = true;
+      router.push('/api-config');
     }
   },
   {
@@ -162,26 +150,7 @@ const userOptions = [
   }
 ];
 
-// 控制API Key对话框显示
-const showApiKeyDialog = ref(false);
 
-// API Key表单数据
-const apiKeyForm = ref({
-  apiKey: ''
-});
-
-// 保存API Key
-const saveApiKey = () => {
-  // 这里可以添加保存API Key的逻辑
-  console.log('保存API Key:', apiKeyForm.value.apiKey);
-  showApiKeyDialog.value = false;
-  MessagePlugin.success('API Key 保存成功');
-};
-
-// 取消API Key设置
-const cancelApiKey = () => {
-  showApiKeyDialog.value = false;
-};
 </script>
 
 <style scoped>

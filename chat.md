@@ -43,3 +43,4 @@
 [songhahaha66][08-14 23:54]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在侧边栏user-info不显示头像了，显示用户名 然后小标题邮箱
 [songhahaha66][08-14 23:58]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在template.vue没有引用sidebar组件请你修改
 [songhahaha66][08-15 00:19:28]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：当请求api出现401 Unauthorized Could not validate credentials自动退出登录
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：修改现在api_key系统。模型分为中枢大脑、代码实验、论文写作三部分，每一部分需要填写API Key 、Base URL、 Model ID，先改前端，不着急后端
