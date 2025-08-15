@@ -3,14 +3,8 @@
 这是一个使用 Vue 3 + TypeScript + TDesign Vue Next 构建的前端应用，为用户提供直观易用的论文自动生成界面。
 
 ## 技术栈
-
-- [Vue 3](https://vuejs.org/) - 渐进式 JavaScript 框架
-- [TypeScript](https://www.typescriptlang.org/) - 类型安全的 JavaScript 超集
 - [TDesign Vue Next](https://tdesign.tencent.com/vue-next) - 腾讯开源的企业级设计系统
 - [TD Chat](https://tdesign.tencent.com/vue-next/components/chat) - 专为 AI 对话场景设计的专业聊天组件
-- [Pinia](https://pinia.vuejs.org/) - Vue 官方状态管理工具
-- [Vue Router](https://router.vuejs.org/) - Vue 官方路由管理器
-- [Vite](https://vitejs.dev/) - 快速构建工具
 
 ## 功能特性
 
