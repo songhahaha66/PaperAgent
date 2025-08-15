@@ -36,36 +36,8 @@ backend/
 - **包管理**: [uv](https://github.com/astral-sh/uv) - 极快的 Python 包安装器和解析器
 - **异步**: [asyncio](https://docs.python.org/3/library/asyncio.html) Python 异步 I/O
 
-## 核心功能模块
-
-### 认证系统
-- 用户注册和登录
-- JWT Token 生成和验证
-- 密码加密存储（bcrypt）
-
-### 数据库管理
-- 用户信息管理
-- 工作历史记录
-- 消息存储
-- 论文模板管理
-- AI 模型配置
-
-### 文件服务
-- LaTeX 文件管理
-- 代码文件管理
-- 数据文件管理
-- 文件上传下载接口
-
-### 论文模板系统
-- 模板库管理
-- 模板应用接口
-- 格式转换服务
-- LaTeX 编译服务
-
 ## 开发说明
 
 - 保持代码简洁，避免过度设计
 - 按功能模块组织代码，便于维护
 - 遵循 [FastAPI 最佳实践](https://fastapi.tiangolo.com/tutorial/)
-- 使用 Pydantic 进行数据验证
-- 使用 SQLAlchemy 进行数据库操作
