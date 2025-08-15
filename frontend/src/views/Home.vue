@@ -3,7 +3,6 @@
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
-      :history-items="historyItems"
       @toggle-sidebar="toggleSidebar"
       @create-new-task="createNewTask"
       @select-history="selectHistory"
@@ -146,13 +145,13 @@
                 theme="success" 
                 size="middle" 
                 @click="startWork"
-                :disabled="!selectedTemplateId"
+                :disabled="!selectedTemplateId || creatingWork"
                 class="start-btn"
               >
                 <template #icon>
                   <t-icon name="play" />
                 </template>
-                开始工作
+                {{ creatingWork ? '创建中...' : '开始工作' }}
               </t-button>
             </div>
           </div>
@@ -168,6 +167,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { templateAPI, type PaperTemplate } from '@/api/template';
+import { workspaceAPI, type WorkCreate } from '@/api/workspace';
 import Sidebar from '@/components/Sidebar.vue';
 
 const router = useRouter();
@@ -194,30 +194,11 @@ const availableTemplates = ref<PaperTemplate[]>([]);
 // 加载状态
 const loading = ref(false);
 
+// 创建工作状态
+const creatingWork = ref(false);
+
 // 用户名
 const userName = computed(() => authStore.currentUser?.username || '用户');
-
-// 历史工作数据
-const historyItems = ref([
-  {
-    id: 1,
-    title: '计算100平方的家庭使用空调降温速率研究',
-    date: '2024-08-10 14:30',
-    content: '本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。结果表明，在标准条件下，房间温度从30℃降至25℃需要约30分钟，平均降温速率为0.17℃/分钟。研究包括建模过程、分析过程、编程过程、运行过程和论文写作过程。'
-  },
-  {
-    id: 2,
-    title: '区块链技术在金融领域的创新',
-    date: '2024-08-05 09:15',
-    content: '本论文研究了区块链技术在金融行业中的各种创新应用，包括数字货币、智能合约和去中心化金融(DeFi)等...'
-  },
-  {
-    id: 3,
-    title: '可再生能源与可持续发展',
-    date: '2024-07-28 16:45',
-    content: '该论文分析了可再生能源技术的发展现状和未来趋势，以及它们对实现全球可持续发展目标的重要作用...'
-  }
-]);
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
@@ -246,6 +227,8 @@ const loadUserTemplates = async () => {
     loading.value = false;
   }
 };
+
+
 
 // 下一步
 const nextStep = () => {
@@ -296,24 +279,35 @@ const formatUploadResponse = (response: any) => {
 };
 
 // 开始工作
-const startWork = () => {
-  if (researchQuestion.value.trim() && selectedTemplateId.value) {
-    // 生成新的工作ID
-    const newWorkId = Date.now();
-    
-    // 创建新的工作记录
-    const newWork = {
-      id: newWorkId,
-      title: researchQuestion.value.length > 50 ? researchQuestion.value.substring(0, 50) + '...' : researchQuestion.value,
-      date: new Date().toLocaleString(),
-      content: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n附件数量：${uploadedFiles.value.length}`
+const startWork = async () => {
+  if (!researchQuestion.value.trim() || !selectedTemplateId.value || !authStore.token) {
+    return;
+  }
+
+  creatingWork.value = true;
+  
+  try {
+    // 创建工作数据
+    const workData: WorkCreate = {
+      title: researchQuestion.value,
+      description: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n`,
+      tags: '研究,论文,AI生成',
+      template_id: selectedTemplateId.value  // 添加选择的模板ID
     };
+
+    // 调用API创建工作
+    const newWork = await workspaceAPI.createWork(authStore.token, workData);
     
-    // 添加到历史记录
-    historyItems.value.unshift(newWork);
+    MessagePlugin.success('工作创建成功！');
     
     // 跳转到工作页面
-    router.push(`/work/${newWorkId}`);
+    router.push(`/work/${newWork.work_id}`);
+    
+  } catch (error) {
+    console.error('创建工作失败:', error);
+    MessagePlugin.error('创建工作失败，请重试');
+  } finally {
+    creatingWork.value = false;
   }
 };
 
@@ -339,12 +333,10 @@ const createNewTask = () => {
 // 选择历史工作（侧边栏调用）
 const selectHistory = (id: number) => {
   activeHistoryId.value = id;
+  // 侧边栏会处理跳转逻辑，这里只需要更新选中状态
 };
 
-// 检查用户认证状态
-onMounted(() => {
-  // 路由守卫已经处理认证检查
-});
+
 </script>
 
 <style scoped>

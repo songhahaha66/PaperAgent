@@ -49,3 +49,12 @@
 [songhahaha66][08-15 13:04:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：我计划左边是跟ai对话，在chat-input上面加一个可以展开折叠的文件管理器，选中时右边就对应显示
 [songhahaha66][08-15 14:05:27]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：请实现模板页面表格不显示file_path
 [songhahaha66][08-15 17:27:45]：@AI论文生成功能架构规划.md 鉴于这个文件，项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的规划任务，请你规划核心部分的TODO，在原来的TODO后边附加
+[songhahaha66][08-15 18:06:40]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：工作空间管理系统，请不用管已经完成的任务，你可以看看AI论文生成功能架构规划.md作为参考
+[songhahaha66][08-15 18:30:15]：更新前端，用上你做的功能
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：Home.vue:350  创建工作失败: TypeError: apiClient.post is not a function
+    at Object.createWork (workspace.ts:5:38)修复bug，请修复workspace.ts,配合apiClient.ts,禁止改动apiClient
+[songhahaha66][08-15 19:18:42]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：删掉测试用的历史工作数据
+
+[AI助手][08-15 20:04:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端和前端任务：数据库新增了template_id，适配改动
+
+[songhahaha66][08-15 20:15:09]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务，请不用管已经完成的任务：sidebar和work里面删除progress的相关代码

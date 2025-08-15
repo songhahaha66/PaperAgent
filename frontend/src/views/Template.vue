@@ -1,9 +1,8 @@
 <template>
   <div class="template-page">
-    <Sidebar 
+        <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
-      :history-items="historyItems"
       @toggle-sidebar="toggleSidebar"
       @create-new-task="createNewTask"
       @select-history="selectHistory"
@@ -146,28 +145,6 @@ const createNewTask = () => {
   console.log('创建新任务');
   router.push('/home');
 };
-
-// 历史工作数据
-const historyItems = ref([
-  {
-    id: 1,
-    title: '计算100平方的家庭使用空调降温速率研究',
-    date: '2024-08-10 14:30',
-    content: '本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。结果表明，在标准条件下，房间温度从30℃降至25℃需要约30分钟，平均降温速率为0.17℃/分钟。研究包括建模过程、分析过程、编程过程、运行过程和论文写作过程。'
-  },
-  {
-    id: 2,
-    title: '区块链技术在金融领域的创新',
-    date: '2024-08-05 09:15',
-    content: '本论文研究了区块链技术在金融行业中的各种创新应用，包括数字货币、智能合约和去中心化金融(DeFi)等...'
-  },
-  {
-    id: 3,
-    title: '可再生能源与可持续发展',
-    date: '2024-07-28 16:45',
-    content: '该论文分析了可再生能源技术的发展现状和未来趋势，以及它们对实现全球可持续发展目标的重要作用...'
-  }
-]);
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
