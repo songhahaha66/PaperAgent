@@ -58,3 +58,5 @@
 [AI助手][08-15 20:04:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端和前端任务：数据库新增了template_id，适配改动
 
 [songhahaha66][08-15 20:15:09]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务，请不用管已经完成的任务：sidebar和work里面删除progress的相关代码
+
+[songhahaha66][08-16 00:50:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：INFO:     127.0.0.1:4737 - "GET /api/workspace/fabe431c/files HTTP/1.1" 500 Internal Server Error问题在于，Internal server error: 'str' object has no attribute 'id'，你参考work_router 通过email获取用户对象，修复问题

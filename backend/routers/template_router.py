@@ -12,11 +12,10 @@ router = APIRouter(prefix="/templates", tags=["模板管理"])
 @router.post("", response_model=schemas.PaperTemplateResponse)
 async def create_template(
     template: schemas.PaperTemplateCreateWithContent,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """创建论文模板"""
-    user = crud.get_user_by_email(db, current_user_email)
     # 提取文件内容
     content = template.content
     # 创建模板数据（不包含content字段）
@@ -27,18 +26,17 @@ async def create_template(
         file_path=template.file_path,
         is_public=template.is_public
     )
-    return crud.create_paper_template(db, template_data, user.id, content)
+    return crud.create_paper_template(db, template_data, current_user, content)
 
 @router.get("", response_model=List[schemas.PaperTemplateResponse])
 async def get_user_templates(
     skip: int = 0,
     limit: int = 100,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取当前用户的模板"""
-    user = crud.get_user_by_email(db, current_user_email)
-    return crud.get_user_templates(db, user.id, skip, limit)
+    return crud.get_user_templates(db, current_user, skip, limit)
 
 @router.get("/public", response_model=List[schemas.PaperTemplateResponse])
 async def get_public_templates(
@@ -52,7 +50,7 @@ async def get_public_templates(
 @router.get("/{template_id}", response_model=schemas.PaperTemplateResponse)
 async def get_template(
     template_id: int,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定模板信息"""
@@ -64,8 +62,7 @@ async def get_template(
         )
     
     # 检查权限：只有创建者或公开模板可以访问
-    user = crud.get_user_by_email(db, current_user_email)
-    if not template.is_public and template.created_by != user.id:
+    if not template.is_public and template.created_by != current_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to access this template"
@@ -77,30 +74,27 @@ async def get_template(
 async def update_template(
     template_id: int,
     template_update: schemas.PaperTemplateUpdate,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """更新模板"""
-    user = crud.get_user_by_email(db, current_user_email)
-    return crud.update_paper_template(db, template_id, template_update, user.id)
+    return crud.update_paper_template(db, template_id, template_update, current_user)
 
 @router.delete("/{template_id}")
 async def delete_template(
     template_id: int,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """删除模板"""
-    user = crud.get_user_by_email(db, current_user_email)
-    return crud.delete_paper_template(db, template_id, user.id)
+    return crud.delete_paper_template(db, template_id, current_user)
 
 @router.get("/{template_id}/content")
 async def get_template_content(
     template_id: int,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取模板文件内容"""
-    user = crud.get_user_by_email(db, current_user_email)
-    content = crud.get_template_file_content(db, template_id, user.id)
+    content = crud.get_template_file_content(db, template_id, current_user)
     return {"content": content}
