@@ -3,7 +3,6 @@
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
-      :history-items="historyItems"
       @toggle-sidebar="toggleSidebar"
       @create-new-task="createNewTask"
       @select-history="selectHistory"
@@ -201,28 +200,6 @@ const creatingWork = ref(false);
 // 用户名
 const userName = computed(() => authStore.currentUser?.username || '用户');
 
-// 历史工作数据
-const historyItems = ref([
-  {
-    id: 1,
-    title: '计算100平方的家庭使用空调降温速率研究',
-    date: '2024-08-10 14:30',
-    content: '本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。结果表明，在标准条件下，房间温度从30℃降至25℃需要约30分钟，平均降温速率为0.17℃/分钟。研究包括建模过程、分析过程、编程过程、运行过程和论文写作过程。'
-  },
-  {
-    id: 2,
-    title: '区块链技术在金融领域的创新',
-    date: '2024-08-05 09:15',
-    content: '本论文研究了区块链技术在金融行业中的各种创新应用，包括数字货币、智能合约和去中心化金融(DeFi)等...'
-  },
-  {
-    id: 3,
-    title: '可再生能源与可持续发展',
-    date: '2024-07-28 16:45',
-    content: '该论文分析了可再生能源技术的发展现状和未来趋势，以及它们对实现全球可持续发展目标的重要作用...'
-  }
-]);
-
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
 
@@ -251,28 +228,7 @@ const loadUserTemplates = async () => {
   }
 };
 
-// 加载用户工作列表
-const loadUserWorks = async () => {
-  if (!authStore.token) return;
-  
-  try {
-    const worksResponse = await workspaceAPI.getWorks(authStore.token, 0, 10);
-    
-    // 转换工作数据为历史记录格式
-    historyItems.value = worksResponse.works.map(work => ({
-      id: work.id,
-      work_id: work.work_id,
-      title: work.title,
-      date: new Date(work.created_at).toLocaleString(),
-      content: work.description || '暂无描述',
-      status: work.status,
-      progress: work.progress
-    }));
-  } catch (error) {
-    console.error('加载工作列表失败:', error);
-    // 不显示错误，保持默认历史记录
-  }
-};
+
 
 // 下一步
 const nextStep = () => {
@@ -376,18 +332,10 @@ const createNewTask = () => {
 // 选择历史工作（侧边栏调用）
 const selectHistory = (id: number) => {
   activeHistoryId.value = id;
-  // 如果有work_id，跳转到工作页面
-  const work = historyItems.value.find(item => item.id === id);
-  if (work && work.work_id) {
-    router.push(`/work/${work.work_id}`);
-  }
+  // 侧边栏会处理跳转逻辑，这里只需要更新选中状态
 };
 
-// 检查用户认证状态
-onMounted(() => {
-  // 加载用户工作列表
-  loadUserWorks();
-});
+
 </script>
 
 <style scoped>

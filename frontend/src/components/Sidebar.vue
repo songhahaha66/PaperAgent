@@ -26,38 +26,56 @@
           <span>历史工作</span>
         </div>
         <div class="history-list">
-          <t-card 
-            v-for="item in historyItems" 
-            :key="item.id" 
-            class="history-item"
-            :class="{ 'active': activeHistoryId === item.id }"
-            @click="selectHistory(item)"
-          >
-            <div class="history-item-content">
-              <div class="history-header">
-                <h4>{{ item.title }}</h4>
-                <t-tag 
-                  v-if="item.status" 
-                  :theme="getStatusTheme(item.status)" 
-                  variant="light" 
-                  size="small"
-                >
-                  {{ getStatusText(item.status) }}
-                </t-tag>
+          <!-- 加载状态 -->
+          <div v-if="loadingHistory" class="loading-state">
+            <t-loading size="small" />
+            <p>加载中...</p>
+          </div>
+          
+          <!-- 历史工作列表 -->
+          <template v-else-if="historyItems.length > 0">
+            <t-card 
+              v-for="item in historyItems" 
+              :key="item.id" 
+              class="history-item"
+              :class="{ 'active': activeHistoryId === item.id }"
+              @click="selectHistory(item)"
+            >
+              <div class="history-item-content">
+                <div class="history-header">
+                  <h4>{{ item.title }}</h4>
+                  <t-tag 
+                    v-if="item.status" 
+                    :theme="getStatusTheme(item.status)" 
+                    variant="light" 
+                    size="small"
+                  >
+                    {{ getStatusText(item.status) }}
+                  </t-tag>
+                </div>
+                <p class="history-date">{{ item.date }}</p>
+                <div v-if="item.progress !== undefined" class="history-progress">
+                  <t-progress 
+                    :percentage="item.progress" 
+                    :color="getProgressColor(item.progress)"
+                    size="small"
+                    :show-info="false"
+                  />
+                  <span class="progress-text">{{ item.progress }}%</span>
+                </div>
+                <p class="history-content">{{ item.content }}</p>
               </div>
-              <p class="history-date">{{ item.date }}</p>
-              <div v-if="item.progress !== undefined" class="history-progress">
-                <t-progress 
-                  :percentage="item.progress" 
-                  :color="getProgressColor(item.progress)"
-                  size="small"
-                  :show-info="false"
-                />
-                <span class="progress-text">{{ item.progress }}%</span>
-              </div>
-              <p class="history-content">{{ item.content }}</p>
+            </t-card>
+          </template>
+          
+          <!-- 无历史记录时显示空状态 -->
+          <template v-else>
+            <div class="empty-history">
+              <t-icon name="browse" class="empty-icon" />
+              <p class="empty-text">暂无历史工作</p>
+              <p class="empty-hint">点击"新建工作"开始您的第一个项目</p>
             </div>
-          </t-card>
+          </template>
         </div>
       </div>
     </div>
@@ -79,25 +97,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { BrowseIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useAuthStore } from '@/stores/auth';
+import { workspaceAPI } from '@/api/workspace';
 
 // 定义props
 interface Props {
   isSidebarCollapsed: boolean
   activeHistoryId: number | null
-  historyItems: Array<{
-    id: number
-    work_id?: string
-    title: string
-    date: string
-    content: string
-    status?: string
-    progress?: number
-  }>
 }
 
 // 定义emits
@@ -112,6 +122,21 @@ const emit = defineEmits<Emits>();
 
 const router = useRouter();
 const authStore = useAuthStore();
+
+// 历史工作数据类型定义
+interface HistoryItem {
+  id: number
+  work_id?: string
+  title: string
+  date: string
+  content: string
+  status?: string
+  progress?: number
+}
+
+// 历史工作数据状态
+const historyItems = ref<HistoryItem[]>([]);
+const loadingHistory = ref(false);
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = computed(() => props.isSidebarCollapsed);
@@ -129,6 +154,9 @@ const createNewTask = () => {
 
 // 选择历史工作
 const selectHistory = (item: any) => {
+  // 通知父组件选中状态变化
+  emit('select-history', item.id);
+  
   if (item.work_id) {
     // 跳转到对应的工作页面
     router.push(`/work/${item.work_id}`);
@@ -143,8 +171,32 @@ const userName = computed(() => authStore.currentUser?.username || '用户');
 const userEmail = computed(() => authStore.currentUser?.email || '');
 const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
 
-// 历史工作数据
-const historyItems = computed(() => props.historyItems);
+// 加载用户工作列表
+const loadUserWorks = async () => {
+  if (!authStore.token) return;
+  
+  loadingHistory.value = true;
+  try {
+    const worksResponse = await workspaceAPI.getWorks(authStore.token, 0, 10);
+    
+    // 转换工作数据为历史记录格式
+    historyItems.value = worksResponse.works.map(work => ({
+      id: work.id,
+      work_id: work.work_id,
+      title: work.title,
+      date: new Date(work.created_at).toLocaleString(),
+      content: work.description || '暂无描述',
+      status: work.status,
+      progress: work.progress
+    }));
+  } catch (error) {
+    console.error('加载工作列表失败:', error);
+    // 清空历史记录，显示空状态
+    historyItems.value = [];
+  } finally {
+    loadingHistory.value = false;
+  }
+};
 
 // 当前选中的历史工作ID
 const activeHistoryId = computed(() => props.activeHistoryId);
@@ -182,6 +234,11 @@ const getProgressColor = (progress?: number) => {
   if (progress < 70) return '#faad14';
   return '#52c41a';
 };
+
+// 组件挂载时加载历史工作数据
+onMounted(() => {
+  loadUserWorks();
+});
 
 // 用户菜单选项
 const userOptions = [
@@ -395,5 +452,44 @@ const userOptions = [
 /* 侧边栏折叠按钮 */
 .sidebar-toggle-btn {
   margin-left: auto;
+}
+
+/* 加载状态样式 */
+.loading-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #7f8c8d;
+}
+
+.loading-state p {
+  margin-top: 16px;
+  color: #7f8c8d;
+}
+
+/* 空状态样式 */
+.empty-history {
+  text-align: center;
+  padding: 40px 20px;
+  color: #7f8c8d;
+}
+
+.empty-icon {
+  font-size: 48px;
+  color: #c0c4cc;
+  margin-bottom: 16px;
+}
+
+.empty-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+  margin: 0 0 8px 0;
+}
+
+.empty-hint {
+  font-size: 14px;
+  color: #7f8c8d;
+  margin: 0;
+  line-height: 1.4;
 }
 </style>

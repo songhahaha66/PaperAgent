@@ -3,7 +3,6 @@
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
-      :history-items="historyItems"
       @toggle-sidebar="toggleSidebar"
       @create-new-task="createNewTask"
       @select-history="selectHistory"
@@ -197,23 +196,7 @@ interface ChatMessage {
 }
 
 // 聊天消息数据
-const chatMessages = ref<ChatMessage[]>([
-  {
-    id: '1',
-    role: 'user',
-    content: '你好，请帮我生成一篇关于《计算100平方的家庭使用空调降温速率研究》的论文',
-    datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
-  },
-  {
-    id: '2',
-    role: 'assistant',
-    content: '好的，我将帮您生成一篇关于《计算100平方的家庭使用空调降温速率研究》的论文。让我先进行建模分析。',
-    datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    systemType: 'central'
-  }
-]);
+const chatMessages = ref<ChatMessage[]>([]);
 
 // 输入框内容
 const inputValue = ref('')
@@ -266,16 +249,6 @@ const fileTreeData = ref([
 // 文件内容映射
 const fileContents: Record<string, string> = {}
 
-// 历史工作数据
-const historyItems = ref([
-  {
-    id: 1,
-    title: '计算100平方的家庭使用空调降温速率研究',
-    date: '2024-08-10 14:30',
-    content: '本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。结果表明，在标准条件下，房间温度从30℃降至25℃需要约30分钟，平均降温速率为0.17℃/分钟。研究包括建模过程、分析过程、编程过程、运行过程和论文写作过程。'
-  }
-]);
-
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
 
@@ -287,30 +260,6 @@ const loadWork = async () => {
   try {
     const work = await workspaceAPI.getWork(authStore.token, workId.value);
     currentWork.value = work;
-    
-    // 更新历史工作列表
-    const existingIndex = historyItems.value.findIndex(item => item.id === work.id);
-    if (existingIndex >= 0) {
-      historyItems.value[existingIndex] = {
-        id: work.id,
-        work_id: work.work_id,
-        title: work.title,
-        date: new Date(work.created_at).toLocaleString(),
-        content: work.description || '暂无描述',
-        status: work.status,
-        progress: work.progress
-      };
-    } else {
-      historyItems.value.unshift({
-        id: work.id,
-        work_id: work.work_id,
-        title: work.title,
-        date: new Date(work.created_at).toLocaleString(),
-        content: work.description || '暂无描述',
-        status: work.status,
-        progress: work.progress
-      });
-    }
     
     // 设置当前选中的历史工作
     activeHistoryId.value = work.id;
@@ -362,11 +311,7 @@ const deleteWork = async () => {
     await workspaceAPI.deleteWork(authStore.token, workId.value);
     MessagePlugin.success('工作已删除');
     
-    // 从历史列表中移除
-    const index = historyItems.value.findIndex(item => item.id === currentWork.value?.id);
-    if (index >= 0) {
-      historyItems.value.splice(index, 1);
-    }
+
     
     // 跳转回首页
     router.push('/home');
@@ -493,11 +438,6 @@ const toggleSidebar = () => {
   isSidebarCollapsed.value = !isSidebarCollapsed.value;
 };
 
-// 计算属性：获取当前选中的历史工作详情
-const selectedHistory = computed(() => {
-  return historyItems.value.find(item => item.id === activeHistoryId.value);
-});
-
 // 新建工作
 const createNewTask = () => {
   router.push('/home');
@@ -505,10 +445,8 @@ const createNewTask = () => {
 
 // 选择历史工作
 const selectHistory = (id: number) => {
-  const work = historyItems.value.find(item => item.id === id);
-  if (work && work.work_id) {
-    router.push(`/work/${work.work_id}`);
-  }
+  // 侧边栏会处理跳转逻辑，这里只需要更新选中状态
+  activeHistoryId.value = id;
 };
 
 // 格式化日期
