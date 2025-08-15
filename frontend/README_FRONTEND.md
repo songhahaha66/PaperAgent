@@ -2,34 +2,34 @@
 
 ## 概述
 
-PaperAgent前端是一个基于Vue 3 + TypeScript + TDesign的现代化Web应用，实现了完整的用户认证系统和论文生成工作区。
+PaperAgent 前端是一个基于 Vue 3 + TypeScript + TDesign 的现代化 Web 应用，实现了完整的用户认证系统和论文生成工作区。
 
 ## 技术栈
 
-- **Vue 3** - 渐进式JavaScript框架
-- **TypeScript** - 类型安全的JavaScript
+- **Vue 3** - 渐进式 JavaScript 框架
+- **TypeScript** - 类型安全的 JavaScript
 - **TDesign** - 企业级设计系统
-- **Pinia** - Vue状态管理
+- **Pinia** - Vue 状态管理
 - **Vue Router** - 官方路由管理器
 - **Vite** - 快速构建工具
 
 ## 功能特性
 
-### ✅ 用户认证系统
+### 用户认证系统
 - 用户注册（邮箱、用户名、密码）
 - 用户登录（邮箱、密码）
-- JWT Token管理
+- JWT Token 管理
 - 路由守卫和权限控制
 - 自动登录状态检查
 
-### ✅ 工作区功能
+### 工作区功能
 - 智能论文生成对话
 - 多模型协作系统（中枢、代码执行、论文生成）
 - 历史工作管理
 - 实时聊天界面
 - 论文预览功能
 
-### ✅ 用户体验
+### 用户体验
 - 响应式设计
 - 侧边栏折叠
 - 消息分割线交互
@@ -41,8 +41,8 @@ PaperAgent前端是一个基于Vue 3 + TypeScript + TDesign的现代化Web应用
 ```
 frontend/
 ├── src/
-│   ├── api/           # API服务
-│   │   └── auth.ts    # 认证API
+│   ├── api/           # API 服务
+│   │   └── auth.ts    # 认证 API
 │   ├── components/    # 组件
 │   ├── router/        # 路由配置
 │   ├── stores/        # 状态管理
@@ -67,7 +67,7 @@ npm install
 ### 2. 环境配置
 复制 `env_example` 为 `.env.local` 并配置：
 ```bash
-# 后端API地址
+# 后端 API 地址
 VITE_API_BASE_URL=http://localhost:8000
 ```
 
@@ -98,13 +98,13 @@ npm run build
 ### 工作区使用
 1. 登录后自动进入工作区
 2. 点击"新建工作"开始新任务
-3. 在聊天界面与AI对话
+3. 在聊天界面与 AI 对话
 4. 查看论文预览和生成结果
 5. 管理历史工作记录
 
-## API集成
+## API 集成
 
-前端通过RESTful API与后端通信：
+前端通过 RESTful API 与后端通信：
 
 - **POST** `/register` - 用户注册
 - **POST** `/login` - 用户登录  
@@ -112,10 +112,10 @@ npm run build
 
 ## 状态管理
 
-使用Pinia进行状态管理：
+使用 Pinia 进行状态管理：
 
 - **app store** - 应用全局状态（标题、语言等）
-- **auth store** - 用户认证状态（用户信息、token等）
+- **auth store** - 用户认证状态（用户信息、token 等）
 
 ## 路由配置
 
@@ -125,7 +125,7 @@ npm run build
 
 ## 安全特性
 
-- JWT Token认证
+- JWT Token 认证
 - 路由守卫保护
 - 自动登录状态检查
 - 敏感操作权限验证
@@ -134,22 +134,22 @@ npm run build
 
 ### 添加新组件
 1. 在 `src/components/` 目录创建组件
-2. 使用TDesign组件库
-3. 遵循Vue 3 Composition API规范
+2. 使用 TDesign 组件库
+3. 遵循 Vue 3 Composition API 规范
 
 ### 添加新页面
 1. 在 `src/views/` 目录创建页面组件
 2. 在 `src/router/index.ts` 添加路由配置
 3. 设置适当的路由元信息
 
-### 添加新API
-1. 在 `src/api/` 目录创建API服务
+### 添加新 API
+1. 在 `src/api/` 目录创建 API 服务
 2. 使用统一的请求处理逻辑
 3. 添加适当的错误处理
 
 ## 注意事项
 
 1. 确保后端服务正在运行
-2. 检查环境配置中的API地址
+2. 检查环境配置中的 API 地址
 3. 用户认证状态会自动持久化
 4. 路由守卫会自动处理权限检查
