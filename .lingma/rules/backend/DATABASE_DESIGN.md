@@ -2,20 +2,15 @@
 
 ## 概述
 
-PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支持用户管理、工作历史、论文模板、模型配置等功能。
+PaperAgent 是一个AI驱动的论文生成系统，数据库设计需要支持用户管理、工作历史、论文模板、模型配置等功能。
 
 ## 数据库表结构
 
-### 0. 系统基本配置表 (system_config)
+### 0.系统基本配置表
 
-存储系统级别的配置信息。
-
-| 字段名 | 类型 | 约束 | 描述 |
-|-------|------|-----|-----|
-| id | SERIAL | PRIMARY KEY | 配置ID |
-| is_allow_register | BOOL | NOT NULL DEFAULT TRUE | 是否允许注册 |
-| created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
-| updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 更新时间 |
+| 字段名            | 类型 | 约束     | 描述         |
+| ----------------- | ---- | -------- | ------------ |
+| is_allow_register | BOOL | NOT NULL | 是否允许注册 |
 
 ### 1. 用户表 (users)
 
@@ -33,7 +28,7 @@ PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支�
 
 ### 2. 工作历史表 (works)
 
-存储用户与 AI 的工作历史。
+存储用户与AI的工作历史。
 
 | 字段名 | 类型 | 约束 | 描述 |
 |-------|------|-----|-----|
@@ -52,7 +47,7 @@ PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支�
 |-------|------|-----|-----|
 | id | SERIAL | PRIMARY KEY | 消息ID |
 | work_id | INTEGER | FOREIGN KEY (works.id) | 工作ID |
-| sender_type | VARCHAR(20) | NOT NULL | 发送者类型 ('user', 'ai') |
+| sender_type | VARCHAR(20) | NOT NULL | 发送者类型('user', 'ai') |
 | content | TEXT | NOT NULL | 消息内容 |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 
@@ -70,11 +65,11 @@ PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支�
 | updated_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 更新时间 |
 | is_public | BOOLEAN | DEFAULT FALSE | 是否公开模板 |
 | created_by | INTEGER | FOREIGN KEY (users.id) | 创建者ID |
-| file_path | VARCHAR(255) | NOT NULL | 模板文件路径 |
+| file_path | VARCHAR(50) | NOT NULL | 内容路径 |
 
 ### 5. 模型配置表 (model_configs)
 
-存储 AI 模型配置信息。
+存储AI模型配置信息。
 
 | 字段名 | 类型 | 约束 | 描述 |
 |-------|------|-----|-----|
@@ -82,8 +77,8 @@ PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支�
 | name | VARCHAR(100) | NOT NULL | 配置名称 |
 | provider | VARCHAR(50) | NOT NULL | 模型提供商 |
 | model_name | VARCHAR(100) | NOT NULL | 模型名称 |
-| api_key | VARCHAR(255) |  | API 密钥 |
-| config | JSONB |  | 其他配置参数 |
+| api_key | VARCHAR(255) |  | API密钥 |
+| config | JSON |  | 其他配置参数 |
 | is_active | BOOLEAN | DEFAULT TRUE | 是否激活 |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 
@@ -91,10 +86,9 @@ PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支�
 
 为提高查询性能，建议在以下字段上创建索引：
 
-1. users 表: username, email
-2. works 表: user_id, created_at
-3. messages 表: work_id, created_at
-4. paper_templates 表: created_by, is_public
+1. users表: username, email
+2. works表: user_id, created_at
+3. messages表: conversation_id, created_at
 
 ## 关系图
 
@@ -102,5 +96,4 @@ PaperAgent 是一个 AI 驱动的论文生成系统，数据库设计需要支�
 users 1-----n works
 works 1-----n messages
 users 1-----n paper_templates
-users 1-----n model_configs
 ```
