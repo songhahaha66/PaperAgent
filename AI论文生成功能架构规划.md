@@ -204,6 +204,13 @@ GET    /api/files/{work_id}/list     # 获取工作空间文件列表
 GET    /api/files/{work_id}/{path}   # 获取文件内容
 PUT    /api/files/{work_id}/{path}   # 更新文件内容
 DELETE /api/files/{work_id}/{path}   # 删除文件
+
+# 回退系统相关
+GET    /api/rollback/{work_id}/checkpoints     # 获取回退检查点列表
+POST   /api/rollback/{work_id}/preview         # 预览回退操作
+POST   /api/rollback/{work_id}/execute         # 执行回退操作
+POST   /api/rollback/{work_id}/checkpoint      # 手动创建检查点
+DELETE /api/rollback/{work_id}/checkpoint/{hash} # 删除检查点
 ```
 
 ### 5.3 数据模型设计
@@ -244,6 +251,28 @@ class ExecutionResult(BaseModel):
     error: Optional[str]
     execution_time: float
     created_at: datetime
+
+class Checkpoint(BaseModel):
+    id: str
+    work_id: str
+    commit_hash: str
+    tag: str
+    message: str
+    checkpoint_type: str
+    author: str
+    created_at: datetime
+    metadata: Optional[Dict]
+
+class RollbackOperation(BaseModel):
+    id: str
+    work_id: str
+    from_commit: str
+    to_commit: str
+    operation_type: str
+    backup_created: bool
+    backup_commit: Optional[str]
+    executed_at: datetime
+    executed_by: str
 ```
 
 ## 6. 用户界面设计
@@ -312,7 +341,13 @@ class ExecutionResult(BaseModel):
 - **文件选择**: 点击文件节点触发文件预览
 - **状态指示**: 显示当前选中的文件信息
 
-#### 6.2.3 预览区域功能
+#### 6.2.3 回退系统界面
+- **回退历史标签页**: 集成在文件管理器中，显示检查点历史
+- **检查点列表**: 按时间倒序显示，支持类型筛选和搜索
+- **回退操作按钮**: 每个检查点提供预览和回退按钮
+- **状态指示器**: 显示当前工作空间对应的Git提交状态
+
+#### 6.2.4 预览区域功能
 - **动态内容显示**: 根据选中文件类型和内容动态渲染
 - **多格式支持**: 
   - Python代码: 语法高亮显示
@@ -322,7 +357,7 @@ class ExecutionResult(BaseModel):
 - **论文展示**: 支持论文内容预览和PDF嵌入展示
 - **响应式布局**: 自适应不同屏幕尺寸和内容长度
 
-#### 6.2.4 工作状态管理
+#### 6.2.5 工作状态管理
 - **工作切换**: 通过侧边栏在不同工作间切换
 - **状态保持**: 每个工作保持独立的对话历史和文件状态
 - **实时更新**: 工作状态和进度实时更新
@@ -419,6 +454,12 @@ enum WorkStatus {
 - 支持实时编辑和内容更新
 - 集成数学公式渲染引擎
 
+#### 8.2.3 回退系统集成
+- **回退历史面板**: 显示所有回退检查点，支持按类型筛选
+- **回退预览**: 显示回退前后的文件差异对比
+- **快速回退**: 一键回退到指定检查点
+- **回退操作记录**: 记录所有回退操作历史
+
 ### 8.3 后端文件服务
 
 #### 8.3.1 文件操作API
@@ -445,19 +486,245 @@ enum WorkStatus {
 - 自动提交文件变更
 - 文件修改历史追踪
 
-### 8.5 文件安全与权限
+### 8.5 论文回退系统设计
 
-#### 8.5.1 访问控制
+#### 8.5.1 系统概述
+基于README中提到的"每次对话都git提交，并可随时回滚"需求，设计完整的论文回退系统，支持多层次的回退操作。
+
+#### 8.5.2 回退层级设计
+- **对话级回退**: 回退到指定对话节点，恢复对话状态
+- **文件级回退**: 回退指定文件到历史版本
+- **工作级回退**: 回退整个工作空间到指定时间点
+- **论文级回退**: 回退论文内容到指定版本
+
+#### 8.5.3 回退触发机制
+- **用户主动回退**: 用户选择回退点，系统执行回退操作
+- **AI建议回退**: AI检测到问题，建议用户回退到稳定版本
+- **自动回退**: 系统检测到严重错误时，自动回退到安全版本
+
+#### 8.5.4 回退点管理
+- **对话节点**: 每次AI回复后自动创建回退点
+- **文件快照**: 文件内容变更时创建版本快照
+- **里程碑节点**: 重要节点（如完成章节、完成代码等）标记为里程碑
+- **用户标记**: 用户可手动标记重要节点为回退点
+
+#### 8.5.5 回退操作流程
+1. **选择回退点**: 用户浏览历史版本，选择目标回退点
+2. **预览变更**: 系统显示回退后的状态预览
+3. **确认回退**: 用户确认回退操作
+4. **执行回退**: 系统执行回退，恢复文件状态
+5. **状态同步**: 更新工作空间状态，同步所有相关文件
+6. **历史记录**: 记录回退操作，便于后续追踪
+
+#### 8.5.6 回退安全机制
+- **回退确认**: 重要回退操作需要用户二次确认
+- **备份机制**: 回退前自动备份当前状态
+- **回退限制**: 防止回退到过早期的版本，避免数据丢失
+- **冲突检测**: 检测回退操作是否与其他变更冲突
+
+#### 8.5.7 技术实现方案
+
+##### Git版本控制集成
+```python
+class RollbackService:
+    """论文回退系统服务"""
+    
+    def __init__(self, workspace_path: str):
+        self.workspace_path = Path(workspace_path)
+        self.git_repo = Repo(workspace_path)
+    
+    def create_checkpoint(self, message: str, checkpoint_type: str) -> str:
+        """创建回退检查点"""
+        # 添加所有文件到Git
+        self.git_repo.index.add('*')
+        
+        # 创建提交
+        commit_hash = self.git_repo.index.commit(
+            f"[{checkpoint_type}] {message} - {datetime.now().isoformat()}"
+        )
+        
+        # 添加标签便于识别
+        tag_name = f"checkpoint_{checkpoint_type}_{commit_hash.hexsha[:8]}"
+        self.git_repo.create_tag(tag_name, commit_hash)
+        
+        return commit_hash.hexsha
+    
+    def list_checkpoints(self, checkpoint_type: str = None) -> List[Dict]:
+        """列出所有回退检查点"""
+        checkpoints = []
+        
+        for tag in self.git_repo.tags:
+            if checkpoint_type and checkpoint_type not in tag.name:
+                continue
+                
+            commit = tag.commit
+            checkpoints.append({
+                'hash': commit.hexsha,
+                'tag': tag.name,
+                'message': commit.message,
+                'author': commit.author.name,
+                'date': commit.authored_datetime.isoformat(),
+                'type': checkpoint_type or 'general'
+            })
+        
+        return sorted(checkpoints, key=lambda x: x['date'], reverse=True)
+    
+    def rollback_to_checkpoint(self, commit_hash: str, backup_current: bool = True) -> bool:
+        """回退到指定检查点"""
+        try:
+            if backup_current:
+                # 备份当前状态
+                self.create_checkpoint("自动备份 - 回退前", "backup")
+            
+            # 执行回退
+            self.git_repo.git.reset('--hard', commit_hash)
+            
+            # 清理工作目录
+            self.git_repo.git.clean('-fd')
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"回退失败: {e}")
+            return False
+    
+    def preview_rollback(self, commit_hash: str) -> Dict:
+        """预览回退后的状态"""
+        try:
+            # 获取当前状态
+            current_files = self.get_current_files()
+            
+            # 获取目标状态
+            target_commit = self.git_repo.commit(commit_hash)
+            target_files = self.get_files_at_commit(target_commit)
+            
+            # 计算差异
+            diff_summary = self.calculate_diff(current_files, target_files)
+            
+            return {
+                'current_commit': self.git_repo.head.commit.hexsha,
+                'target_commit': commit_hash,
+                'files_changed': len(diff_summary),
+                'diff_summary': diff_summary,
+                'rollback_safe': self.is_rollback_safe(commit_hash)
+            }
+            
+        except Exception as e:
+            logger.error(f"预览回退失败: {e}")
+            return None
+```
+
+##### 回退点自动创建
+```python
+class AutoCheckpointManager:
+    """自动检查点管理器"""
+    
+    def __init__(self, rollback_service: RollbackService):
+        self.rollback_service = rollback_service
+        self.checkpoint_rules = {
+            'conversation': '每次AI回复后',
+            'file_change': '文件内容变更时',
+            'milestone': '完成重要任务时',
+            'user_request': '用户手动标记'
+        }
+    
+    def auto_create_checkpoint(self, event_type: str, context: Dict):
+        """根据事件类型自动创建检查点"""
+        if event_type == 'conversation':
+            message = f"对话节点: {context.get('message_id', 'unknown')}"
+            self.rollback_service.create_checkpoint(message, 'conversation')
+            
+        elif event_type == 'file_change':
+            filename = context.get('filename', 'unknown')
+            message = f"文件变更: {filename}"
+            self.rollback_service.create_checkpoint(message, 'file_change')
+            
+        elif event_type == 'milestone':
+            milestone = context.get('milestone', 'unknown')
+            message = f"里程碑: {milestone}"
+            self.rollback_service.create_checkpoint(message, 'milestone')
+    
+    def should_create_checkpoint(self, event_type: str, context: Dict) -> bool:
+        """判断是否应该创建检查点"""
+        # 避免过于频繁的检查点
+        if event_type == 'conversation':
+            # 对话检查点间隔至少30秒
+            last_checkpoint = self.get_last_checkpoint_time('conversation')
+            if last_checkpoint and (datetime.now() - last_checkpoint).seconds < 30:
+                return False
+        
+        return True
+```
+
+##### 前端回退界面
+```typescript
+// 回退系统组件
+interface Checkpoint {
+  hash: string;
+  tag: string;
+  message: string;
+  author: string;
+  date: string;
+  type: string;
+}
+
+interface RollbackPreview {
+  current_commit: string;
+  target_commit: string;
+  files_changed: number;
+  diff_summary: any[];
+  rollback_safe: boolean;
+}
+
+class RollbackManager {
+  private checkpoints: Checkpoint[] = [];
+  private currentPreview: RollbackPreview | null = null;
+  
+  async loadCheckpoints(type?: string): Promise<void> {
+    const response = await api.get(`/api/rollback/checkpoints?type=${type || ''}`);
+    this.checkpoints = response.data;
+  }
+  
+  async previewRollback(commitHash: string): Promise<RollbackPreview> {
+    const response = await api.post(`/api/rollback/preview`, { commit_hash: commitHash });
+    this.currentPreview = response.data;
+    return this.currentPreview;
+  }
+  
+  async executeRollback(commitHash: string, backup: boolean = true): Promise<boolean> {
+    try {
+      const response = await api.post(`/api/rollback/execute`, {
+        commit_hash: commitHash,
+        backup_current: backup
+      });
+      
+      if (response.data.success) {
+        // 刷新工作空间状态
+        await this.refreshWorkspace();
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('回退执行失败:', error);
+      return false;
+    }
+  }
+}
+```
+
+### 8.6 文件安全与权限
+
+#### 8.6.1 访问控制
 - 基于JWT token的用户身份验证
 - 工作空间隔离，确保数据安全
 - 文件操作审计日志
 
-#### 8.5.2 安全限制
+#### 8.6.2 安全限制
 - 文件类型白名单验证
 - 文件大小和数量限制
 - 恶意文件检测和过滤
 
-### 8.6 论文格式选择与技术实现
+### 8.7 论文格式选择与技术实现
 
 #### 8.6.1 格式选择分析
 
@@ -664,16 +931,19 @@ paper_drafts/
 - 工作空间管理系统
 - 基础文件操作
 - 用户认证和权限
+- Git版本控制集成
 
 ### 10.2 第二阶段：核心功能
 - AI对话系统
 - 代码生成和执行
 - 基础论文生成
+- 回退系统基础功能
 
 ### 10.3 第三阶段：高级功能
 - 多系统协作优化
 - 高级论文格式
 - 性能优化
+- 回退系统高级功能（智能回退建议、自动回退）
 
 ### 10.4 第四阶段：完善和测试
 - 用户界面优化
@@ -711,6 +981,7 @@ paper_drafts/
 6. **响应式设计**: 文件管理器可折叠，适应不同屏幕尺寸
 7. **多格式支持**: 支持代码、文档、数据、图片等多种文件类型
 8. **实时同步**: 支持多用户协作编辑，实时同步文件变更
+9. **智能回退系统**: 多层次回退支持，确保工作进度安全可控
 
 ### 12.2 用户界面设计亮点
 
@@ -731,3 +1002,14 @@ paper_drafts/
 5. **格式转换**: 自动转换Markdown为LaTeX和PDF格式
 6. **版本控制友好**: 纯文本格式，适合Git版本控制
 7. **学术标准兼容**: 支持学术期刊的LaTeX格式要求
+
+### 12.4 回退系统设计亮点
+
+1. **多层次回退支持**: 对话级、文件级、工作级、论文级回退，满足不同需求
+2. **智能检查点管理**: 自动创建检查点，避免频繁手动操作
+3. **安全回退机制**: 回退前自动备份，防止数据丢失
+4. **预览回退效果**: 回退前预览变更，让用户了解回退影响
+5. **Git深度集成**: 基于Git的版本控制，支持完整的变更历史
+6. **用户友好界面**: 直观的回退历史面板，支持筛选和搜索
+7. **AI智能建议**: AI检测问题时可建议回退到稳定版本
+8. **操作审计追踪**: 完整记录所有回退操作，便于问题排查
