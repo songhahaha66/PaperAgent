@@ -95,3 +95,37 @@ class PaperTemplateResponse(PaperTemplateBase):
     
     class Config:
         from_attributes = True
+
+# Work相关schemas
+class WorkBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+    tags: Optional[str] = None
+
+class WorkCreate(WorkBase):
+    pass
+
+class WorkUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    progress: Optional[int] = None
+    tags: Optional[str] = None
+
+class WorkResponse(WorkBase):
+    id: int
+    work_id: str
+    status: str
+    progress: int
+    created_at: datetime
+    updated_at: datetime
+    created_by: int
+    
+    class Config:
+        from_attributes = True
+
+class WorkListResponse(BaseModel):
+    works: list[WorkResponse]
+    total: int
+    page: int
+    size: int
