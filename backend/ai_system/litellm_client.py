@@ -60,15 +60,12 @@ class LiteLLMClient:
         if not config:
             raise ValueError(f"未找到类型为 {model_type} 的模型配置")
         
-        # 设置环境变量
-        os.environ["OPENAI_API_KEY"] = config.api_key
-        os.environ["OPENAI_API_BASE"] = config.base_url
-        
         try:
             # 构建请求参数
             request_params = {
                 "model": config.model_id,
                 "messages": messages,
+                "api_base": config.base_url,
                 **kwargs
             }
             
@@ -116,15 +113,13 @@ class LiteLLMClient:
         if not config:
             raise ValueError(f"未找到类型为 {model_type} 的模型配置")
         
-        # 设置环境变量
-        os.environ["OPENAI_API_KEY"] = config.api_key
-        os.environ["OPENAI_API_BASE"] = config.base_url
         
         try:
             # 构建请求参数
             request_params = {
                 "model": config.model_id,
                 "messages": messages,
+                "api_base": config.base_url,
                 **kwargs
             }
             

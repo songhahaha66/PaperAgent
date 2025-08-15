@@ -12,8 +12,7 @@ ai_system/
 ├── litellm_client.py        # LiteLLM客户端
 ├── tool_framework.py        # 工具调用框架
 ├── tools.py                 # 核心工具实现
-├── chat_system.py           # 聊天系统
-└── README.md                # 本文档
+|__ chat_system.py           # 聊天系统
 ```
 
 ## 主要组件
