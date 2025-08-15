@@ -9,7 +9,7 @@ router = APIRouter(prefix="/files", tags=["文件管理"])
 @router.post("/upload")
 async def upload_template_file(
     file: UploadFile = File(...),
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """上传模板文件并解析内容"""

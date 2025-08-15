@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile
 from sqlalchemy.orm import Session
 from database.database import get_db
 from auth.auth import get_current_user
-from models.models import User
 from services import crud
 from services.workspace_files import workspace_file_service
 from typing import Optional
@@ -14,7 +13,7 @@ async def list_workspace_files(
     work_id: str,
     path: str = Query("", description="相对路径，默认为根目录"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """列出工作空间中的文件"""
     try:
@@ -26,7 +25,7 @@ async def list_workspace_files(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
@@ -46,7 +45,7 @@ async def read_workspace_file(
     work_id: str,
     file_path: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """读取工作空间中的文件内容"""
     try:
@@ -58,7 +57,7 @@ async def read_workspace_file(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
@@ -79,7 +78,7 @@ async def write_workspace_file(
     file_path: str,
     content: str = Form(..., description="文件内容"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """写入文件到工作空间"""
     try:
@@ -91,7 +90,7 @@ async def write_workspace_file(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
@@ -112,7 +111,7 @@ async def upload_file_to_workspace(
     file_path: str = Form(..., description="目标文件路径"),
     file: UploadFile = Form(..., description="上传的文件"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """上传文件到工作空间"""
     try:
@@ -124,7 +123,7 @@ async def upload_file_to_workspace(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
@@ -144,7 +143,7 @@ async def delete_workspace_file(
     work_id: str,
     file_path: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """删除工作空间中的文件或目录"""
     try:
@@ -156,7 +155,7 @@ async def delete_workspace_file(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
@@ -176,7 +175,7 @@ async def create_workspace_directory(
     work_id: str,
     dir_path: str = Form(..., description="目录路径"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """在工作空间中创建目录"""
     try:
@@ -188,7 +187,7 @@ async def create_workspace_directory(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
@@ -208,7 +207,7 @@ async def get_file_info(
     work_id: str,
     file_path: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """获取文件信息"""
     try:
@@ -220,7 +219,7 @@ async def get_file_info(
                 detail="Work not found"
             )
         
-        if work.created_by != current_user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"

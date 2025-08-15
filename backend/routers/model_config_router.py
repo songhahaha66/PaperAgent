@@ -26,7 +26,7 @@ router = APIRouter(prefix="/model-configs", tags=["模型配置"])
 @router.post("/", response_model=schemas.ModelConfigResponse)
 async def create_model_config(
     config: schemas.ModelConfigCreate,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """创建模型配置"""
@@ -37,7 +37,7 @@ async def create_model_config(
 async def get_all_model_configs(
     skip: int = 0,
     limit: int = 100,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取所有模型配置（不包含api_key）"""
@@ -47,7 +47,7 @@ async def get_all_model_configs(
 @router.get("/{config_id}", response_model=schemas.ModelConfigResponse)
 async def get_model_config(
     config_id: int,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """根据ID获取模型配置（不包含api_key）"""
@@ -62,7 +62,7 @@ async def get_model_config(
 @router.get("/type/{config_type}", response_model=schemas.ModelConfigResponse)
 async def get_model_config_by_type(
     config_type: str,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """根据类型获取模型配置（不包含api_key）"""
@@ -78,7 +78,7 @@ async def get_model_config_by_type(
 async def update_model_config(
     config_id: int,
     config_update: schemas.ModelConfigUpdate,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """更新模型配置"""
@@ -88,7 +88,7 @@ async def update_model_config(
 @router.delete("/{config_id}")
 async def delete_model_config(
     config_id: int,
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """删除模型配置"""
@@ -96,7 +96,7 @@ async def delete_model_config(
 
 @router.delete("/", response_model=dict)
 async def clear_all_model_configs(
-    current_user_email: str = Depends(auth.get_current_user),
+    current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """清空所有模型配置"""
