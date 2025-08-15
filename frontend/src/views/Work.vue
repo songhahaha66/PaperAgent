@@ -64,6 +64,10 @@
                 </div>
               </div>
             </div>
+            <FileManager 
+              :file-tree-data="fileTreeData"
+              @file-select="handleFileSelect"
+            />
             <div class="chat-input">
               <ChatSender
                 v-model="inputValue"
@@ -75,7 +79,26 @@
         </div>
         
         <div class="preview-section">
-          <div v-if="activeHistoryId">
+          <div v-if="selectedFile && fileContents[selectedFile]">
+            <t-card :title="`文件预览: ${selectedFile}`">
+              <div class="file-preview">
+                <div v-if="selectedFile.endsWith('.py')" class="code-preview">
+                  <pre><code>{{ fileContents[selectedFile] }}</code></pre>
+                </div>
+                <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
+                  <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
+                </div>
+                <div v-else-if="selectedFile.endsWith('.txt') || selectedFile.endsWith('.log')" class="text-preview">
+                  <pre>{{ fileContents[selectedFile] }}</pre>
+                </div>
+                <div v-else class="text-preview">
+                  <pre>{{ fileContents[selectedFile] }}</pre>
+                </div>
+              </div>
+            </t-card>
+          </div>
+          
+          <div v-else-if="activeHistoryId">
             <t-card title="论文预览">
               <p>{{ selectedHistory?.content }}</p>
             </t-card>
@@ -95,6 +118,7 @@
               <div class="pdf-info">
                 <p>正在展示：main.pdf</p>
                 <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
+                <p>在左侧文件管理器中点击文件可查看具体内容。</p>
               </div>
             </t-card>
           </div>
@@ -109,8 +133,10 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
+import { Tree, Collapse, CollapsePanel } from 'tdesign-vue-next';
 import { useAuthStore } from '@/stores/auth';
 import Sidebar from '@/components/Sidebar.vue';
+import FileManager from '@/components/FileManager.vue'; // 导入新的FileManager组件
 
 const route = useRoute();
 const workId = computed(() => route.params.work_id as string);
@@ -192,6 +218,223 @@ const inputValue = ref('')
 
 // 分割线悬停状态
 const hoveredDivider = ref<number | null>(null)
+
+// 文件管理器状态
+const selectedFile = ref<string | null>(null)
+
+// 文件树数据
+const fileTreeData = ref([
+  {
+    value: 'generated_code',
+    label: '生成的代码',
+    children: [
+      { value: 'main.py', label: 'main.py', isLeaf: true },
+      { value: 'requirements.txt', label: 'requirements.txt', isLeaf: true },
+      { value: 'data', label: '数据文件', isLeaf: true }
+    ]
+  },
+  {
+    value: 'execution_results',
+    label: '执行结果',
+    children: [
+      { value: 'output.log', label: 'output.log', isLeaf: true },
+      { value: 'plots', label: '图表', isLeaf: true },
+      { value: 'data_output', label: '数据输出', isLeaf: true }
+    ]
+  },
+  {
+    value: 'paper_drafts',
+    label: '论文草稿',
+    children: [
+      { value: 'outline.md', label: '大纲', isLeaf: true },
+      { value: 'sections', label: '章节', isLeaf: true },
+      { value: 'final_paper.md', label: '最终论文', isLeaf: true }
+    ]
+  },
+  {
+    value: 'resources',
+    label: '相关资源',
+    children: [
+      { value: 'references', label: '参考文献', isLeaf: true },
+      { value: 'images', label: '图片', isLeaf: true }
+    ]
+  }
+])
+
+// 文件内容映射
+const fileContents: Record<string, string> = {
+  'main.py': `import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import odeint
+
+def cooling_model(T, t, params):
+    """空调降温模型"""
+    P, m, c, T_out = params
+    dT_dt = P / (m * c) * (T_out - T)
+    return dT_dt
+
+# 参数设置
+P = 12250  # 制冷功率 (W)
+m = 336    # 空气质量 (kg)
+c = 1005   # 比热容 (J/kg·K)
+T_out = 30 # 室外温度 (℃)
+
+# 时间序列
+t = np.linspace(0, 3600, 100)  # 1小时
+T0 = 30  # 初始温度
+
+# 求解微分方程
+solution = odeint(cooling_model, T0, t, args=([P, m, c, T_out],))
+
+# 绘制结果
+plt.figure(figsize=(10, 6))
+plt.plot(t/60, solution, 'b-', linewidth=2)
+plt.xlabel('时间 (分钟)')
+plt.ylabel('温度 (℃)')
+plt.title('空调降温曲线')
+plt.grid(True)
+plt.show()`,
+  'requirements.txt': `numpy>=1.21.0
+matplotlib>=3.5.0
+scipy>=1.7.0
+pandas>=1.3.0`,
+  'data': `房间参数数据：
+面积: 100 m²
+层高: 2.8 m
+体积: 280 m³
+空气质量: 336 kg
+初始温度: 30℃
+目标温度: 25℃
+
+空调参数数据：
+制冷功率: 3500W
+COP: 3.5
+实际制冷量: 12250W`,
+  'outline.md': `# 计算100平方的家庭使用空调降温速率研究
+
+## 摘要
+本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。
+
+## 1. 引言
+- 研究背景
+- 研究意义
+- 研究目标
+
+## 2. 数学模型
+- 热传导方程
+- 房间热平衡
+- 空调制冷功率
+- 降温速率计算
+
+## 3. 数值模拟
+- 参数设置
+- 求解方法
+- 结果分析
+
+## 4. 结论
+- 主要发现
+- 应用价值
+- 未来展望`,
+  'sections': `## 1. 引言部分
+研究背景：空调在现代家庭中的普及应用
+研究意义：节能优化和舒适度提升
+研究目标：建立准确的降温速率预测模型
+
+## 2. 数学模型部分
+热传导理论基础
+能量守恒定律应用
+参数敏感性分析
+
+## 3. 数值模拟部分
+Python编程实现
+数值算法选择
+结果可视化分析`,
+  'output.log': `代码执行日志：
+[INFO] 开始执行空调降温模型
+[INFO] 参数设置完成
+[INFO] 求解微分方程...
+[INFO] 计算完成，降温时间：30分钟
+[INFO] 生成图表成功`,
+  'plots': `生成的图表文件：
+1. cooling_curve.png - 降温曲线图
+2. temperature_distribution.png - 温度分布图
+3. power_consumption.png - 功率消耗图
+
+图表说明：
+- 降温曲线显示温度随时间的变化
+- 温度分布图显示房间内温度梯度
+- 功率消耗图显示空调工作状态`,
+  'data_output': `数值计算结果：
+时间序列: 0-3600秒 (0-60分钟)
+温度数据: 30.0℃ → 25.0℃
+降温速率: 平均0.17℃/分钟
+峰值速率: 0.27℃/分钟 (前15分钟)
+
+关键时间点：
+- 5分钟: 28.2℃
+- 10分钟: 26.8℃
+- 15分钟: 25.9℃
+- 30分钟: 25.0℃`,
+  'final_paper.md': `# 计算100平方的家庭使用空调降温速率研究
+
+## 摘要
+本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。结果表明，在标准条件下，房间温度从30℃降至25℃需要约30分钟，平均降温速率为0.17℃/分钟。
+
+## 关键词
+空调制冷、降温速率、热传导、数值模拟
+
+## 1. 引言
+随着生活水平的提高，空调已成为家庭必备设备。准确预测空调降温速率对节能和舒适度优化具有重要意义。
+
+## 2. 数学模型
+基于热传导理论和能量守恒定律，建立了房间降温的数学模型：
+
+### 2.1 热传导方程
+∂T/∂t = α∇²T
+
+### 2.2 房间热平衡
+Q = mcΔT
+
+### 2.3 空调制冷功率
+P = COP × Q
+
+### 2.4 降温速率
+dT/dt = P/(mc)
+
+## 3. 数值模拟结果
+通过Python数值计算，得到以下结果：
+- 前15分钟降温最快，平均速率0.27℃/分钟
+- 达到目标温度25℃需要约30分钟
+- 降温过程符合指数衰减规律
+
+## 4. 结论
+本研究成功建立了空调降温的数学模型，并通过数值模拟验证了理论分析的正确性。`,
+  'references': `参考文献：
+1. 张三, 李四. 热传导理论在建筑节能中的应用[J]. 建筑科学, 2023, 39(5): 45-52.
+2. Wang L, Smith J. HVAC System Optimization for Residential Buildings[J]. Energy and Buildings, 2023, 285: 112-125.
+3. 王五, 赵六. 空调系统数值模拟方法研究[J]. 暖通空调, 2023, 53(3): 78-85.`,
+  'images': `图片资源：
+1. room_layout.png - 房间布局图
+2. ac_unit.png - 空调设备图
+3. temperature_flow.png - 温度流动图
+4. energy_diagram.png - 能量平衡图`
+}
+
+// 处理文件选择
+const handleFileSelect = (fileKey: string) => {
+  selectedFile.value = fileKey
+}
+
+// 简单的Markdown渲染函数
+const renderMarkdown = (text: string) => {
+  return text
+    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+    .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+    .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+    .replace(/\*(.*)\*/gim, '<em>$1</em>')
+    .replace(/\n/gim, '<br>')
+}
 
 // 显示分割线
 const showDivider = (index: number) => {
@@ -364,13 +607,11 @@ watch(() => route.params.work_id, (newWorkId) => {
 // 新建工作
 const createNewTask = () => {
   // 这个方法现在由Sidebar组件直接处理路由跳转
-  console.log('创建新任务');
 };
 
 // 选择历史工作
 const selectHistory = (id: number) => {
   // 这个方法现在由Sidebar组件直接处理路由跳转
-  console.log('选择历史工作:', id);
 };
 </script>
 
