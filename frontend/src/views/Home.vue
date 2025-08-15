@@ -146,13 +146,13 @@
                 theme="success" 
                 size="middle" 
                 @click="startWork"
-                :disabled="!selectedTemplateId"
+                :disabled="!selectedTemplateId || creatingWork"
                 class="start-btn"
               >
                 <template #icon>
                   <t-icon name="play" />
                 </template>
-                开始工作
+                {{ creatingWork ? '创建中...' : '开始工作' }}
               </t-button>
             </div>
           </div>
@@ -168,6 +168,7 @@ import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { templateAPI, type PaperTemplate } from '@/api/template';
+import { workspaceAPI, type WorkCreate } from '@/api/workspace';
 import Sidebar from '@/components/Sidebar.vue';
 
 const router = useRouter();
@@ -193,6 +194,9 @@ const availableTemplates = ref<PaperTemplate[]>([]);
 
 // 加载状态
 const loading = ref(false);
+
+// 创建工作状态
+const creatingWork = ref(false);
 
 // 用户名
 const userName = computed(() => authStore.currentUser?.username || '用户');
@@ -247,6 +251,29 @@ const loadUserTemplates = async () => {
   }
 };
 
+// 加载用户工作列表
+const loadUserWorks = async () => {
+  if (!authStore.token) return;
+  
+  try {
+    const worksResponse = await workspaceAPI.getWorks(authStore.token, 0, 10);
+    
+    // 转换工作数据为历史记录格式
+    historyItems.value = worksResponse.works.map(work => ({
+      id: work.id,
+      work_id: work.work_id,
+      title: work.title,
+      date: new Date(work.created_at).toLocaleString(),
+      content: work.description || '暂无描述',
+      status: work.status,
+      progress: work.progress
+    }));
+  } catch (error) {
+    console.error('加载工作列表失败:', error);
+    // 不显示错误，保持默认历史记录
+  }
+};
+
 // 下一步
 const nextStep = () => {
   if (currentStep.value === 1) {
@@ -296,24 +323,34 @@ const formatUploadResponse = (response: any) => {
 };
 
 // 开始工作
-const startWork = () => {
-  if (researchQuestion.value.trim() && selectedTemplateId.value) {
-    // 生成新的工作ID
-    const newWorkId = Date.now();
-    
-    // 创建新的工作记录
-    const newWork = {
-      id: newWorkId,
-      title: researchQuestion.value.length > 50 ? researchQuestion.value.substring(0, 50) + '...' : researchQuestion.value,
-      date: new Date().toLocaleString(),
-      content: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n附件数量：${uploadedFiles.value.length}`
+const startWork = async () => {
+  if (!researchQuestion.value.trim() || !selectedTemplateId.value || !authStore.token) {
+    return;
+  }
+
+  creatingWork.value = true;
+  
+  try {
+    // 创建工作数据
+    const workData: WorkCreate = {
+      title: researchQuestion.value,
+      description: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n附件数量：${uploadedFiles.value.length}`,
+      tags: '研究,论文,AI生成'
     };
+
+    // 调用API创建工作
+    const newWork = await workspaceAPI.createWork(authStore.token, workData);
     
-    // 添加到历史记录
-    historyItems.value.unshift(newWork);
+    MessagePlugin.success('工作创建成功！');
     
     // 跳转到工作页面
-    router.push(`/work/${newWorkId}`);
+    router.push(`/work/${newWork.work_id}`);
+    
+  } catch (error) {
+    console.error('创建工作失败:', error);
+    MessagePlugin.error('创建工作失败，请重试');
+  } finally {
+    creatingWork.value = false;
   }
 };
 
@@ -339,11 +376,17 @@ const createNewTask = () => {
 // 选择历史工作（侧边栏调用）
 const selectHistory = (id: number) => {
   activeHistoryId.value = id;
+  // 如果有work_id，跳转到工作页面
+  const work = historyItems.value.find(item => item.id === id);
+  if (work && work.work_id) {
+    router.push(`/work/${work.work_id}`);
+  }
 };
 
 // 检查用户认证状态
 onMounted(() => {
-  // 路由守卫已经处理认证检查
+  // 加载用户工作列表
+  loadUserWorks();
 });
 </script>
 

@@ -31,11 +31,31 @@
             :key="item.id" 
             class="history-item"
             :class="{ 'active': activeHistoryId === item.id }"
-            @click="selectHistory(item.id)"
+            @click="selectHistory(item)"
           >
             <div class="history-item-content">
-              <h4>{{ item.title }}</h4>
-              <p>{{ item.date }}</p>
+              <div class="history-header">
+                <h4>{{ item.title }}</h4>
+                <t-tag 
+                  v-if="item.status" 
+                  :theme="getStatusTheme(item.status)" 
+                  variant="light" 
+                  size="small"
+                >
+                  {{ getStatusText(item.status) }}
+                </t-tag>
+              </div>
+              <p class="history-date">{{ item.date }}</p>
+              <div v-if="item.progress !== undefined" class="history-progress">
+                <t-progress 
+                  :percentage="item.progress" 
+                  :color="getProgressColor(item.progress)"
+                  size="small"
+                  :show-info="false"
+                />
+                <span class="progress-text">{{ item.progress }}%</span>
+              </div>
+              <p class="history-content">{{ item.content }}</p>
             </div>
           </t-card>
         </div>
@@ -54,8 +74,6 @@
           </div>
         </div>
       </t-dropdown>
-      
-
     </div>
   </div>
 </template>
@@ -73,9 +91,12 @@ interface Props {
   activeHistoryId: number | null
   historyItems: Array<{
     id: number
+    work_id?: string
     title: string
     date: string
     content: string
+    status?: string
+    progress?: number
   }>
 }
 
@@ -107,9 +128,14 @@ const createNewTask = () => {
 };
 
 // 选择历史工作
-const selectHistory = (id: number) => {
-  // 跳转到对应的工作页面
-  router.push(`/work/${id}`);
+const selectHistory = (item: any) => {
+  if (item.work_id) {
+    // 跳转到对应的工作页面
+    router.push(`/work/${item.work_id}`);
+  } else {
+    // 如果没有work_id，使用id
+    router.push(`/work/${item.id}`);
+  }
 };
 
 // 用户信息
@@ -122,6 +148,40 @@ const historyItems = computed(() => props.historyItems);
 
 // 当前选中的历史工作ID
 const activeHistoryId = computed(() => props.activeHistoryId);
+
+// 获取状态主题
+const getStatusTheme = (status?: string) => {
+  if (!status) return 'default';
+  const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
+    'created': 'default',
+    'in_progress': 'primary',
+    'completed': 'success',
+    'paused': 'warning',
+    'cancelled': 'danger'
+  };
+  return themes[status] || 'default';
+};
+
+// 获取状态文本
+const getStatusText = (status?: string) => {
+  if (!status) return '';
+  const texts: Record<string, string> = {
+    'created': '已创建',
+    'in_progress': '进行中',
+    'completed': '已完成',
+    'paused': '已暂停',
+    'cancelled': '已取消'
+  };
+  return texts[status] || status;
+};
+
+// 获取进度颜色
+const getProgressColor = (progress?: number) => {
+  if (progress === undefined) return '#d9d9d9';
+  if (progress < 30) return '#ff4d4f';
+  if (progress < 70) return '#faad14';
+  return '#52c41a';
+};
 
 // 用户菜单选项
 const userOptions = [
@@ -149,8 +209,6 @@ const userOptions = [
     }
   }
 ];
-
-
 </script>
 
 <style scoped>
@@ -236,6 +294,50 @@ const userOptions = [
   margin: 0;
   font-size: 12px;
   color: #7f8c8d;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 5px;
+}
+
+.history-header h4 {
+  flex: 1;
+  margin-right: 8px;
+  line-height: 1.2;
+}
+
+.history-date {
+  margin: 5px 0;
+  font-size: 11px;
+  color: #999;
+}
+
+.history-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.progress-text {
+  font-size: 11px;
+  color: #666;
+  min-width: 30px;
+  text-align: right;
+}
+
+.history-content {
+  margin: 8px 0 0 0;
+  font-size: 11px;
+  color: #666;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .sidebar-footer {
