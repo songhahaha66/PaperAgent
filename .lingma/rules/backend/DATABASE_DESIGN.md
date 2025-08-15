@@ -74,11 +74,10 @@ PaperAgent 是一个AI驱动的论文生成系统，数据库设计需要支持�
 | 字段名 | 类型 | 约束 | 描述 |
 |-------|------|-----|-----|
 | id | SERIAL | PRIMARY KEY | 配置ID |
-| name | VARCHAR(100) | NOT NULL | 配置名称 |
-| provider | VARCHAR(50) | NOT NULL | 模型提供商 |
-| model_name | VARCHAR(100) | NOT NULL | 模型名称 |
-| api_key | VARCHAR(255) |  | API密钥 |
-| config | JSON |  | 其他配置参数 |
+| type | VARCHAR(50) | NOT NULL | 模型种类 |
+| model_id | VARCHAR(50) | NOT NULL | 模型ID |
+| base_url | VARCHAR(100) | NOT NULL | 模型URL |
+| api_key | VARCHAR(255) | NOT NULL | API密钥 |
 | is_active | BOOLEAN | DEFAULT TRUE | 是否激活 |
 | created_at | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 创建时间 |
 

@@ -1,57 +1,12 @@
 <template>
   <div class="template-page">
-    <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
-      <div class="sidebar-header">
-        <h2 v-if="!isSidebarCollapsed">PaperAgent</h2>
-        <t-button 
-          theme="default" 
-          shape="square" 
-          variant="text" 
-          @click="toggleSidebar"
-          class="sidebar-toggle-btn"
-        >
-          <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-        </t-button>
-      </div>
-      
-      <div class="sidebar-content" v-if="!isSidebarCollapsed">
-        <div class="menu-section">
-          <t-button theme="primary" block @click="createNewTask">
-            新建工作
-          </t-button>
-        </div>
-        
-        <div class="menu-section">
-          <div class="menu-title">
-            <browse-icon />
-            <span>历史工作</span>
-          </div>
-          <div class="history-list">
-            <t-card 
-              v-for="item in historyItems" 
-              :key="item.id" 
-              class="history-item"
-              :class="{ 'active': activeHistoryId === item.id }"
-              @click="selectHistory(item.id)"
-            >
-              <div class="history-item-content">
-                <h4>{{ item.title }}</h4>
-                <p>{{ item.date }}</p>
-              </div>
-            </t-card>
-          </div>
-        </div>
-      </div>
-      
-      <div class="sidebar-footer" v-if="!isSidebarCollapsed">
-        <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-          <div class="user-info">
-            <t-avatar class="user-avatar" :image="userAvatar"></t-avatar>
-            <span class="user-name">{{ userName }}</span>
-          </div>
-        </t-dropdown>
-      </div>
-    </div>
+        <Sidebar
+      :is-sidebar-collapsed="isSidebarCollapsed"
+      :active-history-id="activeHistoryId"
+      @toggle-sidebar="toggleSidebar"
+      @create-new-task="createNewTask"
+      @select-history="selectHistory"
+    />
     
     <div class="main-content">
       <div class="workspace-header">
@@ -75,6 +30,14 @@
             @page-change="onPageChange"
             :loading="loading"
           >
+            <template #is_public="{ row }">
+              <t-tag :theme="row.is_public ? 'success' : 'warning'" variant="light">
+                {{ row.is_public ? '是' : '否' }}
+              </t-tag>
+            </template>
+            <template #created_at="{ row }">
+              {{ formatDate(row.created_at) }}
+            </template>
             <template #operation="{ row }">
               <t-space>
                 <t-button theme="primary" variant="text" @click="editTemplate(row)">
@@ -154,32 +117,16 @@
         <t-button theme="primary" @click="closeContentDialog">关闭</t-button>
       </template>
     </t-dialog>
-
-
-    
-    <!-- API Key 设置弹窗 -->
-    <t-dialog 
-      v-model:visible="showApiKeyDialog" 
-      header="API Key 设置"
-      @confirm="saveApiKey"
-      @cancel="cancelApiKey"
-    >
-      <t-form :data="apiKeyForm" @submit="saveApiKey">
-        <t-form-item label="API Key" name="apiKey">
-          <t-input v-model="apiKeyForm.apiKey" type="password" placeholder="请输入您的 API Key"></t-input>
-        </t-form-item>
-      </t-form>
-    </t-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { AddIcon, BrowseIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useAuthStore } from '@/stores/auth';
 import { templateAPI, type PaperTemplate, type PaperTemplateCreate, type PaperTemplateUpdate } from '@/api/template';
+import Sidebar from '@/components/Sidebar.vue';
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false);
@@ -192,38 +139,12 @@ const toggleSidebar = () => {
 const router = useRouter();
 const authStore = useAuthStore();
 
-// 用户信息
-const userName = computed(() => authStore.currentUser?.username || '用户');
-const userAvatar = ref(''); // 默认头像，如果为空则使用默认头像
-
 // 新建工作
 const createNewTask = () => {
   // 这里可以添加创建新任务的逻辑
   console.log('创建新任务');
   router.push('/home');
 };
-
-// 历史工作数据
-const historyItems = ref([
-  {
-    id: 1,
-    title: '计算100平方的家庭使用空调降温速率研究',
-    date: '2024-08-10 14:30',
-    content: '本研究通过建立数学模型和数值模拟，分析了100平方米家庭使用空调的降温速率。结果表明，在标准条件下，房间温度从30℃降至25℃需要约30分钟，平均降温速率为0.17℃/分钟。研究包括建模过程、分析过程、编程过程、运行过程和论文写作过程。'
-  },
-  {
-    id: 2,
-    title: '区块链技术在金融领域的创新',
-    date: '2024-08-05 09:15',
-    content: '本论文研究了区块链技术在金融行业中的各种创新应用，包括数字货币、智能合约和去中心化金融(DeFi)等...'
-  },
-  {
-    id: 3,
-    title: '可再生能源与可持续发展',
-    date: '2024-07-28 16:45',
-    content: '该论文分析了可再生能源技术的发展现状和未来趋势，以及它们对实现全球可持续发展目标的重要作用...'
-  }
-]);
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
@@ -234,33 +155,6 @@ const selectHistory = (id: number) => {
   // 在主页中实现选中历史工作的逻辑
 };
 
-// 用户菜单选项
-const userOptions = [
-  {
-    content: '我的模板',
-    value: 'template',
-    onClick: () => {
-      // 当前已在模板页面
-    }
-  },
-  {
-    content: 'API Key 设置',
-    value: 'api-key',
-    onClick: () => {
-      showApiKeyDialog.value = true;
-    }
-  },
-  {
-    content: '退出登录',
-    value: 'logout',
-    onClick: () => {
-      authStore.logout();
-      MessagePlugin.success('已退出登录');
-      router.push('/login');
-    }
-  }
-];
-
 // 模板列表数据
 const templateList = ref<PaperTemplate[]>([]);
 const loading = ref(false);
@@ -270,7 +164,6 @@ const columns = ref([
   { colKey: 'name', title: '模板名称', width: '150px' },
   { colKey: 'description', title: '描述', width: '200px' },
   { colKey: 'category', title: '分类', width: '100px' },
-  { colKey: 'file_path', title: '文件路径', width: '150px' },
   { colKey: 'is_public', title: '是否公开', width: '100px' },
   { colKey: 'created_at', title: '创建时间', width: '150px' },
   { colKey: 'operation', title: '操作', width: '200px' }
@@ -345,16 +238,6 @@ const onFileChange = (fileList: Array<any>) => {
     templateForm.file_path = '';
   }
 };
-
-// 控制API Key对话框显示
-const showApiKeyDialog = ref(false);
-
-// API Key表单数据
-const apiKeyForm = ref({
-  apiKey: ''
-});
-
-
 
 // 编辑模板
 const editTemplate = async (template: PaperTemplate) => {
@@ -483,6 +366,19 @@ const saveTemplate = async () => {
   }
 };
 
+// 格式化日期函数
+const formatDate = (dateString: string) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
 // 取消编辑/新建模板
 const cancelTemplate = () => {
   showCreateTemplateDialog.value = false;
@@ -493,19 +389,6 @@ const cancelTemplate = () => {
   templateForm.file_path = '';
   templateForm.is_public = false;
   templateFormFileList.value = [];
-};
-
-// 保存API Key
-const saveApiKey = () => {
-  // 这里可以添加保存API Key的逻辑
-  console.log('保存API Key:', apiKeyForm.value.apiKey);
-  showApiKeyDialog.value = false;
-  MessagePlugin.success('API Key 保存成功');
-};
-
-// 取消API Key设置
-const cancelApiKey = () => {
-  showApiKeyDialog.value = false;
 };
 
 // 模板内容相关
@@ -538,8 +421,6 @@ const closeContentDialog = () => {
   templateContent.value = '';
 };
 
-
-
 // 检查用户认证状态
 onMounted(() => {
   loadTemplates();
@@ -553,123 +434,6 @@ onMounted(() => {
   width: 100vw;
   background: #f5f7fa;
   overflow: hidden;
-}
-
-.sidebar {
-  width: 300px;
-  background: white;
-  border-right: 1px solid #eee;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
-  transition: width 0.3s ease;
-  overflow: hidden;
-}
-
-.sidebar-collapsed {
-  width: 60px;
-}
-
-.sidebar-header {
-  padding: 10px;
-  border-bottom: 1px solid #eee;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.sidebar-content {
-  flex: 1;
-  padding: 20px 15px;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.menu-section {
-  margin-bottom: 25px;
-}
-
-.menu-title {
-  display: flex;
-  align-items: center;
-  font-weight: 500;
-  color: #2c3e50;
-  margin-bottom: 12px;
-  padding: 5px 10px;
-}
-
-.menu-title .t-icon {
-  margin-right: 8px;
-}
-
-.new-task-button {
-    width: 100%;
-    text-align: center;
-    vertical-align: middle;
-}
-
-.history-list {
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.history-item {
-  margin-bottom: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.history-item:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.history-item.active {
-  border-left: 4px solid #3498db;
-}
-
-.history-item-content h4 {
-  margin: 0 0 5px 0;
-  font-size: 14px;
-  color: #2c3e50;
-}
-
-.history-item-content p {
-  margin: 0;
-  font-size: 12px;
-  color: #7f8c8d;
-}
-
-.sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid #eee;
-}
-
-/* 用户信息样式 */
-.user-info {
-  display: flex;
-  align-items: center;
-  padding: 10px 15px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.user-info:hover {
-  background-color: #f0f0f0;
-}
-
-.user-avatar {
-  margin-right: 10px;
-}
-
-.user-name {
-  font-size: 14px;
-  color: #2c3e50;
-}
-
-/* 侧边栏折叠按钮 */
-.sidebar-toggle-btn {
-  margin-left: auto;
 }
 
 .main-content {
@@ -708,15 +472,12 @@ onMounted(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-
 /* 新增样式 */
 .content-viewer {
   display: flex;
   flex-direction: column;
   height: 100%;
 }
-
-
 
 .content-display {
   flex: 1;

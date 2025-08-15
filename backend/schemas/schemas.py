@@ -37,6 +37,30 @@ class SystemConfigResponse(BaseModel):
     class Config:
         from_attributes = True
 
+# ModelConfig相关schemas
+class ModelConfigBase(BaseModel):
+    type: str  # brain(中枢大脑), code(代码实验), writing(论文写作)
+    model_id: str
+    base_url: str
+
+class ModelConfigCreate(ModelConfigBase):
+    api_key: str  # 创建时必须提供api_key
+
+class ModelConfigUpdate(BaseModel):
+    model_id: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None  # 更新时可以选择性提供api_key
+    is_active: Optional[bool] = None
+
+class ModelConfigResponse(ModelConfigBase):
+    id: int
+    is_active: bool
+    created_at: datetime
+    # 注意：响应中不包含api_key，确保安全性
+    
+    class Config:
+        from_attributes = True
+
 class PaperTemplateBase(BaseModel):
     name: str
     description: Optional[str] = None
@@ -71,3 +95,40 @@ class PaperTemplateResponse(PaperTemplateBase):
     
     class Config:
         from_attributes = True
+
+# Work相关schemas
+class WorkBase(BaseModel):
+    title: str
+    description: Optional[str] = None
+    tags: Optional[str] = None
+    template_id: Optional[int] = None  # 关联的论文模板ID
+
+class WorkCreate(WorkBase):
+    pass
+
+class WorkUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    progress: Optional[int] = None
+    tags: Optional[str] = None
+    template_id: Optional[int] = None  # 关联的论文模板ID
+
+class WorkResponse(WorkBase):
+    id: int
+    work_id: str
+    status: str
+    progress: int
+    template_id: Optional[int] = None  # 关联的论文模板ID
+    created_at: datetime
+    updated_at: datetime
+    created_by: int
+    
+    class Config:
+        from_attributes = True
+
+class WorkListResponse(BaseModel):
+    works: list[WorkResponse]
+    total: int
+    page: int
+    size: int

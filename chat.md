@@ -39,3 +39,22 @@
 [songhahaha66][12:19 15:10:00]：文字没有正常显示，两个按钮应该在两侧
 [songhahaha66][12:19 15:15:00]：请使用多行文字列表，第二步界面少使用css
 [songhahaha66][12:19 15:20:00]：.step-actions {两个按钮在两头显示
+[songhahaha66][08-14 23:39:45]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：现在如果所有api都放在main里边会显得太乱了，请你做一下拆分
+[songhahaha66][08-14 23:54]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在侧边栏user-info不显示头像了，显示用户名 然后小标题邮箱
+[songhahaha66][08-14 23:58]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在template.vue没有引用sidebar组件请你修改
+[songhahaha66][08-15 00:19:28]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：当请求api出现401 Unauthorized Could not validate credentials自动退出登录
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：修改现在api_key系统。模型分为中枢大脑、代码实验、论文写作三部分，每一部分需要填写API Key 、Base URL、 Model ID，先改前端，不着急后端
+[songhahaha66][08-15 01:42:48]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：结合前端设计弄一下api-key配置，数据库配置见md@DATABASE_DESIGN.md ，我要求一点：获取api配置获取不了api-key，api-key只能被删除，设置，更新，不能查看，安全考虑
+[songhahaha66][08-15 02:33:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：api输入页面保证表单有问题时禁止保存
+[songhahaha66][08-15 13:04:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：我计划左边是跟ai对话，在chat-input上面加一个可以展开折叠的文件管理器，选中时右边就对应显示
+[songhahaha66][08-15 14:05:27]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：请实现模板页面表格不显示file_path
+[songhahaha66][08-15 17:27:45]：@AI论文生成功能架构规划.md 鉴于这个文件，项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的规划任务，请你规划核心部分的TODO，在原来的TODO后边附加
+[songhahaha66][08-15 18:06:40]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：工作空间管理系统，请不用管已经完成的任务，你可以看看AI论文生成功能架构规划.md作为参考
+[songhahaha66][08-15 18:30:15]：更新前端，用上你做的功能
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：Home.vue:350  创建工作失败: TypeError: apiClient.post is not a function
+    at Object.createWork (workspace.ts:5:38)修复bug，请修复workspace.ts,配合apiClient.ts,禁止改动apiClient
+[songhahaha66][08-15 19:18:42]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：删掉测试用的历史工作数据
+
+[AI助手][08-15 20:04:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端和前端任务：数据库新增了template_id，适配改动
+
+[songhahaha66][08-15 20:15:09]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务，请不用管已经完成的任务：sidebar和work里面删除progress的相关代码
