@@ -66,6 +66,7 @@ class LiteLLMClient:
                 "model": config.model_id,
                 "messages": messages,
                 "api_base": config.base_url,
+                "api_key": config.api_key,
                 **kwargs
             }
             
@@ -120,6 +121,7 @@ class LiteLLMClient:
                 "model": config.model_id,
                 "messages": messages,
                 "api_base": config.base_url,
+                "api_key": config.api_key,
                 **kwargs
             }
             
