@@ -46,3 +46,4 @@
 [songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：修改现在api_key系统。模型分为中枢大脑、代码实验、论文写作三部分，每一部分需要填写API Key 、Base URL、 Model ID，先改前端，不着急后端
 [songhahaha66][08-15 01:42:48]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：结合前端设计弄一下api-key配置，数据库配置见md@DATABASE_DESIGN.md ，我要求一点：获取api配置获取不了api-key，api-key只能被删除，设置，更新，不能查看，安全考虑
 [songhahaha66][08-15 02:33:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：api输入页面保证表单有问题时禁止保存
+[songhahaha66][08-15 13:04:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：我计划左边是跟ai对话，在chat-input上面加一个可以展开折叠的文件管理器，选中时右边就对应显示
