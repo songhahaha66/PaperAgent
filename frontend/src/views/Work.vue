@@ -11,28 +11,16 @@
     <div class="main-content">
       <div class="workspace-header" v-if="currentWork">
         <div class="work-info">
-          <h1>{{ currentWork.title }}</h1>
-          <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
-          <div class="work-status">
+          <div class="work-title-row">
+            <h1>{{ currentWork.title }}</h1>
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
-            <t-progress 
-              :percentage="currentWork.progress" 
-              :color="getProgressColor(currentWork.progress)"
-              size="small"
-              style="width: 120px; margin-left: 16px;"
-            />
           </div>
+          <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
         <div class="work-actions">
-          <t-button theme="default" variant="outline" size="small" @click="refreshWork">
-            <template #icon>
-              <t-icon name="refresh" />
-            </template>
-            刷新
-          </t-button>
-          <t-button theme="danger" variant="outline" size="small" @click="deleteWork">
+          <t-button theme="danger" variant="outline" size="middle" @click="deleteWork">
             <template #icon>
               <t-icon name="delete" />
             </template>
@@ -131,7 +119,6 @@
                 <p><strong>描述：</strong>{{ currentWork.description || '暂无描述' }}</p>
                 <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
                 <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
-                <p><strong>进度：</strong>{{ currentWork.progress }}%</p>
                 <p><strong>模板：</strong>{{ currentWork.template_id ? `模板ID: ${currentWork.template_id}` : '未选择模板' }}</p>
               </div>
             </t-card>
@@ -479,12 +466,7 @@ const getStatusText = (status: string) => {
   return texts[status] || status;
 };
 
-// 获取进度颜色
-const getProgressColor = (progress: number) => {
-  if (progress < 30) return '#ff4d4f';
-  if (progress < 70) return '#faad14';
-  return '#52c41a';
-};
+
 
 // 监听路由变化
 watch(() => route.params.work_id, (newWorkId) => {
@@ -557,10 +539,10 @@ html, body {
   font-size: 0.9em;
 }
 
-.work-status {
+.work-title-row {
   display: flex;
   align-items: center;
-  margin-top: 8px;
+  gap:10px;
 }
 
 .work-actions {

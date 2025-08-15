@@ -54,14 +54,6 @@
                   </t-tag>
                 </div>
                 <p class="history-date">{{ item.date }}</p>
-                <div v-if="item.progress !== undefined" class="history-progress">
-                  <t-progress 
-                    :percentage="item.progress" 
-                    :color="getProgressColor(item.progress)"
-                    size="small"
-                    :show-info="false"
-                  />
-                </div>
                 <p class="history-content">{{ item.content }}</p>
               </div>
             </t-card>
@@ -130,7 +122,6 @@ interface HistoryItem {
   date: string
   content: string
   status?: string
-  progress?: number
 }
 
 // 历史工作数据状态
@@ -185,8 +176,7 @@ const loadUserWorks = async () => {
       title: work.title,
       date: new Date(work.created_at).toLocaleString(),
       content: work.description || '暂无描述',
-      status: work.status,
-      progress: work.progress
+      status: work.status
     }));
   } catch (error) {
     console.error('加载工作列表失败:', error);
@@ -226,13 +216,7 @@ const getStatusText = (status?: string) => {
   return texts[status] || status;
 };
 
-// 获取进度颜色
-const getProgressColor = (progress?: number) => {
-  if (progress === undefined) return '#d9d9d9';
-  if (progress < 30) return '#ff4d4f';
-  if (progress < 70) return '#faad14';
-  return '#52c41a';
-};
+
 
 // 组件挂载时加载历史工作数据
 onMounted(() => {
@@ -371,19 +355,7 @@ const userOptions = [
   color: #999;
 }
 
-.history-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0;
-}
 
-.progress-text {
-  font-size: 11px;
-  color: #666;
-  min-width: 30px;
-  text-align: right;
-}
 
 .history-content {
   margin: 8px 0 0 0;
