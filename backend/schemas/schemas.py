@@ -101,6 +101,7 @@ class WorkBase(BaseModel):
     title: str
     description: Optional[str] = None
     tags: Optional[str] = None
+    template_id: Optional[int] = None  # 关联的论文模板ID
 
 class WorkCreate(WorkBase):
     pass
@@ -111,12 +112,14 @@ class WorkUpdate(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = None
     tags: Optional[str] = None
+    template_id: Optional[int] = None  # 关联的论文模板ID
 
 class WorkResponse(WorkBase):
     id: int
     work_id: str
     status: str
     progress: int
+    template_id: Optional[int] = None  # 关联的论文模板ID
     created_at: datetime
     updated_at: datetime
     created_by: int

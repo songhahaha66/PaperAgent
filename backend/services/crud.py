@@ -331,6 +331,7 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
             title=work.title,
             description=work.description,
             tags=work.tags,
+            template_id=work.template_id,  # 添加模板ID
             created_by=user_id
         )
         

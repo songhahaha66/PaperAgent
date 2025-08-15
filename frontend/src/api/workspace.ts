@@ -4,6 +4,7 @@ export interface WorkCreate {
   title: string;
   description?: string;
   tags?: string;
+  template_id?: number;  // 关联的论文模板ID
 }
 
 export interface WorkUpdate {
@@ -12,6 +13,7 @@ export interface WorkUpdate {
   status?: string;
   progress?: number;
   tags?: string;
+  template_id?: number;  // 关联的论文模板ID
 }
 
 export interface Work {
@@ -22,6 +24,7 @@ export interface Work {
   status: string;
   progress: number;
   tags?: string;
+  template_id?: number;  // 关联的论文模板ID
   created_at: string;
   updated_at: string;
   created_by: number;

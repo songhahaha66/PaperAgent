@@ -61,7 +61,6 @@
                     size="small"
                     :show-info="false"
                   />
-                  <span class="progress-text">{{ item.progress }}%</span>
                 </div>
                 <p class="history-content">{{ item.content }}</p>
               </div>

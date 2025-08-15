@@ -132,6 +132,7 @@
                 <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
                 <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
                 <p><strong>进度：</strong>{{ currentWork.progress }}%</p>
+                <p><strong>模板：</strong>{{ currentWork.template_id ? `模板ID: ${currentWork.template_id}` : '未选择模板' }}</p>
               </div>
             </t-card>
           </div>

@@ -54,3 +54,5 @@
 [songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：Home.vue:350  创建工作失败: TypeError: apiClient.post is not a function
     at Object.createWork (workspace.ts:5:38)修复bug，请修复workspace.ts,配合apiClient.ts,禁止改动apiClient
 [songhahaha66][08-15 19:18:42]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：删掉测试用的历史工作数据
+
+[AI助手][08-15 20:04:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端和前端任务：数据库新增了template_id，适配改动

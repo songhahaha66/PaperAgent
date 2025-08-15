@@ -290,8 +290,9 @@ const startWork = async () => {
     // 创建工作数据
     const workData: WorkCreate = {
       title: researchQuestion.value,
-      description: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n附件数量：${uploadedFiles.value.length}`,
-      tags: '研究,论文,AI生成'
+      description: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n`,
+      tags: '研究,论文,AI生成',
+      template_id: selectedTemplateId.value  // 添加选择的模板ID
     };
 
     // 调用API创建工作
