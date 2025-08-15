@@ -63,18 +63,7 @@ workspaces/
   "created_at": "2024-08-10T14:30:00Z",
   "updated_at": "2024-08-10T16:45:00Z",
   "status": "in_progress",
-  "progress": {
-    "modeling": 100,
-    "coding": 80,
-    "execution": 70,
-    "writing": 60
-  },
-  "tags": ["热力学", "数值模拟", "空调"],
-  "ai_models": {
-    "central": "gpt-4",
-    "code": "claude-3.5-sonnet",
-    "paper": "gpt-4"
-  }
+  "tags": ["热力学", "数值模拟", "空调"]
 }
 ```
 
@@ -129,7 +118,6 @@ workspaces/
 - 错误处理和边界情况
 
 #### 4.3.2 代码执行
-- 安全的沙箱环境
 - 依赖管理
 - 实时输出显示
 - 错误捕获和调试
@@ -656,61 +644,7 @@ class AutoCheckpointManager:
         return True
 ```
 
-##### 前端回退界面
-```typescript
-// 回退系统组件
-interface Checkpoint {
-  hash: string;
-  tag: string;
-  message: string;
-  author: string;
-  date: string;
-  type: string;
-}
 
-interface RollbackPreview {
-  current_commit: string;
-  target_commit: string;
-  files_changed: number;
-  diff_summary: any[];
-  rollback_safe: boolean;
-}
-
-class RollbackManager {
-  private checkpoints: Checkpoint[] = [];
-  private currentPreview: RollbackPreview | null = null;
-  
-  async loadCheckpoints(type?: string): Promise<void> {
-    const response = await api.get(`/api/rollback/checkpoints?type=${type || ''}`);
-    this.checkpoints = response.data;
-  }
-  
-  async previewRollback(commitHash: string): Promise<RollbackPreview> {
-    const response = await api.post(`/api/rollback/preview`, { commit_hash: commitHash });
-    this.currentPreview = response.data;
-    return this.currentPreview;
-  }
-  
-  async executeRollback(commitHash: string, backup: boolean = true): Promise<boolean> {
-    try {
-      const response = await api.post(`/api/rollback/execute`, {
-        commit_hash: commitHash,
-        backup_current: backup
-      });
-      
-      if (response.data.success) {
-        // 刷新工作空间状态
-        await this.refreshWorkspace();
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('回退执行失败:', error);
-      return false;
-    }
-  }
-}
-```
 
 ### 8.6 文件安全与权限
 
@@ -722,7 +656,6 @@ class RollbackManager {
 #### 8.6.2 安全限制
 - 文件类型白名单验证
 - 文件大小和数量限制
-- 恶意文件检测和过滤
 
 ### 8.7 论文格式选择与技术实现
 
