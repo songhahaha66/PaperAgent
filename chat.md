@@ -47,3 +47,4 @@
 [songhahaha66][08-15 01:42:48]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：结合前端设计弄一下api-key配置，数据库配置见md@DATABASE_DESIGN.md ，我要求一点：获取api配置获取不了api-key，api-key只能被删除，设置，更新，不能查看，安全考虑
 [songhahaha66][08-15 02:33:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：api输入页面保证表单有问题时禁止保存
 [songhahaha66][08-15 13:04:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：我计划左边是跟ai对话，在chat-input上面加一个可以展开折叠的文件管理器，选中时右边就对应显示
+[songhahaha66][08-15 14:05:27]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：请实现模板页面表格不显示file_path

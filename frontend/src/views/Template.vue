@@ -31,6 +31,14 @@
             @page-change="onPageChange"
             :loading="loading"
           >
+            <template #is_public="{ row }">
+              <t-tag :theme="row.is_public ? 'success' : 'warning'" variant="light">
+                {{ row.is_public ? '是' : '否' }}
+              </t-tag>
+            </template>
+            <template #created_at="{ row }">
+              {{ formatDate(row.created_at) }}
+            </template>
             <template #operation="{ row }">
               <t-space>
                 <t-button theme="primary" variant="text" @click="editTemplate(row)">
@@ -179,7 +187,6 @@ const columns = ref([
   { colKey: 'name', title: '模板名称', width: '150px' },
   { colKey: 'description', title: '描述', width: '200px' },
   { colKey: 'category', title: '分类', width: '100px' },
-  { colKey: 'file_path', title: '文件路径', width: '150px' },
   { colKey: 'is_public', title: '是否公开', width: '100px' },
   { colKey: 'created_at', title: '创建时间', width: '150px' },
   { colKey: 'operation', title: '操作', width: '200px' }
@@ -380,6 +387,19 @@ const saveTemplate = async () => {
     MessagePlugin.error('保存模板失败');
     console.error('保存模板失败:', error);
   }
+};
+
+// 格式化日期函数
+const formatDate = (dateString: string) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 };
 
 // 取消编辑/新建模板
