@@ -1,13 +1,21 @@
+import logging
+import asyncio
 import os
 import io
 import contextlib
 import json
 from dotenv import load_dotenv
 import litellm
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Union
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # 使用非交互式后端
+
+# 配置日志
+logger = logging.getLogger(__name__)
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 # --- 核心组件：配置与初始化 ---
 
@@ -20,9 +28,20 @@ def setup_environment():
         raise ValueError("未找到 API_KEY，请检查 .env 文件。")
     litellm.api_key = api_key
 
+    # 从环境变量获取workspace路径，如果没有设置则使用默认路径
+    workspace_dir = os.getenv("WORKSPACE")
+    if not workspace_dir:
+        workspace_dir = os.path.join(os.path.dirname(__file__), "workspace")
+        logger.info(f"未设置WORKSPACE环境变量，使用默认路径: {workspace_dir}")
+    else:
+        logger.info(f"从环境变量获取WORKSPACE路径: {workspace_dir}")
+
     # 确保workspace目录存在
-    workspace_dir = os.path.join(os.path.dirname(__file__), "workspace")
     os.makedirs(workspace_dir, exist_ok=True)
+    logger.info(f"环境初始化完成，workspace目录: {workspace_dir}")
+
+    # 将workspace路径设置为环境变量，供其他组件使用
+    os.environ["WORKSPACE_DIR"] = workspace_dir
 
 # --- 流式输出管理器 ---
 
@@ -30,33 +49,62 @@ def setup_environment():
 class StreamOutputManager:
     """管理全程流式输出，包括XML标签格式"""
 
-    def __init__(self):
+    def __init__(self, stream_callback=None):
         self.indent_level = 0
+        self.stream_callback = stream_callback
+        self.output_count = 0
+        logger.info("StreamOutputManager初始化完成")
+
+    def _output(self, content: str):
+        """统一的输出方法"""
+        self.output_count += 1
+        logger.debug(
+            f"StreamOutputManager._output() 第 {self.output_count} 次调用: {repr(content[:50])}...")
+
+        if self.stream_callback:
+            # 直接调用回调函数，让回调函数自己处理线程安全问题
+            try:
+                self.stream_callback(content)
+                logger.debug(f"成功调用回调函数")
+            except Exception as e:
+                logger.error(f"回调函数调用失败: {e}")
+        else:
+            logger.debug("无回调函数，直接打印")
+            print(content)
 
     def print_xml_open(self, tag_name: str, content: str = ""):
         """打印XML开始标签"""
         indent = "        " * self.indent_level
         if content:
-            print(f"{indent}<{tag_name}>")
-            print(f"{indent}        {content}")
+            output = f"{indent}<{tag_name}>\n{indent}        {content}"
         else:
-            print(f"{indent}<{tag_name}>")
+            output = f"{indent}<{tag_name}>"
+
+        logger.debug(f"XML开始标签: {tag_name}")
+        self._output(output)
         self.indent_level += 1
 
     def print_xml_close(self, tag_name: str):
         """打印XML结束标签"""
         self.indent_level -= 1
         indent = "        " * self.indent_level
-        print(f"{indent}</{tag_name}>")
+        output = f"{indent}</{tag_name}>"
+
+        logger.debug(f"XML结束标签: {tag_name}")
+        self._output(output)
 
     def print_content(self, content: str):
         """打印内容"""
         indent = "        " * self.indent_level
-        print(f"{indent}{content}")
+        output = f"{indent}{content}"
+
+        logger.debug(f"打印内容: {repr(content[:50])}...")
+        self._output(output)
 
     def print_stream(self, content: str):
         """流式打印内容（不换行）"""
-        print(content, end="", flush=True)
+        logger.debug(f"流式打印: {repr(content[:50])}...")
+        self._output(content)
 
 # --- 文件操作工具 ---
 
@@ -66,9 +114,14 @@ class FileTools:
 
     def __init__(self, stream_manager: StreamOutputManager):
         self.stream_manager = stream_manager
-        self.workspace_dir = os.path.join(
-            os.path.dirname(__file__), "workspace")
+        # 从环境变量获取workspace路径
+        self.workspace_dir = os.getenv("WORKSPACE_DIR")
+        if not self.workspace_dir:
+            self.workspace_dir = os.path.join(
+                os.path.dirname(__file__), "workspace")
+            logger.warning("FileTools未找到WORKSPACE_DIR环境变量，使用默认路径")
         os.makedirs(self.workspace_dir, exist_ok=True)
+        logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
     def writemd(self, filename: str, content: str) -> str:
         """
@@ -85,6 +138,7 @@ class FileTools:
             filename += '.md'
 
         filepath = os.path.join(self.workspace_dir, filename)
+        logger.info(f"写入Markdown文件: {filepath}")
 
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
@@ -98,6 +152,7 @@ class FileTools:
             return result
         except Exception as e:
             error_msg = f"写入Markdown文件失败: {str(e)}"
+            logger.error(f"写入文件失败: {e}")
             self.stream_manager.print_xml_open("writemd_result")
             self.stream_manager.print_content(error_msg)
             self.stream_manager.print_xml_close("writemd_result")
@@ -118,6 +173,8 @@ class FileTools:
 
         if not os.path.exists(directory):
             return f"目录不存在: {directory}"
+
+        logger.info(f"生成目录树: {directory}")
 
         def _tree_helper(path: str, prefix: str = "", is_last: bool = True) -> str:
             result = []
@@ -159,9 +216,14 @@ class CodeExecutor:
 
     def __init__(self, stream_manager: StreamOutputManager):
         self.stream_manager = stream_manager
-        self.workspace_dir = os.path.join(
-            os.path.dirname(__file__), "workspace")
+        # 从环境变量获取workspace路径
+        self.workspace_dir = os.getenv("WORKSPACE_DIR")
+        if not self.workspace_dir:
+            self.workspace_dir = os.path.join(
+                os.path.dirname(__file__), "workspace")
+            logger.warning("CodeExecutor未找到WORKSPACE_DIR环境变量，使用默认路径")
         os.makedirs(self.workspace_dir, exist_ok=True)
+        logger.info(f"CodeExecutor初始化完成，workspace目录: {self.workspace_dir}")
 
     def pyexec(self, python_code: str) -> str:
         """
@@ -173,6 +235,7 @@ class CodeExecutor:
         Returns:
             执行结果的字符串（包括输出或错误信息）。
         """
+        logger.info(f"执行Python代码，代码长度: {len(python_code)} 字符")
         self.stream_manager.print_xml_open("call_exec")
         self.stream_manager.print_content(python_code)
         self.stream_manager.print_xml_close("call_exec")
@@ -200,6 +263,7 @@ class CodeExecutor:
                 exec(python_code, globals_dict)
 
             result = string_io.getvalue()
+            logger.info(f"代码执行成功，输出长度: {len(result)} 字符")
 
             self.stream_manager.print_xml_open("ret_exec")
             self.stream_manager.print_content(result.strip())
@@ -208,6 +272,7 @@ class CodeExecutor:
             return result
         except Exception as e:
             error_message = f"代码执行出错: {str(e)}"
+            logger.error(f"代码执行失败: {e}")
             self.stream_manager.print_xml_open("ret_exec")
             self.stream_manager.print_content(error_message)
             self.stream_manager.print_xml_close("ret_exec")
@@ -224,11 +289,16 @@ class LLMHandler:
     def __init__(self, model: str = "gemini/gemini-2.0-flash", stream_manager: StreamOutputManager = None):
         self.model = model
         self.stream_manager = stream_manager
+        logger.info(f"LLMHandler初始化完成，模型: {model}")
 
     def process_stream(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None):
         """
         调用 LLM API 并处理流式响应，返回完整的响应和工具调用信息。
         """
+        logger.info(f"开始调用LLM API，消息数量: {len(messages)}")
+        if tools:
+            logger.info(f"使用工具数量: {len(tools)}")
+
         response_stream = litellm.completion(
             model=self.model,
             messages=messages,
@@ -239,8 +309,10 @@ class LLMHandler:
         full_response_content = ""
         tool_calls = []
         current_tool_call = {"id": None, "name": None, "arguments": ""}
+        chunk_count = 0
 
         for chunk in response_stream:
+            chunk_count += 1
             delta = chunk.choices[0].delta
 
             # 1. 累积文本内容
@@ -251,6 +323,8 @@ class LLMHandler:
                 else:
                     print(content, end="", flush=True)
                 full_response_content += content
+                logger.debug(
+                    f"接收到文本内容块 {chunk_count}: {repr(content[:30])}...")
 
             # 2. 累积工具调用信息
             if delta.tool_calls:
@@ -262,12 +336,17 @@ class LLMHandler:
                                 self._finalize_tool_call(current_tool_call))
                         current_tool_call = {
                             "id": tool_call_delta.id, "name": None, "arguments": ""}
+                        logger.debug(f"开始新的工具调用: {tool_call_delta.id}")
 
                     if tool_call_delta.function:
                         if tool_call_delta.function.name:
                             current_tool_call["name"] = tool_call_delta.function.name
+                            logger.debug(
+                                f"工具调用名称: {tool_call_delta.function.name}")
                         if tool_call_delta.function.arguments:
                             current_tool_call["arguments"] += tool_call_delta.function.arguments
+                            logger.debug(
+                                f"工具调用参数累积: {len(current_tool_call['arguments'])} 字符")
 
         # 添加最后一个工具调用
         if current_tool_call["id"] is not None:
@@ -275,6 +354,8 @@ class LLMHandler:
 
         if not self.stream_manager:
             print()  # 确保换行
+
+        logger.info(f"LLM API调用完成，总块数: {chunk_count}，工具调用数: {len(tool_calls)}")
 
         # 构建完整的 assistant 消息
         assistant_message = {"role": "assistant",
@@ -312,6 +393,7 @@ class Agent:
         """注册一个工具及其实现函数。"""
         self.tools.append(tool_definition)
         self.available_functions[func.__name__] = func
+        logger.debug(f"注册工具: {func.__name__}")
 
     def run(self, *args, **kwargs):
         raise NotImplementedError("每个 Agent 子类必须实现 run 方法。")
@@ -326,16 +408,17 @@ class CodeAgent(Agent):
         super().__init__(llm_handler, stream_manager)
         self.executor = CodeExecutor(stream_manager)
         self._setup()
+        logger.info("CodeAgent初始化完成")
 
     def _setup(self):
         """初始化 System Prompt 和工具。"""
         self.messages = [{
             "role": "system",
             "content": (
-                "根据用户的任务描述，先生成完整、可直接执行的Python代码。"
-                "生成之后必须使用 pyexec 工具来执行生成的代码，并根据执行结果进行总结。"
-                "**注意：如果需要保存图像或数据文件，请使用workspace_dir+test/workspace变量指向的路径。**"
-                "例如：plt.savefig(os.path.join(workspace_dir, 'test', 'workspace', 'figure.png'))"
+                "根据用户的任务描述，先规划分析代码结构，然后使用 pyexec 工具来执行代码，pyexec的输入就是具体代码"
+                "必须使用 pyexec 工具来执行代码，并根据执行结果进行总结。"
+                "**注意：如果需要保存图像或数据文件，请使用workspace_dir/workspace变量指向的路径。**"
+                "例如：plt.savefig(os.path.join(workspace_dir, 'workspace', 'figure.png'))"
                 "保存图像后，请显示保存路径，确保用户知道文件保存位置。"
             )
         }]
@@ -355,18 +438,22 @@ class CodeAgent(Agent):
 
     def run(self, task_prompt: str) -> str:
         """执行代码生成和解释任务。"""
+        logger.info(f"CodeAgent开始执行任务: {repr(task_prompt[:50])}...")
+
         if self.stream_manager:
             self.stream_manager.print_xml_open("ret_code_agent")
 
         self.messages.append({"role": "user", "content": task_prompt})
 
         # 第一次调用：生成代码并产生工具调用
+        logger.info("CodeAgent第一次调用LLM")
         assistant_message, tool_calls = self.llm_handler.process_stream(
             self.messages, self.tools)
         self.messages.append(assistant_message)
 
         if not tool_calls:
             result = assistant_message.get("content", "代码手未生成任何代码。")
+            logger.warning("CodeAgent未生成工具调用")
             if self.stream_manager:
                 self.stream_manager.print_xml_close("ret_code_agent")
             return result
@@ -374,6 +461,7 @@ class CodeAgent(Agent):
         # 执行工具调用
         tool_call = tool_calls[0]  # 代码手一次只处理一个代码块
         function_name = tool_call["function"]["name"]
+        logger.info(f"CodeAgent执行工具调用: {function_name}")
 
         if function_name in self.available_functions:
             try:
@@ -387,13 +475,14 @@ class CodeAgent(Agent):
                     "content": result,
                 })
             except json.JSONDecodeError as e:
-                print(f"JSON 解析失败: {e}")
+                logger.error(f"JSON解析失败: {e}")
                 result = "代码手LLM处理失败：JSON解析错误"
 
         # 第二次调用：基于代码执行结果生成最终回答
         if self.stream_manager:
             self.stream_manager.print_content("正在生成最终回答...")
 
+        logger.info("CodeAgent第二次调用LLM")
         final_message, _ = self.llm_handler.process_stream(
             self.messages, self.tools)
 
@@ -403,6 +492,7 @@ class CodeAgent(Agent):
         if self.stream_manager:
             self.stream_manager.print_xml_close("ret_code_agent")
 
+        logger.info("CodeAgent任务完成")
         return final_result
 
 
@@ -415,6 +505,7 @@ class MainAgent(Agent):
         super().__init__(llm_handler, stream_manager)
         self.file_tools = FileTools(stream_manager)
         self._setup()
+        logger.info("MainAgent初始化完成")
 
     def _setup(self):
         """初始化 System Prompt 和工具。"""
@@ -424,9 +515,9 @@ class MainAgent(Agent):
                 "你是一个建模专家，擅长将用户的问题转化为数学模型。"
                 "分析用户问题，如果涉及具体计算、数据分析"
                 "必须交给 CodeAgent 工具来完成。"
-                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片到test/workspace目录"
+                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片到workspace目录"
                 "或者，请编程计算这个微分方程的解"
-                "任务完成后，必须先使用tree工具查看test/workspace目录结构，确认所有生成的文件都存在，"
+                "任务完成后，必须先使用tree工具查看workspace目录结构，确认所有生成的文件都存在，"
                 "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
             )
         }]
@@ -484,26 +575,36 @@ class MainAgent(Agent):
 
     def run(self, user_problem: str):
         """执行主 Agent 逻辑，循环处理直到任务完成。"""
+        logger.info(f"MainAgent开始执行，问题长度: {len(user_problem)} 字符")
+
         if self.stream_manager:
             self.stream_manager.print_xml_open("main_agent")
             self.stream_manager.print_content("分析建模")
 
         self.messages.append({"role": "user", "content": user_problem})
 
+        iteration_count = 0
         while True:
+            iteration_count += 1
+            logger.info(f"MainAgent第 {iteration_count} 次迭代")
+
             assistant_message, tool_calls = self.llm_handler.process_stream(
                 self.messages, self.tools)
             self.messages.append(assistant_message)
 
             if not tool_calls:
+                logger.info("MainAgent没有工具调用，任务完成")
                 if self.stream_manager:
                     self.stream_manager.print_content("好的，这个问题总结如下")
                     self.stream_manager.print_xml_close("main_agent")
                 break
 
+            logger.info(f"MainAgent执行 {len(tool_calls)} 个工具调用")
+
             # 处理所有工具调用
-            for tool_call in tool_calls:
+            for i, tool_call in enumerate(tool_calls):
                 function_name = tool_call["function"]["name"]
+                logger.info(f"处理工具调用 {i+1}/{len(tool_calls)}: {function_name}")
 
                 if function_name == "CodeAgent":
                     try:
@@ -529,7 +630,7 @@ class MainAgent(Agent):
                             "content": tool_result,
                         })
                     except json.JSONDecodeError as e:
-                        print(f"JSON 解析失败: {e}")
+                        logger.error(f"JSON解析失败: {e}")
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
@@ -549,12 +650,14 @@ class MainAgent(Agent):
                             "content": tool_result,
                         })
                     except json.JSONDecodeError as e:
-                        print(f"JSON 解析失败: {e}")
+                        logger.error(f"JSON解析失败: {e}")
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
                             "content": f"工具参数解析失败: {e}",
                         })
+
+        logger.info(f"MainAgent执行完成，总共 {iteration_count} 次迭代")
 
 # --- 程序入口 ---
 
@@ -595,6 +698,6 @@ if __name__ == "__main__":
         main_agent.run(problem)
 
     except ValueError as e:
-        print(f"初始化错误: {e}")
+        logger.error(f"初始化错误: {e}")
     except Exception as e:
-        print(f"程序运行出现意外错误: {e}")
+        logger.error(f"程序运行出现意外错误: {e}")

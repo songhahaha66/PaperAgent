@@ -85,3 +85,5 @@
 </main_agent>
 [LangQi99][08-16 unknown]: llm3引导codeagent可以把一些图像，数据 放到backend\test\workspace 再给主llm添加一个writemd工具和tree工具 等都结束了 先tree看看workspace结构 然后在workspace调用writemd在里面写成品论文tree就是方便贴图片啥的
 [LangQi99][08-16 unknown]: 1.codeagent说图像生成了 但是没有 是不是sandbox的问题 允许它读写backend\test\workspace 2.writemd之前也要tree 看看文件都有啥
+[LangQi99][08-16 unknown]: 添加一个demo的vue前端 后端用fastapi对接 如果不支持流式就换别的后端api
+[LangQi99][08-16 unknown]: 抱歉我发现并不是流式返回到前端显示的
