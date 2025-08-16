@@ -388,13 +388,25 @@ const runDemo = async () => {
               
               // 处理XML标签渲染
               let processedContent = data.data
-              if (data.data.includes('<call_exec>')) {
-                // 将 <call_exec> 渲染成代码块
-                processedContent = data.data.replace(/<call_exec>/g, '```python\n').replace(/<\/call_exec>/g, '\n```')
-              } else if (data.data.includes('</call_exec>')) {
-                // 将 <ret_exec> 渲染成结果块
-                processedContent = data.data.replace(/<ret_exec>/g, '```\n').replace(/<\/ret_exec>/g, '\n```')
+              
+              // 只有 call_exec 标签需要渲染成代码块
+              if (data.data.includes('<call_exec>') || data.data.includes('</call_exec>')) {
+                processedContent = data.data
+                  .replace(/<call_exec>/g, '```python\n')
+                  .replace(/<\/call_exec>/g, '\n```')
               }
+              // if (data.data.includes('<ret_exec>') || data.data.includes('</ret_exec>')) {
+              //   processedContent = data.data
+              //     .replace(/<ret_exec>/g, '```log\n')
+              //     .replace(/<\/ret_exec>/g, '\n```')
+              // }
+              // if (data.data.includes('<tree_result>') || data.data.includes('</tree_result>')) {
+              //   processedContent = data.data
+              //     .replace(/<tree_result>/g, '```log\n')
+              //     .replace(/<\/tree_result>/g, '\n```')
+              // }
+              // 移除所有其他XML标签（包括 <> 本身）
+              processedContent = processedContent.replace(/<[^>]*>/g, '')
               
               // 检查是否需要创建新的对话栏
               if (lastSystemType !== null && lastSystemType !== currentSystemType) {

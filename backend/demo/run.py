@@ -74,9 +74,10 @@ class StreamOutputManager:
 
     def print_xml_open(self, tag_name: str, content: str = ""):
         """打印XML开始标签"""
-        indent = "        " * self.indent_level
+        # indent = "        " * self.indent_level
+        indent = ""
         if content:
-            output = f"{indent}<{tag_name}>\n{indent}        {content}"
+            output = f"{indent}<{tag_name}>\n{indent}{content}"
         else:
             output = f"{indent}<{tag_name}>"
 
@@ -87,7 +88,8 @@ class StreamOutputManager:
     def print_xml_close(self, tag_name: str):
         """打印XML结束标签"""
         self.indent_level -= 1
-        indent = "        " * self.indent_level
+        # indent = "        " * self.indent_level
+        indent = ""
         output = f"{indent}</{tag_name}>"
 
         logger.debug(f"XML结束标签: {tag_name}")
@@ -95,7 +97,8 @@ class StreamOutputManager:
 
     def print_content(self, content: str):
         """打印内容"""
-        indent = "        " * self.indent_level
+        # indent = "        " * self.indent_level
+        indent = ""
         output = f"{indent}{content}"
 
         logger.debug(f"打印内容: {repr(content[:50])}...")
@@ -416,9 +419,10 @@ class CodeAgent(Agent):
             "role": "system",
             "content": (
                 "根据用户的任务描述，先规划分析代码结构，然后使用 pyexec 工具来执行代码，pyexec的输入就是具体代码"
+                "**也就是说当你想开始写代码时，就调用 pyexec 工具，pyexec的输入就是具体代码**"
                 "必须使用 pyexec 工具来执行代码，并根据执行结果进行总结。"
-                "**注意：如果需要保存图像或数据文件，请使用workspace_dir/workspace变量指向的路径。**"
-                "例如：plt.savefig(os.path.join(workspace_dir, 'workspace', 'figure.png'))"
+                "**注意：如果需要保存图像或数据文件，请使用workspace_dir=os.environ[\"WORKSPACE_DIR\"]变量指向的路径。**"
+                "例如：plt.savefig(os.path.join(workspace_dir,'figure.png'))"
                 "保存图像后，请显示保存路径，确保用户知道文件保存位置。"
             )
         }]
@@ -437,7 +441,7 @@ class CodeAgent(Agent):
         self._register_tool(self.executor.pyexec, pyexec_tool)
 
     def run(self, task_prompt: str) -> str:
-        """执行代码生成和解释任务。"""
+        """执行代码生成和解释任务，支持多次代码执行。"""
         logger.info(f"CodeAgent开始执行任务: {repr(task_prompt[:50])}...")
 
         if self.stream_manager:
@@ -445,55 +449,72 @@ class CodeAgent(Agent):
 
         self.messages.append({"role": "user", "content": task_prompt})
 
-        # 第一次调用：生成代码并产生工具调用
-        logger.info("CodeAgent第一次调用LLM")
-        assistant_message, tool_calls = self.llm_handler.process_stream(
-            self.messages, self.tools)
-        self.messages.append(assistant_message)
+        max_iterations = 5  # 最大迭代次数，防止无限循环
+        iteration = 0
 
-        if not tool_calls:
-            result = assistant_message.get("content", "代码手未生成任何代码。")
-            logger.warning("CodeAgent未生成工具调用")
-            if self.stream_manager:
-                self.stream_manager.print_xml_close("ret_code_agent")
-            return result
+        while iteration < max_iterations:
+            iteration += 1
+            logger.info(f"CodeAgent第{iteration}次迭代")
 
-        # 执行工具调用
-        tool_call = tool_calls[0]  # 代码手一次只处理一个代码块
-        function_name = tool_call["function"]["name"]
-        logger.info(f"CodeAgent执行工具调用: {function_name}")
+            # 调用LLM生成代码或分析结果
+            assistant_message, tool_calls = self.llm_handler.process_stream(
+                self.messages, self.tools)
+            self.messages.append(assistant_message)
 
-        if function_name in self.available_functions:
-            try:
-                args = json.loads(tool_call["function"]["arguments"])
-                result = self.available_functions[function_name](**args)
+            if not tool_calls:
+                # 没有工具调用，说明LLM认为任务完成，生成最终回答
+                result = assistant_message.get("content", "代码手任务完成。")
+                logger.info(f"CodeAgent在第{iteration}次迭代完成，无更多工具调用")
+                if self.stream_manager:
+                    self.stream_manager.print_xml_close("ret_code_agent")
+                return result
 
-                # 将工具执行结果添加回消息历史
-                self.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": result,
-                })
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON解析失败: {e}")
-                result = "代码手LLM处理失败：JSON解析错误"
+            # 执行所有工具调用
+            for tool_call in tool_calls:
+                function_name = tool_call["function"]["name"]
+                logger.info(f"CodeAgent执行工具调用: {function_name}")
 
-        # 第二次调用：基于代码执行结果生成最终回答
+                if function_name in self.available_functions:
+                    try:
+                        args = json.loads(tool_call["function"]["arguments"])
+                        result = self.available_functions[function_name](
+                            **args)
+
+                        # 将工具执行结果添加回消息历史
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": result,
+                        })
+
+                        logger.info(
+                            f"工具 {function_name} 执行成功，结果长度: {len(result)} 字符")
+
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON解析失败: {e}")
+                        result = f"代码手LLM处理失败：JSON解析错误 - {str(e)}"
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": result,
+                        })
+                else:
+                    logger.warning(f"未知工具: {function_name}")
+                    result = f"未知工具: {function_name}"
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": result,
+                    })
+
+        # 达到最大迭代次数
+        logger.warning(f"CodeAgent达到最大迭代次数({max_iterations})，强制结束")
         if self.stream_manager:
-            self.stream_manager.print_content("正在生成最终回答...")
-
-        logger.info("CodeAgent第二次调用LLM")
-        final_message, _ = self.llm_handler.process_stream(
-            self.messages, self.tools)
-
-        # 返回最终的文本内容或代码执行结果作为上下文
-        final_result = final_message.get("content") or result
-
-        if self.stream_manager:
+            self.stream_manager.print_content(
+                f"达到最大迭代次数({max_iterations})，任务结束")
             self.stream_manager.print_xml_close("ret_code_agent")
 
-        logger.info("CodeAgent任务完成")
-        return final_result
+        return "代码手任务完成（达到最大迭代次数）"
 
 
 class MainAgent(Agent):
@@ -515,9 +536,9 @@ class MainAgent(Agent):
                 "你是一个建模专家，擅长将用户的问题转化为数学模型。"
                 "分析用户问题，如果涉及具体计算、数据分析"
                 "必须交给 CodeAgent 工具来完成。"
-                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片到workspace目录"
+                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片"
                 "或者，请编程计算这个微分方程的解"
-                "任务完成后，必须先使用tree工具查看workspace目录结构，确认所有生成的文件都存在，"
+                "任务完成后，必须先使用tree工具查看目录结构，确认所有生成的文件都存在，"
                 "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
             )
         }]
