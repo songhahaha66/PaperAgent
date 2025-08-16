@@ -11,10 +11,12 @@ import asyncio
 import logging
 import json
 
-from database.database import get_db
+from database.database import get_db, get_async_db_session
+from database.async_utils import AsyncDatabaseManager, safe_compare_ids
 from auth.auth import get_current_user
 from models.models import User
 from services.chat_service import ChatService
+from services.async_chat_service import AsyncChatService
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core.stream_manager import PersistentStreamManager, SimpleStreamCallback, StreamCallback
 from ai_system.core.main_agent import MainAgent
@@ -190,7 +192,7 @@ async def get_chat_history(
                 detail="聊天会话不存在"
             )
         
-        if session.created_by != current_user_id:
+        if not safe_compare_ids(session.created_by, current_user_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="无权限访问此会话"
@@ -290,7 +292,7 @@ async def reset_chat_session(
     try:
         chat_service = ChatService(db)
         session = chat_service.get_session(session_id)
-        if not session or session.created_by != current_user_id:
+        if not session or not safe_compare_ids(session.created_by, current_user_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="会话不存在或无权限"
@@ -316,10 +318,17 @@ async def websocket_chat(
     websocket: WebSocket,
     session_id: str
 ):
-    """WebSocket聊天接口"""
+    """WebSocket聊天接口 - 使用正确的异步数据库会话管理"""
+    db_manager = None
+    
     try:
         # 接受连接
         await websocket.accept()
+        
+        # 初始化异步数据库管理器
+        db_manager = AsyncDatabaseManager()
+        await db_manager.initialize()
+        chat_service = await db_manager.get_chat_service()
         
         # 等待客户端发送认证信息
         try:
@@ -348,30 +357,25 @@ async def websocket_chat(
                 return
             
             # 验证用户是否有权限访问此会话
-            db = next(get_db())
-            try:
-                chat_service = ChatService(db)
-                session = chat_service.get_session(session_id)
-                
-                if not session:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': '聊天会话不存在'
-                    }))
-                    await websocket.close()
-                    return
-                
-                if session.created_by != user_id:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': '无权限访问此聊天会话'
-                    }))
-                    await websocket.close()
-                    return
-                    
-            finally:
-                db.close()
+            session = await chat_service.get_session(session_id)
             
+            if not session:
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'message': '聊天会话不存在'
+                }))
+                await websocket.close()
+                return
+            
+            # 使用安全的比较方式
+            if not safe_compare_ids(session.created_by, user_id):
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'message': '无权限访问此聊天会话'
+                }))
+                await websocket.close()
+                return
+                    
             # 认证成功，发送确认消息
             await websocket.send_text(json.dumps({
                 'type': 'auth_success',
@@ -408,40 +412,34 @@ async def websocket_chat(
                     }))
                     continue
                 
-                # 获取数据库会话（重新获取新的连接）
-                db = next(get_db())
-                try:
-                    chat_service = ChatService(db)
-                    session = chat_service.get_session(session_id)
-                    
-                    if not session:
-                        await websocket.send_text(json.dumps({
-                            'type': 'error',
-                            'message': '聊天会话不存在'
-                        }))
-                        continue
-                    
-                    # 再次验证用户权限（防止会话被转移）
-                    if session.created_by != user_id:
-                        await websocket.send_text(json.dumps({
-                            'type': 'error',
-                            'message': '无权限访问此聊天会话'
-                        }))
-                        await websocket.close()
-                        return
-                    
-                    # 保存session信息供后续使用（获取实际的字符串值）
-                    session_system_type = str(session.system_type)
-                    
-                    # 添加用户消息到聊天记录
-                    chat_service.add_message(
-                        session_id=session_id,
-                        role="user",
-                        content=message_data['problem']
-                    )
-                    
-                finally:
-                    db.close()
+                # 重新验证会话状态（防止会话被删除或转移）
+                session = await chat_service.get_session(session_id)
+                
+                if not session:
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'message': '聊天会话不存在'
+                    }))
+                    continue
+                
+                # 再次验证用户权限（防止会话被转移）
+                if not safe_compare_ids(session.created_by, user_id):
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'message': '无权限访问此聊天会话'
+                    }))
+                    await websocket.close()
+                    return
+                
+                # 保存session信息供后续使用（获取实际的字符串值）
+                session_system_type = str(session.system_type)
+                
+                # 添加用户消息到聊天记录
+                await chat_service.add_message(
+                    session_id=session_id,
+                    role="user",
+                    content=message_data['problem']
+                )
                 
                 # 发送开始消息
                 await websocket.send_text(json.dumps({
@@ -451,23 +449,26 @@ async def websocket_chat(
                 
                 try:
                     # 初始化AI环境 - 使用保存的system_type值  
-                    db_new = next(get_db())
+                    # 为AI环境创建独立的数据库会话
+                    # TODO: 后续需要创建异步版本的环境管理器
+                    sync_db = next(get_db())
                     try:
-                        env_manager = setup_environment_from_db(db_new)
+                        env_manager = setup_environment_from_db(sync_db)
                         env_manager.initialize_system(session_system_type)
                     finally:
-                        db_new.close()
+                        sync_db.close()
                     
                     # 创建流式管理器（适配WebSocket）
                     class WebSocketStreamCallback(SimpleStreamCallback):
                         """WebSocket专用的流式输出回调"""
                         
-                        def __init__(self, websocket: WebSocket, session_id: str):
+                        def __init__(self, websocket: WebSocket, session_id: str, async_chat_service: AsyncChatService):
                             super().__init__()
                             self.websocket = websocket
                             self.session_id = session_id
                             self.content = ""
                             self.connection_manager = manager
+                            self.async_chat_service = async_chat_service
                         
                         async def on_content(self, content: str):
                             """处理流式内容 - 立即发送到前端"""
@@ -490,6 +491,13 @@ async def websocket_chat(
                             """消息完成时的回调"""
                             logger.info(f"消息完成，角色: {role}, 长度: {len(content)}")
                             try:
+                                # 保存AI消息到数据库
+                                await self.async_chat_service.add_message(
+                                    session_id=self.session_id,
+                                    role=role,
+                                    content=content
+                                )
+                                
                                 # 直接发送完成消息，让WebSocket自己处理连接状态
                                 await self.websocket.send_text(json.dumps({
                                     'type': 'complete',
@@ -502,12 +510,12 @@ async def websocket_chat(
                                 raise e
                     
                     # 创建WebSocket流式回调
-                    ws_callback = WebSocketStreamCallback(websocket, session_id)
+                    ws_callback = WebSocketStreamCallback(websocket, session_id, chat_service)
                     
-                    # 创建流式管理器，使用WebSocket回调
+                    # 创建流式管理器，使用WebSocket回调和异步ChatService
                     stream_manager = PersistentStreamManager(
                         stream_callback=ws_callback,
-                        chat_service=chat_service,
+                        chat_service=None,  # 不使用同步版本
                         session_id=session_id
                     )
                     
@@ -615,3 +623,7 @@ async def websocket_chat(
             await websocket.close()
         except:
             pass
+    finally:
+        # 确保数据库管理器正确关闭
+        if db_manager:
+            await db_manager.close()
