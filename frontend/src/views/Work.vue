@@ -122,17 +122,7 @@
           
           <div v-else>
             <t-card title="论文展示区">
-              <div class="pdf-container">
-                <iframe 
-                  src="/main.pdf" 
-                  width="100%" 
-                  height="600px"
-                  style="border: none; border-radius: 8px;"
-                  title="论文PDF预览"
-                ></iframe>
-              </div>
               <div class="pdf-info">
-                <p>正在展示：main.pdf</p>
                 <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
                 <p>在左侧文件管理器中点击文件可查看具体内容。</p>
               </div>
@@ -188,43 +178,7 @@ const hoveredDivider = ref<number | null>(null)
 const selectedFile = ref<string | null>(null)
 
 // 文件树数据
-const fileTreeData = ref([
-  {
-    value: 'generated_code',
-    label: '生成的代码',
-    children: [
-      { value: 'main.py', label: 'main.py', isLeaf: true },
-      { value: 'requirements.txt', label: 'requirements.txt', isLeaf: true },
-      { value: 'data', label: '数据文件', isLeaf: true }
-    ]
-  },
-  {
-    value: 'execution_results',
-    label: '执行结果',
-    children: [
-      { value: 'output.log', label: 'output.log', isLeaf: true },
-      { value: 'plots', label: '图表', isLeaf: true },
-      { value: 'data_output', label: '数据输出', isLeaf: true }
-    ]
-  },
-  {
-    value: 'paper_drafts',
-    label: '论文草稿',
-    children: [
-      { value: 'outline.md', label: '大纲', isLeaf: true },
-      { value: 'sections', label: '章节', isLeaf: true },
-      { value: 'final_paper.md', label: '最终论文', isLeaf: true }
-    ]
-  },
-  {
-    value: 'resources',
-    label: '相关资源',
-    children: [
-      { value: 'references', label: '参考文献', isLeaf: true },
-      { value: 'images', label: '图片', isLeaf: true }
-    ]
-  }
-])
+const fileTreeData = ref([])
 
 // 文件内容映射
 const fileContents: Record<string, string> = {}
@@ -420,7 +374,7 @@ const handleFileSelect = async (fileKey: string) => {
   } catch (error) {
     console.error('读取文件失败:', error);
     // 使用默认内容
-    fileContents[fileKey] = `文件 ${fileKey} 的内容将在这里显示...`;
+    fileContents[fileKey] = `文件内容加载中...`;
   }
 };
 
@@ -717,7 +671,7 @@ const sendMockMessage = async (userInput: string, isRegenerate: boolean = false)
         }
       }
       if (lastAiMessageIndex !== -1) {
-        chatMessages.value[lastAiMessageIndex].content = `我理解您希望深入了解"${userInput}"。在空调降温速率研究中，我们可以从以下几个角度来分析：1) 热传导模型建立；2) 参数分析与计算；3) 数值模拟编程；4) 结果验证与优化；5) 论文撰写与格式规范。您希望我详细阐述哪个方面？`
+        chatMessages.value[lastAiMessageIndex].content = `正在重新生成回复...`
         chatMessages.value[lastAiMessageIndex].isStreaming = false
       }
     } else {
@@ -725,7 +679,7 @@ const sendMockMessage = async (userInput: string, isRegenerate: boolean = false)
       const aiReply: ChatMessageDisplay = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `我理解您希望深入了解"${userInput}"。在空调降温速率研究中，我们可以从以下几个角度来分析：1) 热传导模型建立；2) 参数分析与计算；3) 数值模拟编程；4) 结果验证与优化；5) 论文撰写与格式规范。您希望我详细阐述哪个方面？`,
+        content: `正在处理您的请求，请稍候...`,
         datetime: new Date().toLocaleString(),
         avatar: getSystemAvatar({ systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain' }),
         systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain'
@@ -810,7 +764,7 @@ const regenerateMessage = async (messageId: string) => {
       // 确保模拟重新生成时头像信息正确
       message.avatar = getSystemAvatar({ systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain' })
       setTimeout(() => {
-        message.content = '这是重新生成的内容。在空调降温速率研究过程中，我们可以根据不同的要点进行深入分析，包括热传导模型优化、参数敏感性分析、数值算法改进等，确保研究内容的科学性和准确性。'
+        message.content = '这是重新生成的内容。请稍候...'
         message.isStreaming = false
       }, 1000)
     }
@@ -1145,31 +1099,6 @@ html, body {
 
 .message-dimmed .system-label {
   opacity: 0.4;
-}
-
-/* PDF展示区域样式 */
-.pdf-container {
-  margin-bottom: 16px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.pdf-info {
-  padding: 12px 0;
-  border-top: 1px solid #eee;
-}
-
-.pdf-info p {
-  margin: 4px 0;
-  color: #666;
-  font-size: 14px;
-}
-
-.pdf-info p:first-child {
-  font-weight: 500;
-  color: #333;
 }
 
 .work-details {
