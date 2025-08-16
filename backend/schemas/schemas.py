@@ -145,12 +145,6 @@ class ChatMessageBase(BaseModel):
 class ChatMessageCreate(ChatMessageBase):
     pass
 
-class ChatMessageResponse(ChatMessageBase):
-    id: Optional[int] = None
-    
-    class Config:
-        from_attributes = True
-
 class ChatSessionBase(BaseModel):
     session_id: str
     work_id: str
@@ -160,13 +154,6 @@ class ChatSessionBase(BaseModel):
 
 class ChatSessionCreate(ChatSessionBase):
     pass
-
-class ChatSessionResponse(ChatSessionBase):
-    messages: Optional[List[ChatMessageResponse]] = None
-    total_messages: int = 0
-    
-    class Config:
-        from_attributes = True
 
 # --- 新增聊天相关schemas ---
 

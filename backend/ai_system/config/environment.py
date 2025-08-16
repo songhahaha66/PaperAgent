@@ -20,7 +20,7 @@ class DatabaseConfigManager:
     
     def get_model_config(self, system_type: str):
         """获取指定系统类型的模型配置"""
-        from backend.models.models import ModelConfig
+        from models.models import ModelConfig
         
         config = self.db_session.query(ModelConfig).filter(
             ModelConfig.type == system_type,

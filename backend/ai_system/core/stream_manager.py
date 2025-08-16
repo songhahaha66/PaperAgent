@@ -46,8 +46,9 @@ class StreamOutputManager:
 
         if self.stream_callback:
             try:
+                # 立即调用回调函数，实现实时流式传输
                 await self.stream_callback.on_content(content)
-                logger.debug(f"成功调用回调函数")
+                logger.debug(f"成功调用回调函数，内容长度: {len(content)}")
             except Exception as e:
                 logger.error(f"回调函数调用失败: {e}")
         else:
@@ -150,7 +151,7 @@ class PersistentStreamManager(StreamOutputManager):
         if self.chat_service and self.session_id and self.current_message_buffer.strip():
             try:
                 # 保存完整的消息
-                await self.chat_service.add_message(
+                self.chat_service.add_message(
                     session_id=self.session_id,
                     role=self.current_role,
                     content=self.current_message_buffer.strip()
