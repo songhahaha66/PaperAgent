@@ -51,18 +51,6 @@
                   :content="message.content"
                   :datetime="message.datetime"
                   :avatar="getSystemAvatar(message)"
-                  :actions="message.role === 'assistant' ? 'copy,replay' : undefined"
-                  @operation="(action) => {
-                    console.log('ChatItem操作:', action, '消息ID:', message.id, '消息角色:', message.role)
-                    if (action === 'copy') {
-                      console.log('执行复制操作')
-                      copyMessage(message.content)
-                    }
-                    if (action === 'replay') {
-                      console.log('执行重新生成操作，消息详情:', message)
-                      regenerateMessage(message.id)
-                    }
-                  }"
                 />
                 <div v-if="message.systemType" :class="['system-label', message.systemType]">
                   {{ getSystemName(message) }}
