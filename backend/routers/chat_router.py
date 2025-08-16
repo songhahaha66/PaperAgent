@@ -16,7 +16,7 @@ from auth.auth import get_current_user
 from models.models import User
 from services.chat_service import ChatService
 from ai_system.config.environment import setup_environment_from_db
-from ai_system.core.stream_manager import PersistentStreamManager, SimpleStreamCallback
+from ai_system.core.stream_manager import PersistentStreamManager, SimpleStreamCallback, StreamCallback
 from ai_system.core.main_agent import MainAgent
 from ai_system.core.llm_handler import LLMHandler
 from schemas.schemas import (
@@ -158,7 +158,7 @@ async def create_chat_session(
             work_id=request.work_id,
             system_type=request.system_type,
             user_id=current_user_id,
-            title=request.title
+            title=request.title or f"{request.system_type}对话"
         )
         return ChatSessionResponse.from_orm(session)
     except Exception as e:
@@ -235,7 +235,7 @@ async def list_chat_sessions(
 async def update_session_title(
     session_id: str,
     title: str,
-    current_user: User = Depends(get_current_user),
+    current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """更新会话标题"""
@@ -259,13 +259,13 @@ async def update_session_title(
 @router.delete("/session/{session_id}")
 async def delete_chat_session(
     session_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """删除聊天会话"""
     try:
         chat_service = ChatService(db)
-        success = chat_service.delete_session(session_id, current_user.id)
+        success = chat_service.delete_session(session_id, current_user_id)
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -283,14 +283,14 @@ async def delete_chat_session(
 @router.post("/session/{session_id}/reset")
 async def reset_chat_session(
     session_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """重置聊天会话（清空消息历史）"""
     try:
         chat_service = ChatService(db)
         session = chat_service.get_session(session_id)
-        if not session or session.created_by != current_user.id:
+        if not session or session.created_by != current_user_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="会话不存在或无权限"
@@ -336,13 +336,60 @@ async def websocket_chat(
                 
             token = auth_info['token']
             
-            # 这里应该验证JWT token，暂时简化处理
-            # TODO: 实现完整的JWT验证逻辑
+            # 验证JWT token
+            from auth.auth import verify_token
+            user_id = verify_token(token)
+            if user_id is None:
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'message': '无效的认证token'
+                }))
+                await websocket.close()
+                return
             
-        except Exception as e:
+            # 验证用户是否有权限访问此会话
+            db = next(get_db())
+            try:
+                chat_service = ChatService(db)
+                session = chat_service.get_session(session_id)
+                
+                if not session:
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'message': '聊天会话不存在'
+                    }))
+                    await websocket.close()
+                    return
+                
+                if session.created_by != user_id:
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'message': '无权限访问此聊天会话'
+                    }))
+                    await websocket.close()
+                    return
+                    
+            finally:
+                db.close()
+            
+            # 认证成功，发送确认消息
+            await websocket.send_text(json.dumps({
+                'type': 'auth_success',
+                'message': '认证成功，连接已建立'
+            }))
+            
+        except json.JSONDecodeError:
             await websocket.send_text(json.dumps({
                 'type': 'error',
-                'message': '认证信息格式错误'
+                'message': '认证信息格式错误：无效的JSON格式'
+            }))
+            await websocket.close()
+            return
+        except Exception as e:
+            logger.error(f"WebSocket认证失败: {e}")
+            await websocket.send_text(json.dumps({
+                'type': 'error',
+                'message': f'认证失败: {str(e)}'
             }))
             await websocket.close()
             return
@@ -357,28 +404,44 @@ async def websocket_chat(
                 if 'problem' not in message_data:
                     await websocket.send_text(json.dumps({
                         'type': 'error',
-                        'message': '消息格式错误'
+                        'message': '消息格式错误：缺少problem字段'
                     }))
                     continue
                 
-                # 获取数据库会话
+                # 获取数据库会话（重新获取新的连接）
                 db = next(get_db())
-                chat_service = ChatService(db)
-                session = chat_service.get_session(session_id)
-                
-                if not session:
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': '聊天会话不存在'
-                    }))
-                    continue
-                
-                # 添加用户消息到聊天记录
-                chat_service.add_message(
-                    session_id=session_id,
-                    role="user",
-                    content=message_data['problem']
-                )
+                try:
+                    chat_service = ChatService(db)
+                    session = chat_service.get_session(session_id)
+                    
+                    if not session:
+                        await websocket.send_text(json.dumps({
+                            'type': 'error',
+                            'message': '聊天会话不存在'
+                        }))
+                        continue
+                    
+                    # 再次验证用户权限（防止会话被转移）
+                    if session.created_by != user_id:
+                        await websocket.send_text(json.dumps({
+                            'type': 'error',
+                            'message': '无权限访问此聊天会话'
+                        }))
+                        await websocket.close()
+                        return
+                    
+                    # 保存session信息供后续使用（获取实际的字符串值）
+                    session_system_type = str(session.system_type)
+                    
+                    # 添加用户消息到聊天记录
+                    chat_service.add_message(
+                        session_id=session_id,
+                        role="user",
+                        content=message_data['problem']
+                    )
+                    
+                finally:
+                    db.close()
                 
                 # 发送开始消息
                 await websocket.send_text(json.dumps({
@@ -387,16 +450,20 @@ async def websocket_chat(
                 }))
                 
                 try:
-                    # 初始化AI环境
-                    env_manager = setup_environment_from_db(db)
-                    system_type = session.system_type
-                    env_manager.initialize_system(system_type)
+                    # 初始化AI环境 - 使用保存的system_type值  
+                    db_new = next(get_db())
+                    try:
+                        env_manager = setup_environment_from_db(db_new)
+                        env_manager.initialize_system(session_system_type)
+                    finally:
+                        db_new.close()
                     
                     # 创建流式管理器（适配WebSocket）
-                    class WebSocketStreamCallback:
+                    class WebSocketStreamCallback(SimpleStreamCallback):
                         """WebSocket专用的流式输出回调"""
                         
                         def __init__(self, websocket: WebSocket, session_id: str):
+                            super().__init__()
                             self.websocket = websocket
                             self.session_id = session_id
                             self.content = ""
@@ -448,8 +515,8 @@ async def websocket_chat(
                     stream_manager.set_role("assistant")
                     
                     # 创建LLM处理器和主代理
-                    model_config = env_manager.config_manager.get_model_config(system_type)
-                    model_id = message_data.get('model') or model_config.model_id
+                    model_config = env_manager.config_manager.get_model_config(session_system_type)
+                    model_id = message_data.get('model') or str(model_config.model_id)
                     llm_handler = LLMHandler(
                         model=model_id,
                         stream_manager=stream_manager

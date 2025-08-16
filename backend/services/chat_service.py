@@ -105,7 +105,7 @@ class ChatService:
             logger.error(f"获取会话信息失败: {e}")
             return None
     
-    def list_user_sessions(self, user_id: int, work_id: str = None) -> List[ChatSession]:
+    def list_user_sessions(self, user_id: int, work_id: Optional[str] = None) -> List[ChatSession]:
         """列出用户的聊天会话"""
         try:
             query = self.db_session.query(ChatSession)\
