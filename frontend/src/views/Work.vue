@@ -269,6 +269,16 @@ const createChatSession = async (systemType: 'brain' | 'code' | 'writing' = 'bra
   }
 };
 
+// 自动滚动到底部
+const scrollToBottom = () => {
+  nextTick(() => {
+    const chatContainer = document.querySelector('.chat-messages');
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  });
+};
+
 // 加载聊天历史
 const loadChatHistory = async () => {
   if (!authStore.token || !currentChatSession.value) return;
@@ -307,6 +317,9 @@ const loadChatHistory = async () => {
         isStreaming: false // 确保所有消息都不是流式传输
       };
     });
+    
+    // 加载完聊天历史后自动滚动到底部
+    scrollToBottom();
     
   } catch (error) {
     console.error('加载聊天历史失败:', error);
@@ -838,6 +851,13 @@ watch(() => route.params.work_id, (newWorkId) => {
   }
 });
 
+// 监听聊天消息变化，自动滚动到底部
+watch(chatMessages, (newMessages) => {
+  if (newMessages.length > 0) {
+    scrollToBottom();
+  }
+}, { deep: true });
+
 // 组件挂载时加载工作信息
 onMounted(() => {
   if (workId.value) {
@@ -847,6 +867,13 @@ onMounted(() => {
       initializeChatSession();
     }
   }
+  
+  // 组件挂载完成后，如果有聊天消息，自动滚动到底部
+  nextTick(() => {
+    if (chatMessages.value.length > 0) {
+      scrollToBottom();
+    }
+  });
 });
 </script>
 
