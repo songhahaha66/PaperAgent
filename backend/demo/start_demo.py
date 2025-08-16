@@ -55,7 +55,7 @@ API_KEY=your_api_key_here
 
 # 可选：设置其他环境变量
 # BASE_URL=https://api.gemini.com/v1
-# MODEL_ID=gemini-2.0-flash
+# MODEL_ID=gemini-2.5-flash-lite
 """
         with open(env_file, 'w', encoding='utf-8') as f:
             f.write(template)

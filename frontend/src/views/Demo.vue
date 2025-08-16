@@ -62,11 +62,56 @@
             </div>
           </div>
           <div class="chat-content">
-            <XmlChatRenderer 
-              v-if="!showRawOutput"
-              :messages="chatMessages" 
-              :is-loading="isRunning"
-            />
+            <div v-if="!showRawOutput" class="chat-container">
+              <div class="chat-messages">
+                <div 
+                  v-for="(message, index) in chatMessages" 
+                  :key="message.id" 
+                  :class="[
+                    'chat-message-wrapper',
+                    { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider }
+                  ]"
+                >
+                  <ChatItem
+                    :role="message.role"
+                    :content="message.content"
+                    :datetime="message.datetime"
+                    :avatar="getSystemAvatar(message)"
+                    :actions="message.role === 'assistant' ? 'copy,replay' : undefined"
+                    @operation="(action) => {
+                      if (action === 'copy') copyMessage(message.content)
+                      if (action === 'replay') regenerateMessage(message.id)
+                    }"
+                  />
+                  <div v-if="message.systemType" :class="['system-label', message.systemType]">
+                    {{ getSystemName(message) }}
+                  </div>
+                  
+                  <!-- 对话分割线 -->
+                  <div 
+                    v-if="index < chatMessages.length - 1" 
+                    class="message-divider"
+                  >
+                    <div class="divider-line"></div>
+                    <div 
+                      class="divider-icon" 
+                      :class="{ 'show': hoveredDivider === index }"
+                      @mouseenter="showDivider(index)"
+                      @mouseleave="hideDivider"
+                    >
+                      <t-icon name="arrow-up" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-input">
+                <ChatSender
+                  v-model="inputValue"
+                  placeholder="请输入您的问题..."
+                  @send="sendMessage"
+                />
+              </div>
+            </div>
             <div v-else class="raw-output-content" ref="outputContent">
               <pre v-if="outputText">{{ outputText }}</pre>
               <div v-else class="empty-output">输出将在这里显示...</div>
@@ -107,7 +152,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
-import XmlChatRenderer from '@/components/XmlChatRenderer.vue'
+import { ChatItem, ChatSender } from '@tdesign-vue-next/chat'
+import { MessagePlugin, Icon as TIcon } from 'tdesign-vue-next'
 
 // 响应式数据
 const problemInput = ref('')
@@ -119,8 +165,21 @@ const backendStatus = ref('checking')
 const backendStatusText = ref('检查中...')
 
 // 聊天相关数据
-const chatMessages = ref<any[]>([])
+interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant' | 'error' | 'model-change' | 'system'
+  content: string
+  datetime: string
+  avatar: string
+  systemType?: 'central' | 'code' | 'paper' // 系统类型：中枢、代码执行、论文生成
+}
+
+const chatMessages = ref<ChatMessage[]>([])
 const showRawOutput = ref(false)
+const inputValue = ref('')
+
+// 分割线悬停状态
+const hoveredDivider = ref<number | null>(null)
 
 // DOM引用
 const outputContent = ref<HTMLElement>()
@@ -268,9 +327,11 @@ const runDemo = async () => {
   // 清空聊天消息并添加用户问题
   chatMessages.value = []
   chatMessages.value.push({
-    type: 'user',
+    id: Date.now().toString(),
+    role: 'user',
     content: problemInput.value,
-    timestamp: new Date()
+    datetime: new Date().toLocaleString(),
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
   })
 
   try {
@@ -296,6 +357,9 @@ const runDemo = async () => {
 
     const decoder = new TextDecoder()
     let currentAiMessage = ''
+    let currentSystemType: 'central' | 'code' | 'paper' = 'central' // 默认系统类型
+    let lastSystemType: 'central' | 'code' | 'paper' | null = null
+    let currentMessageId: string | null = null
 
     while (true) {
       const { done, value } = await reader.read()
@@ -310,19 +374,66 @@ const runDemo = async () => {
             const data = JSON.parse(line.slice(6))
             if (data.type === 'content') {
               outputText.value += data.data + '\n'
-              currentAiMessage += data.data
               
-              // 更新或创建AI消息
-              const lastMessage = chatMessages.value[chatMessages.value.length - 1]
-              if (lastMessage && lastMessage.type === 'ai') {
-                lastMessage.content = currentAiMessage
-              } else {
-                chatMessages.value.push({
-                  type: 'ai',
-                  content: currentAiMessage,
-                  timestamp: new Date()
-                })
+              // 根据XML标签内容判断系统类型
+              if (data.data.includes('<main_agent>')) {
+                currentSystemType = 'central'  // 中枢系统
+              } else if (data.data.includes('<call_code_agent>') || data.data.includes('<ret_code_agent>')) {
+                currentSystemType = 'code'     // 代码生成系统
+              } else if (data.data.includes('<call_exec>') || data.data.includes('<ret_exec>')) {
+                currentSystemType = 'code'     // 代码执行系统
+              } else if (data.data.includes('<writemd_result>') || data.data.includes('<tree_result>')) {
+                currentSystemType = 'paper'    // 论文生成系统
               }
+              
+              // 处理XML标签渲染
+              let processedContent = data.data
+              if (data.data.includes('<call_exec>')) {
+                // 将 <call_exec> 渲染成代码块
+                processedContent = data.data.replace(/<call_exec>/g, '```python\n').replace(/<\/call_exec>/g, '\n```')
+              } else if (data.data.includes('</call_exec>')) {
+                // 将 <ret_exec> 渲染成结果块
+                processedContent = data.data.replace(/<ret_exec>/g, '```\n').replace(/<\/ret_exec>/g, '\n```')
+              }
+              
+              // 检查是否需要创建新的对话栏
+              if (lastSystemType !== null && lastSystemType !== currentSystemType) {
+                // 系统类型发生变化，创建新的对话栏
+                currentAiMessage = processedContent // 重置当前消息为新内容
+                currentMessageId = (Date.now() + 1).toString()
+                chatMessages.value.push({
+                  id: currentMessageId,
+                  role: 'assistant',
+                  content: currentAiMessage,
+                  datetime: new Date().toLocaleString(),
+                  avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+                  systemType: currentSystemType
+                })
+              } else {
+                // 更新或创建AI消息
+                if (currentMessageId) {
+                  // 更新现有消息
+                  const message = chatMessages.value.find(m => m.id === currentMessageId)
+                  if (message) {
+                    currentAiMessage += processedContent
+                    message.content = currentAiMessage
+                  }
+                } else {
+                  // 创建新的消息
+                  currentMessageId = (Date.now() + 1).toString()
+                  currentAiMessage = processedContent
+                  chatMessages.value.push({
+                    id: currentMessageId,
+                    role: 'assistant',
+                    content: currentAiMessage,
+                    datetime: new Date().toLocaleString(),
+                    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+                    systemType: currentSystemType
+                  })
+                }
+              }
+              
+              lastSystemType = currentSystemType
               
               // 自动滚动到底部
               await nextTick()
@@ -336,9 +447,11 @@ const runDemo = async () => {
               console.error('Demo执行出错:', data.data)
               outputText.value += `\n[错误] ${data.data}\n`
               chatMessages.value.push({
-                type: 'system',
+                id: (Date.now() + 2).toString(),
+                role: 'system',
                 content: `[错误] ${data.data}`,
-                timestamp: new Date()
+                datetime: new Date().toLocaleString(),
+                avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
               })
             }
           } catch (e) {
@@ -351,9 +464,11 @@ const runDemo = async () => {
     console.error('运行Demo失败:', error)
     outputText.value += `\n[错误] 运行失败: ${error}\n`
     chatMessages.value.push({
-      type: 'system',
+      id: (Date.now() + 3).toString(),
+      role: 'system',
       content: `[错误] 运行失败: ${error}`,
-      timestamp: new Date()
+      datetime: new Date().toLocaleString(),
+      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
     })
   } finally {
     isRunning.value = false
@@ -371,6 +486,145 @@ const clearChat = () => {
 
 const toggleView = () => {
   showRawOutput.value = !showRawOutput.value
+}
+
+// 显示分割线
+const showDivider = (index: number) => {
+  hoveredDivider.value = index
+}
+
+// 隐藏分割线
+const hideDivider = () => {
+  hoveredDivider.value = null
+}
+
+// 获取系统头像
+const getSystemAvatar = (message: ChatMessage) => {
+  if (message.systemType) {
+    const systemAvatars = {
+      central: 'https://api.dicebear.com/7.x/bottts/svg?seed=central&backgroundColor=0052d9', // 中枢系统头像 - 蓝色机器人
+      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870',        // 代码执行系统头像 - 绿色机器人
+      paper: 'https://api.dicebear.com/7.x/bottts/svg?seed=paper&backgroundColor=ed7b2f'       // 论文生成系统头像 - 橙色机器人
+    }
+    return systemAvatars[message.systemType]
+  }
+  return message.avatar
+}
+
+// 获取系统名称
+const getSystemName = (message: ChatMessage) => {
+  if (message.systemType) {
+    const systemNames = {
+      central: '中枢系统',
+      code: '代码执行',
+      paper: '论文生成'
+    }
+    return systemNames[message.systemType]
+  }
+  return 'AI助手'
+}
+
+// 发送消息
+const sendMessage = () => {
+  if (!inputValue.value.trim()) return
+  
+  const newMessage: ChatMessage = {
+    id: Date.now().toString(),
+    role: 'user',
+    content: inputValue.value,
+    datetime: new Date().toLocaleString(),
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
+  }
+  
+  chatMessages.value.push(newMessage)
+  
+  // 模拟AI回复 - 根据输入内容创建不同系统的对话栏
+  setTimeout(() => {
+    let systemType: 'central' | 'code' | 'paper' = 'central'
+    let content = `我理解您的问题："${inputValue.value}"。让我为您分析这个问题...`
+    
+    // 根据输入内容判断系统类型
+    if (inputValue.value.toLowerCase().includes('代码') || inputValue.value.toLowerCase().includes('python')) {
+      systemType = 'code'
+      content = `<call_code_agent>正在调用代码助手处理您的请求...</call_code_agent>`
+      
+      // 模拟代码执行
+      setTimeout(() => {
+        const codeMessage: ChatMessage = {
+          id: (Date.now() + 3).toString(),
+          role: 'assistant',
+          content: `<call_exec>print("Hello, World!")
+x = 10
+y = 20
+print(f"x + y = {x + y}")</call_exec>`,
+          datetime: new Date().toLocaleString(),
+          avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+          systemType: 'code'
+        }
+        chatMessages.value.push(codeMessage)
+        
+        // 模拟执行结果
+        setTimeout(() => {
+          const resultMessage: ChatMessage = {
+            id: (Date.now() + 4).toString(),
+            role: 'assistant',
+            content: `<ret_exec>Hello, World!
+x + y = 30</ret_exec>`,
+            datetime: new Date().toLocaleString(),
+            avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+            systemType: 'code'
+          }
+          chatMessages.value.push(resultMessage)
+        }, 1000)
+      }, 1000)
+    } else if (inputValue.value.toLowerCase().includes('文件') || inputValue.value.toLowerCase().includes('保存')) {
+      systemType = 'paper'
+      content = `<writemd_result>正在处理文件操作...</writemd_result>`
+    }
+    
+    // 创建新的对话栏
+    const aiReply: ChatMessage = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: content,
+      datetime: new Date().toLocaleString(),
+      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+      systemType: systemType
+    }
+    chatMessages.value.push(aiReply)
+    
+    // 模拟系统切换 - 创建另一个系统的对话栏
+    setTimeout(() => {
+      const secondReply: ChatMessage = {
+        id: (Date.now() + 2).toString(),
+        role: 'assistant',
+        content: `这是来自${systemType === 'code' ? '代码生成' : systemType === 'paper' ? '论文生成' : '中枢'}系统的回复。`,
+        datetime: new Date().toLocaleString(),
+        avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+        systemType: systemType
+      }
+      chatMessages.value.push(secondReply)
+    }, 2000)
+  }, 1000)
+  
+  inputValue.value = ''
+}
+
+// 复制消息
+const copyMessage = (content: string) => {
+  navigator.clipboard.writeText(content)
+  MessagePlugin.success('消息已复制到剪贴板！')
+}
+
+// 重新生成消息
+const regenerateMessage = (messageId: string) => {
+  const message = chatMessages.value.find(m => m.id === messageId)
+  if (message && message.role === 'assistant') {
+    message.content = '正在重新生成回复...'
+    setTimeout(() => {
+      message.content = '这是重新生成的内容。让我重新分析您的问题并提供更准确的回答。'
+    }, 1000)
+  }
 }
 
 const copyOutput = async () => {
@@ -475,7 +729,9 @@ onMounted(() => {
 }
 
 .demo-center {
-  flex: 1;
+  flex: 0 0 600px;
+  width: 600px;
+  max-width: 600px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -661,7 +917,6 @@ textarea:focus {
 }
 
 .output-content,
-.chat-content,
 .raw-output-content {
   background: #f8f9fa;
   border: 1px solid #ddd;
@@ -672,6 +927,153 @@ textarea:focus {
   font-family: 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.chat-content {
+  height: 500px;
+  overflow: hidden;
+}
+
+.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+  min-height: 0;
+  height: 100%;
+}
+
+.chat-messages {
+  flex: 1;
+  padding: 16px;
+  overflow-y: auto;
+  background: #fafafa;
+  min-height: 0;
+}
+
+.chat-input {
+  padding: 16px;
+  border-top: 1px solid #eee;
+  background: white;
+}
+
+.chat-message-wrapper {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.system-label {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 1;
+}
+
+.system-label.central {
+  background: rgba(0, 82, 217, 0.1);
+  color: #0052d9;
+  border: 1px solid rgba(0, 82, 217, 0.2);
+}
+
+.system-label.code {
+  background: rgba(0, 168, 112, 0.1);
+  color: #00a870;
+  border: 1px solid rgba(0, 168, 112, 0.2);
+}
+
+.system-label.paper {
+  background: rgba(237, 123, 47, 0.1);
+  color: #ed7b2f;
+  border: 1px solid rgba(237, 123, 47, 0.2);
+}
+
+/* 对话分割线样式 */
+.message-divider {
+  position: relative;
+  height: 40px;
+  margin: 12px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.message-divider:hover {
+  height: 50px;
+  margin: 6px 0;
+}
+
+.divider-line {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #e0e0e0;
+  transition: all 0.3s ease;
+}
+
+.message-divider:hover .divider-line {
+  background: #c0c0c0;
+  height: 2px;
+}
+
+.divider-icon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.3s ease;
+  z-index: 1;
+  cursor: pointer;
+}
+
+.divider-icon.show {
+  opacity: 1;
+  transform: scale(1);
+  background: #f0f0f0;
+  border-color: #c0c0c0;
+}
+
+.divider-icon .t-icon {
+  font-size: 16px;
+  color: #666;
+}
+
+.message-divider:hover .divider-icon {
+  opacity: 1;
+  transform: scale(1);
+  background: #e8e8e8;
+  border-color: #b0b0b0;
+}
+
+/* 对话变灰效果 */
+.message-dimmed {
+  opacity: 0.4;
+  filter: grayscale(0.6);
+  transition: all 0.3s ease;
+}
+
+.message-dimmed .t-chat__message {
+  opacity: 0.4;
+}
+
+.message-dimmed .system-label {
+  opacity: 0.4;
 }
 
 .output-content pre {

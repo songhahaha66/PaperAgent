@@ -579,7 +579,6 @@ class MainAgent(Agent):
 
         if self.stream_manager:
             self.stream_manager.print_xml_open("main_agent")
-            self.stream_manager.print_content("分析建模")
 
         self.messages.append({"role": "user", "content": user_problem})
 
@@ -595,7 +594,6 @@ class MainAgent(Agent):
             if not tool_calls:
                 logger.info("MainAgent没有工具调用，任务完成")
                 if self.stream_manager:
-                    self.stream_manager.print_content("好的，这个问题总结如下")
                     self.stream_manager.print_xml_close("main_agent")
                 break
 
