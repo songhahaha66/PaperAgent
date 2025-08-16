@@ -1,0 +1,143 @@
+"""
+文件操作工具模块
+提供文件写入、目录树显示等基础文件操作功能
+"""
+
+import os
+import logging
+from typing import Optional
+from ..core.stream_manager import StreamOutputManager
+
+logger = logging.getLogger(__name__)
+
+
+class FileTools:
+    """文件操作工具类"""
+
+    def __init__(self, stream_manager: StreamOutputManager):
+        self.stream_manager = stream_manager
+        # 从环境变量获取workspace路径
+        self.workspace_dir = os.getenv("WORKSPACE_DIR")
+        if not self.workspace_dir:
+            self.workspace_dir = os.path.join(
+                os.path.dirname(__file__), "workspace")
+            logger.warning("FileTools未找到WORKSPACE_DIR环境变量，使用默认路径")
+        os.makedirs(self.workspace_dir, exist_ok=True)
+        logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
+
+    async def writemd(self, filename: str, content: str) -> str:
+        """
+        写入Markdown文件到workspace目录
+
+        Args:
+            filename: 文件名（不需要.md后缀）
+            content: Markdown内容
+
+        Returns:
+            操作结果信息
+        """
+        if not filename.endswith('.md'):
+            filename += '.md'
+
+        filepath = os.path.join(self.workspace_dir, filename)
+        logger.info(f"写入Markdown文件: {filepath}")
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            result = f"成功写入Markdown文件: {filepath}"
+            await self.stream_manager.print_xml_open("writemd_result")
+            await self.stream_manager.print_content(result)
+            await self.stream_manager.print_xml_close("writemd_result")
+
+            return result
+        except Exception as e:
+            error_msg = f"写入Markdown文件失败: {str(e)}"
+            logger.error(f"写入文件失败: {e}")
+            await self.stream_manager.print_xml_open("writemd_result")
+            await self.stream_manager.print_content(error_msg)
+            await self.stream_manager.print_xml_close("writemd_result")
+            return error_msg
+
+    async def tree(self, directory: str = None) -> str:
+        """
+        显示目录树结构
+
+        Args:
+            directory: 要显示的目录路径，默认为workspace目录
+
+        Returns:
+            目录树结构字符串
+        """
+        if directory is None:
+            directory = self.workspace_dir
+
+        if not os.path.exists(directory):
+            return f"目录不存在: {directory}"
+
+        logger.info(f"生成目录树: {directory}")
+
+        def _tree_helper(path: str, prefix: str = "", is_last: bool = True) -> str:
+            result = []
+            items = os.listdir(path)
+            items.sort()
+
+            for i, item in enumerate(items):
+                item_path = os.path.join(path, item)
+                is_last_item = i == len(items) - 1
+
+                if os.path.isdir(item_path):
+                    result.append(
+                        f"{prefix}{'└── ' if is_last_item else '├── '}{item}/")
+                    new_prefix = prefix + ('    ' if is_last_item else '│   ')
+                    result.append(_tree_helper(
+                        item_path, new_prefix, is_last_item))
+                else:
+                    result.append(
+                        f"{prefix}{'└── ' if is_last_item else '├── '}{item}")
+
+            return '\n'.join(result)
+
+        tree_result = _tree_helper(directory)
+        
+        # 输出目录树
+        await self.stream_manager.print_xml_open("tree_result")
+        await self.stream_manager.print_content(tree_result)
+        await self.stream_manager.print_xml_close("tree_result")
+
+        return tree_result
+
+    def get_workspace_dir(self) -> str:
+        """获取工作空间目录"""
+        return self.workspace_dir
+
+    def file_exists(self, filename: str) -> bool:
+        """检查文件是否存在"""
+        filepath = os.path.join(self.workspace_dir, filename)
+        return os.path.exists(filepath)
+
+    def read_file(self, filename: str) -> Optional[str]:
+        """读取文件内容"""
+        filepath = os.path.join(self.workspace_dir, filename)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"读取文件失败: {e}")
+            return None
+
+    def list_files(self, directory: str = None) -> list:
+        """列出目录中的文件"""
+        if directory is None:
+            directory = self.workspace_dir
+        
+        if not os.path.exists(directory):
+            return []
+        
+        try:
+            return os.listdir(directory)
+        except Exception as e:
+            logger.error(f"列出目录失败: {e}")
+            return []
+

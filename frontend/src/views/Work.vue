@@ -51,11 +51,6 @@
                   :content="message.content"
                   :datetime="message.datetime"
                   :avatar="getSystemAvatar(message)"
-                  :actions="message.role === 'assistant' ? 'copy,replay' : undefined"
-                  @operation="(action) => {
-                    if (action === 'copy') copyMessage(message.content)
-                    if (action === 'replay') regenerateMessage(message.id)
-                  }"
                 />
                 <div v-if="message.systemType" :class="['system-label', message.systemType]">
                   {{ getSystemName(message) }}
@@ -87,6 +82,7 @@
                 v-model="inputValue"
                 placeholder="请输入您的问题..."
                 @send="sendMessage"
+                :disabled="isStreaming"
               />
             </div>
           </div>
@@ -126,17 +122,7 @@
           
           <div v-else>
             <t-card title="论文展示区">
-              <div class="pdf-container">
-                <iframe 
-                  src="/main.pdf" 
-                  width="100%" 
-                  height="600px"
-                  style="border: none; border-radius: 8px;"
-                  title="论文PDF预览"
-                ></iframe>
-              </div>
               <div class="pdf-info">
-                <p>正在展示：main.pdf</p>
                 <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
                 <p>在左侧文件管理器中点击文件可查看具体内容。</p>
               </div>
@@ -149,13 +135,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 import { Tree, Collapse, CollapsePanel } from 'tdesign-vue-next';
 import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
+import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 
@@ -173,18 +160,13 @@ const currentWork = ref<Work | null>(null);
 // 加载状态
 const loading = ref(false);
 
-// 定义聊天消息类型
-interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant' | 'error' | 'model-change' | 'system'
-  content: string
-  datetime: string
-  avatar: string
-  systemType?: 'central' | 'code' | 'paper' // 系统类型：中枢、代码执行、论文生成
+// 定义聊天消息类型（使用API中的类型）
+interface ChatMessageDisplay extends ChatMessage {
+  systemType?: 'brain' | 'code' | 'writing' // 更新为API中的系统类型
 }
 
 // 聊天消息数据
-const chatMessages = ref<ChatMessage[]>([]);
+const chatMessages = ref<ChatMessageDisplay[]>([]);
 
 // 输入框内容
 const inputValue = ref('')
@@ -196,49 +178,18 @@ const hoveredDivider = ref<number | null>(null)
 const selectedFile = ref<string | null>(null)
 
 // 文件树数据
-const fileTreeData = ref([
-  {
-    value: 'generated_code',
-    label: '生成的代码',
-    children: [
-      { value: 'main.py', label: 'main.py', isLeaf: true },
-      { value: 'requirements.txt', label: 'requirements.txt', isLeaf: true },
-      { value: 'data', label: '数据文件', isLeaf: true }
-    ]
-  },
-  {
-    value: 'execution_results',
-    label: '执行结果',
-    children: [
-      { value: 'output.log', label: 'output.log', isLeaf: true },
-      { value: 'plots', label: '图表', isLeaf: true },
-      { value: 'data_output', label: '数据输出', isLeaf: true }
-    ]
-  },
-  {
-    value: 'paper_drafts',
-    label: '论文草稿',
-    children: [
-      { value: 'outline.md', label: '大纲', isLeaf: true },
-      { value: 'sections', label: '章节', isLeaf: true },
-      { value: 'final_paper.md', label: '最终论文', isLeaf: true }
-    ]
-  },
-  {
-    value: 'resources',
-    label: '相关资源',
-    children: [
-      { value: 'references', label: '参考文献', isLeaf: true },
-      { value: 'images', label: '图片', isLeaf: true }
-    ]
-  }
-])
+const fileTreeData = ref([])
 
 // 文件内容映射
 const fileContents: Record<string, string> = {}
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
+
+// 聊天相关状态
+const currentChatSession = ref<ChatSessionResponse | null>(null);
+const isStreaming = ref(false);
+const webSocketHandler = ref<WebSocketChatHandler | null>(null);
 
 // 加载工作信息
 const loadWork = async () => {
@@ -255,11 +206,124 @@ const loadWork = async () => {
     // 加载工作空间文件
     await loadWorkspaceFiles();
     
+    // 初始化聊天会话
+    await initializeChatSession();
+    
   } catch (error) {
     console.error('加载工作信息失败:', error);
     MessagePlugin.error('加载工作信息失败');
   } finally {
     loading.value = false;
+  }
+};
+
+// 初始化聊天会话
+const initializeChatSession = async () => {
+  if (!authStore.token || !workId.value) return;
+  
+  console.log('初始化聊天会话，workId:', workId.value);
+  console.log('认证token:', authStore.token ? '已设置' : '未设置');
+  
+  try {
+    // 获取工作的聊天会话列表
+    const sessions = await chatAPI.getChatSessions(authStore.token, workId.value);
+    console.log('获取到的聊天会话:', sessions);
+    
+    if (sessions.length > 0) {
+      // 使用第一个会话（最新的）
+      currentChatSession.value = sessions[0];
+      console.log('设置当前聊天会话:', currentChatSession.value);
+      await loadChatHistory();
+    } else {
+      // 创建新的聊天会话
+      console.log('创建新的聊天会话');
+      await createChatSession('brain'); // 默认使用中枢系统
+    }
+  } catch (error) {
+    console.error('初始化聊天会话失败:', error);
+    // 不显示错误，继续使用模拟聊天
+  }
+};
+
+// 创建聊天会话
+const createChatSession = async (systemType: 'brain' | 'code' | 'writing' = 'brain') => {
+  if (!authStore.token || !workId.value) return;
+  
+  try {
+    const request: ChatSessionCreateRequest = {
+      work_id: workId.value,
+      system_type: systemType,
+      title: `${currentWork.value?.title || '工作'} - 聊天会话`
+    };
+    
+    const session = await chatAPI.createChatSession(authStore.token, request);
+    currentChatSession.value = session;
+    
+    // 清空现有消息
+    chatMessages.value = [];
+    
+    MessagePlugin.success('聊天会话创建成功');
+  } catch (error) {
+    console.error('创建聊天会话失败:', error);
+    MessagePlugin.error('创建聊天会话失败');
+  }
+};
+
+// 自动滚动到底部
+const scrollToBottom = () => {
+  nextTick(() => {
+    const chatContainer = document.querySelector('.chat-messages');
+    if (chatContainer) {
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+  });
+};
+
+// 加载聊天历史
+const loadChatHistory = async () => {
+  if (!authStore.token || !currentChatSession.value) return;
+  
+  try {
+    const messages = await chatAPI.getChatHistory(authStore.token, currentChatSession.value.session_id);
+    
+    // 转换消息格式
+    chatMessages.value = messages.map(msg => {
+      // 根据消息内容判断系统类型
+      let systemType: 'brain' | 'code' | 'writing' | undefined = undefined;
+      
+      if (msg.role === 'assistant') {
+        // 只有AI消息才判断系统类型
+        if (msg.content.includes('<main_agent>')) {
+          systemType = 'brain';
+        } else if (msg.content.includes('<call_code_agent>') || msg.content.includes('<ret_code_agent>')) {
+          systemType = 'code';
+        } else if (msg.content.includes('<call_exec>') || msg.content.includes('<ret_exec>')) {
+          systemType = 'code';
+        } else if (msg.content.includes('<writemd_result>') || msg.content.includes('<tree_result>')) {
+          systemType = 'writing';
+        } else {
+          // 如果没有明确的标签，使用会话的默认系统类型
+          systemType = currentChatSession.value?.system_type as 'brain' | 'code' | 'writing';
+        }
+      }
+      
+      return {
+        id: msg.id.toString(),
+        role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
+        content: msg.content,
+        datetime: new Date(msg.created_at).toLocaleString(),
+        avatar: msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType }),
+        systemType: systemType,
+        isStreaming: false // 确保所有消息都不是流式传输
+      };
+    });
+    
+    // 加载完聊天历史后自动滚动到底部
+    scrollToBottom();
+    
+  } catch (error) {
+    console.error('加载聊天历史失败:', error);
+    // 不显示错误，使用空消息列表
   }
 };
 
@@ -323,7 +387,7 @@ const handleFileSelect = async (fileKey: string) => {
   } catch (error) {
     console.error('读取文件失败:', error);
     // 使用默认内容
-    fileContents[fileKey] = `文件 ${fileKey} 的内容将在这里显示...`;
+    fileContents[fileKey] = `文件内容加载中...`;
   }
 };
 
@@ -349,25 +413,26 @@ const hideDivider = () => {
 }
 
 // 获取系统头像
-const getSystemAvatar = (message: ChatMessage) => {
+const getSystemAvatar = (message: ChatMessageDisplay | { systemType?: 'brain' | 'code' | 'writing' }) => {
   if (message.systemType) {
     const systemAvatars = {
-      central: 'https://api.dicebear.com/7.x/bottts/svg?seed=central&backgroundColor=0052d9', // 中枢系统头像 - 蓝色机器人
-      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870',        // 代码执行系统头像 - 绿色机器人
-      paper: 'https://api.dicebear.com/7.x/bottts/svg?seed=paper&backgroundColor=ed7b2f'       // 论文生成系统头像 - 橙色机器人
+      brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9',   // 中枢系统头像 - 蓝色机器人
+      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870',    // 代码执行系统头像 - 绿色机器人
+      writing: 'https://api.dicebear.com/7.x/bottts/svg?seed=writing&backgroundColor=ed7b2f' // 论文生成系统头像 - 橙色机器人
     }
     return systemAvatars[message.systemType]
   }
-  return message.avatar
+  // 如果没有系统类型，返回默认头像
+  return 'https://tdesign.gtimg.com/site/avatar.jpg'
 }
 
 // 获取系统名称
-const getSystemName = (message: ChatMessage) => {
+const getSystemName = (message: ChatMessageDisplay) => {
   if (message.systemType) {
     const systemNames = {
-      central: '中枢系统',
+      brain: '中枢系统',
       code: '代码执行',
-      paper: '论文生成'
+      writing: '论文生成'
     }
     return systemNames[message.systemType]
   }
@@ -375,33 +440,266 @@ const getSystemName = (message: ChatMessage) => {
 }
 
 // 发送消息
-const sendMessage = () => {
-  if (!inputValue.value.trim()) return
+const sendMessage = async (messageContent?: string, isRegenerate: boolean = false) => {
+  const content = messageContent || inputValue.value.trim()
+  if (!content || isStreaming.value) return
   
-  const newMessage: ChatMessage = {
-    id: Date.now().toString(),
-    role: 'user',
-    content: inputValue.value,
-    datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
+  // 如果不是重新生成，清空输入框并添加用户消息
+  if (!isRegenerate) {
+    const userMessage: ChatMessageDisplay = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: content,
+      datetime: new Date().toLocaleString(),
+      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
+    }
+    
+    chatMessages.value.push(userMessage)
+    inputValue.value = ''
   }
   
-  chatMessages.value.push(newMessage)
+  // 如果有聊天会话，使用真实API
+  if (currentChatSession.value && authStore.token) {
+    await sendRealMessage(content, isRegenerate)
+  } else {
+    // 回退到模拟聊天
+    await sendMockMessage(content, isRegenerate)
+  }
+}
+
+// 发送真实消息（WebSocket）
+const sendRealMessage = async (message: string, isRegenerate: boolean = false) => {
+  if (!currentChatSession.value || !authStore.token) return
   
+  isStreaming.value = true
+  
+  let aiMessage: ChatMessageDisplay
+  let aiMessageId: string
+  
+  if (isRegenerate) {
+    // 重新生成：找到最后一条AI消息并更新它
+    console.log('重新生成模式，当前消息列表:', chatMessages.value.map(m => ({ id: m.id, role: m.role, content: m.content.substring(0, 50) })))
+    
+    // 尝试多种方式查找AI消息
+    let lastAiMessageIndex = -1
+    for (let i = chatMessages.value.length - 1; i >= 0; i--) {
+      if (chatMessages.value[i].role === 'assistant') {
+        lastAiMessageIndex = i
+        break
+      }
+    }
+    console.log('找到的最后一条AI消息索引:', lastAiMessageIndex)
+    
+    if (lastAiMessageIndex === -1) {
+      console.error('没有找到可重新生成的消息，所有消息:', chatMessages.value)
+      MessagePlugin.error('没有找到可重新生成的消息')
+      isStreaming.value = false
+      return
+    }
+    
+    aiMessage = chatMessages.value[lastAiMessageIndex]
+    aiMessageId = aiMessage.id
+    aiMessage.content = ''
+    aiMessage.isStreaming = true
+    // 确保重新生成时头像信息正确
+    aiMessage.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
+    console.log('准备重新生成消息:', aiMessageId)
+  } else {
+    // 新消息：创建AI回复消息
+    aiMessageId = (Date.now() + 1).toString()
+    aiMessage = {
+      id: aiMessageId,
+      role: 'assistant',
+      content: '', // 从空内容开始，通过流式传输填充
+      datetime: new Date().toLocaleString(),
+      avatar: getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' }),
+      systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing',
+      isStreaming: true
+    }
+    chatMessages.value.push(aiMessage)
+    
+    // 强制Vue更新视图
+    chatMessages.value = [...chatMessages.value]
+    console.log('创建AI消息:', aiMessage)
+  }
+  
+  try {
+    console.log('开始WebSocket聊天，session_id:', currentChatSession.value.session_id);
+    console.log('API基础URL:', import.meta.env.VITE_API_BASE_URL);
+    
+    // 使用WebSocket发送消息
+    await sendMessageViaWebSocket(message, aiMessageId);
+    
+  } catch (error) {
+    console.error('发送消息失败:', error)
+    const messageIndex = chatMessages.value.findIndex(m => m.id === aiMessageId)
+    if (messageIndex > -1) {
+      chatMessages.value[messageIndex].content = '发送消息失败，请稍后重试'
+      chatMessages.value[messageIndex].isStreaming = false
+      // 确保错误消息也保持头像信息
+      chatMessages.value[messageIndex].avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
+    }
+    isStreaming.value = false
+    MessagePlugin.error('发送消息失败')
+  }
+}
+
+// WebSocket方式发送消息
+const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => {
+  try {
+    // 创建WebSocket处理器
+    webSocketHandler.value = new WebSocketChatHandler(
+      currentChatSession.value!.session_id,
+      authStore.token!
+    );
+
+    // 连接WebSocket
+    await webSocketHandler.value.connect();
+
+    let fullContent = '';
+    let currentSystemType: 'brain' | 'code' | 'writing' = currentChatSession.value!.system_type as 'brain' | 'code' | 'writing';
+    let systemTypeChanged = false;
+
+    // 设置消息监听器
+    webSocketHandler.value.onMessage((data) => {
+      console.log('收到WebSocket消息:', data);
+      
+      switch (data.type) {
+        case 'start':
+          // 开始消息，可以显示加载状态
+          console.log('开始AI分析...');
+          break;
+        case 'content':
+          // 内容更新 - 实时流式显示
+          const messageIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (messageIndex > -1) {
+            // 实时更新内容，实现流式显示效果
+            fullContent += data.content;
+            chatMessages.value[messageIndex].content = fullContent;
+            
+            // 根据内容判断系统类型
+            let newSystemType = currentSystemType;
+            if (data.content.includes('<main_agent>')) {
+              newSystemType = 'brain';
+            } else if (data.content.includes('<call_code_agent>') || data.content.includes('<ret_code_agent>')) {
+              newSystemType = 'code';
+            } else if (data.content.includes('<call_exec>') || data.content.includes('<ret_exec>')) {
+              newSystemType = 'code';
+            } else if (data.content.includes('<writemd_result>') || data.content.includes('<tree_result>')) {
+              newSystemType = 'writing';
+            }
+            
+            // 如果系统类型发生变化，更新显示
+            if (newSystemType !== currentSystemType) {
+              currentSystemType = newSystemType;
+              systemTypeChanged = true;
+              chatMessages.value[messageIndex].systemType = currentSystemType;
+              console.log('系统类型切换为:', currentSystemType);
+            }
+            
+            // 强制Vue更新视图 - 使用响应式更新
+            const updatedMessage = { ...chatMessages.value[messageIndex] };
+            updatedMessage.content = fullContent;
+            updatedMessage.systemType = currentSystemType;
+            // 确保头像信息完整保留
+            updatedMessage.avatar = getSystemAvatar({ systemType: currentSystemType });
+            chatMessages.value[messageIndex] = updatedMessage;
+            
+            console.log('更新消息内容:', fullContent.substring(0, 100) + '...');
+            
+            // 自动滚动到底部
+            nextTick(() => {
+              const chatContainer = document.querySelector('.chat-messages');
+              if (chatContainer) {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+              }
+            });
+          } else {
+            console.error('未找到消息:', aiMessageId);
+          }
+          break;
+        case 'xml_open':
+        case 'xml_close':
+          // XML标签，可以用于格式化显示
+          break;
+        case 'complete':
+          // 完成消息
+          const completeIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (completeIndex > -1) {
+            chatMessages.value[completeIndex].isStreaming = false;
+            // 确保最终内容完整显示
+            chatMessages.value[completeIndex].content = fullContent;
+            // 确保最终头像信息完整
+            chatMessages.value[completeIndex].avatar = getSystemAvatar({ systemType: currentSystemType });
+            
+            // 如果系统类型发生了变化，显示切换提示
+            if (systemTypeChanged) {
+              console.log('AI分析完成，系统类型:', currentSystemType);
+            }
+          }
+          isStreaming.value = false;
+          webSocketHandler.value = null;
+          console.log('AI分析完成');
+          break;
+        case 'error':
+          // 错误消息
+          const errorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (errorIndex > -1) {
+            chatMessages.value[errorIndex].content = `错误: ${data.message}`;
+            chatMessages.value[errorIndex].isStreaming = false;
+            // 确保错误消息也保持头像信息
+            chatMessages.value[errorIndex].avatar = getSystemAvatar({ systemType: currentSystemType });
+          }
+          isStreaming.value = false;
+          webSocketHandler.value = null;
+          MessagePlugin.error(`聊天失败: ${data.message}`);
+          break;
+      }
+    });
+
+    // 等待一下确保监听器设置完成
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // 发送消息
+    console.log('发送消息到WebSocket:', message);
+    webSocketHandler.value.sendMessage(message);
+
+  } catch (err) {
+    console.error('WebSocket处理错误:', err);
+    throw err;
+  }
+};
+
+// 模拟聊天（回退方案）
+const sendMockMessage = async (userInput: string, isRegenerate: boolean = false) => {
   // 模拟AI回复
   setTimeout(() => {
-    const aiReply: ChatMessage = {
-      id: (Date.now() + 1).toString(),
-      role: 'assistant',
-      content: `我理解您希望深入了解"${inputValue.value}"。在空调降温速率研究中，我们可以从以下几个角度来分析：1) 热传导模型建立；2) 参数分析与计算；3) 数值模拟编程；4) 结果验证与优化；5) 论文撰写与格式规范。您希望我详细阐述哪个方面？`,
-      datetime: new Date().toLocaleString(),
-      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-      systemType: 'central'
+    if (isRegenerate) {
+      // 重新生成：更新最后一条AI消息
+      let lastAiMessageIndex = -1
+      for (let i = chatMessages.value.length - 1; i >= 0; i--) {
+        if (chatMessages.value[i].role === 'assistant') {
+          lastAiMessageIndex = i
+          break
+        }
+      }
+      if (lastAiMessageIndex !== -1) {
+        chatMessages.value[lastAiMessageIndex].content = `正在重新生成回复...`
+        chatMessages.value[lastAiMessageIndex].isStreaming = false
+      }
+    } else {
+      // 新消息：创建AI回复
+      const aiReply: ChatMessageDisplay = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `正在处理您的请求，请稍候...`,
+        datetime: new Date().toLocaleString(),
+        avatar: getSystemAvatar({ systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain' }),
+        systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain'
+      }
+      chatMessages.value.push(aiReply)
     }
-    chatMessages.value.push(aiReply)
   }, 1000)
-  
-  inputValue.value = ''
 }
 
 // 复制消息
@@ -411,13 +709,81 @@ const copyMessage = (content: string) => {
 }
 
 // 重新生成消息
-const regenerateMessage = (messageId: string) => {
+const regenerateMessage = async (messageId: string) => {
+  console.log('开始重新生成消息，消息ID:', messageId)
+  console.log('当前所有消息:', chatMessages.value.map(m => ({ id: m.id, role: m.role, content: m.content.substring(0, 50) })))
+  
   const message = chatMessages.value.find(m => m.id === messageId)
+  console.log('找到的消息:', message)
+  
   if (message && message.role === 'assistant') {
-    message.content = '正在重新生成回复...'
-    setTimeout(() => {
-      message.content = '这是重新生成的内容。在空调降温速率研究过程中，我们可以根据不同的要点进行深入分析，包括热传导模型优化、参数敏感性分析、数值算法改进等，确保研究内容的科学性和准确性。'
-    }, 1000)
+    if (currentChatSession.value && authStore.token) {
+      try {
+        // 显示重新生成状态
+        message.content = '正在重新生成回复...'
+        message.isStreaming = true // 确保是流式传输
+        // 确保重新生成状态时头像信息正确
+        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
+        
+        // 获取上一条用户消息作为重新生成的输入
+        const messageIndex = chatMessages.value.findIndex(m => m.id === messageId)
+        console.log('消息索引:', messageIndex)
+        
+        if (messageIndex > 0) {
+          const userMessage = chatMessages.value[messageIndex - 1]
+          console.log('上一条用户消息:', userMessage)
+          
+          if (userMessage.role === 'user') {
+            // 调用真实的重新生成API
+            console.log('调用重新生成API，用户输入:', userMessage.content)
+            await sendMessage(userMessage.content, true) // 第二个参数表示是重新生成
+            return
+          } else {
+            console.log('上一条消息不是用户消息，角色:', userMessage.role)
+          }
+        }
+        
+        // 如果没有找到用户消息，尝试查找最近的用户消息
+        if (messageIndex > 0) {
+          for (let i = messageIndex - 1; i >= 0; i--) {
+            const prevMessage = chatMessages.value[i]
+            if (prevMessage.role === 'user') {
+              console.log('找到最近的用户消息:', prevMessage.content)
+              await sendMessage(prevMessage.content, true)
+              return
+            }
+          }
+        }
+        
+        // 如果没有找到用户消息，显示错误
+        message.content = '无法重新生成：未找到原始问题'
+        message.isStreaming = false
+        // 确保错误状态时头像信息正确
+        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
+        MessagePlugin.error('无法重新生成：未找到原始问题')
+        
+      } catch (error) {
+        console.error('重新生成消息失败:', error)
+        message.content = '重新生成失败，请稍后重试'
+        message.isStreaming = false
+        // 确保错误状态时头像信息正确
+        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
+        MessagePlugin.error('重新生成失败')
+      }
+    } else {
+      // 模拟重新生成
+      message.content = '正在重新生成回复...'
+      message.isStreaming = true
+      // 确保模拟重新生成时头像信息正确
+      message.avatar = getSystemAvatar({ systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain' })
+      setTimeout(() => {
+        message.content = '这是重新生成的内容。请稍候...'
+        message.isStreaming = false
+      }, 1000)
+    }
+  } else {
+    console.error('消息不存在或不是AI消息:', message)
+    MessagePlugin.error('无法重新生成：消息不存在或不是AI消息')
   }
 }
 
@@ -466,20 +832,48 @@ const getStatusText = (status: string) => {
   return texts[status] || status;
 };
 
-
+// 组件卸载时清理资源
+onUnmounted(() => {
+  if (webSocketHandler.value) {
+    webSocketHandler.value.disconnect();
+    webSocketHandler.value = null;
+  }
+});
 
 // 监听路由变化
 watch(() => route.params.work_id, (newWorkId) => {
   if (newWorkId) {
     loadWork();
+    // 重新初始化聊天会话
+    if (authStore.token) {
+      initializeChatSession();
+    }
   }
 });
+
+// 监听聊天消息变化，自动滚动到底部
+watch(chatMessages, (newMessages) => {
+  if (newMessages.length > 0) {
+    scrollToBottom();
+  }
+}, { deep: true });
 
 // 组件挂载时加载工作信息
 onMounted(() => {
   if (workId.value) {
     loadWork();
+    // 初始化聊天会话
+    if (authStore.token) {
+      initializeChatSession();
+    }
   }
+  
+  // 组件挂载完成后，如果有聊天消息，自动滚动到底部
+  nextTick(() => {
+    if (chatMessages.value.length > 0) {
+      scrollToBottom();
+    }
+  });
 });
 </script>
 
@@ -634,7 +1028,7 @@ html, body {
   z-index: 1;
 }
 
-.system-label.central {
+.system-label.brain {
   background: rgba(0, 82, 217, 0.1);
   color: #0052d9;
   border: 1px solid rgba(0, 82, 217, 0.2);
@@ -646,7 +1040,7 @@ html, body {
   border: 1px solid rgba(0, 168, 112, 0.2);
 }
 
-.system-label.paper {
+.system-label.writing {
   background: rgba(237, 123, 47, 0.1);
   color: #ed7b2f;
   border: 1px solid rgba(237, 123, 47, 0.2);
@@ -732,31 +1126,6 @@ html, body {
 
 .message-dimmed .system-label {
   opacity: 0.4;
-}
-
-/* PDF展示区域样式 */
-.pdf-container {
-  margin-bottom: 16px;
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.pdf-info {
-  padding: 12px 0;
-  border-top: 1px solid #eee;
-}
-
-.pdf-info p {
-  margin: 4px 0;
-  color: #666;
-  font-size: 14px;
-}
-
-.pdf-info p:first-child {
-  font-weight: 500;
-  color: #333;
 }
 
 .work-details {

@@ -48,6 +48,9 @@
 [songhahaha66][08-15 02:33:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：api输入页面保证表单有问题时禁止保存
 [songhahaha66][08-15 13:04:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：我计划左边是跟ai对话，在chat-input上面加一个可以展开折叠的文件管理器，选中时右边就对应显示
 [songhahaha66][08-15 14:05:27]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：请实现模板页面表格不显示file_path
+[songhahaha66][08-17 02:39:19]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：当前的 WebSocket 认证尚未完成，仅有 TODO 注释。这造成了一个重大的安全漏洞，因为未经认证的用户可能会访问聊天会话。
+[songhahaha66][08-16 23:32:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：更新Work.vue文件，集成聊天API
+[songhahaha66][08-16 23:32:21]：你需要实现api对接呀，参考demo的前端设计
 [songhahaha66][08-15 17:27:45]：@AI论文生成功能架构规划.md 鉴于这个文件，项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的规划任务，请你规划核心部分的TODO，在原来的TODO后边附加
 [songhahaha66][08-15 18:06:40]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：工作空间管理系统，请不用管已经完成的任务，你可以看看AI论文生成功能架构规划.md作为参考
 [songhahaha66][08-15 18:30:15]：更新前端，用上你做的功能
@@ -86,4 +89,16 @@
 [LangQi99][08-16 unknown]: 添加一个demo的vue前端 后端用fastapi对接 如果不支持流式就换别的后端api
 [LangQi99][08-16 unknown]: 抱歉我发现并不是流式返回到前端显示的
 [songhahaha66][08-16 00:50:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：INFO:     127.0.0.1:4737 - "GET /api/workspace/fabe431c/files HTTP/1.1" 500 Internal Server Error问题在于，Internal server error: 'str' object has no attribute 'id'，你参考work_router 通过email获取用户对象，修复问题
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在要把这个demo系统迁移到项目中，请规划拆分，写一个计划
+
+[songhahaha66][08-17 00:20:24]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在流式聊天切换到ws，而不是现在的post
+[songhahaha66][08-17 00:46:35]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：请支持现在ai对话过程的流式传输
+[songhahaha66][08-17 01:40:43]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在还不支持附件上传，请你规划一下支持方案，最后做一个规划告诉我
+[songhahaha66][08-17 01:29:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：现在AI system后端api还有post请求，删掉他
+
+[songhahaha66][08-17 01:44:31]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：流式内容失败: Cannot call "send" once a close message has been sent.现在前端有时候会丢失连接（如用户刷新，这时候就没办法了，说一下解决方案
+
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在work.vue可能存在着当时编写的一些示例用的内容，请你将这些代码全部删除
+
+[songhahaha66][08-17 02:22:16]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在进入work时自动到最底下的对话
 

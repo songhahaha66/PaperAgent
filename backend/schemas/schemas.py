@@ -112,7 +112,7 @@ class WorkUpdate(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = None
     tags: Optional[str] = None
-    template_id: Optional[int] = None  # 关联的论文模板ID
+    template_id: Optional[str] = None  # 关联的论文模板ID
 
 class WorkResponse(WorkBase):
     id: int
@@ -145,12 +145,6 @@ class ChatMessageBase(BaseModel):
 class ChatMessageCreate(ChatMessageBase):
     pass
 
-class ChatMessageResponse(ChatMessageBase):
-    id: Optional[int] = None
-    
-    class Config:
-        from_attributes = True
-
 class ChatSessionBase(BaseModel):
     session_id: str
     work_id: str
@@ -161,9 +155,74 @@ class ChatSessionBase(BaseModel):
 class ChatSessionCreate(ChatSessionBase):
     pass
 
-class ChatSessionResponse(ChatSessionBase):
-    messages: Optional[List[ChatMessageResponse]] = None
+# --- 新增聊天相关schemas ---
+
+class ChatSessionCreateRequest(BaseModel):
+    """创建聊天会话请求"""
+    work_id: str
+    system_type: str  # brain, code, writing
+    title: Optional[str] = None
+
+class ChatSessionResponse(BaseModel):
+    """聊天会话响应"""
+    id: int
+    session_id: str
+    work_id: str
+    system_type: str
+    title: Optional[str]
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    created_by: int
     total_messages: int = 0
+    
+    class Config:
+        from_attributes = True
+
+class ChatMessageCreateRequest(BaseModel):
+    """创建聊天消息请求"""
+    role: str  # user, assistant, system, tool
+    content: str
+    tool_calls: Optional[dict] = None
+    tool_results: Optional[dict] = None
+    message_metadata: Optional[dict] = None
+
+class ChatMessageResponse(BaseModel):
+    """聊天消息响应"""
+    id: int
+    session_id: str
+    role: str
+    content: str
+    tool_calls: Optional[dict] = None
+    tool_results: Optional[dict] = None
+    message_metadata: Optional[dict] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ChatStreamRequest(BaseModel):
+    """流式聊天请求"""
+    problem: str
+    model: Optional[str] = None
+
+class WorkFlowStateCreateRequest(BaseModel):
+    """创建工作流状态请求"""
+    work_id: str
+    current_state: str
+    previous_state: Optional[str] = None
+    state_data: Optional[dict] = None
+    transition_reason: Optional[str] = None
+
+class WorkFlowStateResponse(BaseModel):
+    """工作流状态响应"""
+    id: int
+    work_id: str
+    current_state: str
+    previous_state: Optional[str]
+    state_data: Optional[dict]
+    transition_reason: Optional[str]
+    created_at: datetime
     
     class Config:
         from_attributes = True
