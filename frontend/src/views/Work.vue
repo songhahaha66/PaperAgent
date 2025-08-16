@@ -81,7 +81,7 @@
               <ChatSender
                 v-model="inputValue"
                 placeholder="请输入您的问题..."
-                @send="() => sendMessage()"
+                @send="sendMessage"
                 :disabled="isStreaming"
               />
             </div>
