@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class UserBase(BaseModel):
@@ -132,3 +132,38 @@ class WorkListResponse(BaseModel):
     total: int
     page: int
     size: int
+
+
+# 聊天系统相关schemas
+class ChatMessageBase(BaseModel):
+    role: str  # user, assistant, system, tool
+    content: str
+    timestamp: Optional[datetime] = None
+    tool_calls: Optional[List[dict]] = None
+    tool_results: Optional[List[dict]] = None
+
+class ChatMessageCreate(ChatMessageBase):
+    pass
+
+class ChatMessageResponse(ChatMessageBase):
+    id: Optional[int] = None
+    
+    class Config:
+        from_attributes = True
+
+class ChatSessionBase(BaseModel):
+    session_id: str
+    work_id: str
+    system_type: str  # brain, code, writing
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+class ChatSessionCreate(ChatSessionBase):
+    pass
+
+class ChatSessionResponse(ChatSessionBase):
+    messages: Optional[List[ChatMessageResponse]] = None
+    total_messages: int = 0
+    
+    class Config:
+        from_attributes = True
