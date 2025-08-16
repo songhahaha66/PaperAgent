@@ -285,8 +285,8 @@ export class WebSocketChatHandler {
   }
 
   // 发送消息
-  sendMessage(problem: string, model?: string) {
-    const message = { problem, model };
+  sendMessage(content: string, model?: string) {
+    const message = { problem: content, model };
     
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // 如果连接未建立，将消息加入队列
