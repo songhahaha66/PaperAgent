@@ -3,11 +3,9 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import { useAuthStore } from '@/stores/auth';
 import { 
   chatAPI, 
-  ChatStreamHandler, 
   ChatStateManager,
   WebSocketChatHandler,
   type ChatSessionCreateRequest,
-  type ChatStreamRequest,
   type ChatMessage,
   type ChatSessionResponse
 } from '@/api/chat';
@@ -23,8 +21,7 @@ export function useChat() {
   const isStreaming = ref(false);
   const error = ref<string | null>(null);
   
-  // 流式处理器
-  let currentStreamHandler: ChatStreamHandler | null = null;
+  // WebSocket处理器
   let currentWebSocketHandler: WebSocketChatHandler | null = null;
 
   // 订阅状态变化
@@ -93,7 +90,7 @@ export function useChat() {
   };
 
   // 发送消息并获取流式响应
-  const sendMessage = async (content: string, model?: string, useWebSocket: boolean = true) => {
+  const sendMessage = async (content: string, model?: string) => {
     if (!currentSession.value || !authStore.token) {
       MessagePlugin.error('请先创建聊天会话');
       return;
@@ -131,13 +128,8 @@ export function useChat() {
       chatStateManager.dispatch({ type: 'SET_STREAMING', payload: true });
       chatStateManager.dispatch({ type: 'SET_ERROR', payload: null });
 
-      if (useWebSocket) {
-        // 使用WebSocket
-        await sendMessageViaWebSocket(content, aiMessageId, model);
-      } else {
-        // 使用HTTP流式传输（原有方式）
-        await sendMessageViaHTTP(content, aiMessageId, model);
-      }
+      // 使用WebSocket
+      await sendMessageViaWebSocket(content, aiMessageId, model);
 
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : '发送消息失败';
@@ -237,76 +229,10 @@ export function useChat() {
     }
   };
 
-  // HTTP方式发送消息（原有实现）
-  const sendMessageViaHTTP = async (content: string, aiMessageId: string, model?: string) => {
-    const stream = await chatAPI.chatStream(
-      authStore.token!,
-      currentSession.value!.session_id,
-      { problem: content, model }
-    );
 
-    currentStreamHandler = new ChatStreamHandler(stream);
-    
-    let fullContent = '';
-    
-    await currentStreamHandler.startReading(
-      // onMessage: 处理每个流式消息块
-      (chunk) => {
-        fullContent += chunk;
-        
-        // 更新AI消息内容
-        chatStateManager.dispatch({
-          type: 'UPDATE_MESSAGE',
-          payload: {
-            id: aiMessageId,
-            updates: {
-              content: fullContent,
-              isStreaming: true
-            }
-          }
-        });
-      },
-      // onComplete: 流式传输完成
-      () => {
-        chatStateManager.dispatch({
-          type: 'UPDATE_MESSAGE',
-          payload: {
-            id: aiMessageId,
-            updates: {
-              isStreaming: false
-            }
-          }
-        });
-        chatStateManager.dispatch({ type: 'SET_STREAMING', payload: false });
-        currentStreamHandler = null;
-      },
-      // onError: 处理错误
-      (errorMsg) => {
-        chatStateManager.dispatch({
-          type: 'UPDATE_MESSAGE',
-          payload: {
-            id: aiMessageId,
-            updates: {
-              content: `错误: ${errorMsg}`,
-              isStreaming: false
-            }
-          }
-        });
-        chatStateManager.dispatch({ type: 'SET_STREAMING', payload: false });
-        chatStateManager.dispatch({ type: 'SET_ERROR', payload: errorMsg });
-        currentStreamHandler = null;
-        MessagePlugin.error(`聊天失败: ${errorMsg}`);
-      }
-    );
-  };
 
-  // 停止流式传输
+  // 停止WebSocket传输
   const stopStreaming = () => {
-    if (currentStreamHandler) {
-      currentStreamHandler.stop();
-      currentStreamHandler = null;
-      chatStateManager.dispatch({ type: 'SET_STREAMING', payload: false });
-    }
     if (currentWebSocketHandler) {
       currentWebSocketHandler.disconnect();
       currentWebSocketHandler = null;
@@ -354,10 +280,6 @@ export function useChat() {
   // 重置聊天状态
   const resetChat = () => {
     chatStateManager.dispatch({ type: 'RESET_STATE' });
-    if (currentStreamHandler) {
-      currentStreamHandler.stop();
-      currentStreamHandler = null;
-    }
     if (currentWebSocketHandler) {
       currentWebSocketHandler.disconnect();
       currentWebSocketHandler = null;

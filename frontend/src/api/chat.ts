@@ -31,10 +31,7 @@ export interface ChatMessageResponse {
   created_at: string;
 }
 
-export interface ChatStreamRequest {
-  problem: string;
-  model?: string;
-}
+
 
 // 聊天API
 export const chatAPI = {
@@ -54,30 +51,7 @@ export const chatAPI = {
     return response;
   },
 
-  // 流式聊天（返回ReadableStream）
-  async chatStream(
-    token: string,
-    sessionId: string,
-    request: ChatStreamRequest
-  ): Promise<ReadableStream<Uint8Array>> {
-    // 获取API基础URL，如果没有配置则使用默认值
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-    
-    const response = await fetch(`${baseUrl}/api/chat/session/${sessionId}/stream`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(request)
-    });
 
-    if (!response.ok) {
-      throw new Error(`聊天流式接口失败: ${response.status}`);
-    }
-
-    return response.body!;
-  },
 
   // 获取聊天历史
   async getChatHistory(
@@ -162,54 +136,7 @@ export const chatAPI = {
   }
 };
 
-// 流式聊天工具函数
-export class ChatStreamHandler {
-  private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  private decoder = new TextDecoder();
-  private buffer = '';
 
-  constructor(private stream: ReadableStream<Uint8Array>) {}
-
-  // 开始读取流
-  async startReading(
-    onMessage: (content: string) => void,
-    onComplete: () => void,
-    onError: (error: string) => void
-  ) {
-    try {
-      this.reader = this.stream.getReader();
-      
-      while (true) {
-        const { done, value } = await this.reader.read();
-        
-        if (done) {
-          onComplete();
-          break;
-        }
-
-        // 解码并直接处理数据（后端返回plain text）
-        const chunk = this.decoder.decode(value, { stream: true });
-        if (chunk.trim()) {
-          onMessage(chunk);
-        }
-      }
-    } catch (error) {
-      onError(error instanceof Error ? error.message : '未知错误');
-    } finally {
-      if (this.reader) {
-        this.reader.releaseLock();
-      }
-    }
-  }
-
-  // 停止读取
-  stop() {
-    if (this.reader) {
-      this.reader.cancel();
-      this.reader.releaseLock();
-    }
-  }
-}
 
 // WebSocket聊天处理器
 export class WebSocketChatHandler {

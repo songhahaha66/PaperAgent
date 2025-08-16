@@ -4,7 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+
 from sqlalchemy.orm import Session
 from typing import Optional
 import asyncio
@@ -21,7 +21,6 @@ from ai_system.core.main_agent import MainAgent
 from ai_system.core.llm_handler import LLMHandler
 from schemas.schemas import (
     ChatSessionCreateRequest, 
-    ChatStreamRequest, 
     ChatSessionResponse, 
     ChatMessageResponse
 )
@@ -80,92 +79,7 @@ async def create_chat_session(
         )
 
 
-@router.post("/session/{session_id}/stream")
-async def chat_stream(
-    session_id: str,
-    request: ChatStreamRequest,
-    current_user_id: int = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """流式聊天接口"""
-    try:
-        # 验证会话权限
-        chat_service = ChatService(db)
-        session = chat_service.get_session(session_id)
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="聊天会话不存在"
-            )
-        
-        # 检查用户权限
-        if session.created_by != current_user_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="无权限访问此会话"
-            )
-        
-        # 创建流式响应
-        async def generate_stream():
-            try:
-                # 初始化AI环境
-                env_manager = setup_environment_from_db(db)
-                
-                # 根据会话类型初始化系统
-                system_type = session.system_type
-                env_manager.initialize_system(system_type)
-                
-                # 创建流式管理器
-                stream_manager = PersistentStreamManager(
-                    chat_service=chat_service,
-                    session_id=session_id
-                )
-                
-                # 设置消息角色
-                stream_manager.set_role("assistant")
-                
-                # 添加用户消息到聊天记录
-                chat_service.add_message(
-                    session_id=session_id,
-                    role="user",
-                    content=request.problem
-                )
-                
-                # 创建LLM处理器和主代理
-                # 使用数据库中的模型配置
-                model_config = env_manager.config_manager.get_model_config(system_type)
-                llm_handler = LLMHandler(
-                    model=request.model or model_config.model_id,
-                    stream_manager=stream_manager
-                )
-                
-                main_agent = MainAgent(llm_handler, stream_manager)
-                
-                # 执行AI任务
-                await stream_manager.print_xml_open("ai_response")
-                await stream_manager.print_content("正在分析您的问题...")
-                await stream_manager.print_content(f"\n\n问题: {request.problem}")
-                await stream_manager.print_content("\n\n开始AI分析...")
-                await stream_manager.print_xml_close("ai_response")
-                
-                # 运行主代理
-                result = await main_agent.run(request.problem)
-                
-                # 完成消息持久化
-                await stream_manager.finalize_message()
-                
-            except Exception as e:
-                logger.error(f"流式聊天处理失败: {e}")
-                yield f"错误: {str(e)}"
-        
-        return StreamingResponse(generate_stream(), media_type="text/plain")
-        
-    except Exception as e:
-        logger.error(f"聊天流式接口失败: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"聊天接口失败: {str(e)}"
-        )
+
 
 
 @router.get("/session/{session_id}/history", response_model=list[ChatMessageResponse])

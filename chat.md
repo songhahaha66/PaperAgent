@@ -92,4 +92,5 @@
 
 [songhahaha66][08-17 00:20:24]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在流式聊天切换到ws，而不是现在的post
 [AI Assistant][08-17 00:46:35]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：请支持现在ai对话过程的流式传输
+[songhahaha66][08-17 01:29:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：现在AI system后端api还有post请求，删掉他
 
