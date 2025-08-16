@@ -4,286 +4,419 @@ import contextlib
 import json
 from dotenv import load_dotenv
 import litellm
+from typing import List, Dict, Any, Callable
 
-# 加载 .env 文件中的环境变量
-load_dotenv()
-
-# 从环境变量中获取API密钥
-litellm.api_key = os.getenv("GEMINI_API_KEY")
-
-# --- 第三层：Python代码执行器 (pyexec) ---
+# --- 核心组件：配置与初始化 ---
 
 
-def pyexec(python_code: str) -> str:
+def setup_environment():
+    """加载环境变量并配置 litellm API 密钥。"""
+    load_dotenv()
+    api_key = os.getenv("API_KEY")
+    if not api_key:
+        raise ValueError("未找到 API_KEY，请检查 .env 文件。")
+    litellm.api_key = api_key
+
+# --- 流式输出管理器 ---
+
+
+class StreamOutputManager:
+    """管理全程流式输出，包括XML标签格式"""
+
+    def __init__(self):
+        self.indent_level = 0
+
+    def print_xml_open(self, tag_name: str, content: str = ""):
+        """打印XML开始标签"""
+        indent = "        " * self.indent_level
+        if content:
+            print(f"{indent}<{tag_name}>")
+            print(f"{indent}        {content}")
+        else:
+            print(f"{indent}<{tag_name}>")
+        self.indent_level += 1
+
+    def print_xml_close(self, tag_name: str):
+        """打印XML结束标签"""
+        self.indent_level -= 1
+        indent = "        " * self.indent_level
+        print(f"{indent}</{tag_name}>")
+
+    def print_content(self, content: str):
+        """打印内容"""
+        indent = "        " * self.indent_level
+        print(f"{indent}{content}")
+
+    def print_stream(self, content: str):
+        """流式打印内容（不换行）"""
+        print(content, end="", flush=True)
+
+# --- 第三层封装：代码执行器 ---
+
+
+class CodeExecutor:
     """
-    执行Python代码并返回结果
+    一个专门用于安全执行 Python 代码的类。
     """
-    print(f"\n>> [pyexec 执行代码...] <<\n", flush=True)
 
-    try:
-        # 安全执行生成的代码并捕获输出
-        string_io = io.StringIO()
-        with contextlib.redirect_stdout(string_io), contextlib.redirect_stderr(string_io):
-            exec(python_code, {})
+    def __init__(self, stream_manager: StreamOutputManager):
+        self.stream_manager = stream_manager
 
-        result = string_io.getvalue()
-        print(f"\n>> [pyexec 执行完毕。输出: {result.strip()}] <<\n", flush=True)
-        return result
+    def pyexec(self, python_code: str) -> str:
+        """
+        执行Python代码字符串并捕获其标准输出和错误。
 
-    except Exception as e:
-        error_message = f"代码执行出错: {str(e)}"
-        print(f"\n>> [pyexec 执行失败: {error_message}] <<\n", flush=True)
-        return error_message
+        Args:
+            python_code: 要执行的 Python 代码。
 
-# --- 第二层：代码手 LLM ---
+        Returns:
+            执行结果的字符串（包括输出或错误信息）。
+        """
+        self.stream_manager.print_xml_open("call_exec")
+        self.stream_manager.print_content(python_code)
+        self.stream_manager.print_xml_close("call_exec")
+
+        try:
+            # 使用 io.StringIO 捕获 exec 的所有输出
+            string_io = io.StringIO()
+            with contextlib.redirect_stdout(string_io), contextlib.redirect_stderr(string_io):
+                # 在一个空字典中执行代码，以隔离作用域
+                exec(python_code, {})
+
+            result = string_io.getvalue()
+
+            self.stream_manager.print_xml_open("ret_exec")
+            self.stream_manager.print_content(result.strip())
+            self.stream_manager.print_xml_close("ret_exec")
+
+            return result
+        except Exception as e:
+            error_message = f"代码执行出错: {str(e)}"
+            self.stream_manager.print_xml_open("ret_exec")
+            self.stream_manager.print_content(error_message)
+            self.stream_manager.print_xml_close("ret_exec")
+            return error_message
+
+# --- 通用逻辑封装：LLM 通信处理器 ---
 
 
-def code_interpreter(task_prompt: str) -> str:
+class LLMHandler:
     """
-    代码手LLM，接收任务描述，生成Python代码，然后调用pyexec执行
+    处理与 litellm API 的所有通信，包括流式响应和工具调用。
     """
-    print(f"\n>> [代码手LLM 启动... 任务: {task_prompt}] <<\n", flush=True)
 
-    # 定义代码手可以使用的工具
-    tools = [
-        {
+    def __init__(self, model: str = "gemini/gemini-2.0-flash", stream_manager: StreamOutputManager = None):
+        self.model = model
+        self.stream_manager = stream_manager
+
+    def process_stream(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None):
+        """
+        调用 LLM API 并处理流式响应，返回完整的响应和工具调用信息。
+        """
+        response_stream = litellm.completion(
+            model=self.model,
+            messages=messages,
+            tools=tools,
+            stream=True,
+        )
+
+        full_response_content = ""
+        tool_calls = []
+        current_tool_call = {"id": None, "name": None, "arguments": ""}
+
+        for chunk in response_stream:
+            delta = chunk.choices[0].delta
+
+            # 1. 累积文本内容
+            if delta.content:
+                content = delta.content
+                if self.stream_manager:
+                    self.stream_manager.print_stream(content)
+                else:
+                    print(content, end="", flush=True)
+                full_response_content += content
+
+            # 2. 累积工具调用信息
+            if delta.tool_calls:
+                for tool_call_delta in delta.tool_calls:
+                    if tool_call_delta.id:
+                        # 如果是新的 tool_call，保存上一个
+                        if current_tool_call["id"] is not None:
+                            tool_calls.append(
+                                self._finalize_tool_call(current_tool_call))
+                        current_tool_call = {
+                            "id": tool_call_delta.id, "name": None, "arguments": ""}
+
+                    if tool_call_delta.function:
+                        if tool_call_delta.function.name:
+                            current_tool_call["name"] = tool_call_delta.function.name
+                        if tool_call_delta.function.arguments:
+                            current_tool_call["arguments"] += tool_call_delta.function.arguments
+
+        # 添加最后一个工具调用
+        if current_tool_call["id"] is not None:
+            tool_calls.append(self._finalize_tool_call(current_tool_call))
+
+        if not self.stream_manager:
+            print()  # 确保换行
+
+        # 构建完整的 assistant 消息
+        assistant_message = {"role": "assistant",
+                             "content": full_response_content}
+        if tool_calls:
+            assistant_message["tool_calls"] = tool_calls
+
+        return assistant_message, tool_calls
+
+    def _finalize_tool_call(self, tool_call_data: Dict) -> Dict:
+        """构建完整的工具调用对象"""
+        return {
+            "id": tool_call_data["id"],
+            "type": "function",
+            "function": {
+                "name": tool_call_data["name"],
+                "arguments": tool_call_data["arguments"]
+            }
+        }
+
+# --- Agent 核心逻辑 ---
+
+
+class Agent:
+    """Agent 的基类，定义通用接口。"""
+
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager = None):
+        self.llm_handler = llm_handler
+        self.stream_manager = stream_manager
+        self.messages: List[Dict[str, Any]] = []
+        self.tools: List[Dict[str, Any]] = []
+        self.available_functions: Dict[str, Callable] = {}
+
+    def _register_tool(self, func: Callable, tool_definition: Dict):
+        """注册一个工具及其实现函数。"""
+        self.tools.append(tool_definition)
+        self.available_functions[func.__name__] = func
+
+    def run(self, *args, **kwargs):
+        raise NotImplementedError("每个 Agent 子类必须实现 run 方法。")
+
+
+class CodeAgent(Agent):
+    """
+    代码手 LLM Agent，负责生成和执行代码。
+    """
+
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager):
+        super().__init__(llm_handler, stream_manager)
+        self.executor = CodeExecutor(stream_manager)
+        self._setup()
+
+    def _setup(self):
+        """初始化 System Prompt 和工具。"""
+        self.messages = [{
+            "role": "system",
+            "content": (
+                "根据用户的任务描述，先生成完整、可直接执行的Python代码。"
+                "生成之后必须使用 pyexec 工具来执行生成的代码，并根据执行结果进行总结。"
+            )
+        }]
+        pyexec_tool = {
             "type": "function",
             "function": {
                 "name": "pyexec",
                 "description": "执行Python代码并返回结果",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "python_code": {
-                            "type": "string",
-                            "description": "要执行的Python代码",
-                        }
-                    },
+                    "properties": {"python_code": {"type": "string", "description": "要执行的Python代码"}},
                     "required": ["python_code"],
                 },
             },
         }
-    ]
+        self._register_tool(self.executor.pyexec, pyexec_tool)
 
-    # 代码手的消息历史
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一个精通Python的代码生成助手。"
-                "根据用户的任务描述，生成完整、可直接执行的Python代码。"
-                "代码必须通过print()函数输出结果。"
-                "不要包含任何解释或注释，只生成纯粹的Python代码。"
-                "使用pyexec工具来执行生成的代码。"
-            )
-        },
-        {"role": "user", "content": task_prompt}
-    ]
+    def run(self, task_prompt: str) -> str:
+        """执行代码生成和解释任务。"""
+        if self.stream_manager:
+            self.stream_manager.print_xml_open("ret_code_agent")
 
-    # 流式调用代码手LLM
-    response_stream = litellm.completion(
-        model="gemini/gemini-2.0-flash",
-        messages=messages,
-        tools=tools,
-        stream=True,
-    )
+        self.messages.append({"role": "user", "content": task_prompt})
 
-    # 处理流式响应
-    full_response = ""
-    current_tool_call = {"id": None, "name": None, "arguments": ""}
+        # 第一次调用：生成代码并产生工具调用
+        assistant_message, tool_calls = self.llm_handler.process_stream(
+            self.messages, self.tools)
+        self.messages.append(assistant_message)
 
-    for chunk in response_stream:
-        # 提取并打印文本内容
-        if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-            content = chunk.choices[0].delta.content
-            print(content, end="", flush=True)
-            full_response += content
+        if not tool_calls:
+            result = assistant_message.get("content", "代码手未生成任何代码。")
+            if self.stream_manager:
+                self.stream_manager.print_xml_close("ret_code_agent")
+            return result
 
-        # 提取工具调用信息
-        if hasattr(chunk.choices[0].delta, 'tool_calls') and chunk.choices[0].delta.tool_calls:
-            for tool_call_delta in chunk.choices[0].delta.tool_calls:
-                if hasattr(tool_call_delta, 'id') and tool_call_delta.id:
-                    current_tool_call["id"] = tool_call_delta.id
-                if hasattr(tool_call_delta, 'function') and tool_call_delta.function:
-                    if hasattr(tool_call_delta.function, 'name') and tool_call_delta.function.name:
-                        current_tool_call["name"] = tool_call_delta.function.name
-                    if hasattr(tool_call_delta.function, 'arguments') and tool_call_delta.function.arguments:
-                        current_tool_call["arguments"] += tool_call_delta.function.arguments
+        # 执行工具调用
+        tool_call = tool_calls[0]  # 代码手一次只处理一个代码块
+        function_name = tool_call["function"]["name"]
 
-    print()  # 换行
+        if function_name in self.available_functions:
+            try:
+                args = json.loads(tool_call["function"]["arguments"])
+                result = self.available_functions[function_name](**args)
 
-    # 构建assistant消息
-    assistant_message = {"role": "assistant", "content": full_response}
-
-    # 如果有工具调用，执行pyexec
-    if current_tool_call["name"] and current_tool_call["arguments"]:
-        try:
-            function_args = json.loads(current_tool_call["arguments"])
-
-            # 构建完整的工具调用对象
-            tool_call = {
-                "id": current_tool_call["id"],
-                "type": "function",
-                "function": {
-                    "name": current_tool_call["name"],
-                    "arguments": current_tool_call["arguments"]
-                }
-            }
-            assistant_message["tool_calls"] = [tool_call]
-
-            if current_tool_call["name"] == "pyexec":
-                python_code = function_args.get("python_code", "")
-                result = pyexec(python_code=python_code)
-
-                # 将结果返回给代码手LLM进行最终处理
-                messages.append(assistant_message)
-                messages.append({
+                # 将工具执行结果添加回消息历史
+                self.messages.append({
                     "role": "tool",
-                    "tool_call_id": current_tool_call["id"],
+                    "tool_call_id": tool_call["id"],
                     "content": result,
                 })
+            except json.JSONDecodeError as e:
+                print(f"JSON 解析失败: {e}")
+                result = "代码手LLM处理失败：JSON解析错误"
 
-                # 代码手LLM的最终回答
-                final_response = litellm.completion(
-                    model="gemini/gemini-2.0-flash",
-                    messages=messages,
-                    stream=True,
-                )
+        # 第二次调用：基于代码执行结果生成最终回答
+        if self.stream_manager:
+            self.stream_manager.print_content("正在生成最终回答...")
 
-                print("\n>> [代码手LLM 最终回答:] <<\n", flush=True)
-                for chunk in final_response:
-                    if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        print(content, end="", flush=True)
-                print()
+        final_message, _ = self.llm_handler.process_stream(
+            self.messages, self.tools)
 
-                return result
+        # 返回最终的文本内容或代码执行结果作为上下文
+        final_result = final_message.get("content") or result
 
-        except json.JSONDecodeError:
-            return "代码手LLM处理失败：JSON解析错误"
-    else:
-        return full_response
+        if self.stream_manager:
+            self.stream_manager.print_xml_close("ret_code_agent")
 
-# --- 第一层：主LLM (Orchestrator) ---
+        return final_result
 
 
-def main_agent(user_problem: str):
+class MainAgent(Agent):
     """
-    主LLM，负责分析问题并决定是否调用代码手
+    主 LLM Agent (Orchestrator)，负责分析问题并委派任务。
     """
-    print("--- 主LLM Agent 启动 ---", flush=True)
 
-    # 定义主LLM可以使用的工具
-    tools = [
-        {
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager):
+        super().__init__(llm_handler, stream_manager)
+        self._setup()
+
+    def _setup(self):
+        """初始化 System Prompt 和工具。"""
+        self.messages = [{
+            "role": "system",
+            "content": (
+                "你是一个建模专家，擅长将用户的问题转化为数学模型。"
+                "分析用户问题，如果涉及具体计算、数据分析"
+                "必须交给 CodeAgent 工具来完成。"
+                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片到./data/visualization.png"
+                "或者，请编程计算这个微分方程的解"
+            )
+        }]
+        code_interpreter_tool = {
             "type": "function",
             "function": {
-                "name": "code_interpreter",
-                "description": "当需要进行数学计算、数据分析、编程任务时，调用此代码解释器。提供一个清晰、具体的任务描述。",
+                "name": "CodeAgent",
+                "description": "当需要数学计算、数据分析或执行编程任务时调用。提供清晰、具体的任务描述。不要提供代码。",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "task_prompt": {
-                            "type": "string",
-                            "description": "需要执行的具体任务描述，例如：'计算函数f(x)=x^2+2x+1在x=3处的导数' 或 '求解方程x^2-5x+6=0'",
-                        }
-                    },
+                    "properties": {"task_prompt": {"type": "string", "description": "需要执行的具体任务描述。不要提供代码。"}},
                     "required": ["task_prompt"],
                 },
             },
         }
-    ]
+        # 注意：这里的 code_interpreter 并不是一个直接的函数，而是一个触发器
+        # 它的"实现"是在 run 循环中创建一个 CodeAgent 实例来处理
+        self.tools.append(code_interpreter_tool)
 
-    # 初始化对话历史
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是一个顶级的数学和编程问题解决专家。"
-                "你需要分析用户的问题，如果涉及计算、编程或数学运算，"
-                "你必须使用code_interpreter工具来完成。"
-                "在调用工具后，基于结果给出完整的分析和答案。"
-                "请以流式方式输出你的思考过程。"
-            )
-        },
-        {"role": "user", "content": user_problem}
-    ]
+    def run(self, user_problem: str):
+        """执行主 Agent 逻辑，循环处理直到任务完成。"""
+        if self.stream_manager:
+            self.stream_manager.print_xml_open("main_agent")
+            self.stream_manager.print_content("分析建模")
 
-    # 循环处理，直到获得最终答案
-    while True:
-        response_stream = litellm.completion(
-            model="gemini/gemini-2.0-flash",
-            messages=messages,
-            tools=tools,
-            stream=True,
-        )
+        self.messages.append({"role": "user", "content": user_problem})
 
-        # 处理流式响应
-        full_response = ""
-        current_tool_call = {"id": None, "name": None, "arguments": ""}
+        while True:
+            assistant_message, tool_calls = self.llm_handler.process_stream(
+                self.messages, self.tools)
+            self.messages.append(assistant_message)
 
-        for chunk in response_stream:
-            # 提取并打印文本内容
-            if hasattr(chunk.choices[0].delta, 'content') and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                print(content, end="", flush=True)
-                full_response += content
+            if not tool_calls:
+                if self.stream_manager:
+                    self.stream_manager.print_content("好的，这个问题总结如下")
+                    self.stream_manager.print_xml_close("main_agent")
+                break
 
-            # 提取工具调用信息
-            if hasattr(chunk.choices[0].delta, 'tool_calls') and chunk.choices[0].delta.tool_calls:
-                for tool_call_delta in chunk.choices[0].delta.tool_calls:
-                    if hasattr(tool_call_delta, 'id') and tool_call_delta.id:
-                        current_tool_call["id"] = tool_call_delta.id
-                    if hasattr(tool_call_delta, 'function') and tool_call_delta.function:
-                        if hasattr(tool_call_delta.function, 'name') and tool_call_delta.function.name:
-                            current_tool_call["name"] = tool_call_delta.function.name
-                        if hasattr(tool_call_delta.function, 'arguments') and tool_call_delta.function.arguments:
-                            current_tool_call["arguments"] += tool_call_delta.function.arguments
+            # 目前只处理第一个工具调用
+            tool_call = tool_calls[0]
+            function_name = tool_call["function"]["name"]
 
-        # 构建assistant消息
-        assistant_message = {"role": "assistant", "content": full_response}
+            if function_name == "CodeAgent":
+                try:
+                    args = json.loads(tool_call["function"]["arguments"])
+                    task_prompt = args.get("task_prompt", "")
 
-        # 如果有工具调用，执行代码手
-        if current_tool_call["name"] and current_tool_call["arguments"]:
-            try:
-                function_args = json.loads(current_tool_call["arguments"])
+                    if self.stream_manager:
+                        self.stream_manager.print_xml_open("call_code_agent")
+                        self.stream_manager.print_content(task_prompt)
+                        self.stream_manager.print_xml_close("call_code_agent")
 
-                # 构建完整的工具调用对象
-                tool_call = {
-                    "id": current_tool_call["id"],
-                    "type": "function",
-                    "function": {
-                        "name": current_tool_call["name"],
-                        "arguments": current_tool_call["arguments"]
-                    }
-                }
-                assistant_message["tool_calls"] = [tool_call]
+                    # 创建并运行子 Agent
+                    code_agent = CodeAgent(
+                        self.llm_handler, self.stream_manager)
+                    tool_result = code_agent.run(task_prompt)
 
-                if current_tool_call["name"] == "code_interpreter":
-                    task = function_args.get("task_prompt", "")
-                    tool_result = code_interpreter(task_prompt=task)
-
-                    # 将工具调用的结果添加回消息历史
-                    messages.append(assistant_message)
-                    messages.append({
+                    # 将子 Agent 的结果添加回主 Agent 的消息历史
+                    self.messages.append({
                         "role": "tool",
-                        "tool_call_id": current_tool_call["id"],
+                        "tool_call_id": tool_call["id"],
                         "content": tool_result,
                     })
+                except json.JSONDecodeError as e:
+                    print(f"JSON 解析失败: {e}")
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": f"工具参数解析失败: {e}",
+                    })
+                    continue  # 继续循环让主 Agent 处理这个错误
+            else:
+                # 如果未来有其他工具，在这里处理
+                pass
 
-            except json.JSONDecodeError:
-                continue
-        else:
-            # 如果没有工具调用，说明对话结束
-            messages.append(assistant_message)
-            print("\n\n--- 主LLM Agent 任务完成 ---", flush=True)
-            break
+# --- 程序入口 ---
 
 
 if __name__ == "__main__":
-    # 测试问题
-    problem = "我在做一个物理实验，测量某一物体的运动轨迹。已知物体的位置随时间变化的函数为f(x)=x^3+2x^2-5x+3，其中x为时间（秒），f(x)为位置（米）。请帮我计算当x=2秒时物体的瞬时速度。"
-    # problem = "求解方程x^2-7x+12=0"
-    # problem = "计算积分∫(x^2+3x)dx"
+    try:
+        setup_environment()
 
-    main_agent(problem)
+        # 定义问题
+        problem = """
+        问题：咖啡的最佳饮用时机
+
+        问题描述：
+        一名办公室职员在早上 t=0 时刻冲泡了一杯热咖啡。他知道刚冲好的咖啡太烫，无法饮用，而冷掉的咖啡口感不佳。他希望能在咖啡温度最适宜的区间内享用。
+        假设我们已经知道以下所有必需的物理参数，请建立一个数学模型来确定他应该在什么时候开始喝咖啡，以及这个"最佳饮用窗口"有多长。
+        
+        已知条件与参数：
+        初始温度 (t=0)：咖啡的初始温度 T₀ = 95°C
+        环境温度：办公室的恒定室温 T_env = 25°C
+        最佳饮用温度区间：咖啡的理想入口温度在 60°C（最低）到 70°C（最高）之间。
+        冷却系数 (k): 为了简化问题，我们假设一个合理的冷却系数 k = 0.05 (单位: 1/分钟)。
+        
+        任务：
+        1. 使用牛顿冷却定律建立温度随时间变化的数学模型。
+        2. 计算咖啡温度达到 70°C 所需的时间 (t_start)。
+        3. 计算咖啡温度达到 60°C 所需的时间 (t_end)。
+        4. 计算最佳饮用窗口的持续时间 (Δt = t_end - t_start)。
+        """
+
+        # 初始化流式输出管理器
+        stream_manager = StreamOutputManager()
+
+        # 初始化并运行主 Agent
+        llm_handler = LLMHandler(stream_manager=stream_manager)
+        main_agent = MainAgent(llm_handler, stream_manager)
+        main_agent.run(problem)
+
+    except ValueError as e:
+        print(f"初始化错误: {e}")
+    except Exception as e:
+        print(f"程序运行出现意外错误: {e}")

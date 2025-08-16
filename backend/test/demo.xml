@@ -1,0 +1,22 @@
+<main_agent>
+        分析建模
+        <call_code_agent>
+                请写代码实现xxxx
+        </call_code_agent>
+        <ret_code_agent>
+                我决定编写py脚本
+                <call_exec>
+                        python code
+                </call_exec>
+                <ret_exec>
+                        缺少模块
+                </ret_exec>
+                <call_exec>
+                        python code
+                </call_exec>
+                <ret_exec>
+                        得到结果数值
+                </ret_exec>
+        </ret_code_agent>
+        好的，这个问题总结如下
+</main_agent>
