@@ -534,6 +534,8 @@ const sendRealMessage = async (message: string, isRegenerate: boolean = false) =
     aiMessageId = aiMessage.id
     aiMessage.content = ''
     aiMessage.isStreaming = true
+    // 确保重新生成时头像信息正确
+    aiMessage.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
     console.log('准备重新生成消息:', aiMessageId)
   } else {
     // 新消息：创建AI回复消息
@@ -567,6 +569,8 @@ const sendRealMessage = async (message: string, isRegenerate: boolean = false) =
     if (messageIndex > -1) {
       chatMessages.value[messageIndex].content = '发送消息失败，请稍后重试'
       chatMessages.value[messageIndex].isStreaming = false
+      // 确保错误消息也保持头像信息
+      chatMessages.value[messageIndex].avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
     }
     isStreaming.value = false
     MessagePlugin.error('发送消息失败')
@@ -630,6 +634,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             const updatedMessage = { ...chatMessages.value[messageIndex] };
             updatedMessage.content = fullContent;
             updatedMessage.systemType = currentSystemType;
+            // 确保头像信息完整保留
+            updatedMessage.avatar = getSystemAvatar({ systemType: currentSystemType });
             chatMessages.value[messageIndex] = updatedMessage;
             
             console.log('更新消息内容:', fullContent.substring(0, 100) + '...');
@@ -656,6 +662,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             chatMessages.value[completeIndex].isStreaming = false;
             // 确保最终内容完整显示
             chatMessages.value[completeIndex].content = fullContent;
+            // 确保最终头像信息完整
+            chatMessages.value[completeIndex].avatar = getSystemAvatar({ systemType: currentSystemType });
             
             // 如果系统类型发生了变化，显示切换提示
             if (systemTypeChanged) {
@@ -672,6 +680,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
           if (errorIndex > -1) {
             chatMessages.value[errorIndex].content = `错误: ${data.message}`;
             chatMessages.value[errorIndex].isStreaming = false;
+            // 确保错误消息也保持头像信息
+            chatMessages.value[errorIndex].avatar = getSystemAvatar({ systemType: currentSystemType });
           }
           isStreaming.value = false;
           webSocketHandler.value = null;
@@ -717,7 +727,7 @@ const sendMockMessage = async (userInput: string, isRegenerate: boolean = false)
         role: 'assistant',
         content: `我理解您希望深入了解"${userInput}"。在空调降温速率研究中，我们可以从以下几个角度来分析：1) 热传导模型建立；2) 参数分析与计算；3) 数值模拟编程；4) 结果验证与优化；5) 论文撰写与格式规范。您希望我详细阐述哪个方面？`,
         datetime: new Date().toLocaleString(),
-        avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+        avatar: getSystemAvatar({ systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain' }),
         systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain'
       }
       chatMessages.value.push(aiReply)
@@ -745,6 +755,8 @@ const regenerateMessage = async (messageId: string) => {
         // 显示重新生成状态
         message.content = '正在重新生成回复...'
         message.isStreaming = true // 确保是流式传输
+        // 确保重新生成状态时头像信息正确
+        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
         
         // 获取上一条用户消息作为重新生成的输入
         const messageIndex = chatMessages.value.findIndex(m => m.id === messageId)
@@ -779,18 +791,24 @@ const regenerateMessage = async (messageId: string) => {
         // 如果没有找到用户消息，显示错误
         message.content = '无法重新生成：未找到原始问题'
         message.isStreaming = false
+        // 确保错误状态时头像信息正确
+        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
         MessagePlugin.error('无法重新生成：未找到原始问题')
         
       } catch (error) {
         console.error('重新生成消息失败:', error)
         message.content = '重新生成失败，请稍后重试'
         message.isStreaming = false
+        // 确保错误状态时头像信息正确
+        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
         MessagePlugin.error('重新生成失败')
       }
     } else {
       // 模拟重新生成
       message.content = '正在重新生成回复...'
       message.isStreaming = true
+      // 确保模拟重新生成时头像信息正确
+      message.avatar = getSystemAvatar({ systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain' })
       setTimeout(() => {
         message.content = '这是重新生成的内容。在空调降温速率研究过程中，我们可以根据不同的要点进行深入分析，包括热传导模型优化、参数敏感性分析、数值算法改进等，确保研究内容的科学性和准确性。'
         message.isStreaming = false

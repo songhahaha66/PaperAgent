@@ -145,10 +145,13 @@ export class WebSocketChatHandler {
   private token: string;
   private baseUrl: string;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 3;
+  private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
   private messageQueue: any[] = [];
   private isConnecting = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private messageCallback: ((data: any) => void) | null = null;
 
   constructor(sessionId: string, token: string) {
     this.sessionId = sessionId;
@@ -165,6 +168,7 @@ export class WebSocketChatHandler {
       }
 
       this.isConnecting = true;
+      this.clearReconnectTimer();
       
       try {
         // 构建WebSocket URL
@@ -188,6 +192,9 @@ export class WebSocketChatHandler {
               this.ws!.send(JSON.stringify(message));
             }
             
+            // 启动心跳检测
+            this.startHeartbeat();
+            
             resolve();
           } catch (error) {
             reject(error);
@@ -203,10 +210,11 @@ export class WebSocketChatHandler {
         this.ws.onclose = (event) => {
           console.log('WebSocket连接已关闭:', event.code, event.reason);
           this.isConnecting = false;
+          this.stopHeartbeat();
           
           // 如果不是正常关闭，尝试重连
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.attemptReconnect();
+            this.scheduleReconnect();
           }
         };
 
@@ -228,49 +236,100 @@ export class WebSocketChatHandler {
     });
   }
 
-  // 尝试重连
-  private attemptReconnect() {
+  // 启动心跳检测
+  private startHeartbeat() {
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+        } catch (error) {
+          console.error('心跳发送失败:', error);
+          this.scheduleReconnect();
+        }
+      }
+    }, 30000); // 30秒发送一次心跳
+  }
+
+  // 停止心跳检测
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  // 安排重连
+  private scheduleReconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log('达到最大重连次数，停止重连');
       return;
     }
 
     this.reconnectAttempts++;
-    console.log(`尝试重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 10000);
+    console.log(`安排重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})，延迟: ${delay}ms`);
     
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
       this.connect().catch(error => {
         console.error('重连失败:', error);
       });
-    }, this.reconnectDelay * this.reconnectAttempts);
+    }, delay);
+  }
+
+  // 清除重连定时器
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   // 发送消息
   sendMessage(problem: string, model?: string) {
+    const message = { problem, model };
+    
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // 如果连接未建立，将消息加入队列
-      const message = { problem, model };
       this.messageQueue.push(message);
       console.log('WebSocket未连接，消息已加入队列');
+      
+      // 尝试连接
+      if (!this.isConnecting) {
+        this.connect().catch(error => {
+          console.error('自动连接失败:', error);
+        });
+      }
       return;
     }
 
-    const message = {
-      problem,
-      model
-    };
-
-    this.ws.send(JSON.stringify(message));
+    try {
+      this.ws.send(JSON.stringify(message));
+    } catch (error) {
+      console.error('发送消息失败:', error);
+      // 发送失败，加入队列并尝试重连
+      this.messageQueue.push(message);
+      this.scheduleReconnect();
+    }
   }
 
   // 监听消息
   onMessage(callback: (data: any) => void) {
+    this.messageCallback = callback;
+    
     if (!this.ws) return;
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        callback(data);
+        
+        // 处理心跳响应
+        if (data.type === 'pong') {
+          return;
+        }
+        
+        if (this.messageCallback) {
+          this.messageCallback(data);
+        }
       } catch (error) {
         console.error('解析WebSocket消息失败:', error);
       }
@@ -279,6 +338,9 @@ export class WebSocketChatHandler {
 
   // 关闭连接
   disconnect() {
+    this.clearReconnectTimer();
+    this.stopHeartbeat();
+    
     if (this.ws) {
       this.ws.close(1000, '用户主动断开');
       this.ws = null;
@@ -302,6 +364,14 @@ export class WebSocketChatHandler {
       case WebSocket.CLOSED: return 'closed';
       default: return 'unknown';
     }
+  }
+
+  // 强制重连
+  async forceReconnect(): Promise<void> {
+    console.log('强制重连...');
+    this.disconnect();
+    this.reconnectAttempts = 0;
+    await this.connect();
   }
 }
 

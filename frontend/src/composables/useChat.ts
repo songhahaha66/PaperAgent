@@ -214,8 +214,8 @@ export function useChat() {
               }
             });
             chatStateManager.dispatch({ type: 'SET_STREAMING', payload: false });
-            chatStateManager.dispatch({ type: 'SET_ERROR', payload: data.message });
             currentWebSocketHandler = null;
+            chatStateManager.dispatch({ type: 'SET_ERROR', payload: data.message });
             MessagePlugin.error(`聊天失败: ${data.message}`);
             break;
         }
@@ -228,8 +228,6 @@ export function useChat() {
       throw err;
     }
   };
-
-
 
   // 停止WebSocket传输
   const stopStreaming = () => {
@@ -338,9 +336,6 @@ export function useChat() {
   // 清理资源
   onUnmounted(() => {
     unsubscribe();
-    if (currentStreamHandler) {
-      currentStreamHandler.stop();
-    }
     if (currentWebSocketHandler) {
       currentWebSocketHandler.disconnect();
     }
