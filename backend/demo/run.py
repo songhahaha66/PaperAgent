@@ -5,6 +5,9 @@ import json
 from dotenv import load_dotenv
 import litellm
 from typing import List, Dict, Any, Callable
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # 使用非交互式后端
 
 # --- 核心组件：配置与初始化 ---
 
@@ -16,6 +19,10 @@ def setup_environment():
     if not api_key:
         raise ValueError("未找到 API_KEY，请检查 .env 文件。")
     litellm.api_key = api_key
+
+    # 确保workspace目录存在
+    workspace_dir = os.path.join(os.path.dirname(__file__), "workspace")
+    os.makedirs(workspace_dir, exist_ok=True)
 
 # --- 流式输出管理器 ---
 
@@ -51,6 +58,97 @@ class StreamOutputManager:
         """流式打印内容（不换行）"""
         print(content, end="", flush=True)
 
+# --- 文件操作工具 ---
+
+
+class FileTools:
+    """文件操作工具类"""
+
+    def __init__(self, stream_manager: StreamOutputManager):
+        self.stream_manager = stream_manager
+        self.workspace_dir = os.path.join(
+            os.path.dirname(__file__), "workspace")
+        os.makedirs(self.workspace_dir, exist_ok=True)
+
+    def writemd(self, filename: str, content: str) -> str:
+        """
+        写入Markdown文件到workspace目录
+
+        Args:
+            filename: 文件名（不需要.md后缀）
+            content: Markdown内容
+
+        Returns:
+            操作结果信息
+        """
+        if not filename.endswith('.md'):
+            filename += '.md'
+
+        filepath = os.path.join(self.workspace_dir, filename)
+
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            result = f"成功写入Markdown文件: {filepath}"
+            self.stream_manager.print_xml_open("writemd_result")
+            self.stream_manager.print_content(result)
+            self.stream_manager.print_xml_close("writemd_result")
+
+            return result
+        except Exception as e:
+            error_msg = f"写入Markdown文件失败: {str(e)}"
+            self.stream_manager.print_xml_open("writemd_result")
+            self.stream_manager.print_content(error_msg)
+            self.stream_manager.print_xml_close("writemd_result")
+            return error_msg
+
+    def tree(self, directory: str = None) -> str:
+        """
+        显示目录树结构
+
+        Args:
+            directory: 要显示的目录路径，默认为workspace目录
+
+        Returns:
+            目录树结构字符串
+        """
+        if directory is None:
+            directory = self.workspace_dir
+
+        if not os.path.exists(directory):
+            return f"目录不存在: {directory}"
+
+        def _tree_helper(path: str, prefix: str = "", is_last: bool = True) -> str:
+            result = []
+            items = os.listdir(path)
+            items.sort()
+
+            for i, item in enumerate(items):
+                item_path = os.path.join(path, item)
+                is_last_item = i == len(items) - 1
+
+                if os.path.isdir(item_path):
+                    result.append(
+                        f"{prefix}{'└── ' if is_last_item else '├── '}{item}/")
+                    new_prefix = prefix + ('    ' if is_last_item else '│   ')
+                    result.append(_tree_helper(
+                        item_path, new_prefix, is_last_item))
+                else:
+                    result.append(
+                        f"{prefix}{'└── ' if is_last_item else '├── '}{item}")
+
+            return '\n'.join(result)
+
+        tree_result = f"{os.path.basename(directory)}/\n" + \
+            _tree_helper(directory)
+
+        self.stream_manager.print_xml_open("tree_result")
+        self.stream_manager.print_content(tree_result)
+        self.stream_manager.print_xml_close("tree_result")
+
+        return tree_result
+
 # --- 第三层封装：代码执行器 ---
 
 
@@ -61,6 +159,9 @@ class CodeExecutor:
 
     def __init__(self, stream_manager: StreamOutputManager):
         self.stream_manager = stream_manager
+        self.workspace_dir = os.path.join(
+            os.path.dirname(__file__), "workspace")
+        os.makedirs(self.workspace_dir, exist_ok=True)
 
     def pyexec(self, python_code: str) -> str:
         """
@@ -77,11 +178,26 @@ class CodeExecutor:
         self.stream_manager.print_xml_close("call_exec")
 
         try:
+            # 创建一个包含workspace路径的全局环境
+            globals_dict = {
+                '__builtins__': __builtins__,
+                'workspace_dir': self.workspace_dir,
+                'os': os,
+                'plt': plt,
+                'matplotlib': matplotlib,
+                'numpy': __import__('numpy')
+            }
+
+            # 设置matplotlib后端和配置
+            plt.switch_backend('Agg')
+            plt.rcParams['figure.figsize'] = (10, 6)
+            plt.rcParams['font.size'] = 12
+
             # 使用 io.StringIO 捕获 exec 的所有输出
             string_io = io.StringIO()
             with contextlib.redirect_stdout(string_io), contextlib.redirect_stderr(string_io):
-                # 在一个空字典中执行代码，以隔离作用域
-                exec(python_code, {})
+                # 在包含workspace_dir的环境中执行代码
+                exec(python_code, globals_dict)
 
             result = string_io.getvalue()
 
@@ -218,6 +334,9 @@ class CodeAgent(Agent):
             "content": (
                 "根据用户的任务描述，先生成完整、可直接执行的Python代码。"
                 "生成之后必须使用 pyexec 工具来执行生成的代码，并根据执行结果进行总结。"
+                "**注意：如果需要保存图像或数据文件，请使用workspace_dir+test/workspace变量指向的路径。**"
+                "例如：plt.savefig(os.path.join(workspace_dir, 'test', 'workspace', 'figure.png'))"
+                "保存图像后，请显示保存路径，确保用户知道文件保存位置。"
             )
         }]
         pyexec_tool = {
@@ -294,6 +413,7 @@ class MainAgent(Agent):
 
     def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager):
         super().__init__(llm_handler, stream_manager)
+        self.file_tools = FileTools(stream_manager)
         self._setup()
 
     def _setup(self):
@@ -304,10 +424,14 @@ class MainAgent(Agent):
                 "你是一个建模专家，擅长将用户的问题转化为数学模型。"
                 "分析用户问题，如果涉及具体计算、数据分析"
                 "必须交给 CodeAgent 工具来完成。"
-                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片到./data/visualization.png"
+                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片到test/workspace目录"
                 "或者，请编程计算这个微分方程的解"
+                "任务完成后，必须先使用tree工具查看test/workspace目录结构，确认所有生成的文件都存在，"
+                "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
             )
         }]
+
+        # 注册工具
         code_interpreter_tool = {
             "type": "function",
             "function": {
@@ -320,9 +444,43 @@ class MainAgent(Agent):
                 },
             },
         }
-        # 注意：这里的 code_interpreter 并不是一个直接的函数，而是一个触发器
-        # 它的"实现"是在 run 循环中创建一个 CodeAgent 实例来处理
-        self.tools.append(code_interpreter_tool)
+
+        writemd_tool = {
+            "type": "function",
+            "function": {
+                "name": "writemd",
+                "description": "将内容写入Markdown文件到workspace目录",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string", "description": "文件名（不需要.md后缀）"},
+                        "content": {"type": "string", "description": "Markdown格式的内容"}
+                    },
+                    "required": ["filename", "content"],
+                },
+            },
+        }
+
+        tree_tool = {
+            "type": "function",
+            "function": {
+                "name": "tree",
+                "description": "显示workspace目录的树形结构",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {"type": "string", "description": "要显示的目录路径，默认为workspace目录"}
+                    },
+                    "required": [],
+                },
+            },
+        }
+
+        self.tools.extend([code_interpreter_tool, writemd_tool, tree_tool])
+        self.available_functions.update({
+            "writemd": self.file_tools.writemd,
+            "tree": self.file_tools.tree
+        })
 
     def run(self, user_problem: str):
         """执行主 Agent 逻辑，循环处理直到任务完成。"""
@@ -343,42 +501,60 @@ class MainAgent(Agent):
                     self.stream_manager.print_xml_close("main_agent")
                 break
 
-            # 目前只处理第一个工具调用
-            tool_call = tool_calls[0]
-            function_name = tool_call["function"]["name"]
+            # 处理所有工具调用
+            for tool_call in tool_calls:
+                function_name = tool_call["function"]["name"]
 
-            if function_name == "CodeAgent":
-                try:
-                    args = json.loads(tool_call["function"]["arguments"])
-                    task_prompt = args.get("task_prompt", "")
+                if function_name == "CodeAgent":
+                    try:
+                        args = json.loads(tool_call["function"]["arguments"])
+                        task_prompt = args.get("task_prompt", "")
 
-                    if self.stream_manager:
-                        self.stream_manager.print_xml_open("call_code_agent")
-                        self.stream_manager.print_content(task_prompt)
-                        self.stream_manager.print_xml_close("call_code_agent")
+                        if self.stream_manager:
+                            self.stream_manager.print_xml_open(
+                                "call_code_agent")
+                            self.stream_manager.print_content(task_prompt)
+                            self.stream_manager.print_xml_close(
+                                "call_code_agent")
 
-                    # 创建并运行子 Agent
-                    code_agent = CodeAgent(
-                        self.llm_handler, self.stream_manager)
-                    tool_result = code_agent.run(task_prompt)
+                        # 创建并运行子 Agent
+                        code_agent = CodeAgent(
+                            self.llm_handler, self.stream_manager)
+                        tool_result = code_agent.run(task_prompt)
 
-                    # 将子 Agent 的结果添加回主 Agent 的消息历史
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": tool_result,
-                    })
-                except json.JSONDecodeError as e:
-                    print(f"JSON 解析失败: {e}")
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": f"工具参数解析失败: {e}",
-                    })
-                    continue  # 继续循环让主 Agent 处理这个错误
-            else:
-                # 如果未来有其他工具，在这里处理
-                pass
+                        # 将子 Agent 的结果添加回主 Agent 的消息历史
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": tool_result,
+                        })
+                    except json.JSONDecodeError as e:
+                        print(f"JSON 解析失败: {e}")
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": f"工具参数解析失败: {e}",
+                        })
+
+                elif function_name in self.available_functions:
+                    try:
+                        args = json.loads(tool_call["function"]["arguments"])
+                        tool_result = self.available_functions[function_name](
+                            **args)
+
+                        # 将工具执行结果添加回消息历史
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": tool_result,
+                        })
+                    except json.JSONDecodeError as e:
+                        print(f"JSON 解析失败: {e}")
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": f"工具参数解析失败: {e}",
+                        })
 
 # --- 程序入口 ---
 
@@ -406,6 +582,8 @@ if __name__ == "__main__":
         2. 计算咖啡温度达到 70°C 所需的时间 (t_start)。
         3. 计算咖啡温度达到 60°C 所需的时间 (t_end)。
         4. 计算最佳饮用窗口的持续时间 (Δt = t_end - t_start)。
+        5. 生成温度随时间变化的可视化图表。
+        6. 生成完整的论文文档。
         """
 
         # 初始化流式输出管理器
