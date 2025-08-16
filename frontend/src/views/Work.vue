@@ -335,15 +335,36 @@ const loadChatHistory = async () => {
     const messages = await chatAPI.getChatHistory(authStore.token, currentChatSession.value.session_id);
     
     // 转换消息格式
-    chatMessages.value = messages.map(msg => ({
-      id: msg.id.toString(),
-      role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
-      content: msg.content,
-      datetime: new Date(msg.created_at).toLocaleString(),
-      avatar: msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : 'https://tdesign.gtimg.com/site/avatar.jpg',
-      systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing',
-      isStreaming: false // 确保所有消息都不是流式传输
-    }));
+    chatMessages.value = messages.map(msg => {
+      // 根据消息内容判断系统类型
+      let systemType: 'brain' | 'code' | 'writing' | undefined = undefined;
+      
+      if (msg.role === 'assistant') {
+        // 只有AI消息才判断系统类型
+        if (msg.content.includes('<main_agent>')) {
+          systemType = 'brain';
+        } else if (msg.content.includes('<call_code_agent>') || msg.content.includes('<ret_code_agent>')) {
+          systemType = 'code';
+        } else if (msg.content.includes('<call_exec>') || msg.content.includes('<ret_exec>')) {
+          systemType = 'code';
+        } else if (msg.content.includes('<writemd_result>') || msg.content.includes('<tree_result>')) {
+          systemType = 'writing';
+        } else {
+          // 如果没有明确的标签，使用会话的默认系统类型
+          systemType = currentChatSession.value?.system_type as 'brain' | 'code' | 'writing';
+        }
+      }
+      
+      return {
+        id: msg.id.toString(),
+        role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
+        content: msg.content,
+        datetime: new Date(msg.created_at).toLocaleString(),
+        avatar: msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType }),
+        systemType: systemType,
+        isStreaming: false // 确保所有消息都不是流式传输
+      };
+    });
     
   } catch (error) {
     console.error('加载聊天历史失败:', error);
@@ -437,7 +458,7 @@ const hideDivider = () => {
 }
 
 // 获取系统头像
-const getSystemAvatar = (message: ChatMessageDisplay) => {
+const getSystemAvatar = (message: ChatMessageDisplay | { systemType?: 'brain' | 'code' | 'writing' }) => {
   if (message.systemType) {
     const systemAvatars = {
       brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9',   // 中枢系统头像 - 蓝色机器人
@@ -446,7 +467,8 @@ const getSystemAvatar = (message: ChatMessageDisplay) => {
     }
     return systemAvatars[message.systemType]
   }
-  return message.avatar
+  // 如果没有系统类型，返回默认头像
+  return 'https://tdesign.gtimg.com/site/avatar.jpg'
 }
 
 // 获取系统名称
@@ -708,7 +730,7 @@ const sendMockMessage = async (userInput: string, isRegenerate: boolean = false)
         content: `我理解您希望深入了解"${userInput}"。在空调降温速率研究中，我们可以从以下几个角度来分析：1) 热传导模型建立；2) 参数分析与计算；3) 数值模拟编程；4) 结果验证与优化；5) 论文撰写与格式规范。您希望我详细阐述哪个方面？`,
         datetime: new Date().toLocaleString(),
         avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-        systemType: 'brain'
+        systemType: currentChatSession.value?.system_type as 'brain' | 'code' | 'writing' || 'brain'
       }
       chatMessages.value.push(aiReply)
     }
