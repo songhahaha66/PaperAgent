@@ -54,9 +54,7 @@
 [songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：Home.vue:350  创建工作失败: TypeError: apiClient.post is not a function
     at Object.createWork (workspace.ts:5:38)修复bug，请修复workspace.ts,配合apiClient.ts,禁止改动apiClient
 [songhahaha66][08-15 19:18:42]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：删掉测试用的历史工作数据
-
 [songhahaha66][08-15 20:04:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端和前端任务：数据库新增了template_id，适配改动
-
 [songhahaha66][08-15 20:15:09]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务，请不用管已经完成的任务：sidebar和work里面删除progress的相关代码
 [songhahaha66][08-15 21:31:34]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务:LiteLLM集成和工具调用系统
 [LangQi99][08-16 unknown]: 
@@ -87,3 +85,5 @@
 [LangQi99][08-16 unknown]: 1.codeagent说图像生成了 但是没有 是不是sandbox的问题 允许它读写backend\test\workspace 2.writemd之前也要tree 看看文件都有啥
 [LangQi99][08-16 unknown]: 添加一个demo的vue前端 后端用fastapi对接 如果不支持流式就换别的后端api
 [LangQi99][08-16 unknown]: 抱歉我发现并不是流式返回到前端显示的
+[songhahaha66][08-16 00:50:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：INFO:     127.0.0.1:4737 - "GET /api/workspace/fabe431c/files HTTP/1.1" 500 Internal Server Error问题在于，Internal server error: 'str' object has no attribute 'id'，你参考work_router 通过email获取用户对象，修复问题
+

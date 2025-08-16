@@ -12,19 +12,11 @@ router = APIRouter(prefix="/api/works", tags=["works"])
 async def create_work(
     work: schemas.WorkCreate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """创建工作"""
     try:
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        return crud.create_work(db, work, user.id)
+        return crud.create_work(db, work, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -40,19 +32,11 @@ async def get_works(
     status: Optional[str] = Query(None, description="工作状态筛选"),
     search: Optional[str] = Query(None, description="搜索关键词"),
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """获取用户的工作列表"""
     try:
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        return crud.get_user_works(db, user.id, skip, limit, status, search)
+        return crud.get_user_works(db, current_user, skip, limit, status, search)
     except HTTPException:
         raise
     except Exception as e:
@@ -65,7 +49,7 @@ async def get_works(
 async def get_work(
     work_id: str,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """获取工作详情"""
     try:
@@ -76,16 +60,8 @@ async def get_work(
                 detail="Work not found"
             )
         
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
         # 检查权限：只有创建者可以查看
-        if work.created_by != user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this work"
@@ -105,19 +81,11 @@ async def update_work(
     work_id: str,
     work_update: schemas.WorkUpdate,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """更新工作信息"""
     try:
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        return crud.update_work(db, work_id, work_update, user.id)
+        return crud.update_work(db, work_id, work_update, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -130,19 +98,11 @@ async def update_work(
 async def delete_work(
     work_id: str,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """删除工作"""
     try:
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        return crud.delete_work(db, work_id, user.id)
+        return crud.delete_work(db, work_id, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -157,19 +117,11 @@ async def update_work_status(
     status: str = Query(..., description="新的工作状态"),
     progress: Optional[int] = Query(None, ge=0, le=100, description="工作进度(0-100)"),
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """更新工作状态和进度"""
     try:
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
-        return crud.update_work_status(db, work_id, status, progress, user.id)
+        return crud.update_work_status(db, work_id, status, progress, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -182,7 +134,7 @@ async def update_work_status(
 async def get_work_metadata(
     work_id: str,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """获取工作元数据文件内容"""
     try:
@@ -194,16 +146,8 @@ async def get_work_metadata(
                 detail="Work not found"
             )
         
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
         # 检查权限
-        if work.created_by != user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this work"
@@ -236,7 +180,7 @@ async def get_work_metadata(
 async def get_work_chat_history(
     work_id: str,
     db: Session = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: int = Depends(get_current_user)
 ):
     """获取工作对话历史"""
     try:
@@ -248,16 +192,8 @@ async def get_work_chat_history(
                 detail="Work not found"
             )
         
-        # 通过email获取用户对象
-        user = crud.get_user_by_email(db, current_user)
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
-            )
-        
         # 检查权限
-        if work.created_by != user.id:
+        if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to view this work"

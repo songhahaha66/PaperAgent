@@ -32,13 +32,13 @@ async def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_d
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = auth.create_access_token(data={"sub": user.email})
+    access_token = auth.create_access_token(data={"user_id": user.id})
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=schemas.UserResponse)
-async def get_current_user_info(current_user_email: str = Depends(auth.get_current_user), db: Session = Depends(get_db)):
+async def get_current_user_info(current_user: int = Depends(auth.get_current_user), db: Session = Depends(get_db)):
     """获取当前用户信息"""
-    user = crud.get_user_by_email(db, current_user_email)
+    user = crud.get_user_by_id(db, current_user)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
