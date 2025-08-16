@@ -86,4 +86,5 @@
 [LangQi99][08-16 unknown]: 添加一个demo的vue前端 后端用fastapi对接 如果不支持流式就换别的后端api
 [LangQi99][08-16 unknown]: 抱歉我发现并不是流式返回到前端显示的
 [songhahaha66][08-16 00:50:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：INFO:     127.0.0.1:4737 - "GET /api/workspace/fabe431c/files HTTP/1.1" 500 Internal Server Error问题在于，Internal server error: 'str' object has no attribute 'id'，你参考work_router 通过email获取用户对象，修复问题
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在要把这个demo系统迁移到项目中，请规划拆分，写一个计划
 
