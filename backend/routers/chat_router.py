@@ -178,19 +178,30 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         self.content = ""
                     
                     async def on_content(self, content: str):
+                        """实时发送流式内容到WebSocket"""
                         self.content += content
-                        await self.websocket.send_text(json.dumps({
-                            'type': 'content',
-                            'content': content
-                        }))
+                        try:
+                            # 立即发送内容，不等待
+                            await self.websocket.send_text(json.dumps({
+                                'type': 'content',
+                                'content': content
+                            }))
+                            logger.debug(f"发送流式内容: {repr(content[:30])}")
+                        except Exception as e:
+                            logger.error(f"发送WebSocket内容失败: {e}")
                     
                     async def on_message_complete(self, role: str, content: str):
-                        # 保存AI回复
-                        self.chat_service.add_message(self.work_id, role, content)
-                        await self.websocket.send_text(json.dumps({
-                            'type': 'complete',
-                            'message': 'AI分析完成'
-                        }))
+                        """消息完成回调"""
+                        try:
+                            # 保存AI回复
+                            self.chat_service.add_message(self.work_id, role, content)
+                            await self.websocket.send_text(json.dumps({
+                                'type': 'complete',
+                                'message': 'AI分析完成'
+                            }))
+                            logger.info(f"AI消息完成，角色: {role}, 长度: {len(content)}")
+                        except Exception as e:
+                            logger.error(f"处理消息完成失败: {e}")
                 
                 # 初始化AI环境
                 env_manager = setup_environment_from_db(db)
@@ -201,7 +212,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 stream_manager = PersistentStreamManager(
                     stream_callback=ws_callback,
                     chat_service=None,  # 不需要异步chat_service
-                    session_id=session.session_id
+                    session_id=str(session.session_id)
                 )
                 
                 # 创建LLM处理器和主代理
@@ -221,23 +232,22 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                    for msg in history_messages]
                     main_agent.load_conversation_history(history_data)
                 
-                # 异步执行AI任务
-                async def run_ai_task():
-                    try:
+                # 直接执行AI任务并等待完成，确保流式传输正常工作
+                try:
+                    # 检查main_agent.run是否是异步函数
+                    if asyncio.iscoroutinefunction(main_agent.run):
+                        await main_agent.run(message_data['problem'])
+                    else:
+                        # 如果是同步函数，使用线程池执行
                         loop = asyncio.get_event_loop()
-                        if asyncio.iscoroutinefunction(main_agent.run):
-                            await main_agent.run(message_data['problem'])
-                        else:
-                            await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
-                    except Exception as e:
-                        logger.error(f"AI任务执行失败: {e}")
-                        await websocket.send_text(json.dumps({
-                            'type': 'error',
-                            'message': f'AI处理失败: {str(e)}'
-                        }))
-                
-                # 启动AI任务
-                asyncio.create_task(run_ai_task())
+                        await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
+                    
+                except Exception as e:
+                    logger.error(f"AI任务执行失败: {e}")
+                    await websocket.send_text(json.dumps({
+                        'type': 'error',
+                        'message': f'AI处理失败: {str(e)}'
+                    }))
                 
         finally:
             db.close()
