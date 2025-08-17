@@ -51,6 +51,10 @@
                   :content="message.content"
                   :datetime="message.datetime"
                   :avatar="getSystemAvatar(message)"
+                  :actions="message.role === 'assistant' ? 'copy' : undefined"
+                  @operation="(action) => {
+                    if (action === 'copy') copyMessage(message.content)
+                  }"
                 />
                 <div v-if="message.systemType" :class="['system-label', message.systemType]">
                   {{ getSystemName(message) }}
@@ -427,79 +431,52 @@ const getSystemName = (message: ChatMessageDisplay) => {
 }
 
 // 发送消息
-const sendMessage = async (messageContent?: string, isRegenerate: boolean = false) => {
+const sendMessage = async (messageContent?: string) => {
   const content = messageContent || inputValue.value.trim()
   if (!content || isStreaming.value) return
   
-  // 如果不是重新生成，清空输入框并添加用户消息
-  if (!isRegenerate) {
-    const userMessage: ChatMessageDisplay = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: content,
-      datetime: new Date().toLocaleString(),
-      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
-    }
-    
-    chatMessages.value.push(userMessage)
-    inputValue.value = ''
+  // 添加用户消息
+  const userMessage: ChatMessageDisplay = {
+    id: Date.now().toString(),
+    role: 'user',
+    content: content,
+    datetime: new Date().toLocaleString(),
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
   }
+  
+  chatMessages.value.push(userMessage)
+  inputValue.value = ''
   
   // 发送真实消息
   if (currentChatSession.value && authStore.token) {
-    await sendRealMessage(content, isRegenerate)
+    await sendRealMessage(content)
   } else {
     MessagePlugin.error('聊天会话未初始化，请刷新页面重试')
   }
 }
 
 // 发送真实消息（WebSocket）
-const sendRealMessage = async (message: string, isRegenerate: boolean = false) => {
+const sendRealMessage = async (message: string) => {
   if (!currentChatSession.value || !authStore.token) return
   
   isStreaming.value = true
   
-  let aiMessage: ChatMessageDisplay
-  let aiMessageId: string
-  
-  if (isRegenerate) {
-    // 重新生成：找到最后一条AI消息并更新它
-    let lastAiMessageIndex = -1
-    for (let i = chatMessages.value.length - 1; i >= 0; i--) {
-      if (chatMessages.value[i].role === 'assistant') {
-        lastAiMessageIndex = i
-        break
-      }
-    }
-    
-    if (lastAiMessageIndex === -1) {
-      MessagePlugin.error('没有找到可重新生成的消息')
-      isStreaming.value = false
-      return
-    }
-    
-    aiMessage = chatMessages.value[lastAiMessageIndex]
-    aiMessageId = aiMessage.id
-    aiMessage.content = ''
-    aiMessage.isStreaming = true
-    aiMessage.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
-  } else {
-    // 新消息：创建AI回复消息
-    aiMessageId = (Date.now() + 1).toString()
-    aiMessage = {
-      id: aiMessageId,
-      role: 'assistant',
-      content: '',
-      datetime: new Date().toLocaleString(),
-      avatar: getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' }),
-      systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing',
-      isStreaming: true
-    }
-    chatMessages.value.push(aiMessage)
-    
-    // 强制Vue更新视图
-    chatMessages.value = [...chatMessages.value]
+  // 创建AI回复消息
+  const aiMessageId = (Date.now() + 1).toString()
+  const aiMessage: ChatMessageDisplay = {
+    id: aiMessageId,
+    role: 'assistant',
+    content: '',
+    datetime: new Date().toLocaleString(),
+    avatar: getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' }),
+    systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing',
+    isStreaming: true
   }
+  
+  chatMessages.value.push(aiMessage)
+  
+  // 强制Vue更新视图
+  chatMessages.value = [...chatMessages.value]
   
   try {
     // 使用WebSocket发送消息
@@ -627,61 +604,13 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
 
 
-// 重新生成消息
-const regenerateMessage = async (messageId: string) => {
-  const message = chatMessages.value.find(m => m.id === messageId)
-  
-  if (message && message.role === 'assistant') {
-    if (currentChatSession.value && authStore.token) {
-      try {
-        // 显示重新生成状态
-        message.content = '正在重新生成回复...'
-        message.isStreaming = true
-        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
-        
-        // 获取上一条用户消息作为重新生成的输入
-        const messageIndex = chatMessages.value.findIndex(m => m.id === messageId)
-        
-        if (messageIndex > 0) {
-          const userMessage = chatMessages.value[messageIndex - 1]
-          
-          if (userMessage.role === 'user') {
-            await sendMessage(userMessage.content, true)
-            return
-          }
-        }
-        
-        // 如果没有找到用户消息，尝试查找最近的用户消息
-        if (messageIndex > 0) {
-          for (let i = messageIndex - 1; i >= 0; i--) {
-            const prevMessage = chatMessages.value[i]
-            if (prevMessage.role === 'user') {
-              await sendMessage(prevMessage.content, true)
-              return
-            }
-          }
-        }
-        
-        // 如果没有找到用户消息，显示错误
-        message.content = '无法重新生成：未找到原始问题'
-        message.isStreaming = false
-        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
-        MessagePlugin.error('无法重新生成：未找到原始问题')
-        
-      } catch (error) {
-        console.error('重新生成消息失败:', error)
-        message.content = '重新生成失败，请稍后重试'
-        message.isStreaming = false
-        message.avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
-        MessagePlugin.error('重新生成失败')
-      }
-    } else {
-      MessagePlugin.error('聊天会话未初始化，请刷新页面重试')
-    }
-  } else {
-    MessagePlugin.error('无法重新生成：消息不存在或不是AI消息')
-  }
+// 复制消息
+const copyMessage = (content: string) => {
+  navigator.clipboard.writeText(content)
+  MessagePlugin.success('消息已复制到剪贴板！')
 }
+
+
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
