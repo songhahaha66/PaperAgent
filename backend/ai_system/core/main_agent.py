@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from .agents import Agent
 from .llm_handler import LLMHandler
 from .stream_manager import StreamOutputManager
+from .context_manager import ContextManager
 from ..tools.file_tools import FileTools
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,13 @@ class MainAgent(Agent):
         super().__init__(llm_handler, stream_manager)
         self.file_tools = FileTools(stream_manager)
         self.session_id = session_id
+        
+        # 初始化上下文管理器
+        self.context_manager = ContextManager(
+            max_tokens=4000,  # 可根据模型调整
+            max_messages=50
+        )
+        
         self._setup()
         logger.info(f"MainAgent初始化完成，session_id: {session_id}")
 
@@ -106,7 +114,7 @@ class MainAgent(Agent):
             },
         }
 
-        self.tools.extend([code_interpreter_tool, writemd_tool, tree_tool])
+        # 注册工具到可用函数列表
         self.available_functions.update({
             "writemd": self.file_tools.writemd,
             "tree": self.file_tools.tree
@@ -123,10 +131,55 @@ class MainAgent(Agent):
         
         # 添加历史消息，但过滤掉tool消息（避免上下文过长）
         for msg in history_messages:
-            if msg.get("role") in ["user", "assistant"]:
+            if msg.get('role') in ["user", "assistant"]:
                 self.messages.append(msg)
         
+        # 检查是否需要压缩上下文
+        self._check_and_compress_context()
+        
         logger.info(f"已加载 {len(self.messages) - 1} 条历史消息，维护上下文连续性")
+
+    def _check_and_compress_context(self):
+        """检查并压缩上下文"""
+        context_status = self.context_manager.get_context_status(self.messages)
+        
+        if context_status["compression_needed"]:
+            logger.info(f"上下文过长，开始压缩。当前token使用率: {context_status['token_usage_ratio']:.2%}")
+            
+            # 选择压缩策略
+            if context_status["token_usage_ratio"] > 0.8:
+                strategy = "high"  # 高压缩
+            elif context_status["token_usage_ratio"] > 0.6:
+                strategy = "medium"  # 中等压缩
+            else:
+                strategy = "low"  # 低压缩
+            
+            # 执行压缩
+            compressed_messages, compression_results = self.context_manager.compress_context(
+                self.messages, strategy
+            )
+            
+            # 更新消息列表
+            self.messages = compressed_messages
+            
+            # 记录压缩结果
+            self.context_manager.compression_history.extend(compression_results)
+            
+            logger.info(f"上下文压缩完成，压缩后消息数: {len(self.messages)}")
+            
+            # 生成摘要（如果是中枢大脑模式）
+            if self.session_id and self.session_id.startswith("brain"):
+                self._generate_context_summary_async()
+
+    async def _generate_context_summary_async(self):
+        """异步生成上下文摘要"""
+        try:
+            summary = await self.context_manager.generate_context_summary(
+                self.messages, self.session_id
+            )
+            logger.info(f"上下文摘要生成成功: {summary.summary_id}")
+        except Exception as e:
+            logger.error(f"生成上下文摘要失败: {e}")
 
     async def run(self, user_problem: str):
         """执行主 Agent 逻辑，循环处理直到任务完成。"""
@@ -138,6 +191,9 @@ class MainAgent(Agent):
 
         # 添加用户消息到对话历史
         self.messages.append({"role": "user", "content": user_problem})
+
+        # 检查上下文状态
+        self._check_and_compress_context()
 
         iteration_count = 0
         while True:
@@ -217,6 +273,9 @@ class MainAgent(Agent):
 
     def get_execution_summary(self) -> Dict[str, Any]:
         """获取执行摘要"""
+        # 获取上下文状态
+        context_status = self.context_manager.get_context_status(self.messages)
+        
         return {
             "total_messages": len(self.messages),
             "tool_calls_count": sum(1 for msg in self.messages if msg.get("role") == "tool"),
@@ -224,7 +283,8 @@ class MainAgent(Agent):
             "assistant_messages": sum(1 for msg in self.messages if msg.get("role") == "assistant"),
             "workspace_files": self.file_tools.list_files(),
             "session_id": self.session_id,
-            "is_brain_mode": self.session_id and self.session_id.startswith("brain") if self.session_id else False
+            "is_brain_mode": self.session_id and self.session_id.startswith("brain") if self.session_id else False,
+            "context_status": context_status
         }
 
     def reset_conversation(self):
@@ -249,6 +309,22 @@ class MainAgent(Agent):
         if len(self.messages) <= 1:
             return "对话刚开始，暂无上下文"
         
+        # 使用ContextManager生成摘要
+        try:
+            # 同步调用摘要生成（简化版本）
+            summary = self.context_manager._format_summary_content(
+                self.messages,
+                self.context_manager.extract_key_topics(self.messages),
+                self.context_manager._extract_important_points(self.messages)
+            )
+            return summary
+        except Exception as e:
+            logger.error(f"生成上下文摘要失败: {e}")
+            # 回退到原来的简单摘要
+            return self._get_simple_context_summary()
+    
+    def _get_simple_context_summary(self) -> str:
+        """获取简单的上下文摘要（回退方法）"""
         # 统计用户和AI的交互次数
         user_count = sum(1 for msg in self.messages if msg.get("role") == "user")
         ai_count = sum(1 for msg in self.messages if msg.get("role") == "assistant")
@@ -264,3 +340,7 @@ class MainAgent(Agent):
             summary += f" 最近的用户问题：{' | '.join(reversed(recent_questions))}"
         
         return summary
+
+    def get_context_manager(self) -> ContextManager:
+        """获取上下文管理器实例"""
+        return self.context_manager
