@@ -91,6 +91,23 @@ class ChatService:
             logger.error(f"获取聊天历史失败: {e}")
             return []
     
+    def get_chat_history_objects(self, session_id: str, limit: int = 50) -> List[ChatMessage]:
+        """获取聊天历史对象，用于上下文维护"""
+        try:
+            messages = self.db_session.query(ChatMessage)\
+                .filter(ChatMessage.session_id == session_id)\
+                .filter(ChatMessage.role.in_(["user", "assistant"]))\
+                .order_by(ChatMessage.created_at.asc())\
+                .limit(limit)\
+                .all()
+            
+            logger.info(f"获取聊天历史对象: {session_id}, 限制: {limit}, 实际数量: {len(messages)}")
+            return messages
+            
+        except Exception as e:
+            logger.error(f"获取聊天历史对象失败: {e}")
+            return []
+    
     def get_session(self, session_id: str) -> Optional[ChatSession]:
         """获取会话信息"""
         try:

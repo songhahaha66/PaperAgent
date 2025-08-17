@@ -133,6 +133,21 @@ export const chatAPI = {
       }
     );
     return response;
+  },
+
+  // 获取会话上下文信息（主要用于中枢大脑模式）
+  async getSessionContext(
+    token: string,
+    sessionId: string
+  ): Promise<any> {
+    const response = await apiClient.request<any>(
+      `/api/chat/session/${sessionId}/context`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    );
+    return response;
   }
 };
 

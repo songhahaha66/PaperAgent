@@ -313,6 +313,66 @@ async def reset_chat_session(
         )
 
 
+@router.get("/session/{session_id}/context")
+async def get_session_context(
+    session_id: str,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取会话上下文信息（主要用于中枢大脑模式）"""
+    try:
+        chat_service = ChatService(db)
+        session = chat_service.get_session(session_id)
+        if not session or not safe_compare_ids(session.created_by, current_user_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="会话不存在或无权限"
+            )
+        
+        # 获取会话基本信息
+        session_info = {
+            "session_id": session.session_id,
+            "work_id": session.work_id,
+            "system_type": session.system_type,
+            "title": session.title,
+            "status": session.status,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at
+        }
+        
+        # 如果是中枢大脑模式，获取上下文摘要
+        if session.system_type == "brain":
+            # 获取最近的对话历史
+            recent_messages = chat_service.get_chat_history_objects(session_id, limit=10)
+            context_summary = {
+                "total_messages": len(recent_messages),
+                "recent_conversations": []
+            }
+            
+            # 构建最近的对话摘要
+            for i in range(0, len(recent_messages), 2):
+                if i + 1 < len(recent_messages):
+                    user_msg = recent_messages[i]
+                    ai_msg = recent_messages[i + 1]
+                    if user_msg.role == "user" and ai_msg.role == "assistant":
+                        context_summary["recent_conversations"].append({
+                            "user_question": user_msg.content[:100] + "..." if len(user_msg.content) > 100 else user_msg.content,
+                            "ai_response_summary": ai_msg.content[:150] + "..." if len(ai_msg.content) > 150 else ai_msg.content,
+                            "timestamp": user_msg.created_at.isoformat()
+                        })
+            
+            session_info["context_summary"] = context_summary
+        
+        return session_info
+        
+    except Exception as e:
+        logger.error(f"获取会话上下文失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取会话上下文失败: {str(e)}"
+        )
+
+
 @router.websocket("/ws/{session_id}")
 async def websocket_chat(
     websocket: WebSocket,
@@ -500,11 +560,15 @@ async def websocket_chat(
                             logger.info(f"消息完成，角色: {role}, 长度: {len(content)}")
                             try:
                                 # 保存AI消息到数据库
-                                await self.async_chat_service.add_message(
-                                    session_id=self.session_id,
-                                    role=role,
-                                    content=content
-                                )
+                                if self.async_chat_service and self.session_id:
+                                    await self.async_chat_service.add_message(
+                                        session_id=self.session_id,
+                                        role=role,
+                                        content=content
+                                    )
+                                    logger.info(f"AI消息持久化成功: {role}, 长度: {len(content)}")
+                                else:
+                                    logger.warning(f"无法持久化AI消息: chat_service={self.async_chat_service is not None}, session_id={self.session_id}")
                                 
                                 # 直接发送完成消息，让WebSocket自己处理连接状态
                                 await self.websocket.send_text(json.dumps({
@@ -523,7 +587,7 @@ async def websocket_chat(
                     # 创建流式管理器，使用WebSocket回调和异步ChatService
                     stream_manager = PersistentStreamManager(
                         stream_callback=ws_callback,
-                        chat_service=None,  # 不使用同步版本
+                        chat_service=chat_service,  # 传入异步聊天服务
                         session_id=session_id
                     )
                     
@@ -538,7 +602,28 @@ async def websocket_chat(
                         stream_manager=stream_manager
                     )
                     
-                    main_agent = MainAgent(llm_handler, stream_manager)
+                    # 创建MainAgent，传入session_id以支持上下文维护
+                    main_agent = MainAgent(llm_handler, stream_manager, session_id)
+                    
+                    # 如果是中枢大脑模式，加载对话历史以维护上下文
+                    if session_system_type == "brain":
+                        try:
+                            # 获取对话历史对象，用于上下文维护
+                            history_messages = await chat_service.get_chat_history_objects(session_id, limit=20)
+                            if history_messages:
+                                # 转换历史消息格式
+                                history_data = []
+                                for msg in history_messages:
+                                    history_data.append({
+                                        "role": msg.role,
+                                        "content": msg.content
+                                    })
+                                
+                                # 加载到MainAgent中
+                                main_agent.load_conversation_history(history_data)
+                                logger.info(f"已加载 {len(history_data)} 条历史消息到中枢大脑")
+                        except Exception as e:
+                            logger.warning(f"加载对话历史失败，但不影响当前对话: {e}")
                     
                     
                     # 在后台异步运行主代理，避免阻塞WebSocket
@@ -557,12 +642,26 @@ async def websocket_chat(
                                     None,  # 使用默认线程池
                                     lambda: main_agent.run(message_data['problem'])
                                 )
+                            
+                            # AI任务完成后，确保消息被持久化
+                            try:
+                                await stream_manager.finalize_message()
+                                logger.info("AI任务完成后消息持久化成功")
+                            except Exception as e:
+                                logger.error(f"AI任务完成后消息持久化失败: {e}")
+                            
                             return result
                         except asyncio.CancelledError:
                             logger.info("AI任务被取消")
                             raise
                         except Exception as e:
                             logger.error(f"Agent执行失败: {e}")
+                            # 即使失败也要尝试持久化已生成的内容
+                            try:
+                                await stream_manager.finalize_message()
+                                logger.info("AI任务失败后消息持久化成功")
+                            except Exception as persist_error:
+                                logger.error(f"AI任务失败后消息持久化失败: {persist_error}")
                             raise e
                     
                     # 启动异步任务，不等待完成
@@ -581,8 +680,8 @@ async def websocket_chat(
                             if not task.cancelled():
                                 result = task.result()
                                 logger.info("AI任务执行完成")
-                        except asyncio.CancelledError:
-                            logger.info("AI任务被取消")
+                            else:
+                                logger.info("AI任务被取消")
                         except Exception as e:
                             logger.error(f"AI任务执行失败: {e}")
                             # 如果WebSocket还连接着，发送错误消息
@@ -594,8 +693,8 @@ async def websocket_chat(
                     
                     agent_task.add_done_callback(cleanup_agent_task)
                     
-                    # 完成消息持久化
-                    await stream_manager.finalize_message()
+                    # 注意：不要在这里调用finalize_message，让AI任务完成后自动调用
+                    # await stream_manager.finalize_message()  # 删除这行
                     
                     # 立即返回，不等待AI任务完成
                     logger.info(f"WebSocket处理完成，AI任务在后台运行，会话ID: {session_id}")
