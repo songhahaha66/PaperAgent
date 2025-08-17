@@ -1,37 +1,46 @@
 """
-聊天记录管理服务
-提供聊天会话创建、消息存储、历史记录查询等功能
+简化版聊天记录管理服务
+使用JSON文件存储聊天记录，数据库只存储会话元数据
 """
 
 import logging
 import time
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
 
-from models.models import ChatSession, ChatMessage, User
-from schemas.schemas import ChatSessionCreateRequest, ChatMessageCreateRequest
+from models.models import ChatSession, User
+from services.chat_history_manager import ChatHistoryManager
 
 logger = logging.getLogger(__name__)
 
 
 class ChatService:
-    """聊天服务"""
+    """简化版聊天服务"""
     
     def __init__(self, db_session: Session):
         self.db_session = db_session
+        self.history_manager = ChatHistoryManager()
     
-    def create_chat_session(self, work_id: str, system_type: str, user_id: int, title: str = None) -> ChatSession:
-        """创建新的聊天会话"""
+    def create_or_get_work_session(self, work_id: str, user_id: int) -> ChatSession:
+        """为work创建或获取唯一的session（一个work对应一个session）"""
         try:
-            session_id = f"{work_id}_{system_type}_{int(time.time())}"
+            # 查找现有session
+            existing_session = self.db_session.query(ChatSession)\
+                .filter(ChatSession.work_id == work_id)\
+                .filter(ChatSession.created_by == user_id)\
+                .first()
             
-            # 创建ChatSession记录
+            if existing_session:
+                logger.info(f"找到现有会话: {existing_session.session_id}")
+                return existing_session
+            
+            # 创建新session
+            session_id = f"{work_id}_main_session"
             session = ChatSession(
                 session_id=session_id,
                 work_id=work_id,
-                system_type=system_type,
-                title=title or f"{system_type}对话",
+                system_type="brain",  # 统一使用主会话类型
+                title="主会话",
                 created_by=user_id
             )
             
@@ -39,169 +48,79 @@ class ChatService:
             self.db_session.commit()
             self.db_session.refresh(session)
             
-            logger.info(f"创建聊天会话成功: {session_id}")
+            logger.info(f"创建新会话: {session_id}")
             return session
             
         except Exception as e:
-            logger.error(f"创建聊天会话失败: {e}")
+            logger.error(f"创建/获取会话失败: {e}")
             self.db_session.rollback()
             raise
     
-    def add_message(self, session_id: str, role: str, content: str, 
-                   tool_calls: Dict = None, tool_results: Dict = None, message_metadata: Dict = None) -> ChatMessage:
-        """添加聊天消息"""
+    def add_message(self, work_id: str, role: str, content: str, metadata: Optional[Dict] = None):
+        """添加消息到JSON文件"""
         try:
-            # 创建ChatMessage记录
-            message = ChatMessage(
-                session_id=session_id,
-                role=role,
-                content=content,
-                tool_calls=tool_calls,
-                tool_results=tool_results,
-                message_metadata=message_metadata
-            )
-            
-            self.db_session.add(message)
-            self.db_session.commit()
-            self.db_session.refresh(message)
-            
-            logger.info(f"添加聊天消息成功: {session_id}, 角色: {role}, 长度: {len(content)}")
-            return message
-            
+            self.history_manager.save_message(work_id, role, content, metadata)
+            logger.info(f"消息已保存到JSON: {work_id}, 角色: {role}")
         except Exception as e:
-            logger.error(f"添加聊天消息失败: {e}")
-            self.db_session.rollback()
+            logger.error(f"保存消息失败: {e}")
             raise
     
-    def get_chat_history(self, session_id: str, limit: int = 50) -> List[ChatMessage]:
-        """获取聊天历史"""
+    def get_work_chat_history(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
+        """获取work的聊天记录"""
         try:
-            messages = self.db_session.query(ChatMessage)\
-                .filter(ChatMessage.session_id == session_id)\
-                .order_by(ChatMessage.created_at.desc())\
-                .limit(limit)\
-                .all()
-            
-            # 按时间正序返回
-            messages.reverse()
-            logger.info(f"获取聊天历史: {session_id}, 限制: {limit}, 实际数量: {len(messages)}")
+            messages = self.history_manager.get_messages(work_id, limit)
+            logger.info(f"获取聊天记录: {work_id}, 数量: {len(messages)}")
             return messages
-            
         except Exception as e:
-            logger.error(f"获取聊天历史失败: {e}")
+            logger.error(f"获取聊天记录失败: {e}")
             return []
     
-    def get_chat_history_objects(self, session_id: str, limit: int = 50) -> List[ChatMessage]:
-        """获取聊天历史对象，用于上下文维护"""
+    def get_work_context(self, work_id: str) -> Dict:
+        """获取work的上下文信息"""
         try:
-            messages = self.db_session.query(ChatMessage)\
-                .filter(ChatMessage.session_id == session_id)\
-                .filter(ChatMessage.role.in_(["user", "assistant"]))\
-                .order_by(ChatMessage.created_at.asc())\
-                .limit(limit)\
-                .all()
-            
-            logger.info(f"获取聊天历史对象: {session_id}, 限制: {limit}, 实际数量: {len(messages)}")
-            return messages
-            
+            history = self.history_manager.get_work_history(work_id)
+            return history.get("context", {})
         except Exception as e:
-            logger.error(f"获取聊天历史对象失败: {e}")
-            return []
+            logger.error(f"获取上下文失败: {e}")
+            return {}
     
-    def get_session(self, session_id: str) -> Optional[ChatSession]:
-        """获取会话信息"""
+    def update_work_context(self, work_id: str, context_updates: Dict):
+        """更新work的上下文"""
+        try:
+            self.history_manager.update_context(work_id, context_updates)
+            logger.info(f"上下文已更新: {work_id}")
+        except Exception as e:
+            logger.error(f"更新上下文失败: {e}")
+            raise
+    
+    def get_session_by_work_id(self, work_id: str, user_id: int) -> Optional[ChatSession]:
+        """通过work_id获取session"""
         try:
             session = self.db_session.query(ChatSession)\
-                .filter(ChatSession.session_id == session_id)\
+                .filter(ChatSession.work_id == work_id)\
+                .filter(ChatSession.created_by == user_id)\
                 .first()
-            
-            logger.info(f"获取会话信息: {session_id}, 结果: {'成功' if session else '不存在'}")
             return session
-            
         except Exception as e:
-            logger.error(f"获取会话信息失败: {e}")
+            logger.error(f"获取session失败: {e}")
             return None
     
-    def list_user_sessions(self, user_id: int, work_id: Optional[str] = None) -> List[ChatSession]:
-        """列出用户的聊天会话"""
+    def delete_work_session(self, work_id: str, user_id: int) -> bool:
+        """删除work对应的session和聊天记录"""
         try:
-            query = self.db_session.query(ChatSession)\
-                .filter(ChatSession.created_by == user_id)
+            # 删除数据库中的session记录
+            session = self.get_session_by_work_id(work_id, user_id)
+            if session:
+                self.db_session.delete(session)
+                self.db_session.commit()
             
-            if work_id:
-                query = query.filter(ChatSession.work_id == work_id)
+            # 清空JSON聊天记录
+            self.history_manager.clear_history(work_id)
             
-            sessions = query.order_by(ChatSession.updated_at.desc()).all()
-            
-            logger.info(f"列出用户会话: {user_id}, 工作ID: {work_id}, 数量: {len(sessions)}")
-            return sessions
-            
-        except Exception as e:
-            logger.error(f"列出用户会话失败: {e}")
-            return []
-    
-    def update_session_title(self, session_id: str, title: str) -> bool:
-        """更新会话标题"""
-        try:
-            session = self.get_session(session_id)
-            if not session:
-                return False
-            
-            session.title = title
-            self.db_session.commit()
-            
-            logger.info(f"更新会话标题: {session_id}, 新标题: {title}")
+            logger.info(f"删除work会话: {work_id}")
             return True
             
         except Exception as e:
-            logger.error(f"更新会话标题失败: {e}")
-            self.db_session.rollback()
-            return False
-    
-    def delete_session(self, session_id: str, user_id: int) -> bool:
-        """删除聊天会话"""
-        try:
-            session = self.get_session(session_id)
-            if not session or session.created_by != user_id:
-                return False
-            
-            # 删除会话（消息会通过cascade自动删除）
-            self.db_session.delete(session)
-            self.db_session.commit()
-            
-            logger.info(f"删除聊天会话: {session_id}, 用户: {user_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"删除聊天会话失败: {e}")
-            self.db_session.rollback()
-            return False
-    
-    def get_session_message_count(self, session_id: str) -> int:
-        """获取会话的消息数量"""
-        try:
-            count = self.db_session.query(ChatMessage)\
-                .filter(ChatMessage.session_id == session_id)\
-                .count()
-            return count
-        except Exception as e:
-            logger.error(f"获取会话消息数量失败: {e}")
-            return 0
-    
-    def archive_session(self, session_id: str, user_id: int) -> bool:
-        """归档聊天会话"""
-        try:
-            session = self.get_session(session_id)
-            if not session or session.created_by != user_id:
-                return False
-            
-            session.status = "archived"
-            self.db_session.commit()
-            
-            logger.info(f"归档聊天会话: {session_id}, 用户: {user_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"归档聊天会话失败: {e}")
+            logger.error(f"删除work会话失败: {e}")
             self.db_session.rollback()
             return False

@@ -22,47 +22,35 @@ class MainAgent(Agent):
     支持session上下文维护，保持对话连续性。
     """
 
-    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, session_id: Optional[str] = None):
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None):
         super().__init__(llm_handler, stream_manager)
         self.file_tools = FileTools(stream_manager)
-        self.session_id = session_id
+        self.work_id = work_id  # 改为work_id，每个work对应一个MainAgent
         
         # 初始化上下文管理器
         self.context_manager = ContextManager(
-            max_tokens=4000,  # 可根据模型调整
+            max_tokens=4000,
             max_messages=50
         )
         
         self._setup()
-        logger.info(f"MainAgent初始化完成，session_id: {session_id}")
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}")
 
     def _setup(self):
         """初始化 System Prompt 和工具。"""
-        # 根据session_id判断是否为中枢大脑模式
-        if self.session_id and self.session_id.startswith("brain"):
-            # 中枢大脑模式：维护上下文，不重置对话历史
-            system_content = (
-                "你是中枢大脑，负责协调整个论文生成过程。"
-                "你需要维护对话的上下文连续性，理解用户的整体需求。"
-                "分析用户问题，如果涉及具体计算、数据分析，"
-                "必须交给 CodeAgent 工具来完成。"
-                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片"
-                "或者，请编程计算这个微分方程的解"
-                "任务完成后，必须先使用tree工具查看目录结构，确认所有生成的文件都存在，"
-                "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
-                "重要：保持对话的连续性，理解上下文，不要重复询问已经明确的信息。"
-            )
-        else:
-            # 普通模式：每次重置对话历史
-            system_content = (
-                "你是一个建模专家，擅长将用户的问题转化为数学模型。"
-                "分析用户问题，如果涉及具体计算、数据分析"
-                "必须交给 CodeAgent 工具来完成。"
-                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片"
-                "或者，请编程计算这个微分方程的解"
-                "任务完成后，必须先使用tree工具查看目录结构，确认所有生成的文件都存在，"
-                "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
-            )
+        # 简化系统提示，明确角色定位
+        system_content = (
+            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。\n"
+            "你的职责：\n"
+            "1. 分析用户需求，制定论文生成计划\n"
+            "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
+            "3. 维护对话上下文，理解整个工作流程的连续性\n"
+            "4. 最终使用tree工具检查生成的文件，用writemd工具生成论文\n\n"
+            "重要原则：\n"
+            "- 保持对话连贯性，不重复询问已明确的信息\n"
+            "- CodeAgent负责具体执行，你负责规划和协调\n"
+            "- 所有生成的文件都要在最终论文中引用"
+        )
 
         self.messages = [{
             "role": "system",

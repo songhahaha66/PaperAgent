@@ -44,7 +44,6 @@ export const chatAPI = {
       method: 'POST',
       body: JSON.stringify(request),
       headers: { 
-        Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       }
     });
@@ -53,40 +52,67 @@ export const chatAPI = {
 
 
 
-  // 获取聊天历史
-  async getChatHistory(
+  // 获取工作的聊天历史（新API）
+  async getWorkChatHistory(
     token: string,
-    sessionId: string,
-    limit: number = 50
-  ): Promise<ChatMessageResponse[]> {
-    const params = new URLSearchParams();
-    params.append('limit', limit.toString());
-
-    const response = await apiClient.request<ChatMessageResponse[]>(
-      `/api/chat/session/${sessionId}/history?${params.toString()}`,
+    workId: string
+  ): Promise<{ work_id: string; messages: any[]; context: any }> {
+    const response = await apiClient.request<{ work_id: string; messages: any[]; context: any }>(
+      `/api/chat/work/${workId}/history`,
       {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` }
+        method: 'GET'
       }
     );
     return response;
   },
 
-  // 获取聊天会话列表
+  // 兼容旧的聊天历史接口
+  async getChatHistory(
+    token: string,
+    sessionId: string,
+    limit: number = 50
+  ): Promise<ChatMessageResponse[]> {
+    // 尝试从sessionId推导workId，或者直接使用新接口
+    const response = await apiClient.request<ChatMessageResponse[]>(
+      `/api/chat/session/${sessionId}/history?limit=${limit}`,
+      {
+        method: 'GET'
+      }
+    );
+    return response;
+  },
+
+  // 简化的获取聊天会话（重构后一个work对应一个session）
   async getChatSessions(
     token: string,
     workId?: string
   ): Promise<ChatSessionResponse[]> {
-    const params = workId ? `?work_id=${encodeURIComponent(workId)}` : '';
+    if (!workId) {
+      // 如果没有workId，返回空数组（新架构下需要指定work）
+      return [];
+    }
     
-    const response = await apiClient.request<ChatSessionResponse[]>(
-      `/api/chat/sessions${params}`,
-      {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` }
-      }
-    );
-    return response;
+    try {
+      // 尝试获取工作的聊天记录来验证是否有session
+      await this.getWorkChatHistory(token, workId);
+      
+      // 如果成功，返回一个虚拟的session对象（兼容旧接口）
+      return [{
+        id: 1,
+        session_id: `${workId}_main_session`,
+        work_id: workId,
+        system_type: 'brain',
+        title: '主会话',
+        status: 'active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        created_by: 0,
+        total_messages: 0
+      }];
+    } catch (error) {
+      // 如果获取失败，说明还没有session，返回空数组
+      return [];
+    }
   },
 
   // 更新会话标题
@@ -98,8 +124,7 @@ export const chatAPI = {
     const response = await apiClient.request<{ status: string; message: string }>(
       `/api/chat/session/${sessionId}/title?title=${encodeURIComponent(title)}`,
       {
-        method: 'PUT',
-        headers: { Authorization: `Bearer ${token}` }
+        method: 'PUT'
       }
     );
     return response;
@@ -113,8 +138,7 @@ export const chatAPI = {
     const response = await apiClient.request<{ status: string; message: string }>(
       `/api/chat/session/${sessionId}`,
       {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+        method: 'DELETE'
       }
     );
     return response;
@@ -128,8 +152,7 @@ export const chatAPI = {
     const response = await apiClient.request<{ status: string; message: string }>(
       `/api/chat/session/${sessionId}/reset`,
       {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
+        method: 'POST'
       }
     );
     return response;
@@ -143,8 +166,7 @@ export const chatAPI = {
     const response = await apiClient.request<any>(
       `/api/chat/session/${sessionId}/context`,
       {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` }
+        method: 'GET'
       }
     );
     return response;
@@ -156,7 +178,7 @@ export const chatAPI = {
 // WebSocket聊天处理器
 export class WebSocketChatHandler {
   private ws: WebSocket | null = null;
-  private sessionId: string;
+  private workId: string;  // 改为workId
   private token: string;
   private baseUrl: string;
   private reconnectAttempts = 0;
@@ -168,8 +190,8 @@ export class WebSocketChatHandler {
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private messageCallback: ((data: any) => void) | null = null;
 
-  constructor(sessionId: string, token: string) {
-    this.sessionId = sessionId;
+  constructor(workId: string, token: string) {  // 参数改为workId
+    this.workId = workId;
     this.token = token;
     this.baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
   }
@@ -186,8 +208,8 @@ export class WebSocketChatHandler {
       this.clearReconnectTimer();
       
       try {
-        // 构建WebSocket URL
-        const wsUrl = `${this.baseUrl.replace('http', 'ws')}/api/chat/ws/${this.sessionId}`;
+        // 构建WebSocket URL（使用workId）
+        const wsUrl = `${this.baseUrl.replace('http', 'ws')}/api/chat/ws/${this.workId}`;
         console.log('连接WebSocket:', wsUrl);
         
         this.ws = new WebSocket(wsUrl);

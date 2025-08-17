@@ -134,33 +134,12 @@ class WorkListResponse(BaseModel):
     size: int
 
 
-# 聊天系统相关schemas
-class ChatMessageBase(BaseModel):
-    role: str  # user, assistant, system, tool
-    content: str
-    timestamp: Optional[datetime] = None
-    tool_calls: Optional[List[dict]] = None
-    tool_results: Optional[List[dict]] = None
-
-class ChatMessageCreate(ChatMessageBase):
-    pass
-
-class ChatSessionBase(BaseModel):
-    session_id: str
-    work_id: str
-    system_type: str  # brain, code, writing
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
-class ChatSessionCreate(ChatSessionBase):
-    pass
-
-# --- 新增聊天相关schemas ---
+# 简化后的聊天系统相关schemas
 
 class ChatSessionCreateRequest(BaseModel):
     """创建聊天会话请求"""
     work_id: str
-    system_type: str  # brain, code, writing
+    system_type: str = "brain"  # 统一使用brain类型
     title: Optional[str] = None
 
 class ChatSessionResponse(BaseModel):
@@ -174,29 +153,16 @@ class ChatSessionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     created_by: int
-    total_messages: int = 0
     
     class Config:
         from_attributes = True
 
-class ChatMessageCreateRequest(BaseModel):
-    """创建聊天消息请求"""
-    role: str  # user, assistant, system, tool
-    content: str
-    tool_calls: Optional[dict] = None
-    tool_results: Optional[dict] = None
-    message_metadata: Optional[dict] = None
-
-class ChatMessageResponse(BaseModel):
-    """聊天消息响应"""
-    id: int
-    session_id: str
-    role: str
-    content: str
-    tool_calls: Optional[dict] = None
-    tool_results: Optional[dict] = None
-    message_metadata: Optional[dict] = None
-    created_at: datetime
+# JSON格式的聊天记录响应（从JSON文件读取）
+class ChatHistoryResponse(BaseModel):
+    """聊天记录响应"""
+    work_id: str
+    messages: List[dict]  # JSON格式的消息列表
+    context: dict  # 工作上下文
     
     class Config:
         from_attributes = True
