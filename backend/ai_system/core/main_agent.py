@@ -156,14 +156,20 @@ class MainAgent(Agent):
             logger.info(f"上下文压缩完成，压缩后消息数: {len(self.messages)}")
             
             # 生成摘要（如果是中枢大脑模式）
-            if self.session_id and self.session_id.startswith("brain"):
-                self._generate_context_summary_async()
+            if self.work_id:
+                # 由于这是同步方法，我们创建一个任务但不等待
+                import asyncio
+                try:
+                    asyncio.create_task(self._generate_context_summary_async())
+                except RuntimeError:
+                    # 如果没有事件循环，就跳过摘要生成
+                    logger.warning("无法生成上下文摘要：没有运行的事件循环")
 
     async def _generate_context_summary_async(self):
         """异步生成上下文摘要"""
         try:
             summary = await self.context_manager.generate_context_summary(
-                self.messages, self.session_id
+                self.messages, self.work_id or "default"
             )
             logger.info(f"上下文摘要生成成功: {summary.summary_id}")
         except Exception as e:
@@ -196,6 +202,8 @@ class MainAgent(Agent):
                 logger.info("MainAgent没有工具调用，任务完成")
                 if self.stream_manager:
                     await self.stream_manager.print_xml_close("main_agent")
+                    # 确保触发消息完成回调
+                    await self.stream_manager.finalize_message()
                 break
 
             logger.info(f"MainAgent执行 {len(tool_calls)} 个工具调用")
@@ -270,16 +278,16 @@ class MainAgent(Agent):
             "user_messages": sum(1 for msg in self.messages if msg.get("role") == "user"),
             "assistant_messages": sum(1 for msg in self.messages if msg.get("role") == "assistant"),
             "workspace_files": self.file_tools.list_files(),
-            "session_id": self.session_id,
-            "is_brain_mode": self.session_id and self.session_id.startswith("brain") if self.session_id else False,
+            "work_id": self.work_id,
+            "is_brain_mode": bool(self.work_id),
             "context_status": context_status
         }
 
     def reset_conversation(self):
         """重置对话历史"""
-        if self.session_id and self.session_id.startswith("brain"):
-            # 中枢大脑模式：只保留system message，不清空历史
-            logger.info("中枢大脑模式：重置对话历史，保留system message")
+        if self.work_id:
+            # 工作模式：只保留system message，不清空历史
+            logger.info("工作模式：重置对话历史，保留system message")
             self.messages = [self.messages[0]]
         else:
             # 普通模式：完全重置

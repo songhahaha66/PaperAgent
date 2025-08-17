@@ -36,7 +36,7 @@ class StreamOutputManager:
         logger.info("StreamOutputManager初始化完成")
 
     async def _output(self, content: str):
-        """统一的输出方法"""
+        """统一的输出方法，确保实时性"""
         self.output_count += 1
         logger.debug(
             f"StreamOutputManager._output() 第 {self.output_count} 次调用: {repr(content[:50])}...")
@@ -49,6 +49,10 @@ class StreamOutputManager:
                 # 立即调用回调函数，实现实时流式传输
                 await self.stream_callback.on_content(content)
                 logger.debug(f"成功调用回调函数，内容长度: {len(content)}")
+                
+                # 让出控制权，确保事件循环能处理其他任务
+                import asyncio
+                await asyncio.sleep(0)
             except Exception as e:
                 logger.error(f"回调函数调用失败: {e}")
         else:

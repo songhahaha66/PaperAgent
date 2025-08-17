@@ -44,6 +44,8 @@ class LLMHandler:
             current_tool_call = {"id": None, "name": None, "arguments": ""}
             chunk_count = 0
 
+            # 使用异步迭代器处理流式响应
+            import asyncio
             for chunk in response_stream:
                 chunk_count += 1
                 delta = chunk.choices[0].delta
@@ -58,6 +60,9 @@ class LLMHandler:
                     full_response_content += content
                     logger.debug(
                         f"接收到文本内容块 {chunk_count}: {repr(content[:30])}...")
+                    
+                    # 让出控制权，确保WebSocket能及时发送数据
+                    await asyncio.sleep(0)
 
                 # 2. 累积工具调用信息
                 if delta.tool_calls:
@@ -89,6 +94,10 @@ class LLMHandler:
                 print()  # 确保换行
 
             logger.info(f"LLM API调用完成，总块数: {chunk_count}，工具调用数: {len(tool_calls)}")
+
+            # 确保触发消息完成回调
+            if self.stream_manager:
+                await self.stream_manager.finalize_message()
 
             # 构建完整的 assistant 消息
             assistant_message = {"role": "assistant",
