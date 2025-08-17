@@ -205,6 +205,7 @@ async def get_work_chat_history(
         
         chat_file = Path("../pa_data/workspaces") / work_id / "chat_history.json"
         if not chat_file.exists():
+            return {}
             return {"messages": [], "context": {}}
         
         with open(chat_file, 'r', encoding='utf-8') as f:

@@ -13,6 +13,7 @@ from typing import Dict, Any
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # 使用非交互式后端
+from datetime import datetime
 
 from ..core.stream_manager import StreamOutputManager
 
@@ -81,6 +82,11 @@ class CodeExecutor:
             result = string_io.getvalue()
             logger.info(f"代码执行成功，输出长度: {len(result)} 字符")
 
+            # 代码执行成功后，自动保存代码到文件
+            saved_file_path = await self._save_successful_code(python_code, result)
+            if saved_file_path:
+                result += f"\n\n[代码已自动保存到: {saved_file_path}]"
+
             await self.stream_manager.print_xml_open("ret_exec")
             await self.stream_manager.print_content(result.strip())
             await self.stream_manager.print_xml_close("ret_exec")
@@ -93,6 +99,45 @@ class CodeExecutor:
             await self.stream_manager.print_content(error_message)
             await self.stream_manager.print_xml_close("ret_exec")
             return error_message
+
+    async def _save_successful_code(self, python_code: str, execution_result: str) -> str:
+        """
+        将成功执行的代码保存到文件
+        
+        Args:
+            python_code: 要保存的Python代码
+            execution_result: 代码执行结果
+            
+        Returns:
+            保存的文件路径，如果保存失败返回空字符串
+        """
+        try:
+            # 生成文件名：使用时间戳和代码内容的hash
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            code_hash = str(hash(python_code))[-8:]  # 取hash的后8位
+            filename = f"code_{timestamp}_{code_hash}.py"
+            filepath = os.path.join(self.workspace_dir, filename)
+            
+            # 创建代码文件内容，包含执行结果注释
+            file_content = f"""# 自动生成的代码文件
+# 生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+# 执行结果: {execution_result[:200]}{'...' if len(execution_result) > 200 else ''}
+
+{python_code}
+
+# 代码执行完成
+"""
+            
+            # 保存文件
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            
+            logger.info(f"代码已成功保存到文件: {filepath}")
+            return filename
+            
+        except Exception as e:
+            logger.error(f"保存代码文件失败: {e}")
+            return ""
 
     def get_workspace_dir(self) -> str:
         """获取工作空间目录"""

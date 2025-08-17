@@ -110,3 +110,4 @@
 [songhahaha66][08-17 23:12:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在ai_system有点混乱，需要重构，请注意以下几点：每个work对应一个session（需要维护上下文的主会话，用mainagent模型，然后codeagent和其他的mainagent去调用）。现在一个work对应一堆session的设计是极其不合理的，请你帮我设计一个方案让我看看；
 [songhahaha66][08-17 23:24:44]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在ai_system有点混乱，需要重构，请注意以下几点：每个work对应一个session（需要维护上下文的主会话，用mainagent模型，然后codeagent（允许多个）由mainagent去调用.）。现在一个work对应一堆session的设计是极其不合理的；请修改模式，聊天记录存在json里面，而不存在数据库里，但是api,workid等基本信息由数据库储存；由于聊天记录不再需要数据库，可能异步数据库逻辑也不再需要，可以简化。请帮我设计方案让我看看，概括说明
 [songhahaha66][08-18 00:31:44]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在ws传输，生成ai内容会等待AI生成结束之后才一股脑返回一段段文本，找到bug并修复
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在codeagent应该是先把可以运行成功的代码保存成文件，实现这个逻辑了吗
