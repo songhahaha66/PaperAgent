@@ -180,9 +180,6 @@ class MainAgent(Agent):
         logger.info(f"MainAgent开始执行，问题长度: {len(user_problem)} 字符")
         logger.info(f"当前消息历史长度: {len(self.messages)}")
 
-        if self.stream_manager:
-            await self.stream_manager.print_xml_open("main_agent")
-
         # 添加用户消息到对话历史
         self.messages.append({"role": "user", "content": user_problem})
 
@@ -201,7 +198,6 @@ class MainAgent(Agent):
             if not tool_calls:
                 logger.info("MainAgent没有工具调用，任务完成")
                 if self.stream_manager:
-                    await self.stream_manager.print_xml_close("main_agent")
                     # 确保触发消息完成回调
                     await self.stream_manager.finalize_message()
                 break

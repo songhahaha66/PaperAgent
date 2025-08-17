@@ -156,16 +156,21 @@ class PersistentStreamManager(StreamOutputManager):
             try:
                 # 检查聊天服务是否有add_message方法
                 if hasattr(self.chat_service, 'add_message'):
-                    # 异步聊天服务
-                    if hasattr(self.chat_service.add_message, '__call__'):
-                        await self.chat_service.add_message(
-                            session_id=self.session_id,
-                            role=self.current_role,
-                            content=self.current_message_buffer.strip()
-                        )
-                        logger.info(f"消息持久化完成，角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
-                    else:
-                        logger.warning("聊天服务的add_message方法不可调用")
+                    # ChatService.add_message是同步方法，需要从session_id中提取work_id
+                    work_id = self.session_id.replace("_main_session", "") if "_main_session" in self.session_id else self.session_id
+                    
+                    # 在事件循环中运行同步方法
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(
+                        None,
+                        self.chat_service.add_message,
+                        work_id,
+                        self.current_role,
+                        self.current_message_buffer.strip(),
+                        None  # metadata
+                    )
+                    logger.info(f"[PERSISTENCE] 消息持久化完成，work_id: {work_id}, 角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
                 else:
                     logger.warning("聊天服务没有add_message方法")
             except Exception as e:

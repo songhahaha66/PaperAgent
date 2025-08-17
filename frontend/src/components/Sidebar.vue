@@ -306,14 +306,14 @@ const userOptions = [
 }
 
 .history-list {
-  max-height: 400px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .history-item {
   margin-bottom: 10px;
   cursor: pointer;
   transition: all 0.2s;
+  overflow: hidden;
 }
 
 .history-item:hover {
