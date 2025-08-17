@@ -356,8 +356,6 @@ const deleteWork = async () => {
     await workspaceAPI.deleteWork(authStore.token, workId.value);
     MessagePlugin.success('工作已删除');
     
-
-    
     // 跳转回首页
     router.push('/home');
     

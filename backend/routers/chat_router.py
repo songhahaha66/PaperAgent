@@ -404,6 +404,14 @@ async def websocket_chat(
                 data = await websocket.receive_text()
                 message_data = json.loads(data)
                 
+                # 处理心跳检测消息
+                if message_data.get('type') == 'ping':
+                    await websocket.send_text(json.dumps({
+                        'type': 'pong',
+                        'message': 'pong'
+                    }))
+                    continue
+                
                 # 验证消息格式
                 if 'problem' not in message_data:
                     await websocket.send_text(json.dumps({
@@ -532,12 +540,6 @@ async def websocket_chat(
                     
                     main_agent = MainAgent(llm_handler, stream_manager)
                     
-                    # 执行AI任务 - 使用异步方式
-                    await stream_manager.print_xml_open("ai_response")
-                    await stream_manager.print_content("正在分析您的问题...")
-                    await stream_manager.print_content(f"\n\n问题: {message_data['problem']}")
-                    await stream_manager.print_content("\n\n开始AI分析...")
-                    await stream_manager.print_xml_close("ai_response")
                     
                     # 在后台异步运行主代理，避免阻塞WebSocket
                     async def run_agent_async():
