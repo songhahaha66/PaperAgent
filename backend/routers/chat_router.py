@@ -161,6 +161,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 
                 # 保存用户消息
                 chat_service.add_message(work_id, "user", message_data['problem'])
+                logger.info(f"[PERSISTENCE] 用户消息已保存，work_id: {work_id}")
                 
                 # 发送开始消息
                 await websocket.send_text(json.dumps({
@@ -193,8 +194,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     async def on_message_complete(self, role: str, content: str):
                         """消息完成回调"""
                         try:
-                            # 保存AI回复
-                            self.chat_service.add_message(self.work_id, role, content)
+                            # 注意：不在这里保存AI回复，由PersistentStreamManager统一处理
+                            # 避免重复保存同一条消息
                             await self.websocket.send_text(json.dumps({
                                 'type': 'complete',
                                 'message': 'AI分析完成'
@@ -211,7 +212,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 ws_callback = WebSocketStreamCallback(websocket, work_id, chat_service)
                 stream_manager = PersistentStreamManager(
                     stream_callback=ws_callback,
-                    chat_service=None,  # 不需要异步chat_service
+                    chat_service=chat_service,  # 传入chat_service实例以支持消息持久化
                     session_id=str(session.session_id)
                 )
                 
