@@ -150,15 +150,29 @@ class PersistentStreamManager(StreamOutputManager):
         # 先保存缓冲的内容
         if self.chat_service and self.session_id and self.current_message_buffer.strip():
             try:
-                # 保存完整的消息
-                self.chat_service.add_message(
-                    session_id=self.session_id,
-                    role=self.current_role,
-                    content=self.current_message_buffer.strip()
-                )
-                logger.info(f"消息持久化完成，角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
+                # 检查聊天服务是否有add_message方法
+                if hasattr(self.chat_service, 'add_message'):
+                    # 异步聊天服务
+                    if hasattr(self.chat_service.add_message, '__call__'):
+                        await self.chat_service.add_message(
+                            session_id=self.session_id,
+                            role=self.current_role,
+                            content=self.current_message_buffer.strip()
+                        )
+                        logger.info(f"消息持久化完成，角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
+                    else:
+                        logger.warning("聊天服务的add_message方法不可调用")
+                else:
+                    logger.warning("聊天服务没有add_message方法")
             except Exception as e:
                 logger.error(f"消息持久化失败: {e}")
+                # 记录更多调试信息
+                logger.error(f"聊天服务类型: {type(self.chat_service)}")
+                logger.error(f"会话ID: {self.session_id}")
+                logger.error(f"消息角色: {self.current_role}")
+                logger.error(f"消息内容长度: {len(self.current_message_buffer)}")
+        else:
+            logger.warning(f"无法持久化消息: chat_service={self.chat_service is not None}, session_id={self.session_id}, content_length={len(self.current_message_buffer)}")
         
         # 调用父类方法
         await super().finalize_message()

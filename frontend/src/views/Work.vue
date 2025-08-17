@@ -221,51 +221,46 @@ const loadWork = async () => {
   }
 };
 
-// 初始化聊天会话
+// 初始化聊天会话（重构后简化）
 const initializeChatSession = async () => {
   if (!authStore.token || !workId.value) return;
   
   try {
-    // 获取工作的聊天会话列表
-    const sessions = await chatAPI.getChatSessions(authStore.token, workId.value);
+    // 直接使用新API加载聊天历史
+    await loadChatHistory();
     
-    if (sessions.length > 0) {
-      // 使用第一个会话（最新的）
-      currentChatSession.value = sessions[0];
-      await loadChatHistory();
-    } else {
-      // 创建新的聊天会话
-      await createChatSession('brain'); // 默认使用中枢系统
-    }
+    // 创建虚拟的session对象（兼容旧逻辑）
+    currentChatSession.value = {
+      id: 1,
+      session_id: `${workId.value}_main_session`,
+      work_id: workId.value,
+      system_type: 'brain',
+      title: '主会话',
+      status: 'active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      created_by: 0,
+      total_messages: chatMessages.value.length
+    };
   } catch (error) {
     console.error('初始化聊天会话失败:', error);
-    MessagePlugin.error('初始化聊天会话失败');
+    // 如果加载失败，创建空的session
+    currentChatSession.value = {
+      id: 1,
+      session_id: `${workId.value}_main_session`,
+      work_id: workId.value,
+      system_type: 'brain',
+      title: '主会话',
+      status: 'active',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      created_by: 0,
+      total_messages: 0
+    };
   }
 };
 
-// 创建聊天会话
-const createChatSession = async (systemType: 'brain' | 'code' | 'writing' = 'brain') => {
-  if (!authStore.token || !workId.value) return;
-  
-  try {
-    const request: ChatSessionCreateRequest = {
-      work_id: workId.value,
-      system_type: systemType,
-      title: `${currentWork.value?.title || '工作'} - 聊天会话`
-    };
-    
-    const session = await chatAPI.createChatSession(authStore.token, request);
-    currentChatSession.value = session;
-    
-    // 清空现有消息
-    chatMessages.value = [];
-    
-    MessagePlugin.success('聊天会话创建成功');
-  } catch (error) {
-    console.error('创建聊天会话失败:', error);
-    MessagePlugin.error('创建聊天会话失败');
-  }
-};
+// 重构后不再需要显式创建聊天会话，MainAgent会自动处理
 
 // 自动滚动到底部
 const scrollToBottom = () => {
@@ -277,39 +272,29 @@ const scrollToBottom = () => {
   });
 };
 
-// 加载聊天历史
+// 加载聊天历史（使用新API）
 const loadChatHistory = async () => {
-  if (!authStore.token || !currentChatSession.value) return;
+  if (!authStore.token || !workId.value) return;
   
   try {
-    const messages = await chatAPI.getChatHistory(authStore.token, currentChatSession.value.session_id);
+    // 使用新的work聊天历史API
+    const historyData = await chatAPI.getWorkChatHistory(authStore.token, workId.value);
     
     // 转换消息格式
-    chatMessages.value = messages.map(msg => {
-      // 根据消息内容判断系统类型
+    chatMessages.value = historyData.messages.map((msg, index) => {
+      // 根据消息内容判断系统类型（简化逻辑，主要显示MainAgent的对话）
       let systemType: 'brain' | 'code' | 'writing' | undefined = undefined;
       
       if (msg.role === 'assistant') {
-        // 只有AI消息才判断系统类型
-        if (msg.content.includes('<main_agent>')) {
-          systemType = 'brain';
-        } else if (msg.content.includes('<call_code_agent>') || msg.content.includes('<ret_code_agent>')) {
-          systemType = 'code';
-        } else if (msg.content.includes('<call_exec>') || msg.content.includes('<ret_exec>')) {
-          systemType = 'code';
-        } else if (msg.content.includes('<writemd_result>') || msg.content.includes('<tree_result>')) {
-          systemType = 'writing';
-        } else {
-          // 如果没有明确的标签，使用会话的默认系统类型
-          systemType = currentChatSession.value?.system_type as 'brain' | 'code' | 'writing';
-        }
+        // 重构后主要是MainAgent，默认使用brain类型
+        systemType = 'brain';
       }
       
       return {
-        id: msg.id.toString(),
+        id: `msg_${index}`,
         role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
         content: msg.content,
-        datetime: new Date(msg.created_at).toLocaleString(),
+        datetime: new Date(msg.timestamp).toLocaleString(),
         avatar: msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType }),
         systemType: systemType,
         isStreaming: false
@@ -321,7 +306,8 @@ const loadChatHistory = async () => {
     
   } catch (error) {
     console.error('加载聊天历史失败:', error);
-    MessagePlugin.error('加载聊天历史失败');
+    // 如果加载失败，初始化为空数组
+    chatMessages.value = [];
   }
 };
 
@@ -355,8 +341,6 @@ const deleteWork = async () => {
   try {
     await workspaceAPI.deleteWork(authStore.token, workId.value);
     MessagePlugin.success('工作已删除');
-    
-
     
     // 跳转回首页
     router.push('/home');
@@ -498,9 +482,9 @@ const sendRealMessage = async (message: string) => {
 // WebSocket方式发送消息
 const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => {
   try {
-    // 创建WebSocket处理器
+    // 创建WebSocket处理器（使用workId）
     webSocketHandler.value = new WebSocketChatHandler(
-      currentChatSession.value!.session_id,
+      workId.value!,
       authStore.token!
     );
 

@@ -94,23 +94,9 @@ class ChatSession(Base):
     
     # 关联关系
     creator = relationship("User", back_populates="chat_sessions")
-    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    # 删除messages关联关系，聊天记录改用JSON文件存储
 
-class ChatMessage(Base):
-    """聊天消息表"""
-    __tablename__ = "chat_messages"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String(100), ForeignKey("chat_sessions.session_id"), nullable=False, index=True)
-    role = Column(String(20), nullable=False)  # 消息角色：user, assistant, system, tool
-    content = Column(Text, nullable=False)  # 消息内容
-    tool_calls = Column(JSON)  # 工具调用信息，JSON格式
-    tool_results = Column(JSON)  # 工具执行结果，JSON格式
-    message_metadata = Column(JSON)  # 额外元数据，如流式传输状态等
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # 关联关系
-    session = relationship("ChatSession", back_populates="messages")
+# 删除ChatMessage表，聊天记录改用JSON文件存储
 
 class WorkFlowState(Base):
     """工作流状态表"""

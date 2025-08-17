@@ -10,6 +10,25 @@ import {
   type ChatSessionResponse
 } from '@/api/chat';
 
+// 会话上下文信息接口
+export interface SessionContext {
+  session_id: string;
+  work_id: string;
+  system_type: string;
+  title?: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  context_summary?: {
+    total_messages: number;
+    recent_conversations: Array<{
+      user_question: string;
+      ai_response_summary: string;
+      timestamp: string;
+    }>;
+  };
+}
+
 export function useChat() {
   const authStore = useAuthStore();
   const chatStateManager = new ChatStateManager();
@@ -20,6 +39,7 @@ export function useChat() {
   const isLoading = ref(false);
   const isStreaming = ref(false);
   const error = ref<string | null>(null);
+  const sessionContext = ref<SessionContext | null>(null);
   
   // WebSocket处理器
   let currentWebSocketHandler: WebSocketChatHandler | null = null;
@@ -49,6 +69,11 @@ export function useChat() {
       
       // 加载聊天历史
       await loadChatHistory(session.session_id);
+      
+      // 如果是中枢大脑模式，加载会话上下文
+      if (request.system_type === 'brain') {
+        await loadSessionContext(session.session_id);
+      }
       
       MessagePlugin.success('聊天会话创建成功');
       return session;
@@ -86,6 +111,24 @@ export function useChat() {
       });
     } catch (err) {
       console.error('加载聊天历史失败:', err);
+    }
+  };
+
+  // 获取会话上下文信息（主要用于中枢大脑模式）
+  const loadSessionContext = async (sessionId: string) => {
+    if (!authStore.token) return;
+
+    try {
+      const context = await chatAPI.getSessionContext(authStore.token, sessionId);
+      sessionContext.value = context;
+      
+      // 如果是中枢大脑模式，显示上下文摘要
+      if (context.system_type === 'brain' && context.context_summary) {
+        console.log('中枢大脑上下文摘要:', context.context_summary);
+        // 可以在这里添加UI显示逻辑
+      }
+    } catch (err) {
+      console.error('获取会话上下文失败:', err);
     }
   };
 
@@ -348,6 +391,7 @@ export function useChat() {
     isLoading,
     isStreaming,
     error,
+    sessionContext,
     
     // 计算属性
     hasMessages,
@@ -357,6 +401,7 @@ export function useChat() {
     
     // 方法
     createSession,
+    loadSessionContext,
     sendMessage,
     stopStreaming,
     copyMessage,

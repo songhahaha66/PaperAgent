@@ -5,11 +5,12 @@
 
 import logging
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from .agents import Agent
 from .llm_handler import LLMHandler
 from .stream_manager import StreamOutputManager
+from .context_manager import ContextManager
 from ..tools.file_tools import FileTools
 
 logger = logging.getLogger(__name__)
@@ -18,27 +19,42 @@ logger = logging.getLogger(__name__)
 class MainAgent(Agent):
     """
     主 LLM Agent (Orchestrator)，负责分析问题并委派任务。
+    支持session上下文维护，保持对话连续性。
     """
 
-    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager):
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None):
         super().__init__(llm_handler, stream_manager)
         self.file_tools = FileTools(stream_manager)
+        self.work_id = work_id  # 改为work_id，每个work对应一个MainAgent
+        
+        # 初始化上下文管理器
+        self.context_manager = ContextManager(
+            max_tokens=4000,
+            max_messages=50
+        )
+        
         self._setup()
-        logger.info("MainAgent初始化完成")
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}")
 
     def _setup(self):
         """初始化 System Prompt 和工具。"""
+        # 简化系统提示，明确角色定位
+        system_content = (
+            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。\n"
+            "你的职责：\n"
+            "1. 分析用户需求，制定论文生成计划\n"
+            "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
+            "3. 维护对话上下文，理解整个工作流程的连续性\n"
+            "4. 最终使用tree工具检查生成的文件，用writemd工具生成论文\n\n"
+            "重要原则：\n"
+            "- 保持对话连贯性，不重复询问已明确的信息\n"
+            "- CodeAgent负责具体执行，你负责规划和协调\n"
+            "- 所有生成的文件都要在最终论文中引用"
+        )
+
         self.messages = [{
             "role": "system",
-            "content": (
-                "你是一个建模专家，擅长将用户的问题转化为数学模型。"
-                "分析用户问题，如果涉及具体计算、数据分析"
-                "必须交给 CodeAgent 工具来完成。"
-                "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片"
-                "或者，请编程计算这个微分方程的解"
-                "任务完成后，必须先使用tree工具查看目录结构，确认所有生成的文件都存在，"
-                "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
-            )
+            "content": system_content
         }]
 
         # 注册工具
@@ -86,20 +102,86 @@ class MainAgent(Agent):
             },
         }
 
-        self.tools.extend([code_interpreter_tool, writemd_tool, tree_tool])
+        # 注册工具到可用函数列表
         self.available_functions.update({
             "writemd": self.file_tools.writemd,
             "tree": self.file_tools.tree
         })
 
+    def load_conversation_history(self, history_messages: List[Dict[str, Any]]):
+        """加载对话历史，维护上下文连续性"""
+        if not history_messages:
+            return
+        
+        # 保留system message，添加历史消息
+        system_message = self.messages[0]
+        self.messages = [system_message]
+        
+        # 添加历史消息，但过滤掉tool消息（避免上下文过长）
+        for msg in history_messages:
+            if msg.get('role') in ["user", "assistant"]:
+                self.messages.append(msg)
+        
+        # 检查是否需要压缩上下文
+        self._check_and_compress_context()
+        
+        logger.info(f"已加载 {len(self.messages) - 1} 条历史消息，维护上下文连续性")
+
+    def _check_and_compress_context(self):
+        """检查并压缩上下文"""
+        context_status = self.context_manager.get_context_status(self.messages)
+        
+        if context_status["compression_needed"]:
+            logger.info(f"上下文过长，开始压缩。当前token使用率: {context_status['token_usage_ratio']:.2%}")
+            
+            # 选择压缩策略
+            if context_status["token_usage_ratio"] > 0.8:
+                strategy = "high"  # 高压缩
+            elif context_status["token_usage_ratio"] > 0.6:
+                strategy = "medium"  # 中等压缩
+            else:
+                strategy = "low"  # 低压缩
+            
+            # 执行压缩
+            compressed_messages, compression_results = self.context_manager.compress_context(
+                self.messages, strategy
+            )
+            
+            # 更新消息列表
+            self.messages = compressed_messages
+            
+            # 记录压缩结果
+            self.context_manager.compression_history.extend(compression_results)
+            
+            logger.info(f"上下文压缩完成，压缩后消息数: {len(self.messages)}")
+            
+            # 生成摘要（如果是中枢大脑模式）
+            if self.session_id and self.session_id.startswith("brain"):
+                self._generate_context_summary_async()
+
+    async def _generate_context_summary_async(self):
+        """异步生成上下文摘要"""
+        try:
+            summary = await self.context_manager.generate_context_summary(
+                self.messages, self.session_id
+            )
+            logger.info(f"上下文摘要生成成功: {summary.summary_id}")
+        except Exception as e:
+            logger.error(f"生成上下文摘要失败: {e}")
+
     async def run(self, user_problem: str):
         """执行主 Agent 逻辑，循环处理直到任务完成。"""
         logger.info(f"MainAgent开始执行，问题长度: {len(user_problem)} 字符")
+        logger.info(f"当前消息历史长度: {len(self.messages)}")
 
         if self.stream_manager:
             await self.stream_manager.print_xml_open("main_agent")
 
+        # 添加用户消息到对话历史
         self.messages.append({"role": "user", "content": user_problem})
+
+        # 检查上下文状态
+        self._check_and_compress_context()
 
         iteration_count = 0
         while True:
@@ -175,23 +257,78 @@ class MainAgent(Agent):
                             "content": f"工具参数解析失败: {e}",
                         })
 
-        logger.info(f"MainAgent执行完成，总共 {iteration_count} 次迭代")
+        logger.info(f"MainAgent执行完成，总共 {iteration_count} 次迭代，最终消息历史长度: {len(self.messages)}")
 
     def get_execution_summary(self) -> Dict[str, Any]:
         """获取执行摘要"""
+        # 获取上下文状态
+        context_status = self.context_manager.get_context_status(self.messages)
+        
         return {
             "total_messages": len(self.messages),
             "tool_calls_count": sum(1 for msg in self.messages if msg.get("role") == "tool"),
             "user_messages": sum(1 for msg in self.messages if msg.get("role") == "user"),
             "assistant_messages": sum(1 for msg in self.messages if msg.get("role") == "assistant"),
-            "workspace_files": self.file_tools.list_files()
+            "workspace_files": self.file_tools.list_files(),
+            "session_id": self.session_id,
+            "is_brain_mode": self.session_id and self.session_id.startswith("brain") if self.session_id else False,
+            "context_status": context_status
         }
 
     def reset_conversation(self):
         """重置对话历史"""
-        self.messages = [self.messages[0]]  # 保留system message
+        if self.session_id and self.session_id.startswith("brain"):
+            # 中枢大脑模式：只保留system message，不清空历史
+            logger.info("中枢大脑模式：重置对话历史，保留system message")
+            self.messages = [self.messages[0]]
+        else:
+            # 普通模式：完全重置
+            logger.info("普通模式：完全重置对话历史")
+            self.messages = [self.messages[0]]
+        
         logger.info("MainAgent对话历史已重置")
 
     def export_conversation(self) -> List[Dict[str, Any]]:
         """导出对话历史"""
         return self.messages.copy()
+
+    def get_context_summary(self) -> str:
+        """获取上下文摘要，用于理解当前对话状态"""
+        if len(self.messages) <= 1:
+            return "对话刚开始，暂无上下文"
+        
+        # 使用ContextManager生成摘要
+        try:
+            # 同步调用摘要生成（简化版本）
+            summary = self.context_manager._format_summary_content(
+                self.messages,
+                self.context_manager.extract_key_topics(self.messages),
+                self.context_manager._extract_important_points(self.messages)
+            )
+            return summary
+        except Exception as e:
+            logger.error(f"生成上下文摘要失败: {e}")
+            # 回退到原来的简单摘要
+            return self._get_simple_context_summary()
+    
+    def _get_simple_context_summary(self) -> str:
+        """获取简单的上下文摘要（回退方法）"""
+        # 统计用户和AI的交互次数
+        user_count = sum(1 for msg in self.messages if msg.get("role") == "user")
+        ai_count = sum(1 for msg in self.messages if msg.get("role") == "assistant")
+        
+        # 获取最近的几个用户问题
+        recent_questions = []
+        for msg in reversed(self.messages):
+            if msg.get("role") == "user" and len(recent_questions) < 3:
+                recent_questions.append(msg.get("content", "")[:100])
+        
+        summary = f"当前对话已进行 {user_count} 轮交互，用户提问 {user_count} 次，AI回答 {ai_count} 次。"
+        if recent_questions:
+            summary += f" 最近的用户问题：{' | '.join(reversed(recent_questions))}"
+        
+        return summary
+
+    def get_context_manager(self) -> ContextManager:
+        """获取上下文管理器实例"""
+        return self.context_manager
