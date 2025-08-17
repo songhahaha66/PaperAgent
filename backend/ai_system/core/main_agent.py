@@ -107,6 +107,13 @@ class MainAgent(Agent):
             "writemd": self.file_tools.writemd,
             "tree": self.file_tools.tree
         })
+        
+        # 将工具定义添加到tools列表
+        self.tools = [
+            code_interpreter_tool,
+            writemd_tool,
+            tree_tool
+        ]
 
     def load_conversation_history(self, history_messages: List[Dict[str, Any]]):
         """加载对话历史，维护上下文连续性"""
@@ -260,6 +267,15 @@ class MainAgent(Agent):
                             "tool_call_id": tool_call["id"],
                             "content": f"工具参数解析失败: {e}",
                         })
+                        
+                else:
+                    # 处理未知工具调用
+                    logger.warning(f"未知工具: {function_name}")
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": f"未知工具: {function_name}",
+                    })
 
         logger.info(f"MainAgent执行完成，总共 {iteration_count} 次迭代，最终消息历史长度: {len(self.messages)}")
 

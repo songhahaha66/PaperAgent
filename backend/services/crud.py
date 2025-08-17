@@ -391,7 +391,17 @@ def create_workspace_folders(work_id: str):
             json.dump(metadata, f, ensure_ascii=False, indent=2)
         
         # 创建初始对话历史文件
-        chat_history = []
+        chat_history = {
+            "work_id": work_id,
+            "session_id": f"{work_id}_session",
+            "messages": [],
+            "context": {
+                "current_topic": "",
+                "generated_files": [],
+                "workflow_state": "created"
+            },
+            "created_at": str(datetime.now())
+        }
         chat_file = base_path / "chat_history.json"
         with open(chat_file, 'w', encoding='utf-8') as f:
             json.dump(chat_history, f, ensure_ascii=False, indent=2)

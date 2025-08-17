@@ -17,11 +17,14 @@ class FileTools:
     def __init__(self, stream_manager: StreamOutputManager):
         self.stream_manager = stream_manager
         # 从环境变量获取workspace路径
-        self.workspace_dir = os.getenv("WORKSPACE_DIR")
-        if not self.workspace_dir:
-            self.workspace_dir = os.path.join(
-                os.path.dirname(__file__), "workspace")
+        workspace_dir = os.getenv("WORKSPACE_DIR")
+        if not workspace_dir:
+            # 使用项目根目录下的pa_data/workspaces作为默认路径
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # 回到backend目录
+            project_root = os.path.dirname(backend_dir)  # 回到项目根目录
+            workspace_dir = os.path.join(project_root, "pa_data", "workspaces")
             logger.warning("FileTools未找到WORKSPACE_DIR环境变量，使用默认路径")
+        self.workspace_dir = workspace_dir
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
@@ -60,7 +63,7 @@ class FileTools:
             await self.stream_manager.print_xml_close("writemd_result")
             return error_msg
 
-    async def tree(self, directory: str = None) -> str:
+    async def tree(self, directory: Optional[str] = None) -> str:
         """
         显示目录树结构
 
@@ -127,7 +130,7 @@ class FileTools:
             logger.error(f"读取文件失败: {e}")
             return None
 
-    def list_files(self, directory: str = None) -> list:
+    def list_files(self, directory: Optional[str] = None) -> list:
         """列出目录中的文件"""
         if directory is None:
             directory = self.workspace_dir

@@ -205,12 +205,22 @@ async def get_work_chat_history(
         
         chat_file = Path("../pa_data/workspaces") / work_id / "chat_history.json"
         if not chat_file.exists():
-            return []
+            return {}
+            return {"messages": [], "context": {}}
         
         with open(chat_file, 'r', encoding='utf-8') as f:
             chat_history = json.load(f)
         
-        return chat_history
+        # 确保返回正确的格式
+        if isinstance(chat_history, list):
+            # 如果是旧格式（列表），转换为新格式
+            return {"messages": chat_history, "context": {}}
+        elif isinstance(chat_history, dict):
+            # 如果是新格式（字典），直接返回
+            return chat_history
+        else:
+            # 其他情况，返回默认格式
+            return {"messages": [], "context": {}}
     except HTTPException:
         raise
     except Exception as e:
