@@ -28,11 +28,14 @@ class CodeExecutor:
     def __init__(self, stream_manager: StreamOutputManager):
         self.stream_manager = stream_manager
         # 从环境变量获取workspace路径
-        self.workspace_dir = os.getenv("WORKSPACE_DIR")
-        if not self.workspace_dir:
-            self.workspace_dir = os.path.join(
-                os.path.dirname(__file__), "workspace")
+        workspace_dir = os.getenv("WORKSPACE_DIR")
+        if not workspace_dir:
+            # 使用项目根目录下的pa_data/workspaces作为默认路径
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # 回到backend目录
+            project_root = os.path.dirname(backend_dir)  # 回到项目根目录
+            workspace_dir = os.path.join(project_root, "pa_data", "workspaces")
             logger.warning("CodeExecutor未找到WORKSPACE_DIR环境变量，使用默认路径")
+        self.workspace_dir = workspace_dir
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"CodeExecutor初始化完成，工作空间目录: {self.workspace_dir}")
 
