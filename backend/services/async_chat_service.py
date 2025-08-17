@@ -93,6 +93,25 @@ class AsyncChatService:
             logger.error(f"获取聊天历史失败: {e}")
             return []
     
+    async def get_chat_history_objects(self, session_id: str, limit: int = 50) -> List[ChatMessage]:
+        """获取聊天历史对象，用于上下文维护"""
+        try:
+            stmt = select(ChatMessage)\
+                .where(ChatMessage.session_id == session_id)\
+                .where(ChatMessage.role.in_(["user", "assistant"]))\
+                .order_by(ChatMessage.created_at.asc())\
+                .limit(limit)
+            
+            result = await self.db_session.execute(stmt)
+            messages = result.scalars().all()
+            
+            logger.info(f"获取聊天历史对象: {session_id}, 限制: {limit}, 实际数量: {len(messages)}")
+            return list(messages)
+            
+        except Exception as e:
+            logger.error(f"获取聊天历史对象失败: {e}")
+            return []
+    
     async def get_session(self, session_id: str) -> Optional[ChatSession]:
         """获取会话信息"""
         try:
