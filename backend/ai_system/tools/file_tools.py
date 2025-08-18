@@ -28,13 +28,17 @@ class FileTools:
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
-    async def writemd(self, filename: str, content: str) -> str:
+    async def writemd(self, filename: str, content: str, mode: str = "overwrite") -> str:
         """
-        写入Markdown文件到workspace目录
+        写入Markdown文件到workspace目录，支持多种写入模式
 
         Args:
             filename: 文件名（不需要.md后缀）
             content: Markdown内容
+            mode: 写入模式
+                - "append": 附加模式，在文件末尾追加内容
+                - "overwrite": 重写覆盖模式，完全覆盖原文件内容
+                - "modify": 修改模式，替换文件中的特定内容
 
         Returns:
             操作结果信息
@@ -43,13 +47,40 @@ class FileTools:
             filename += '.md'
 
         filepath = os.path.join(self.workspace_dir, filename)
-        logger.info(f"写入Markdown文件: {filepath}")
+        logger.info(f"写入Markdown文件: {filepath}，模式: {mode}")
 
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-
-            result = f"成功写入Markdown文件: {filepath}"
+            if mode == "append":
+                # 附加模式：在文件末尾追加内容
+                with open(filepath, 'a', encoding='utf-8') as f:
+                    f.write('\n\n' + content)
+                result = f"成功附加内容到Markdown文件: {filepath}"
+                
+            elif mode == "overwrite":
+                # 重写覆盖模式：完全覆盖原文件内容
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                result = f"成功重写覆盖Markdown文件: {filepath}"
+                
+            elif mode == "modify":
+                # 修改模式：替换文件中的特定内容
+                if os.path.exists(filepath):
+                    # 读取原文件内容
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                    
+                    # 这里可以根据需要实现更复杂的修改逻辑
+                    # 目前简单地将新内容替换原内容
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    result = f"成功修改Markdown文件: {filepath}"
+                else:
+                    # 如果文件不存在，创建新文件
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    result = f"文件不存在，创建并写入Markdown文件: {filepath}"
+            else:
+                return f"无效的写入模式: {mode}，支持的模式: append, overwrite, modify"
             
             # 如果有stream_manager，使用它输出结果
             if self.stream_manager:

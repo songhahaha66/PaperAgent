@@ -86,6 +86,7 @@
 </main_agent>
 [LangQi99][08-16 unknown]: llm3引导codeagent可以把一些图像，数据 放到backend\test\workspace 再给主llm添加一个writemd工具和tree工具 等都结束了 先tree看看workspace结构 然后在workspace调用writemd在里面写成品论文tree就是方便贴图片啥的
 [LangQi99][08-16 unknown]: 1.codeagent说图像生成了 但是没有 是不是sandbox的问题 允许它读写backend\test\workspace 2.writemd之前也要tree 看看文件都有啥
+[songhahaha66][08-18 23:48]: 项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：改一下writemd工具，支持后边附加模式和重写覆盖模式还有修改模式，彻底修改
 [LangQi99][08-16 unknown]: 添加一个demo的vue前端 后端用fastapi对接 如果不支持流式就换别的后端api
 [LangQi99][08-16 unknown]: 抱歉我发现并不是流式返回到前端显示的
 [songhahaha66][08-16 00:50:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：INFO:     127.0.0.1:4737 - "GET /api/workspace/fabe431c/files HTTP/1.1" 500 Internal Server Error问题在于，Internal server error: 'str' object has no attribute 'id'，你参考work_router 通过email获取用户对象，修复问题
@@ -111,3 +112,5 @@
 [songhahaha66][08-17 23:24:44]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在ai_system有点混乱，需要重构，请注意以下几点：每个work对应一个session（需要维护上下文的主会话，用mainagent模型，然后codeagent（允许多个）由mainagent去调用.）。现在一个work对应一堆session的设计是极其不合理的；请修改模式，聊天记录存在json里面，而不存在数据库里，但是api,workid等基本信息由数据库储存；由于聊天记录不再需要数据库，可能异步数据库逻辑也不再需要，可以简化。请帮我设计方案让我看看，概括说明
 [songhahaha66][08-18 00:31:44]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在ws传输，生成ai内容会等待AI生成结束之后才一股脑返回一段段文本，找到bug并修复
 [songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在codeagent应该是先把可以运行成功的代码保存成文件，实现这个逻辑了吗
+
+[songhahaha66][08-19 00:04:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：pa_data\workspaces\1136a263\code_files\阅读这几个py，他们图片产生了覆盖，怎么办，给我解决方案

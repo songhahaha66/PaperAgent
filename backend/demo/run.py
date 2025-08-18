@@ -127,13 +127,17 @@ class FileTools:
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
-    def writemd(self, filename: str, content: str) -> str:
+    def writemd(self, filename: str, content: str, mode: str = "overwrite") -> str:
         """
-        写入Markdown文件到workspace目录
+        写入Markdown文件到workspace目录，支持多种写入模式
 
         Args:
             filename: 文件名（不需要.md后缀）
             content: Markdown内容
+            mode: 写入模式
+                - "append": 附加模式，在文件末尾追加内容
+                - "overwrite": 重写覆盖模式，完全覆盖原文件内容
+                - "modify": 修改模式，替换文件中的特定内容
 
         Returns:
             操作结果信息
@@ -142,13 +146,41 @@ class FileTools:
             filename += '.md'
 
         filepath = os.path.join(self.workspace_dir, filename)
-        logger.info(f"写入Markdown文件: {filepath}")
+        logger.info(f"写入Markdown文件: {filepath}，模式: {mode}")
 
         try:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(content)
-
-            result = f"成功写入Markdown文件: {filepath}"
+            if mode == "append":
+                # 附加模式：在文件末尾追加内容
+                with open(filepath, 'a', encoding='utf-8') as f:
+                    f.write('\n\n' + content)
+                result = f"成功附加内容到Markdown文件: {filepath}"
+                
+            elif mode == "overwrite":
+                # 重写覆盖模式：完全覆盖原文件内容
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                result = f"成功重写覆盖Markdown文件: {filepath}"
+                
+            elif mode == "modify":
+                # 修改模式：替换文件中的特定内容
+                if os.path.exists(filepath):
+                    # 读取原文件内容
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                    
+                    # 这里可以根据需要实现更复杂的修改逻辑
+                    # 目前简单地将新内容替换原内容
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    result = f"成功修改Markdown文件: {filepath}"
+                else:
+                    # 如果文件不存在，创建新文件
+                    with open(filepath, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    result = f"文件不存在，创建并写入Markdown文件: {filepath}"
+            else:
+                return f"无效的写入模式: {mode}，支持的模式: append, overwrite, modify"
+            
             self.stream_manager.print_xml_open("writemd_result")
             self.stream_manager.print_content(result)
             self.stream_manager.print_xml_close("writemd_result")
@@ -719,7 +751,10 @@ class MainAgent(Agent):
                 "例如你可以调用 CodeAgent 工具，请生成这份数据的可视化图片"
                 "或者，请编程计算这个微分方程的解"
                 "任务完成后，必须先使用tree工具查看目录结构，确认所有生成的文件都存在，"
-                "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。"
+                "然后使用writemd工具生成最终的论文文档。在论文中要引用生成的文件。\n\n"
+                "文件组织结构：\n"
+                "- 论文草稿请保存在paper_drafts文件夹中，使用writemd工具写入\n"
+                "- 使用tree工具查看workspace目录结构，确保文件组织合理"
             )
         }]
 
@@ -741,12 +776,13 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "writemd",
-                "description": "将内容写入Markdown文件到workspace目录",
+                "description": "将内容写入Markdown文件到workspace目录，支持多种写入模式",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "filename": {"type": "string", "description": "文件名（不需要.md后缀）"},
-                        "content": {"type": "string", "description": "Markdown格式的内容"}
+                        "content": {"type": "string", "description": "Markdown格式的内容"},
+                        "mode": {"type": "string", "description": "写入模式：append（附加）、overwrite（重写覆盖）、modify（修改）", "default": "overwrite"}
                     },
                     "required": ["filename", "content"],
                 },

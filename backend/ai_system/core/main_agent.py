@@ -60,9 +60,14 @@ class MainAgent(Agent):
             "3. 维护对话上下文，理解整个工作流程的连续性\n"
             "4. 最终使用tree工具检查生成的文件，用writemd工具生成论文\n\n"
             "重要原则：\n"
+            "- 先执行图片生成、数据分析、图表生成再写论文\n"
             "- 保持对话连贯性，不重复询问已明确的信息\n"
             "- CodeAgent负责具体执行，你负责规划和协调\n"
-            "- 所有生成的文件都要在最终论文中引用"
+            "- 所有生成的文件都要在最终论文中引用\n\n"
+            "文件组织结构：\n"
+            "- 论文草稿请保存在paper_drafts文件夹中，使用writemd工具写入\n"
+            "- 使用tree工具查看workspace目录结构，确保文件组织合理"
+            "- 最后需要保证论文md里面引用图片，且正确"
         )
 
         self.messages = [{
@@ -88,12 +93,13 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "writemd",
-                "description": "将内容写入Markdown文件到workspace目录",
+                "description": "将内容写入Markdown文件到workspace目录，支持多种写入模式",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "filename": {"type": "string", "description": "文件名（不需要.md后缀）"},
-                        "content": {"type": "string", "description": "Markdown格式的内容"}
+                        "content": {"type": "string", "description": "Markdown格式的内容"},
+                        "mode": {"type": "string", "description": "写入模式：append（附加）、overwrite（重写覆盖）、modify（修改）", "default": "overwrite"}
                     },
                     "required": ["filename", "content"],
                 },
