@@ -6,6 +6,7 @@
 import logging
 import json
 from typing import List, Dict, Any, Optional
+import os # Added for workspace directory path
 
 from .agents import Agent
 from .llm_handler import LLMHandler
@@ -24,6 +25,18 @@ class MainAgent(Agent):
 
     def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None):
         super().__init__(llm_handler, stream_manager)
+        
+        # 构建工作空间目录路径
+        if work_id:
+            workspace_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
+                "pa_data", "workspaces", work_id
+            )
+            # 设置环境变量，供FileTools使用
+            os.environ["WORKSPACE_DIR"] = workspace_dir
+        else:
+            workspace_dir = None
+        
         self.file_tools = FileTools(stream_manager)
         self.work_id = work_id  # 改为work_id，每个work对应一个MainAgent
         
@@ -230,8 +243,19 @@ class MainAgent(Agent):
 
                         # 创建并运行子 Agent
                         from .agents import CodeAgent
+                        
+                        # 构建工作空间目录路径
+                        if self.work_id:
+                            # 使用相对于项目根目录的路径
+                            workspace_dir = os.path.join(
+                                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
+                                "pa_data", "workspaces", self.work_id
+                            )
+                        else:
+                            raise ValueError("MainAgent必须有work_id才能创建CodeAgent")
+                        
                         code_agent = CodeAgent(
-                            self.llm_handler, self.stream_manager)
+                            self.llm_handler, self.stream_manager, workspace_dir)
                         tool_result = await code_agent.run(task_prompt)
 
                         # 将子 Agent 的结果添加回主 Agent 的消息历史

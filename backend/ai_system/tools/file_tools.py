@@ -14,14 +14,18 @@ logger = logging.getLogger(__name__)
 class FileTools:
     """文件操作工具类"""
 
-    def __init__(self, stream_manager: StreamOutputManager):
-        self.stream_manager = stream_manager
-        # 从环境变量获取workspace路径
+    def __init__(self, stream_manager: StreamOutputManager = None):
+        # 获取工作空间目录
         workspace_dir = os.getenv("WORKSPACE_DIR")
         if not workspace_dir:
-            logger.error("FileTools未找到WORKSPACE_DIR环境变量，请确保环境已正确初始化")
-            raise RuntimeError("工作空间目录未设置")
+            # 必须设置工作空间目录，不能使用默认路径
+            raise ValueError("必须设置WORKSPACE_DIR环境变量，指定具体的工作空间目录（包含work_id）")
+        
         self.workspace_dir = workspace_dir
+        self.stream_manager = stream_manager
+        
+        # 确保工作空间目录存在
+        os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
     async def writemd(self, filename: str, content: str) -> str:
@@ -46,17 +50,24 @@ class FileTools:
                 f.write(content)
 
             result = f"成功写入Markdown文件: {filepath}"
-            await self.stream_manager.print_xml_open("writemd_result")
-            await self.stream_manager.print_content(result)
-            await self.stream_manager.print_xml_close("writemd_result")
+            
+            # 如果有stream_manager，使用它输出结果
+            if self.stream_manager:
+                await self.stream_manager.print_xml_open("writemd_result")
+                await self.stream_manager.print_content(result)
+                await self.stream_manager.print_xml_close("writemd_result")
 
             return result
         except Exception as e:
             error_msg = f"写入Markdown文件失败: {str(e)}"
             logger.error(f"写入文件失败: {e}")
-            await self.stream_manager.print_xml_open("writemd_result")
-            await self.stream_manager.print_content(error_msg)
-            await self.stream_manager.print_xml_close("writemd_result")
+            
+            # 如果有stream_manager，使用它输出错误
+            if self.stream_manager:
+                await self.stream_manager.print_xml_open("writemd_result")
+                await self.stream_manager.print_content(error_msg)
+                await self.stream_manager.print_xml_close("writemd_result")
+            
             return error_msg
 
     async def tree(self, directory: Optional[str] = None) -> str:

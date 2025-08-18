@@ -26,12 +26,12 @@ class WorkspaceFileService:
     def _create_workspace_structure(self, workspace_path: Path):
         """创建工作空间的目录结构"""
         try:
-            # 创建必要的目录
+            # 创建必要的目录 - 与代码执行器保持一致
             directories = [
-                "code_files",
-                "outputs/plots", 
-                "outputs/data",
-                "execution_logs"
+                "generated_code",      # 生成的代码文件
+                "outputs/plots",       # 图表输出
+                "outputs/data",        # 数据输出
+                "outputs/logs"         # 执行日志
             ]
             
             for directory in directories:

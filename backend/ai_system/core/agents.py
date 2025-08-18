@@ -5,8 +5,10 @@ AI代理系统
 
 import logging
 import json
+import os
 from typing import List, Dict, Any, Callable
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from .llm_handler import LLMHandler
 from .stream_manager import StreamOutputManager
@@ -28,8 +30,10 @@ class Agent(ABC):
     def _register_tool(self, func: Callable, tool_definition: Dict):
         """注册一个工具及其实现函数。"""
         self.tools.append(tool_definition)
-        self.available_functions[func.__name__] = func
-        logger.debug(f"注册工具: {func.__name__}")
+        # 使用工具定义中的名称作为键，而不是函数名
+        tool_name = tool_definition["function"]["name"]
+        self.available_functions[tool_name] = func
+        logger.debug(f"注册工具: {tool_name} -> {func.__name__}")
 
     @abstractmethod
     async def run(self, *args, **kwargs):
@@ -39,12 +43,17 @@ class Agent(ABC):
 
 class CodeAgent(Agent):
     """
-    代码手 LLM Agent，负责生成和执行代码。
+    代码手 LLM Agent，负责生成、保存和执行代码。
     """
 
-    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager):
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, workspace_dir: str):
         super().__init__(llm_handler, stream_manager)
-        self.executor = CodeExecutor(stream_manager)
+        
+        # 工作空间目录是必需的
+        if not workspace_dir:
+            raise ValueError("必须传入workspace_dir参数，指定具体的工作空间目录（包含work_id）")
+        
+        self.executor = CodeExecutor(stream_manager, workspace_dir)
         self._setup()
         logger.info("CodeAgent初始化完成")
 
@@ -53,17 +62,52 @@ class CodeAgent(Agent):
         self.messages = [{
             "role": "system",
             "content": (
-                "根据用户的任务描述，先规划分析代码结构，然后使用 execute_code_file 工具来执行代码文件。"
-                "**也就是说当你想开始写代码时，就调用 execute_code_file 工具，execute_code_file的输入就是代码文件路径**"
-                "必须使用 execute_code_file 工具来执行代码，并根据执行结果进行总结。"
-                "**注意：如果需要保存图像或数据文件，请使用workspace_dir=os.environ[\"WORKSPACE_DIR\"]变量指向的路径。**"
-                "例如：plt.savefig(os.path.join(workspace_dir,'outputs/plots/figure.png'))"
-                "保存图像后，请显示保存路径，确保用户知道文件保存位置。"
-                "代码执行结果会自动保存到execution_logs目录，图片会自动保存到outputs/plots目录。"
+                "你是一个专业的代码生成和执行助手。你的工作流程是：\n"
+                "1. 分析用户任务，生成相应的Python代码\n"
+                "2. 使用 save_code_to_file 工具将代码保存到文件\n"
+                "3. 使用 execute_code_file 工具执行保存的代码文件\n"
+                "4. 分析执行结果\n"
+                "5. 如果代码有问题或需要优化，使用 edit_code_file 工具修改代码\n"
+                "6. 重新执行修改后的代码，直到得到正确结果\n"
+                "7. 给出最终答案\n\n"
+                "**重要：必须先保存代码到文件，再执行代码！**\n"
+                "**如果代码执行失败或结果不正确，可以修改代码重新执行！**\n"
+                "代码应该包含必要的导入语句和完整的逻辑。\n"
+                "如果需要保存图像或数据文件，请使用workspace_dir变量。\n"
+                "例如：plt.savefig(os.path.join(workspace_dir,'outputs/plots/figure.png'))\n\n"
+                "**工具使用顺序：**\n"
+                "- save_code_to_file: 保存新代码\n"
+                "- execute_code_file: 执行代码\n"
+                "- edit_code_file: 修改现有代码（如果需要）\n"
+                "- list_code_files: 列出工作空间中的所有代码文件\n"
+                "- 重复执行直到成功"
             )
         }]
         
-        # 新的工具定义
+        # 注册代码保存工具
+        save_code_tool = {
+            "type": "function",
+            "function": {
+                "name": "save_code_to_file",
+                "description": "将Python代码保存到文件",
+                "parameters": {
+                    "type": "object", 
+                    "properties": {
+                        "code_content": {
+                            "type": "string", 
+                            "description": "要保存的Python代码内容"
+                        },
+                        "filename": {
+                            "type": "string", 
+                            "description": "文件名（不需要.py后缀）"
+                        }
+                    },
+                    "required": ["code_content", "filename"],
+                },
+            },
+        }
+        
+        # 注册代码执行工具
         execute_code_tool = {
             "type": "function",
             "function": {
@@ -74,7 +118,7 @@ class CodeAgent(Agent):
                     "properties": {
                         "code_file_path": {
                             "type": "string", 
-                            "description": "要执行的代码文件路径"
+                            "description": "要执行的代码文件路径（相对于工作空间的code_files目录，例如：calculation.py）"
                         }
                     },
                     "required": ["code_file_path"],
@@ -82,11 +126,202 @@ class CodeAgent(Agent):
             },
         }
         
+        # 注册代码修改工具
+        edit_code_tool = {
+            "type": "function",
+            "function": {
+                "name": "edit_code_file",
+                "description": "修改已存在的Python代码文件",
+                "parameters": {
+                    "type": "object", 
+                    "properties": {
+                        "filename": {
+                            "type": "string", 
+                            "description": "要修改的文件名（不需要.py后缀）"
+                        },
+                        "new_code_content": {
+                            "type": "string", 
+                            "description": "新的代码内容"
+                        }
+                    },
+                    "required": ["filename", "new_code_content"],
+                },
+            },
+        }
+        
+        # 注册代码文件列表工具
+        list_files_tool = {
+            "type": "function",
+            "function": {
+                "name": "list_code_files",
+                "description": "列出工作空间中的所有代码文件",
+                "parameters": {
+                    "type": "object", 
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+        
         # 注册工具
-        self._register_tool(self.executor.execute_code_file, execute_code_tool)
+        self._register_tool(self.save_code_to_file, save_code_tool)
+        self._register_tool(self.executor.pyexec_file, execute_code_tool)
+        self._register_tool(self.edit_code_file, edit_code_tool)
+        self._register_tool(self.list_code_files, list_files_tool)
+
+    async def save_code_to_file(self, code_content: str, filename: str) -> str:
+        """
+        将代码内容保存到文件
+        
+        Args:
+            code_content: Python代码内容
+            filename: 文件名（不需要.py后缀）
+            
+        Returns:
+            保存结果信息
+        """
+        try:
+            # 参数验证
+            if not code_content or not code_content.strip():
+                return "错误：代码内容不能为空"
+            
+            if not filename or not filename.strip():
+                return "错误：文件名不能为空"
+            
+            # 清理文件名，移除不安全的字符
+            safe_filename = "".join(c for c in filename if c.isalnum() or c in "._-")
+            if not safe_filename:
+                safe_filename = "code"
+            
+            # 确保文件名有.py后缀
+            if not safe_filename.endswith('.py'):
+                safe_filename = safe_filename + '.py'
+            
+            # 构建完整的文件路径
+            code_files_dir = os.path.join(self.executor.workspace_dir, "code_files")
+            os.makedirs(code_files_dir, exist_ok=True)
+            
+            file_path = os.path.join(code_files_dir, safe_filename)
+            
+            # 保存代码到文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(code_content)
+            
+            logger.info(f"代码已保存到文件: {file_path}")
+            
+            # 返回相对路径，这样execute_code_file就能正确找到文件
+            relative_path = os.path.join("code_files", safe_filename)
+            
+            return f"代码已成功保存到文件: {safe_filename}\n文件路径: {file_path}\n相对路径: {relative_path}\n代码长度: {len(code_content)} 字符"
+            
+        except Exception as e:
+            error_msg = f"保存代码文件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    async def edit_code_file(self, filename: str, new_code_content: str) -> str:
+        """
+        修改已存在的代码文件
+        
+        Args:
+            filename: 文件名（不需要.py后缀）
+            new_code_content: 新的代码内容
+            
+        Returns:
+            修改结果信息
+        """
+        try:
+            # 参数验证
+            if not new_code_content or not new_code_content.strip():
+                return "错误：新代码内容不能为空"
+            
+            if not filename or not filename.strip():
+                return "错误：文件名不能为空"
+            
+            # 清理文件名，移除不安全的字符
+            safe_filename = "".join(c for c in filename if c.isalnum() or c in "._-")
+            if not safe_filename:
+                safe_filename = "code"
+            
+            # 确保文件名有.py后缀
+            if not safe_filename.endswith('.py'):
+                safe_filename = safe_filename + '.py'
+            
+            # 构建完整的文件路径
+            code_files_dir = os.path.join(self.executor.workspace_dir, "code_files")
+            file_path = os.path.join(code_files_dir, safe_filename)
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                return f"错误：文件 {safe_filename} 不存在，无法修改。请先使用 save_code_to_file 创建文件。"
+            
+            # 备份原文件
+            backup_path = file_path + f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            with open(file_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+            
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(original_content)
+            
+            # 写入新代码
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(new_code_content)
+            
+            logger.info(f"代码文件已修改: {file_path}")
+            
+            # 返回相对路径，这样execute_code_file就能正确找到文件
+            relative_path = os.path.join("code_files", safe_filename)
+            
+            return f"代码文件 {safe_filename} 已成功修改\n文件路径: {file_path}\n相对路径: {relative_path}\n新代码长度: {len(new_code_content)} 字符\n原文件已备份到: {os.path.basename(backup_path)}"
+            
+        except Exception as e:
+            error_msg = f"修改代码文件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    async def list_code_files(self) -> str:
+        """
+        列出工作空间中的所有代码文件
+        
+        Returns:
+            代码文件列表信息
+        """
+        try:
+            code_files_dir = os.path.join(self.executor.workspace_dir, "code_files")
+            
+            if not os.path.exists(code_files_dir):
+                return "代码文件目录不存在，还没有创建任何代码文件。"
+            
+            files = os.listdir(code_files_dir)
+            python_files = [f for f in files if f.endswith('.py')]
+            
+            if not python_files:
+                return "代码文件目录为空，还没有创建任何Python代码文件。"
+            
+            # 获取文件详细信息
+            file_info = []
+            for filename in python_files:
+                file_path = os.path.join(code_files_dir, filename)
+                try:
+                    stat = os.stat(file_path)
+                    file_size = stat.st_size
+                    file_info.append(f"- {filename} ({file_size} 字节)")
+                except:
+                    file_info.append(f"- {filename}")
+            
+            result = f"工作空间中的代码文件：\n" + "\n".join(file_info)
+            result += f"\n\n总计: {len(python_files)} 个Python文件"
+            
+            logger.info(f"列出了 {len(python_files)} 个代码文件")
+            return result
+            
+        except Exception as e:
+            error_msg = f"列出代码文件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
     async def run(self, task_prompt: str) -> str:
-        """执行代码生成和解释任务，支持多次代码执行。"""
+        """执行代码生成、保存和执行任务。"""
         logger.info(f"CodeAgent开始执行任务: {repr(task_prompt[:50])}...")
 
         if self.stream_manager:
@@ -122,6 +357,8 @@ class CodeAgent(Agent):
                 if function_name in self.available_functions:
                     try:
                         args = json.loads(tool_call["function"]["arguments"])
+                        logger.debug(f"工具 {function_name} 参数: {args}")
+                        
                         result = await self.available_functions[function_name](
                             **args)
 
@@ -137,7 +374,15 @@ class CodeAgent(Agent):
 
                     except json.JSONDecodeError as e:
                         logger.error(f"JSON解析失败: {e}")
-                        result = f"代码手LLM处理失败：JSON解析错误 - {str(e)}"
+                        result = f"代码手LLM处理失败：JSON解析错误 - {str(e)}\n原始参数: {tool_call['function'].get('arguments', '')}"
+                        self.messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": result,
+                        })
+                    except Exception as e:
+                        logger.error(f"工具 {function_name} 执行失败: {e}")
+                        result = f"工具 {function_name} 执行失败: {str(e)}"
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
