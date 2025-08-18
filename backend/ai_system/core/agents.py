@@ -576,7 +576,7 @@ class CodeAgent(Agent):
 
         self.messages.append({"role": "user", "content": task_prompt})
 
-        max_iterations = 5  # 最大迭代次数，防止无限循环
+        max_iterations = 10  # 最大迭代次数，防止无限循环
         iteration = 0
 
         while iteration < max_iterations:
