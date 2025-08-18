@@ -59,12 +59,21 @@ class AIEnvironmentManager:
         """设置工作空间目录"""
         if workspace_path:
             self.workspace_dir = workspace_path
-            # 确保工作空间目录存在
-            os.makedirs(self.workspace_dir, exist_ok=True)
-            logger.info(f"工作空间目录设置完成: {self.workspace_dir}")
-            
-            # 设置为环境变量，供其他组件使用
-            os.environ["WORKSPACE_DIR"] = self.workspace_dir
+        else:
+            # 使用与其他服务一致的路径：../pa_data/workspaces
+            self.workspace_dir = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)), 
+                "..", 
+                "pa_data", 
+                "workspaces"
+            )
+        
+        # 确保工作空间目录存在
+        os.makedirs(self.workspace_dir, exist_ok=True)
+        logger.info(f"工作空间目录设置完成: {self.workspace_dir}")
+        
+        # 设置为环境变量，供其他组件使用
+        os.environ["WORKSPACE_DIR"] = self.workspace_dir
     
     def initialize_system(self, system_type: str):
         """初始化指定系统类型"""

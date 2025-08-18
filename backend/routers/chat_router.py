@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 import asyncio
 import logging
 import json
+import os
 
 from database.database import get_db
 from auth.auth import get_current_user, verify_token
@@ -209,8 +210,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 env_manager.initialize_system("brain")
                 
                 # 设置工作空间目录，确保代码执行器使用正确路径
-                import os
-                workspace_path = os.path.join("pa_data", "workspaces", work_id)
+                # 使用与其他服务一致的路径：../pa_data/workspaces/{work_id}
+                workspace_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)), 
+                    "..", 
+                    "pa_data", 
+                    "workspaces", 
+                    work_id
+                )
                 env_manager.setup_workspace(workspace_path)
                 
                 # 创建流式回调和管理器
