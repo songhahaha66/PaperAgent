@@ -60,11 +60,12 @@ class AIEnvironmentManager:
         if workspace_path:
             self.workspace_dir = workspace_path
         else:
-            # 使用默认工作空间路径
+            # 使用与其他服务一致的路径：../pa_data/workspaces
             self.workspace_dir = os.path.join(
                 os.path.dirname(os.path.dirname(__file__)), 
-                "workspaces", 
-                "default"
+                "..", 
+                "pa_data", 
+                "workspaces"
             )
         
         # 确保工作空间目录存在

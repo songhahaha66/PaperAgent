@@ -30,14 +30,10 @@ class CodeExecutor:
         # 从环境变量获取workspace路径
         workspace_dir = os.getenv("WORKSPACE_DIR")
         if not workspace_dir:
-            # 使用项目根目录下的pa_data/workspaces作为默认路径
-            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))  # 回到backend目录
-            project_root = os.path.dirname(backend_dir)  # 回到项目根目录
-            workspace_dir = os.path.join(project_root, "pa_data", "workspaces")
-            logger.warning("CodeExecutor未找到WORKSPACE_DIR环境变量，使用默认路径")
+            logger.error("CodeExecutor未找到WORKSPACE_DIR环境变量，请确保环境已正确初始化")
+            raise RuntimeError("工作空间目录未设置")
         self.workspace_dir = workspace_dir
-        os.makedirs(self.workspace_dir, exist_ok=True)
-        logger.info(f"CodeExecutor初始化完成，工作空间目录: {self.workspace_dir}")
+        logger.info(f"CodeExecutor初始化完成，工作空间目录: {workspace_dir}")
 
     async def pyexec(self, python_code: str) -> str:
         """
@@ -85,10 +81,12 @@ class CodeExecutor:
             result = string_io.getvalue()
             logger.info(f"代码执行成功，输出长度: {len(result)} 字符")
 
-            # 代码执行成功后，自动保存代码到文件
-            saved_file_path = await self._save_successful_code(python_code, result)
-            if saved_file_path:
-                result += f"\n\n[代码已自动保存到: {saved_file_path}]"
+            # 代码执行成功后，保存代码和结果到正确的目录
+            saved_files = await self._save_execution_results(python_code, result)
+            if saved_files:
+                result += f"\n\n[执行结果已保存到以下位置:]\n"
+                for file_type, file_path in saved_files.items():
+                    result += f"- {file_type}: {file_path}\n"
 
             await self.stream_manager.print_xml_open("ret_exec")
             await self.stream_manager.print_content(result.strip())
@@ -103,26 +101,28 @@ class CodeExecutor:
             await self.stream_manager.print_xml_close("ret_exec")
             return error_message
 
-    async def _save_successful_code(self, python_code: str, execution_result: str) -> str:
+    async def _save_execution_results(self, python_code: str, execution_result: str) -> Dict[str, str]:
         """
-        将成功执行的代码保存到文件
+        将执行结果保存到正确的workspace目录结构
         
         Args:
             python_code: 要保存的Python代码
             execution_result: 代码执行结果
             
         Returns:
-            保存的文件路径，如果保存失败返回空字符串
+            保存的文件路径字典，包含各种类型的文件路径
         """
+        saved_files = {}
+        
         try:
-            # 生成文件名：使用时间戳和代码内容的hash
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             code_hash = str(hash(python_code))[-8:]  # 取hash的后8位
-            filename = f"code_{timestamp}_{code_hash}.py"
-            filepath = os.path.join(self.workspace_dir, filename)
             
-            # 创建代码文件内容，包含执行结果注释
-            file_content = f"""# 自动生成的代码文件
+            # 1. 保存代码到 generated_code 目录
+            code_filename = f"code_{timestamp}_{code_hash}.py"
+            code_filepath = os.path.join(self.workspace_dir, "generated_code", code_filename)
+            
+            code_content = f"""# 自动生成的代码文件
 # 生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 # 执行结果: {execution_result[:200]}{'...' if len(execution_result) > 200 else ''}
 
@@ -131,16 +131,169 @@ class CodeExecutor:
 # 代码执行完成
 """
             
-            # 保存文件
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write(file_content)
+            with open(code_filepath, 'w', encoding='utf-8') as f:
+                f.write(code_content)
             
-            logger.info(f"代码已成功保存到文件: {filepath}")
-            return filename
+            saved_files["代码文件"] = f"generated_code/{code_filename}"
+            logger.info(f"代码已保存到: {code_filepath}")
+            
+            # 2. 保存执行输出到 execution_results 目录
+            output_filename = f"output_{timestamp}_{code_hash}.log"
+            output_filepath = os.path.join(self.workspace_dir, "execution_results", output_filename)
+            
+            output_content = f"""# 代码执行输出日志
+# 执行时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+# 代码文件: {code_filename}
+
+## 执行输出:
+{execution_result}
+
+## 执行状态: 成功
+"""
+            
+            with open(output_filepath, 'w', encoding='utf-8') as f:
+                f.write(output_content)
+            
+            saved_files["执行输出"] = f"execution_results/{output_filename}"
+            logger.info(f"执行输出已保存到: {output_filepath}")
+            
+            # 3. 检查并保存matplotlib图表到 execution_results/plots 目录
+            if plt.get_fignums():  # 如果有图表
+                for fig_num in plt.get_fignums():
+                    fig = plt.figure(fig_num)
+                    plot_filename = f"plot_{timestamp}_{code_hash}_{fig_num}.png"
+                    plot_filepath = os.path.join(self.workspace_dir, "execution_results", "plots", plot_filename)
+                    
+                    fig.savefig(plot_filepath, dpi=300, bbox_inches='tight')
+                    saved_files[f"图表{fig_num}"] = f"execution_results/plots/{plot_filename}"
+                    logger.info(f"图表已保存到: {plot_filepath}")
+                
+                plt.close('all')  # 关闭所有图表
+            
+            # 4. 检查并保存数据输出到 execution_results/data_output 目录
+            data_files = await self._save_data_outputs(timestamp, code_hash)
+            saved_files.update(data_files)
+            
+            # 5. 保存执行元数据到 execution_results 目录
+            metadata_filename = f"metadata_{timestamp}_{code_hash}.json"
+            metadata_filepath = os.path.join(self.workspace_dir, "execution_results", metadata_filename)
+            
+            metadata = {
+                "execution_time": datetime.now().isoformat(),
+                "code_file": code_filename,
+                "output_file": output_filename,
+                "code_length": len(python_code),
+                "output_length": len(execution_result),
+                "has_plots": len(plt.get_fignums()) > 0,
+                "plot_files": [f for f in saved_files.keys() if "图表" in f],
+                "data_files": [f for f in saved_files.keys() if "数据" in f],
+                "status": "success"
+            }
+            
+            with open(metadata_filepath, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+            
+            saved_files["执行元数据"] = f"execution_results/{metadata_filename}"
+            logger.info(f"执行元数据已保存到: {metadata_filepath}")
+            
+            return saved_files
             
         except Exception as e:
-            logger.error(f"保存代码文件失败: {e}")
-            return ""
+            logger.error(f"保存执行结果失败: {e}")
+            return {}
+
+    async def _save_data_outputs(self, timestamp: str, code_hash: str) -> Dict[str, str]:
+        """
+        检测并保存数据输出到 data_output 目录
+        
+        Args:
+            timestamp: 时间戳
+            code_hash: 代码hash
+            
+        Returns:
+            保存的数据文件路径字典
+        """
+        data_files = {}
+        
+        try:
+            # 检查全局变量中是否有数据对象
+            import sys
+            import inspect
+            
+            # 获取当前执行环境中的变量
+            frame = sys._getframe(1)  # 获取调用者的frame
+            if frame:
+                local_vars = frame.f_locals
+                global_vars = frame.f_globals
+                
+                # 合并变量
+                all_vars = {**global_vars, **local_vars}
+                
+                for var_name, var_value in all_vars.items():
+                    # 跳过内置变量和函数
+                    if var_name.startswith('_') or callable(var_value):
+                        continue
+                    
+                    # 检测numpy数组
+                    if hasattr(var_value, 'shape') and hasattr(var_value, 'dtype'):
+                        try:
+                            import numpy as np
+                            if isinstance(var_value, np.ndarray):
+                                data_filename = f"data_{var_name}_{timestamp}_{code_hash}.npy"
+                                data_filepath = os.path.join(self.workspace_dir, "execution_results", "data_output", data_filename)
+                                
+                                np.save(data_filepath, var_value)
+                                data_files[f"数据数组_{var_name}"] = f"execution_results/data_output/{data_filename}"
+                                logger.info(f"numpy数组已保存到: {data_filepath}")
+                        except Exception as e:
+                            logger.warning(f"保存numpy数组失败: {e}")
+                    
+                    # 检测pandas数据框
+                    elif hasattr(var_value, 'to_csv'):
+                        try:
+                            import pandas as pd
+                            if hasattr(var_value, 'columns'):
+                                data_filename = f"data_{var_name}_{timestamp}_{code_hash}.csv"
+                                data_filepath = os.path.join(self.workspace_dir, "execution_results", "data_output", data_filename)
+                                
+                                var_value.to_csv(data_filepath, index=False, encoding='utf-8')
+                                data_files[f"数据表格_{var_name}"] = f"execution_results/data_output/{data_filename}"
+                                logger.info(f"pandas数据框已保存到: {data_filepath}")
+                        except Exception as e:
+                            logger.warning(f"保存pandas数据框失败: {e}")
+                    
+                    # 检测字典数据
+                    elif isinstance(var_value, dict) and len(var_value) > 0:
+                        try:
+                            data_filename = f"data_{var_name}_{timestamp}_{code_hash}.json"
+                            data_filepath = os.path.join(self.workspace_dir, "execution_results", "data_output", data_filename)
+                            
+                            with open(data_filepath, 'w', encoding='utf-8') as f:
+                                json.dump(var_value, f, ensure_ascii=False, indent=2, default=str)
+                            
+                            data_files[f"数据字典_{var_name}"] = f"execution_results/data_output/{data_filename}"
+                            logger.info(f"字典数据已保存到: {data_filepath}")
+                        except Exception as e:
+                            logger.warning(f"保存字典数据失败: {e}")
+                    
+                    # 检测列表数据
+                    elif isinstance(var_value, list) and len(var_value) > 0:
+                        try:
+                            data_filename = f"data_{var_name}_{timestamp}_{code_hash}.json"
+                            data_filepath = os.path.join(self.workspace_dir, "execution_results", "data_output", data_filename)
+                            
+                            with open(data_filepath, 'w', encoding='utf-8') as f:
+                                json.dump(var_value, f, ensure_ascii=False, indent=2, default=str)
+                            
+                            data_files[f"数据列表_{var_name}"] = f"execution_results/data_output/{data_filename}"
+                            logger.info(f"列表数据已保存到: {data_filepath}")
+                        except Exception as e:
+                            logger.warning(f"保存列表数据失败: {e}")
+                            
+        except Exception as e:
+            logger.warning(f"检测数据输出时出错: {e}")
+        
+        return data_files
 
     def get_workspace_dir(self) -> str:
         """获取工作空间目录"""
@@ -149,8 +302,11 @@ class CodeExecutor:
     def set_workspace_dir(self, workspace_dir: str):
         """设置工作空间目录"""
         self.workspace_dir = workspace_dir
-        os.makedirs(workspace_dir, exist_ok=True)
+        os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"工作空间目录已更新为: {workspace_dir}")
+        
+        # 重新确保目录结构
+        # self._ensure_workspace_structure() # This line is removed as per the edit hint
 
     def list_workspace_files(self) -> list:
         """列出工作空间中的文件"""
