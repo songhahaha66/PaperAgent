@@ -43,7 +43,7 @@ class ContextManager:
     负责对话上下文的压缩、摘要生成和长期记忆管理
     """
     
-    def __init__(self, max_tokens: int = 4000, max_messages: int = 50):
+    def __init__(self, max_tokens: int = 20000, max_messages: int = 50):
         self.max_tokens = max_tokens
         self.max_messages = max_messages
         self.summaries: List[ContextSummary] = []

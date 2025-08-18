@@ -42,7 +42,7 @@ class MainAgent(Agent):
         
         # 初始化上下文管理器
         self.context_manager = ContextManager(
-            max_tokens=4000,
+            max_tokens=20000,
             max_messages=50
         )
         
