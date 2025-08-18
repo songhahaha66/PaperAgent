@@ -4,6 +4,12 @@ from models import models
 from database.database import engine
 from routers import auth_router, template_router, file_router, model_config_router, work_router, workspace_file_router, chat_router, context_router
 
+# 导入日志配置
+from ai_system.config.logging_config import setup_simple_logging
+
+# 设置日志系统（只显示在终端，关闭LiteLLM日志）
+setup_simple_logging("INFO")
+
 # 创建数据库表
 models.Base.metadata.create_all(bind=engine)
 

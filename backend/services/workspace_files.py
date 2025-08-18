@@ -17,11 +17,32 @@ class WorkspaceFileService:
         """确保工作空间存在"""
         workspace_path = self.get_workspace_path(work_id)
         if not workspace_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Workspace not found"
-            )
+            # 创建工作空间目录
+            workspace_path.mkdir(parents=True, exist_ok=True)
+            # 创建新的目录结构
+            self._create_workspace_structure(workspace_path)
         return workspace_path
+    
+    def _create_workspace_structure(self, workspace_path: Path):
+        """创建工作空间的目录结构"""
+        try:
+            # 创建必要的目录 - 与代码执行器保持一致
+            directories = [
+                "generated_code",      # 生成的代码文件
+                "outputs/plots",       # 图表输出
+                "outputs/data",        # 数据输出
+                "outputs/logs"         # 执行日志
+            ]
+            
+            for directory in directories:
+                dir_path = workspace_path / directory
+                dir_path.mkdir(parents=True, exist_ok=True)
+                
+        except Exception as e:
+            # 记录错误但不中断流程
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"创建工作空间目录结构失败: {e}")
     
     def list_files(self, work_id: str, relative_path: str = "") -> List[Dict[str, Any]]:
         """列出工作空间中的文件"""

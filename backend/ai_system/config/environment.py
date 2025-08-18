@@ -72,6 +72,7 @@ class AIEnvironmentManager:
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"工作空间目录设置完成: {self.workspace_dir}")
         
+        # 不需要重复创建目录结构，workspace_files.py中已经处理了
         # 设置为环境变量，供其他组件使用
         os.environ["WORKSPACE_DIR"] = self.workspace_dir
     

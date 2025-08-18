@@ -363,8 +363,6 @@ def create_workspace_folders(work_id: str):
         folders = [
             "user_inputs",
             "user_inputs/attachments",
-            "generated_code",
-            "generated_code/data",
             "execution_results",
             "execution_results/plots",
             "execution_results/data_output",
