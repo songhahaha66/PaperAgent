@@ -208,6 +208,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 env_manager = setup_environment_from_db(db)
                 env_manager.initialize_system("brain")
                 
+                # 设置工作空间目录，确保代码执行器使用正确路径
+                import os
+                workspace_path = os.path.join("pa_data", "workspaces", work_id)
+                env_manager.setup_workspace(workspace_path)
+                
                 # 创建流式回调和管理器
                 ws_callback = WebSocketStreamCallback(websocket, work_id, chat_service)
                 stream_manager = PersistentStreamManager(
