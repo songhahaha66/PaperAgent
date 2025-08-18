@@ -62,7 +62,7 @@ class CodeAgent(Agent):
         self.messages = [{
             "role": "system",
             "content": (
-                "你是一个专业的代码生成和执行助手。你的工作流程是：\n"
+                "你是一个专业的代码生成和执行助手。保证你的工作成功再交付。你的工作流程是：\n"
                 "1. 分析用户任务，生成相应的Python代码\n"
                 "2. 使用 save_and_execute 工具保存代码并立即执行\n"
                 "3. 仔细分析执行结果和错误信息\n"
