@@ -53,26 +53,56 @@ class CodeAgent(Agent):
         self.messages = [{
             "role": "system",
             "content": (
-                "根据用户的任务描述，先规划分析代码结构，然后使用 pyexec 工具来执行代码，pyexec的输入就是具体代码"
-                "**也就是说当你想开始写代码时，就调用 pyexec 工具，pyexec的输入就是具体代码**"
-                "必须使用 pyexec 工具来执行代码，并根据执行结果进行总结。"
+                "根据用户的任务描述，先规划分析代码结构，然后使用 execute_code_file 工具来执行代码文件。"
+                "**也就是说当你想开始写代码时，就调用 execute_code_file 工具，execute_code_file的输入就是代码文件路径**"
+                "必须使用 execute_code_file 工具来执行代码，并根据执行结果进行总结。"
                 "**注意：如果需要保存图像或数据文件，请使用workspace_dir=os.environ[\"WORKSPACE_DIR\"]变量指向的路径。**"
-                "例如：plt.savefig(os.path.join(workspace_dir,'figure.png'))"
+                "例如：plt.savefig(os.path.join(workspace_dir,'outputs/plots/figure.png'))"
                 "保存图像后，请显示保存路径，确保用户知道文件保存位置。"
+                "代码执行结果会自动保存到execution_logs目录，图片会自动保存到outputs/plots目录。"
             )
         }]
+        
+        # 新的工具定义
+        execute_code_tool = {
+            "type": "function",
+            "function": {
+                "name": "execute_code_file",
+                "description": "执行指定的Python代码文件并返回结果",
+                "parameters": {
+                    "type": "object", 
+                    "properties": {
+                        "code_file_path": {
+                            "type": "string", 
+                            "description": "要执行的代码文件路径"
+                        }
+                    },
+                    "required": ["code_file_path"],
+                },
+            },
+        }
+        
+        # 保持向后兼容性的工具
         pyexec_tool = {
             "type": "function",
             "function": {
                 "name": "pyexec",
-                "description": "执行Python代码并返回结果",
+                "description": "执行Python代码并返回结果（保持向后兼容性）",
                 "parameters": {
-                    "type": "object",
-                    "properties": {"python_code": {"type": "string", "description": "要执行的Python代码"}},
+                    "type": "object", 
+                    "properties": {
+                        "python_code": {
+                            "type": "string", 
+                            "description": "要执行的Python代码"
+                        }
+                    },
                     "required": ["python_code"],
                 },
             },
         }
+        
+        # 注册工具
+        self._register_tool(self.executor.execute_code_file, execute_code_tool)
         self._register_tool(self.executor.pyexec, pyexec_tool)
 
     async def run(self, task_prompt: str) -> str:
