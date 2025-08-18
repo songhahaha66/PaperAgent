@@ -546,6 +546,52 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         case 'xml_open':
         case 'xml_close':
           break;
+        case 'tool_call':
+          // 工具调用开始通知
+          const toolCallIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (toolCallIndex > -1) {
+            // 在消息中添加工具调用状态指示
+            const toolCallMessage = { ...chatMessages.value[toolCallIndex] };
+            toolCallMessage.content += `\n\n🔧 **工具调用**: ${data.content}`;
+            chatMessages.value[toolCallIndex] = toolCallMessage;
+          }
+          break;
+        case 'tool_result':
+          // 工具调用结果通知
+          const toolResultIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (toolResultIndex > -1) {
+            const toolResultMessage = { ...chatMessages.value[toolResultIndex] };
+            toolResultMessage.content += `\n\n✅ **工具执行结果**: ${data.content}`;
+            chatMessages.value[toolResultIndex] = toolResultMessage;
+          }
+          break;
+        case 'execution_start':
+          // 代码执行开始通知
+          const execStartIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (execStartIndex > -1) {
+            const execStartMessage = { ...chatMessages.value[execStartIndex] };
+            execStartMessage.content += `\n\n🚀 **代码执行**: ${data.content}`;
+            chatMessages.value[execStartIndex] = execStartMessage;
+          }
+          break;
+        case 'execution_complete':
+          // 代码执行完成通知
+          const execCompleteIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (execCompleteIndex > -1) {
+            const execCompleteMessage = { ...chatMessages.value[execCompleteIndex] };
+            execCompleteMessage.content += `\n\n✅ **执行完成**: ${data.content}`;
+            chatMessages.value[execCompleteIndex] = execCompleteMessage;
+          }
+          break;
+        case 'tool_error':
+          // 工具调用错误通知
+          const toolErrorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (toolErrorIndex > -1) {
+            const toolErrorMessage = { ...chatMessages.value[toolErrorIndex] };
+            toolErrorMessage.content += `\n\n❌ **工具错误**: ${data.content}`;
+            chatMessages.value[toolErrorIndex] = toolErrorMessage;
+          }
+          break;
         case 'complete':
           // 完成消息
           const completeIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);

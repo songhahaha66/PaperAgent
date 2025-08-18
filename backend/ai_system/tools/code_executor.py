@@ -41,6 +41,21 @@ class CodeExecutor:
     async def pyexec_file(self, code_file_path: str) -> str:
         """执行Python代码文件"""
         try:
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    # 发送工具调用开始通知
+                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: execute_code_file")
+                    await self.stream_manager.print_xml_close("tool_call")
+                    
+                    # 发送执行开始通知
+                    await self.stream_manager.print_xml_open("execution_start")
+                    await self.stream_manager.print_content(f"开始执行代码文件: {code_file_path}")
+                    await self.stream_manager.print_xml_close("execution_start")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+            
             # 构建完整路径
             if os.path.isabs(code_file_path):
                 full_path = code_file_path
@@ -66,10 +81,36 @@ class CodeExecutor:
                 code = f.read()
             
             result = await self._execute_code(code)
+            
+            # 发送执行完成通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("execution_complete")
+                    await self.stream_manager.print_content(f"代码文件 {code_file_path} 执行完成")
+                    await self.stream_manager.print_xml_close("execution_complete")
+                    
+                    # 发送工具调用结果通知
+                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_content(f"代码执行成功，输出长度: {len(result)} 字符")
+                    await self.stream_manager.print_xml_close("tool_result")
+                except Exception as e:
+                    logger.warning(f"发送执行完成通知失败: {e}")
+            
             return result
             
         except Exception as e:
-            logger.error(f"执行代码文件失败: {e}")
+            error_msg = f"执行代码文件失败: {e}"
+            logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
             return f"执行失败: {str(e)}"
 
     async def _execute_code(self, code: str) -> str:
