@@ -227,7 +227,7 @@ class CodeAgent(Agent):
             # 返回相对路径，这样execute_code_file就能正确找到文件
             relative_path = os.path.join("code_files", safe_filename)
             
-            return f"代码已成功保存到文件: {safe_filename}\n文件路径: {file_path}\n相对路径: {relative_path}\n代码长度: {len(code_content)} 字符"
+            return f"代码已成功保存到文件: {safe_filename}\n文件路径: {file_path}\n相对路径: {relative_path}\n代码长度: {len(code_content)} 字符\n\n现在可以使用 execute_code_file 工具执行此文件，传入参数: {relative_path}"
             
         except Exception as e:
             error_msg = f"保存代码文件失败: {str(e)}"

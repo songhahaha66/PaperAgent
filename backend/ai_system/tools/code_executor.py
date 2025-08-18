@@ -56,25 +56,34 @@ class CodeExecutor:
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
-            # 构建完整路径
+            # 修复路径处理逻辑
             if os.path.isabs(code_file_path):
+                # 如果是绝对路径，直接使用
                 full_path = code_file_path
             else:
-                full_path = os.path.join(self.workspace_dir, code_file_path)
+                # 如果是相对路径，需要判断是否已经包含工作空间前缀
+                if code_file_path.startswith(('code_files/', 'outputs/', 'execution_logs/')):
+                    # 已经是相对于工作空间的路径，直接拼接
+                    full_path = os.path.join(self.workspace_dir, code_file_path)
+                else:
+                    # 假设是相对于code_files目录的路径
+                    full_path = os.path.join(self.workspace_dir, "code_files", code_file_path)
             
             # 标准化路径
             full_path = os.path.normpath(full_path)
             
-            # 安全检查
+            # 安全检查 - 确保文件在工作空间内
             workspace_abs = os.path.abspath(self.workspace_dir)
             if not full_path.startswith(workspace_abs):
-                return f"错误：文件路径 {code_file_path} 不在工作空间内"
+                return f"错误：文件路径 {code_file_path} 不在工作空间内\n工作空间: {workspace_abs}\n尝试路径: {full_path}"
             
             if not os.path.exists(full_path):
-                return f"错误：文件不存在 {full_path}"
+                return f"错误：文件不存在 {full_path}\n请检查文件路径是否正确"
             
             if not full_path.endswith('.py'):
                 return f"错误：文件 {full_path} 不是Python文件"
+            
+            logger.info(f"准备执行文件: {full_path}")
             
             # 读取并执行代码
             with open(full_path, 'r', encoding='utf-8') as f:
