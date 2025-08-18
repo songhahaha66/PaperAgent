@@ -82,28 +82,8 @@ class CodeAgent(Agent):
             },
         }
         
-        # 保持向后兼容性的工具
-        pyexec_tool = {
-            "type": "function",
-            "function": {
-                "name": "pyexec",
-                "description": "执行Python代码并返回结果（保持向后兼容性）",
-                "parameters": {
-                    "type": "object", 
-                    "properties": {
-                        "python_code": {
-                            "type": "string", 
-                            "description": "要执行的Python代码"
-                        }
-                    },
-                    "required": ["python_code"],
-                },
-            },
-        }
-        
         # 注册工具
         self._register_tool(self.executor.execute_code_file, execute_code_tool)
-        self._register_tool(self.executor.pyexec, pyexec_tool)
 
     async def run(self, task_prompt: str) -> str:
         """执行代码生成和解释任务，支持多次代码执行。"""
