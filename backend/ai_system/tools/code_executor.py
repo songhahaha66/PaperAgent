@@ -139,6 +139,12 @@ class CodeExecutor:
                 globals_dict['numpy'] = numpy
             except ImportError:
                 pass
+
+            try:
+                import scipy
+                globals_dict['scipy'] = scipy
+            except ImportError:
+                pass
             
             # 清除之前的图表
             plt.close('all')

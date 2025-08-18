@@ -21,4 +21,5 @@ dependencies = [
     "pytest>=8.4.1",
     "numpy>=2.2.6",
     "matplotlib>=3.10.5",
+    "scipy>=1.15.3",
 ]
