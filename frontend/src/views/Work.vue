@@ -195,6 +195,22 @@ const currentChatSession = ref<ChatSessionResponse | null>(null);
 const isStreaming = ref(false);
 const webSocketHandler = ref<WebSocketChatHandler | null>(null);
 
+// 根据消息内容判断系统类型
+const getSystemTypeFromContent = (content: string): 'brain' | 'code' | 'writing' | undefined => {
+  if (content.includes('<main_agent>')) {
+    return 'brain';
+  } else if (content.includes('<call_code_agent>') || content.includes('<ret_code_agent>') || 
+             content.includes('<call_exec>') || content.includes('<ret_exec>') ||
+             content.includes('<tool_call>') || content.includes('<tool_result>') ||
+             content.includes('<execution_start>') || content.includes('<execution_complete>') ||
+             content.includes('<tool_error>')) {
+    return 'code';
+  } else if (content.includes('<writemd_result>') || content.includes('<tree_result>')) {
+    return 'writing';
+  }
+  return undefined;
+};
+
 // 加载工作信息
 const loadWork = async () => {
   if (!workId.value || !authStore.token) return;
@@ -282,12 +298,16 @@ const loadChatHistory = async () => {
     
     // 转换消息格式
     chatMessages.value = historyData.messages.map((msg, index) => {
-      // 根据消息内容判断系统类型（简化逻辑，主要显示MainAgent的对话）
       let systemType: 'brain' | 'code' | 'writing' | undefined = undefined;
       
       if (msg.role === 'assistant') {
-        // 重构后主要是MainAgent，默认使用brain类型
-        systemType = 'brain';
+        // 根据消息内容判断系统类型
+        systemType = getSystemTypeFromContent(msg.content);
+        
+        // 如果没有明确的XML标签，默认为brain类型（中枢系统）
+        if (!systemType) {
+          systemType = 'brain';
+        }
       }
       
       return {
@@ -452,8 +472,8 @@ const sendRealMessage = async (message: string) => {
     role: 'assistant',
     content: '',
     datetime: new Date().toLocaleString(),
-    avatar: getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' }),
-    systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing',
+    avatar: getSystemAvatar({ systemType: 'brain' }), // 默认使用brain类型，后续会根据内容更新
+    systemType: 'brain', // 默认使用brain类型，后续会根据内容更新
     isStreaming: true
   }
   
@@ -472,7 +492,7 @@ const sendRealMessage = async (message: string) => {
     if (messageIndex > -1) {
       chatMessages.value[messageIndex].content = '发送消息失败，请稍后重试'
       chatMessages.value[messageIndex].isStreaming = false
-      chatMessages.value[messageIndex].avatar = getSystemAvatar({ systemType: currentChatSession.value.system_type as 'brain' | 'code' | 'writing' })
+      chatMessages.value[messageIndex].avatar = getSystemAvatar({ systemType: 'brain' })
     }
     isStreaming.value = false
     MessagePlugin.error('发送消息失败')
@@ -482,6 +502,8 @@ const sendRealMessage = async (message: string) => {
 // WebSocket方式发送消息
 const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => {
   try {
+    console.log('Starting WebSocket connection for message:', { messageId: aiMessageId, message: message });
+    
     // 创建WebSocket处理器（使用workId）
     webSocketHandler.value = new WebSocketChatHandler(
       workId.value!,
@@ -490,9 +512,10 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
     // 连接WebSocket
     await webSocketHandler.value.connect();
+    console.log('WebSocket connected successfully');
 
     let fullContent = '';
-    let currentSystemType: 'brain' | 'code' | 'writing' = currentChatSession.value!.system_type as 'brain' | 'code' | 'writing';
+    let currentSystemType: 'brain' | 'code' | 'writing' = 'brain'; // 默认从brain开始，后续根据内容更新
     let systemTypeChanged = false;
 
     // 设置消息监听器
@@ -506,33 +529,56 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
           if (messageIndex > -1) {
             // 实时更新内容，实现流式显示效果
             fullContent += data.content;
-            chatMessages.value[messageIndex].content = fullContent;
             
-            // 根据内容判断系统类型
+            // 调试日志
+            console.log('WebSocket content update:', {
+              messageId: aiMessageId,
+              contentLength: fullContent.length,
+              currentSystemType,
+              hasMainAgent: fullContent.includes('<main_agent>'),
+              hasCodeAgent: fullContent.includes('<call_code_agent>') || fullContent.includes('<ret_code_agent>'),
+              hasWriting: fullContent.includes('<writemd_result>') || fullContent.includes('<tree_result>')
+            });
+            
+            // 根据累积的完整内容判断系统类型（而不是单个片段）
             let newSystemType = currentSystemType;
-            if (data.content.includes('<main_agent>')) {
+            if (fullContent.includes('<main_agent>')) {
               newSystemType = 'brain';
-            } else if (data.content.includes('<call_code_agent>') || data.content.includes('<ret_code_agent>')) {
+            } else if (fullContent.includes('<call_code_agent>') || fullContent.includes('<ret_code_agent>') ||
+                       fullContent.includes('<call_exec>') || fullContent.includes('<ret_exec>') ||
+                       fullContent.includes('<tool_call>') || fullContent.includes('<tool_result>') ||
+                       fullContent.includes('<execution_start>') || fullContent.includes('<execution_complete>') ||
+                       fullContent.includes('<tool_error>')) {
               newSystemType = 'code';
-            } else if (data.content.includes('<call_exec>') || data.content.includes('<ret_exec>')) {
-              newSystemType = 'code';
-            } else if (data.content.includes('<writemd_result>') || data.content.includes('<tree_result>')) {
+            } else if (fullContent.includes('<writemd_result>') || fullContent.includes('<tree_result>')) {
               newSystemType = 'writing';
             }
             
             // 如果系统类型发生变化，更新显示
             if (newSystemType !== currentSystemType) {
+              console.log('System type changed:', { from: currentSystemType, to: newSystemType });
               currentSystemType = newSystemType;
               systemTypeChanged = true;
-              chatMessages.value[messageIndex].systemType = currentSystemType;
             }
             
-            // 强制Vue更新视图 - 使用响应式更新
-            const updatedMessage = { ...chatMessages.value[messageIndex] };
-            updatedMessage.content = fullContent;
-            updatedMessage.systemType = currentSystemType;
-            updatedMessage.avatar = getSystemAvatar({ systemType: currentSystemType });
-            chatMessages.value[messageIndex] = updatedMessage;
+            // 使用Vue的响应式更新，确保视图正确刷新
+            const updatedMessage = {
+              ...chatMessages.value[messageIndex],
+              content: fullContent,
+              systemType: currentSystemType,
+              avatar: getSystemAvatar({ systemType: currentSystemType })
+            };
+            
+            // 替换整个消息对象，确保Vue响应式更新
+            chatMessages.value.splice(messageIndex, 1, updatedMessage);
+            
+            // 调试日志
+            console.log('Message updated:', {
+              messageId: aiMessageId,
+              systemType: currentSystemType,
+              contentLength: fullContent.length,
+              avatar: getSystemAvatar({ systemType: currentSystemType })
+            });
             
             // 自动滚动到底部
             nextTick(() => {
@@ -546,13 +592,91 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         case 'xml_open':
         case 'xml_close':
           break;
+        case 'tool_call':
+          // 工具调用开始通知
+          const toolCallIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (toolCallIndex > -1) {
+            console.log('Tool call notification:', { messageId: aiMessageId, content: data.content });
+            const toolCallMessage = {
+              ...chatMessages.value[toolCallIndex],
+              content: chatMessages.value[toolCallIndex].content + `\n\n🔧 **工具调用**: ${data.content}`,
+              systemType: 'code',
+              avatar: getSystemAvatar({ systemType: 'code' })
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(toolCallIndex, 1, toolCallMessage);
+            console.log('Tool call message updated, system type set to code');
+          }
+          break;
+        case 'tool_result':
+          // 工具调用结果通知
+          const toolResultIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (toolResultIndex > -1) {
+            const toolResultMessage = {
+              ...chatMessages.value[toolResultIndex],
+              content: chatMessages.value[toolResultIndex].content + `\n\n✅ **工具执行结果**: ${data.content}`,
+              systemType: 'code',
+              avatar: getSystemAvatar({ systemType: 'code' })
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(toolResultIndex, 1, toolResultMessage);
+          }
+          break;
+        case 'execution_start':
+          // 代码执行开始通知
+          const execStartIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (execStartIndex > -1) {
+            const execStartMessage = {
+              ...chatMessages.value[execStartIndex],
+              content: chatMessages.value[execStartIndex].content + `\n\n🚀 **代码执行**: ${data.content}`,
+              systemType: 'code',
+              avatar: getSystemAvatar({ systemType: 'code' })
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(execStartIndex, 1, execStartMessage);
+          }
+          break;
+        case 'execution_complete':
+          // 代码执行完成通知
+          const execCompleteIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (execCompleteIndex > -1) {
+            const execCompleteMessage = {
+              ...chatMessages.value[execCompleteIndex],
+              content: chatMessages.value[execCompleteIndex].content + `\n\n✅ **执行完成**: ${data.content}`,
+              systemType: 'code',
+              avatar: getSystemAvatar({ systemType: 'code' })
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(execCompleteIndex, 1, execCompleteMessage);
+          }
+          break;
+        case 'tool_error':
+          // 工具调用错误通知
+          const toolErrorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
+          if (toolErrorIndex > -1) {
+            const toolErrorMessage = {
+              ...chatMessages.value[toolErrorIndex],
+              content: chatMessages.value[toolErrorIndex].content + `\n\n❌ **工具错误**: ${data.content}`,
+              systemType: 'code',
+              avatar: getSystemAvatar({ systemType: 'code' })
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(toolErrorIndex, 1, toolErrorMessage);
+          }
+          break;
         case 'complete':
           // 完成消息
           const completeIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
           if (completeIndex > -1) {
-            chatMessages.value[completeIndex].isStreaming = false;
-            chatMessages.value[completeIndex].content = fullContent;
-            chatMessages.value[completeIndex].avatar = getSystemAvatar({ systemType: currentSystemType });
+            const completeMessage = {
+              ...chatMessages.value[completeIndex],
+              isStreaming: false,
+              content: fullContent,
+              systemType: currentSystemType,
+              avatar: getSystemAvatar({ systemType: currentSystemType })
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(completeIndex, 1, completeMessage);
           }
           isStreaming.value = false;
           webSocketHandler.value = null;
@@ -561,9 +685,15 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
           // 错误消息
           const errorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
           if (errorIndex > -1) {
-            chatMessages.value[errorIndex].content = `错误: ${data.message}`;
-            chatMessages.value[errorIndex].isStreaming = false;
-            chatMessages.value[errorIndex].avatar = getSystemAvatar({ systemType: currentSystemType });
+            const errorMessage = {
+              ...chatMessages.value[errorIndex],
+              content: `错误: ${data.message}`,
+              isStreaming: false,
+              avatar: getSystemAvatar({ systemType: currentSystemType }),
+              systemType: currentSystemType
+            };
+            // 使用splice确保Vue响应式更新
+            chatMessages.value.splice(errorIndex, 1, errorMessage);
           }
           isStreaming.value = false;
           webSocketHandler.value = null;
@@ -576,6 +706,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     await new Promise(resolve => setTimeout(resolve, 100));
     
     // 发送消息
+    console.log('Sending message via WebSocket:', message);
     webSocketHandler.value.sendMessage(message);
 
   } catch (err) {

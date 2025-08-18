@@ -18,7 +18,7 @@ class LLMHandler:
     处理与 litellm API 的所有通信，包括流式响应和工具调用。
     """
 
-    def __init__(self, model: str = "gemini/gemini-2.0-flash", stream_manager: StreamOutputManager = None):
+    def __init__(self, model: str , stream_manager: StreamOutputManager = None):
         self.model = model
         self.stream_manager = stream_manager
         logger.info(f"LLMHandler初始化完成，模型: {model}")

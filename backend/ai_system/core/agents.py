@@ -209,6 +209,21 @@ class CodeAgent(Agent):
             
             logger.info(f"代码已保存到文件: {file_path}")
             
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    # 发送工具调用开始通知
+                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: save_code_to_file")
+                    await self.stream_manager.print_xml_close("tool_call")
+                    
+                    # 发送工具调用结果通知
+                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_content(f"代码文件 {safe_filename} 保存成功")
+                    await self.stream_manager.print_xml_close("tool_result")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+            
             # 返回相对路径，这样execute_code_file就能正确找到文件
             relative_path = os.path.join("code_files", safe_filename)
             
@@ -217,6 +232,16 @@ class CodeAgent(Agent):
         except Exception as e:
             error_msg = f"保存代码文件失败: {str(e)}"
             logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
             return error_msg
 
     async def edit_code_file(self, filename: str, new_code_content: str) -> str:
@@ -269,6 +294,21 @@ class CodeAgent(Agent):
             
             logger.info(f"代码文件已修改: {file_path}")
             
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    # 发送工具调用开始通知
+                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: edit_code_file")
+                    await self.stream_manager.print_xml_close("tool_call")
+                    
+                    # 发送工具调用结果通知
+                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_content(f"代码文件 {safe_filename} 修改成功")
+                    await self.stream_manager.print_xml_close("tool_result")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+            
             # 返回相对路径，这样execute_code_file就能正确找到文件
             relative_path = os.path.join("code_files", safe_filename)
             
@@ -277,6 +317,16 @@ class CodeAgent(Agent):
         except Exception as e:
             error_msg = f"修改代码文件失败: {str(e)}"
             logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
             return error_msg
 
     async def list_code_files(self) -> str:
@@ -298,26 +348,46 @@ class CodeAgent(Agent):
             if not python_files:
                 return "代码文件目录为空，还没有创建任何Python代码文件。"
             
-            # 获取文件详细信息
-            file_info = []
-            for filename in python_files:
-                file_path = os.path.join(code_files_dir, filename)
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
                 try:
-                    stat = os.stat(file_path)
-                    file_size = stat.st_size
-                    file_info.append(f"- {filename} ({file_size} 字节)")
-                except:
-                    file_info.append(f"- {filename}")
+                    # 发送工具调用开始通知
+                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: list_code_files")
+                    await self.stream_manager.print_xml_close("tool_call")
+                    
+                    # 发送工具调用结果通知
+                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_content(f"找到 {len(python_files)} 个Python代码文件")
+                    await self.stream_manager.print_xml_close("tool_result")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
             
-            result = f"工作空间中的代码文件：\n" + "\n".join(file_info)
-            result += f"\n\n总计: {len(python_files)} 个Python文件"
+            # 构建文件列表信息
+            file_info = []
+            for file in python_files:
+                file_path = os.path.join(code_files_dir, file)
+                try:
+                    file_size = os.path.getsize(file_path)
+                    file_info.append(f"- {file} ({file_size} bytes)")
+                except OSError:
+                    file_info.append(f"- {file} (无法获取文件大小)")
             
-            logger.info(f"列出了 {len(python_files)} 个代码文件")
-            return result
+            return f"代码文件目录: {code_files_dir}\n找到 {len(python_files)} 个Python代码文件:\n" + "\n".join(file_info)
             
         except Exception as e:
             error_msg = f"列出代码文件失败: {str(e)}"
             logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
             return error_msg
 
     async def run(self, task_prompt: str) -> str:

@@ -42,7 +42,7 @@ class MainAgent(Agent):
         
         # 初始化上下文管理器
         self.context_manager = ContextManager(
-            max_tokens=4000,
+            max_tokens=20000,
             max_messages=50
         )
         
@@ -240,6 +240,11 @@ class MainAgent(Agent):
                             await self.stream_manager.print_content(task_prompt)
                             await self.stream_manager.print_xml_close(
                                 "call_code_agent")
+                            
+                            # 发送工具调用开始通知
+                            await self.stream_manager.print_xml_open("tool_call")
+                            await self.stream_manager.print_content(f"MainAgent正在调用CodeAgent执行任务")
+                            await self.stream_manager.print_xml_close("tool_call")
 
                         # 创建并运行子 Agent
                         from .agents import CodeAgent
@@ -258,6 +263,15 @@ class MainAgent(Agent):
                             self.llm_handler, self.stream_manager, workspace_dir)
                         tool_result = await code_agent.run(task_prompt)
 
+                        # 发送工具调用完成通知
+                        if self.stream_manager:
+                            try:
+                                await self.stream_manager.print_xml_open("tool_result")
+                                await self.stream_manager.print_content(f"CodeAgent任务执行完成，结果长度: {len(tool_result)} 字符")
+                                await self.stream_manager.print_xml_close("tool_result")
+                            except Exception as e:
+                                logger.warning(f"发送CodeAgent完成通知失败: {e}")
+
                         # 将子 Agent 的结果添加回主 Agent 的消息历史
                         self.messages.append({
                             "role": "tool",
@@ -275,8 +289,27 @@ class MainAgent(Agent):
                 elif function_name in self.available_functions:
                     try:
                         args = json.loads(tool_call["function"]["arguments"])
+                        
+                        # 发送工具调用开始通知
+                        if self.stream_manager:
+                            try:
+                                await self.stream_manager.print_xml_open("tool_call")
+                                await self.stream_manager.print_content(f"MainAgent正在执行工具调用: {function_name}")
+                                await self.stream_manager.print_xml_close("tool_call")
+                            except Exception as e:
+                                logger.warning(f"发送工具调用通知失败: {e}")
+                        
                         tool_result = await self.available_functions[function_name](
                             **args)
+
+                        # 发送工具调用完成通知
+                        if self.stream_manager:
+                            try:
+                                await self.stream_manager.print_xml_open("tool_result")
+                                await self.stream_manager.print_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
+                                await self.stream_manager.print_xml_close("tool_result")
+                            except Exception as e:
+                                logger.warning(f"发送工具完成通知失败: {e}")
 
                         # 将工具执行结果添加回消息历史
                         self.messages.append({
