@@ -74,7 +74,7 @@ class CodeAgent(Agent):
                 "**如果代码执行失败或结果不正确，可以修改代码重新执行！**\n"
                 "代码应该包含必要的导入语句和完整的逻辑。\n"
                 "如果需要保存图像或数据文件，请使用workspace_dir变量。\n"
-                "例如：plt.savefig(os.path.join(workspace_dir,'outputs/plots/figure.png'))\n\n"
+                "务必注意！：例如：plt.savefig(os.path.join(workspace_dir,'outputs/plots/filename'))\n\n"
                 "**工具使用顺序：**\n"
                 "- save_code_to_file: 保存新代码\n"
                 "- execute_code_file: 执行代码\n"
