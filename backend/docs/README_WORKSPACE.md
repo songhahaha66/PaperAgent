@@ -27,10 +27,6 @@ workspaces/
 │   │   ├── main.py
 │   │   ├── requirements.txt
 │   │   └── data/
-│   ├── execution_results/     # 代码执行结果
-│   │   ├── output.log
-│   │   ├── plots/
-│   │   └── data_output/
 │   ├── paper_drafts/         # 论文草稿
 │   │   ├── outline.md
 │   │   ├── sections/
