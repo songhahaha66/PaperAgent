@@ -184,7 +184,7 @@ const hoveredDivider = ref<number | null>(null)
 const selectedFile = ref<string | null>(null)
 
 // 文件树数据
-const fileTreeData = ref([])
+const fileTreeData = ref<FileInfo[]>([])
 
 // 文件内容映射
 // 数据定义
@@ -694,7 +694,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             const toolCallMessage = {
               ...chatMessages.value[toolCallIndex],
               content: chatMessages.value[toolCallIndex].content + `\n\n🔧 **工具调用**: ${data.content}`,
-              systemType: 'code',
+              systemType: 'code' as const,
               avatar: getSystemAvatar({ systemType: 'code' })
             };
             // 使用splice确保Vue响应式更新
@@ -709,7 +709,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             const toolResultMessage = {
               ...chatMessages.value[toolResultIndex],
               content: chatMessages.value[toolResultIndex].content + `\n\n✅ **工具执行结果**: ${data.content}`,
-              systemType: 'code',
+              systemType: 'code' as const,
               avatar: getSystemAvatar({ systemType: 'code' })
             };
             // 使用splice确保Vue响应式更新
@@ -723,7 +723,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             const execStartMessage = {
               ...chatMessages.value[execStartIndex],
               content: chatMessages.value[execStartIndex].content + `\n\n🚀 **代码执行**: ${data.content}`,
-              systemType: 'code',
+              systemType: 'code' as const,
               avatar: getSystemAvatar({ systemType: 'code' })
             };
             // 使用splice确保Vue响应式更新
@@ -737,7 +737,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             const execCompleteMessage = {
               ...chatMessages.value[execCompleteIndex],
               content: chatMessages.value[execCompleteIndex].content + `\n\n✅ **执行完成**: ${data.content}`,
-              systemType: 'code',
+              systemType: 'code' as const,
               avatar: getSystemAvatar({ systemType: 'code' })
             };
             // 使用splice确保Vue响应式更新
@@ -751,7 +751,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
             const toolErrorMessage = {
               ...chatMessages.value[toolErrorIndex],
               content: chatMessages.value[toolErrorIndex].content + `\n\n❌ **工具错误**: ${data.content}`,
-              systemType: 'code',
+              systemType: 'code' as const,
               avatar: getSystemAvatar({ systemType: 'code' })
             };
             // 使用splice确保Vue响应式更新
