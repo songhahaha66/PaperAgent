@@ -100,6 +100,10 @@
 [songhahaha66][08-17 01:44:31]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：流式内容失败: Cannot call "send" once a close message has been sent.现在前端有时候会丢失连接（如用户刷新，这时候就没办法了，说一下解决方案
 [songhahaha66][08-19 16:21:25]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：required_packages = ['pandas', 'scipy', 'seaborn', 'matplotlib']导入这些必备的软件，python执行库，告诉我解决方案，不能擅自修改
 
+[songhahaha66][08-19 17:35:59]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：前后端同时实现文件管理器功能，在work目录下
+
+[songhahaha66][08-19 17:46:03]：这个文件管理器按后缀分类，只展示图片、md、py脚本
+
 [songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在work.vue可能存在着当时编写的一些示例用的内容，请你将这些代码全部删除
 
 [songhahaha66][08-17 02:22:16]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的前端任务：现在进入work时自动到最底下的对话

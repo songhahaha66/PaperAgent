@@ -2,15 +2,18 @@
   <div class="file-manager">
     <t-collapse v-model="fileManagerExpanded" :border="false">
       <t-collapse-panel value="files" header="文件管理器">
+        <!-- 文件树 -->
         <div class="file-tree">
           <t-tree
-            :data="fileTreeData"
+            :data="processedFileTreeData"
             :expand-on-click-node="true"
-            :default-expanded="['generated_code', 'execution_results', 'paper_drafts']"
+            :default-expanded="['python_files', 'markdown_files', 'image_files']"
             @click="handleFileClick"
             @select="handleFileSelect"
           />
         </div>
+        
+        <!-- 文件信息 -->
         <div class="file-manager-info">
           <span v-if="selectedFile" class="selected-file-info">
             当前选中: {{ selectedFile }}
@@ -25,7 +28,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, defineProps, defineEmits } from 'vue'
+import { ref, defineProps, defineEmits, computed } from 'vue'
 import { Tree, Collapse, CollapsePanel } from 'tdesign-vue-next'
 
 // 定义props
@@ -39,6 +42,7 @@ interface Props {
       isLeaf: boolean
     }>
   }>
+  workId?: string
 }
 
 // 定义emits
@@ -52,6 +56,83 @@ const emit = defineEmits<Emits>()
 // 文件管理器状态
 const fileManagerExpanded = ref(['files'])
 const selectedFile = ref<string | null>(null)
+
+// 处理文件树数据，按文件类型分类
+const processedFileTreeData = computed(() => {
+  if (!props.fileTreeData || props.fileTreeData.length === 0) {
+    // 返回默认的空结构
+    return [
+      {
+        value: 'python_files',
+        label: 'Python脚本',
+        children: []
+      },
+      {
+        value: 'markdown_files',
+        label: 'Markdown文档',
+        children: []
+      },
+      {
+        value: 'image_files',
+        label: '图片文件',
+        children: []
+      }
+    ]
+  }
+  
+  // 按文件类型分类
+  const pythonFiles: any[] = []
+  const markdownFiles: any[] = []
+  const imageFiles: any[] = []
+  
+  // 遍历文件数据，按后缀分类
+  props.fileTreeData.forEach(file => {
+    if (file.path.endsWith('.py')) {
+      pythonFiles.push({
+        value: file.path,
+        label: file.name,
+        isLeaf: true
+      })
+    } else if (file.path.endsWith('.md')) {
+      markdownFiles.push({
+        value: file.path,
+        label: file.name,
+        isLeaf: true
+      })
+    } else if (isImageFile(file.path)) {
+      imageFiles.push({
+        value: file.path,
+        label: file.name,
+        isLeaf: true
+      })
+    }
+  })
+  
+  return [
+    {
+      value: 'python_files',
+      label: `Python脚本 (${pythonFiles.length})`,
+      children: pythonFiles
+    },
+    {
+      value: 'markdown_files',
+      label: `Markdown文档 (${markdownFiles.length})`,
+      children: markdownFiles
+    },
+    {
+      value: 'image_files',
+      label: `图片文件 (${imageFiles.length})`,
+      children: imageFiles
+    }
+  ]
+})
+
+// 判断是否为图片文件
+const isImageFile = (filePath: string): boolean => {
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
+  const lowerPath = filePath.toLowerCase()
+  return imageExtensions.some(ext => lowerPath.endsWith(ext))
+}
 
 // 处理文件点击
 const handleFileClick = (context: { node: any, e: PointerEvent }) => {
@@ -88,7 +169,7 @@ const handleFileSelect = (selectedKeys: string[]) => {
 
 // 检查节点是否为叶子节点
 const checkIfLeaf = (key: string): boolean => {
-  for (const category of props.fileTreeData) {
+  for (const category of processedFileTreeData.value) {
     for (const child of category.children || []) {
       if (child.value === key) {
         return child.isLeaf || false
@@ -129,7 +210,7 @@ defineExpose({
 }
 
 .file-tree {
-  max-height: 200px;
+  max-height: 300px;
   overflow-y: auto;
 }
 

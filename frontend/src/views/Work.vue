@@ -79,6 +79,7 @@
             </div>
             <FileManager 
               :file-tree-data="fileTreeData"
+              :work-id="workId"
               @file-select="handleFileSelect"
             />
             <div class="chat-input">
@@ -102,8 +103,8 @@
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
                   <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
                 </div>
-                <div v-else-if="selectedFile.endsWith('.txt') || selectedFile.endsWith('.log')" class="text-preview">
-                  <pre>{{ fileContents[selectedFile] }}</pre>
+                <div v-else-if="isImageFile(selectedFile)" class="image-preview">
+                  <img :src="getImageUrl(selectedFile)" :alt="selectedFile" style="max-width: 100%; height: auto;" />
                 </div>
                 <div v-else class="text-preview">
                   <pre>{{ fileContents[selectedFile] }}</pre>
@@ -349,7 +350,8 @@ const loadWorkspaceFiles = async () => {
 
 // 更新文件树数据
 const updateFileTreeData = (files: FileInfo[]) => {
-  // 暂时保持默认结构，后续可根据需要实现
+  // 直接传递文件列表，让FileManager组件按类型分类
+  fileTreeData.value = files;
 };
 
 
@@ -386,6 +388,8 @@ const handleFileSelect = async (fileKey: string) => {
   }
 };
 
+
+
 // 简单的Markdown渲染函数
 const renderMarkdown = (text: string) => {
   return text
@@ -395,6 +399,20 @@ const renderMarkdown = (text: string) => {
     .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
     .replace(/\*(.*)\*/gim, '<em>$1</em>')
     .replace(/\n/gim, '<br>')
+}
+
+// 判断是否为图片文件
+const isImageFile = (filePath: string): boolean => {
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
+  const lowerPath = filePath.toLowerCase()
+  return imageExtensions.some(ext => lowerPath.endsWith(ext))
+}
+
+// 获取图片URL（这里假设图片文件在工作空间中，需要根据实际情况调整）
+const getImageUrl = (filePath: string): string => {
+  // 如果是图片文件，返回文件路径作为URL
+  // 在实际应用中，可能需要通过API获取图片内容或URL
+  return `/api/workspace/${workId.value}/files/${encodeURIComponent(filePath)}`
 }
 
 // 显示分割线
@@ -1071,5 +1089,58 @@ html, body {
 .work-details strong {
   color: #333;
   font-weight: 600;
+}
+
+/* 文件预览样式 */
+.file-preview {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.code-preview {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.code-preview pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.markdown-preview {
+  padding: 16px;
+  line-height: 1.6;
+}
+
+.image-preview {
+  text-align: center;
+  padding: 16px;
+}
+
+.image-preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.text-preview {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.text-preview pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 </style>

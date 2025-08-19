@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 
 class WorkspaceFileService:
     def __init__(self):
-        self.base_path = Path("../pa_data/workspaces")
+        self.base_path = Path("pa_data/workspaces")
     
     def get_workspace_path(self, work_id: str) -> Path:
         """获取工作空间路径"""
