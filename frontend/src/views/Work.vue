@@ -79,6 +79,7 @@
             </div>
             <FileManager 
               :file-tree-data="fileTreeData"
+              :work-id="workId"
               @file-select="handleFileSelect"
             />
             <div class="chat-input">
@@ -102,8 +103,9 @@
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
                   <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
                 </div>
-                <div v-else-if="selectedFile.endsWith('.txt') || selectedFile.endsWith('.log')" class="text-preview">
-                  <pre>{{ fileContents[selectedFile] }}</pre>
+                <div v-else-if="isImageFile(selectedFile)" class="image-preview">
+                  <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />
+                  <div v-else class="loading-image">正在加载图片...</div>
                 </div>
                 <div v-else class="text-preview">
                   <pre>{{ fileContents[selectedFile] }}</pre>
@@ -185,7 +187,14 @@ const selectedFile = ref<string | null>(null)
 const fileTreeData = ref([])
 
 // 文件内容映射
-const fileContents: Record<string, string> = {}
+// 数据定义
+const currentFileContent = ref('')
+const currentFileName = ref('')
+const fileContents = ref<Record<string, string>>({})
+const currentWorkspaceConfig = ref('')
+
+// 图片URL缓存
+const imageUrls = ref<Record<string, string>>({})
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
@@ -349,7 +358,8 @@ const loadWorkspaceFiles = async () => {
 
 // 更新文件树数据
 const updateFileTreeData = (files: FileInfo[]) => {
-  // 暂时保持默认结构，后续可根据需要实现
+  // 直接传递文件列表，让FileManager组件按类型分类
+  fileTreeData.value = files;
 };
 
 
@@ -372,19 +382,62 @@ const deleteWork = async () => {
 };
 
 // 处理文件选择
-const handleFileSelect = async (fileKey: string) => {
-  if (!workId.value || !authStore.token) return;
+const handleFileSelect = async (filePath: string) => {
+  console.log('文件被选中:', filePath)
+  currentFileName.value = filePath
+  selectedFile.value = filePath  // 设置选中的文件
   
-  selectedFile.value = fileKey;
-  
-  try {
-    const content = await workspaceFileAPI.readFile(authStore.token, workId.value, fileKey);
-    fileContents[fileKey] = content;
-  } catch (error) {
-    console.error('读取文件失败:', error);
-    fileContents[fileKey] = '文件读取失败';
+  // 检查是否为图片文件
+  if (isImageFile(filePath)) {
+    console.log('图片文件，获取blob URL')
+    // 对于图片文件，设置一个特殊标记表示这是图片
+    fileContents.value[filePath] = 'IMAGE_FILE'
+    currentFileContent.value = 'IMAGE_FILE'
+    
+    // 如果已经有缓存的blob URL，直接使用
+    if (imageUrls.value[filePath]) {
+      console.log('使用缓存的图片URL')
+      return
+    }
+    
+    // 获取图片blob URL
+    try {
+      const blobUrl = await getImageBlobUrl(filePath)
+      imageUrls.value[filePath] = blobUrl
+      console.log('图片blob URL获取成功')
+    } catch (error) {
+      console.error('获取图片失败:', error)
+      MessagePlugin.error('加载图片失败')
+    }
+    return
   }
-};
+  
+  // 检查是否已缓存
+  if (fileContents.value[filePath]) {
+    currentFileContent.value = fileContents.value[filePath]
+    console.log('使用缓存的文件内容')
+    return
+  }
+
+  // 从服务器获取文件内容（仅对非图片文件）
+  try {
+    console.log('从服务器获取文件内容:', filePath)
+    const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
+    
+    // 缓存文件内容
+    fileContents.value[filePath] = content
+    currentFileContent.value = content
+    
+    console.log('文件内容获取成功，长度:', content.length)
+  } catch (error) {
+    console.error('获取文件内容失败:', error)
+    fileContents.value[filePath] = '文件读取失败'
+    currentFileContent.value = '文件读取失败'
+    MessagePlugin.error('加载文件失败')
+  }
+}
+
+
 
 // 简单的Markdown渲染函数
 const renderMarkdown = (text: string) => {
@@ -395,6 +448,47 @@ const renderMarkdown = (text: string) => {
     .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
     .replace(/\*(.*)\*/gim, '<em>$1</em>')
     .replace(/\n/gim, '<br>')
+}
+
+// 判断是否为图片文件
+const isImageFile = (filePath: string): boolean => {
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
+  const lowerPath = filePath.toLowerCase()
+  return imageExtensions.some(ext => lowerPath.endsWith(ext))
+}
+
+// 获取图片URL（使用新的图片API）
+const getImageUrl = (filePath: string): string => {
+  // 使用新的图片API端点
+  return `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`;
+}
+
+// 获取图片的blob URL（带认证）
+const getImageBlobUrl = async (filePath: string): Promise<string> => {
+  try {
+    const token = authStore.token;
+    if (!token) {
+      throw new Error('未登录');
+    }
+    
+    const url = `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.error('获取图片失败:', error);
+    throw error;
+  }
 }
 
 // 显示分割线
@@ -778,6 +872,14 @@ onUnmounted(() => {
     webSocketHandler.value.disconnect();
     webSocketHandler.value = null;
   }
+  
+  // 清理blob URLs以释放内存
+  Object.values(imageUrls.value).forEach(url => {
+    if (url.startsWith('blob:')) {
+      URL.revokeObjectURL(url);
+    }
+  });
+  imageUrls.value = {};
 });
 
 // 监听路由变化
@@ -1071,5 +1173,58 @@ html, body {
 .work-details strong {
   color: #333;
   font-weight: 600;
+}
+
+/* 文件预览样式 */
+.file-preview {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.code-preview {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.code-preview pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.markdown-preview {
+  padding: 16px;
+  line-height: 1.6;
+}
+
+.image-preview {
+  text-align: center;
+  padding: 16px;
+}
+
+.image-preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.text-preview {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.text-preview pre {
+  margin: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
 }
 </style>

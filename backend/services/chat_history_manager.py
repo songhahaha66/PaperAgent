@@ -36,16 +36,21 @@ class ChatHistoryManager:
         """保存新消息到JSON文件"""
         history = self.get_work_history(work_id)
         
+        # 使用高精度时间戳，确保消息顺序正确
+        from datetime import datetime
+        timestamp = datetime.now().isoformat()
+        
         message = {
+            "id": len(history.get("messages", [])) + 1,  # 添加消息ID
             "role": role,
             "content": content,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": timestamp,
             "metadata": metadata or {}
         }
         
         history["messages"].append(message)
         self._save_history(work_id, history)
-        logger.info(f"消息已保存 {work_id}: {role}")
+        logger.info(f"消息已保存 {work_id}: {role}, ID: {message['id']}, 时间: {timestamp}")
     
     def update_context(self, work_id: str, context_updates: Dict):
         """更新工作上下文"""
@@ -55,12 +60,15 @@ class ChatHistoryManager:
         logger.info(f"上下文已更新 {work_id}")
     
     def get_messages(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
-        """获取消息列表"""
+        """获取消息列表，按时间顺序和ID顺序排列"""
         history = self.get_work_history(work_id)
         messages = history.get("messages", [])
         
+        # 确保消息按ID和时间戳排序
+        messages.sort(key=lambda x: (x.get('id', 0), x.get('timestamp', '')))
+        
         if limit:
-            return messages[-limit:]
+            return messages[-limit:]  # 返回最新的limit条消息
         return messages
     
     def clear_history(self, work_id: str):

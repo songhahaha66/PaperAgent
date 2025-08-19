@@ -242,9 +242,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     history_data = [{"role": msg["role"], "content": msg["content"]} 
                                    for msg in history_messages]
                     main_agent.load_conversation_history(history_data)
+                    logger.info(f"已加载 {len(history_data)} 条历史消息到MainAgent")
+                else:
+                    logger.info("没有找到历史消息，将创建新的对话")
                 
                 # 在正确位置添加用户消息到MainAgent的消息历史
                 main_agent.add_user_message(message_data['problem'])
+                
+                # 立即保存用户消息到持久化存储，确保历史记录顺序正确
+                await stream_manager.save_user_message(message_data['problem'])
+                logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
                 
                 # 执行AI任务
                 try:
@@ -256,9 +263,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
                     
-                    # AI处理完成后，保存用户消息到持久化存储
-                    await stream_manager.save_user_message(message_data['problem'])
-                    logger.info(f"[PERSISTENCE] AI处理完成，用户消息已保存到持久化存储")
+                    # AI处理完成后，确保AI回复已通过流管理器保存
+                    # 调用finalize_message确保所有缓冲内容都被保存
+                    await stream_manager.finalize_message()
+                    logger.info(f"[PERSISTENCE] AI处理完成，所有消息已保存到持久化存储")
                     
                 except Exception as e:
                     logger.error(f"AI任务执行失败: {e}")
