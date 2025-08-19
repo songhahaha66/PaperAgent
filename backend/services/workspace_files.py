@@ -155,6 +155,16 @@ class WorkspaceFileService:
                     detail="File too large to read"
                 )
             
+            # 检查是否为图片文件
+            if self._is_image_file(file_path):
+                # 对于图片文件，返回base64编码的数据
+                import base64
+                with open(target_file, 'rb') as f:
+                    file_data = f.read()
+                    base64_data = base64.b64encode(file_data).decode('utf-8')
+                    return base64_data
+            
+            # 对于文本文件，使用文本模式读取
             with open(target_file, 'r', encoding='utf-8') as f:
                 return f.read()
         except HTTPException:
@@ -164,6 +174,11 @@ class WorkspaceFileService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to read file: {str(e)}"
             )
+    
+    def _is_image_file(self, file_path: str) -> bool:
+        """判断文件是否为图片文件"""
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
+        return any(file_path.lower().endswith(ext) for ext in image_extensions)
     
     def write_file(self, work_id: str, file_path: str, content: str) -> Dict[str, Any]:
         """写入文件到工作空间"""

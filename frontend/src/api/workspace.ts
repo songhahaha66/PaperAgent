@@ -212,6 +212,11 @@ export const workspaceFileAPI = {
     return response.content;
   },
 
+  // 获取图片文件URL
+  getImageUrl(token: string, workId: string, filePath: string): string {
+    return `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId}/images/${encodeURIComponent(filePath)}`;
+  },
+
   // 写入文件
   async writeFile(
     token: string, 

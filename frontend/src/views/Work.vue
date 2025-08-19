@@ -104,7 +104,8 @@
                   <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
                 </div>
                 <div v-else-if="isImageFile(selectedFile)" class="image-preview">
-                  <img :src="getImageUrl(selectedFile)" :alt="selectedFile" style="max-width: 100%; height: auto;" />
+                  <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />
+                  <div v-else class="loading-image">正在加载图片...</div>
                 </div>
                 <div v-else class="text-preview">
                   <pre>{{ fileContents[selectedFile] }}</pre>
@@ -191,6 +192,9 @@ const currentFileContent = ref('')
 const currentFileName = ref('')
 const fileContents = ref<Record<string, string>>({})
 const currentWorkspaceConfig = ref('')
+
+// 图片URL缓存
+const imageUrls = ref<Record<string, string>>({})
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
@@ -383,6 +387,31 @@ const handleFileSelect = async (filePath: string) => {
   currentFileName.value = filePath
   selectedFile.value = filePath  // 设置选中的文件
   
+  // 检查是否为图片文件
+  if (isImageFile(filePath)) {
+    console.log('图片文件，获取blob URL')
+    // 对于图片文件，设置一个特殊标记表示这是图片
+    fileContents.value[filePath] = 'IMAGE_FILE'
+    currentFileContent.value = 'IMAGE_FILE'
+    
+    // 如果已经有缓存的blob URL，直接使用
+    if (imageUrls.value[filePath]) {
+      console.log('使用缓存的图片URL')
+      return
+    }
+    
+    // 获取图片blob URL
+    try {
+      const blobUrl = await getImageBlobUrl(filePath)
+      imageUrls.value[filePath] = blobUrl
+      console.log('图片blob URL获取成功')
+    } catch (error) {
+      console.error('获取图片失败:', error)
+      MessagePlugin.error('加载图片失败')
+    }
+    return
+  }
+  
   // 检查是否已缓存
   if (fileContents.value[filePath]) {
     currentFileContent.value = fileContents.value[filePath]
@@ -390,7 +419,7 @@ const handleFileSelect = async (filePath: string) => {
     return
   }
 
-  // 从服务器获取文件内容
+  // 从服务器获取文件内容（仅对非图片文件）
   try {
     console.log('从服务器获取文件内容:', filePath)
     const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
@@ -428,11 +457,38 @@ const isImageFile = (filePath: string): boolean => {
   return imageExtensions.some(ext => lowerPath.endsWith(ext))
 }
 
-// 获取图片URL（这里假设图片文件在工作空间中，需要根据实际情况调整）
+// 获取图片URL（使用新的图片API）
 const getImageUrl = (filePath: string): string => {
-  // 如果是图片文件，返回文件路径作为URL
-  // 在实际应用中，可能需要通过API获取图片内容或URL
-  return `/api/workspace/${workId.value}/files/${encodeURIComponent(filePath)}`
+  // 使用新的图片API端点
+  return `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`;
+}
+
+// 获取图片的blob URL（带认证）
+const getImageBlobUrl = async (filePath: string): Promise<string> => {
+  try {
+    const token = authStore.token;
+    if (!token) {
+      throw new Error('未登录');
+    }
+    
+    const url = `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.error('获取图片失败:', error);
+    throw error;
+  }
 }
 
 // 显示分割线
@@ -816,6 +872,14 @@ onUnmounted(() => {
     webSocketHandler.value.disconnect();
     webSocketHandler.value = null;
   }
+  
+  // 清理blob URLs以释放内存
+  Object.values(imageUrls.value).forEach(url => {
+    if (url.startsWith('blob:')) {
+      URL.revokeObjectURL(url);
+    }
+  });
+  imageUrls.value = {};
 });
 
 // 监听路由变化
