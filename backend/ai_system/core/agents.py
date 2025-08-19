@@ -62,40 +62,50 @@ class CodeAgent(Agent):
         self.messages = [{
             "role": "system",
             "content": (
-                "你是一个专业的代码生成和执行助手。你的工作流程是：\n"
+                "你是一个专业的代码生成和执行助手。保证你的工作成功再交付，工作完成之前一定要调用工具！重复执行直到成功。你的工作流程是：\n"
                 "1. 分析用户任务，生成相应的Python代码\n"
-                "2. 使用 save_code_to_file 工具将代码保存到文件\n"
-                "3. 使用 execute_code_file 工具执行保存的代码文件\n"
-                "4. 分析执行结果\n"
-                "5. 如果代码有问题或需要优化，使用 edit_code_file 工具修改代码\n"
-                "6. 重新执行修改后的代码，直到得到正确结果\n"
-                "7. 给出最终答案\n\n"
-                "**重要：必须先保存代码到文件，再执行代码！**\n"
-                "**如果代码执行失败或结果不正确，可以修改代码重新执行！**\n"
-                "代码应该包含必要的导入语句和完整的逻辑。\n"
-                "如果需要保存图像或数据文件，请使用workspace_dir变量。\n"
-                "务必注意！：例如：plt.savefig(os.path.join(workspace_dir,'outputs/plots/filename'))\n\n"
+                "2. 使用 save_and_execute 工具保存代码并立即执行\n"
+                "3. 仔细分析执行结果和错误信息\n"
+                "4. 如果代码有错误或需要优化：\n"
+                "   - 使用 edit_code_file 工具修改代码\n"
+                "   - 使用 execute_file 工具重新执行修改后的代码\n"
+                "   - 重复修改和执行，直到得到正确结果\n"
+                "5. 给出最终答案\n\n"
+                "**重要策略：**\n"
+                "**推荐使用 save_and_execute 工具，一次性完成保存和执行！**\n"
+                "**当代码执行失败时，仔细分析错误信息，然后修改代码重试！**\n"
+                "**代码应该包含必要的导入语句和完整的逻辑。**\n"
+                "**文件操作使用相对路径即可，例如：plt.savefig('outputs/plots/filename.png')**\n\n"
+                "**必须要保证保存图片且图片名字含有时间戳，否则会覆盖之前的图片！**\n"
                 "**工具使用顺序：**\n"
-                "- save_code_to_file: 保存新代码\n"
-                "- execute_code_file: 执行代码\n"
-                "- edit_code_file: 修改现有代码（如果需要）\n"
-                "- list_code_files: 列出工作空间中的所有代码文件\n"
-                "- 重复执行直到成功"
+                "- save_and_execute: 保存代码并立即执行（推荐）\n"
+                "- execute_code: 直接执行代码内容（不保存）\n"
+                "- execute_file: 执行已保存的代码文件\n"
+                "- edit_code_file: 修改现有代码文件（修复错误时使用）\n"
+                "- list_code_files: 列出工作空间中的所有代码文件\n\n"
+                "**错误处理策略：**\n"
+                "1. 当代码执行失败时，仔细阅读错误信息\n"
+                "2. 识别错误类型：语法错误、导入错误、逻辑错误等\n"
+                "3. 使用 edit_code_file 修复问题\n"
+                "4. 使用 execute_file 重新执行修复后的代码\n"
+                "5. 如果还有问题，继续修改直到成功\n"
+                "6. 记录修改历史，避免重复错误\n\n"
+                "**重复执行直到成功**"
             )
         }]
         
-        # 注册代码保存工具
-        save_code_tool = {
+        # 注册代码保存并执行工具（推荐）
+        save_and_execute_tool = {
             "type": "function",
             "function": {
-                "name": "save_code_to_file",
-                "description": "将Python代码保存到文件",
+                "name": "save_and_execute",
+                "description": "保存Python代码到文件并立即执行，推荐使用此工具",
                 "parameters": {
                     "type": "object", 
                     "properties": {
                         "code_content": {
                             "type": "string", 
-                            "description": "要保存的Python代码内容"
+                            "description": "要保存和执行的Python代码内容"
                         },
                         "filename": {
                             "type": "string", 
@@ -107,21 +117,40 @@ class CodeAgent(Agent):
             },
         }
         
-        # 注册代码执行工具
+        # 注册直接执行代码工具
         execute_code_tool = {
             "type": "function",
             "function": {
-                "name": "execute_code_file",
-                "description": "执行指定的Python代码文件并返回结果",
+                "name": "execute_code",
+                "description": "直接执行Python代码内容，不保存到文件",
                 "parameters": {
                     "type": "object", 
                     "properties": {
-                        "code_file_path": {
+                        "code_content": {
                             "type": "string", 
-                            "description": "要执行的代码文件路径（相对于工作空间的code_files目录，例如：calculation.py）"
+                            "description": "要执行的Python代码内容"
                         }
                     },
-                    "required": ["code_file_path"],
+                    "required": ["code_content"],
+                },
+            },
+        }
+        
+        # 注册执行文件工具
+        execute_file_tool = {
+            "type": "function",
+            "function": {
+                "name": "execute_file",
+                "description": "执行指定的Python代码文件",
+                "parameters": {
+                    "type": "object", 
+                    "properties": {
+                        "file_path": {
+                            "type": "string", 
+                            "description": "要执行的代码文件路径（相对于工作空间，例如：code_files/calculation.py）"
+                        }
+                    },
+                    "required": ["file_path"],
                 },
             },
         }
@@ -131,17 +160,17 @@ class CodeAgent(Agent):
             "type": "function",
             "function": {
                 "name": "edit_code_file",
-                "description": "修改已存在的Python代码文件",
+                "description": "修改已存在的Python代码文件，主要用于修复代码错误、优化逻辑或添加新功能。当代码执行失败时，使用此工具修复问题后重新执行。",
                 "parameters": {
                     "type": "object", 
                     "properties": {
                         "filename": {
                             "type": "string", 
-                            "description": "要修改的文件名（不需要.py后缀）"
+                            "description": "要修改的文件名（不需要.py后缀），例如：calculation"
                         },
                         "new_code_content": {
                             "type": "string", 
-                            "description": "新的代码内容"
+                            "description": "修复后的完整代码内容，包含所有必要的导入语句和完整的逻辑"
                         }
                     },
                     "required": ["filename", "new_code_content"],
@@ -164,10 +193,186 @@ class CodeAgent(Agent):
         }
         
         # 注册工具
-        self._register_tool(self.save_code_to_file, save_code_tool)
-        self._register_tool(self.executor.pyexec_file, execute_code_tool)
+        self._register_tool(self.save_and_execute, save_and_execute_tool)
+        self._register_tool(self.execute_code, execute_code_tool)
+        self._register_tool(self.execute_file, execute_file_tool)
         self._register_tool(self.edit_code_file, edit_code_tool)
         self._register_tool(self.list_code_files, list_files_tool)
+
+    async def save_and_execute(self, code_content: str, filename: str) -> str:
+        """
+        保存代码到文件并立即执行
+        
+        Args:
+            code_content: Python代码内容
+            filename: 文件名（不需要.py后缀）
+            
+        Returns:
+            保存结果 + 执行结果
+        """
+        try:
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: save_and_execute")
+                    await self.stream_manager.print_xml_close("code_agent_tool_call")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+            
+            # 调用executor的save_and_execute方法
+            executor_result = await self.executor.save_and_execute(code_content, filename)
+            
+            # 生成明确的结果，包含代码保存和执行的信息
+            result = f"""代码任务执行完成！
+
+📁 文件信息：
+- 文件名: {filename}.py
+- 代码长度: {len(code_content)} 字符
+
+⚡ 执行结果：
+{executor_result}
+
+✅ 状态: 代码已保存并执行成功
+"""
+            
+            # 发送工具调用结果通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_result")
+                    await self.stream_manager.print_content(f"代码保存并执行完成，结果长度: {len(result)} 字符")
+                    await self.stream_manager.print_xml_close("code_agent_tool_result")
+                except Exception as e:
+                    logger.warning(f"发送工具调用结果通知失败: {e}")
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"保存并执行代码失败: {str(e)}"
+            logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("code_agent_tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
+            return error_msg
+
+    async def execute_code(self, code_content: str) -> str:
+        """
+        直接执行Python代码内容，不保存到文件
+        
+        Args:
+            code_content: Python代码内容
+            
+        Returns:
+            执行结果
+        """
+        try:
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: execute_code")
+                    await self.stream_manager.print_xml_close("code_agent_tool_call")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+            
+            # 调用executor的execute_code方法
+            executor_result = await self.executor.execute_code(code_content)
+            
+            # 生成明确的结果，包含代码执行的信息
+            result = f"""代码执行完成！
+
+📝 代码内容：
+```python
+{code_content[:500]}{'...' if len(code_content) > 500 else ''}
+```
+
+⚡ 执行结果：
+{executor_result}
+
+✅ 状态: 代码执行成功
+"""
+            
+            # 发送工具调用结果通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_result")
+                    await self.stream_manager.print_content(f"代码执行完成，结果长度: {len(result)} 字符")
+                    await self.stream_manager.print_xml_close("code_agent_tool_result")
+                except Exception as e:
+                    logger.warning(f"发送工具调用结果通知失败: {e}")
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"执行代码失败: {str(e)}"
+            logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("code_agent_tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
+            return error_msg
+
+    async def execute_file(self, file_path: str) -> str:
+        """
+        执行指定的Python代码文件
+        
+        Args:
+            file_path: 文件路径（相对于工作空间或绝对路径）
+            
+        Returns:
+            执行结果
+        """
+        try:
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_call")
+                    await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: execute_file")
+                    await self.stream_manager.print_xml_close("code_agent_tool_call")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+            
+            # 调用executor的execute_file方法
+            result = await self.executor.execute_file(file_path)
+            
+            # 发送工具调用结果通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_result")
+                    await self.stream_manager.print_content(f"文件执行完成")
+                    await self.stream_manager.print_xml_close("code_agent_tool_result")
+                except Exception as e:
+                    logger.warning(f"发送工具调用结果通知失败: {e}")
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"执行文件失败: {str(e)}"
+            logger.error(error_msg)
+            
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.print_xml_open("code_agent_tool_error")
+                    await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
+                    await self.stream_manager.print_xml_close("code_agent_tool_error")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+            
+            return error_msg
 
     async def save_code_to_file(self, code_content: str, filename: str) -> str:
         """
@@ -213,21 +418,21 @@ class CodeAgent(Agent):
             if self.stream_manager:
                 try:
                     # 发送工具调用开始通知
-                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_xml_open("code_agent_tool_call")
                     await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: save_code_to_file")
-                    await self.stream_manager.print_xml_close("tool_call")
+                    await self.stream_manager.print_xml_close("code_agent_tool_call")
                     
                     # 发送工具调用结果通知
-                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_xml_open("code_agent_tool_result")
                     await self.stream_manager.print_content(f"代码文件 {safe_filename} 保存成功")
-                    await self.stream_manager.print_xml_close("tool_result")
+                    await self.stream_manager.print_xml_close("code_agent_tool_result")
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
             # 返回相对路径，这样execute_code_file就能正确找到文件
             relative_path = os.path.join("code_files", safe_filename)
             
-            return f"代码已成功保存到文件: {safe_filename}\n文件路径: {file_path}\n相对路径: {relative_path}\n代码长度: {len(code_content)} 字符"
+            return f"代码已成功保存到文件: {safe_filename}\n文件路径: {file_path}\n相对路径: {relative_path}\n代码长度: {len(code_content)} 字符\n\n现在可以使用 execute_code_file 工具执行此文件，传入参数: {relative_path}"
             
         except Exception as e:
             error_msg = f"保存代码文件失败: {str(e)}"
@@ -236,9 +441,9 @@ class CodeAgent(Agent):
             # 发送错误通知到前端
             if self.stream_manager:
                 try:
-                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_xml_open("code_agent_tool_error")
                     await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
-                    await self.stream_manager.print_xml_close("tool_error")
+                    await self.stream_manager.print_xml_close("code_agent_tool_error")
                 except Exception as ws_error:
                     logger.warning(f"发送错误通知失败: {ws_error}")
             
@@ -298,14 +503,14 @@ class CodeAgent(Agent):
             if self.stream_manager:
                 try:
                     # 发送工具调用开始通知
-                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_xml_open("code_agent_tool_call")
                     await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: edit_code_file")
-                    await self.stream_manager.print_xml_close("tool_call")
+                    await self.stream_manager.print_xml_close("code_agent_tool_call")
                     
                     # 发送工具调用结果通知
-                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_xml_open("code_agent_tool_result")
                     await self.stream_manager.print_content(f"代码文件 {safe_filename} 修改成功")
-                    await self.stream_manager.print_xml_close("tool_result")
+                    await self.stream_manager.print_xml_close("code_agent_tool_result")
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
@@ -321,9 +526,9 @@ class CodeAgent(Agent):
             # 发送错误通知到前端
             if self.stream_manager:
                 try:
-                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_xml_open("code_agent_tool_error")
                     await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
-                    await self.stream_manager.print_xml_close("tool_error")
+                    await self.stream_manager.print_xml_close("code_agent_tool_error")
                 except Exception as ws_error:
                     logger.warning(f"发送错误通知失败: {ws_error}")
             
@@ -352,14 +557,14 @@ class CodeAgent(Agent):
             if self.stream_manager:
                 try:
                     # 发送工具调用开始通知
-                    await self.stream_manager.print_xml_open("tool_call")
+                    await self.stream_manager.print_xml_open("code_agent_tool_call")
                     await self.stream_manager.print_content(f"CodeAgent正在执行工具调用: list_code_files")
-                    await self.stream_manager.print_xml_close("tool_call")
+                    await self.stream_manager.print_xml_close("code_agent_tool_call")
                     
                     # 发送工具调用结果通知
-                    await self.stream_manager.print_xml_open("tool_result")
+                    await self.stream_manager.print_xml_open("code_agent_tool_result")
                     await self.stream_manager.print_content(f"找到 {len(python_files)} 个Python代码文件")
-                    await self.stream_manager.print_xml_close("tool_result")
+                    await self.stream_manager.print_xml_close("code_agent_tool_result")
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
@@ -382,9 +587,9 @@ class CodeAgent(Agent):
             # 发送错误通知到前端
             if self.stream_manager:
                 try:
-                    await self.stream_manager.print_xml_open("tool_error")
+                    await self.stream_manager.print_xml_open("code_agent_tool_error")
                     await self.stream_manager.print_content(f"工具调用失败: {error_msg}")
-                    await self.stream_manager.print_xml_close("tool_error")
+                    await self.stream_manager.print_xml_close("code_agent_tool_error")
                 except Exception as ws_error:
                     logger.warning(f"发送错误通知失败: {ws_error}")
             
@@ -395,12 +600,15 @@ class CodeAgent(Agent):
         logger.info(f"CodeAgent开始执行任务: {repr(task_prompt[:50])}...")
 
         if self.stream_manager:
-            await self.stream_manager.print_xml_open("ret_code_agent")
+            await self.stream_manager.print_xml_open("code_agent_start")
+            await self.stream_manager.print_content(f"开始执行代码任务: {task_prompt[:100]}...")
+            await self.stream_manager.print_xml_close("code_agent_start")
 
         self.messages.append({"role": "user", "content": task_prompt})
 
-        max_iterations = 5  # 最大迭代次数，防止无限循环
+        max_iterations = 10  # 最大迭代次数，防止无限循环
         iteration = 0
+        last_tool_result = None
 
         while iteration < max_iterations:
             iteration += 1
@@ -413,10 +621,17 @@ class CodeAgent(Agent):
 
             if not tool_calls:
                 # 没有工具调用，说明LLM认为任务完成，生成最终回答
-                result = assistant_message.get("content", "代码手任务完成。")
+                if last_tool_result:
+                    # 如果有工具执行结果，使用它作为最终结果
+                    result = f"任务完成！\n\n执行结果：\n{last_tool_result}\n\nLLM总结：{assistant_message.get('content', '')}"
+                else:
+                    result = assistant_message.get("content", "代码手任务完成。")
+                
                 logger.info(f"CodeAgent在第{iteration}次迭代完成，无更多工具调用")
                 if self.stream_manager:
-                    await self.stream_manager.print_xml_close("ret_code_agent")
+                    await self.stream_manager.print_xml_open("code_agent_result")
+                    await self.stream_manager.print_content(f"任务完成，最终结果: {result[:200]}...")
+                    await self.stream_manager.print_xml_close("code_agent_result")
                 return result
 
             # 执行所有工具调用
@@ -429,52 +644,61 @@ class CodeAgent(Agent):
                         args = json.loads(tool_call["function"]["arguments"])
                         logger.debug(f"工具 {function_name} 参数: {args}")
                         
-                        result = await self.available_functions[function_name](
-                            **args)
+                        # 执行工具调用
+                        tool_result = await self.available_functions[function_name](**args)
+                        
+                        # 保存最后的工具执行结果，用于最终交付
+                        last_tool_result = tool_result
 
                         # 将工具执行结果添加回消息历史
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
-                            "content": result,
+                            "content": tool_result,
                         })
 
-                        logger.info(
-                            f"工具 {function_name} 执行成功，结果长度: {len(result)} 字符")
+                        logger.info(f"工具 {function_name} 执行成功，结果长度: {len(tool_result)} 字符")
 
                     except json.JSONDecodeError as e:
                         logger.error(f"JSON解析失败: {e}")
-                        result = f"代码手LLM处理失败：JSON解析错误 - {str(e)}\n原始参数: {tool_call['function'].get('arguments', '')}"
+                        error_result = f"代码手LLM处理失败：JSON解析错误 - {str(e)}\n原始参数: {tool_call['function'].get('arguments', '')}"
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
-                            "content": result,
+                            "content": error_result,
                         })
+                        last_tool_result = error_result
                     except Exception as e:
                         logger.error(f"工具 {function_name} 执行失败: {e}")
-                        result = f"工具 {function_name} 执行失败: {str(e)}"
+                        error_result = f"工具 {function_name} 执行失败: {str(e)}"
                         self.messages.append({
                             "role": "tool",
                             "tool_call_id": tool_call["id"],
-                            "content": result,
+                            "content": error_result,
                         })
+                        last_tool_result = error_result
                 else:
                     logger.warning(f"未知工具: {function_name}")
-                    result = f"未知工具: {function_name}"
+                    error_result = f"未知工具: {function_name}"
                     self.messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
-                        "content": result,
+                        "content": error_result,
                     })
+                    last_tool_result = error_result
 
         # 达到最大迭代次数
         logger.warning(f"CodeAgent达到最大迭代次数({max_iterations})，强制结束")
         if self.stream_manager:
-            await self.stream_manager.print_content(
-                f"达到最大迭代次数({max_iterations})，任务结束")
-            await self.stream_manager.print_xml_close("ret_code_agent")
+            await self.stream_manager.print_xml_open("code_agent_warning")
+            await self.stream_manager.print_content(f"达到最大迭代次数({max_iterations})，任务结束")
+            await self.stream_manager.print_xml_close("code_agent_warning")
 
-        return "代码手任务完成（达到最大迭代次数）"
+        # 即使达到最大迭代次数，也要尝试交付最后的结果
+        if last_tool_result:
+            return f"任务完成（达到最大迭代次数）！\n\n最终执行结果：\n{last_tool_result}"
+        else:
+            return "代码手任务完成（达到最大迭代次数），但未获得有效结果"
 
     def get_execution_stats(self) -> Dict[str, Any]:
         """获取执行统计信息"""

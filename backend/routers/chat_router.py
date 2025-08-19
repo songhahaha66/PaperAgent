@@ -160,10 +160,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     }))
                     continue
                 
-                # 保存用户消息
-                chat_service.add_message(work_id, "user", message_data['problem'])
-                logger.info(f"[PERSISTENCE] 用户消息已保存，work_id: {work_id}")
-                
                 # 发送开始消息
                 await websocket.send_text(json.dumps({
                     'type': 'start',
@@ -238,14 +234,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 # 创建MainAgent，传入work_id
                 main_agent = MainAgent(llm_handler, stream_manager, work_id)
                 
-                # 加载历史消息维护上下文
+                # 先加载真正的历史消息（排除当前这次对话）
                 history_messages = chat_service.get_work_chat_history(work_id, limit=20)
                 if history_messages:
+                    # 过滤掉可能包含当前消息的历史记录
+                    # 只加载真正属于历史的消息
                     history_data = [{"role": msg["role"], "content": msg["content"]} 
                                    for msg in history_messages]
                     main_agent.load_conversation_history(history_data)
                 
-                # 直接执行AI任务并等待完成，确保流式传输正常工作
+                # 先执行AI任务，处理完成后保存用户消息到历史
                 try:
                     # 检查main_agent.run是否是异步函数
                     if asyncio.iscoroutinefunction(main_agent.run):
@@ -254,6 +252,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         # 如果是同步函数，使用线程池执行
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
+                    
+                    # AI处理完成后，保存用户消息到历史
+                    await stream_manager.save_user_message(message_data['problem'])
+                    logger.info(f"[PERSISTENCE] AI处理完成，用户消息已保存到历史")
                     
                 except Exception as e:
                     logger.error(f"AI任务执行失败: {e}")

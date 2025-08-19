@@ -246,22 +246,8 @@ class MainAgent(Agent):
                             await self.stream_manager.print_content(f"MainAgent正在调用CodeAgent执行任务")
                             await self.stream_manager.print_xml_close("tool_call")
 
-                        # 创建并运行子 Agent
-                        from .agents import CodeAgent
-                        
-                        # 构建工作空间目录路径
-                        if self.work_id:
-                            # 使用相对于项目根目录的路径
-                            workspace_dir = os.path.join(
-                                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
-                                "pa_data", "workspaces", self.work_id
-                            )
-                        else:
-                            raise ValueError("MainAgent必须有work_id才能创建CodeAgent")
-                        
-                        code_agent = CodeAgent(
-                            self.llm_handler, self.stream_manager, workspace_dir)
-                        tool_result = await code_agent.run(task_prompt)
+                        # 使用独立的CodeAgent执行方法，确保消息隔离
+                        tool_result = await self._execute_code_agent(task_prompt, tool_call["id"])
 
                         # 发送工具调用完成通知
                         if self.stream_manager:
@@ -409,3 +395,45 @@ class MainAgent(Agent):
     def get_context_manager(self) -> ContextManager:
         """获取上下文管理器实例"""
         return self.context_manager
+
+    async def _execute_code_agent(self, task_prompt: str, tool_call_id: str) -> str:
+        """执行CodeAgent的独立方法，使用转发StreamManager确保消息隔离"""
+        try:
+            # 创建独立的StreamManager给CodeAgent使用
+            from .stream_manager import CodeAgentStreamManager
+            
+            # 构建工作空间目录路径
+            if self.work_id:
+                workspace_dir = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
+                    "pa_data", "workspaces", self.work_id
+                )
+            else:
+                raise ValueError("MainAgent必须有work_id才能创建CodeAgent")
+            
+            # 创建转发StreamManager，将CodeAgent输出转发到MainAgent但保持消息隔离
+            code_agent_stream = CodeAgentStreamManager(
+                main_stream_manager=self.stream_manager,  # 转发到MainAgent的StreamManager
+                agent_name="CodeAgent"
+            )
+            
+            # 创建CodeAgent实例，传入独立的StreamManager
+            from .agents import CodeAgent
+            code_agent = CodeAgent(
+                self.llm_handler, 
+                code_agent_stream,  # 使用转发StreamManager
+                workspace_dir
+            )
+            
+            # 执行任务
+            result = await code_agent.run(task_prompt)
+            
+            # 记录执行统计
+            logger.info(f"CodeAgent执行完成，工具调用ID: {tool_call_id}, 结果长度: {len(result)}")
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"CodeAgent执行失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg

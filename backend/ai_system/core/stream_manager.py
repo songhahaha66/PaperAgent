@@ -139,6 +139,30 @@ class PersistentStreamManager(StreamOutputManager):
         if len(self.current_message_buffer) > self.buffer_size or content.endswith('\n'):
             await self._save_message_buffer()
     
+    async def save_user_message(self, content: str):
+        """专门保存用户消息的方法"""
+        if self.chat_service and self.session_id:
+            try:
+                # 从session_id中提取work_id
+                work_id = self.session_id.replace("_main_session", "") if "_main_session" in self.session_id else self.session_id
+                
+                # 在事件循环中运行同步方法
+                import asyncio
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(
+                    None,
+                    self.chat_service.add_message,
+                    work_id,
+                    "user",
+                    content,
+                    None  # metadata
+                )
+                logger.info(f"[PERSISTENCE] 用户消息持久化完成，work_id: {work_id}, 长度: {len(content)}")
+            except Exception as e:
+                logger.error(f"用户消息持久化失败: {e}")
+        else:
+            logger.warning("无法持久化用户消息：聊天服务或会话ID未配置")
+    
     async def _save_message_buffer(self):
         """保存消息缓冲到数据库"""
         if self.chat_service and self.session_id and self.current_message_buffer.strip():
@@ -213,3 +237,77 @@ class SimpleStreamCallback(StreamCallback):
                 await self.output_queue.put("[MESSAGE_COMPLETE]")
             except Exception as e:
                 logger.error(f"发送完成标记失败: {e}")
+
+
+class CodeAgentStreamManager(StreamOutputManager):
+    """CodeAgent专用的StreamManager，将输出转发到MainAgent但保持消息隔离"""
+    
+    def __init__(self, main_stream_manager: StreamOutputManager, agent_name: str):
+        super().__init__()
+        self.main_stream_manager = main_stream_manager
+        self.agent_name = agent_name
+        self.output_buffer = []
+        self.is_forwarding = True
+        
+        logger.info(f"CodeAgentStreamManager初始化完成，代理名称: {agent_name}")
+        
+    async def _output(self, content: str):
+        """重写输出方法，转发到MainAgent的StreamManager"""
+        # 缓冲内容
+        self.output_buffer.append(content)
+        
+        # 转发到MainAgent的StreamManager，添加标识前缀
+        if self.main_stream_manager and self.is_forwarding:
+            try:
+                # 使用特殊的XML标签标识这是CodeAgent的输出
+                await self.main_stream_manager.print_xml_open(f"code_agent_output")
+                await self.main_stream_manager.print_content(f"[{self.agent_name}] {content}")
+                await self.main_stream_manager.print_xml_close(f"code_agent_output")
+            except Exception as e:
+                logger.error(f"转发CodeAgent输出失败: {e}")
+    
+    async def print_xml_open(self, tag_name: str, content: str = ""):
+        """转发XML开始标签"""
+        if self.main_stream_manager and self.is_forwarding:
+            try:
+                # 添加CodeAgent标识
+                await self.main_stream_manager.print_xml_open(f"code_agent_{tag_name}")
+                if content:
+                    await self.main_stream_manager.print_content(f"[{self.agent_name}] {content}")
+            except Exception as e:
+                logger.error(f"转发CodeAgent XML标签失败: {e}")
+    
+    async def print_xml_close(self, tag_name: str):
+        """转发XML结束标签"""
+        if self.main_stream_manager and self.is_forwarding:
+            try:
+                await self.main_stream_manager.print_xml_close(f"code_agent_{tag_name}")
+            except Exception as e:
+                logger.error(f"转发CodeAgent XML标签失败: {e}")
+    
+    async def print_content(self, content: str):
+        """转发内容"""
+        await self._output(content)
+    
+    async def print_stream(self, content: str):
+        """流式打印内容（不换行）"""
+        await self._output(content)
+    
+    def set_forwarding(self, enabled: bool):
+        """设置是否启用转发"""
+        self.is_forwarding = enabled
+        logger.debug(f"CodeAgent转发状态设置为: {enabled}")
+    
+    async def finalize_message(self):
+        """完成消息，清理缓冲区"""
+        self.output_buffer.clear()
+        await super().finalize_message()
+        
+        # 发送CodeAgent完成标识
+        if self.main_stream_manager and self.is_forwarding:
+            try:
+                await self.main_stream_manager.print_xml_open("code_agent_complete")
+                await self.main_stream_manager.print_content(f"[{self.agent_name}] 任务执行完成")
+                await self.main_stream_manager.print_xml_close("code_agent_complete")
+            except Exception as e:
+                logger.error(f"发送CodeAgent完成标识失败: {e}")
