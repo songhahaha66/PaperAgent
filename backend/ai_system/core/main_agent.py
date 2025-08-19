@@ -147,6 +147,21 @@ class MainAgent(Agent):
         
         logger.info(f"已加载 {len(self.messages) - 1} 条历史消息，维护上下文连续性")
 
+    def add_user_message(self, user_problem: str):
+        """在正确位置添加用户消息到对话历史"""
+        # 检查是否已存在相同的用户消息，避免重复添加
+        existing_user_messages = [msg for msg in self.messages if msg.get('role') == 'user']
+        is_duplicate = any(msg.get('content') == user_problem for msg in existing_user_messages)
+        
+        if is_duplicate:
+            logger.warning(f"检测到重复的用户消息，跳过添加。问题: {user_problem[:50]}...")
+            return False
+        else:
+            # 添加用户消息到对话历史
+            self.messages.append({"role": "user", "content": user_problem})
+            logger.info("用户消息已添加到对话历史")
+            return True
+
     def _check_and_compress_context(self):
         """检查并压缩上下文"""
         context_status = self.context_manager.get_context_status(self.messages)
@@ -199,9 +214,6 @@ class MainAgent(Agent):
         """执行主 Agent 逻辑，循环处理直到任务完成。"""
         logger.info(f"MainAgent开始执行，问题长度: {len(user_problem)} 字符")
         logger.info(f"当前消息历史长度: {len(self.messages)}")
-
-        # 添加用户消息到对话历史
-        self.messages.append({"role": "user", "content": user_problem})
 
         # 检查上下文状态
         self._check_and_compress_context()

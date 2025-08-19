@@ -243,7 +243,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                    for msg in history_messages]
                     main_agent.load_conversation_history(history_data)
                 
-                # 先执行AI任务，处理完成后保存用户消息到历史
+                # 在正确位置添加用户消息到MainAgent的消息历史
+                main_agent.add_user_message(message_data['problem'])
+                
+                # 执行AI任务
                 try:
                     # 检查main_agent.run是否是异步函数
                     if asyncio.iscoroutinefunction(main_agent.run):
@@ -253,9 +256,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
                     
-                    # AI处理完成后，保存用户消息到历史
+                    # AI处理完成后，保存用户消息到持久化存储
                     await stream_manager.save_user_message(message_data['problem'])
-                    logger.info(f"[PERSISTENCE] AI处理完成，用户消息已保存到历史")
+                    logger.info(f"[PERSISTENCE] AI处理完成，用户消息已保存到持久化存储")
                     
                 except Exception as e:
                     logger.error(f"AI任务执行失败: {e}")
