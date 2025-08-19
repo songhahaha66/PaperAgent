@@ -167,9 +167,28 @@ class PersistentStreamManager(StreamOutputManager):
         """保存消息缓冲到数据库"""
         if self.chat_service and self.session_id and self.current_message_buffer.strip():
             try:
-                # 这里可以调用聊天服务保存消息
-                # 由于是流式传输，可能需要特殊处理
-                logger.debug(f"缓冲消息长度: {len(self.current_message_buffer)}")
+                # 检查聊天服务是否有add_message方法
+                if hasattr(self.chat_service, 'add_message'):
+                    # ChatService.add_message是同步方法，需要从session_id中提取work_id
+                    work_id = self.session_id.replace("_main_session", "") if "_main_session" in self.session_id else self.session_id
+                    
+                    # 在事件循环中运行同步方法
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(
+                        None,
+                        self.chat_service.add_message,
+                        work_id,
+                        self.current_role,
+                        self.current_message_buffer.strip(),
+                        None  # metadata
+                    )
+                    logger.info(f"[PERSISTENCE] 缓冲消息已保存，work_id: {work_id}, 角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
+                    
+                    # 清空已保存的缓冲区内容
+                    self.current_message_buffer = ""
+                else:
+                    logger.warning("聊天服务没有add_message方法")
             except Exception as e:
                 logger.error(f"保存消息缓冲失败: {e}")
     
