@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 
 class WorkspaceFileService:
     def __init__(self):
-        self.base_path = Path("pa_data/workspaces")
+        self.base_path = Path("../pa_data/workspaces")
     
     def get_workspace_path(self, work_id: str) -> Path:
         """获取工作空间路径"""
@@ -44,8 +44,14 @@ class WorkspaceFileService:
             logger = logging.getLogger(__name__)
             logger.error(f"创建工作空间目录结构失败: {e}")
     
-    def list_files(self, work_id: str, relative_path: str = "") -> List[Dict[str, Any]]:
-        """列出工作空间中的文件"""
+    def list_files(self, work_id: str, relative_path: str = "", recursive: bool = True) -> List[Dict[str, Any]]:
+        """列出工作空间中的文件，支持递归遍历
+        
+        Args:
+            work_id: 工作ID
+            relative_path: 相对路径，默认为根目录
+            recursive: 是否递归遍历子目录，默认为True
+        """
         try:
             workspace_path = self.ensure_workspace_exists(work_id)
             target_path = workspace_path / relative_path if relative_path else workspace_path
@@ -54,22 +60,71 @@ class WorkspaceFileService:
                 return []
             
             files = []
-            for item in target_path.iterdir():
-                file_info = {
-                    "name": item.name,
-                    "type": "directory" if item.is_dir() else "file",
-                    "size": item.stat().st_size if item.is_file() else None,
-                    "modified": item.stat().st_mtime,
-                    "path": str(item.relative_to(workspace_path))
-                }
-                files.append(file_info)
             
-            # 按类型和名称排序：目录在前，文件在后
-            files.sort(key=lambda x: (x["type"] == "file", x["name"].lower()))
+            if recursive:
+                # 使用更直接的方法递归遍历
+                def scan_directory(current_path: Path, current_depth: int = 0):
+                    try:
+                        for item in current_path.iterdir():
+                            # 计算相对于工作空间的路径
+                            rel_path = str(item.relative_to(workspace_path))
+                            
+                            # 计算深度
+                            depth = current_depth
+                            
+                            file_info = {
+                                "name": item.name,
+                                "type": "directory" if item.is_dir() else "file",
+                                "size": item.stat().st_size if item.is_file() else None,
+                                "modified": item.stat().st_mtime,
+                                "path": rel_path,
+                                "depth": depth
+                            }
+                            files.append(file_info)
+                            
+                            # 调试输出
+                            print(f"找到文件: {rel_path}, 类型: {file_info['type']}, 深度: {depth}")
+                            
+                            # 如果是目录且需要递归，继续扫描
+                            if item.is_dir() and recursive:
+                                scan_directory(item, current_depth + 1)
+                    except Exception as e:
+                        print(f"扫描目录 {current_path} 时出错: {e}")
+                
+                # 开始扫描
+                scan_directory(target_path)
+                
+            else:
+                # 只遍历当前目录
+                for item in target_path.iterdir():
+                    file_info = {
+                        "name": item.name,
+                        "type": "directory" if item.is_dir() else "file",
+                        "size": item.stat().st_size if item.is_file() else None,
+                        "modified": item.stat().st_mtime,
+                        "path": str(item.relative_to(workspace_path)),
+                        "depth": 0
+                    }
+                    files.append(file_info)
+            
+            # 按类型、深度和名称排序：目录在前，文件在后，同类型按深度和名称排序
+            files.sort(key=lambda x: (x["type"] == "file", x["depth"], x["name"].lower()))
+            
+            # 添加调试日志
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"列出工作空间 {work_id} 的文件，路径: {relative_path}，递归: {recursive}，找到 {len(files)} 个文件")
+            for file in files:
+                logger.info(f"  - {file['type']}: {file['path']}")
+            
             return files
         except HTTPException:
             raise
         except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"列出文件失败: {e}")
+            print(f"错误: {e}")  # 直接打印错误
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to list files: {str(e)}"

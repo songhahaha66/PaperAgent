@@ -43,6 +43,8 @@ export interface FileInfo {
   size?: number;
   modified: number;
   path: string;
+  display_path?: string;  // 显示路径（相对于当前目录）
+  depth?: number;         // 目录深度
 }
 
 export interface FileUploadResponse {
@@ -184,10 +186,17 @@ export const workspaceFileAPI = {
   async listFiles(
     token: string, 
     workId: string, 
-    path: string = ''
+    path: string = '',
+    recursive: boolean = true
   ): Promise<FileInfo[]> {
-    const params = path ? `?path=${encodeURIComponent(path)}` : '';
-    const response = await apiClient.request<FileInfo[]>(`/api/workspace/${workId}/files${params}`, {
+    const params = new URLSearchParams();
+    if (path) params.append('path', path);
+    if (!recursive) params.append('recursive', 'false');
+    
+    const queryString = params.toString();
+    const url = `/api/workspace/${workId}/files${queryString ? `?${queryString}` : ''}`;
+    
+    const response = await apiClient.request<FileInfo[]>(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}` }
     });

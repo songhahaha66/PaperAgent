@@ -80,12 +80,90 @@ const processedFileTreeData = computed(() => {
     ]
   }
   
-  // 按文件类型分类
-  const pythonFiles: any[] = []
-  const markdownFiles: any[] = []
-  const imageFiles: any[] = []
+  // 构建目录树结构
+  const buildDirectoryTree = (files: any[]) => {
+    const tree: any = {};
+    
+    files.forEach(file => {
+      const pathParts = file.path.split('/');
+      let currentLevel = tree;
+      
+      // 构建目录路径
+      for (let i = 0; i < pathParts.length - 1; i++) {
+        const part = pathParts[i];
+        if (!currentLevel[part]) {
+          currentLevel[part] = {
+            type: 'directory',
+            children: {},
+            files: []
+          };
+        }
+        currentLevel = currentLevel[part].children;
+      }
+      
+      // 添加文件到对应目录
+      const fileName = pathParts[pathParts.length - 1];
+      if (currentLevel.files) {
+        currentLevel.files.push({
+          ...file,
+          displayName: fileName
+        });
+      }
+    });
+    
+    return tree;
+  };
   
-  // 遍历文件数据，按后缀分类
+  // 将目录树转换为组件需要的格式
+  const convertTreeToComponentFormat = (tree: any, parentPath = ''): any[] => {
+    const result: any[] = [];
+    
+    // 先添加目录
+    Object.keys(tree).forEach(key => {
+      if (key !== 'files' && key !== 'type') {
+        const node = tree[key];
+        const fullPath = parentPath ? `${parentPath}/${key}` : key;
+        
+        result.push({
+          value: fullPath,
+          label: key,
+          children: convertTreeToComponentFormat(node, fullPath)
+        });
+      }
+    });
+    
+    // 再添加文件
+    if (tree.files) {
+      tree.files.forEach((file: any) => {
+        result.push({
+          value: file.path,
+          label: file.displayName,
+          isLeaf: true,
+          fileType: getFileType(file.path)
+        });
+      });
+    }
+    
+    return result;
+  };
+  
+  // 获取文件类型
+  const getFileType = (filePath: string): string => {
+    if (filePath.endsWith('.py')) return 'python';
+    if (filePath.endsWith('.md')) return 'markdown';
+    if (isImageFile(filePath)) return 'image';
+    return 'other';
+  };
+  
+  // 构建完整的目录树
+  const directoryTree = buildDirectoryTree(props.fileTreeData);
+  const fullTree = convertTreeToComponentFormat(directoryTree);
+  
+  // 按文件类型分类（保持原有逻辑作为备选）
+  const pythonFiles: any[] = [];
+  const markdownFiles: any[] = [];
+  const imageFiles: any[] = [];
+  
   props.fileTreeData.forEach(file => {
     if (file.path.endsWith('.py')) {
       pythonFiles.push({
@@ -108,7 +186,8 @@ const processedFileTreeData = computed(() => {
     }
   })
   
-  return [
+  // 返回完整的目录树结构
+  return fullTree.length > 0 ? fullTree : [
     {
       value: 'python_files',
       label: `Python脚本 (${pythonFiles.length})`,
@@ -134,16 +213,44 @@ const isImageFile = (filePath: string): boolean => {
   return imageExtensions.some(ext => lowerPath.endsWith(ext))
 }
 
+// 检查节点是否为叶子节点
+const checkIfLeaf = (key: string): boolean => {
+  // 如果是分类名称，直接返回false
+  if (key === 'python_files' || key === 'markdown_files' || key === 'image_files') {
+    return false
+  }
+  
+  // 检查是否在分类的子节点中
+  for (const category of processedFileTreeData.value) {
+    if (category.value === key) {
+      return false // 分类节点不是叶子节点
+    }
+    for (const child of category.children || []) {
+      if (child.value === key) {
+        return child.isLeaf || false
+      }
+    }
+  }
+  
+  // 对于新的目录树结构，检查是否为文件
+  return !key.endsWith('/') && key.includes('.') // 简单判断：包含扩展名的不是目录
+}
+
+// 检查是否为分类节点
+const isCategoryNode = (key: string): boolean => {
+  return key === 'python_files' || key === 'markdown_files' || key === 'image_files'
+}
+
 // 处理文件点击
 const handleFileClick = (context: { node: any, e: PointerEvent }) => {
   console.log('文件节点点击:', context)
   const node = context.node
-  if (node && node.isLeaf) {
+  if (node && node.isLeaf && node.value && !isCategoryNode(node.value)) {
     selectedFile.value = node.value
     emit('file-select', node.value)
     console.log('成功选中文件:', node.value)
   } else {
-    console.log('点击的不是文件节点:', node?.value)
+    console.log('点击的不是文件节点或点击的是分类节点:', node?.value)
   }
 }
 
@@ -155,28 +262,18 @@ const handleFileSelect = (selectedKeys: string[]) => {
     const selectedKey = selectedKeys[0]
     console.log('选中的key:', selectedKey)
     
-    // 检查是否是叶子节点（文件）
+    // 检查是否是叶子节点（文件）且不是分类名称
     const isLeaf = checkIfLeaf(selectedKey)
-    if (isLeaf) {
+    const isNotCategory = !isCategoryNode(selectedKey)
+    
+    if (isLeaf && isNotCategory) {
       selectedFile.value = selectedKey
       emit('file-select', selectedKey)
       console.log('成功选中文件:', selectedKey)
     } else {
-      console.log('选中的不是文件节点:', selectedKey)
+      console.log('选中的不是文件节点或点击的是分类节点:', selectedKey)
     }
   }
-}
-
-// 检查节点是否为叶子节点
-const checkIfLeaf = (key: string): boolean => {
-  for (const category of processedFileTreeData.value) {
-    for (const child of category.children || []) {
-      if (child.value === key) {
-        return child.isLeaf || false
-      }
-    }
-  }
-  return false
 }
 
 // 暴露方法供父组件调用
