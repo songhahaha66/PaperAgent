@@ -33,7 +33,7 @@ class LLMHandler:
         logger.info("=== 消息列表详情 ===")
         for i, msg in enumerate(messages):
             role = msg.get('role', 'unknown')
-            content = msg.get('content', '')[:100]  # 只显示前100个字符
+            content = msg.get('content', '')[:1000]  # 只显示前100个字符
             logger.info(f"消息 {i}: role={role}, content={repr(content)}...")
         logger.info("=== 消息列表结束 ===")
         
