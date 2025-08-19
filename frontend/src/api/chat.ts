@@ -186,8 +186,8 @@ export class WebSocketChatHandler {
   private reconnectDelay = 1000;
   private messageQueue: any[] = [];
   private isConnecting = false;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: number | null = null;
+  private heartbeatTimer: number | null = null;
   private messageCallback: ((data: any) => void) | null = null;
 
   constructor(workId: string, token: string) {  // 参数改为workId
