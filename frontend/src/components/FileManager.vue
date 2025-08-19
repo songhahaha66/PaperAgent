@@ -80,6 +80,34 @@ const processedFileTreeData = computed(() => {
     ]
   }
   
+  // 过滤掉空目录，只保留有文件的目录
+  const hasActualFiles = props.fileTreeData.some(file => file.type === 'file');
+  
+  if (!hasActualFiles) {
+    // 如果没有实际文件，只显示分类结构
+    const pythonFiles: any[] = [];
+    const markdownFiles: any[] = [];
+    const imageFiles: any[] = [];
+    
+    return [
+      {
+        value: 'python_files',
+        label: 'Python脚本 (0)',
+        children: pythonFiles
+      },
+      {
+        value: 'markdown_files',
+        label: 'Markdown文档 (0)',
+        children: markdownFiles
+      },
+      {
+        value: 'image_files',
+        label: '图片文件 (0)',
+        children: imageFiles
+      }
+    ]
+  }
+  
   // 构建目录树结构
   const buildDirectoryTree = (files: any[]) => {
     const tree: any = {};
@@ -155,7 +183,7 @@ const processedFileTreeData = computed(() => {
     return 'other';
   };
   
-  // 构建完整的目录树
+  // 构建完整的目录树结构
   const directoryTree = buildDirectoryTree(props.fileTreeData);
   const fullTree = convertTreeToComponentFormat(directoryTree);
   
@@ -186,24 +214,28 @@ const processedFileTreeData = computed(() => {
     }
   })
   
-  // 返回完整的目录树结构
-  return fullTree.length > 0 ? fullTree : [
-    {
-      value: 'python_files',
-      label: `Python脚本 (${pythonFiles.length})`,
-      children: pythonFiles
-    },
-    {
-      value: 'markdown_files',
-      label: `Markdown文档 (${markdownFiles.length})`,
-      children: markdownFiles
-    },
-    {
-      value: 'image_files',
-      label: `图片文件 (${imageFiles.length})`,
-      children: imageFiles
-    }
-  ]
+  // 返回完整的目录树结构，如果没有文件则回退到分类显示
+  if (fullTree.length > 0 && hasActualFiles) {
+    return fullTree;
+  } else {
+    return [
+      {
+        value: 'python_files',
+        label: `Python脚本 (${pythonFiles.length})`,
+        children: pythonFiles
+      },
+      {
+        value: 'markdown_files',
+        label: `Markdown文档 (${markdownFiles.length})`,
+        children: markdownFiles
+      },
+      {
+        value: 'image_files',
+        label: `图片文件 (${imageFiles.length})`,
+        children: imageFiles
+      }
+    ]
+  }
 })
 
 // 判断是否为图片文件
