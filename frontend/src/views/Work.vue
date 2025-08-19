@@ -186,7 +186,11 @@ const selectedFile = ref<string | null>(null)
 const fileTreeData = ref([])
 
 // 文件内容映射
-const fileContents: Record<string, string> = {}
+// 数据定义
+const currentFileContent = ref('')
+const currentFileName = ref('')
+const fileContents = ref<Record<string, string>>({})
+const currentWorkspaceConfig = ref('')
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
@@ -374,19 +378,35 @@ const deleteWork = async () => {
 };
 
 // 处理文件选择
-const handleFileSelect = async (fileKey: string) => {
-  if (!workId.value || !authStore.token) return;
+const handleFileSelect = async (filePath: string) => {
+  console.log('文件被选中:', filePath)
+  currentFileName.value = filePath
+  selectedFile.value = filePath  // 设置选中的文件
   
-  selectedFile.value = fileKey;
-  
-  try {
-    const content = await workspaceFileAPI.readFile(authStore.token, workId.value, fileKey);
-    fileContents[fileKey] = content;
-  } catch (error) {
-    console.error('读取文件失败:', error);
-    fileContents[fileKey] = '文件读取失败';
+  // 检查是否已缓存
+  if (fileContents.value[filePath]) {
+    currentFileContent.value = fileContents.value[filePath]
+    console.log('使用缓存的文件内容')
+    return
   }
-};
+
+  // 从服务器获取文件内容
+  try {
+    console.log('从服务器获取文件内容:', filePath)
+    const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
+    
+    // 缓存文件内容
+    fileContents.value[filePath] = content
+    currentFileContent.value = content
+    
+    console.log('文件内容获取成功，长度:', content.length)
+  } catch (error) {
+    console.error('获取文件内容失败:', error)
+    fileContents.value[filePath] = '文件读取失败'
+    currentFileContent.value = '文件读取失败'
+    MessagePlugin.error('加载文件失败')
+  }
+}
 
 
 
