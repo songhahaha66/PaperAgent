@@ -1,51 +1,51 @@
-import fetch from 'node-fetch';
-
 export default async function handler(req, res) {
   try {
-    // 构造目标 URL，包括查询参数
-    const query = req.url.includes('?') ? '' : req.url.split('?')[1] || '';
-    const targetUrl = `http://118.178.124.124:8000${req.url}${query ? '?' + query : ''}`;
+    // 目标后端地址
+    const targetUrl = `http://118.178.124.124:8000${req.url}`;
 
-    // 构造请求体
+    // 读取请求体（支持 JSON、文本、文件等）
     let body;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
-      body = req.body;
-      // 如果是 JSON，需要转换为字符串
-      if (req.headers['content-type']?.includes('application/json') && typeof body !== 'string') {
-        body = JSON.stringify(body);
-      }
+      body = await new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on('data', chunk => chunks.push(chunk));
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', err => reject(err));
+      });
     }
 
-    // 转发请求
+    // 转发请求，过滤掉有问题的头
+    const filteredHeaders = Object.fromEntries(
+      Object.entries(req.headers).filter(([k]) =>
+        !['host', 'content-length', 'connection'].includes(k.toLowerCase())
+      )
+    );
+
     const response = await fetch(targetUrl, {
       method: req.method,
-      headers: {
-        ...req.headers,
-        host: undefined, // 避免 host 冲突
-      },
-      body,
+      headers: filteredHeaders,
+      body: body && body.length > 0 ? body : undefined
     });
 
-    // 设置响应头
+    // 转发响应头
     response.headers.forEach((value, key) => {
-      // 避免某些受限头导致 Vercel 报错
       if (!['transfer-encoding', 'content-encoding', 'connection'].includes(key)) {
         res.setHeader(key, value);
       }
     });
 
-    // 返回响应状态码和内容
+    // 返回内容
     const contentType = response.headers.get('content-type') || '';
     if (contentType.includes('application/json')) {
       const data = await response.json();
       res.status(response.status).json(data);
     } else {
-      const data = await response.text();
-      res.status(response.status).send(data);
+      const data = await response.arrayBuffer();
+      res.status(response.status).send(Buffer.from(data));
     }
 
   } catch (err) {
     console.error(err);
-    res.status(500).send({ error: 'Proxy error' });
+    res.status(500).json({ error: 'Proxy error', message: err.message });
   }
 }
