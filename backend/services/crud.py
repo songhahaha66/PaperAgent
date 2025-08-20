@@ -284,6 +284,19 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
             detail="Not authorized to delete this template"
         )
     
+    # 检查是否有works引用该模板
+    from models.models import Work
+    works_using_template = db.query(Work).filter(Work.template_id == template_id).all()
+    if works_using_template:
+        work_titles = [work.title for work in works_using_template[:5]]  # 只显示前5个
+        if len(works_using_template) > 5:
+            work_titles.append(f"... 还有 {len(works_using_template) - 5} 个工作")
+        
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"无法删除模板，因为还有 {len(works_using_template)} 个工作正在使用该模板。请先删除或修改这些工作：{', '.join(work_titles)}"
+        )
+    
     # 删除关联的模板文件
     template_file_service.delete_template_file(template_id)
     
@@ -291,6 +304,46 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
     db.delete(db_template)
     db.commit()
     return {"message": "Template deleted successfully"}
+
+def force_delete_paper_template(db: Session, template_id: int, user_id: int):
+    """强制删除论文模板（同时删除引用该模板的工作）"""
+    db_template = get_paper_template(db, template_id)
+    if not db_template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template not found"
+        )
+    
+    # 检查权限：只有创建者可以删除
+    if db_template.created_by != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this template"
+        )
+    
+    # 查找并删除引用该模板的所有works
+    from models.models import Work
+    works_using_template = db.query(Work).filter(Work.template_id == template_id).all()
+    
+    if works_using_template:
+        # 删除引用该模板的工作
+        for work in works_using_template:
+            # 这里可以添加删除工作相关文件的逻辑
+            # 例如删除工作空间文件夹、聊天记录等
+            db.delete(work)
+    
+    # 删除关联的模板文件
+    template_file_service.delete_template_file(template_id)
+    
+    # 删除数据库记录
+    db.delete(db_template)
+    db.commit()
+    
+    deleted_works_count = len(works_using_template)
+    return {
+        "message": f"Template and {deleted_works_count} related works deleted successfully",
+        "deleted_works_count": deleted_works_count
+    }
 
 def get_template_file_content(db: Session, template_id: int, user_id: int) -> str:
     """获取模板文件内容"""

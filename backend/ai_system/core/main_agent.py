@@ -13,6 +13,7 @@ from .llm_handler import LLMHandler
 from .stream_manager import StreamOutputManager
 from .context_manager import ContextManager
 from ..tools.file_tools import FileTools
+from ..tools.template_agent_tools import TemplateAgentTools
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class MainAgent(Agent):
     支持session上下文维护，保持对话连续性。
     """
 
-    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None):
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None, template_id: Optional[int] = None):
         super().__init__(llm_handler, stream_manager)
 
         # 构建工作空间目录路径
@@ -40,6 +41,10 @@ class MainAgent(Agent):
 
         self.file_tools = FileTools(stream_manager)
         self.work_id = work_id  # 改为work_id，每个work对应一个MainAgent
+        self.template_id = template_id  # 添加模板ID
+        
+        # 初始化模板工具，传入正确的工作空间目录
+        self.template_agent_tools = TemplateAgentTools(workspace_dir)
 
         # 初始化上下文管理器
         self.context_manager = ContextManager(
@@ -48,23 +53,88 @@ class MainAgent(Agent):
         )
 
         self._setup()
-        logger.info(f"MainAgent初始化完成，work_id: {work_id}")
+        
+        # 如果有模板ID，复制模板文件到工作空间
+        if self.template_id and work_id:
+            self._copy_template_to_workspace()
+            
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}")
+
+    def _copy_template_to_workspace(self):
+        """复制模板文件到工作空间"""
+        try:
+            import shutil
+            from services.crud import get_paper_template
+            from database.database import get_db
+            
+            # 获取数据库会话
+            db = next(get_db())
+            
+            # 获取模板信息
+            template = get_paper_template(db, self.template_id)
+            if not template:
+                logger.warning(f"模板 {self.template_id} 不存在")
+                return
+            
+            # 构建模板文件路径
+            template_file_path = os.path.join(
+                os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.dirname(__file__)))),
+                "pa_data", "templates", f"{self.template_id}_template.md"
+            )
+            
+            # 检查模板文件是否存在
+            if not os.path.exists(template_file_path):
+                logger.warning(f"模板文件不存在: {template_file_path}")
+                return
+            
+            # 构建目标路径 - 将模板复制为paper.md，明确这是最终论文文件
+            target_path = os.path.join(self.file_tools.get_workspace_dir(), "paper.md")
+            
+            # 复制模板文件到工作空间
+            shutil.copy2(template_file_path, target_path)
+            logger.info(f"模板文件已复制到工作空间，重命名为paper.md: {target_path}")
+            
+        except Exception as e:
+            logger.error(f"复制模板文件失败: {e}")
 
     def _setup(self):
         """初始化 System Prompt 和工具。"""
-        # 简化系统提示，明确角色定位
+        # 基础系统提示
         system_content = (
             "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。\n"
             "你的职责：\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
             "3. 维护对话上下文，理解整个工作流程的连续性\n"
-            "4. 最终使用tree工具检查生成的文件，用writemd工具生成论文\n\n"
+            "4. 最终使用tree工具检查生成的文件\n\n"
             "重要原则：\n"
             "- 保持对话连贯性，不重复询问已明确的信息\n"
             "- CodeAgent负责具体执行，你负责规划和协调\n"
             "- 所有生成的文件都要在最终论文中引用"
+            "- 请自己执行迭代，直到任务完成\n"
+            "- 生成的论文不要杜撰，确保科学性"
         )
+
+        # 如果有模板，添加模板信息到系统提示
+        if self.template_id:
+            system_content += f"\n\n模板信息（已生成）：\n"
+            system_content += f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
+            system_content += f"- 模板是一个大纲，你要填满大纲！\n"
+            system_content += f"- 然后使用以下工具之一来操作论文文件：\n"
+            system_content += f"  * writemd工具：支持多种模式（覆盖、追加、修改、插入、智能替换、章节更新）\n"
+            system_content += f"  * update_template工具：专门用于模板操作，支持章节级别更新\n"
+            system_content += f"- 模板操作工具，让AI更方便地操作模板：\n"
+            system_content += f"  * extract_headers: 快速提取模板中的所有标题，了解结构\n"
+            system_content += f"  * get_structure_summary: 获取模板结构摘要\n"
+            system_content += f"  * analyze_template: 深度分析模板结构和内容\n"
+            system_content += f"  * get_section_content: 查看指定章节内容\n"
+            system_content += f"  * update_section_content: 更新章节内容（支持多种模式）\n"
+            system_content += f"  * add_new_section: 添加新章节\n"
+            system_content += f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
+            system_content += f"- 如果模板有特定的章节要求，请保持这些章节结构\n"
+            system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
+            system_content += f"- 建议使用smart_replace模式来保持模板结构，只替换内容部分\n"
 
         self.messages = [{
             "role": "system",
@@ -89,14 +159,32 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "writemd",
-                "description": "将内容写入Markdown文件到workspace目录",
+                "description": "将内容写入Markdown文件到workspace目录，支持多种写入模式",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "filename": {"type": "string", "description": "文件名（不需要.md后缀）"},
-                        "content": {"type": "string", "description": "Markdown格式的内容"}
+                        "content": {"type": "string", "description": "Markdown格式的内容"},
+                        "mode": {"type": "string", "description": "写入模式：overwrite(覆盖), append(追加), modify(修改), insert(插入), smart_replace(智能替换), section_update(章节更新)", "default": "overwrite"}
                     },
                     "required": ["filename", "content"],
+                },
+            },
+        }
+
+        update_template_tool = {
+            "type": "function",
+            "function": {
+                "name": "update_template",
+                "description": "专门用于更新论文文件的工具，支持章节级别的更新",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "template_name": {"type": "string", "description": "论文文件名，默认为paper.md"},
+                        "content": {"type": "string", "description": "要更新的内容"},
+                        "section": {"type": "string", "description": "要更新的章节名称（可选）"}
+                    },
+                    "required": ["content"],
                 },
             },
         }
@@ -116,17 +204,128 @@ class MainAgent(Agent):
             },
         }
 
+        # 模板操作工具
+        analyze_template_tool = {
+            "type": "function",
+            "function": {
+                "name": "analyze_template",
+                "description": "分析当前工作目录中模板文件的模板结构，识别所有标题层级和内容，为AI提供模板概览",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+
+        get_section_content_tool = {
+            "type": "function",
+            "function": {
+                "name": "get_section_content",
+                "description": "获取paper.md文件中指定章节的内容",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section_title": {"type": "string", "description": "要查看的章节标题"}
+                    },
+                    "required": ["section_title"],
+                },
+            },
+        }
+
+        update_section_content_tool = {
+            "type": "function",
+            "function": {
+                "name": "update_section_content",
+                "description": "更新paper.md文件中指定章节的内容，支持多种更新模式",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "section_title": {"type": "string", "description": "要更新的章节标题"},
+                        "new_content": {"type": "string", "description": "新内容"},
+                        "mode": {"type": "string", "description": "更新模式：replace(替换), append(追加), prepend(插入), merge(合并)", "default": "replace"}
+                    },
+                    "required": ["section_title", "new_content"],
+                },
+            },
+        }
+
+        add_new_section_tool = {
+            "type": "function",
+            "function": {
+                "name": "add_new_section",
+                "description": "在paper.md文件中指定父章节下添加新章节",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "parent_section": {"type": "string", "description": "父章节标题"},
+                        "section_title": {"type": "string", "description": "新章节标题"},
+                        "content": {"type": "string", "description": "新章节内容", "default": ""}
+                    },
+                    "required": ["parent_section", "section_title"],
+                },
+            },
+        }
+
+        extract_headers_tool = {
+            "type": "function",
+            "function": {
+                "name": "extract_headers",
+                "description": "从paper.md文件中提取所有标题信息，快速了解文档结构",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+
+        get_structure_summary_tool = {
+            "type": "function",
+            "function": {
+                "name": "get_structure_summary",
+                "description": "获取paper.md文件的内容结构摘要，显示所有标题的层级关系",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+
         # 注册工具到可用函数列表
         self.available_functions.update({
             "writemd": self.file_tools.writemd,
+            "update_template": self.file_tools.update_template,
             "tree": self.file_tools.tree
+        })
+        
+        # 注册模板操作工具
+        self.available_functions.update({
+            "analyze_template": self.template_agent_tools.analyze_template,
+            "get_section_content": self.template_agent_tools.get_section_content,
+            "update_section_content": self.template_agent_tools.update_section_content,
+            "add_new_section": self.template_agent_tools.add_new_section,
+            "remove_section": self.template_agent_tools.remove_section,
+            "reorder_sections": self.template_agent_tools.reorder_sections,
+            "format_template": self.template_agent_tools.format_template,
+            "get_template_help": self.template_agent_tools.get_template_help,
+            "extract_headers": self.template_agent_tools.extract_headers_from_content,
+            "get_structure_summary": self.template_agent_tools.get_content_structure_summary
         })
 
         # 将工具定义添加到tools列表
         self.tools = [
             code_interpreter_tool,
             writemd_tool,
-            tree_tool
+            update_template_tool,
+            tree_tool,
+            analyze_template_tool,
+            get_section_content_tool,
+            update_section_content_tool,
+            add_new_section_tool,
+            extract_headers_tool,
+            get_structure_summary_tool
         ]
 
     def load_conversation_history(self, history_messages: List[Dict[str, Any]]):

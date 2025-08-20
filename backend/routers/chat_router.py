@@ -320,8 +320,19 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     stream_manager=stream_manager
                 )
 
-                # 创建MainAgent，传入work_id
-                main_agent = MainAgent(llm_handler, stream_manager, work_id)
+                # 获取工作的模板ID
+                template_id = None
+                try:
+                    from services.crud import get_work
+                    work = get_work(db, work_id)
+                    if work and hasattr(work, 'template_id') and work.template_id:
+                        template_id = work.template_id
+                        logger.info(f"工作 {work_id} 使用模板: {template_id}")
+                except Exception as e:
+                    logger.warning(f"获取工作模板ID失败: {e}")
+
+                # 创建MainAgent，传入work_id和template_id
+                main_agent = MainAgent(llm_handler, stream_manager, work_id, template_id)
 
                 # 先加载真正的历史消息（排除当前这次对话）
                 history_messages = chat_service.get_work_chat_history(
