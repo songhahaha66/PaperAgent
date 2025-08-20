@@ -189,6 +189,7 @@ export class WebSocketChatHandler {
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private messageCallback: ((data: any) => void) | null = null;
+  private disconnectCallback: (() => void) | null = null;
 
   constructor(workId: string, token: string) {  // 参数改为workId
     this.workId = workId;
@@ -252,6 +253,11 @@ export class WebSocketChatHandler {
           // 如果不是正常关闭，尝试重连
           if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
             this.scheduleReconnect();
+          } else {
+            // 如果是正常关闭或达到最大重连次数，调用断开回调
+            if (this.disconnectCallback) {
+              this.disconnectCallback();
+            }
           }
         };
 
@@ -373,6 +379,11 @@ export class WebSocketChatHandler {
     };
   }
 
+  // 监听断开连接
+  onDisconnect(callback: () => void) {
+    this.disconnectCallback = callback;
+  }
+
   // 关闭连接
   disconnect() {
     this.clearReconnectTimer();
@@ -384,6 +395,11 @@ export class WebSocketChatHandler {
     }
     this.isConnecting = false;
     this.messageQueue = [];
+    
+    // 调用断开回调
+    if (this.disconnectCallback) {
+      this.disconnectCallback();
+    }
   }
 
   // 检查连接状态
