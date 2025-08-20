@@ -78,14 +78,15 @@ class AsyncConfig:
         cls.WEBSOCKET_CONFIG["content_yield_delay"] = 0.001
         cls.TASK_CONFIG["max_workers"] = 2
     
-    def get_status(self) -> Dict[str, Any]:
+    @classmethod
+    def get_status(cls) -> Dict[str, Any]:
         """获取配置状态"""
         return {
-            "llm_stream_config": self.LLM_STREAM_CONFIG.copy(),
-            "websocket_config": self.WEBSOCKET_CONFIG.copy(),
-            "tool_call_config": self.TOOL_CALL_CONFIG.copy(),
-            "task_config": self.TASK_CONFIG.copy(),
-            "instance_id": id(self)
+            "llm_stream_config": cls.LLM_STREAM_CONFIG.copy(),
+            "websocket_config": cls.WEBSOCKET_CONFIG.copy(),
+            "tool_call_config": cls.TOOL_CALL_CONFIG.copy(),
+            "task_config": cls.TASK_CONFIG.copy(),
+            "instance_id": id(cls)
         }
 
 # 全局配置实例
