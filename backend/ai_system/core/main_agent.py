@@ -84,12 +84,12 @@ class MainAgent(Agent):
                 logger.warning(f"模板文件不存在: {template_file_path}")
                 return
             
-            # 构建目标路径
-            target_path = os.path.join(self.file_tools.get_workspace_dir(), "template.md")
+            # 构建目标路径 - 将模板复制为paper.md，明确这是最终论文文件
+            target_path = os.path.join(self.file_tools.get_workspace_dir(), "paper.md")
             
             # 复制模板文件到工作空间
             shutil.copy2(template_file_path, target_path)
-            logger.info(f"模板文件已复制到工作空间: {target_path}")
+            logger.info(f"模板文件已复制到工作空间，重命名为paper.md: {target_path}")
             
         except Exception as e:
             logger.error(f"复制模板文件失败: {e}")
@@ -98,7 +98,7 @@ class MainAgent(Agent):
         """初始化 System Prompt 和工具。"""
         # 基础系统提示
         system_content = (
-            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。\n"
+            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程，最后论文要保存在模板文件里！\n"
             "你的职责：\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
@@ -113,13 +113,16 @@ class MainAgent(Agent):
         # 如果有模板，添加模板信息到系统提示
         if self.template_id:
             system_content += f"\n\n模板信息：\n"
-            system_content += f"- 当前工作使用模板ID: {self.template_id}\n"
-            system_content += f"- 模板文件已复制到工作空间，文件名为 'template.md'\n"
-            system_content += f"- 请先使用tree工具查看工作空间结构，找到template.md文件\n"
-            system_content += f"- 然后使用writemd工具修改template.md文件，生成最终的论文\n"
+            system_content += f"- 模板文件已复制到工作空间，重命名为 'paper.md'（这是最终论文文件）\n"
+            system_content += f"- 请先使用tree工具查看工作空间结构，找到paper.md文件\n"
+            system_content += f"- 然后使用以下工具之一来操作论文文件：\n"
+            system_content += f"  * writemd工具：支持多种模式（覆盖、追加、修改、插入、智能替换、章节更新）\n"
+            system_content += f"  * update_template工具：专门用于模板操作，支持章节级别更新\n"
             system_content += f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
             system_content += f"- 如果模板有特定的章节要求，请保持这些章节结构\n"
-            system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档"
+            system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
+            system_content += f"- 建议使用smart_replace模式来保持模板结构，只替换内容部分\n"
+            system_content += f"- 重要：所有论文内容都应该写入到paper.md文件中，这是最终的论文文档"
 
         self.messages = [{
             "role": "system",
@@ -144,14 +147,32 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "writemd",
-                "description": "将内容写入Markdown文件到workspace目录",
+                "description": "将内容写入Markdown文件到workspace目录，支持多种写入模式",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "filename": {"type": "string", "description": "文件名（不需要.md后缀）"},
-                        "content": {"type": "string", "description": "Markdown格式的内容"}
+                        "content": {"type": "string", "description": "Markdown格式的内容"},
+                        "mode": {"type": "string", "description": "写入模式：overwrite(覆盖), append(追加), modify(修改), insert(插入), smart_replace(智能替换), section_update(章节更新)", "default": "overwrite"}
                     },
                     "required": ["filename", "content"],
+                },
+            },
+        }
+
+        update_template_tool = {
+            "type": "function",
+            "function": {
+                "name": "update_template",
+                "description": "专门用于更新论文文件的工具，支持章节级别的更新",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "template_name": {"type": "string", "description": "论文文件名，默认为paper.md"},
+                        "content": {"type": "string", "description": "要更新的内容"},
+                        "section": {"type": "string", "description": "要更新的章节名称（可选）"}
+                    },
+                    "required": ["content"],
                 },
             },
         }
@@ -174,6 +195,7 @@ class MainAgent(Agent):
         # 注册工具到可用函数列表
         self.available_functions.update({
             "writemd": self.file_tools.writemd,
+            "update_template": self.file_tools.update_template,
             "tree": self.file_tools.tree
         })
 
@@ -181,6 +203,7 @@ class MainAgent(Agent):
         self.tools = [
             code_interpreter_tool,
             writemd_tool,
+            update_template_tool,
             tree_tool
         ]
 
