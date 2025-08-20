@@ -474,6 +474,10 @@ class MainAgent(Agent):
                 function_name = tool_call["function"]["name"]
                 logger.info(f"执行工具调用 {i+1}/{len(tool_calls)}: {function_name}")
                 
+                # 使用配置参数优化延迟
+                from ..config.async_config import AsyncConfig
+                config = AsyncConfig.get_tool_call_config()
+                
                 try:
                     # 执行单个工具调用
                     tool_result = await self._execute_tool_call(tool_call, i+1, len(tool_calls))
@@ -487,8 +491,6 @@ class MainAgent(Agent):
                     })
                     
                     # 使用配置参数优化延迟
-                    from ..config.async_config import AsyncConfig
-                    config = AsyncConfig.get_tool_call_config()
                     await asyncio.sleep(config["execution_yield_delay"])
                     
                 except Exception as e:
@@ -633,6 +635,8 @@ class MainAgent(Agent):
 
     async def _execute_tool_call(self, tool_call: Dict[str, Any], index: int, total: int) -> str:
         """执行单个工具调用的异步方法"""
+        import json  # 移到方法开头，避免作用域问题
+        
         function_name = tool_call["function"]["name"]
         logger.info(f"执行工具调用 {index}/{total}: {function_name}")
 
@@ -695,7 +699,6 @@ class MainAgent(Agent):
             logger.error(f"JSON解析失败: {e}")
             # 尝试修复不完整的JSON
             try:
-                import json
                 # 获取原始参数
                 raw_args = tool_call["function"]["arguments"]
                 logger.info(f"尝试修复JSON参数，原始长度: {len(raw_args)}")
