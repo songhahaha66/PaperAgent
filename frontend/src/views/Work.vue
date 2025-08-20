@@ -238,6 +238,9 @@ const loadWork = async () => {
     // 初始化聊天会话
     await initializeChatSession();
     
+    // 检查并自动发送第一句话
+    await checkAndAutoSendFirstMessage();
+    
   } catch (error) {
     console.error('加载工作信息失败:', error);
     MessagePlugin.error('加载工作信息失败');
@@ -959,6 +962,94 @@ onMounted(() => {
     }
   });
 });
+
+// 检查并自动发送第一句话
+const checkAndAutoSendFirstMessage = async () => {
+  // 检查是否有待发送的问题，且当前工作标题为空或空格
+  const pendingQuestion = localStorage.getItem('pendingQuestion');
+  if (pendingQuestion && currentWork.value?.title?.trim() === '') {
+    try {
+      // 并行执行：前端模拟发送消息 + 生成标题
+      await Promise.all([
+        simulateSendFirstMessage(pendingQuestion),  // 前端模拟发送
+        generateWorkTitle(pendingQuestion)          // 生成标题
+      ]);
+      
+      // 清除localStorage
+      localStorage.removeItem('pendingQuestion');
+      
+    } catch (error) {
+      console.error('自动发送第一句话失败:', error);
+    }
+  }
+};
+
+// 前端模拟发送第一句话
+const simulateSendFirstMessage = async (content: string) => {
+  // 直接添加用户消息到界面
+  const userMessage = {
+    id: `msg_${Date.now()}`,
+    role: 'user' as const,
+    content: content,
+    datetime: new Date().toLocaleString(),
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+    systemType: undefined,
+    isStreaming: false
+  };
+  
+  chatMessages.value.push(userMessage);
+  
+  // 添加一个短暂的延迟，模拟发送过程
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  // 自动滚动到底部
+  scrollToBottom();
+};
+
+// 生成工作标题
+const generateWorkTitle = async (question: string) => {
+  try {
+    // 调用标题生成API
+    const titleResponse = await chatAPI.generateTitle(
+      authStore.token!,
+      workId.value!,
+      question
+    );
+    
+    // 调用标题更新API
+    await updateWorkTitle(titleResponse.title);
+    
+  } catch (error) {
+    console.error('生成标题失败:', error);
+    // 如果标题生成失败，使用问题作为备选标题
+    await updateWorkTitle(question);
+  }
+};
+
+// 更新工作标题
+const updateWorkTitle = async (newTitle: string) => {
+  try {
+    await chatAPI.updateWorkTitle(authStore.token!, workId.value!, newTitle);
+    
+    // 更新本地状态
+    if (currentWork.value) {
+      currentWork.value.title = newTitle;
+    }
+    
+    // 通知侧边栏刷新工作列表
+    // 通过触发一个自定义事件来通知父组件或侧边栏
+    window.dispatchEvent(new CustomEvent('work-title-updated', {
+      detail: {
+        workId: workId.value,
+        newTitle: newTitle
+      }
+    }));
+    
+    console.log('标题已更新:', newTitle);
+  } catch (error) {
+    console.error('更新标题失败:', error);
+  }
+};
 </script>
 
 <style>

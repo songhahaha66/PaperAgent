@@ -290,3 +290,142 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
         except:
             pass
         manager.disconnect(work_id)
+
+
+@router.post("/work/{work_id}/generate-title")
+async def generate_work_title(
+    work_id: str,
+    request: dict,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """AI生成工作标题"""
+    try:
+        # 验证用户权限
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
+        
+        # 获取用户问题
+        question = request.get("question", "")
+        if not question:
+            raise HTTPException(status_code=400, detail="缺少问题内容")
+        
+        # 初始化AI环境
+        env_manager = setup_environment_from_db(db)
+        env_manager.initialize_system("brain")
+        
+        # 创建LLM处理器
+        model_config = env_manager.config_manager.get_model_config("brain")
+        llm_handler = LLMHandler(
+            model=str(model_config.model_id),
+            stream_manager=None  # 不需要流式处理
+        )
+        
+        # 构建标题生成提示词
+        title_prompt = f"""请根据用户的研究问题生成一个简洁、专业的学术论文标题。
+要求：
+1. 标题要准确反映研究内容
+2. 使用学术化的表达
+3. 长度适中，不超过50个字符
+4. 只返回标题，不要其他内容
+
+用户问题：{question}
+
+请生成标题："""
+        
+        # 调用AI生成标题
+        try:
+            # 使用现有的process_stream方法，但不使用流式处理
+            messages = [{"role": "user", "content": title_prompt}]
+            
+            # 创建临时的流管理器来捕获输出
+            from ai_system.core.stream_manager import SimpleStreamCallback
+            class TitleCaptureCallback(SimpleStreamCallback):
+                def __init__(self):
+                    self.content = ""
+                
+                async def print_stream(self, content: str):
+                    self.content += content
+                
+                async def print_content(self, content: str):
+                    self.content += content
+                
+                async def finalize_message(self):
+                    pass
+            
+            title_callback = TitleCaptureCallback()
+            from ai_system.core.stream_manager import StreamOutputManager
+            title_stream_manager = StreamOutputManager(title_callback)
+            
+            # 创建新的LLMHandler实例用于标题生成
+            title_llm_handler = LLMHandler(
+                model=str(model_config.model_id),
+                stream_manager=title_stream_manager
+            )
+            
+            # 调用LLM生成标题
+            assistant_message, _ = await title_llm_handler.process_stream(messages)
+            title = assistant_message.get("content", "")
+            
+            # 清理标题（移除可能的引号、换行等）
+            title = title.strip().strip('"').strip("'").strip()
+            
+            return {
+                "title": title,
+                "status": "success"
+            }
+        except Exception as e:
+            logger.error(f"AI生成标题失败: {e}")
+            # 如果AI生成失败，使用问题作为备选标题
+            fallback_title = question[:50] if len(question) > 50 else question
+            return {
+                "title": fallback_title,
+                "status": "fallback"
+            }
+            
+    except Exception as e:
+        logger.error(f"生成工作标题失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/work/{work_id}/title")
+async def update_work_title(
+    work_id: str,
+    request: dict,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """更新工作标题"""
+    try:
+        # 验证用户权限
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
+        
+        # 获取新标题
+        new_title = request.get("title", "")
+        if not new_title or new_title.strip() == "":
+            raise HTTPException(status_code=400, detail="标题不能为空")
+        
+        # 更新数据库中的标题
+        from services.crud import update_work
+        from schemas.schemas import WorkUpdate
+        
+        # 创建WorkUpdate对象
+        work_update = WorkUpdate(title=new_title.strip())
+        updated_work = update_work(db, work_id, work_update, current_user_id)
+        
+        if not updated_work:
+            raise HTTPException(status_code=404, detail="工作不存在")
+        
+        return {
+            "status": "success",
+            "message": "标题更新成功"
+        }
+        
+    except Exception as e:
+        logger.error(f"更新工作标题失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

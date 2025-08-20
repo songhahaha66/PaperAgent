@@ -91,7 +91,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { BrowseIcon } from 'tdesign-icons-vue-next';
 import { MessagePlugin } from 'tdesign-vue-next';
@@ -224,6 +224,35 @@ const getStatusText = (status?: string) => {
 // 组件挂载时加载历史工作数据
 onMounted(() => {
   loadUserWorks();
+  
+  // 监听工作标题更新事件，刷新侧边栏工作列表
+  window.addEventListener('work-title-updated', (event: any) => {
+    const { workId, newTitle } = event.detail;
+    
+    // 找到对应的工作项并更新标题
+    const workItem = historyItems.value.find(item => item.work_id === workId);
+    if (workItem) {
+      workItem.title = newTitle;
+      console.log('侧边栏工作标题已更新:', newTitle);
+    }
+    
+      // 也可以选择重新加载整个工作列表
+  // loadUserWorks();
+});
+
+// 组件卸载时清理事件监听器
+onUnmounted(() => {
+  window.removeEventListener('work-title-updated', (event: any) => {
+    const { workId, newTitle } = event.detail;
+    
+    // 找到对应的工作项并更新标题
+    const workItem = historyItems.value.find(item => item.work_id === workId);
+    if (workItem) {
+      workItem.title = newTitle;
+      console.log('侧边栏工作标题已更新:', newTitle);
+    }
+  });
+});
 });
 
 // 用户菜单选项
