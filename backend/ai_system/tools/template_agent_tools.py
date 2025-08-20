@@ -6,7 +6,7 @@ AI Agent模板操作工具
 import os
 import logging
 from typing import Dict, Any, Optional, List
-from template_operations import template_operations
+from . import template_operations
 
 logger = logging.getLogger(__name__)
 
