@@ -1,7 +1,10 @@
 <template>
   <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
     <div class="sidebar-header">
-      <h2 v-if="!isSidebarCollapsed">PaperAgent</h2>
+      <div v-if="!isSidebarCollapsed" class="header-title">
+        <h2>PaperAgent</h2>
+        <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
+      </div>
       <t-button 
         theme="default" 
         shape="square" 
@@ -273,6 +276,18 @@ const userOptions = [
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
 }
 
 .sidebar-content {

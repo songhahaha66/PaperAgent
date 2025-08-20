@@ -1,3 +1,12 @@
+/* 字体声明 */
+@font-face {
+  font-family: 'LibreBaskerville';
+  src: url('/LibreBaskerville-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root, :root[theme-mode="light"] {
     --td-brand-color-1: #f3f3f3;
     --td-brand-color-2: #e3e3e3;
@@ -242,6 +251,7 @@
 :root {
     --td-font-family: pingfang sc, microsoft yahei, arial regular;
     --td-font-family-medium: pingfang sc, microsoft yahei, arial medium;
+    --td-font-family-heading: 'LibreBaskerville', serif;
     --td-font-size-link-small: 12px;
     --td-font-size-link-medium: 14px;
     --td-font-size-link-large: 16px;
@@ -282,14 +292,14 @@
     --td-font-body-small: var(--td-font-size-body-small) / var(--td-line-height-body-small) var(--td-font-family);
     --td-font-body-medium: var(--td-font-size-body-medium) / var(--td-line-height-body-medium) var(--td-font-family);
     --td-font-body-large: var(--td-font-size-body-large) / var(--td-line-height-body-large) var(--td-font-family);
-    --td-font-title-small: 600 var(--td-font-size-title-small) / var(--td-line-height-title-small) var(--td-font-family);
-    --td-font-title-medium: 600 var(--td-font-size-title-medium) / var(--td-line-height-title-medium) var(--td-font-family);
-    --td-font-title-large: 600 var(--td-font-size-title-large) / var(--td-line-height-title-large) var(--td-font-family);
-    --td-font-headline-small: 600 var(--td-font-size-headline-small) / var(--td-line-height-headline-small) var(--td-font-family);
-    --td-font-headline-medium: 600 var(--td-font-size-headline-medium) / var(--td-line-height-headline-medium) var(--td-font-family);
-    --td-font-headline-large: 600 var(--td-font-size-headline-large) / var(--td-line-height-headline-large) var(--td-font-family);
-    --td-font-display-medium: 600 var(--td-font-size-display-medium) / var(--td-line-height-display-medium) var(--td-font-family);
-    --td-font-display-large: 600 var(--td-font-size-display-large) / var(--td-line-height-display-large) var(--td-font-family);
+    --td-font-title-small: 600 var(--td-font-size-title-small) / var(--td-line-height-title-small) var(--td-font-family-heading);
+    --td-font-title-medium: 600 var(--td-font-size-title-medium) / var(--td-line-height-title-medium) var(--td-font-family-heading);
+    --td-font-title-large: 600 var(--td-font-size-title-large) / var(--td-line-height-title-large) var(--td-font-family-heading);
+    --td-font-headline-small: 600 var(--td-font-size-headline-small) / var(--td-line-height-headline-small) var(--td-font-family-heading);
+    --td-font-headline-medium: 600 var(--td-font-size-headline-medium) / var(--td-line-height-headline-medium) var(--td-font-family-heading);
+    --td-font-headline-large: 600 var(--td-font-size-headline-large) / var(--td-line-height-headline-large) var(--td-font-family-heading);
+    --td-font-display-medium: 600 var(--td-font-size-display-medium) / var(--td-line-height-display-medium) var(--td-font-family-heading);
+    --td-font-display-large: 600 var(--td-font-size-display-large) / var(--td-line-height-display-large) var(--td-font-family-heading);
     --td-radius-small: 4px;
     --td-radius-default: 6px;
     --td-radius-medium: 12px;
@@ -352,4 +362,27 @@
     --td-comp-margin-xxl: var(--td-size-8);
     --td-comp-margin-xxxl: var(--td-size-10);
     --td-comp-margin-xxxxl: var(--td-size-12);
+}
+
+/* 全局标题字体设置 */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--td-font-family-heading);
+}
+
+/* 确保所有标题元素都使用LibreBaskerville字体 */
+.welcome-header h1,
+.sidebar-header h2,
+.page-header h1,
+.demo-header h1,
+.header h1,
+.login-header h1,
+.work-info h1,
+.workspace-header h1,
+.feature-card h2,
+.feature-card h3,
+.cta-card h2,
+.history-item-content h4,
+.feature-description h4,
+.no-template-state h4 {
+  font-family: var(--td-font-family-heading);
 }
