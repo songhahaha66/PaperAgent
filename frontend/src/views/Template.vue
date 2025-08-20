@@ -267,9 +267,32 @@ const deleteTemplate = async (template: PaperTemplate) => {
     await templateAPI.deleteTemplate(authStore.token, template.id);
     MessagePlugin.success('模板删除成功');
     loadTemplates(); // 重新加载列表
-  } catch (error) {
-    MessagePlugin.error('删除模板失败');
-    console.error('删除模板失败:', error);
+  } catch (error: any) {
+    // 检查是否是外键约束错误
+    if (error.response?.status === 400 && error.response?.data?.detail?.includes('无法删除模板')) {
+      // 显示确认对话框，询问是否强制删除
+      const confirmed = await MessagePlugin.confirm({
+        header: '模板删除失败',
+        body: error.response.data.detail,
+        confirmBtn: '强制删除',
+        cancelBtn: '取消',
+        theme: 'warning'
+      });
+      
+      if (confirmed) {
+        try {
+          const result = await templateAPI.forceDeleteTemplate(authStore.token, template.id);
+          MessagePlugin.success(`强制删除成功！${result.deleted_works_count} 个相关工作已被删除`);
+          loadTemplates(); // 重新加载列表
+        } catch (forceDeleteError) {
+          MessagePlugin.error('强制删除失败');
+          console.error('强制删除失败:', forceDeleteError);
+        }
+      }
+    } else {
+      MessagePlugin.error('删除模板失败');
+      console.error('删除模板失败:', error);
+    }
   }
 };
 

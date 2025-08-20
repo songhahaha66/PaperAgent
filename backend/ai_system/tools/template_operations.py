@@ -6,7 +6,7 @@
 import os
 import logging
 from typing import Dict, Any, Optional, List
-from .template_tools import template_tools
+from template_tools import template_tools
 
 logger = logging.getLogger(__name__)
 

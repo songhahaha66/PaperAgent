@@ -98,6 +98,16 @@ class TemplateAPI {
     })
   }
 
+  // 强制删除模板（同时删除引用该模板的工作）
+  async forceDeleteTemplate(token: string, templateId: number): Promise<{ message: string; deleted_works_count: number }> {
+    return this.request<{ message: string; deleted_works_count: number }>(`/templates/${templateId}/force`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    })
+  }
+
   // 获取模板文件内容
   async getTemplateContent(token: string, templateId: number): Promise<{ content: string }> {
     return this.request<{ content: string }>(`/templates/${templateId}/content`, {

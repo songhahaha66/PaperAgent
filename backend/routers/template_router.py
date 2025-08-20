@@ -89,6 +89,15 @@ async def delete_template(
     """删除模板"""
     return crud.delete_paper_template(db, template_id, current_user)
 
+@router.delete("/{template_id}/force")
+async def force_delete_template(
+    template_id: int,
+    current_user: int = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """强制删除模板（同时删除引用该模板的工作）"""
+    return crud.force_delete_paper_template(db, template_id, current_user)
+
 @router.get("/{template_id}/content")
 async def get_template_content(
     template_id: int,

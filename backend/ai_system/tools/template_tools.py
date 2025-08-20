@@ -90,6 +90,13 @@ class TemplateTools:
             
             structure['total_sections'] = len(structure['sections'])
             
+            # 修复：有标题结构的模板应该被认为是有内容的
+            if structure['total_sections'] > 0:
+                structure['has_content'] = True
+                # 同时更新所有章节的has_content状态
+                for section in structure['sections']:
+                    section['has_content'] = True
+            
             # 构建章节层级关系
             self._build_section_hierarchy(structure['sections'])
             
