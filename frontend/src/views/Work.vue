@@ -60,7 +60,11 @@
                   placeholder="请输入您的问题..."
                   @send="sendMessage"
                   :disabled="isStreaming"
-                />
+                >      
+                <template #suffix="{ renderPresets }">
+                  <component :is="renderPresets([])" />
+                </template>
+              </ChatSender>
               </div>
             </div>
           </div>

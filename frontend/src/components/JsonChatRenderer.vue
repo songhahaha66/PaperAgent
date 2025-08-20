@@ -14,10 +14,6 @@
           :content="renderMessageContent(message)"
           :datetime="message.datetime"
           :avatar="getSystemAvatar(message)"
-          :actions="message.role === 'assistant' ? 'copy' : undefined"
-          @operation="(action) => {
-            if (action === 'copy') copyMessage(message.content)
-          }"
         />
         <div v-if="message.systemType" :class="['system-label', message.systemType]">
           {{ getSystemName(message) }}
