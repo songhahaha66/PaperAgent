@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import functools
 
 from .stream_manager import StreamOutputManager
+from ..config.async_config import AsyncConfig
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,10 @@ class LLMHandler:
                         f"接收到文本内容块 {chunk_count}: {repr(content[:30])}...")
                     
                     # 让出控制权，确保WebSocket能及时发送数据
-                    await asyncio.sleep(0.001)  # 使用更小的延迟
+                    # 使用配置参数优化延迟
+                    config = AsyncConfig.get_llm_stream_config()
+                    if chunk_count % config["yield_interval"] == 0:
+                        await asyncio.sleep(config["yield_delay"])
 
                 # 2. 累积工具调用信息
                 if delta.tool_calls:
@@ -91,8 +95,22 @@ class LLMHandler:
                         if tool_call_delta.id:
                             # 如果是新的 tool_call，保存上一个
                             if current_tool_call["id"] is not None:
-                                tool_calls.append(
-                                    self._finalize_tool_call(current_tool_call))
+                                # 验证上一个工具调用的参数是否完整
+                                if self._is_valid_json(current_tool_call["arguments"]):
+                                    tool_calls.append(
+                                        self._finalize_tool_call(current_tool_call))
+                                    logger.debug(f"完成工具调用: {current_tool_call['name']}, 参数长度: {len(current_tool_call['arguments'])}")
+                                else:
+                                    # 尝试修复不完整的JSON
+                                    fixed_args = self._try_fix_incomplete_json(current_tool_call["arguments"])
+                                    if self._is_valid_json(fixed_args):
+                                        current_tool_call["arguments"] = fixed_args
+                                        tool_calls.append(
+                                            self._finalize_tool_call(current_tool_call))
+                                        logger.info(f"修复并完成工具调用: {current_tool_call['name']}, 参数长度: {len(fixed_args)}")
+                                    else:
+                                        logger.warning(f"工具调用参数无法修复，跳过: {current_tool_call['name']}, 参数: {repr(current_tool_call['arguments'][:100])}")
+                            
                             current_tool_call = {
                                 "id": tool_call_delta.id, "name": None, "arguments": ""}
                             logger.debug(f"开始新的工具调用: {tool_call_delta.id}")
@@ -106,14 +124,31 @@ class LLMHandler:
                                 current_tool_call["arguments"] += tool_call_delta.function.arguments
                                 logger.debug(
                                     f"工具调用参数累积: {len(current_tool_call['arguments'])} 字符")
+                                
+                                # 尝试解析JSON，检查是否完整
+                                if self._is_valid_json(current_tool_call["arguments"]):
+                                    logger.debug(f"工具调用参数JSON完整: {current_tool_call['name']}")
 
                 # 定期让出控制权，确保其他异步任务能够执行
-                if chunk_count % 10 == 0:
-                    await asyncio.sleep(0.001)
+                config = AsyncConfig.get_llm_stream_config()
+                if chunk_count % (config["yield_interval"] * 2) == 0:
+                    await asyncio.sleep(config["yield_delay"])
 
             # 添加最后一个工具调用
             if current_tool_call["id"] is not None:
-                tool_calls.append(self._finalize_tool_call(current_tool_call))
+                # 验证最后一个工具调用的参数是否完整
+                if self._is_valid_json(current_tool_call["arguments"]):
+                    tool_calls.append(self._finalize_tool_call(current_tool_call))
+                    logger.debug(f"完成最后一个工具调用: {current_tool_call['name']}, 参数长度: {len(current_tool_call['arguments'])}")
+                else:
+                    # 尝试修复不完整的JSON
+                    fixed_args = self._try_fix_incomplete_json(current_tool_call["arguments"])
+                    if self._is_valid_json(fixed_args):
+                        current_tool_call["arguments"] = fixed_args
+                        tool_calls.append(self._finalize_tool_call(current_tool_call))
+                        logger.info(f"修复并完成最后一个工具调用: {current_tool_call['name']}, 参数长度: {len(fixed_args)}")
+                    else:
+                        logger.warning(f"最后一个工具调用参数无法修复，跳过: {current_tool_call['name']}, 参数: {repr(current_tool_call['arguments'][:100])}")
 
             if not self.stream_manager:
                 print()  # 确保换行
@@ -218,3 +253,60 @@ class LLMHandler:
         """析构函数，确保线程池被正确关闭"""
         if hasattr(self, 'executor') and self.executor:
             self.executor.shutdown(wait=False)
+
+    def _is_valid_json(self, json_str: str) -> bool:
+        """检查字符串是否是有效的JSON"""
+        try:
+            json.loads(json_str)
+            return True
+        except json.JSONDecodeError:
+            return False
+    
+    def _try_fix_incomplete_json(self, json_str: str) -> str:
+        """尝试修复不完整的JSON字符串"""
+        if not json_str.strip():
+            return json_str
+            
+        try:
+            # 尝试直接解析
+            json.loads(json_str)
+            return json_str
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON解析失败，尝试修复: {e}")
+            
+            # 常见的修复策略
+            fixed_str = json_str
+            
+            # 1. 检查未闭合的引号
+            quote_count = json_str.count('"') - json_str.count('\\"')
+            if quote_count % 2 != 0:
+                # 找到最后一个未闭合的引号位置
+                last_quote_pos = json_str.rfind('"')
+                if last_quote_pos > 0:
+                    # 检查是否在字符串内部
+                    before_quote = json_str[:last_quote_pos]
+                    if before_quote.count('"') % 2 == 0:
+                        # 在字符串末尾添加引号
+                        fixed_str = json_str + '"'
+                        logger.debug("修复未闭合的引号")
+            
+            # 2. 检查未闭合的大括号
+            brace_count = json_str.count('{') - json_str.count('}')
+            if brace_count > 0:
+                fixed_str = json_str + '}' * brace_count
+                logger.debug(f"修复未闭合的大括号，添加 {brace_count} 个")
+            
+            # 3. 检查未闭合的方括号
+            bracket_count = json_str.count('[') - json_str.count(']')
+            if bracket_count > 0:
+                fixed_str = json_str + ']' * bracket_count
+                logger.debug(f"修复未闭合的方括号，添加 {bracket_count} 个")
+            
+            # 4. 尝试解析修复后的字符串
+            try:
+                json.loads(fixed_str)
+                logger.info(f"JSON修复成功，原始长度: {len(json_str)}, 修复后长度: {len(fixed_str)}")
+                return fixed_str
+            except json.JSONDecodeError:
+                logger.warning(f"JSON修复失败，原始字符串: {repr(json_str[:100])}")
+                return json_str

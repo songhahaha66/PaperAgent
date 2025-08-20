@@ -468,37 +468,41 @@ class MainAgent(Agent):
 
             logger.info(f"MainAgent执行 {len(tool_calls)} 个工具调用")
 
-            # 并发处理所有工具调用，提高效率
-            tool_tasks = []
+            # 顺序执行工具调用，但保持异步特性
+            tool_results = []
             for i, tool_call in enumerate(tool_calls):
                 function_name = tool_call["function"]["name"]
-                logger.info(f"准备执行工具调用 {i+1}/{len(tool_calls)}: {function_name}")
+                logger.info(f"执行工具调用 {i+1}/{len(tool_calls)}: {function_name}")
                 
-                # 创建异步任务
-                task = self._execute_tool_call(tool_call, i+1, len(tool_calls))
-                tool_tasks.append(task)
-
-            # 等待所有工具调用完成
-            if tool_tasks:
-                tool_results = await asyncio.gather(*tool_tasks, return_exceptions=True)
-                
-                # 处理结果
-                for i, result in enumerate(tool_results):
-                    if isinstance(result, Exception):
-                        logger.error(f"工具调用 {i+1} 执行失败: {result}")
-                        # 添加错误消息到历史
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_calls[i]["id"],
-                            "content": f"工具执行失败: {str(result)}",
-                        })
-                    else:
-                        # 添加成功结果到历史
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_calls[i]["id"],
-                            "content": result,
-                        })
+                try:
+                    # 执行单个工具调用
+                    tool_result = await self._execute_tool_call(tool_call, i+1, len(tool_calls))
+                    tool_results.append(tool_result)
+                    
+                    # 添加成功结果到历史
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": tool_result,
+                    })
+                    
+                    # 使用配置参数优化延迟
+                    from ..config.async_config import AsyncConfig
+                    config = AsyncConfig.get_tool_call_config()
+                    await asyncio.sleep(config["execution_yield_delay"])
+                    
+                except Exception as e:
+                    logger.error(f"工具调用 {i+1} 执行失败: {e}")
+                    # 添加错误消息到历史
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": f"工具执行失败: {str(e)}",
+                    })
+                    tool_results.append(f"工具执行失败: {str(e)}")
+                    
+                    # 使用配置参数优化延迟
+                    await asyncio.sleep(config["execution_yield_delay"])
 
         logger.info(
             f"MainAgent执行完成，总共 {iteration_count} 次迭代，最终消息历史长度: {len(self.messages)}")
@@ -689,7 +693,108 @@ class MainAgent(Agent):
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON解析失败: {e}")
+            # 尝试修复不完整的JSON
+            try:
+                import json
+                # 获取原始参数
+                raw_args = tool_call["function"]["arguments"]
+                logger.info(f"尝试修复JSON参数，原始长度: {len(raw_args)}")
+                
+                # 尝试修复常见的JSON问题
+                fixed_args = self._try_fix_incomplete_json(raw_args)
+                if fixed_args != raw_args:
+                    logger.info(f"JSON修复成功，重新执行工具调用")
+                    # 重新解析修复后的参数
+                    args = json.loads(fixed_args)
+                    
+                    # 重新执行工具调用
+                    if function_name == "CodeAgent":
+                        task_prompt = args.get("task_prompt", "")
+                        if self.stream_manager:
+                            await self.stream_manager.print_code_agent_call(task_prompt)
+                            await self.stream_manager.print_main_content("MainAgent正在调用CodeAgent执行任务")
+                        tool_result = await self._execute_code_agent(task_prompt, tool_call["id"])
+                        if self.stream_manager:
+                            try:
+                                await self.stream_manager.print_main_content(f"CodeAgent任务执行完成，结果长度: {len(tool_result)} 字符")
+                            except Exception as e:
+                                logger.warning(f"发送CodeAgent完成通知失败: {e}")
+                        return tool_result
+                    elif function_name in self.available_functions:
+                        if self.stream_manager:
+                            try:
+                                await self.stream_manager.print_main_content(f"MainAgent正在执行工具调用: {function_name}")
+                            except Exception as e:
+                                logger.warning(f"发送工具调用通知失败: {e}")
+                        
+                        func = self.available_functions[function_name]
+                        if asyncio.iscoroutinefunction(func):
+                            tool_result = await func(**args)
+                        else:
+                            loop = asyncio.get_event_loop()
+                            tool_result = await loop.run_in_executor(None, lambda: func(**args))
+                        
+                        if self.stream_manager:
+                            try:
+                                await self.stream_manager.print_main_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
+                            except Exception as e:
+                                logger.warning(f"发送工具完成通知失败: {e}")
+                        
+                        return tool_result
+                
+            except Exception as fix_error:
+                logger.error(f"JSON修复失败: {fix_error}")
+            
             return f"工具参数解析失败: {e}"
         except Exception as e:
             logger.error(f"工具 {function_name} 执行失败: {e}")
             return f"工具执行失败: {str(e)}"
+
+    def _try_fix_incomplete_json(self, json_str: str) -> str:
+        """尝试修复不完整的JSON字符串"""
+        if not json_str.strip():
+            return json_str
+            
+        try:
+            # 尝试直接解析
+            json.loads(json_str)
+            return json_str
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON解析失败，尝试修复: {e}")
+            
+            # 常见的修复策略
+            fixed_str = json_str
+            
+            # 1. 检查未闭合的引号
+            quote_count = json_str.count('"') - json_str.count('\\"')
+            if quote_count % 2 != 0:
+                # 找到最后一个未闭合的引号位置
+                last_quote_pos = json_str.rfind('"')
+                if last_quote_pos > 0:
+                    # 检查是否在字符串内部
+                    before_quote = json_str[:last_quote_pos]
+                    if before_quote.count('"') % 2 == 0:
+                        # 在字符串末尾添加引号
+                        fixed_str = json_str + '"'
+                        logger.debug("修复未闭合的引号")
+            
+            # 2. 检查未闭合的大括号
+            brace_count = json_str.count('{') - json_str.count('}')
+            if brace_count > 0:
+                fixed_str = json_str + '}' * brace_count
+                logger.debug(f"修复未闭合的大括号，添加 {brace_count} 个")
+            
+            # 3. 检查未闭合的方括号
+            bracket_count = json_str.count('[') - json_str.count(']')
+            if bracket_count > 0:
+                fixed_str = json_str + ']' * bracket_count
+                logger.debug(f"修复未闭合的方括号，添加 {bracket_count} 个")
+            
+            # 4. 尝试解析修复后的字符串
+            try:
+                json.loads(fixed_str)
+                logger.info(f"JSON修复成功，原始长度: {len(json_str)}, 修复后长度: {len(fixed_str)}")
+                return fixed_str
+            except json.JSONDecodeError:
+                logger.warning(f"JSON修复失败，原始字符串: {repr(json_str[:100])}")
+                return json_str
