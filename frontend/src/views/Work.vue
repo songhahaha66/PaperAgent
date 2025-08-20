@@ -984,12 +984,12 @@ const checkAndAutoSendFirstMessage = async () => {
   }
 };
 
-// 前端模拟发送第一句话
+// 真正发送第一句话给AI
 const simulateSendFirstMessage = async (content: string) => {
   // 直接添加用户消息到界面
   const userMessage = {
     id: `msg_${Date.now()}`,
-    role: 'user' as const,
+    role: 'user',
     content: content,
     datetime: new Date().toLocaleString(),
     avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
@@ -999,11 +999,75 @@ const simulateSendFirstMessage = async (content: string) => {
   
   chatMessages.value.push(userMessage);
   
-  // 添加一个短暂的延迟，模拟发送过程
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
   // 自动滚动到底部
   scrollToBottom();
+  
+  // 创建并连接WebSocket，然后发送第一句话给AI
+  try {
+    // 创建WebSocket处理器
+    webSocketHandler.value = new WebSocketChatHandler(
+      workId.value!,
+      authStore.token!
+    );
+
+    // 连接WebSocket
+    await webSocketHandler.value.connect();
+    console.log('WebSocket已连接，准备发送第一句话');
+
+    // 发送消息给AI
+    webSocketHandler.value.sendMessage(content);
+    console.log('第一句话已真正发送给AI:', content);
+    
+    // 设置消息监听器来处理AI的回复
+    webSocketHandler.value.onMessage((data) => {
+      console.log('收到AI回复:', data);
+      
+      // 处理AI的回复
+      switch (data.type) {
+        case 'start':
+          // AI开始处理
+          break;
+        case 'content':
+          // 创建或更新AI回复消息
+          let aiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
+          if (aiMessageIndex === -1) {
+            // 创建新的AI回复消息
+            const aiMessage = {
+              id: `ai_msg_${Date.now()}`,
+              role: 'assistant' as const,
+              content: data.content,
+              datetime: new Date().toLocaleString(),
+              avatar: getSystemAvatar({ systemType: 'brain' }),
+              systemType: 'brain' as const,
+              isStreaming: true
+            };
+            chatMessages.value.push(aiMessage);
+            aiMessageIndex = chatMessages.value.length - 1;
+          } else {
+            // 更新现有的AI回复消息
+            chatMessages.value[aiMessageIndex].content += data.content;
+          }
+          
+          // 自动滚动到底部
+          scrollToBottom();
+          break;
+        case 'complete':
+          // AI回复完成
+          const finalAiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
+          if (finalAiMessageIndex !== -1) {
+            chatMessages.value[finalAiMessageIndex].isStreaming = false;
+          }
+          console.log('AI回复完成');
+          break;
+        case 'error':
+          console.error('AI处理出错:', data.message);
+          break;
+      }
+    });
+    
+  } catch (error) {
+    console.error('发送第一句话给AI失败:', error);
+  }
 };
 
 // 生成工作标题
