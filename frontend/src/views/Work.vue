@@ -80,6 +80,7 @@
             <FileManager 
               :file-tree-data="fileTreeData"
               :work-id="workId"
+              :loading="loading"
               @file-select="handleFileSelect"
             />
             <div class="chat-input">
@@ -345,6 +346,9 @@ const loadWorkspaceFiles = async () => {
   if (!workId.value || !authStore.token) return;
   
   try {
+    // 设置加载状态
+    loading.value = true;
+    
     const files = await workspaceFileAPI.listFiles(authStore.token, workId.value);
     
     // 更新文件树数据
@@ -353,6 +357,9 @@ const loadWorkspaceFiles = async () => {
   } catch (error) {
     console.error('加载工作空间文件失败:', error);
     MessagePlugin.error('加载工作空间文件失败');
+  } finally {
+    // 确保加载状态被重置
+    loading.value = false;
   }
 };
 
@@ -654,6 +661,12 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     let currentSystemType: 'brain' | 'code' | 'writing' = 'brain'; // 默认从brain开始，后续根据内容更新
     let systemTypeChanged = false;
 
+    // 设置断开连接回调
+    webSocketHandler.value.onDisconnect(() => {
+      console.log('WebSocket连接已断开，重置流式状态');
+      isStreaming.value = false;
+    });
+
     // 设置消息监听器
     webSocketHandler.value.onMessage((data) => {
       switch (data.type) {
@@ -915,6 +928,9 @@ onUnmounted(() => {
     webSocketHandler.value = null;
   }
   
+  // 重置流式状态，确保输入框不被禁用
+  isStreaming.value = false;
+  
   // 清理blob URLs以释放内存
   Object.values(imageUrls.value).forEach(url => {
     if (url.startsWith('blob:')) {
@@ -927,6 +943,15 @@ onUnmounted(() => {
 // 监听路由变化
 watch(() => route.params.work_id, (newWorkId) => {
   if (newWorkId) {
+    // 重置流式状态，确保输入框不被禁用
+    isStreaming.value = false;
+    
+    // 清理之前的WebSocket连接
+    if (webSocketHandler.value) {
+      webSocketHandler.value.disconnect();
+      webSocketHandler.value = null;
+    }
+    
     loadWork();
     // 重新初始化聊天会话
     if (authStore.token) {
