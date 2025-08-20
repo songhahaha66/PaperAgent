@@ -239,6 +239,9 @@ const loadWork = async () => {
     // 初始化聊天会话
     await initializeChatSession();
     
+    // 检查并自动发送第一句话
+    await checkAndAutoSendFirstMessage();
+    
   } catch (error) {
     console.error('加载工作信息失败:', error);
     MessagePlugin.error('加载工作信息失败');
@@ -984,6 +987,185 @@ onMounted(() => {
     }
   });
 });
+
+// 检查并自动发送第一句话
+const checkAndAutoSendFirstMessage = async () => {
+  // 检查是否有待发送的问题，且当前工作标题为空或空格
+  const pendingQuestion = localStorage.getItem('pendingQuestion');
+  if (pendingQuestion && currentWork.value?.title?.trim() === '') {
+    try {
+      // 并行执行：前端模拟发送消息 + 生成标题
+      // 不等待完成，让两个操作独立进行
+      simulateSendFirstMessage(pendingQuestion);  // 立即开始，不等待
+      
+      // 在后台异步生成标题，不阻塞主流程
+      (async () => {
+        try {
+          await generateWorkTitle(pendingQuestion);
+        } catch (error) {
+          console.error('后台生成标题失败:', error);
+        }
+      })();
+      
+      // 清除localStorage
+      localStorage.removeItem('pendingQuestion');
+      
+    } catch (error) {
+      console.error('自动发送第一句话失败:', error);
+    }
+  }
+};
+
+// 真正发送第一句话给AI
+const simulateSendFirstMessage = (content: string) => {
+  // 直接添加用户消息到界面
+  const userMessage = {
+    id: `msg_${Date.now()}`,
+    role: 'user',
+    content: content,
+    datetime: new Date().toLocaleString(),
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+    systemType: undefined,
+    isStreaming: false
+  };
+  
+  chatMessages.value.push(userMessage);
+  
+  // 自动滚动到底部
+  scrollToBottom();
+  
+  // 在后台异步创建WebSocket连接并发送消息，不阻塞主流程
+  (async () => {
+    try {
+      // 创建WebSocket处理器
+      webSocketHandler.value = new WebSocketChatHandler(
+        workId.value!,
+        authStore.token!
+      );
+
+      // 连接WebSocket
+      await webSocketHandler.value.connect();
+      console.log('WebSocket已连接，准备发送第一句话');
+
+      // 等待连接状态确认
+      let retryCount = 0;
+      const maxRetries = 10;
+      
+      while (retryCount < maxRetries) {
+        if (webSocketHandler.value.isConnected()) {
+          console.log('WebSocket连接状态确认成功');
+          break;
+        }
+        console.log(`等待WebSocket连接建立... (${retryCount + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        retryCount++;
+      }
+      
+      if (!webSocketHandler.value.isConnected()) {
+        throw new Error('WebSocket连接建立超时');
+      }
+
+      // 发送消息给AI
+      webSocketHandler.value.sendMessage(content);
+      console.log('第一句话已真正发送给AI:', content);
+      
+      // 设置消息监听器来处理AI的回复
+      webSocketHandler.value.onMessage((data) => {
+        console.log('收到AI回复:', data);
+        
+        // 处理AI的回复
+        switch (data.type) {
+          case 'start':
+            // AI开始处理
+            break;
+          case 'content':
+            // 创建或更新AI回复消息
+            let aiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
+            if (aiMessageIndex === -1) {
+              // 创建新的AI回复消息
+              const aiMessage = {
+                id: `ai_msg_${Date.now()}`,
+                role: 'assistant' as const,
+                content: data.content,
+                datetime: new Date().toLocaleString(),
+                avatar: getSystemAvatar({ systemType: 'brain' }),
+                systemType: 'brain' as const,
+                isStreaming: true
+              };
+              chatMessages.value.push(aiMessage);
+              aiMessageIndex = chatMessages.value.length - 1;
+            } else {
+              // 更新现有的AI回复消息
+              chatMessages.value[aiMessageIndex].content += data.content;
+            }
+            
+            // 自动滚动到底部
+            scrollToBottom();
+            break;
+          case 'complete':
+            // AI回复完成
+            const finalAiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
+            if (finalAiMessageIndex !== -1) {
+              chatMessages.value[finalAiMessageIndex].isStreaming = false;
+            }
+            console.log('AI回复完成');
+            break;
+          case 'error':
+            console.error('AI处理出错:', data.message);
+            break;
+        }
+      });
+      
+    } catch (error) {
+      console.error('发送第一句话给AI失败:', error);
+    }
+  })();
+};
+
+// 生成工作标题
+const generateWorkTitle = async (question: string) => {
+  try {
+    // 调用标题生成API
+    const titleResponse = await chatAPI.generateTitle(
+      authStore.token!,
+      workId.value!,
+      question
+    );
+    
+    // 调用标题更新API
+    await updateWorkTitle(titleResponse.title);
+    
+  } catch (error) {
+    console.error('生成标题失败:', error);
+    // 如果标题生成失败，使用问题作为备选标题
+    await updateWorkTitle(question);
+  }
+};
+
+// 更新工作标题
+const updateWorkTitle = async (newTitle: string) => {
+  try {
+    await chatAPI.updateWorkTitle(authStore.token!, workId.value!, newTitle);
+    
+    // 更新本地状态
+    if (currentWork.value) {
+      currentWork.value.title = newTitle;
+    }
+    
+    // 通知侧边栏刷新工作列表
+    // 通过触发一个自定义事件来通知父组件或侧边栏
+    window.dispatchEvent(new CustomEvent('work-title-updated', {
+      detail: {
+        workId: workId.value,
+        newTitle: newTitle
+      }
+    }));
+    
+    console.log('标题已更新:', newTitle);
+  } catch (error) {
+    console.error('更新标题失败:', error);
+  }
+};
 </script>
 
 <style>
