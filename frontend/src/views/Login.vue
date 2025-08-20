@@ -10,6 +10,7 @@
         :data="formData"
         :rules="rules"
         @submit="onSubmit"
+        :required-mark="false"
         class="login-form"
       >
         <t-form-item name="email">
@@ -227,10 +228,6 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   margin-left: -90px;
 }
 
-.form-footer {
-  border-top: 1px solid #eee;
-  padding-top: 20px;
-}
 
 .form-footer p {
   margin: 0;

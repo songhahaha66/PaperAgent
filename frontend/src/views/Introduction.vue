@@ -1,8 +1,18 @@
 <template>
   <div class="introduction-page">
     <div class="header">
-      <h1>PaperAgent 论文智能生成系统</h1>
-      <p class="subtitle">基于AI技术的学术论文自动生成平台</p>
+      <div class="header-content">
+        <t-image 
+          src="/logo.png" 
+          alt="PaperAgent Logo" 
+          class="logo-image"
+          :style="{ width: '50px', height: '50px' }"
+        />
+        <div class="title-section">
+          <h1>PaperAgent 论文智能生成系统</h1>
+          <p class="subtitle">基于AI技术的学术论文自动生成平台</p>
+        </div>
+      </div>
     </div>
 
     <div class="content">
@@ -13,7 +23,14 @@
           通过先进的自然语言处理技术和深度学习模型，系统能够根据用户提供的主题和要求自动生成结构完整、内容丰富的学术论文。
         </p>
       </t-card>
-
+      <t-card class="cta-card">
+        <h2>开始使用PaperAgent</h2>
+        <p>立即登录以体验智能论文生成服务</p>
+        <div class="cta-buttons">
+          <t-button theme="primary" size="large" @click="goToLogin">登录</t-button>
+          <t-button theme="default" variant="outline" size="large" @click="goToRegister">注册</t-button>
+        </div>
+      </t-card>
       <div class="features-grid">
         <t-card class="feature-card">
           <t-icon name="edit-1" class="feature-icon" />
@@ -39,19 +56,10 @@
           <p>内置查重和质量检测机制，确保论文原创性和学术水平</p>
         </t-card>
       </div>
-
-      <t-card class="cta-card">
-        <h2>开始使用PaperAgent</h2>
-        <p>立即登录以体验智能论文生成服务</p>
-        <div class="cta-buttons">
-          <t-button theme="primary" size="large" @click="goToLogin">登录</t-button>
-          <t-button theme="default" variant="outline" size="large" @click="goToRegister">注册</t-button>
-        </div>
-      </t-card>
     </div>
 
     <div class="footer">
-      <p>&copy; 2024 PaperAgent. All rights reserved.</p>
+      <p>&copy; 2025 PaperAgent. All rights reserved.</p>
     </div>
   </div>
 </template>
@@ -102,6 +110,21 @@ const goToRegister = () => {
   font-size: 1.2rem;
   color: #7f8c8d;
   margin: 0;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+}
+
+.title-section {
+  text-align: left;
+}
+
+.title-section h1 {
+  margin-bottom: 8px;
 }
 
 .content {
@@ -167,5 +190,10 @@ const goToRegister = () => {
   padding: 30px 0;
   color: #7f8c8d;
   margin-top: 40px;
+}
+
+.logo-image {
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
 }
 </style>

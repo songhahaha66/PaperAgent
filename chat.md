@@ -121,3 +121,5 @@
 [songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在codeagent应该是先把可以运行成功的代码保存成文件，实现这个逻辑了吗
 
 [songhahaha66][08-19 00:04:21]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：pa_data\workspaces\1136a263\code_files\阅读这几个py，他们图片产生了覆盖，怎么办，给我解决方案
+
+[username][08-20 14:08:33]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：introduction界面来加上logo
