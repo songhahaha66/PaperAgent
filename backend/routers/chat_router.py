@@ -239,6 +239,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         self.content = ""
                         self.current_message_id = None
                         self.json_blocks = []
+                        logger.info(f"WebSocket回调初始化完成，work_id: {work_id}")
 
                     async def on_content(self, content: str):
                         """实时发送流式内容到WebSocket"""
@@ -256,33 +257,18 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     async def on_message_complete(self, role: str, content: str):
                         """消息完成回调"""
                         try:
-                            # 如果有JSON块，保存为JSON卡片格式
-                            if self.json_blocks:
-                                # 保存JSON卡片格式的消息
-                                self.chat_service.add_json_card_message(
-                                    self.work_id,
-                                    role,
-                                    content,
-                                    self.json_blocks,
-                                    {"system_type": "brain"}
-                                )
-                                logger.info(
-                                    f"JSON卡片消息已保存，块数: {len(self.json_blocks)}")
-                            else:
-                                # 保存普通文本消息
-                                self.chat_service.add_message(
-                                    self.work_id,
-                                    role,
-                                    content,
-                                    {"system_type": "brain"}
-                                )
+                            # 注意：这里不立即保存消息，因为MainAgent可能会多次调用这个方法
+                            # 我们只在MainAgent完全执行完成后才保存消息
+                            # 这里只是记录内容，不保存到数据库
+                            logger.debug(
+                                f"收到消息完成回调，角色: {role}, 长度: {len(content)}, JSON块数: {len(self.json_blocks)}")
 
-                            await self.websocket.send_text(json.dumps({
-                                'type': 'complete',
-                                'message': 'AI分析完成'
-                            }))
-                            logger.info(
-                                f"AI消息完成，角色: {role}, 长度: {len(content)}")
+                            # 不发送complete消息，因为MainAgent可能还会继续执行
+                            # await self.websocket.send_text(json.dumps({
+                            #     'type': 'complete',
+                            #     'message': 'AI分析完成'
+                            # }))
+
                         except Exception as e:
                             logger.error(f"处理消息完成失败: {e}")
 
@@ -367,10 +353,39 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         loop = asyncio.get_event_loop()
                         await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
 
-                    # AI处理完成后，确保AI回复已通过流管理器保存
-                    # 调用finalize_message确保所有缓冲内容都被保存
-                    await stream_manager.finalize_message()
-                    logger.info(f"[PERSISTENCE] AI处理完成，所有消息已保存到持久化存储")
+                    # AI处理完成后，手动保存最终的AI消息
+                    # 获取最终的AI回复内容
+                    final_content = ws_callback.content.strip()
+
+                    # 保存最终的AI消息
+                    if ws_callback.json_blocks:
+                        # 保存JSON卡片格式的消息
+                        chat_service.add_json_card_message(
+                            work_id,
+                            "assistant",
+                            final_content,
+                            ws_callback.json_blocks,
+                            {"system_type": "brain"}
+                        )
+                        logger.info(
+                            f"[PERSISTENCE] JSON卡片消息已保存，块数: {len(ws_callback.json_blocks)}")
+                    else:
+                        # 保存普通文本消息
+                        chat_service.add_message(
+                            work_id,
+                            "assistant",
+                            final_content,
+                            {"system_type": "brain"}
+                        )
+                        logger.info(
+                            f"[PERSISTENCE] 普通文本消息已保存，长度: {len(final_content)}")
+
+                    # 发送完成消息到前端
+                    await websocket.send_text(json.dumps({
+                        'type': 'complete',
+                        'message': 'AI分析完成'
+                    }))
+                    logger.info(f"[PERSISTENCE] AI处理完成，最终消息已保存到持久化存储")
 
                 except Exception as e:
                     logger.error(f"AI任务执行失败: {e}")
