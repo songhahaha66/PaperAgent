@@ -120,7 +120,7 @@ class TemplateAgentTools:
         """
         return await template_operations.get_template_help()
     
-    def extract_headers_from_content(self, content: str) -> List[Dict[str, Any]]:
+    async def extract_headers_from_content(self, content: str) -> List[Dict[str, Any]]:
         """
         从内容中提取所有标题信息
         
@@ -157,7 +157,7 @@ class TemplateAgentTools:
             logger.error(f"提取标题失败: {e}")
             return []
     
-    def get_content_structure_summary(self, content: str) -> str:
+    async def get_content_structure_summary(self, content: str) -> str:
         """
         获取内容结构摘要
         
@@ -168,7 +168,7 @@ class TemplateAgentTools:
             结构摘要
         """
         try:
-            headers = self.extract_headers_from_content(content)
+            headers = await self.extract_headers_from_content(content)
             
             if not headers:
                 return "内容中没有找到标题结构"
