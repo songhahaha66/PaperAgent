@@ -273,22 +273,29 @@ const loadChatHistory = async () => {
       let systemType: 'brain' | 'code' | 'writing' | undefined = undefined;
       
       if (msg.role === 'assistant') {
-        // 根据消息内容判断系统类型
-        systemType = getSystemTypeFromContent(msg.content);
-        
-        // 如果没有明确的XML标签，默认为brain类型（中枢系统）
-        if (!systemType) {
-          systemType = 'brain';
+        // 优先使用消息中的systemType
+        if (msg.systemType) {
+          systemType = msg.systemType;
+        } else {
+          // 根据消息内容判断系统类型
+          systemType = getSystemTypeFromContent(msg.content);
+          
+          // 如果没有明确的XML标签，默认为brain类型（中枢系统）
+          if (!systemType) {
+            systemType = 'brain';
+          }
         }
       }
       
       return {
-        id: `msg_${index}`,
+        id: msg.id || `msg_${index}`,
         role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
         content: msg.content,
-        datetime: new Date(msg.timestamp).toLocaleString(),
-        avatar: msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType }),
+        datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
+        avatar: msg.avatar || (msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType })),
         systemType: systemType,
+        json_blocks: msg.json_blocks || [],
+        message_type: msg.message_type || 'text',
         isStreaming: false
       };
     });
@@ -677,14 +684,17 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
       const messageIndex = chatMessages.value.findIndex(m => m.id === messageId);
       if (messageIndex === -1) return;
       
-      // 直接添加JSON块到消息内容中，保持JSON原文格式
+      // 获取当前消息
       const currentMessage = chatMessages.value[messageIndex];
-      const newContent = currentMessage.content + '\n\n' + JSON.stringify(block, null, 2);
       
-      // 更新消息，不改变其他属性
+      // 添加JSON块到json_blocks数组
+      const updatedJsonBlocks = [...(currentMessage.json_blocks || []), block];
+      
+      // 更新消息，设置为JSON卡片格式
       const updatedMessage = {
         ...currentMessage,
-        content: newContent
+        json_blocks: updatedJsonBlocks,
+        message_type: 'json_card' as const
       };
       
       // 使用Vue的响应式更新

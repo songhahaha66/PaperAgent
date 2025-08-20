@@ -57,6 +57,8 @@ interface ChatMessage {
   avatar: string;
   systemType?: 'brain' | 'code' | 'writing';
   isStreaming?: boolean;
+  json_blocks?: any[];
+  message_type?: 'text' | 'json_card';
 }
 
 // Props
@@ -159,32 +161,57 @@ const renderMessageContent = (message: ChatMessage) => {
     return message.content;
   }
   
-  // 对于AI消息，解析JSON块并渲染
+  // 对于AI消息，优先使用预解析的JSON块
   if (message.role === 'assistant') {
-    const { blocks, remainingText } = parseJsonBlocks(message.content);
-    
     let renderedContent = '';
     
-    // 添加剩余文本
-    if (remainingText) {
-      renderedContent += remainingText;
-    }
-    
-    // 渲染每个JSON块
-    blocks.forEach((block, index) => {
-      if (index > 0 || remainingText) {
-        renderedContent += '\n\n';
+    // 如果有预解析的JSON块，直接使用
+    if (message.json_blocks && message.json_blocks.length > 0) {
+      // 添加文本内容
+      if (message.content) {
+        renderedContent += message.content;
       }
       
-      // 为每个type创建一个独立的格子
-      const blockType = block.type || 'unknown';
-      const blockContent = block.content || '';
+      // 渲染每个JSON块
+      message.json_blocks.forEach((block, index) => {
+        if (index > 0 || message.content) {
+          renderedContent += '\n\n';
+        }
+        
+        // 为每个type创建一个独立的格子
+        const blockType = block.type || 'unknown';
+        const blockContent = block.content || '';
+        
+        renderedContent += `<div class="json-block json-block-${blockType}">`;
+        renderedContent += `<div class="json-block-header">Type: ${blockType}</div>`;
+        renderedContent += `<div class="json-block-content">${blockContent}</div>`;
+        renderedContent += `</div>`;
+      });
+    } else {
+      // 兼容旧格式：解析内容中的JSON块
+      const { blocks, remainingText } = parseJsonBlocks(message.content);
       
-      renderedContent += `<div class="json-block json-block-${blockType}">`;
-      renderedContent += `<div class="json-block-header">Type: ${blockType}</div>`;
-      renderedContent += `<div class="json-block-content">${blockContent}</div>`;
-      renderedContent += `</div>`;
-    });
+      // 添加剩余文本
+      if (remainingText) {
+        renderedContent += remainingText;
+      }
+      
+      // 渲染每个JSON块
+      blocks.forEach((block, index) => {
+        if (index > 0 || remainingText) {
+          renderedContent += '\n\n';
+        }
+        
+        // 为每个type创建一个独立的格子
+        const blockType = block.type || 'unknown';
+        const blockContent = block.content || '';
+        
+        renderedContent += `<div class="json-block json-block-${blockType}">`;
+        renderedContent += `<div class="json-block-header">Type: ${blockType}</div>`;
+        renderedContent += `<div class="json-block-content">${blockContent}</div>`;
+        renderedContent += `</div>`;
+      });
+    }
     
     return renderedContent;
   }

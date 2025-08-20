@@ -29,6 +29,8 @@ export interface ChatMessageResponse {
   tool_results?: any;
   message_metadata?: any;
   created_at: string;
+  json_blocks?: any[];
+  message_type?: 'text' | 'json_card';
 }
 
 
@@ -444,6 +446,8 @@ export interface ChatMessage {
   systemType?: 'brain' | 'code' | 'writing';
   isLoading?: boolean;
   isStreaming?: boolean;
+  json_blocks?: any[];
+  message_type?: 'text' | 'json_card';
 }
 
 // 聊天状态管理

@@ -101,7 +101,9 @@ export function useChat() {
         content: msg.content,
         datetime: new Date(msg.created_at).toLocaleString(),
         avatar: getAvatarForRole(msg.role),
-        systemType: getSystemTypeFromSession(currentSession.value?.system_type)
+        systemType: getSystemTypeFromSession(currentSession.value?.system_type),
+        json_blocks: msg.json_blocks || [],
+        message_type: msg.message_type || 'text'
       }));
 
       // 清空现有消息并添加历史消息
@@ -225,6 +227,24 @@ export function useChat() {
                 }
               }
             });
+            break;
+          case 'json_block':
+            // JSON块消息
+            const currentMessage = messages.value.find(m => m.id === aiMessageId);
+            if (currentMessage) {
+              const updatedJsonBlocks = [...(currentMessage.json_blocks || []), data.block];
+              chatStateManager.dispatch({
+                type: 'UPDATE_MESSAGE',
+                payload: {
+                  id: aiMessageId,
+                  updates: {
+                    json_blocks: updatedJsonBlocks,
+                    message_type: 'json_card',
+                    isStreaming: true
+                  }
+                }
+              });
+            }
             break;
           case 'xml_open':
           case 'xml_close':
