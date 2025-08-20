@@ -104,12 +104,14 @@ class MainAgent(Agent):
         system_content = (
             "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n"
             "你的职责：\n"
+            "0. 请你生成论文为paper.md文档！！！\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
             "3. 维护对话上下文，理解整个工作流程的连续性\n"
             "4. 最终使用tree工具检查生成的文件\n\n"
             "重要原则：\n"
             "- 保持对话连贯性，不重复询问已明确的信息\n"
+            "- 你是中枢大脑，负责规划和协调，不能直接编写、执行代码\n"
             "- CodeAgent负责具体执行，你负责规划和协调\n"
             "- 所有生成的文件都要在最终论文中引用"
             "- 请自己执行迭代，直到任务完成\n"
@@ -118,7 +120,7 @@ class MainAgent(Agent):
 
         # 如果有模板，添加模板信息到系统提示
         if self.template_id:
-            system_content += f"\n\n模板信息（已生成）：\n"
+            system_content += f"\n\n**你使用的语言需要跟模板语言一致**模板信息（已生成）：\n"
             system_content += f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
             system_content += f"- 模板是一个大纲，你要填满大纲！\n"
             system_content += f"- 然后使用以下工具之一来操作论文文件：\n"
@@ -135,6 +137,12 @@ class MainAgent(Agent):
             system_content += f"- 如果模板有特定的章节要求，请保持这些章节结构\n"
             system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
             system_content += f"- 建议使用smart_replace模式来保持模板结构，只替换内容部分\n"
+        else:
+            system_content += f"\n\n**不使用模板模式**：\n"
+            system_content += f"- 你需要从头开始创建完整的论文结构\n"
+            system_content += f"- 使用writemd工具创建paper.md文件\n"
+            system_content += f"- 根据用户需求设计合适的论文章节结构\n"
+            system_content += f"- 确保论文结构完整、逻辑清晰\n"
 
         self.messages = [{
             "role": "system",
@@ -300,33 +308,46 @@ class MainAgent(Agent):
             "tree": self.file_tools.tree
         })
         
-        # 注册模板操作工具
-        self.available_functions.update({
-            "analyze_template": self.template_agent_tools.analyze_template,
-            "get_section_content": self.template_agent_tools.get_section_content,
-            "update_section_content": self.template_agent_tools.update_section_content,
-            "add_new_section": self.template_agent_tools.add_new_section,
-            "remove_section": self.template_agent_tools.remove_section,
-            "reorder_sections": self.template_agent_tools.reorder_sections,
-            "format_template": self.template_agent_tools.format_template,
-            "get_template_help": self.template_agent_tools.get_template_help,
-            "extract_headers": self.template_agent_tools.extract_headers_from_content,
-            "get_structure_summary": self.template_agent_tools.get_content_structure_summary
-        })
+        # 根据是否有模板来决定是否注册模板操作工具
+        if self.template_id:
+            # 有模板时，注册所有模板操作工具
+            self.available_functions.update({
+                "analyze_template": self.template_agent_tools.analyze_template,
+                "get_section_content": self.template_agent_tools.get_section_content,
+                "update_section_content": self.template_agent_tools.update_section_content,
+                "add_new_section": self.template_agent_tools.add_new_section,
+                "remove_section": self.template_agent_tools.remove_section,
+                "reorder_sections": self.template_agent_tools.reorder_sections,
+                "format_template": self.template_agent_tools.format_template,
+                "get_template_help": self.template_agent_tools.get_template_help,
+                "extract_headers": self.template_agent_tools.extract_headers_from_content,
+                "get_structure_summary": self.template_agent_tools.get_content_structure_summary
+            })
+            
+            # 将模板工具定义添加到tools列表
+            self.tools = [
+                code_interpreter_tool,
+                writemd_tool,
+                update_template_tool,
+                tree_tool,
+                analyze_template_tool,
+                get_section_content_tool,
+                update_section_content_tool,
+                add_new_section_tool,
+                extract_headers_tool,
+                get_structure_summary_tool
+            ]
+        else:
+            # 没有模板时，只注册基础工具
+            self.tools = [
+                code_interpreter_tool,
+                writemd_tool,
+                update_template_tool,
+                tree_tool
+            ]
+            
+            logger.info("未使用模板，模板相关工具已禁用")
 
-        # 将工具定义添加到tools列表
-        self.tools = [
-            code_interpreter_tool,
-            writemd_tool,
-            update_template_tool,
-            tree_tool,
-            analyze_template_tool,
-            get_section_content_tool,
-            update_section_content_tool,
-            add_new_section_tool,
-            extract_headers_tool,
-            get_structure_summary_tool
-        ]
 
     def load_conversation_history(self, history_messages: List[Dict[str, Any]]):
         """加载对话历史，维护上下文连续性"""
