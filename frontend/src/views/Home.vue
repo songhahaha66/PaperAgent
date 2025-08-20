@@ -23,7 +23,7 @@
             <div class="input-wrapper">
               <t-textarea
                 v-model="researchQuestion"
-                placeholder="请详细描述您要研究的学术问题，例如：计算100平方米家庭使用空调的降温速率研究..."
+                placeholder="请详细描述您要研究的学术问题"
                 :autosize="{ minRows: 5, maxRows: 8 }"
                 class="question-input"
               />
@@ -31,7 +31,7 @@
               <!-- 按钮容器 -->
               <div class="button-container">
                 <!-- 附件按钮 - 左下角 -->
-                <div class="attachment-btn">
+                <!-- <div class="attachment-btn">
                   <t-upload
                     v-model="uploadedFiles"
                     :action="uploadAction"
@@ -54,7 +54,7 @@
                     </t-button>
                   </t-upload>
                   <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
-                </div>
+                </div> -->
                 
                 <!-- 下一步按钮 - 右下角 -->
                 <div class="next-btn-wrapper">
@@ -541,7 +541,7 @@ const selectHistory = (id: number) => {
 /* 按钮容器 */
 .button-container {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   margin-top: 16px;
   width: 100%;
@@ -575,10 +575,12 @@ const selectHistory = (id: number) => {
 .next-btn-wrapper {
   display: flex;
   justify-content: flex-end;
+  float: right;
 }
 
 .next-btn {
   min-width: 80px;
+  
 }
 
 /* 加载状态 */
