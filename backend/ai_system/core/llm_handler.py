@@ -64,7 +64,8 @@ class LLMHandler:
 
             full_response_content = ""
             tool_calls = []
-            current_tool_call = {"id": None, "name": None, "arguments": ""}
+            # 改为收集所有工具调用chunk，不进行实时解析
+            tool_call_chunks = []
             chunk_count = 0
 
             # 异步处理流式响应
@@ -72,7 +73,7 @@ class LLMHandler:
                 chunk_count += 1
                 delta = chunk.choices[0].delta
 
-                # 1. 累积文本内容
+                # 1. 累积文本内容（保持不变）
                 if delta.content:
                     content = delta.content
                     if self.stream_manager:
@@ -89,66 +90,27 @@ class LLMHandler:
                     if chunk_count % config["yield_interval"] == 0:
                         await asyncio.sleep(config["yield_delay"])
 
-                # 2. 累积工具调用信息
+                # 2. 收集工具调用chunk，但不解析（改为完全等待模式）
                 if delta.tool_calls:
-                    for tool_call_delta in delta.tool_calls:
-                        if tool_call_delta.id:
-                            # 如果是新的 tool_call，保存上一个
-                            if current_tool_call["id"] is not None:
-                                # 验证上一个工具调用的参数是否完整
-                                if self._is_valid_json(current_tool_call["arguments"]):
-                                    tool_calls.append(
-                                        self._finalize_tool_call(current_tool_call))
-                                    logger.debug(f"完成工具调用: {current_tool_call['name']}, 参数长度: {len(current_tool_call['arguments'])}")
-                                else:
-                                    # 尝试修复不完整的JSON
-                                    fixed_args = self._try_fix_incomplete_json(current_tool_call["arguments"])
-                                    if self._is_valid_json(fixed_args):
-                                        current_tool_call["arguments"] = fixed_args
-                                        tool_calls.append(
-                                            self._finalize_tool_call(current_tool_call))
-                                        logger.info(f"修复并完成工具调用: {current_tool_call['name']}, 参数长度: {len(fixed_args)}")
-                                    else:
-                                        logger.warning(f"工具调用参数无法修复，跳过: {current_tool_call['name']}, 参数: {repr(current_tool_call['arguments'][:100])}")
-                            
-                            current_tool_call = {
-                                "id": tool_call_delta.id, "name": None, "arguments": ""}
-                            logger.debug(f"开始新的工具调用: {tool_call_delta.id}")
-
-                        if tool_call_delta.function:
-                            if tool_call_delta.function.name:
-                                current_tool_call["name"] = tool_call_delta.function.name
-                                logger.debug(
-                                    f"工具调用名称: {tool_call_delta.function.name}")
-                            if tool_call_delta.function.arguments:
-                                current_tool_call["arguments"] += tool_call_delta.function.arguments
-                                logger.debug(
-                                    f"工具调用参数累积: {len(current_tool_call['arguments'])} 字符")
-                                
-                                # 尝试解析JSON，检查是否完整
-                                if self._is_valid_json(current_tool_call["arguments"]):
-                                    logger.debug(f"工具调用参数JSON完整: {current_tool_call['name']}")
+                    # 只收集chunk，不进行任何解析
+                    tool_call_chunks.append({
+                        "chunk_id": chunk_count,
+                        "delta": delta.tool_calls
+                    })
+                    logger.debug(f"收集工具调用chunk {chunk_count}，包含 {len(delta.tool_calls)} 个工具调用")
 
                 # 定期让出控制权，确保其他异步任务能够执行
                 config = AsyncConfig.get_llm_stream_config()
                 if chunk_count % (config["yield_interval"] * 2) == 0:
                     await asyncio.sleep(config["yield_delay"])
 
-            # 添加最后一个工具调用
-            if current_tool_call["id"] is not None:
-                # 验证最后一个工具调用的参数是否完整
-                if self._is_valid_json(current_tool_call["arguments"]):
-                    tool_calls.append(self._finalize_tool_call(current_tool_call))
-                    logger.debug(f"完成最后一个工具调用: {current_tool_call['name']}, 参数长度: {len(current_tool_call['arguments'])}")
-                else:
-                    # 尝试修复不完整的JSON
-                    fixed_args = self._try_fix_incomplete_json(current_tool_call["arguments"])
-                    if self._is_valid_json(fixed_args):
-                        current_tool_call["arguments"] = fixed_args
-                        tool_calls.append(self._finalize_tool_call(current_tool_call))
-                        logger.info(f"修复并完成最后一个工具调用: {current_tool_call['name']}, 参数长度: {len(fixed_args)}")
-                    else:
-                        logger.warning(f"最后一个工具调用参数无法修复，跳过: {current_tool_call['name']}, 参数: {repr(current_tool_call['arguments'][:100])}")
+            # 流式响应结束后，统一处理所有工具调用（完全等待模式）
+            if tool_call_chunks:
+                logger.info(f"开始处理 {len(tool_call_chunks)} 个工具调用chunk")
+                tool_calls = self._extract_tool_calls_from_chunks(tool_call_chunks)
+                logger.info(f"成功提取 {len(tool_calls)} 个完整工具调用")
+            else:
+                logger.info("没有工具调用需要处理")
 
             if not self.stream_manager:
                 print()  # 确保换行
@@ -231,28 +193,57 @@ class LLMHandler:
             }
         }
 
-    def set_model(self, model: str):
-        """设置LLM模型"""
-        self.model = model
-        logger.info(f"LLM模型已更新为: {model}")
-
-    def get_model_info(self) -> Dict[str, Any]:
-        """获取当前模型信息"""
-        return {
-            "model": self.model,
-            "stream_manager_configured": self.stream_manager is not None
-        }
-
-    async def close(self):
-        """关闭线程池执行器"""
-        if self.executor:
-            self.executor.shutdown(wait=True)
-            logger.info("LLMHandler线程池已关闭")
-
-    def __del__(self):
-        """析构函数，确保线程池被正确关闭"""
-        if hasattr(self, 'executor') and self.executor:
-            self.executor.shutdown(wait=False)
+    def _extract_tool_calls_from_chunks(self, tool_call_chunks: List[Dict]) -> List[Dict]:
+        """
+        从完整的工具调用chunk列表中提取完整的工具调用
+        采用完全等待模式，确保所有参数都完整
+        """
+        if not tool_call_chunks:
+            return []
+        
+        logger.info(f"开始从 {len(tool_call_chunks)} 个chunk中提取工具调用")
+        
+        # 按工具调用ID分组收集所有chunk
+        tool_call_groups = {}
+        
+        for chunk_info in tool_call_chunks:
+            chunk_id = chunk_info["chunk_id"]
+            deltas = chunk_info["delta"]
+            
+            for delta in deltas:
+                if delta.id:
+                    # 新的工具调用开始
+                    if delta.id not in tool_call_groups:
+                        tool_call_groups[delta.id] = {
+                            "id": delta.id,
+                            "name": "",
+                            "arguments": ""
+                        }
+                        logger.debug(f"开始收集工具调用 {delta.id} 的chunk")
+                
+                # 累积工具调用信息
+                if delta.function:
+                    if delta.function.name:
+                        tool_call_groups[delta.id]["name"] = delta.function.name
+                    if delta.function.arguments:
+                        tool_call_groups[delta.id]["arguments"] += delta.function.arguments
+        
+        # 构建完整的工具调用列表
+        complete_tool_calls = []
+        for tool_call_id, tool_call_data in tool_call_groups.items():
+            # 验证工具调用是否完整
+            if tool_call_data["name"] and tool_call_data["arguments"]:
+                # 验证JSON参数是否完整
+                if self._is_valid_json(tool_call_data["arguments"]):
+                    complete_tool_calls.append(self._finalize_tool_call(tool_call_data))
+                    logger.info(f"工具调用 {tool_call_data['name']} 参数完整，长度: {len(tool_call_data['arguments'])}")
+                else:
+                    logger.warning(f"工具调用 {tool_call_data['name']} 参数不完整，跳过: {repr(tool_call_data['arguments'][:100])}")
+            else:
+                logger.warning(f"工具调用 {tool_call_id} 缺少必要信息，跳过")
+        
+        logger.info(f"成功提取 {len(complete_tool_calls)} 个完整工具调用")
+        return complete_tool_calls
 
     def _is_valid_json(self, json_str: str) -> bool:
         """检查字符串是否是有效的JSON"""
@@ -310,3 +301,26 @@ class LLMHandler:
             except json.JSONDecodeError:
                 logger.warning(f"JSON修复失败，原始字符串: {repr(json_str[:100])}")
                 return json_str
+
+    def set_model(self, model: str):
+        """设置LLM模型"""
+        self.model = model
+        logger.info(f"LLM模型已更新为: {model}")
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """获取当前模型信息"""
+        return {
+            "model": self.model,
+            "stream_manager_configured": self.stream_manager is not None
+        }
+
+    async def close(self):
+        """关闭线程池执行器"""
+        if self.executor:
+            self.executor.shutdown(wait=True)
+            logger.info("LLMHandler线程池已关闭")
+
+    def __del__(self):
+        """析构函数，确保线程池被正确关闭"""
+        if hasattr(self, 'executor') and self.executor:
+            self.executor.shutdown(wait=False)
