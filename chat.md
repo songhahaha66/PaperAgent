@@ -98,6 +98,7 @@
 [songhahaha66][08-17 01:29:12]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：现在AI system后端api还有post请求，删掉他
 
 [songhahaha66][08-17 01:44:31]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的后端任务：流式内容失败: Cannot call "send" once a close message has been sent.现在前端有时候会丢失连接（如用户刷新，这时候就没办法了，说一下解决方案
+[songhahaha66][12-19 15:30:00]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：Sidebar点击收起按钮后侧边栏比较空，左下角再加一个头像
 
 [songhahaha66][08-20 11:51:47]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：现在首页输入问题能自动成为用户发送给ai的的第一句话吗，能这么设计吗，然后用户输入的话不再是work的标题，标题由ai总结用户问题生成（仿照chatgpt，先进入会话，同时生成标题，给我一个解决方案再改代码，不要擅自开始工作
 [songhahaha66][08-19 16:21:25]：项目规则文件：project_rule.md，请仔细阅读。你需要继续完成新的任务：required_packages = ['pandas', 'scipy', 'seaborn', 'matplotlib']导入这些必备的软件，python执行库，告诉我解决方案，不能擅自修改

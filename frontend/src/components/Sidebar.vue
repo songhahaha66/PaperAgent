@@ -16,6 +16,7 @@
       </t-button>
     </div>
     
+    <!-- 展开状态的内容 -->
     <div class="sidebar-content" v-if="!isSidebarCollapsed">
       <div class="menu-section">
         <t-button theme="primary" block @click="createNewTask">
@@ -74,6 +75,11 @@
       </div>
     </div>
     
+    <!-- 收起状态的内容 -->
+    <div class="sidebar-content-collapsed" v-if="isSidebarCollapsed">
+     
+    </div>
+    
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
       <t-dropdown :options="userOptions" placement="top-left" trigger="click">
         <div class="user-info">
@@ -84,6 +90,20 @@
             <div class="user-name">{{ userName }}</div>
             <div class="user-email">{{ userEmail }}</div>
           </div>
+        </div>
+      </t-dropdown>
+    </div>
+    
+    <!-- 收起状态下的用户头像 -->
+    <div class="sidebar-footer-collapsed" v-if="isSidebarCollapsed">
+      <t-dropdown :options="userOptions" placement="top-left" trigger="click">
+        <div class="user-avatar-collapsed">
+          <t-avatar 
+            :content="userName.charAt(0).toUpperCase()" 
+            size="large"
+            shape="circle"
+            class="collapsed-avatar"
+          />
         </div>
       </t-dropdown>
     </div>
@@ -326,6 +346,40 @@ const userOptions = [
   min-height: 0;
 }
 
+/* 收起状态下的样式 */
+.sidebar-content-collapsed {
+  flex: 1;
+  padding: 20px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  min-height: 0;
+}
+
+.collapsed-menu-section {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.create-button-collapsed {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.create-button-collapsed:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
 .menu-section {
   margin-bottom: 25px;
 }
@@ -417,6 +471,14 @@ const userOptions = [
   border-top: 1px solid #eee;
 }
 
+.sidebar-footer-collapsed {
+  padding: 15px 10px;
+  border-top: 1px solid #eee;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
 /* 用户信息样式 */
 .user-info {
   display: flex;
@@ -462,6 +524,26 @@ const userOptions = [
 .user-email {
   font-size: 12px;
   color: #7f8c8d;
+}
+
+.user-avatar-collapsed {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.user-avatar-collapsed:hover {
+  transform: scale(1.05);
+}
+
+.collapsed-avatar {
+  background-color: #3498db;
+  color: white;
+  font-weight: bold;
+  font-size: 18px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 /* 侧边栏折叠按钮 */
