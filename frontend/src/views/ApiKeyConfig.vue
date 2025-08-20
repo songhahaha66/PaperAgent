@@ -12,7 +12,8 @@
       <div class="page-header">
         <h1>API Key 配置</h1>
         <p>配置不同模型服务的API密钥和连接信息</p>
-        <p>此页面不回显api-key，这是正常现象</p>
+        <p>为防止Key泄露，此页面不回显API Key，这是正常现象</p>
+        <a href="https://docs.litellm.ai/docs/providers/">如何填写参考这里</a>
       </div>
 
       <div class="config-grid">
@@ -118,7 +119,7 @@ const formRefs = reactive<Record<string, FormInstanceFunctions | null>>({
 const formRules = {
   apiKey: [{ required: true, message: '请输入API Key', trigger: 'blur' }],
   baseUrl: [
-    { required: true, message: '请输入Base URL', trigger: 'blur' },
+    { required: false, message: '请输入Base URL', trigger: 'blur' },
     { 
       pattern: /^https?:\/\/.+/, 
       message: '请输入有效的URL地址', 
@@ -147,15 +148,6 @@ const configs = reactive([
       baseUrl: '',
       modelId: ''
     })
-  },
-  {
-    type: 'writing' as const,
-    title: '论文写作',
-    data: reactive<ModelConfigForm>({
-      apiKey: '',
-      baseUrl: '',
-      modelId: ''
-    })
   }
 ])
 
@@ -179,11 +171,14 @@ const setFormRef = (el: FormInstanceFunctions | null, type: string) => {
 const isFormValid = (type: string): boolean => {
   const config = configs.find(c => c.type === type)
   if (!config) return false
-  
-  return config.data.apiKey.trim() !== '' && 
-         config.data.baseUrl.trim() !== '' && 
-         config.data.modelId.trim() !== '' &&
-         /^https?:\/\/.+/.test(config.data.baseUrl.trim())
+
+  // apiKey 和 modelId 必填；baseUrl 可选，但若填写则必须是有效的 URL
+  const hasApiKey = config.data.apiKey.trim() !== ''
+  const hasModelId = config.data.modelId.trim() !== ''
+  const baseUrl = config.data.baseUrl.trim()
+  const baseUrlValid = baseUrl === '' || /^https?:\/\/.+/.test(baseUrl)
+
+  return hasApiKey && hasModelId && baseUrlValid
 }
 
 // 验证表单

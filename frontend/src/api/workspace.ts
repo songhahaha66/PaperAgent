@@ -301,6 +301,28 @@ export const workspaceFileAPI = {
       headers: { Authorization: `Bearer ${token}` }
     });
     return response;
+  },
+
+  // 导出工作空间
+  async exportWorkspace(
+    token: string,
+    workId: string
+  ): Promise<Blob> {
+    // 获取API基础URL
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+    const response = await fetch(`${API_BASE_URL}/api/workspace/${workId}/export`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      throw new Error(`导出失败: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+
+    return response.blob();
   }
 };
 
