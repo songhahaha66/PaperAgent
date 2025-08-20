@@ -102,18 +102,28 @@
                   </t-list-item-meta>
                   
                   <template #action>
-                    <div v-if="selectedTemplateId === template.id">
-                      <t-icon name="check-circle-filled" theme="success" />
-                    </div>
-                    <t-button 
-                      v-else
-                      theme="primary" 
-                      variant="text" 
-                      size="small"
-                      @click.stop="selectTemplate(template.id)"
-                    >
-                      选择
-                    </t-button>
+                    <t-space>
+                      <t-button 
+                        theme="default" 
+                        variant="text" 
+                        size="small"
+                        @click.stop="previewTemplate(template)"
+                      >
+                        预览
+                      </t-button>
+                      <div v-if="selectedTemplateId === template.id">
+                        <t-icon name="check-circle-filled" theme="success" />
+                      </div>
+                      <t-button 
+                        v-else
+                        theme="primary" 
+                        variant="text" 
+                        size="small"
+                        @click.stop="selectTemplate(template.id)"
+                      >
+                        选择
+                      </t-button>
+                    </t-space>
                   </template>
                 </t-list-item>
               </t-list>
@@ -158,6 +168,43 @@
         </div>
       </div>
     </div>
+    
+    <!-- 模板预览对话框 -->
+    <t-dialog
+      v-model:visible="showPreviewDialog"
+      :header="`模板预览 - ${previewTemplateData?.name}`"
+      width="900px"
+      @confirm="closePreviewDialog"
+      @cancel="closePreviewDialog"
+    >
+      <div class="template-preview">
+        <div class="template-info">
+          <p><strong>模板名称：</strong>{{ previewTemplateData?.name }}</p>
+          <p><strong>模板描述：</strong>{{ previewTemplateData?.description || '暂无描述' }}</p>
+          <p><strong>模板分类：</strong>{{ previewTemplateData?.category || '未分类' }}</p>
+        </div>
+        <div class="template-content">
+          <h4>模板内容：</h4>
+          <div class="content-display">
+            <div 
+              v-if="previewTemplateData?.file_path?.endsWith('.md')" 
+              class="markdown-content"
+              v-html="renderMarkdown(templateContent)"
+            ></div>
+            <t-textarea
+              v-else
+              v-model="templateContent"
+              readonly
+              :autosize="{ minRows: 15, maxRows: 25 }"
+              placeholder="模板内容加载中..."
+            />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <t-button theme="primary" @click="closePreviewDialog">关闭</t-button>
+      </template>
+    </t-dialog>
   </div>
 </template>
 
@@ -202,6 +249,11 @@ const userName = computed(() => authStore.currentUser?.username || '用户');
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
+
+// 模板预览相关
+const showPreviewDialog = ref(false);
+const previewTemplateData = ref<PaperTemplate | null>(null);
+const templateContent = ref('');
 
 // 上传相关配置
 const uploadAction = 'http://localhost:8000/upload'; // 替换为实际的上传接口
@@ -252,6 +304,87 @@ const prevStep = () => {
 // 选择模板
 const selectTemplate = (templateId: number) => {
   selectedTemplateId.value = templateId;
+};
+
+// 预览模板
+const previewTemplate = async (template: PaperTemplate) => {
+  if (!authStore.token) return;
+  
+  previewTemplateData.value = template;
+  showPreviewDialog.value = true;
+  
+  try {
+    const result = await templateAPI.getTemplateContent(
+      authStore.token,
+      template.id
+    );
+    templateContent.value = result.content;
+  } catch (error) {
+    MessagePlugin.error('加载模板内容失败');
+    console.error('加载模板内容失败:', error);
+    templateContent.value = '模板内容加载失败';
+  }
+};
+
+// 关闭预览对话框
+const closePreviewDialog = () => {
+  showPreviewDialog.value = false;
+  previewTemplateData.value = null;
+  templateContent.value = '';
+};
+
+// 简单的Markdown渲染函数
+const renderMarkdown = (text: string) => {
+  if (!text) return '';
+  
+  // 先处理代码块，避免代码块中的标记被处理
+  let codeBlocks: string[] = [];
+  let codeBlockCounter = 0;
+  
+  // 提取代码块（包括语言标识）
+  text = text.replace(/```(\w+)?\n([\s\S]*?)\n```/g, (match, lang, content) => {
+    codeBlocks.push(`<pre><code class="language-${lang || 'plaintext'}">${content}</code></pre>`);
+    return `{{CODE_BLOCK_${codeBlockCounter++}}}`;
+  });
+
+  // 处理行内代码
+  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // 按照从h6到h1的顺序处理标题
+  text = text
+    .replace(/^###### (.*)$/gm, '<h6>$1</h6>')
+    .replace(/^##### (.*)$/gm, '<h5>$1</h5>')
+    .replace(/^#### (.*)$/gm, '<h4>$1</h4>')
+    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.*)$/gm, '<h1>$1</h1>');
+  
+  // 处理粗体和斜体
+  text = text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>');
+  
+  // 处理链接
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  
+  // 处理无序列表
+  text = text.replace(/^\s*[\*|\-|\+]\s(.*)$/gm, '<li>$1</li>');
+  text = text.replace(/(<li>.*<\/li>)/gms, '<ul>$1</ul>');
+  
+  // 处理有序列表
+  text = text.replace(/^\s*(\d+)\.\s(.*)$/gm, '<li data-line="$1">$2</li>');
+  text = text.replace(/(<li data-line="\d+">.*<\/li>)/gms, '<ol>$1</ol>');
+  text = text.replace(/ data-line="\d+"/g, '');
+  
+  // 处理换行（但不在块级元素内部添加<br>）
+  text = text.replace(/\n/g, '<br>');
+
+  // 恢复代码块
+  for (let i = 0; i < codeBlockCounter; i++) {
+    text = text.replace(`{{CODE_BLOCK_${i}}}`, codeBlocks[i]);
+  }
+  
+  return text;
 };
 
 // 跳转到模板页面
@@ -500,6 +633,78 @@ const selectHistory = (id: number) => {
   display: flex;
   gap: 16px;
   justify-content: space-between;
+}
+
+/* 模板预览样式 */
+.template-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.template-info {
+  background-color: #f5f7fa;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #e0e6ed;
+}
+
+.template-info p {
+  margin: 8px 0;
+  color: #2c3e50;
+}
+
+.template-content h4 {
+  margin: 0 0 12px 0;
+  color: #2c3e50;
+  font-size: 1.1rem;
+}
+
+.content-display {
+  border: 1px solid #e0e6ed;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.content-display .markdown-content {
+  padding: 16px;
+  background-color: #f9f9f9;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.content-display .markdown-content h1,
+.content-display .markdown-content h2,
+.content-display .markdown-content h3,
+.content-display .markdown-content h4,
+.content-display .markdown-content h5,
+.content-display .markdown-content h6 {
+  margin: 16px 0 8px 0;
+  color: #2c3e50;
+}
+
+.content-display .markdown-content p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+
+.content-display .markdown-content code {
+  background-color: #f0f0f0;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+}
+
+.content-display .markdown-content pre {
+  background-color: #f5f5f5;
+  padding: 12px;
+  border-radius: 4px;
+  overflow-x: auto;
+}
+
+.content-display .markdown-content pre code {
+  background-color: transparent;
+  padding: 0;
 }
 
 

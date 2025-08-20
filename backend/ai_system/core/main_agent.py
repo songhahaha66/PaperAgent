@@ -23,7 +23,7 @@ class MainAgent(Agent):
     支持session上下文维护，保持对话连续性。
     """
 
-    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None):
+    def __init__(self, llm_handler: LLMHandler, stream_manager: StreamOutputManager, work_id: Optional[str] = None, template_id: Optional[int] = None):
         super().__init__(llm_handler, stream_manager)
 
         # 构建工作空间目录路径
@@ -40,6 +40,7 @@ class MainAgent(Agent):
 
         self.file_tools = FileTools(stream_manager)
         self.work_id = work_id  # 改为work_id，每个work对应一个MainAgent
+        self.template_id = template_id  # 添加模板ID
 
         # 初始化上下文管理器
         self.context_manager = ContextManager(
@@ -48,11 +49,54 @@ class MainAgent(Agent):
         )
 
         self._setup()
-        logger.info(f"MainAgent初始化完成，work_id: {work_id}")
+        
+        # 如果有模板ID，复制模板文件到工作空间
+        if self.template_id and work_id:
+            self._copy_template_to_workspace()
+            
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}")
+
+    def _copy_template_to_workspace(self):
+        """复制模板文件到工作空间"""
+        try:
+            import shutil
+            from services.crud import get_paper_template
+            from database.database import get_db
+            
+            # 获取数据库会话
+            db = next(get_db())
+            
+            # 获取模板信息
+            template = get_paper_template(db, self.template_id)
+            if not template:
+                logger.warning(f"模板 {self.template_id} 不存在")
+                return
+            
+            # 构建模板文件路径
+            template_file_path = os.path.join(
+                os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.dirname(__file__)))),
+                "pa_data", "templates", f"{self.template_id}_template.md"
+            )
+            
+            # 检查模板文件是否存在
+            if not os.path.exists(template_file_path):
+                logger.warning(f"模板文件不存在: {template_file_path}")
+                return
+            
+            # 构建目标路径
+            target_path = os.path.join(self.file_tools.get_workspace_dir(), "template.md")
+            
+            # 复制模板文件到工作空间
+            shutil.copy2(template_file_path, target_path)
+            logger.info(f"模板文件已复制到工作空间: {target_path}")
+            
+        except Exception as e:
+            logger.error(f"复制模板文件失败: {e}")
 
     def _setup(self):
         """初始化 System Prompt 和工具。"""
-        # 简化系统提示，明确角色定位
+        # 基础系统提示
         system_content = (
             "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。\n"
             "你的职责：\n"
@@ -65,6 +109,17 @@ class MainAgent(Agent):
             "- CodeAgent负责具体执行，你负责规划和协调\n"
             "- 所有生成的文件都要在最终论文中引用"
         )
+
+        # 如果有模板，添加模板信息到系统提示
+        if self.template_id:
+            system_content += f"\n\n模板信息：\n"
+            system_content += f"- 当前工作使用模板ID: {self.template_id}\n"
+            system_content += f"- 模板文件已复制到工作空间，文件名为 'template.md'\n"
+            system_content += f"- 请先使用tree工具查看工作空间结构，找到template.md文件\n"
+            system_content += f"- 然后使用writemd工具修改template.md文件，生成最终的论文\n"
+            system_content += f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
+            system_content += f"- 如果模板有特定的章节要求，请保持这些章节结构\n"
+            system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档"
 
         self.messages = [{
             "role": "system",
