@@ -77,3 +77,47 @@ class AsyncConfig:
         cls.WEBSOCKET_CONFIG["content_yield_threshold"] = 20
         cls.WEBSOCKET_CONFIG["content_yield_delay"] = 0.001
         cls.TASK_CONFIG["max_workers"] = 2
+    
+    def get_status(self) -> Dict[str, Any]:
+        """获取配置状态"""
+        return {
+            "llm_stream_config": self.LLM_STREAM_CONFIG.copy(),
+            "websocket_config": self.WEBSOCKET_CONFIG.copy(),
+            "tool_call_config": self.TOOL_CALL_CONFIG.copy(),
+            "task_config": self.TASK_CONFIG.copy(),
+            "instance_id": id(self)
+        }
+
+# 全局配置实例
+_async_config_instance = None
+
+def initialize_async_config(max_workers: int = 20, max_processes: int = 4):
+    """初始化异步配置"""
+    global _async_config_instance
+    
+    if _async_config_instance is None:
+        _async_config_instance = AsyncConfig()
+    
+    # 更新配置
+    _async_config_instance.TASK_CONFIG["max_workers"] = max_workers
+    _async_config_instance.TASK_CONFIG["max_processes"] = max_processes
+    
+    # 根据系统性能自动选择优化策略
+    if max_workers >= 10:
+        AsyncConfig.optimize_for_performance()
+    else:
+        AsyncConfig.optimize_for_responsiveness()
+    
+    return _async_config_instance
+
+def shutdown_async_config():
+    """关闭异步配置"""
+    global _async_config_instance
+    _async_config_instance = None
+
+def get_async_config():
+    """获取异步配置实例"""
+    global _async_config_instance
+    if _async_config_instance is None:
+        _async_config_instance = AsyncConfig()
+    return _async_config_instance
