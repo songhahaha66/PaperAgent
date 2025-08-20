@@ -970,10 +970,17 @@ const checkAndAutoSendFirstMessage = async () => {
   if (pendingQuestion && currentWork.value?.title?.trim() === '') {
     try {
       // 并行执行：前端模拟发送消息 + 生成标题
-      await Promise.all([
-        simulateSendFirstMessage(pendingQuestion),  // 前端模拟发送
-        generateWorkTitle(pendingQuestion)          // 生成标题
-      ]);
+      // 不等待完成，让两个操作独立进行
+      simulateSendFirstMessage(pendingQuestion);  // 立即开始，不等待
+      
+      // 在后台异步生成标题，不阻塞主流程
+      (async () => {
+        try {
+          await generateWorkTitle(pendingQuestion);
+        } catch (error) {
+          console.error('后台生成标题失败:', error);
+        }
+      })();
       
       // 清除localStorage
       localStorage.removeItem('pendingQuestion');
@@ -985,7 +992,7 @@ const checkAndAutoSendFirstMessage = async () => {
 };
 
 // 真正发送第一句话给AI
-const simulateSendFirstMessage = async (content: string) => {
+const simulateSendFirstMessage = (content: string) => {
   // 直接添加用户消息到界面
   const userMessage = {
     id: `msg_${Date.now()}`,
@@ -1002,72 +1009,92 @@ const simulateSendFirstMessage = async (content: string) => {
   // 自动滚动到底部
   scrollToBottom();
   
-  // 创建并连接WebSocket，然后发送第一句话给AI
-  try {
-    // 创建WebSocket处理器
-    webSocketHandler.value = new WebSocketChatHandler(
-      workId.value!,
-      authStore.token!
-    );
+  // 在后台异步创建WebSocket连接并发送消息，不阻塞主流程
+  (async () => {
+    try {
+      // 创建WebSocket处理器
+      webSocketHandler.value = new WebSocketChatHandler(
+        workId.value!,
+        authStore.token!
+      );
 
-    // 连接WebSocket
-    await webSocketHandler.value.connect();
-    console.log('WebSocket已连接，准备发送第一句话');
+      // 连接WebSocket
+      await webSocketHandler.value.connect();
+      console.log('WebSocket已连接，准备发送第一句话');
 
-    // 发送消息给AI
-    webSocketHandler.value.sendMessage(content);
-    console.log('第一句话已真正发送给AI:', content);
-    
-    // 设置消息监听器来处理AI的回复
-    webSocketHandler.value.onMessage((data) => {
-      console.log('收到AI回复:', data);
+      // 等待连接状态确认
+      let retryCount = 0;
+      const maxRetries = 10;
       
-      // 处理AI的回复
-      switch (data.type) {
-        case 'start':
-          // AI开始处理
+      while (retryCount < maxRetries) {
+        if (webSocketHandler.value.isConnected()) {
+          console.log('WebSocket连接状态确认成功');
           break;
-        case 'content':
-          // 创建或更新AI回复消息
-          let aiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
-          if (aiMessageIndex === -1) {
-            // 创建新的AI回复消息
-            const aiMessage = {
-              id: `ai_msg_${Date.now()}`,
-              role: 'assistant' as const,
-              content: data.content,
-              datetime: new Date().toLocaleString(),
-              avatar: getSystemAvatar({ systemType: 'brain' }),
-              systemType: 'brain' as const,
-              isStreaming: true
-            };
-            chatMessages.value.push(aiMessage);
-            aiMessageIndex = chatMessages.value.length - 1;
-          } else {
-            // 更新现有的AI回复消息
-            chatMessages.value[aiMessageIndex].content += data.content;
-          }
-          
-          // 自动滚动到底部
-          scrollToBottom();
-          break;
-        case 'complete':
-          // AI回复完成
-          const finalAiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
-          if (finalAiMessageIndex !== -1) {
-            chatMessages.value[finalAiMessageIndex].isStreaming = false;
-          }
-          console.log('AI回复完成');
-          break;
-        case 'error':
-          console.error('AI处理出错:', data.message);
-          break;
+        }
+        console.log(`等待WebSocket连接建立... (${retryCount + 1}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        retryCount++;
       }
-    });
-    
-  } catch (error) {
-    console.error('发送第一句话给AI失败:', error);
-  }
+      
+      if (!webSocketHandler.value.isConnected()) {
+        throw new Error('WebSocket连接建立超时');
+      }
+
+      // 发送消息给AI
+      webSocketHandler.value.sendMessage(content);
+      console.log('第一句话已真正发送给AI:', content);
+      
+      // 设置消息监听器来处理AI的回复
+      webSocketHandler.value.onMessage((data) => {
+        console.log('收到AI回复:', data);
+        
+        // 处理AI的回复
+        switch (data.type) {
+          case 'start':
+            // AI开始处理
+            break;
+          case 'content':
+            // 创建或更新AI回复消息
+            let aiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
+            if (aiMessageIndex === -1) {
+              // 创建新的AI回复消息
+              const aiMessage = {
+                id: `ai_msg_${Date.now()}`,
+                role: 'assistant' as const,
+                content: data.content,
+                datetime: new Date().toLocaleString(),
+                avatar: getSystemAvatar({ systemType: 'brain' }),
+                systemType: 'brain' as const,
+                isStreaming: true
+              };
+              chatMessages.value.push(aiMessage);
+              aiMessageIndex = chatMessages.value.length - 1;
+            } else {
+              // 更新现有的AI回复消息
+              chatMessages.value[aiMessageIndex].content += data.content;
+            }
+            
+            // 自动滚动到底部
+            scrollToBottom();
+            break;
+          case 'complete':
+            // AI回复完成
+            const finalAiMessageIndex = chatMessages.value.findIndex(m => m.role === 'assistant' && m.isStreaming);
+            if (finalAiMessageIndex !== -1) {
+              chatMessages.value[finalAiMessageIndex].isStreaming = false;
+            }
+            console.log('AI回复完成');
+            break;
+          case 'error':
+            console.error('AI处理出错:', data.message);
+            break;
+        }
+      });
+      
+    } catch (error) {
+      console.error('发送第一句话给AI失败:', error);
+    }
+  })();
 };
 
 // 生成工作标题
