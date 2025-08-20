@@ -80,6 +80,7 @@
             <FileManager 
               :file-tree-data="fileTreeData"
               :work-id="workId"
+              :loading="loading"
               @file-select="handleFileSelect"
             />
             <div class="chat-input">
@@ -345,6 +346,9 @@ const loadWorkspaceFiles = async () => {
   if (!workId.value || !authStore.token) return;
   
   try {
+    // 设置加载状态
+    loading.value = true;
+    
     const files = await workspaceFileAPI.listFiles(authStore.token, workId.value);
     
     // 更新文件树数据
@@ -353,6 +357,9 @@ const loadWorkspaceFiles = async () => {
   } catch (error) {
     console.error('加载工作空间文件失败:', error);
     MessagePlugin.error('加载工作空间文件失败');
+  } finally {
+    // 确保加载状态被重置
+    loading.value = false;
   }
 };
 

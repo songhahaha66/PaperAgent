@@ -4,10 +4,17 @@
       <t-collapse-panel value="files" header="文件管理器">
         <!-- 文件树 -->
         <div class="file-tree">
+          <div v-if="isLoading" class="loading-state">
+            <t-loading size="small" text="加载文件中..." />
+          </div>
+          <div v-else-if="!fileTreeData || fileTreeData.length === 0" class="empty-state">
+            <div class="empty-icon">📁</div>
+            <div class="empty-text">暂无文件</div>
+          </div>
           <t-tree
+            v-else
             :data="processedFileTreeData"
             :expand-on-click-node="true"
-            :default-expanded="['python_files', 'markdown_files', 'image_files']"
             @click="handleFileClick"
             @select="handleFileSelect"
           />
@@ -28,8 +35,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, defineProps, defineEmits, computed } from 'vue'
-import { Tree, Collapse, CollapsePanel } from 'tdesign-vue-next'
+import { ref, defineProps, defineEmits, computed, watch } from 'vue'
+import { Tree, Collapse, CollapsePanel, Loading } from 'tdesign-vue-next'
 
 // 定义props
 interface Props {
@@ -51,6 +58,7 @@ interface Props {
     depth?: number
   }>
   workId?: string
+  loading?: boolean
 }
 
 // 定义emits
@@ -65,11 +73,41 @@ const emit = defineEmits<Emits>()
 const fileManagerExpanded = ref(['files'])
 const selectedFile = ref<string | null>(null)
 
+// 计算加载状态：优先使用父组件传入的loading状态，否则使用内部状态
+const isLoading = computed(() => {
+  if (props.loading !== undefined) {
+    return props.loading
+  }
+  // 如果没有传入loading状态，则根据数据状态判断
+  return !props.fileTreeData || props.fileTreeData.length === 0
+})
+
 // 处理文件树数据，按文件类型分类
 const processedFileTreeData = computed(() => {
+  // 如果正在加载，返回空数组，避免显示默认结构
+  if (isLoading.value) {
+    return []
+  }
+  
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
     // 返回默认的空结构
-    return []
+    return [
+      {
+          value: 'python_files',
+          label: 'Python脚本 (0)',
+          children: []
+        },
+        {
+          value: 'markdown_files',
+          label: 'Markdown文档 (0)',
+          children: []
+        },
+        {
+          value: 'image_files',
+          label: '图片文件 (0)',
+          children: []
+        }
+      ]
   }
   
   // 检查是否为FileInfo[]类型（有path和type属性）
@@ -418,6 +456,33 @@ defineExpose({
 .file-tree {
   max-height: 300px;
   overflow-y: auto;
+}
+
+.loading-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100px;
+  color: #7f8c8d;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  height: 100px;
+  color: #7f8c8d;
+}
+
+.empty-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.empty-text {
+  font-size: 14px;
+  color: #999;
 }
 
 .file-tree .t-tree-node {
