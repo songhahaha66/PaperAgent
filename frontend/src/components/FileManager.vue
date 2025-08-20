@@ -69,23 +69,7 @@ const selectedFile = ref<string | null>(null)
 const processedFileTreeData = computed(() => {
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
     // 返回默认的空结构
-    return [
-      {
-        value: 'python_files',
-        label: 'Python脚本',
-        children: []
-      },
-      {
-        value: 'markdown_files',
-        label: 'Markdown文档',
-        children: []
-      },
-      {
-        value: 'image_files',
-        label: '图片文件',
-        children: []
-      }
-    ]
+    return []
   }
   
   // 检查是否为FileInfo[]类型（有path和type属性）
