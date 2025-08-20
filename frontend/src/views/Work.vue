@@ -677,72 +677,17 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
       const messageIndex = chatMessages.value.findIndex(m => m.id === messageId);
       if (messageIndex === -1) return;
       
-      const blockType = block.type;
-      const blockContent = block.content;
-      
-      // 根据块类型确定系统类型
-      let systemType: 'brain' | 'code' | 'writing' = 'brain';
-      let shouldUpdateSystem = false;
-      
-      switch (blockType) {
-        case 'main':
-          systemType = 'brain';
-          break;
-        case 'call_code_agent':
-        case 'code_agent':
-        case 'call_exec_py':
-        case 'exec_py':
-          systemType = 'code';
-          shouldUpdateSystem = true;
-          break;
-        case 'call_writing_agent':
-        case 'writing_agent':
-          systemType = 'writing';
-          shouldUpdateSystem = true;
-          break;
-        default:
-          systemType = 'brain';
-      }
-      
-      // 更新消息内容
+      // 直接添加JSON块到消息内容中，保持JSON原文格式
       const currentMessage = chatMessages.value[messageIndex];
-      let newContent = currentMessage.content;
+      const newContent = currentMessage.content + '\n\n' + JSON.stringify(block, null, 2);
       
-      // 根据块类型格式化内容
-      switch (blockType) {
-        case 'main':
-          newContent += blockContent;
-          break;
-        case 'call_code_agent':
-          newContent += `\n\n🤖 **代码执行请求**:\n${blockContent}`;
-          break;
-        case 'code_agent':
-          newContent += `\n\n💻 **代码执行**:\n${blockContent}`;
-          break;
-        case 'call_exec_py':
-          newContent += `\n\n⚡ **执行代码**:\n\`\`\`python\n${blockContent}\n\`\`\``;
-          break;
-        case 'exec_py':
-          newContent += `\n\n📊 **执行结果**:\n\`\`\`\n${blockContent}\n\`\`\``;
-          break;
-        case 'call_writing_agent':
-          newContent += `\n\n✍️ **写作请求**:\n${blockContent}`;
-          break;
-        case 'writing_agent':
-          newContent += `\n\n📝 **写作内容**:\n${blockContent}`;
-          break;
-        default:
-          newContent += `\n\n${blockContent}`;
-      }
-      
-      // 更新消息
+      // 更新消息，不改变其他属性
       const updatedMessage = {
         ...currentMessage,
-        content: newContent,
-        systemType: shouldUpdateSystem ? systemType : currentMessage.systemType,
-        avatar: shouldUpdateSystem ? getSystemAvatar({ systemType }) : currentMessage.avatar
+        content: newContent
       };
       
+      // 使用Vue的响应式更新
       chatMessages.value.splice(messageIndex, 1, updatedMessage);
       
       // 自动滚动到底部

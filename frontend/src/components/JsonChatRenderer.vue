@@ -106,15 +106,87 @@ const getSystemName = (message: ChatMessage) => {
   return 'AI助手';
 };
 
+// 解析JSON块
+const parseJsonBlocks = (content: string) => {
+  const blocks: any[] = [];
+  const lines = content.split('\n');
+  let currentBlock = '';
+  let inJsonBlock = false;
+  
+  for (const line of lines) {
+    if (line.trim().startsWith('{') && line.trim().endsWith('}')) {
+      // 单行JSON
+      try {
+        const block = JSON.parse(line.trim());
+        blocks.push(block);
+      } catch (e) {
+        // 不是有效的JSON，作为普通文本处理
+        if (!inJsonBlock) {
+          currentBlock += line + '\n';
+        }
+      }
+    } else if (line.trim().startsWith('{')) {
+      // 多行JSON开始
+      inJsonBlock = true;
+      currentBlock = line + '\n';
+    } else if (line.trim().endsWith('}') && inJsonBlock) {
+      // 多行JSON结束
+      currentBlock += line;
+      try {
+        const block = JSON.parse(currentBlock);
+        blocks.push(block);
+      } catch (e) {
+        // 解析失败，作为普通文本处理
+        currentBlock = '';
+      }
+      inJsonBlock = false;
+      currentBlock = '';
+    } else if (inJsonBlock) {
+      // 多行JSON中间
+      currentBlock += line + '\n';
+    } else {
+      // 普通文本
+      currentBlock += line + '\n';
+    }
+  }
+  
+  return { blocks, remainingText: currentBlock.trim() };
+};
+
 // 渲染消息内容
 const renderMessageContent = (message: ChatMessage) => {
   if (message.role === 'user') {
     return message.content;
   }
   
-  // 对于AI消息，支持Markdown渲染
+  // 对于AI消息，解析JSON块并渲染
   if (message.role === 'assistant') {
-    return message.content;
+    const { blocks, remainingText } = parseJsonBlocks(message.content);
+    
+    let renderedContent = '';
+    
+    // 添加剩余文本
+    if (remainingText) {
+      renderedContent += remainingText;
+    }
+    
+    // 渲染每个JSON块
+    blocks.forEach((block, index) => {
+      if (index > 0 || remainingText) {
+        renderedContent += '\n\n';
+      }
+      
+      // 为每个type创建一个独立的格子
+      const blockType = block.type || 'unknown';
+      const blockContent = block.content || '';
+      
+      renderedContent += `<div class="json-block json-block-${blockType}">`;
+      renderedContent += `<div class="json-block-header">Type: ${blockType}</div>`;
+      renderedContent += `<div class="json-block-content">${blockContent}</div>`;
+      renderedContent += `</div>`;
+    });
+    
+    return renderedContent;
   }
   
   return message.content;
@@ -223,6 +295,116 @@ const copyMessage = (content: string) => {
   background-color: #0052d9;
   border-color: #0052d9;
   color: white;
+}
+
+/* JSON块样式 */
+:deep(.json-block) {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+  background-color: #fafafa;
+}
+
+:deep(.json-block-header) {
+  background-color: #f0f0f0;
+  padding: 8px 12px;
+  font-weight: 600;
+  font-size: 14px;
+  border-bottom: 1px solid #e0e0e0;
+  color: #333;
+}
+
+:deep(.json-block-content) {
+  padding: 12px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: white;
+}
+
+/* 不同type的JSON块样式 */
+:deep(.json-block-main) {
+  border-left: 4px solid #0052d9;
+}
+
+:deep(.json-block-main .json-block-header) {
+  background-color: #e6f3ff;
+  color: #0052d9;
+}
+
+:deep(.json-block-call_code_agent) {
+  border-left: 4px solid #00a870;
+}
+
+:deep(.json-block-call_code_agent .json-block-header) {
+  background-color: #e6fff2;
+  color: #00a870;
+}
+
+:deep(.json-block-code_agent) {
+  border-left: 4px solid #00a870;
+}
+
+:deep(.json-block-code_agent .json-block-header) {
+  background-color: #e6fff2;
+  color: #00a870;
+}
+
+:deep(.json-block-call_exec_py) {
+  border-left: 4px solid #ff6b35;
+}
+
+:deep(.json-block-call_exec_py .json-block-header) {
+  background-color: #fff2e6;
+  color: #ff6b35;
+}
+
+:deep(.json-block-exec_py) {
+  border-left: 4px solid #ff6b35;
+}
+
+:deep(.json-block-exec_py .json-block-header) {
+  background-color: #fff2e6;
+  color: #ff6b35;
+}
+
+:deep(.json-block-call_writing_agent) {
+  border-left: 4px solid #ed7b2f;
+}
+
+:deep(.json-block-call_writing_agent .json-block-header) {
+  background-color: #fff2e6;
+  color: #ed7b2f;
+}
+
+:deep(.json-block-writing_agent) {
+  border-left: 4px solid #ed7b2f;
+}
+
+:deep(.json-block-writing_agent .json-block-header) {
+  background-color: #fff2e6;
+  color: #ed7b2f;
+}
+
+:deep(.json-block-writemd_result) {
+  border-left: 4px solid #8e44ad;
+}
+
+:deep(.json-block-writemd_result .json-block-header) {
+  background-color: #f4e6ff;
+  color: #8e44ad;
+}
+
+:deep(.json-block-tree_result) {
+  border-left: 4px solid #27ae60;
+}
+
+:deep(.json-block-tree_result .json-block-header) {
+  background-color: #e6fff2;
+  color: #27ae60;
 }
 
 /* 代码块样式 */
