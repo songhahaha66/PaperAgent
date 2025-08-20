@@ -125,6 +125,26 @@
         <t-button theme="primary" @click="closeContentDialog">关闭</t-button>
       </template>
     </t-dialog>
+
+    <!-- 确认删除对话框 -->
+    <t-dialog
+      v-model:visible="showDeleteConfirmDialog"
+      header="确认删除模板"
+      width="500px"
+      @confirm="confirmForceDelete"
+      @cancel="cancelForceDelete"
+    >
+      <div class="delete-confirm-content">
+        <p>{{ deleteConfirmMessage }}</p>
+        <p class="warning-text">⚠️ 强制删除将同时删除所有引用该模板的工作，此操作不可恢复！</p>
+      </div>
+      <template #footer>
+        <t-space>
+          <t-button theme="default" @click="cancelForceDelete">取消</t-button>
+          <t-button theme="danger" @click="confirmForceDelete">强制删除</t-button>
+        </t-space>
+      </template>
+    </t-dialog>
   </div>
 </template>
 
@@ -263,34 +283,47 @@ const editTemplate = async (template: PaperTemplate) => {
 const deleteTemplate = async (template: PaperTemplate) => {
   if (!authStore.token) return;
   
+  console.log('开始删除模板:', template.id);
+  
   try {
-    await templateAPI.deleteTemplate(authStore.token, template.id);
+    const result = await templateAPI.deleteTemplate(authStore.token, template.id);
+    console.log('删除成功:', result);
     MessagePlugin.success('模板删除成功');
     loadTemplates(); // 重新加载列表
   } catch (error: any) {
+    console.log('删除模板错误详情:', error);
+    console.log('错误类型:', typeof error);
+    console.log('错误响应状态:', error.response?.status);
+    console.log('错误响应数据:', error.response?.data);
+    console.log('错误消息:', error.message);
+    
     // 检查是否是外键约束错误
-    if (error.response?.status === 400 && error.response?.data?.detail?.includes('无法删除模板')) {
-      // 显示确认对话框，询问是否强制删除
-      const confirmed = await MessagePlugin.confirm({
-        header: '模板删除失败',
-        body: error.response.data.detail,
-        confirmBtn: '强制删除',
-        cancelBtn: '取消',
-        theme: 'warning'
-      });
+    const isForeignKeyError = error.response?.status === 400 && 
+      (error.response?.data?.detail?.includes('无法删除模板') || 
+       error.response?.data?.detail?.includes('violates foreign key constraint') ||
+       error.message?.includes('无法删除模板'));
+    
+    console.log('是否检测到外键约束错误:', isForeignKeyError);
+    
+    if (isForeignKeyError) {
+      console.log('检测到外键约束错误，显示确认对话框');
       
-      if (confirmed) {
-        try {
-          const result = await templateAPI.forceDeleteTemplate(authStore.token, template.id);
-          MessagePlugin.success(`强制删除成功！${result.deleted_works_count} 个相关工作已被删除`);
-          loadTemplates(); // 重新加载列表
-        } catch (forceDeleteError) {
-          MessagePlugin.error('强制删除失败');
-          console.error('强制删除失败:', forceDeleteError);
-        }
-      }
+      // 设置要删除的模板和确认消息
+      templateToDelete.value = template;
+      deleteConfirmMessage.value = error.response?.data?.detail || error.message || '该模板正在被其他工作使用，无法直接删除。';
+      
+      // 显示确认删除对话框
+      showDeleteConfirmDialog.value = true;
+      
+      // 显示警告消息
+      MessagePlugin.warning({
+        content: '检测到外键约束，请在弹出的对话框中确认是否强制删除',
+        duration: 3000
+      });
     } else {
-      MessagePlugin.error('删除模板失败');
+      // 其他类型的错误
+      const errorMessage = error.response?.data?.detail || error.message || '删除模板失败';
+      MessagePlugin.error(errorMessage);
       console.error('删除模板失败:', error);
     }
   }
@@ -506,6 +539,31 @@ const closeContentDialog = () => {
   templateContent.value = '';
 };
 
+// 确认删除对话框相关
+const showDeleteConfirmDialog = ref(false);
+const deleteConfirmMessage = ref('');
+const templateToDelete = ref<PaperTemplate | null>(null);
+
+const confirmForceDelete = async () => {
+  if (!authStore.token || !templateToDelete.value) return;
+  
+  try {
+    const result = await templateAPI.forceDeleteTemplate(authStore.token, templateToDelete.value.id);
+    MessagePlugin.success(`强制删除成功！${result.deleted_works_count} 个相关工作已被删除`);
+    loadTemplates(); // 重新加载列表
+    showDeleteConfirmDialog.value = false;
+    templateToDelete.value = null;
+  } catch (error) {
+    MessagePlugin.error('强制删除失败');
+    console.error('强制删除失败:', error);
+  }
+};
+
+const cancelForceDelete = () => {
+  showDeleteConfirmDialog.value = false;
+  templateToDelete.value = null;
+};
+
 // 检查用户认证状态
 onMounted(() => {
   loadTemplates();
@@ -578,4 +636,18 @@ onMounted(() => {
   box-sizing: border-box;
 }
 
+.delete-confirm-content {
+  text-align: left;
+  padding: 10px 0;
+}
+
+.delete-confirm-content p {
+  margin-bottom: 5px;
+  color: #333;
+}
+
+.warning-text {
+  color: #e74c3c;
+  font-weight: bold;
+}
 </style>

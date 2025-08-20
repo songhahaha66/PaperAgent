@@ -59,7 +59,12 @@ export class ApiClient {
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
+        const error = new Error(errorData.detail || `HTTP error! status: ${response.status}`) as any
+        error.response = {
+          status: response.status,
+          data: errorData
+        }
+        throw error
       }
       
       return await response.json()
@@ -93,7 +98,12 @@ export class ApiClient {
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`)
+        const error = new Error(errorData.detail || `HTTP error! status: ${response.status}`) as any
+        error.response = {
+          status: response.status,
+          data: errorData
+        }
+        throw error
       }
       
       return await response.json()
