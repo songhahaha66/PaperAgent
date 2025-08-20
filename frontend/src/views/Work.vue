@@ -683,7 +683,7 @@ const sendMessage = async (messageContent?: string) => {
   // 添加用户消息
   const userMessage: ChatMessageDisplay = {
     id: Date.now().toString(),
-    role: 'user',
+    role: 'user' as const,
     content: content,
     datetime: new Date().toLocaleString(),
     avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
@@ -710,7 +710,7 @@ const sendRealMessage = async (message: string) => {
   const aiMessageId = (Date.now() + 1).toString()
   const aiMessage: ChatMessageDisplay = {
     id: aiMessageId,
-    role: 'assistant',
+    role: 'assistant' as const,
     content: '',
     datetime: new Date().toLocaleString(),
     avatar: getSystemAvatar({ systemType: 'brain' }), // 默认使用brain类型，后续会根据内容更新
@@ -1046,9 +1046,9 @@ const checkAndAutoSendFirstMessage = async () => {
 // 真正发送第一句话给AI
 const simulateSendFirstMessage = (content: string) => {
   // 直接添加用户消息到界面
-  const userMessage = {
+  const userMessage: ChatMessageDisplay = {
     id: `msg_${Date.now()}`,
-    role: 'user',
+    role: 'user' as const,
     content: content,
     datetime: new Date().toLocaleString(),
     avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
