@@ -172,6 +172,44 @@ export const chatAPI = {
       }
     );
     return response;
+  },
+
+  // 生成工作标题
+  async generateTitle(
+    token: string,
+    workId: string,
+    question: string
+  ): Promise<{ title: string; status: string }> {
+    const response = await apiClient.request<{ title: string; status: string }>(
+      `/api/chat/work/${workId}/generate-title`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ question }),
+        headers: { 
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response;
+  },
+
+  // 更新工作标题
+  async updateWorkTitle(
+    token: string,
+    workId: string,
+    title: string
+  ): Promise<{ status: string; message: string }> {
+    const response = await apiClient.request<{ status: string; message: string }>(
+      `/api/chat/work/${workId}/title`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ title }),
+        headers: { 
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response;
   }
 };
 

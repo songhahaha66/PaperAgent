@@ -287,16 +287,19 @@ const startWork = async () => {
   creatingWork.value = true;
   
   try {
-    // 创建工作数据
+    // 创建工作数据，标题用空格作为初始值
     const workData: WorkCreate = {
-      title: researchQuestion.value,
+      title: " ",  // 用空格作为初始标题，后续由AI生成
       description: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n`,
       tags: '研究,论文,AI生成',
-      template_id: selectedTemplateId.value  // 添加选择的模板ID
+      template_id: selectedTemplateId.value
     };
 
     // 调用API创建工作
     const newWork = await workspaceAPI.createWork(authStore.token, workData);
+    
+    // 将研究问题存储到localStorage，供Work.vue使用
+    localStorage.setItem('pendingQuestion', researchQuestion.value);
     
     MessagePlugin.success('工作创建成功！');
     
