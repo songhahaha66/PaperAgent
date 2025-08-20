@@ -168,11 +168,12 @@ const fileTreeData = ref<FileInfo[]>([])
 // 数据定义
 const currentFileContent = ref('')
 const currentFileName = ref('')
-const fileContents = ref<Record<string, string>>({})
+// 按workId分组的文件内容缓存，避免不同work的文件内容混淆
+const fileContents = ref<Record<string, Record<string, string>>>({})
 const currentWorkspaceConfig = ref('')
 
-// 图片URL缓存
-const imageUrls = ref<Record<string, string>>({})
+// 图片URL缓存，按workId分组
+const imageUrls = ref<Record<string, Record<string, string>>>({})
 
 // 导出状态
 const exportLoading = ref(false)
@@ -209,6 +210,19 @@ const loadWork = async () => {
   
   loading.value = true;
   try {
+    // 清理之前的文件缓存，确保不同work的文件内容不混淆
+    if (workId.value) {
+      delete fileContents.value[workId.value];
+      delete imageUrls.value[workId.value];
+    }
+    currentFileContent.value = '';
+    currentFileName.value = '';
+    selectedFile.value = null;
+    
+    // 清理其他相关状态，确保不同work的数据不混淆
+    chatMessages.value = [];
+    fileTreeData.value = [];
+    
     const work = await workspaceAPI.getWork(authStore.token, workId.value);
     currentWork.value = work;
     
@@ -496,11 +510,14 @@ const handleFileSelect = async (filePath: string) => {
   if (isImageFile(filePath)) {
     console.log('图片文件，获取blob URL')
     // 对于图片文件，设置一个特殊标记表示这是图片
-    fileContents.value[filePath] = 'IMAGE_FILE'
+    if (!fileContents.value[workId.value!]) {
+      fileContents.value[workId.value!] = {};
+    }
+    fileContents.value[workId.value!][filePath] = 'IMAGE_FILE'
     currentFileContent.value = 'IMAGE_FILE'
     
     // 如果已经有缓存的blob URL，直接使用
-    if (imageUrls.value[filePath]) {
+    if (imageUrls.value[workId.value!] && imageUrls.value[workId.value!][filePath]) {
       console.log('使用缓存的图片URL')
       return
     }
@@ -508,7 +525,10 @@ const handleFileSelect = async (filePath: string) => {
     // 获取图片blob URL
     try {
       const blobUrl = await getImageBlobUrl(filePath)
-      imageUrls.value[filePath] = blobUrl
+      if (!imageUrls.value[workId.value!]) {
+        imageUrls.value[workId.value!] = {};
+      }
+      imageUrls.value[workId.value!][filePath] = blobUrl
       console.log('图片blob URL获取成功')
     } catch (error) {
       console.error('获取图片失败:', error)
@@ -518,8 +538,8 @@ const handleFileSelect = async (filePath: string) => {
   }
   
   // 检查是否已缓存
-  if (fileContents.value[filePath]) {
-    currentFileContent.value = fileContents.value[filePath]
+  if (fileContents.value[workId.value!] && fileContents.value[workId.value!][filePath]) {
+    currentFileContent.value = fileContents.value[workId.value!][filePath]
     console.log('使用缓存的文件内容')
     return
   }
@@ -530,13 +550,19 @@ const handleFileSelect = async (filePath: string) => {
     const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
     
     // 缓存文件内容
-    fileContents.value[filePath] = content
+    if (!fileContents.value[workId.value!]) {
+      fileContents.value[workId.value!] = {};
+    }
+    fileContents.value[workId.value!][filePath] = content
     currentFileContent.value = content
     
     console.log('文件内容获取成功，长度:', content.length)
   } catch (error) {
     console.error('获取文件内容失败:', error)
-    fileContents.value[filePath] = '文件读取失败'
+    if (!fileContents.value[workId.value!]) {
+      fileContents.value[workId.value!] = {};
+    }
+    fileContents.value[workId.value!][filePath] = '文件读取失败'
     currentFileContent.value = '文件读取失败'
     MessagePlugin.error('加载文件失败')
   }
@@ -959,9 +985,13 @@ onUnmounted(() => {
   isStreaming.value = false;
   
   // 清理blob URLs以释放内存
-  Object.values(imageUrls.value).forEach(url => {
-    if (url.startsWith('blob:')) {
-      URL.revokeObjectURL(url);
+  Object.values(imageUrls.value).forEach(workUrls => {
+    if (workUrls && typeof workUrls === 'object') {
+      Object.values(workUrls).forEach(url => {
+        if (typeof url === 'string' && url.startsWith('blob:')) {
+          URL.revokeObjectURL(url);
+        }
+      });
     }
   });
   imageUrls.value = {};
@@ -981,6 +1011,19 @@ watch(() => route.params.work_id, (newWorkId) => {
     
     // 停止文件刷新定时器
     stopFileRefreshTimer();
+    
+    // 清理文件缓存，避免不同work的文件内容混淆
+    if (workId.value) {
+      delete fileContents.value[workId.value];
+      delete imageUrls.value[workId.value];
+    }
+    currentFileContent.value = '';
+    currentFileName.value = '';
+    selectedFile.value = null;
+    
+    // 清理其他相关状态，确保不同work的数据不混淆
+    chatMessages.value = [];
+    fileTreeData.value = [];
     
     loadWork();
     // 重新初始化聊天会话
