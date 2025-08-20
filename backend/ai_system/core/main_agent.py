@@ -448,6 +448,7 @@ class MainAgent(Agent):
             iteration_count += 1
             logger.info(f"MainAgent第 {iteration_count} 次迭代")
 
+            # 使用异步LLM处理
             assistant_message, tool_calls = await self.llm_handler.process_stream(
                 self.messages, self.tools)
             self.messages.append(assistant_message)
@@ -459,89 +460,37 @@ class MainAgent(Agent):
 
             logger.info(f"MainAgent执行 {len(tool_calls)} 个工具调用")
 
-            # 处理所有工具调用
+            # 并发处理所有工具调用，提高效率
+            tool_tasks = []
             for i, tool_call in enumerate(tool_calls):
                 function_name = tool_call["function"]["name"]
-                logger.info(f"处理工具调用 {i+1}/{len(tool_calls)}: {function_name}")
+                logger.info(f"准备执行工具调用 {i+1}/{len(tool_calls)}: {function_name}")
+                
+                # 创建异步任务
+                task = self._execute_tool_call(tool_call, i+1, len(tool_calls))
+                tool_tasks.append(task)
 
-                if function_name == "CodeAgent":
-                    try:
-                        args = json.loads(tool_call["function"]["arguments"])
-                        task_prompt = args.get("task_prompt", "")
-
-                        if self.stream_manager:
-                            await self.stream_manager.print_code_agent_call(task_prompt)
-
-                            # 发送工具调用开始通知
-                            await self.stream_manager.print_main_content("MainAgent正在调用CodeAgent执行任务")
-
-                        # 使用独立的CodeAgent执行方法，确保消息隔离
-                        tool_result = await self._execute_code_agent(task_prompt, tool_call["id"])
-
-                        # 发送工具调用完成通知
-                        if self.stream_manager:
-                            try:
-                                await self.stream_manager.print_main_content(f"CodeAgent任务执行完成，结果长度: {len(tool_result)} 字符")
-                            except Exception as e:
-                                logger.warning(f"发送CodeAgent完成通知失败: {e}")
-
-                        # 将子 Agent 的结果添加回主 Agent 的消息历史
+            # 等待所有工具调用完成
+            if tool_tasks:
+                tool_results = await asyncio.gather(*tool_tasks, return_exceptions=True)
+                
+                # 处理结果
+                for i, result in enumerate(tool_results):
+                    if isinstance(result, Exception):
+                        logger.error(f"工具调用 {i+1} 执行失败: {result}")
+                        # 添加错误消息到历史
                         self.messages.append({
                             "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "content": tool_result,
+                            "tool_call_id": tool_calls[i]["id"],
+                            "content": f"工具执行失败: {str(result)}",
                         })
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSON解析失败: {e}")
+                    else:
+                        # 添加成功结果到历史
                         self.messages.append({
                             "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "content": f"工具参数解析失败: {e}",
+                            "tool_call_id": tool_calls[i]["id"],
+                            "content": result,
                         })
-
-                elif function_name in self.available_functions:
-                    try:
-                        args = json.loads(tool_call["function"]["arguments"])
-
-                        # 发送工具调用开始通知
-                        if self.stream_manager:
-                            try:
-                                await self.stream_manager.print_main_content(f"MainAgent正在执行工具调用: {function_name}")
-                            except Exception as e:
-                                logger.warning(f"发送工具调用通知失败: {e}")
-
-                        tool_result = await self.available_functions[function_name](
-                            **args)
-
-                        # 发送工具调用完成通知
-                        if self.stream_manager:
-                            try:
-                                await self.stream_manager.print_main_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
-                            except Exception as e:
-                                logger.warning(f"发送工具完成通知失败: {e}")
-
-                        # 将工具执行结果添加回消息历史
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "content": tool_result,
-                        })
-                    except json.JSONDecodeError as e:
-                        logger.error(f"JSON解析失败: {e}")
-                        self.messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "content": f"工具参数解析失败: {e}",
-                        })
-
-                else:
-                    # 处理未知工具调用
-                    logger.warning(f"未知工具: {function_name}")
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call["id"],
-                        "content": f"未知工具: {function_name}",
-                    })
 
         logger.info(
             f"MainAgent执行完成，总共 {iteration_count} 次迭代，最终消息历史长度: {len(self.messages)}")
@@ -669,3 +618,70 @@ class MainAgent(Agent):
             error_msg = f"CodeAgent执行失败: {str(e)}"
             logger.error(error_msg)
             return error_msg
+
+    async def _execute_tool_call(self, tool_call: Dict[str, Any], index: int, total: int) -> str:
+        """执行单个工具调用的异步方法"""
+        function_name = tool_call["function"]["name"]
+        logger.info(f"执行工具调用 {index}/{total}: {function_name}")
+
+        try:
+            if function_name == "CodeAgent":
+                args = json.loads(tool_call["function"]["arguments"])
+                task_prompt = args.get("task_prompt", "")
+
+                if self.stream_manager:
+                    await self.stream_manager.print_code_agent_call(task_prompt)
+                    # 发送工具调用开始通知
+                    await self.stream_manager.print_main_content("MainAgent正在调用CodeAgent执行任务")
+
+                # 使用独立的CodeAgent执行方法，确保消息隔离
+                tool_result = await self._execute_code_agent(task_prompt, tool_call["id"])
+
+                # 发送工具调用完成通知
+                if self.stream_manager:
+                    try:
+                        await self.stream_manager.print_main_content(f"CodeAgent任务执行完成，结果长度: {len(tool_result)} 字符")
+                    except Exception as e:
+                        logger.warning(f"发送CodeAgent完成通知失败: {e}")
+
+                return tool_result
+
+            elif function_name in self.available_functions:
+                args = json.loads(tool_call["function"]["arguments"])
+
+                # 发送工具调用开始通知
+                if self.stream_manager:
+                    try:
+                        await self.stream_manager.print_main_content(f"MainAgent正在执行工具调用: {function_name}")
+                    except Exception as e:
+                        logger.warning(f"发送工具调用通知失败: {e}")
+
+                # 检查函数是否是异步的
+                func = self.available_functions[function_name]
+                if asyncio.iscoroutinefunction(func):
+                    tool_result = await func(**args)
+                else:
+                    # 同步函数在线程池中执行
+                    loop = asyncio.get_event_loop()
+                    tool_result = await loop.run_in_executor(None, lambda: func(**args))
+
+                # 发送工具调用完成通知
+                if self.stream_manager:
+                    try:
+                        await self.stream_manager.print_main_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
+                    except Exception as e:
+                        logger.warning(f"发送工具完成通知失败: {e}")
+
+                return tool_result
+
+            else:
+                # 处理未知工具调用
+                logger.warning(f"未知工具: {function_name}")
+                return f"未知工具: {function_name}"
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析失败: {e}")
+            return f"工具参数解析失败: {e}"
+        except Exception as e:
+            logger.error(f"工具 {function_name} 执行失败: {e}")
+            return f"工具执行失败: {str(e)}"

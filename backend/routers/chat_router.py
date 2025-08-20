@@ -251,6 +251,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 'content': content
                             }))
                             logger.debug(f"发送流式内容: {repr(content[:30])}")
+                            
+                            # 让出控制权，确保其他任务能够执行
+                            await asyncio.sleep(0.001)
                         except Exception as e:
                             logger.error(f"发送WebSocket内容失败: {e}")
 
@@ -285,6 +288,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             }))
                             logger.debug(
                                 f"发送JSON块: {block.get('type', 'unknown')}")
+                            
+                            # 让出控制权，确保其他任务能够执行
+                            await asyncio.sleep(0.001)
                         except Exception as e:
                             logger.error(f"发送JSON块失败: {e}")
 
@@ -354,15 +360,15 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 await stream_manager.save_user_message(message_data['problem'])
                 logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
 
-                # 执行AI任务
+                # 执行AI任务 - 使用异步任务避免阻塞
                 try:
-                    # 检查main_agent.run是否是异步函数
-                    if asyncio.iscoroutinefunction(main_agent.run):
-                        await main_agent.run(message_data['problem'])
-                    else:
-                        # 如果是同步函数，使用线程池执行
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
+                    # 创建异步任务执行AI处理
+                    ai_task = asyncio.create_task(
+                        main_agent.run(message_data['problem'])
+                    )
+                    
+                    # 等待AI任务完成
+                    await ai_task
 
                     # AI处理完成后，手动保存最终的AI消息
                     # 获取最终的AI回复内容
