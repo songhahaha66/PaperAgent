@@ -34,42 +34,16 @@ class TemplateOperations:
             if 'error' in structure:
                 return f"模板分析失败: {structure['error']}"
             
-            # 生成摘要
-            summary = template_tools.get_template_summary(template_content)
-            
-            # 验证结构
-            validation = template_tools.validate_template_structure(template_content)
-            
+            # 只返回章节结构
             result_lines = []
-            result_lines.append("=== 模板结构分析 ===")
-            result_lines.append(summary)
+            result_lines.append(f"模板标题: {structure['title'] or '未设置'}")
+            result_lines.append(f"总章节数: {structure['total_sections']}")
             result_lines.append("")
+            result_lines.append("章节结构:")
             
-            if validation['warnings']:
-                result_lines.append("⚠️ 警告:")
-                for warning in validation['warnings']:
-                    result_lines.append(f"  - {warning}")
-                result_lines.append("")
-            
-            if validation['errors']:
-                result_lines.append("❌ 错误:")
-                for error in validation['errors']:
-                    result_lines.append(f"  - {error}")
-                result_lines.append("")
-            
-            if validation['suggestions']:
-                result_lines.append("💡 建议:")
-                for suggestion in validation['suggestions']:
-                    result_lines.append(f"  - {suggestion}")
-                result_lines.append("")
-            
-            result_lines.append("=== 可用操作 ===")
-            result_lines.append("1. 查看章节内容: get_section_content(章节标题)")
-            result_lines.append("2. 更新章节内容: update_section_content(章节标题, 新内容, 模式)")
-            result_lines.append("3. 添加新章节: add_new_section(父章节, 新章节标题, 内容)")
-            result_lines.append("4. 删除章节: remove_section(章节标题)")
-            result_lines.append("5. 重新排序: reorder_sections([章节标题列表])")
-            result_lines.append("6. 格式化内容: format_template_content()")
+            for section in structure['sections']:
+                indent = "  " * (section['level'] - 1)
+                result_lines.append(f"{indent}{'#' * section['level']} {section['title']}")
             
             return '\n'.join(result_lines)
             

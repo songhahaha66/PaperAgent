@@ -181,12 +181,6 @@ class TemplateAgentTools:
                 indent = "  " * (header['level'] - 1)
                 summary_lines.append(f"{indent}{'#' * header['level']} {header['title']}")
             
-            summary_lines.append("")
-            summary_lines.append("💡 提示: 使用以下工具操作模板:")
-            summary_lines.append("- analyze_template: 分析完整模板结构")
-            summary_lines.append("- get_section_content: 查看章节内容")
-            summary_lines.append("- update_section_content: 更新章节内容")
-            summary_lines.append("- add_new_section: 添加新章节")
             
             return '\n'.join(summary_lines)
             
