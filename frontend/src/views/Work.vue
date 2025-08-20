@@ -40,13 +40,14 @@
             <div class="chat-messages-container">
               <JsonChatRenderer :messages="chatMessages" />
             </div>
-            <div class="chat-bottom-section">
-              <FileManager 
-                :file-tree-data="fileTreeData"
-                :work-id="workId"
-                :loading="loading"
-                @file-select="handleFileSelect"
-              />
+                          <div class="chat-bottom-section">
+                <FileManager 
+                  :file-tree-data="fileTreeData"
+                  :work-id="workId"
+                  :loading="loading"
+                  @file-select="handleFileSelect"
+                  @refresh="handleFileRefresh"
+                />
               <div class="chat-input">
                 <ChatSender
                   v-model="inputValue"
@@ -170,6 +171,8 @@ const activeHistoryId = ref<number | null>(null);
 const currentChatSession = ref<ChatSessionResponse | null>(null);
 const isStreaming = ref(false);
 const webSocketHandler = ref<WebSocketChatHandler | null>(null);
+const fileRefreshTimer = ref<number | null>(null);
+const lastFileUpdateTime = ref<number>(0);
 
 // 根据消息内容判断系统类型
 const getSystemTypeFromContent = (content: string): 'brain' | 'code' | 'writing' | undefined => {
@@ -340,6 +343,78 @@ const loadWorkspaceFiles = async () => {
 const updateFileTreeData = (files: FileInfo[]) => {
   // 直接传递文件列表，让FileManager组件按类型分类
   fileTreeData.value = files;
+  lastFileUpdateTime.value = Date.now();
+};
+
+// 智能文件刷新 - 只在必要时刷新
+const smartFileRefresh = async () => {
+  try {
+    console.log('智能刷新文件列表');
+    const files = await workspaceFileAPI.listFiles(authStore.token!, workId.value!);
+    
+    // 检查文件列表是否有变化
+    const hasChanges = checkFileChanges(files);
+    
+    if (hasChanges) {
+      console.log('检测到文件变化，更新文件列表');
+      updateFileTreeData(files);
+    } else {
+      console.log('文件列表无变化，跳过更新');
+    }
+  } catch (error) {
+    console.error('智能刷新文件列表失败:', error);
+  }
+};
+
+// 检查文件列表是否有变化
+const checkFileChanges = (newFiles: FileInfo[]): boolean => {
+  const currentFiles = fileTreeData.value;
+  
+  // 如果文件数量不同，肯定有变化
+  if (currentFiles.length !== newFiles.length) {
+    return true;
+  }
+  
+  // 检查文件路径和修改时间
+  const currentFileMap = new Map(currentFiles.map(f => [f.path, f.modified]));
+  const newFileMap = new Map(newFiles.map(f => [f.path, f.modified]));
+  
+  for (const [path, modified] of newFileMap) {
+    const currentModified = currentFileMap.get(path);
+    if (currentModified === undefined || currentModified !== modified) {
+      return true;
+    }
+  }
+  
+  return false;
+};
+
+// 启动文件刷新定时器
+const startFileRefreshTimer = () => {
+  // 清除之前的定时器
+  if (fileRefreshTimer.value) {
+    clearTimeout(fileRefreshTimer.value);
+  }
+  
+  // 设置新的定时器，3秒后刷新文件列表
+  fileRefreshTimer.value = setTimeout(() => {
+    smartFileRefresh();
+    fileRefreshTimer.value = null;
+  }, 3000);
+};
+
+// 停止文件刷新定时器
+const stopFileRefreshTimer = () => {
+  if (fileRefreshTimer.value) {
+    clearTimeout(fileRefreshTimer.value);
+    fileRefreshTimer.value = null;
+  }
+};
+
+// 处理文件刷新
+const handleFileRefresh = () => {
+  console.log('手动刷新文件列表');
+  smartFileRefresh();
 };
 
 
@@ -664,6 +739,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         case 'complete':
           console.log('AI分析完成');
           isStreaming.value = false;
+          // AI处理完成后，智能刷新文件列表
+          smartFileRefresh();
           break;
           
         case 'error':
@@ -703,6 +780,23 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
       
       // 使用Vue的响应式更新
       chatMessages.value.splice(messageIndex, 1, updatedMessage);
+      
+      // 检查是否是文件操作相关的JSON块，如果是则智能刷新文件列表
+      if (block.type && (
+        block.type.includes('save_and_execute') || 
+        block.type.includes('edit_code_file') || 
+        block.type.includes('execute_file') ||
+        block.type.includes('code_agent') ||
+        block.content?.includes('文件') ||
+        block.content?.includes('保存') ||
+        block.content?.includes('创建')
+      )) {
+        console.log('检测到文件操作，智能刷新文件列表');
+        // 延迟刷新，避免频繁请求
+        setTimeout(() => {
+          smartFileRefresh();
+        }, 1000);
+      }
       
       // 自动滚动到底部
       nextTick(() => {
@@ -834,6 +928,9 @@ watch(() => route.params.work_id, (newWorkId) => {
       webSocketHandler.value.disconnect();
       webSocketHandler.value = null;
     }
+    
+    // 停止文件刷新定时器
+    stopFileRefreshTimer();
     
     loadWork();
     // 重新初始化聊天会话
@@ -1014,6 +1111,8 @@ html, body {
   max-height: 300px; /* 限制文件管理器最大高度 */
   overflow-y: auto; /* 如果内容过多，允许滚动 */
 }
+
+
 
 .chat-message-wrapper {
   position: relative;
