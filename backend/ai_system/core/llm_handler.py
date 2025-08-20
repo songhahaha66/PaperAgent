@@ -93,11 +93,24 @@ class LLMHandler:
                 # 2. 收集工具调用chunk，但不解析（改为完全等待模式）
                 if delta.tool_calls:
                     # 只收集chunk，不进行任何解析
-                    tool_call_chunks.append({
+                    chunk_info = {
                         "chunk_id": chunk_count,
                         "delta": delta.tool_calls
-                    })
-                    logger.debug(f"收集工具调用chunk {chunk_count}，包含 {len(delta.tool_calls)} 个工具调用")
+                    }
+                    tool_call_chunks.append(chunk_info)
+                    
+                    # 添加详细的调试日志
+                    tool_call_count = len(delta.tool_calls)
+                    logger.debug(f"收集工具调用chunk {chunk_count}，包含 {tool_call_count} 个工具调用")
+                    
+                    # 如果chunk数量异常多，记录警告
+                    if chunk_count > 1000:
+                        logger.warning(f"工具调用chunk数量异常多: {chunk_count}，可能存在无限循环")
+                    
+                    # 记录前几个chunk的详细信息
+                    if chunk_count <= 5:
+                        for i, tool_call in enumerate(delta.tool_calls):
+                            logger.debug(f"  Chunk {chunk_count} 工具调用 {i}: id={tool_call.id}, name={getattr(tool_call.function, 'name', 'None') if tool_call.function else 'None'}")
 
                 # 定期让出控制权，确保其他异步任务能够执行
                 config = AsyncConfig.get_llm_stream_config()
@@ -107,8 +120,12 @@ class LLMHandler:
             # 流式响应结束后，统一处理所有工具调用（完全等待模式）
             if tool_call_chunks:
                 logger.info(f"开始处理 {len(tool_call_chunks)} 个工具调用chunk")
-                tool_calls = self._extract_tool_calls_from_chunks(tool_call_chunks)
-                logger.info(f"成功提取 {len(tool_calls)} 个完整工具调用")
+                try:
+                    tool_calls = self._extract_tool_calls_from_chunks(tool_call_chunks)
+                    logger.info(f"成功提取 {len(tool_calls)} 个完整工具调用")
+                except Exception as e:
+                    logger.error(f"工具调用提取失败: {e}", exc_info=True)
+                    tool_calls = []
             else:
                 logger.info("没有工具调用需要处理")
 
@@ -205,28 +222,31 @@ class LLMHandler:
         
         # 按工具调用ID分组收集所有chunk
         tool_call_groups = {}
+        current_tool_call_id = None
         
         for chunk_info in tool_call_chunks:
             chunk_id = chunk_info["chunk_id"]
             deltas = chunk_info["delta"]
             
             for delta in deltas:
+                # 处理工具调用ID
                 if delta.id:
                     # 新的工具调用开始
-                    if delta.id not in tool_call_groups:
-                        tool_call_groups[delta.id] = {
-                            "id": delta.id,
+                    current_tool_call_id = delta.id
+                    if current_tool_call_id not in tool_call_groups:
+                        tool_call_groups[current_tool_call_id] = {
+                            "id": current_tool_call_id,
                             "name": "",
                             "arguments": ""
                         }
-                        logger.debug(f"开始收集工具调用 {delta.id} 的chunk")
+                        logger.debug(f"开始收集工具调用 {current_tool_call_id} 的chunk")
                 
-                # 累积工具调用信息
-                if delta.function:
+                # 只有在有有效工具调用ID时才处理function信息
+                if current_tool_call_id and delta.function:
                     if delta.function.name:
-                        tool_call_groups[delta.id]["name"] = delta.function.name
+                        tool_call_groups[current_tool_call_id]["name"] = delta.function.name
                     if delta.function.arguments:
-                        tool_call_groups[delta.id]["arguments"] += delta.function.arguments
+                        tool_call_groups[current_tool_call_id]["arguments"] += delta.function.arguments
         
         # 构建完整的工具调用列表
         complete_tool_calls = []
