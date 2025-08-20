@@ -40,20 +40,20 @@
 
         <t-card class="feature-card">
           <t-icon name="book" class="feature-icon" />
-          <h3>文献整合</h3>
-          <p>自动检索和整合相关领域的学术文献，确保论文内容的权威性和时效性</p>
+          <h3>多模型适配</h3>
+          <p>基本适配市面主流所有大模型，可自行选择</p>
         </t-card>
 
         <t-card class="feature-card">
           <t-icon name="format-horizontal-align-bottom" class="feature-icon" />
           <h3>格式规范</h3>
-          <p>支持多种学术期刊和会议的格式要求，自动生成符合规范的论文格式</p>
+          <p>支持上传模板，可以让AI根据你的模板定制</p>
         </t-card>
 
         <t-card class="feature-card">
           <t-icon name="check-circle" class="feature-icon" />
           <h3>质量保证</h3>
-          <p>内置查重和质量检测机制，确保论文原创性和学术水平</p>
+          <p>所生成图片均由AI根据代码生成，保证数据真实</p>
         </t-card>
       </div>
     </div>
