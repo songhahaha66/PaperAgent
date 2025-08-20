@@ -190,6 +190,7 @@ export class WebSocketChatHandler {
   private heartbeatTimer: number | null = null;
   private messageCallback: ((data: any) => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
+  private jsonBlockCallback: ((block: any) => void) | null = null;
 
   constructor(workId: string, token: string) {  // 参数改为workId
     this.workId = workId;
@@ -377,6 +378,11 @@ export class WebSocketChatHandler {
         console.error('解析WebSocket消息失败:', error);
       }
     };
+  }
+
+  // 监听JSON块消息
+  onJsonBlock(callback: (block: any) => void) {
+    this.jsonBlockCallback = callback;
   }
 
   // 监听断开连接

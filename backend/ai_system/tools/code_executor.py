@@ -54,18 +54,14 @@ class CodeExecutor:
         try:
             # 发送执行开始通知
             if self.stream_manager:
-                await self.stream_manager.print_xml_open("execution_start")
-                await self.stream_manager.print_content("开始执行Python代码")
-                await self.stream_manager.print_xml_close("execution_start")
+                await self.stream_manager.print_code_execution_call("开始执行Python代码")
             
             # 直接在子进程中执行代码
             result = await self._execute_code_directly(code_content)
             
-            # 发送执行完成通知
+            # 发送执行结果
             if self.stream_manager:
-                await self.stream_manager.print_xml_open("execution_complete")
-                await self.stream_manager.print_content("代码执行完成")
-                await self.stream_manager.print_xml_close("execution_complete")
+                await self.stream_manager.print_code_execution_result(result)
             
             return result
             
@@ -113,18 +109,14 @@ class CodeExecutor:
         try:
             # 发送执行开始通知
             if self.stream_manager:
-                await self.stream_manager.print_xml_open("execution_start")
-                await self.stream_manager.print_content(f"开始执行文件: {file_path}")
-                await self.stream_manager.print_xml_close("execution_start")
+                await self.stream_manager.print_code_execution_call(f"开始执行文件: {file_path}")
             
             # 从文件读取代码并执行
             result = await self._execute_from_file(file_path)
             
-            # 发送执行完成通知
+            # 发送执行结果
             if self.stream_manager:
-                await self.stream_manager.print_xml_open("execution_complete")
-                await self.stream_manager.print_content(f"文件 {file_path} 执行完成")
-                await self.stream_manager.print_xml_close("execution_complete")
+                await self.stream_manager.print_code_execution_result(result)
             
             return result
             
@@ -227,9 +219,7 @@ class CodeExecutor:
             # 通过stream_manager发送工具调用通知到前端
             if self.stream_manager:
                 try:
-                    await self.stream_manager.print_xml_open("tool_call")
-                    await self.stream_manager.print_content(f"代码文件 {safe_filename} 保存成功")
-                    await self.stream_manager.print_xml_close("tool_call")
+                    await self.stream_manager.print_code_execution_call(f"代码文件 {safe_filename} 保存成功")
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             

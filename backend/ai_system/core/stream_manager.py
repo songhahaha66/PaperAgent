@@ -1,11 +1,12 @@
 """
 支持持久化的流式输出管理器
-管理全程流式输出，包括XML标签格式，并支持聊天记录持久化
+管理全程流式输出，使用JSON格式，并支持聊天记录持久化
 """
 
 import logging
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 from abc import ABC, abstractmethod
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -22,17 +23,22 @@ class StreamCallback(ABC):
     async def on_message_complete(self, role: str, content: str):
         """消息完成时的回调"""
         pass
+    
+    @abstractmethod
+    async def on_json_block(self, block: Dict[str, Any]):
+        """处理JSON格式的数据块"""
+        pass
 
 
 class StreamOutputManager:
-    """管理全程流式输出，包括XML标签格式"""
+    """管理全程流式输出，使用JSON格式"""
 
     def __init__(self, stream_callback: Optional[StreamCallback] = None):
-        self.indent_level = 0
         self.stream_callback = stream_callback
         self.output_count = 0
         self.current_message_buffer = ""
         self.current_role = "assistant"
+        self.current_block_type = "main"
         logger.info("StreamOutputManager初始化完成")
 
     async def _output(self, content: str):
@@ -59,38 +65,63 @@ class StreamOutputManager:
             logger.debug("无回调函数，直接打印")
             print(content, end="", flush=True)
 
-    async def print_xml_open(self, tag_name: str, content: str = ""):
-        """打印XML开始标签"""
-        indent = ""
-        if content:
-            output = f"{indent}<{tag_name}>\n{indent}{content}"
+    async def send_json_block(self, block_type: str, content: str):
+        """发送JSON格式的数据块"""
+        block = {
+            "type": block_type,
+            "content": content
+        }
+        
+        logger.debug(f"发送JSON块: {block_type} - {repr(content[:50])}...")
+        
+        if self.stream_callback:
+            try:
+                await self.stream_callback.on_json_block(block)
+                logger.debug(f"成功发送JSON块: {block_type}")
+                
+                # 让出控制权
+                import asyncio
+                await asyncio.sleep(0)
+            except Exception as e:
+                logger.error(f"发送JSON块失败: {e}")
         else:
-            output = f"{indent}<{tag_name}>"
+            # 直接打印JSON格式
+            print(json.dumps(block, ensure_ascii=False), flush=True)
 
-        logger.debug(f"XML开始标签: {tag_name}")
-        await self._output(output)
-        self.indent_level += 1
+    async def print_main_content(self, content: str):
+        """打印主要内容"""
+        await self.send_json_block("main", content)
 
-    async def print_xml_close(self, tag_name: str):
-        """打印XML结束标签"""
-        self.indent_level -= 1
-        indent = ""
-        output = f"{indent}</{tag_name}>"
+    async def print_code_agent_call(self, content: str):
+        """打印代码代理调用"""
+        await self.send_json_block("call_code_agent", content)
 
-        logger.debug(f"XML结束标签: {tag_name}")
-        await self._output(output)
+    async def print_code_agent_response(self, content: str):
+        """打印代码代理响应"""
+        await self.send_json_block("code_agent", content)
+
+    async def print_code_execution_call(self, content: str):
+        """打印代码执行调用"""
+        await self.send_json_block("call_exec_py", content)
+
+    async def print_code_execution_result(self, content: str):
+        """打印代码执行结果"""
+        await self.send_json_block("exec_py", content)
+
+    async def print_writing_agent_call(self, content: str):
+        """打印写作代理调用"""
+        await self.send_json_block("call_writing_agent", content)
+
+    async def print_writing_agent_response(self, content: str):
+        """打印写作代理响应"""
+        await self.send_json_block("writing_agent", content)
 
     async def print_content(self, content: str):
-        """打印内容"""
-        indent = ""
-        output = f"{indent}{content}"
-
-        logger.debug(f"打印内容: {repr(content[:50])}...")
-        await self._output(output)
+        """打印内容（兼容旧接口）"""
+        await self.print_main_content(content)
 
     async def print_stream(self, content: str):
         """流式打印内容（不换行）"""
-        logger.debug(f"流式打印: {repr(content[:50])}...")
         await self._output(content)
 
     async def finalize_message(self):
@@ -256,6 +287,14 @@ class SimpleStreamCallback(StreamCallback):
                 await self.output_queue.put("[MESSAGE_COMPLETE]")
             except Exception as e:
                 logger.error(f"发送完成标记失败: {e}")
+    
+    async def on_json_block(self, block: Dict[str, Any]):
+        """处理JSON格式的数据块"""
+        if self.output_queue:
+            try:
+                await self.output_queue.put(json.dumps(block, ensure_ascii=False))
+            except Exception as e:
+                logger.error(f"JSON块队列写入失败: {e}")
 
 
 class CodeAgentStreamManager(StreamOutputManager):
@@ -275,34 +314,22 @@ class CodeAgentStreamManager(StreamOutputManager):
         # 缓冲内容
         self.output_buffer.append(content)
         
-        # 转发到MainAgent的StreamManager，添加标识前缀
+        # 转发到MainAgent的StreamManager
         if self.main_stream_manager and self.is_forwarding:
             try:
-                # 使用特殊的XML标签标识这是CodeAgent的输出
-                await self.main_stream_manager.print_xml_open(f"code_agent_output")
-                await self.main_stream_manager.print_content(f"[{self.agent_name}] {content}")
-                await self.main_stream_manager.print_xml_close(f"code_agent_output")
+                # 使用JSON格式转发CodeAgent的输出
+                await self.main_stream_manager.print_code_agent_response(f"[{self.agent_name}] {content}")
             except Exception as e:
                 logger.error(f"转发CodeAgent输出失败: {e}")
     
-    async def print_xml_open(self, tag_name: str, content: str = ""):
-        """转发XML开始标签"""
+    async def send_json_block(self, block_type: str, content: str):
+        """转发JSON块"""
         if self.main_stream_manager and self.is_forwarding:
             try:
                 # 添加CodeAgent标识
-                await self.main_stream_manager.print_xml_open(f"code_agent_{tag_name}")
-                if content:
-                    await self.main_stream_manager.print_content(f"[{self.agent_name}] {content}")
+                await self.main_stream_manager.send_json_block(f"code_agent_{block_type}", f"[{self.agent_name}] {content}")
             except Exception as e:
-                logger.error(f"转发CodeAgent XML标签失败: {e}")
-    
-    async def print_xml_close(self, tag_name: str):
-        """转发XML结束标签"""
-        if self.main_stream_manager and self.is_forwarding:
-            try:
-                await self.main_stream_manager.print_xml_close(f"code_agent_{tag_name}")
-            except Exception as e:
-                logger.error(f"转发CodeAgent XML标签失败: {e}")
+                logger.error(f"转发CodeAgent JSON块失败: {e}")
     
     async def print_content(self, content: str):
         """转发内容"""
@@ -325,8 +352,6 @@ class CodeAgentStreamManager(StreamOutputManager):
         # 发送CodeAgent完成标识
         if self.main_stream_manager and self.is_forwarding:
             try:
-                await self.main_stream_manager.print_xml_open("code_agent_complete")
-                await self.main_stream_manager.print_content(f"[{self.agent_name}] 任务执行完成")
-                await self.main_stream_manager.print_xml_close("code_agent_complete")
+                await self.main_stream_manager.send_json_block("code_agent_complete", f"[{self.agent_name}] 任务执行完成")
             except Exception as e:
                 logger.error(f"发送CodeAgent完成标识失败: {e}")

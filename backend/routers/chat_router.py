@@ -200,6 +200,18 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             logger.info(f"AI消息完成，角色: {role}, 长度: {len(content)}")
                         except Exception as e:
                             logger.error(f"处理消息完成失败: {e}")
+                    
+                    async def on_json_block(self, block: dict):
+                        """处理JSON格式的数据块"""
+                        try:
+                            # 直接发送JSON块到WebSocket
+                            await self.websocket.send_text(json.dumps({
+                                'type': 'json_block',
+                                'block': block
+                            }))
+                            logger.debug(f"发送JSON块: {block.get('type', 'unknown')}")
+                        except Exception as e:
+                            logger.error(f"发送JSON块失败: {e}")
                 
                 # 初始化AI环境
                 env_manager = setup_environment_from_db(db)

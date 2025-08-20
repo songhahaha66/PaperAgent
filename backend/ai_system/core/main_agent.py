@@ -247,16 +247,10 @@ class MainAgent(Agent):
                         task_prompt = args.get("task_prompt", "")
 
                         if self.stream_manager:
-                            await self.stream_manager.print_xml_open(
-                                "call_code_agent")
-                            await self.stream_manager.print_content(task_prompt)
-                            await self.stream_manager.print_xml_close(
-                                "call_code_agent")
+                            await self.stream_manager.print_code_agent_call(task_prompt)
                             
                             # 发送工具调用开始通知
-                            await self.stream_manager.print_xml_open("tool_call")
-                            await self.stream_manager.print_content(f"MainAgent正在调用CodeAgent执行任务")
-                            await self.stream_manager.print_xml_close("tool_call")
+                            await self.stream_manager.print_main_content("MainAgent正在调用CodeAgent执行任务")
 
                         # 使用独立的CodeAgent执行方法，确保消息隔离
                         tool_result = await self._execute_code_agent(task_prompt, tool_call["id"])
@@ -264,9 +258,7 @@ class MainAgent(Agent):
                         # 发送工具调用完成通知
                         if self.stream_manager:
                             try:
-                                await self.stream_manager.print_xml_open("tool_result")
-                                await self.stream_manager.print_content(f"CodeAgent任务执行完成，结果长度: {len(tool_result)} 字符")
-                                await self.stream_manager.print_xml_close("tool_result")
+                                await self.stream_manager.print_main_content(f"CodeAgent任务执行完成，结果长度: {len(tool_result)} 字符")
                             except Exception as e:
                                 logger.warning(f"发送CodeAgent完成通知失败: {e}")
 
@@ -291,9 +283,7 @@ class MainAgent(Agent):
                         # 发送工具调用开始通知
                         if self.stream_manager:
                             try:
-                                await self.stream_manager.print_xml_open("tool_call")
-                                await self.stream_manager.print_content(f"MainAgent正在执行工具调用: {function_name}")
-                                await self.stream_manager.print_xml_close("tool_call")
+                                await self.stream_manager.print_main_content(f"MainAgent正在执行工具调用: {function_name}")
                             except Exception as e:
                                 logger.warning(f"发送工具调用通知失败: {e}")
                         
@@ -303,9 +293,7 @@ class MainAgent(Agent):
                         # 发送工具调用完成通知
                         if self.stream_manager:
                             try:
-                                await self.stream_manager.print_xml_open("tool_result")
-                                await self.stream_manager.print_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
-                                await self.stream_manager.print_xml_close("tool_result")
+                                await self.stream_manager.print_main_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
                             except Exception as e:
                                 logger.warning(f"发送工具完成通知失败: {e}")
 

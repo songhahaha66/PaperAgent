@@ -37,46 +37,7 @@
       <div class="workspace-content">
         <div class="chat-section">
           <div class="chat-container">
-            <div class="chat-messages">
-              <div 
-                v-for="(message, index) in chatMessages" 
-                :key="message.id" 
-                :class="[
-                  'chat-message-wrapper',
-                  { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider }
-                ]"
-              >
-                <ChatItem
-                  :role="message.role"
-                  :content="message.content"
-                  :datetime="message.datetime"
-                  :avatar="getSystemAvatar(message)"
-                  :actions="message.role === 'assistant' ? 'copy' : undefined"
-                  @operation="(action) => {
-                    if (action === 'copy') copyMessage(message.content)
-                  }"
-                />
-                <div v-if="message.systemType" :class="['system-label', message.systemType]">
-                  {{ getSystemName(message) }}
-                </div>
-                
-                <!-- 对话分割线 -->
-                <div 
-                  v-if="index < chatMessages.length - 1" 
-                  class="message-divider"
-                >
-                  <div class="divider-line"></div>
-                  <div 
-                    class="divider-icon" 
-                    :class="{ 'show': hoveredDivider === index }"
-                    @mouseenter="showDivider(index)"
-                    @mouseleave="hideDivider"
-                  >
-                    <t-icon name="arrow-up" />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <JsonChatRenderer :messages="chatMessages" />
             <FileManager 
               :file-tree-data="fileTreeData"
               :work-id="workId"
@@ -152,6 +113,7 @@ import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
+import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -669,187 +631,149 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
     // 设置消息监听器
     webSocketHandler.value.onMessage((data) => {
+      console.log('WebSocket message received:', data);
+      
       switch (data.type) {
         case 'start':
+          console.log('AI分析开始');
           break;
+          
+        case 'json_block':
+          // 处理JSON格式的数据块
+          if (data.block) {
+            handleJsonBlock(data.block, aiMessageId);
+          }
+          break;
+          
         case 'content':
-          // 内容更新 - 实时流式显示
-          const messageIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (messageIndex > -1) {
-            // 实时更新内容，实现流式显示效果
-            fullContent += data.content;
-            
-            // 调试日志
-            console.log('WebSocket content update:', {
-              messageId: aiMessageId,
-              contentLength: fullContent.length,
-              currentSystemType,
-              hasMainAgent: fullContent.includes('<main_agent>'),
-              hasCodeAgent: fullContent.includes('<call_code_agent>') || fullContent.includes('<ret_code_agent>'),
-              hasWriting: fullContent.includes('<writemd_result>') || fullContent.includes('<tree_result>')
-            });
-            
-            // 根据累积的完整内容判断系统类型（而不是单个片段）
-            let newSystemType = currentSystemType;
-            if (fullContent.includes('<main_agent>')) {
-              newSystemType = 'brain';
-            } else if (fullContent.includes('<call_code_agent>') || fullContent.includes('<ret_code_agent>') ||
-                       fullContent.includes('<call_exec>') || fullContent.includes('<ret_exec>') ||
-                       fullContent.includes('<tool_call>') || fullContent.includes('<tool_result>') ||
-                       fullContent.includes('<execution_start>') || fullContent.includes('<execution_complete>') ||
-                       fullContent.includes('<tool_error>')) {
-              newSystemType = 'code';
-            } else if (fullContent.includes('<writemd_result>') || fullContent.includes('<tree_result>')) {
-              newSystemType = 'writing';
-            }
-            
-            // 如果系统类型发生变化，更新显示
-            if (newSystemType !== currentSystemType) {
-              console.log('System type changed:', { from: currentSystemType, to: newSystemType });
-              currentSystemType = newSystemType;
-              systemTypeChanged = true;
-            }
-            
-            // 使用Vue的响应式更新，确保视图正确刷新
-            const updatedMessage = {
-              ...chatMessages.value[messageIndex],
-              content: fullContent,
-              systemType: currentSystemType,
-              avatar: getSystemAvatar({ systemType: currentSystemType })
-            };
-            
-            // 替换整个消息对象，确保Vue响应式更新
-            chatMessages.value.splice(messageIndex, 1, updatedMessage);
-            
-            // 调试日志
-            console.log('Message updated:', {
-              messageId: aiMessageId,
-              systemType: currentSystemType,
-              contentLength: fullContent.length,
-              avatar: getSystemAvatar({ systemType: currentSystemType })
-            });
-            
-            // 自动滚动到底部
-            nextTick(() => {
-              const chatContainer = document.querySelector('.chat-messages');
-              if (chatContainer) {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-              }
-            });
-          }
+          // 兼容旧的内容格式
+          handleContentUpdate(data.content, aiMessageId);
           break;
-        case 'xml_open':
-        case 'xml_close':
-          break;
-        case 'tool_call':
-          // 工具调用开始通知
-          const toolCallIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (toolCallIndex > -1) {
-            console.log('Tool call notification:', { messageId: aiMessageId, content: data.content });
-            const toolCallMessage = {
-              ...chatMessages.value[toolCallIndex],
-              content: chatMessages.value[toolCallIndex].content + `\n\n🔧 **工具调用**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(toolCallIndex, 1, toolCallMessage);
-            console.log('Tool call message updated, system type set to code');
-          }
-          break;
-        case 'tool_result':
-          // 工具调用结果通知
-          const toolResultIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (toolResultIndex > -1) {
-            const toolResultMessage = {
-              ...chatMessages.value[toolResultIndex],
-              content: chatMessages.value[toolResultIndex].content + `\n\n✅ **工具执行结果**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(toolResultIndex, 1, toolResultMessage);
-          }
-          break;
-        case 'execution_start':
-          // 代码执行开始通知
-          const execStartIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (execStartIndex > -1) {
-            const execStartMessage = {
-              ...chatMessages.value[execStartIndex],
-              content: chatMessages.value[execStartIndex].content + `\n\n🚀 **代码执行**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(execStartIndex, 1, execStartMessage);
-          }
-          break;
-        case 'execution_complete':
-          // 代码执行完成通知
-          const execCompleteIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (execCompleteIndex > -1) {
-            const execCompleteMessage = {
-              ...chatMessages.value[execCompleteIndex],
-              content: chatMessages.value[execCompleteIndex].content + `\n\n✅ **执行完成**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(execCompleteIndex, 1, execCompleteMessage);
-          }
-          break;
-        case 'tool_error':
-          // 工具调用错误通知
-          const toolErrorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (toolErrorIndex > -1) {
-            const toolErrorMessage = {
-              ...chatMessages.value[toolErrorIndex],
-              content: chatMessages.value[toolErrorIndex].content + `\n\n❌ **工具错误**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(toolErrorIndex, 1, toolErrorMessage);
-          }
-          break;
+          
         case 'complete':
-          // 完成消息
-          const completeIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (completeIndex > -1) {
-            const completeMessage = {
-              ...chatMessages.value[completeIndex],
-              isStreaming: false,
-              content: fullContent,
-              systemType: currentSystemType,
-              avatar: getSystemAvatar({ systemType: currentSystemType })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(completeIndex, 1, completeMessage);
-          }
+          console.log('AI分析完成');
           isStreaming.value = false;
-          webSocketHandler.value = null;
           break;
+          
         case 'error':
-          // 错误消息
+          console.error('WebSocket错误:', data.message);
           const errorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
           if (errorIndex > -1) {
-            const errorMessage = {
-              ...chatMessages.value[errorIndex],
-              content: `错误: ${data.message}`,
-              isStreaming: false,
-              avatar: getSystemAvatar({ systemType: currentSystemType }),
-              systemType: currentSystemType
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(errorIndex, 1, errorMessage);
+            chatMessages.value[errorIndex].content = `错误: ${data.message}`;
+            chatMessages.value[errorIndex].isStreaming = false;
           }
           isStreaming.value = false;
-          webSocketHandler.value = null;
-          MessagePlugin.error(`聊天失败: ${data.message}`);
           break;
+          
+        default:
+          console.log('未知消息类型:', data.type);
       }
     });
+
+    // 处理JSON块数据
+    const handleJsonBlock = (block: any, messageId: string) => {
+      console.log('处理JSON块:', block);
+      
+      const messageIndex = chatMessages.value.findIndex(m => m.id === messageId);
+      if (messageIndex === -1) return;
+      
+      const blockType = block.type;
+      const blockContent = block.content;
+      
+      // 根据块类型确定系统类型
+      let systemType: 'brain' | 'code' | 'writing' = 'brain';
+      let shouldUpdateSystem = false;
+      
+      switch (blockType) {
+        case 'main':
+          systemType = 'brain';
+          break;
+        case 'call_code_agent':
+        case 'code_agent':
+        case 'call_exec_py':
+        case 'exec_py':
+          systemType = 'code';
+          shouldUpdateSystem = true;
+          break;
+        case 'call_writing_agent':
+        case 'writing_agent':
+          systemType = 'writing';
+          shouldUpdateSystem = true;
+          break;
+        default:
+          systemType = 'brain';
+      }
+      
+      // 更新消息内容
+      const currentMessage = chatMessages.value[messageIndex];
+      let newContent = currentMessage.content;
+      
+      // 根据块类型格式化内容
+      switch (blockType) {
+        case 'main':
+          newContent += blockContent;
+          break;
+        case 'call_code_agent':
+          newContent += `\n\n🤖 **代码执行请求**:\n${blockContent}`;
+          break;
+        case 'code_agent':
+          newContent += `\n\n💻 **代码执行**:\n${blockContent}`;
+          break;
+        case 'call_exec_py':
+          newContent += `\n\n⚡ **执行代码**:\n\`\`\`python\n${blockContent}\n\`\`\``;
+          break;
+        case 'exec_py':
+          newContent += `\n\n📊 **执行结果**:\n\`\`\`\n${blockContent}\n\`\`\``;
+          break;
+        case 'call_writing_agent':
+          newContent += `\n\n✍️ **写作请求**:\n${blockContent}`;
+          break;
+        case 'writing_agent':
+          newContent += `\n\n📝 **写作内容**:\n${blockContent}`;
+          break;
+        default:
+          newContent += `\n\n${blockContent}`;
+      }
+      
+      // 更新消息
+      const updatedMessage = {
+        ...currentMessage,
+        content: newContent,
+        systemType: shouldUpdateSystem ? systemType : currentMessage.systemType,
+        avatar: shouldUpdateSystem ? getSystemAvatar({ systemType }) : currentMessage.avatar
+      };
+      
+      chatMessages.value.splice(messageIndex, 1, updatedMessage);
+      
+      // 自动滚动到底部
+      nextTick(() => {
+        const chatContainer = document.querySelector('.chat-messages');
+        if (chatContainer) {
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+      });
+    };
+
+    // 处理内容更新（兼容旧格式）
+    const handleContentUpdate = (content: string, messageId: string) => {
+      const messageIndex = chatMessages.value.findIndex(m => m.id === messageId);
+      if (messageIndex > -1) {
+        const currentMessage = chatMessages.value[messageIndex];
+        const updatedMessage = {
+          ...currentMessage,
+          content: currentMessage.content + content
+        };
+        chatMessages.value.splice(messageIndex, 1, updatedMessage);
+        
+        // 自动滚动到底部
+        nextTick(() => {
+          const chatContainer = document.querySelector('.chat-messages');
+          if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+          }
+        });
+      }
+    };
 
     // 等待一下确保监听器设置完成
     await new Promise(resolve => setTimeout(resolve, 100));
