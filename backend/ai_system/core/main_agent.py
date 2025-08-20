@@ -5,6 +5,7 @@
 
 import logging
 import json
+import asyncio
 from typing import List, Dict, Any, Optional
 import os  # Added for workspace directory path
 
@@ -44,7 +45,10 @@ class MainAgent(Agent):
         self.template_id = template_id  # 添加模板ID
         
         # 初始化模板工具，传入正确的工作空间目录
-        self.template_agent_tools = TemplateAgentTools(workspace_dir)
+        if workspace_dir:
+            self.template_agent_tools = TemplateAgentTools(workspace_dir)
+        else:
+            self.template_agent_tools = None
 
         # 初始化上下文管理器
         self.context_manager = ContextManager(
@@ -63,6 +67,10 @@ class MainAgent(Agent):
     def _copy_template_to_workspace(self):
         """复制模板文件到工作空间"""
         try:
+            if not self.template_id:
+                logger.warning("模板ID为空，无法复制模板文件")
+                return
+                
             import shutil
             from services.crud import get_paper_template
             from database.database import get_db
@@ -309,7 +317,7 @@ class MainAgent(Agent):
         })
         
         # 根据是否有模板来决定是否注册模板操作工具
-        if self.template_id:
+        if self.template_id and self.template_agent_tools:
             # 有模板时，注册所有模板操作工具
             self.available_functions.update({
                 "analyze_template": self.template_agent_tools.analyze_template,

@@ -481,6 +481,7 @@ async def generate_work_title(
 
             class TitleCaptureCallback(SimpleStreamCallback):
                 def __init__(self):
+                    super().__init__(output_queue=None)  # 显式传递None给父类
                     self.content = ""
 
                 async def print_stream(self, content: str):
