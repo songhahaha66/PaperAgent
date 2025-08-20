@@ -6,7 +6,7 @@ AI系统工具模块
 from .file_tools import FileTools
 from .template_tools import TemplateTools, template_tools
 from .template_operations import TemplateOperations, template_operations
-from .template_agent_tools import TemplateAgentTools, template_agent_tools
+from .template_agent_tools import TemplateAgentTools
 
 __all__ = [
     'FileTools',
@@ -14,7 +14,6 @@ __all__ = [
     'template_tools',
     'TemplateOperations',
     'template_operations',
-    'TemplateAgentTools',
-    'template_agent_tools'
+    'TemplateAgentTools'
 ]
 

@@ -17,37 +17,56 @@ class TemplateAgentTools:
     def __init__(self, workspace_dir: str = None):
         self.workspace_dir = workspace_dir or os.getenv("WORKSPACE_DIR", ".")
         
-    async def analyze_template(self, template_content: str) -> str:
+    def _read_paper_md(self) -> str:
         """
-        分析模板结构，为AI提供模板概览
+        从当前工作目录读取paper.md文件内容
         
-        Args:
-            template_content: 模板内容
+        Returns:
+            文件内容，如果文件不存在则返回空字符串
+        """
+        try:
+            paper_path = os.path.join(self.workspace_dir, "paper.md")
+            if not os.path.exists(paper_path):
+                return ""
             
+            with open(paper_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            logger.error(f"读取paper.md文件失败: {e}")
+            return ""
+    
+    async def analyze_template(self) -> str:
+        """
+        分析paper.md文件的模板结构，为AI提供模板概览
+        
         Returns:
             模板分析结果
         """
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
         return await template_operations.analyze_template(template_content)
     
-    async def get_section_content(self, template_content: str, section_title: str) -> str:
+    async def get_section_content(self, section_title: str) -> str:
         """
-        获取指定章节的内容
+        获取paper.md文件中指定章节的内容
         
         Args:
-            template_content: 模板内容
             section_title: 章节标题
             
         Returns:
             章节内容或错误信息
         """
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
         return await template_operations.get_section_content(template_content, section_title)
     
-    async def update_section_content(self, template_content: str, section_title: str, new_content: str, mode: str = 'replace') -> str:
+    async def update_section_content(self, section_title: str, new_content: str, mode: str = 'replace') -> str:
         """
-        更新指定章节的内容
+        更新paper.md文件中指定章节的内容
         
         Args:
-            template_content: 模板内容
             section_title: 章节标题
             new_content: 新内容
             mode: 更新模式 ('replace', 'append', 'prepend', 'merge')
@@ -55,14 +74,27 @@ class TemplateAgentTools:
         Returns:
             更新结果
         """
-        return await template_operations.update_section_content(template_content, section_title, new_content, mode)
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+        
+        # 更新内容
+        updated_content = await template_operations.update_section_content(template_content, section_title, new_content, mode)
+        
+        # 保存到文件
+        try:
+            paper_path = os.path.join(self.workspace_dir, "paper.md")
+            with open(paper_path, 'w', encoding='utf-8') as f:
+                f.write(updated_content)
+            return f"✅ 章节 '{section_title}' 更新成功，已保存到paper.md文件"
+        except Exception as e:
+            return f"❌ 更新成功但保存失败: {str(e)}"
     
-    async def add_new_section(self, template_content: str, parent_section: str, section_title: str, content: str = '') -> str:
+    async def add_new_section(self, parent_section: str, section_title: str, content: str = '') -> str:
         """
-        添加新章节
+        在paper.md文件中指定父章节下添加新章节
         
         Args:
-            template_content: 模板内容
             parent_section: 父章节标题
             section_title: 新章节标题
             content: 新章节内容
@@ -70,46 +102,99 @@ class TemplateAgentTools:
         Returns:
             添加结果
         """
-        return await template_operations.add_new_section(template_content, parent_section, section_title, content)
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+        
+        # 添加新章节
+        updated_content = await template_operations.add_new_section(template_content, parent_section, section_title, content)
+        
+        # 保存到文件
+        try:
+            paper_path = os.path.join(self.workspace_dir, "paper.md")
+            with open(paper_path, 'w', encoding='utf-8') as f:
+                f.write(updated_content)
+            return f"✅ 新章节 '{section_title}' 添加成功，已保存到paper.md文件"
+        except Exception as e:
+            return f"❌ 添加成功但保存失败: {str(e)}"
     
-    async def remove_section(self, template_content: str, section_title: str) -> str:
+    async def remove_section(self, section_title: str) -> str:
         """
-        删除指定章节
+        删除paper.md文件中指定章节
         
         Args:
-            template_content: 模板内容
             section_title: 章节标题
             
         Returns:
             删除结果
         """
-        return await template_operations.remove_section(template_content, section_title)
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+        
+        # 删除章节
+        updated_content = await template_operations.remove_section(template_content, section_title)
+        
+        # 保存到文件
+        try:
+            paper_path = os.path.join(self.workspace_dir, "paper.md")
+            with open(paper_path, 'w', encoding='utf-8') as f:
+                f.write(updated_content)
+            return f"✅ 章节 '{section_title}' 删除成功，已保存到paper.md文件"
+        except Exception as e:
+            return f"❌ 删除成功但保存失败: {str(e)}"
     
-    async def reorder_sections(self, template_content: str, section_order: List[str]) -> str:
+    async def reorder_sections(self, section_order: List[str]) -> str:
         """
-        重新排序章节
+        重新排序paper.md文件中的章节
         
         Args:
-            template_content: 模板内容
             section_order: 新的章节顺序列表
             
         Returns:
             重排序结果
         """
-        return await template_operations.reorder_sections(template_content, section_order)
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+        
+        # 重新排序
+        updated_content = await template_operations.reorder_sections(template_content, section_order)
+        
+        # 保存到文件
+        try:
+            paper_path = os.path.join(self.workspace_dir, "paper.md")
+            with open(paper_path, 'w', encoding='utf-8') as f:
+                f.write(updated_content)
+            return f"✅ 章节重排序成功，已保存到paper.md文件"
+        except Exception as e:
+            return f"❌ 重排序成功但保存失败: {str(e)}"
     
-    async def format_template(self, template_content: str, format_options: Dict[str, Any] = None) -> str:
+    async def format_template(self, format_options: Dict[str, Any] = None) -> str:
         """
-        格式化模板内容
+        格式化paper.md文件内容
         
         Args:
-            template_content: 模板内容
             format_options: 格式化选项
             
         Returns:
             格式化结果
         """
-        return await template_operations.format_template(template_content, format_options)
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+        
+        # 格式化内容
+        formatted_content = await template_operations.format_template(template_content, format_options)
+        
+        # 保存到文件
+        try:
+            paper_path = os.path.join(self.workspace_dir, "paper.md")
+            with open(paper_path, 'w', encoding='utf-8') as f:
+                f.write(formatted_content)
+            return f"✅ 模板格式化完成，已保存到paper.md文件"
+        except Exception as e:
+            return f"❌ 格式化成功但保存失败: {str(e)}"
     
     async def get_template_help(self) -> str:
         """
@@ -120,20 +205,21 @@ class TemplateAgentTools:
         """
         return await template_operations.get_template_help()
     
-    async def extract_headers_from_content(self, content: str) -> List[Dict[str, Any]]:
+    async def extract_headers_from_content(self) -> List[Dict[str, Any]]:
         """
-        从内容中提取所有标题信息
+        从paper.md文件中提取所有标题信息
         
-        Args:
-            content: 内容字符串
-            
         Returns:
             标题信息列表
         """
+        template_content = self._read_paper_md()
+        if not template_content:
+            return []
+        
         try:
             import re
             headers = []
-            lines = content.split('\n')
+            lines = template_content.split('\n')
             
             for line_num, line in enumerate(lines, 1):
                 line = line.strip()
@@ -157,21 +243,22 @@ class TemplateAgentTools:
             logger.error(f"提取标题失败: {e}")
             return []
     
-    async def get_content_structure_summary(self, content: str) -> str:
+    async def get_content_structure_summary(self) -> str:
         """
-        获取内容结构摘要
+        获取paper.md文件的内容结构摘要
         
-        Args:
-            content: 内容字符串
-            
         Returns:
             结构摘要
         """
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+        
         try:
-            headers = await self.extract_headers_from_content(content)
+            headers = await self.extract_headers_from_content()
             
             if not headers:
-                return "内容中没有找到标题结构"
+                return "paper.md文件中没有找到标题结构"
             
             summary_lines = []
             summary_lines.append(f"📋 内容结构摘要 (共 {len(headers)} 个标题)")
@@ -181,7 +268,6 @@ class TemplateAgentTools:
                 indent = "  " * (header['level'] - 1)
                 summary_lines.append(f"{indent}{'#' * header['level']} {header['title']}")
             
-            
             return '\n'.join(summary_lines)
             
         except Exception as e:
@@ -189,5 +275,4 @@ class TemplateAgentTools:
             return f"生成结构摘要失败: {str(e)}"
 
 
-# 创建全局实例
-template_agent_tools = TemplateAgentTools()
+# 不再创建全局实例，由MainAgent在初始化时创建

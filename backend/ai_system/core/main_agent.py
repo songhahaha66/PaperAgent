@@ -13,7 +13,7 @@ from .llm_handler import LLMHandler
 from .stream_manager import StreamOutputManager
 from .context_manager import ContextManager
 from ..tools.file_tools import FileTools
-from ..tools.template_agent_tools import template_agent_tools
+from ..tools.template_agent_tools import TemplateAgentTools
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ class MainAgent(Agent):
         self.file_tools = FileTools(stream_manager)
         self.work_id = work_id  # 改为work_id，每个work对应一个MainAgent
         self.template_id = template_id  # 添加模板ID
+        
+        # 初始化模板工具，传入正确的工作空间目录
+        self.template_agent_tools = TemplateAgentTools(workspace_dir)
 
         # 初始化上下文管理器
         self.context_manager = ContextManager(
@@ -99,7 +102,7 @@ class MainAgent(Agent):
         """初始化 System Prompt 和工具。"""
         # 基础系统提示
         system_content = (
-            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程，最后论文要保存在paper.md文件里且不改动原来模板标题！\n"
+            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程，不要总是问我问题，尽量自己执行\n"
             "你的职责：\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
@@ -115,7 +118,6 @@ class MainAgent(Agent):
         if self.template_id:
             system_content += f"\n\n模板信息：\n"
             system_content += f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
-            system_content += f"- 请先使用tree工具查看工作空间结构，找到paper.md文件\n"
             system_content += f"- 然后使用以下工具之一来操作论文文件：\n"
             system_content += f"  * writemd工具：支持多种模式（覆盖、追加、修改、插入、智能替换、章节更新）\n"
             system_content += f"  * update_template工具：专门用于模板操作，支持章节级别更新\n"
@@ -130,7 +132,6 @@ class MainAgent(Agent):
             system_content += f"- 如果模板有特定的章节要求，请保持这些章节结构\n"
             system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
             system_content += f"- 建议使用smart_replace模式来保持模板结构，只替换内容部分\n"
-            system_content += f"- 重要：所有论文内容都应该写入到paper.md文件中，这是最终的论文文档"
 
         self.messages = [{
             "role": "system",
@@ -205,13 +206,11 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "analyze_template",
-                "description": "分析模板结构，识别所有标题层级和内容，为AI提供模板概览",
+                "description": "分析当前工作目录中模板文件的模板结构，识别所有标题层级和内容，为AI提供模板概览",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "template_content": {"type": "string", "description": "要分析的模板内容"}
-                    },
-                    "required": ["template_content"],
+                    "properties": {},
+                    "required": [],
                 },
             },
         }
@@ -220,14 +219,13 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "get_section_content",
-                "description": "获取指定章节的内容",
+                "description": "获取paper.md文件中指定章节的内容",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "template_content": {"type": "string", "description": "模板内容"},
                         "section_title": {"type": "string", "description": "要查看的章节标题"}
                     },
-                    "required": ["template_content", "section_title"],
+                    "required": ["section_title"],
                 },
             },
         }
@@ -236,16 +234,15 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "update_section_content",
-                "description": "更新指定章节的内容，支持多种更新模式",
+                "description": "更新paper.md文件中指定章节的内容，支持多种更新模式",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "template_content": {"type": "string", "description": "模板内容"},
                         "section_title": {"type": "string", "description": "要更新的章节标题"},
                         "new_content": {"type": "string", "description": "新内容"},
                         "mode": {"type": "string", "description": "更新模式：replace(替换), append(追加), prepend(插入), merge(合并)", "default": "replace"}
                     },
-                    "required": ["template_content", "section_title", "new_content"],
+                    "required": ["section_title", "new_content"],
                 },
             },
         }
@@ -254,16 +251,15 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "add_new_section",
-                "description": "在指定父章节下添加新章节",
+                "description": "在paper.md文件中指定父章节下添加新章节",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "template_content": {"type": "string", "description": "模板内容"},
                         "parent_section": {"type": "string", "description": "父章节标题"},
                         "section_title": {"type": "string", "description": "新章节标题"},
                         "content": {"type": "string", "description": "新章节内容", "default": ""}
                     },
-                    "required": ["template_content", "parent_section", "section_title"],
+                    "required": ["parent_section", "section_title"],
                 },
             },
         }
@@ -272,13 +268,11 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "extract_headers",
-                "description": "从内容中提取所有标题信息，快速了解文档结构",
+                "description": "从paper.md文件中提取所有标题信息，快速了解文档结构",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "要分析的内容"}
-                    },
-                    "required": ["content"],
+                    "properties": {},
+                    "required": [],
                 },
             },
         }
@@ -287,13 +281,11 @@ class MainAgent(Agent):
             "type": "function",
             "function": {
                 "name": "get_structure_summary",
-                "description": "获取内容结构摘要，显示所有标题的层级关系",
+                "description": "获取paper.md文件的内容结构摘要，显示所有标题的层级关系",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "content": {"type": "string", "description": "要分析的内容"}
-                    },
-                    "required": ["content"],
+                    "properties": {},
+                    "required": [],
                 },
             },
         }
@@ -307,16 +299,16 @@ class MainAgent(Agent):
         
         # 注册模板操作工具
         self.available_functions.update({
-            "analyze_template": template_agent_tools.analyze_template,
-            "get_section_content": template_agent_tools.get_section_content,
-            "update_section_content": template_agent_tools.update_section_content,
-            "add_new_section": template_agent_tools.add_new_section,
-            "remove_section": template_agent_tools.remove_section,
-            "reorder_sections": template_agent_tools.reorder_sections,
-            "format_template": template_agent_tools.format_template,
-            "get_template_help": template_agent_tools.get_template_help,
-            "extract_headers": template_agent_tools.extract_headers_from_content,
-            "get_structure_summary": template_agent_tools.get_content_structure_summary
+            "analyze_template": self.template_agent_tools.analyze_template,
+            "get_section_content": self.template_agent_tools.get_section_content,
+            "update_section_content": self.template_agent_tools.update_section_content,
+            "add_new_section": self.template_agent_tools.add_new_section,
+            "remove_section": self.template_agent_tools.remove_section,
+            "reorder_sections": self.template_agent_tools.reorder_sections,
+            "format_template": self.template_agent_tools.format_template,
+            "get_template_help": self.template_agent_tools.get_template_help,
+            "extract_headers": self.template_agent_tools.extract_headers_from_content,
+            "get_structure_summary": self.template_agent_tools.get_content_structure_summary
         })
 
         # 将工具定义添加到tools列表
