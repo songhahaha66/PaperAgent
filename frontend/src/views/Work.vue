@@ -37,59 +37,25 @@
       <div class="workspace-content">
         <div class="chat-section">
           <div class="chat-container">
-            <div class="chat-messages">
-              <div 
-                v-for="(message, index) in chatMessages" 
-                :key="message.id" 
-                :class="[
-                  'chat-message-wrapper',
-                  { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider }
-                ]"
-              >
-                <ChatItem
-                  :role="message.role"
-                  :content="message.content"
-                  :datetime="message.datetime"
-                  :avatar="getSystemAvatar(message)"
-                  :actions="message.role === 'assistant' ? 'copy' : undefined"
-                  @operation="(action) => {
-                    if (action === 'copy') copyMessage(message.content)
-                  }"
-                />
-                <div v-if="message.systemType" :class="['system-label', message.systemType]">
-                  {{ getSystemName(message) }}
-                </div>
-                
-                <!-- 对话分割线 -->
-                <div 
-                  v-if="index < chatMessages.length - 1" 
-                  class="message-divider"
-                >
-                  <div class="divider-line"></div>
-                  <div 
-                    class="divider-icon" 
-                    :class="{ 'show': hoveredDivider === index }"
-                    @mouseenter="showDivider(index)"
-                    @mouseleave="hideDivider"
-                  >
-                    <t-icon name="arrow-up" />
-                  </div>
-                </div>
-              </div>
+            <div class="chat-messages-container">
+              <JsonChatRenderer :messages="chatMessages" />
             </div>
-            <FileManager 
-              :file-tree-data="fileTreeData"
-              :work-id="workId"
-              :loading="loading"
-              @file-select="handleFileSelect"
-            />
-            <div class="chat-input">
-              <ChatSender
-                v-model="inputValue"
-                placeholder="请输入您的问题..."
-                @send="sendMessage"
-                :disabled="isStreaming"
-              />
+                          <div class="chat-bottom-section">
+                <FileManager 
+                  :file-tree-data="fileTreeData"
+                  :work-id="workId"
+                  :loading="loading"
+                  @file-select="handleFileSelect"
+                  @refresh="handleFileRefresh"
+                />
+              <div class="chat-input">
+                <ChatSender
+                  v-model="inputValue"
+                  placeholder="请输入您的问题..."
+                  @send="sendMessage"
+                  :disabled="isStreaming"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -152,6 +118,7 @@ import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
+import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -204,6 +171,8 @@ const activeHistoryId = ref<number | null>(null);
 const currentChatSession = ref<ChatSessionResponse | null>(null);
 const isStreaming = ref(false);
 const webSocketHandler = ref<WebSocketChatHandler | null>(null);
+const fileRefreshTimer = ref<number | null>(null);
+const lastFileUpdateTime = ref<number>(0);
 
 // 根据消息内容判断系统类型
 const getSystemTypeFromContent = (content: string): 'brain' | 'code' | 'writing' | undefined => {
@@ -314,22 +283,29 @@ const loadChatHistory = async () => {
       let systemType: 'brain' | 'code' | 'writing' | undefined = undefined;
       
       if (msg.role === 'assistant') {
-        // 根据消息内容判断系统类型
-        systemType = getSystemTypeFromContent(msg.content);
-        
-        // 如果没有明确的XML标签，默认为brain类型（中枢系统）
-        if (!systemType) {
-          systemType = 'brain';
+        // 优先使用消息中的systemType
+        if (msg.systemType) {
+          systemType = msg.systemType;
+        } else {
+          // 根据消息内容判断系统类型
+          systemType = getSystemTypeFromContent(msg.content);
+          
+          // 如果没有明确的XML标签，默认为brain类型（中枢系统）
+          if (!systemType) {
+            systemType = 'brain';
+          }
         }
       }
       
       return {
-        id: `msg_${index}`,
+        id: msg.id || `msg_${index}`,
         role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
         content: msg.content,
-        datetime: new Date(msg.timestamp).toLocaleString(),
-        avatar: msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType }),
+        datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
+        avatar: msg.avatar || (msg.role === 'user' ? 'https://tdesign.gtimg.com/site/avatar.jpg' : getSystemAvatar({ systemType })),
         systemType: systemType,
+        json_blocks: msg.json_blocks || [],
+        message_type: msg.message_type || 'text',
         isStreaming: false
       };
     });
@@ -370,6 +346,78 @@ const loadWorkspaceFiles = async () => {
 const updateFileTreeData = (files: FileInfo[]) => {
   // 直接传递文件列表，让FileManager组件按类型分类
   fileTreeData.value = files;
+  lastFileUpdateTime.value = Date.now();
+};
+
+// 智能文件刷新 - 只在必要时刷新
+const smartFileRefresh = async () => {
+  try {
+    console.log('智能刷新文件列表');
+    const files = await workspaceFileAPI.listFiles(authStore.token!, workId.value!);
+    
+    // 检查文件列表是否有变化
+    const hasChanges = checkFileChanges(files);
+    
+    if (hasChanges) {
+      console.log('检测到文件变化，更新文件列表');
+      updateFileTreeData(files);
+    } else {
+      console.log('文件列表无变化，跳过更新');
+    }
+  } catch (error) {
+    console.error('智能刷新文件列表失败:', error);
+  }
+};
+
+// 检查文件列表是否有变化
+const checkFileChanges = (newFiles: FileInfo[]): boolean => {
+  const currentFiles = fileTreeData.value;
+  
+  // 如果文件数量不同，肯定有变化
+  if (currentFiles.length !== newFiles.length) {
+    return true;
+  }
+  
+  // 检查文件路径和修改时间
+  const currentFileMap = new Map(currentFiles.map(f => [f.path, f.modified]));
+  const newFileMap = new Map(newFiles.map(f => [f.path, f.modified]));
+  
+  for (const [path, modified] of newFileMap) {
+    const currentModified = currentFileMap.get(path);
+    if (currentModified === undefined || currentModified !== modified) {
+      return true;
+    }
+  }
+  
+  return false;
+};
+
+// 启动文件刷新定时器
+const startFileRefreshTimer = () => {
+  // 清除之前的定时器
+  if (fileRefreshTimer.value) {
+    clearTimeout(fileRefreshTimer.value);
+  }
+  
+  // 设置新的定时器，3秒后刷新文件列表
+  fileRefreshTimer.value = setTimeout(() => {
+    smartFileRefresh();
+    fileRefreshTimer.value = null;
+  }, 3000);
+};
+
+// 停止文件刷新定时器
+const stopFileRefreshTimer = () => {
+  if (fileRefreshTimer.value) {
+    clearTimeout(fileRefreshTimer.value);
+    fileRefreshTimer.value = null;
+  }
+};
+
+// 处理文件刷新
+const handleFileRefresh = () => {
+  console.log('手动刷新文件列表');
+  smartFileRefresh();
 };
 
 
@@ -672,187 +720,116 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
     // 设置消息监听器
     webSocketHandler.value.onMessage((data) => {
+      console.log('WebSocket message received:', data);
+      
       switch (data.type) {
         case 'start':
+          console.log('AI分析开始');
           break;
+          
+        case 'json_block':
+          // 处理JSON格式的数据块
+          if (data.block) {
+            handleJsonBlock(data.block, aiMessageId);
+          }
+          break;
+          
         case 'content':
-          // 内容更新 - 实时流式显示
-          const messageIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (messageIndex > -1) {
-            // 实时更新内容，实现流式显示效果
-            fullContent += data.content;
-            
-            // 调试日志
-            console.log('WebSocket content update:', {
-              messageId: aiMessageId,
-              contentLength: fullContent.length,
-              currentSystemType,
-              hasMainAgent: fullContent.includes('<main_agent>'),
-              hasCodeAgent: fullContent.includes('<call_code_agent>') || fullContent.includes('<ret_code_agent>'),
-              hasWriting: fullContent.includes('<writemd_result>') || fullContent.includes('<tree_result>')
-            });
-            
-            // 根据累积的完整内容判断系统类型（而不是单个片段）
-            let newSystemType = currentSystemType;
-            if (fullContent.includes('<main_agent>')) {
-              newSystemType = 'brain';
-            } else if (fullContent.includes('<call_code_agent>') || fullContent.includes('<ret_code_agent>') ||
-                       fullContent.includes('<call_exec>') || fullContent.includes('<ret_exec>') ||
-                       fullContent.includes('<tool_call>') || fullContent.includes('<tool_result>') ||
-                       fullContent.includes('<execution_start>') || fullContent.includes('<execution_complete>') ||
-                       fullContent.includes('<tool_error>')) {
-              newSystemType = 'code';
-            } else if (fullContent.includes('<writemd_result>') || fullContent.includes('<tree_result>')) {
-              newSystemType = 'writing';
-            }
-            
-            // 如果系统类型发生变化，更新显示
-            if (newSystemType !== currentSystemType) {
-              console.log('System type changed:', { from: currentSystemType, to: newSystemType });
-              currentSystemType = newSystemType;
-              systemTypeChanged = true;
-            }
-            
-            // 使用Vue的响应式更新，确保视图正确刷新
-            const updatedMessage = {
-              ...chatMessages.value[messageIndex],
-              content: fullContent,
-              systemType: currentSystemType,
-              avatar: getSystemAvatar({ systemType: currentSystemType })
-            };
-            
-            // 替换整个消息对象，确保Vue响应式更新
-            chatMessages.value.splice(messageIndex, 1, updatedMessage);
-            
-            // 调试日志
-            console.log('Message updated:', {
-              messageId: aiMessageId,
-              systemType: currentSystemType,
-              contentLength: fullContent.length,
-              avatar: getSystemAvatar({ systemType: currentSystemType })
-            });
-            
-            // 自动滚动到底部
-            nextTick(() => {
-              const chatContainer = document.querySelector('.chat-messages');
-              if (chatContainer) {
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-              }
-            });
-          }
+          // 兼容旧的内容格式
+          handleContentUpdate(data.content, aiMessageId);
           break;
-        case 'xml_open':
-        case 'xml_close':
-          break;
-        case 'tool_call':
-          // 工具调用开始通知
-          const toolCallIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (toolCallIndex > -1) {
-            console.log('Tool call notification:', { messageId: aiMessageId, content: data.content });
-            const toolCallMessage = {
-              ...chatMessages.value[toolCallIndex],
-              content: chatMessages.value[toolCallIndex].content + `\n\n🔧 **工具调用**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(toolCallIndex, 1, toolCallMessage);
-            console.log('Tool call message updated, system type set to code');
-          }
-          break;
-        case 'tool_result':
-          // 工具调用结果通知
-          const toolResultIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (toolResultIndex > -1) {
-            const toolResultMessage = {
-              ...chatMessages.value[toolResultIndex],
-              content: chatMessages.value[toolResultIndex].content + `\n\n✅ **工具执行结果**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(toolResultIndex, 1, toolResultMessage);
-          }
-          break;
-        case 'execution_start':
-          // 代码执行开始通知
-          const execStartIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (execStartIndex > -1) {
-            const execStartMessage = {
-              ...chatMessages.value[execStartIndex],
-              content: chatMessages.value[execStartIndex].content + `\n\n🚀 **代码执行**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(execStartIndex, 1, execStartMessage);
-          }
-          break;
-        case 'execution_complete':
-          // 代码执行完成通知
-          const execCompleteIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (execCompleteIndex > -1) {
-            const execCompleteMessage = {
-              ...chatMessages.value[execCompleteIndex],
-              content: chatMessages.value[execCompleteIndex].content + `\n\n✅ **执行完成**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(execCompleteIndex, 1, execCompleteMessage);
-          }
-          break;
-        case 'tool_error':
-          // 工具调用错误通知
-          const toolErrorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (toolErrorIndex > -1) {
-            const toolErrorMessage = {
-              ...chatMessages.value[toolErrorIndex],
-              content: chatMessages.value[toolErrorIndex].content + `\n\n❌ **工具错误**: ${data.content}`,
-              systemType: 'code' as const,
-              avatar: getSystemAvatar({ systemType: 'code' })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(toolErrorIndex, 1, toolErrorMessage);
-          }
-          break;
+          
         case 'complete':
-          // 完成消息
-          const completeIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
-          if (completeIndex > -1) {
-            const completeMessage = {
-              ...chatMessages.value[completeIndex],
-              isStreaming: false,
-              content: fullContent,
-              systemType: currentSystemType,
-              avatar: getSystemAvatar({ systemType: currentSystemType })
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(completeIndex, 1, completeMessage);
-          }
+          console.log('AI分析完成');
           isStreaming.value = false;
-          webSocketHandler.value = null;
+          // AI处理完成后，智能刷新文件列表
+          smartFileRefresh();
           break;
+          
         case 'error':
-          // 错误消息
+          console.error('WebSocket错误:', data.message);
           const errorIndex = chatMessages.value.findIndex(m => m.id === aiMessageId);
           if (errorIndex > -1) {
-            const errorMessage = {
-              ...chatMessages.value[errorIndex],
-              content: `错误: ${data.message}`,
-              isStreaming: false,
-              avatar: getSystemAvatar({ systemType: currentSystemType }),
-              systemType: currentSystemType
-            };
-            // 使用splice确保Vue响应式更新
-            chatMessages.value.splice(errorIndex, 1, errorMessage);
+            chatMessages.value[errorIndex].content = `错误: ${data.message}`;
+            chatMessages.value[errorIndex].isStreaming = false;
           }
           isStreaming.value = false;
-          webSocketHandler.value = null;
-          MessagePlugin.error(`聊天失败: ${data.message}`);
           break;
+          
+        default:
+          console.log('未知消息类型:', data.type);
       }
     });
+
+    // 处理JSON块数据
+    const handleJsonBlock = (block: any, messageId: string) => {
+      console.log('处理JSON块:', block);
+      
+      const messageIndex = chatMessages.value.findIndex(m => m.id === messageId);
+      if (messageIndex === -1) return;
+      
+      // 获取当前消息
+      const currentMessage = chatMessages.value[messageIndex];
+      
+      // 添加JSON块到json_blocks数组
+      const updatedJsonBlocks = [...(currentMessage.json_blocks || []), block];
+      
+      // 更新消息，设置为JSON卡片格式
+      const updatedMessage = {
+        ...currentMessage,
+        json_blocks: updatedJsonBlocks,
+        message_type: 'json_card' as const
+      };
+      
+      // 使用Vue的响应式更新
+      chatMessages.value.splice(messageIndex, 1, updatedMessage);
+      
+      // 检查是否是文件操作相关的JSON块，如果是则智能刷新文件列表
+      if (block.type && (
+        block.type.includes('save_and_execute') || 
+        block.type.includes('edit_code_file') || 
+        block.type.includes('execute_file') ||
+        block.type.includes('code_agent') ||
+        block.content?.includes('文件') ||
+        block.content?.includes('保存') ||
+        block.content?.includes('创建')
+      )) {
+        console.log('检测到文件操作，智能刷新文件列表');
+        // 延迟刷新，避免频繁请求
+        setTimeout(() => {
+          smartFileRefresh();
+        }, 1000);
+      }
+      
+      // 自动滚动到底部
+      nextTick(() => {
+        const chatContainer = document.querySelector('.chat-messages');
+        if (chatContainer) {
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+      });
+    };
+
+    // 处理内容更新（兼容旧格式）
+    const handleContentUpdate = (content: string, messageId: string) => {
+      const messageIndex = chatMessages.value.findIndex(m => m.id === messageId);
+      if (messageIndex > -1) {
+        const currentMessage = chatMessages.value[messageIndex];
+        const updatedMessage = {
+          ...currentMessage,
+          content: currentMessage.content + content
+        };
+        chatMessages.value.splice(messageIndex, 1, updatedMessage);
+        
+        // 自动滚动到底部
+        nextTick(() => {
+          const chatContainer = document.querySelector('.chat-messages');
+          if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+          }
+        });
+      }
+    };
 
     // 等待一下确保监听器设置完成
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -954,6 +931,9 @@ watch(() => route.params.work_id, (newWorkId) => {
       webSocketHandler.value.disconnect();
       webSocketHandler.value = null;
     }
+    
+    // 停止文件刷新定时器
+    stopFileRefreshTimer();
     
     loadWork();
     // 重新初始化聊天会话
@@ -1242,7 +1222,7 @@ html, body {
   display: flex;
   padding: 0;
   overflow: hidden;
-  min-height: 0;
+  height: calc(100vh - 120px); /* 固定高度，减去header高度 */
 }
 
 .chat-section {
@@ -1253,6 +1233,7 @@ html, body {
   padding: 20px;
   min-width: 300px;
   overflow: hidden;
+  height: 100%; /* 确保占满父容器高度 */
 }
 
 .preview-section {
@@ -1260,7 +1241,7 @@ html, body {
   padding: 20px;
   overflow-y: auto;
   background: #f9f9f9;
-  min-height: 0;
+  height: 100%; /* 确保占满父容器高度 */
 }
 
 
@@ -1273,7 +1254,21 @@ html, body {
   border-radius: 8px;
   overflow: hidden;
   background: white;
-  min-height: 0;
+  height: 100%; /* 确保占满父容器高度 */
+}
+
+.chat-messages-container {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0; /* 允许flex子项收缩 */
+}
+
+.chat-bottom-section {
+  flex-shrink: 0; /* 防止底部区域被压缩 */
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #eee;
+  background: white;
 }
 
 .chat-messages {
@@ -1281,14 +1276,25 @@ html, body {
   padding: 16px;
   overflow-y: auto;
   background: #fafafa;
-  min-height: 0;
+  min-height: 0; /* 允许flex子项收缩 */
 }
 
 .chat-input {
   padding: 16px;
   border-top: 1px solid #eee;
   background: white;
+  flex-shrink: 0; /* 防止输入框被压缩 */
+  min-height: 80px; /* 确保输入框有最小高度 */
 }
+
+/* 确保FileManager组件有合适的高度 */
+.chat-bottom-section .file-manager {
+  flex-shrink: 0; /* 防止文件管理器被压缩 */
+  max-height: 300px; /* 限制文件管理器最大高度 */
+  overflow-y: auto; /* 如果内容过多，允许滚动 */
+}
+
+
 
 .chat-message-wrapper {
   position: relative;

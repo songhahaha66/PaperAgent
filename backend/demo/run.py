@@ -1,16 +1,29 @@
-import logging
-import asyncio
-import os
-import io
-import contextlib
-import json
-from dotenv import load_dotenv
-import litellm
-from typing import List, Dict, Any, Callable, Union
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # 使用非交互式后端
+"""
+简化版AI系统演示
+使用litellm进行LLM调用，支持流式输出
+"""
+
 from datetime import datetime
+import matplotlib
+import matplotlib.pyplot as plt
+import contextlib
+import io
+import litellm
+import os
+import sys
+import json
+import asyncio
+import logging
+import tempfile
+import subprocess
+from typing import Dict, Any, Optional, List
+from dotenv import load_dotenv
+
+# 添加项目根目录到Python路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+matplotlib.use('Agg')  # 使用非交互式后端
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -63,51 +76,69 @@ class StreamOutputManager:
             f"StreamOutputManager._output() 第 {self.output_count} 次调用: {repr(content[:50])}...")
 
         if self.stream_callback:
-            # 直接调用回调函数，让回调函数自己处理线程安全问题
             try:
-                self.stream_callback(content)
-                logger.debug(f"成功调用回调函数")
+                # 立即调用回调函数，实现实时流式传输
+                asyncio.create_task(self.stream_callback.on_content(content))
+                logger.debug(f"成功调用回调函数，内容长度: {len(content)}")
             except Exception as e:
                 logger.error(f"回调函数调用失败: {e}")
         else:
             logger.debug("无回调函数，直接打印")
-            print(content)
+            print(content, end="", flush=True)
 
-    def print_xml_open(self, tag_name: str, content: str = ""):
-        """打印XML开始标签"""
-        # indent = "        " * self.indent_level
-        indent = ""
-        if content:
-            output = f"{indent}<{tag_name}>\n{indent}{content}"
+    def send_json_block(self, block_type: str, content: str):
+        """发送JSON格式的数据块"""
+        block = {
+            "type": block_type,
+            "content": content
+        }
+
+        logger.debug(f"发送JSON块: {block_type} - {repr(content[:50])}...")
+
+        if self.stream_callback:
+            try:
+                asyncio.create_task(self.stream_callback.on_json_block(block))
+                logger.debug(f"成功发送JSON块: {block_type}")
+            except Exception as e:
+                logger.error(f"发送JSON块失败: {e}")
         else:
-            output = f"{indent}<{tag_name}>"
+            # 直接打印JSON格式
+            print(json.dumps(block, ensure_ascii=False), flush=True)
 
-        logger.debug(f"XML开始标签: {tag_name}")
-        self._output(output)
-        self.indent_level += 1
+    def print_main_content(self, content: str):
+        """打印主要内容"""
+        self.send_json_block("main", content)
 
-    def print_xml_close(self, tag_name: str):
-        """打印XML结束标签"""
-        self.indent_level -= 1
-        # indent = "        " * self.indent_level
-        indent = ""
-        output = f"{indent}</{tag_name}>"
+    def print_code_agent_call(self, content: str):
+        """打印代码代理调用"""
+        self.send_json_block("call_code_agent", content)
 
-        logger.debug(f"XML结束标签: {tag_name}")
-        self._output(output)
+    def print_code_agent_response(self, content: str):
+        """打印代码代理响应"""
+        self.send_json_block("code_agent", content)
+
+    def print_code_execution_call(self, content: str):
+        """打印代码执行调用"""
+        self.send_json_block("call_exec_py", content)
+
+    def print_code_execution_result(self, content: str):
+        """打印代码执行结果"""
+        self.send_json_block("exec_py", content)
+
+    def print_writing_agent_call(self, content: str):
+        """打印写作代理调用"""
+        self.send_json_block("call_writing_agent", content)
+
+    def print_writing_agent_response(self, content: str):
+        """打印写作代理响应"""
+        self.send_json_block("writing_agent", content)
 
     def print_content(self, content: str):
-        """打印内容"""
-        # indent = "        " * self.indent_level
-        indent = ""
-        output = f"{indent}{content}"
-
-        logger.debug(f"打印内容: {repr(content[:50])}...")
-        self._output(output)
+        """打印内容（兼容旧接口）"""
+        self.print_main_content(content)
 
     def print_stream(self, content: str):
         """流式打印内容（不换行）"""
-        logger.debug(f"流式打印: {repr(content[:50])}...")
         self._output(content)
 
 # --- 文件操作工具 ---
@@ -154,20 +185,20 @@ class FileTools:
                 with open(filepath, 'a', encoding='utf-8') as f:
                     f.write('\n\n' + content)
                 result = f"成功附加内容到Markdown文件: {filepath}"
-                
+
             elif mode == "overwrite":
                 # 重写覆盖模式：完全覆盖原文件内容
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write(content)
                 result = f"成功重写覆盖Markdown文件: {filepath}"
-                
+
             elif mode == "modify":
                 # 修改模式：替换文件中的特定内容
                 if os.path.exists(filepath):
                     # 读取原文件内容
                     with open(filepath, 'r', encoding='utf-8') as f:
                         original_content = f.read()
-                    
+
                     # 这里可以根据需要实现更复杂的修改逻辑
                     # 目前简单地将新内容替换原内容
                     with open(filepath, 'w', encoding='utf-8') as f:
@@ -180,18 +211,14 @@ class FileTools:
                     result = f"文件不存在，创建并写入Markdown文件: {filepath}"
             else:
                 return f"无效的写入模式: {mode}，支持的模式: append, overwrite, modify"
-            
-            self.stream_manager.print_xml_open("writemd_result")
-            self.stream_manager.print_content(result)
-            self.stream_manager.print_xml_close("writemd_result")
+
+            self.stream_manager.print_main_content(result)
 
             return result
         except Exception as e:
             error_msg = f"写入Markdown文件失败: {str(e)}"
             logger.error(f"写入文件失败: {e}")
-            self.stream_manager.print_xml_open("writemd_result")
-            self.stream_manager.print_content(error_msg)
-            self.stream_manager.print_xml_close("writemd_result")
+            self.stream_manager.print_main_content(error_msg)
             return error_msg
 
     def tree(self, directory: str = None) -> str:
@@ -236,9 +263,7 @@ class FileTools:
         tree_result = f"{os.path.basename(directory)}/\n" + \
             _tree_helper(directory)
 
-        self.stream_manager.print_xml_open("tree_result")
-        self.stream_manager.print_content(tree_result)
-        self.stream_manager.print_xml_close("tree_result")
+        self.stream_manager.print_main_content(tree_result)
 
         return tree_result
 
@@ -256,7 +281,7 @@ class CodeExecutor:
             self.workspace_dir = os.path.join(
                 os.path.dirname(__file__), "workspace")
             logger.warning("CodeExecutor未找到WORKSPACE_DIR环境变量，使用默认路径")
-        
+
         # 确保工作空间目录存在
         os.makedirs(self.workspace_dir, exist_ok=True)
         # 不需要重复创建目录结构，environment.py中已经处理了
@@ -265,28 +290,28 @@ class CodeExecutor:
     def execute_code_file(self, code_file_path: str) -> Dict[str, Any]:
         """
         执行指定的Python代码文件并返回结果
-        
+
         Args:
             code_file_path: 要执行的代码文件路径
-            
+
         Returns:
             执行结果字典，包含状态、输出、错误等信息
         """
         logger.info(f"执行代码文件: {code_file_path}")
-        
+
         try:
             # 读取代码文件内容
             with open(code_file_path, 'r', encoding='utf-8') as f:
                 python_code = f.read()
-            
+
             # 执行代码
             result = self._execute_python_code(python_code)
-            
+
             # 保存执行日志
             self._save_execution_log(code_file_path, result)
-            
+
             return result
-            
+
         except Exception as e:
             error_result = {
                 "success": False,
@@ -300,17 +325,17 @@ class CodeExecutor:
     def _execute_python_code(self, python_code: str) -> Dict[str, Any]:
         """
         执行Python代码字符串并捕获其标准输出和错误
-        
+
         Args:
             python_code: 要执行的 Python 代码
-            
+
         Returns:
             执行结果字典
         """
         logger.info(f"执行Python代码，代码长度: {len(python_code)} 字符")
-        
+
         start_time = datetime.now()
-        
+
         try:
             # 创建一个包含workspace路径的全局环境
             globals_dict = {
@@ -341,10 +366,10 @@ class CodeExecutor:
 
             output = string_io.getvalue()
             execution_time = (datetime.now() - start_time).total_seconds()
-            
+
             # 检查是否有图表需要保存
             plot_files = self._save_plots()
-            
+
             result = {
                 "success": True,
                 "output": output.strip(),
@@ -352,10 +377,11 @@ class CodeExecutor:
                 "plot_files": plot_files,
                 "timestamp": datetime.now().isoformat()
             }
-            
-            logger.info(f"代码执行成功，输出长度: {len(output)} 字符，执行时间: {execution_time:.2f}秒")
+
+            logger.info(
+                f"代码执行成功，输出长度: {len(output)} 字符，执行时间: {execution_time:.2f}秒")
             return result
-            
+
         except Exception as e:
             execution_time = (datetime.now() - start_time).total_seconds()
             error_result = {
@@ -366,46 +392,47 @@ class CodeExecutor:
                 "plot_files": {},
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             logger.error(f"代码执行失败: {e}")
             return error_result
 
     def _save_plots(self) -> Dict[str, str]:
         """
         保存matplotlib图表到plots目录
-        
+
         Returns:
             保存的图片文件路径字典
         """
         plot_files = {}
-        
+
         try:
             if plt.get_fignums():  # 如果有图表
-                plots_dir = os.path.join(self.workspace_dir, "outputs", "plots")
+                plots_dir = os.path.join(
+                    self.workspace_dir, "outputs", "plots")
                 os.makedirs(plots_dir, exist_ok=True)
-                
+
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                
+
                 for fig_num in plt.get_fignums():
                     fig = plt.figure(fig_num)
                     plot_filename = f"plot_{timestamp}_{fig_num}.png"
                     plot_filepath = os.path.join(plots_dir, plot_filename)
-                    
+
                     fig.savefig(plot_filepath, dpi=300, bbox_inches='tight')
                     plot_files[f"plot_{fig_num}"] = f"outputs/plots/{plot_filename}"
                     logger.info(f"图表已保存到: {plot_filepath}")
-                
+
                 plt.close('all')  # 关闭所有图表
-                
+
         except Exception as e:
             logger.warning(f"保存图表失败: {e}")
-        
+
         return plot_files
 
     def _save_execution_log(self, code_file_path: str, result: Dict[str, Any]):
         """
         保存执行日志到execution_logs目录
-        
+
         Args:
             code_file_path: 代码文件路径
             result: 执行结果
@@ -413,11 +440,11 @@ class CodeExecutor:
         try:
             logs_dir = os.path.join(self.workspace_dir, "execution_logs")
             os.makedirs(logs_dir, exist_ok=True)
-            
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_filename = f"execution_{timestamp}.log"
             log_filepath = os.path.join(logs_dir, log_filename)
-            
+
             # 构建日志内容
             log_content = {
                 "timestamp": result.get("timestamp", datetime.now().isoformat()),
@@ -429,12 +456,12 @@ class CodeExecutor:
                 "plot_files": result.get("plot_files", {}),
                 "log_file": f"execution_logs/{log_filename}"
             }
-            
+
             with open(log_filepath, 'w', encoding='utf-8') as f:
                 json.dump(log_content, f, ensure_ascii=False, indent=2)
-            
+
             logger.info(f"执行日志已保存到: {log_filepath}")
-            
+
         except Exception as e:
             logger.error(f"保存执行日志失败: {e}")
 
@@ -451,9 +478,7 @@ class CodeExecutor:
             执行结果的字符串（包括输出或错误信息）。
         """
         logger.info(f"执行Python代码，代码长度: {len(python_code)} 字符")
-        self.stream_manager.print_xml_open("call_exec")
-        self.stream_manager.print_content(python_code)
-        self.stream_manager.print_xml_close("call_exec")
+        self.stream_manager.print_code_execution_call(python_code)
 
         try:
             # 创建一个包含workspace路径的全局环境
@@ -480,17 +505,13 @@ class CodeExecutor:
             result = string_io.getvalue()
             logger.info(f"代码执行成功，输出长度: {len(result)} 字符")
 
-            self.stream_manager.print_xml_open("ret_exec")
-            self.stream_manager.print_content(result.strip())
-            self.stream_manager.print_xml_close("ret_exec")
+            self.stream_manager.print_code_execution_result(result.strip())
 
             return result
         except Exception as e:
             error_message = f"代码执行出错: {str(e)}"
             logger.error(f"代码执行失败: {e}")
-            self.stream_manager.print_xml_open("ret_exec")
-            self.stream_manager.print_content(error_message)
-            self.stream_manager.print_xml_close("ret_exec")
+            self.stream_manager.print_code_execution_result(error_message)
             return error_message
 
 # --- 通用逻辑封装：LLM 通信处理器 ---
@@ -657,7 +678,7 @@ class CodeAgent(Agent):
         logger.info(f"CodeAgent开始执行任务: {repr(task_prompt[:50])}...")
 
         if self.stream_manager:
-            self.stream_manager.print_xml_open("ret_code_agent")
+            self.stream_manager.print_code_agent_call(task_prompt)
 
         self.messages.append({"role": "user", "content": task_prompt})
 
@@ -678,7 +699,7 @@ class CodeAgent(Agent):
                 result = assistant_message.get("content", "代码手任务完成。")
                 logger.info(f"CodeAgent在第{iteration}次迭代完成，无更多工具调用")
                 if self.stream_manager:
-                    self.stream_manager.print_xml_close("ret_code_agent")
+                    self.stream_manager.print_code_agent_response(result)
                 return result
 
             # 执行所有工具调用
@@ -722,9 +743,8 @@ class CodeAgent(Agent):
         # 达到最大迭代次数
         logger.warning(f"CodeAgent达到最大迭代次数({max_iterations})，强制结束")
         if self.stream_manager:
-            self.stream_manager.print_content(
+            self.stream_manager.print_code_agent_response(
                 f"达到最大迭代次数({max_iterations})，任务结束")
-            self.stream_manager.print_xml_close("ret_code_agent")
 
         return "代码手任务完成（达到最大迭代次数）"
 
@@ -815,7 +835,7 @@ class MainAgent(Agent):
         logger.info(f"MainAgent开始执行，问题长度: {len(user_problem)} 字符")
 
         if self.stream_manager:
-            self.stream_manager.print_xml_open("main_agent")
+            self.stream_manager.print_writing_agent_call(user_problem)
 
         self.messages.append({"role": "user", "content": user_problem})
 
@@ -831,7 +851,8 @@ class MainAgent(Agent):
             if not tool_calls:
                 logger.info("MainAgent没有工具调用，任务完成")
                 if self.stream_manager:
-                    self.stream_manager.print_xml_close("main_agent")
+                    self.stream_manager.print_writing_agent_response(
+                        "MainAgent没有工具调用，任务完成")
                 break
 
             logger.info(f"MainAgent执行 {len(tool_calls)} 个工具调用")
@@ -847,11 +868,8 @@ class MainAgent(Agent):
                         task_prompt = args.get("task_prompt", "")
 
                         if self.stream_manager:
-                            self.stream_manager.print_xml_open(
-                                "call_code_agent")
-                            self.stream_manager.print_content(task_prompt)
-                            self.stream_manager.print_xml_close(
-                                "call_code_agent")
+                            self.stream_manager.print_code_agent_call(
+                                task_prompt)
 
                         # 创建并运行子 Agent
                         code_agent = CodeAgent(

@@ -29,6 +29,8 @@ export interface ChatMessageResponse {
   tool_results?: any;
   message_metadata?: any;
   created_at: string;
+  json_blocks?: any[];
+  message_type?: 'text' | 'json_card';
 }
 
 
@@ -228,6 +230,7 @@ export class WebSocketChatHandler {
   private heartbeatTimer: number | null = null;
   private messageCallback: ((data: any) => void) | null = null;
   private disconnectCallback: (() => void) | null = null;
+  private jsonBlockCallback: ((block: any) => void) | null = null;
 
   constructor(workId: string, token: string) {  // 参数改为workId
     this.workId = workId;
@@ -417,6 +420,11 @@ export class WebSocketChatHandler {
     };
   }
 
+  // 监听JSON块消息
+  onJsonBlock(callback: (block: any) => void) {
+    this.jsonBlockCallback = callback;
+  }
+
   // 监听断开连接
   onDisconnect(callback: () => void) {
     this.disconnectCallback = callback;
@@ -476,6 +484,8 @@ export interface ChatMessage {
   systemType?: 'brain' | 'code' | 'writing';
   isLoading?: boolean;
   isStreaming?: boolean;
+  json_blocks?: any[];
+  message_type?: 'text' | 'json_card';
 }
 
 // 聊天状态管理

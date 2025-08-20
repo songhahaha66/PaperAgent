@@ -2,6 +2,21 @@
   <div class="file-manager">
     <t-collapse v-model="fileManagerExpanded" :border="false">
       <t-collapse-panel value="files" header="文件管理器">
+        <template #header>
+          <div class="file-manager-header">
+            <span>文件管理器</span>
+            <t-button 
+              size="small" 
+              variant="text" 
+              @click.stop="handleRefresh"
+              :loading="isLoading"
+            >
+              <template #icon>
+                <t-icon name="refresh" />
+              </template>
+            </t-button>
+          </div>
+        </template>
         <!-- 文件树 -->
         <div class="file-tree">
           <div v-if="isLoading" class="loading-state">
@@ -64,6 +79,7 @@ interface Props {
 // 定义emits
 interface Emits {
   (e: 'file-select', fileKey: string): void
+  (e: 'refresh'): void
 }
 
 const props = defineProps<Props>()
@@ -423,6 +439,11 @@ const handleFileSelect = (selectedKeys: string[]) => {
   }
 }
 
+// 处理刷新
+const handleRefresh = () => {
+  emit('refresh')
+}
+
 // 暴露方法供父组件调用
 defineExpose({
   selectedFile,
@@ -436,6 +457,13 @@ defineExpose({
 .file-manager {
   border-top: 1px solid #eee;
   background: white;
+}
+
+.file-manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
 }
 
 .file-manager .t-collapse {
