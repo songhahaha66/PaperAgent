@@ -142,19 +142,60 @@ class TemplateTools:
         try:
             structure = self.extract_template_structure(template_content)
             
+            # 清理搜索词中的Markdown格式
+            clean_search = self._clean_markdown_format(section_title)
+            logger.debug(f"搜索章节: '{section_title}' -> 清理后: '{clean_search}'")
+            
             for section in structure['sections']:
+                # 清理章节标题中的Markdown格式
+                clean_title = self._clean_markdown_format(section['title'])
+                logger.debug(f"检查章节: '{section['title']}' -> 清理后: '{clean_title}'")
+                
                 if exact_match:
-                    if section['title'] == section_title:
+                    if clean_title == clean_search:
+                        logger.debug(f"精确匹配成功: '{clean_title}' == '{clean_search}'")
                         return section
                 else:
-                    if section_title.lower() in section['title'].lower():
+                    # 改进的包含式匹配：双向检查
+                    if (clean_search.lower() in clean_title.lower() or 
+                        clean_title.lower() in clean_search.lower()):
+                        logger.debug(f"包含匹配成功: '{clean_search}' in '{clean_title}' 或 '{clean_title}' in '{clean_search}'")
                         return section
                         
+            logger.warning(f"未找到章节: '{section_title}' (清理后: '{clean_search}')")
+            logger.debug(f"可用章节: {[s['title'] for s in structure['sections']]}")
             return None
             
         except Exception as e:
             logger.error(f"查找章节失败: {e}")
             return None
+    
+    def _clean_markdown_format(self, text: str) -> str:
+        """
+        清理文本中的Markdown格式标记
+        
+        Args:
+            text: 包含Markdown格式的文本
+            
+        Returns:
+            清理后的纯文本
+        """
+        if not text:
+            return ""
+        
+        # 移除常见的Markdown格式标记
+        cleaned = text
+        cleaned = cleaned.replace('*', '').replace('_', '')  # 粗体、斜体
+        cleaned = cleaned.replace('`', '')  # 行内代码
+        cleaned = cleaned.replace('[', '').replace(']', '')  # 链接标记
+        cleaned = cleaned.replace('(', '').replace(')', '')  # 链接URL
+        cleaned = cleaned.replace('#', '')  # 标题标记
+        cleaned = cleaned.replace('~', '')  # 删除线
+        
+        # 移除多余的空格
+        cleaned = ' '.join(cleaned.split())
+        
+        return cleaned
     
     def get_section_content(self, template_content: str, section_title: str) -> Optional[str]:
         """

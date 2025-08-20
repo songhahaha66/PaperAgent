@@ -102,7 +102,7 @@ class MainAgent(Agent):
         """初始化 System Prompt 和工具。"""
         # 基础系统提示
         system_content = (
-            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程，不要总是问我问题，尽量自己执行\n"
+            "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。不要问我问题，自己执行迭代！\n"
             "你的职责：\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
@@ -112,12 +112,14 @@ class MainAgent(Agent):
             "- 保持对话连贯性，不重复询问已明确的信息\n"
             "- CodeAgent负责具体执行，你负责规划和协调\n"
             "- 所有生成的文件都要在最终论文中引用"
+            "- 请自己执行迭代，直到任务完成\n"
         )
 
         # 如果有模板，添加模板信息到系统提示
         if self.template_id:
-            system_content += f"\n\n模板信息：\n"
+            system_content += f"\n\n模板信息（已生成）：\n"
             system_content += f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
+            system_content += f"- 模板是一个大纲，你要填满大纲！\n"
             system_content += f"- 然后使用以下工具之一来操作论文文件：\n"
             system_content += f"  * writemd工具：支持多种模式（覆盖、追加、修改、插入、智能替换、章节更新）\n"
             system_content += f"  * update_template工具：专门用于模板操作，支持章节级别更新\n"

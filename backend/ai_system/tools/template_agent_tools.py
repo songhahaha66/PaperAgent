@@ -78,17 +78,27 @@ class TemplateAgentTools:
         if not template_content:
             return "错误：当前工作目录中没有找到paper.md文件"
         
-        # 更新内容
-        updated_content = await template_operations.update_section_content(template_content, section_title, new_content, mode)
-        
-        # 保存到文件
         try:
-            paper_path = os.path.join(self.workspace_dir, "paper.md")
-            with open(paper_path, 'w', encoding='utf-8') as f:
-                f.write(updated_content)
-            return f"✅ 章节 '{section_title}' 更新成功，已保存到paper.md文件"
+            # 直接调用底层函数获取更新后的内容
+            from . import template_tools
+            tools_instance = template_tools.TemplateTools(self.workspace_dir)
+            updated_content = tools_instance.update_section_content(
+                template_content, section_title, new_content, mode
+            )
+            
+            # 检查内容是否真的更新了
+            if updated_content and updated_content != template_content:
+                # 保存到文件
+                paper_path = os.path.join(self.workspace_dir, "paper.md")
+                with open(paper_path, 'w', encoding='utf-8') as f:
+                    f.write(updated_content)
+                return f"✅ 章节 '{section_title}' 更新成功，已保存到paper.md文件"
+            else:
+                return f"❌ 更新章节失败：内容未发生变化"
+                
         except Exception as e:
-            return f"❌ 更新成功但保存失败: {str(e)}"
+            logger.error(f"更新章节内容失败: {e}")
+            return f"❌ 更新章节失败: {str(e)}"
     
     async def add_new_section(self, parent_section: str, section_title: str, content: str = '') -> str:
         """
@@ -106,17 +116,27 @@ class TemplateAgentTools:
         if not template_content:
             return "错误：当前工作目录中没有找到paper.md文件"
         
-        # 添加新章节
-        updated_content = await template_operations.add_new_section(template_content, parent_section, section_title, content)
-        
-        # 保存到文件
         try:
-            paper_path = os.path.join(self.workspace_dir, "paper.md")
-            with open(paper_path, 'w', encoding='utf-8') as f:
-                f.write(updated_content)
-            return f"✅ 新章节 '{section_title}' 添加成功，已保存到paper.md文件"
+            # 直接调用底层函数获取更新后的内容
+            from . import template_tools
+            tools_instance = template_tools.TemplateTools(self.workspace_dir)
+            updated_content = tools_instance.add_new_section(
+                template_content, parent_section, section_title, content
+            )
+            
+            # 检查内容是否真的更新了
+            if updated_content and updated_content != template_content:
+                # 保存到文件
+                paper_path = os.path.join(self.workspace_dir, "paper.md")
+                with open(paper_path, 'w', encoding='utf-8') as f:
+                    f.write(updated_content)
+                return f"✅ 新章节 '{section_title}' 添加成功，已保存到paper.md文件"
+            else:
+                return f"❌ 添加章节失败：内容未发生变化"
+                
         except Exception as e:
-            return f"❌ 添加成功但保存失败: {str(e)}"
+            logger.error(f"添加新章节失败: {e}")
+            return f"❌ 添加新章节失败: {str(e)}"
     
     async def remove_section(self, section_title: str) -> str:
         """
@@ -132,17 +152,25 @@ class TemplateAgentTools:
         if not template_content:
             return "错误：当前工作目录中没有找到paper.md文件"
         
-        # 删除章节
-        updated_content = await template_operations.remove_section(template_content, section_title)
-        
-        # 保存到文件
         try:
-            paper_path = os.path.join(self.workspace_dir, "paper.md")
-            with open(paper_path, 'w', encoding='utf-8') as f:
-                f.write(updated_content)
-            return f"✅ 章节 '{section_title}' 删除成功，已保存到paper.md文件"
+            # 直接调用底层函数获取更新后的内容
+            from . import template_tools
+            tools_instance = template_tools.TemplateTools(self.workspace_dir)
+            updated_content = tools_instance.remove_section(template_content, section_title)
+            
+            # 检查内容是否真的更新了
+            if updated_content and updated_content != template_content:
+                # 保存到文件
+                paper_path = os.path.join(self.workspace_dir, "paper.md")
+                with open(paper_path, 'w', encoding='utf-8') as f:
+                    f.write(updated_content)
+                return f"✅ 章节 '{section_title}' 删除成功，已保存到paper.md文件"
+            else:
+                return f"❌ 删除章节失败：内容未发生变化"
+                
         except Exception as e:
-            return f"❌ 删除成功但保存失败: {str(e)}"
+            logger.error(f"删除章节失败: {e}")
+            return f"❌ 删除章节失败: {str(e)}"
     
     async def reorder_sections(self, section_order: List[str]) -> str:
         """
@@ -158,17 +186,25 @@ class TemplateAgentTools:
         if not template_content:
             return "错误：当前工作目录中没有找到paper.md文件"
         
-        # 重新排序
-        updated_content = await template_operations.reorder_sections(template_content, section_order)
-        
-        # 保存到文件
         try:
-            paper_path = os.path.join(self.workspace_dir, "paper.md")
-            with open(paper_path, 'w', encoding='utf-8') as f:
-                f.write(updated_content)
-            return f"✅ 章节重排序成功，已保存到paper.md文件"
+            # 直接调用底层函数获取更新后的内容
+            from . import template_tools
+            tools_instance = template_tools.TemplateTools(self.workspace_dir)
+            updated_content = tools_instance.reorder_sections(template_content, section_order)
+            
+            # 检查内容是否真的更新了
+            if updated_content and updated_content != template_content:
+                # 保存到文件
+                paper_path = os.path.join(self.workspace_dir, "paper.md")
+                with open(paper_path, 'w', encoding='utf-8') as f:
+                    f.write(updated_content)
+                return f"✅ 章节重排序成功，已保存到paper.md文件"
+            else:
+                return f"❌ 重排序失败：内容未发生变化"
+                
         except Exception as e:
-            return f"❌ 重排序成功但保存失败: {str(e)}"
+            logger.error(f"重排序章节失败: {e}")
+            return f"❌ 重排序失败: {str(e)}"
     
     async def format_template(self, format_options: Dict[str, Any] = None) -> str:
         """
@@ -184,17 +220,25 @@ class TemplateAgentTools:
         if not template_content:
             return "错误：当前工作目录中没有找到paper.md文件"
         
-        # 格式化内容
-        formatted_content = await template_operations.format_template(template_content, format_options)
-        
-        # 保存到文件
         try:
-            paper_path = os.path.join(self.workspace_dir, "paper.md")
-            with open(paper_path, 'w', encoding='utf-8') as f:
-                f.write(formatted_content)
-            return f"✅ 模板格式化完成，已保存到paper.md文件"
+            # 直接调用底层函数获取更新后的内容
+            from . import template_tools
+            tools_instance = template_tools.TemplateTools(self.workspace_dir)
+            formatted_content = tools_instance.format_template_content(template_content, format_options)
+            
+            # 检查内容是否真的更新了
+            if formatted_content and formatted_content != template_content:
+                # 保存到文件
+                paper_path = os.path.join(self.workspace_dir, "paper.md")
+                with open(paper_path, 'w', encoding='utf-8') as f:
+                    f.write(formatted_content)
+                return f"✅ 模板格式化完成，已保存到paper.md文件"
+            else:
+                return f"✅ 模板格式化完成：内容无需格式化"
+                
         except Exception as e:
-            return f"❌ 格式化成功但保存失败: {str(e)}"
+            logger.error(f"格式化模板失败: {e}")
+            return f"❌ 格式化失败: {str(e)}"
     
     async def get_template_help(self) -> str:
         """

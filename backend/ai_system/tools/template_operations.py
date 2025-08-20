@@ -133,12 +133,12 @@ class TemplateOperations:
             # 检查父章节是否存在
             parent = template_tools.get_section_by_title(template_content, parent_section)
             if not parent:
-                return f"未找到父章节: {parent_section}"
+                return f"❌ 未找到父章节: {parent_section}"
             
             # 检查新章节标题是否已存在
             existing = template_tools.get_section_by_title(template_content, section_title)
             if existing:
-                return f"章节标题已存在: {section_title}"
+                return f"❌ 章节标题已存在: {section_title}"
             
             # 添加新章节
             updated_content = template_tools.add_new_section(
@@ -146,7 +146,7 @@ class TemplateOperations:
             )
             
             if updated_content == template_content:
-                return f"添加章节失败: 无法添加章节 {section_title}"
+                return f"❌ 添加章节失败: 无法添加章节 {section_title}"
             
             # 验证结果
             validation = template_tools.validate_template_structure(updated_content)
@@ -168,7 +168,7 @@ class TemplateOperations:
             
         except Exception as e:
             logger.error(f"添加新章节失败: {e}")
-            return f"添加新章节失败: {str(e)}"
+            return f"❌ 添加新章节失败: {str(e)}"
     
     async def remove_section(self, template_content: str, section_title: str) -> str:
         """
