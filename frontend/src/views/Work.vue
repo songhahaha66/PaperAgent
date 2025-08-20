@@ -71,25 +71,25 @@
         </div>
         
         <div class="preview-section">
-          <div v-if="selectedFile && fileContents[selectedFile]">
-            <t-card :title="`文件预览: ${selectedFile}`">
-              <div class="file-preview">
-                <div v-if="selectedFile.endsWith('.py')" class="code-preview">
-                  <pre><code>{{ fileContents[selectedFile] }}</code></pre>
-                </div>
-                <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
-                  <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
-                </div>
-                <div v-else-if="isImageFile(selectedFile)" class="image-preview">
-                  <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />
-                  <div v-else class="loading-image">正在加载图片...</div>
-                </div>
-                <div v-else class="text-preview">
-                  <pre>{{ fileContents[selectedFile] }}</pre>
-                </div>
+                  <div v-if="selectedFile && currentFileContent">
+          <t-card :title="`文件预览: ${selectedFile}`">
+            <div class="file-preview">
+              <div v-if="selectedFile.endsWith('.py')" class="code-preview">
+                <pre><code>{{ currentFileContent }}</code></pre>
               </div>
-            </t-card>
-          </div>
+              <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
+                <div v-html="renderMarkdown(currentFileContent)"></div>
+              </div>
+              <div v-else-if="isImageFile(selectedFile)" class="image-preview">
+                <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />
+                <div v-else class="loading-image">正在加载图片...</div>
+              </div>
+              <div v-else class="text-preview">
+                <pre>{{ currentFileContent }}</pre>
+              </div>
+            </div>
+          </t-card>
+        </div>
           
           <div v-else-if="currentWork">
             <t-card title="工作信息">
@@ -168,12 +168,11 @@ const fileTreeData = ref<FileInfo[]>([])
 // 数据定义
 const currentFileContent = ref('')
 const currentFileName = ref('')
-// 按workId分组的文件内容缓存，避免不同work的文件内容混淆
-const fileContents = ref<Record<string, Record<string, string>>>({})
+// 删除文件内容缓存，避免不同work的文件内容被错误缓存
 const currentWorkspaceConfig = ref('')
 
-// 图片URL缓存，按workId分组
-const imageUrls = ref<Record<string, Record<string, string>>>({})
+// 图片URL缓存
+const imageUrls = ref<Record<string, string>>({})
 
 // 导出状态
 const exportLoading = ref(false)
@@ -210,19 +209,6 @@ const loadWork = async () => {
   
   loading.value = true;
   try {
-    // 清理之前的文件缓存，确保不同work的文件内容不混淆
-    if (workId.value) {
-      delete fileContents.value[workId.value];
-      delete imageUrls.value[workId.value];
-    }
-    currentFileContent.value = '';
-    currentFileName.value = '';
-    selectedFile.value = null;
-    
-    // 清理其他相关状态，确保不同work的数据不混淆
-    chatMessages.value = [];
-    fileTreeData.value = [];
-    
     const work = await workspaceAPI.getWork(authStore.token, workId.value);
     currentWork.value = work;
     
@@ -510,14 +496,10 @@ const handleFileSelect = async (filePath: string) => {
   if (isImageFile(filePath)) {
     console.log('图片文件，获取blob URL')
     // 对于图片文件，设置一个特殊标记表示这是图片
-    if (!fileContents.value[workId.value!]) {
-      fileContents.value[workId.value!] = {};
-    }
-    fileContents.value[workId.value!][filePath] = 'IMAGE_FILE'
     currentFileContent.value = 'IMAGE_FILE'
     
     // 如果已经有缓存的blob URL，直接使用
-    if (imageUrls.value[workId.value!] && imageUrls.value[workId.value!][filePath]) {
+    if (imageUrls.value[filePath]) {
       console.log('使用缓存的图片URL')
       return
     }
@@ -525,10 +507,7 @@ const handleFileSelect = async (filePath: string) => {
     // 获取图片blob URL
     try {
       const blobUrl = await getImageBlobUrl(filePath)
-      if (!imageUrls.value[workId.value!]) {
-        imageUrls.value[workId.value!] = {};
-      }
-      imageUrls.value[workId.value!][filePath] = blobUrl
+      imageUrls.value[filePath] = blobUrl
       console.log('图片blob URL获取成功')
     } catch (error) {
       console.error('获取图片失败:', error)
@@ -536,33 +515,18 @@ const handleFileSelect = async (filePath: string) => {
     }
     return
   }
-  
-  // 检查是否已缓存
-  if (fileContents.value[workId.value!] && fileContents.value[workId.value!][filePath]) {
-    currentFileContent.value = fileContents.value[workId.value!][filePath]
-    console.log('使用缓存的文件内容')
-    return
-  }
 
-  // 从服务器获取文件内容（仅对非图片文件）
+  // 每次都从服务器重新获取文件内容，避免缓存问题
   try {
     console.log('从服务器获取文件内容:', filePath)
     const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
     
-    // 缓存文件内容
-    if (!fileContents.value[workId.value!]) {
-      fileContents.value[workId.value!] = {};
-    }
-    fileContents.value[workId.value!][filePath] = content
+    // 直接设置当前文件内容，不缓存
     currentFileContent.value = content
     
     console.log('文件内容获取成功，长度:', content.length)
   } catch (error) {
     console.error('获取文件内容失败:', error)
-    if (!fileContents.value[workId.value!]) {
-      fileContents.value[workId.value!] = {};
-    }
-    fileContents.value[workId.value!][filePath] = '文件读取失败'
     currentFileContent.value = '文件读取失败'
     MessagePlugin.error('加载文件失败')
   }
@@ -985,16 +949,16 @@ onUnmounted(() => {
   isStreaming.value = false;
   
   // 清理blob URLs以释放内存
-  Object.values(imageUrls.value).forEach(workUrls => {
-    if (workUrls && typeof workUrls === 'object') {
-      Object.values(workUrls).forEach(url => {
-        if (typeof url === 'string' && url.startsWith('blob:')) {
-          URL.revokeObjectURL(url);
-        }
-      });
+  Object.values(imageUrls.value).forEach(url => {
+    if (url.startsWith('blob:')) {
+      URL.revokeObjectURL(url);
     }
   });
   imageUrls.value = {};
+  
+  // 清理当前文件内容
+  currentFileContent.value = '';
+  selectedFile.value = null;
 });
 
 // 监听路由变化
@@ -1012,18 +976,17 @@ watch(() => route.params.work_id, (newWorkId) => {
     // 停止文件刷新定时器
     stopFileRefreshTimer();
     
-    // 清理文件缓存，避免不同work的文件内容混淆
-    if (workId.value) {
-      delete fileContents.value[workId.value];
-      delete imageUrls.value[workId.value];
-    }
+    // 清理文件内容，避免不同work的文件内容混淆
     currentFileContent.value = '';
-    currentFileName.value = '';
     selectedFile.value = null;
     
-    // 清理其他相关状态，确保不同work的数据不混淆
-    chatMessages.value = [];
-    fileTreeData.value = [];
+    // 清理图片URL缓存，避免不同work的图片混淆
+    Object.values(imageUrls.value).forEach(url => {
+      if (url.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    imageUrls.value = {};
     
     loadWork();
     // 重新初始化聊天会话
