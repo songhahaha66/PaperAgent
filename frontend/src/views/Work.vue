@@ -37,20 +37,24 @@
       <div class="workspace-content">
         <div class="chat-section">
           <div class="chat-container">
-            <JsonChatRenderer :messages="chatMessages" />
-            <FileManager 
-              :file-tree-data="fileTreeData"
-              :work-id="workId"
-              :loading="loading"
-              @file-select="handleFileSelect"
-            />
-            <div class="chat-input">
-              <ChatSender
-                v-model="inputValue"
-                placeholder="请输入您的问题..."
-                @send="sendMessage"
-                :disabled="isStreaming"
+            <div class="chat-messages-container">
+              <JsonChatRenderer :messages="chatMessages" />
+            </div>
+            <div class="chat-bottom-section">
+              <FileManager 
+                :file-tree-data="fileTreeData"
+                :work-id="workId"
+                :loading="loading"
+                @file-select="handleFileSelect"
               />
+              <div class="chat-input">
+                <ChatSender
+                  v-model="inputValue"
+                  placeholder="请输入您的问题..."
+                  @send="sendMessage"
+                  :disabled="isStreaming"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -939,7 +943,7 @@ html, body {
   display: flex;
   padding: 0;
   overflow: hidden;
-  min-height: 0;
+  height: calc(100vh - 120px); /* 固定高度，减去header高度 */
 }
 
 .chat-section {
@@ -950,6 +954,7 @@ html, body {
   padding: 20px;
   min-width: 300px;
   overflow: hidden;
+  height: 100%; /* 确保占满父容器高度 */
 }
 
 .preview-section {
@@ -957,7 +962,7 @@ html, body {
   padding: 20px;
   overflow-y: auto;
   background: #f9f9f9;
-  min-height: 0;
+  height: 100%; /* 确保占满父容器高度 */
 }
 
 
@@ -970,7 +975,21 @@ html, body {
   border-radius: 8px;
   overflow: hidden;
   background: white;
-  min-height: 0;
+  height: 100%; /* 确保占满父容器高度 */
+}
+
+.chat-messages-container {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0; /* 允许flex子项收缩 */
+}
+
+.chat-bottom-section {
+  flex-shrink: 0; /* 防止底部区域被压缩 */
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #eee;
+  background: white;
 }
 
 .chat-messages {
@@ -978,13 +997,22 @@ html, body {
   padding: 16px;
   overflow-y: auto;
   background: #fafafa;
-  min-height: 0;
+  min-height: 0; /* 允许flex子项收缩 */
 }
 
 .chat-input {
   padding: 16px;
   border-top: 1px solid #eee;
   background: white;
+  flex-shrink: 0; /* 防止输入框被压缩 */
+  min-height: 80px; /* 确保输入框有最小高度 */
+}
+
+/* 确保FileManager组件有合适的高度 */
+.chat-bottom-section .file-manager {
+  flex-shrink: 0; /* 防止文件管理器被压缩 */
+  max-height: 300px; /* 限制文件管理器最大高度 */
+  overflow-y: auto; /* 如果内容过多，允许滚动 */
 }
 
 .chat-message-wrapper {
