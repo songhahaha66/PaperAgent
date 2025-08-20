@@ -79,6 +79,31 @@
           <div v-if="currentStep === 2" class="step-content">
             <h3>选择论文模板</h3>
             
+            <!-- 不使用模板选项 -->
+            <div class="no-template-option">
+              <t-card 
+                :class="{ 'selected': selectedTemplateId === null }"
+                @click="selectNoTemplate"
+                class="no-template-card"
+              >
+                <div class="no-template-content">
+                  <t-icon name="file-add" theme="default" size="32px" />
+                  <div class="no-template-text">
+                    <h4>不使用模板</h4>
+                    <p>从头开始创建论文，完全自定义内容结构</p>
+                  </div>
+                  <div v-if="selectedTemplateId === null" class="selection-indicator">
+                    <t-icon name="check-circle-filled" theme="success" />
+                  </div>
+                </div>
+              </t-card>
+            </div>
+            
+            <!-- 或者分割线 -->
+            <div class="template-divider">
+              <span>或者选择现有模板</span>
+            </div>
+            
             <!-- 加载状态 -->
             <div v-if="loading" class="loading-state">
               <t-loading size="large" />
@@ -155,7 +180,7 @@
                 theme="success" 
                 size="middle" 
                 @click="startWork"
-                :disabled="!selectedTemplateId || creatingWork"
+                :disabled="creatingWork"
                 class="start-btn"
               >
                 <template #icon>
@@ -306,6 +331,11 @@ const selectTemplate = (templateId: number) => {
   selectedTemplateId.value = templateId;
 };
 
+// 选择"不使用模板"
+const selectNoTemplate = () => {
+  selectedTemplateId.value = null;
+};
+
 // 预览模板
 const previewTemplate = async (template: PaperTemplate) => {
   if (!authStore.token) return;
@@ -413,7 +443,7 @@ const formatUploadResponse = (response: any) => {
 
 // 开始工作
 const startWork = async () => {
-  if (!researchQuestion.value.trim() || !selectedTemplateId.value || !authStore.token) {
+  if (!researchQuestion.value.trim() || !authStore.token) {
     return;
   }
 
@@ -423,9 +453,9 @@ const startWork = async () => {
     // 创建工作数据，标题用空格作为初始值
     const workData: WorkCreate = {
       title: " ",  // 用空格作为初始标题，后续由AI生成
-      description: `研究问题：${researchQuestion.value}\n使用模板：${getSelectedTemplateName()}\n`,
+      description: `研究问题：${researchQuestion.value}\n${selectedTemplateId.value ? `使用模板：${getSelectedTemplateName()}` : '不使用模板，从头开始创建'}\n`,
       tags: '研究,论文,AI生成',
-      template_id: selectedTemplateId.value
+      template_id: selectedTemplateId.value || undefined  // 如果为null则传undefined
     };
 
     // 调用API创建工作
@@ -449,6 +479,9 @@ const startWork = async () => {
 
 // 获取选中的模板名称
 const getSelectedTemplateName = () => {
+  if (selectedTemplateId.value === null) {
+    return '不使用模板';
+  }
   const template = availableTemplates.value.find(t => t.id === selectedTemplateId.value);
   return template ? template.name : '未选择';
 };
@@ -462,7 +495,7 @@ const toggleSidebar = () => {
 const createNewTask = () => {
   currentStep.value = 1;
   researchQuestion.value = '';
-  selectedTemplateId.value = null;
+  selectedTemplateId.value = null;  // 重置为null，表示不使用模板
   uploadedFiles.value = [];
 };
 
@@ -603,8 +636,9 @@ const selectHistory = (id: number) => {
 /* 模板列表项选中状态 */
 .t-list-item.selected {
   background-color: #e6f4ff;
-  border: 2px solid #000000;
+  border: 2px solid #0052d9;
   border-radius: 8px;
+  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
 }
 
 /* 无模板状态 */
@@ -629,6 +663,87 @@ const selectHistory = (id: number) => {
   margin: 0 0 24px 0;
 }
 
+/* 不使用模板选项 */
+.no-template-option {
+  margin-bottom: 24px;
+}
+
+.no-template-card {
+  cursor: pointer;
+  border: 2px solid #e0e6ed;
+  border-radius: 8px;
+  padding: 16px;
+  transition: all 0.2s ease;
+  background-color: #f5f7fa;
+}
+
+.no-template-card:hover {
+  background-color: #e6f4ff;
+  border-color: #0052d9;
+}
+
+.no-template-card.selected {
+  background-color: #e6f4ff;
+  border-color: #0052d9;
+  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
+}
+
+.no-template-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.no-template-text {
+  flex: 1;
+}
+
+.no-template-text h4 {
+  margin: 0 0 8px 0;
+  color: #2c3e50;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.no-template-text p {
+  margin: 0;
+  color: #7f8c8d;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.selection-indicator {
+  margin-left: auto;
+}
+
+/* 分割线 */
+.template-divider {
+  text-align: center;
+  margin: 32px 0;
+  position: relative;
+}
+
+.template-divider span {
+  background-color: #ffffff;
+  padding: 0 16px;
+  color: #7f8c8d;
+  font-size: 0.9rem;
+  font-weight: 500;
+  position: relative;
+  z-index: 1;
+}
+
+.template-divider::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background-color: #e0e6ed;
+  z-index: 0;
+}
 
 
 .step-actions {

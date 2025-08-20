@@ -112,7 +112,7 @@ class WorkUpdate(BaseModel):
     status: Optional[str] = None
     progress: Optional[int] = None
     tags: Optional[str] = None
-    template_id: Optional[str] = None  # 关联的论文模板ID
+    template_id: Optional[int] = None  # 关联的论文模板ID
 
 class WorkResponse(WorkBase):
     id: int
