@@ -36,9 +36,6 @@ class TemplateOperations:
             
             # 只返回章节结构
             result_lines = []
-            result_lines.append(f"模板标题: {structure['title'] or '未设置'}")
-            result_lines.append(f"总章节数: {structure['total_sections']}")
-            result_lines.append("")
             result_lines.append("章节结构:")
             
             for section in structure['sections']:
