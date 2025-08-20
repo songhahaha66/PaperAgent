@@ -7,6 +7,7 @@ from services import crud
 from services.workspace_files import workspace_file_service
 from typing import Optional
 import os
+import tempfile
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -293,6 +294,47 @@ async def get_file_info(
             )
         
         return workspace_file_service.get_file_info(work_id, file_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.get("/{work_id}/export")
+async def export_workspace(
+    work_id: str,
+    db: Session = Depends(get_db),
+    current_user: int = Depends(get_current_user)
+):
+    """导出工作空间为ZIP文件"""
+    try:
+        # 检查工作是否存在且用户有权限
+        work = crud.get_work(db, work_id)
+        if not work:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Work not found"
+            )
+        
+        if work.created_by != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to export this workspace"
+            )
+        
+        # 生成ZIP文件
+        zip_path = workspace_file_service.export_workspace(work_id)
+        
+        # 返回ZIP文件
+        return FileResponse(
+            path=zip_path,
+            media_type="application/zip",
+            filename=f"workspace_{work_id}.zip",
+            headers={"Content-Disposition": f"attachment; filename=workspace_{work_id}.zip"}
+        )
+        
     except HTTPException:
         raise
     except Exception as e:

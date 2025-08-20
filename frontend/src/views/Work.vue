@@ -20,6 +20,12 @@
           <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
         <div class="work-actions">
+          <t-button theme="primary" variant="outline" size="middle" @click="exportWorkspace" :loading="exportLoading">
+            <template #icon>
+              <t-icon name="download" />
+            </template>
+            导出文件
+          </t-button>
           <t-button theme="danger" variant="outline" size="middle" @click="deleteWork">
             <template #icon>
               <t-icon name="delete" />
@@ -163,6 +169,9 @@ const currentWorkspaceConfig = ref('')
 
 // 图片URL缓存
 const imageUrls = ref<Record<string, string>>({})
+
+// 导出状态
+const exportLoading = ref(false)
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null);
@@ -436,6 +445,40 @@ const deleteWork = async () => {
   } catch (error) {
     console.error('删除工作失败:', error);
     MessagePlugin.error('删除工作失败');
+  }
+};
+
+// 导出工作空间
+const exportWorkspace = async () => {
+  if (!workId.value || !authStore.token || !currentWork.value) return;
+
+  try {
+    exportLoading.value = true;
+    
+    // 调用导出API
+    const blob = await workspaceFileAPI.exportWorkspace(authStore.token, workId.value);
+    
+    // 创建下载链接
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `workspace_${workId.value}.zip`;
+    
+    // 触发下载
+    document.body.appendChild(link);
+    link.click();
+    
+    // 清理
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+    
+    MessagePlugin.success('工作空间导出成功');
+    
+  } catch (error) {
+    console.error('导出工作空间失败:', error);
+    MessagePlugin.error('导出工作空间失败');
+  } finally {
+    exportLoading.value = false;
   }
 };
 

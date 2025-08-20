@@ -1,6 +1,8 @@
 import os
 import json
 import shutil
+import zipfile
+import tempfile
 from pathlib import Path
 from fastapi import HTTPException, status, UploadFile
 from typing import List, Dict, Any, Optional
@@ -321,6 +323,40 @@ class WorkspaceFileService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to get file info: {str(e)}"
+            )
+    
+    def export_workspace(self, work_id: str) -> str:
+        """导出工作空间为ZIP文件，返回临时文件路径"""
+        try:
+            workspace_path = self.ensure_workspace_exists(work_id)
+            
+            # 创建临时ZIP文件
+            temp_dir = tempfile.mkdtemp()
+            zip_filename = f"workspace_{work_id}.zip"
+            zip_path = os.path.join(temp_dir, zip_filename)
+            
+            # 创建ZIP文件
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                # 遍历工作空间目录
+                for root, dirs, files in os.walk(workspace_path):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        # 计算相对路径
+                        arcname = os.path.relpath(file_path, workspace_path)
+                        zip_file.write(file_path, arcname)
+                        
+                # 如果工作空间为空，添加一个空的README文件
+                if not os.listdir(workspace_path):
+                    zip_file.writestr("README.txt", "This workspace is empty.")
+            
+            return zip_path
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to export workspace: {str(e)}"
             )
 
 # 创建全局实例
