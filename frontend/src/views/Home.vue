@@ -211,11 +211,10 @@
         <div class="template-content">
           <h4>模板内容：</h4>
           <div class="content-display">
-            <div 
+            <MarkdownRenderer 
               v-if="previewTemplateData?.file_path?.endsWith('.md')" 
-              class="markdown-content"
-              v-html="renderMarkdown(templateContent)"
-            ></div>
+              :content="templateContent"
+            />
             <t-textarea
               v-else
               v-model="templateContent"
@@ -241,6 +240,7 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import { templateAPI, type PaperTemplate } from '@/api/template';
 import { workspaceAPI, type WorkCreate } from '@/api/workspace';
 import Sidebar from '@/components/Sidebar.vue';
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -361,60 +361,6 @@ const closePreviewDialog = () => {
   showPreviewDialog.value = false;
   previewTemplateData.value = null;
   templateContent.value = '';
-};
-
-// 简单的Markdown渲染函数
-const renderMarkdown = (text: string) => {
-  if (!text) return '';
-  
-  // 先处理代码块，避免代码块中的标记被处理
-  let codeBlocks: string[] = [];
-  let codeBlockCounter = 0;
-  
-  // 提取代码块（包括语言标识）
-  text = text.replace(/```(\w+)?\n([\s\S]*?)\n```/g, (match, lang, content) => {
-    codeBlocks.push(`<pre><code class="language-${lang || 'plaintext'}">${content}</code></pre>`);
-    return `{{CODE_BLOCK_${codeBlockCounter++}}}`;
-  });
-
-  // 处理行内代码
-  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
-  // 按照从h6到h1的顺序处理标题
-  text = text
-    .replace(/^###### (.*)$/gm, '<h6>$1</h6>')
-    .replace(/^##### (.*)$/gm, '<h5>$1</h5>')
-    .replace(/^#### (.*)$/gm, '<h4>$1</h4>')
-    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.*)$/gm, '<h1>$1</h1>');
-  
-  // 处理粗体和斜体
-  text = text
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>');
-  
-  // 处理链接
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  
-  // 处理无序列表
-  text = text.replace(/^\s*[\*|\-|\+]\s(.*)$/gm, '<li>$1</li>');
-  text = text.replace(/(<li>.*<\/li>)/gms, '<ul>$1</ul>');
-  
-  // 处理有序列表
-  text = text.replace(/^\s*(\d+)\.\s(.*)$/gm, '<li data-line="$1">$2</li>');
-  text = text.replace(/(<li data-line="\d+">.*<\/li>)/gms, '<ol>$1</ol>');
-  text = text.replace(/ data-line="\d+"/g, '');
-  
-  // 处理换行（但不在块级元素内部添加<br>）
-  text = text.replace(/\n/g, '<br>');
-
-  // 恢复代码块
-  for (let i = 0; i < codeBlockCounter; i++) {
-    text = text.replace(`{{CODE_BLOCK_${i}}}`, codeBlocks[i]);
-  }
-  
-  return text;
 };
 
 // 跳转到模板页面
@@ -782,48 +728,6 @@ const selectHistory = (id: number) => {
   border-radius: 8px;
   overflow: hidden;
 }
-
-.content-display .markdown-content {
-  padding: 16px;
-  background-color: #f9f9f9;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.content-display .markdown-content h1,
-.content-display .markdown-content h2,
-.content-display .markdown-content h3,
-.content-display .markdown-content h4,
-.content-display .markdown-content h5,
-.content-display .markdown-content h6 {
-  margin: 16px 0 8px 0;
-  color: #2c3e50;
-}
-
-.content-display .markdown-content p {
-  margin: 8px 0;
-  line-height: 1.6;
-}
-
-.content-display .markdown-content code {
-  background-color: #f0f0f0;
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-family: 'Courier New', monospace;
-}
-
-.content-display .markdown-content pre {
-  background-color: #f5f5f5;
-  padding: 12px;
-  border-radius: 4px;
-  overflow-x: auto;
-}
-
-.content-display .markdown-content pre code {
-  background-color: transparent;
-  padding: 0;
-}
-
 
 @media (max-width: 768px) {
   .home-container {

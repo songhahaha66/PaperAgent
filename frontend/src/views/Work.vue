@@ -78,7 +78,7 @@
                   <pre><code>{{ fileContents[selectedFile] }}</code></pre>
                 </div>
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
-                  <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
+                  <MarkdownRenderer :content="fileContents[selectedFile]" />
                 </div>
                 <div v-else-if="isImageFile(selectedFile)" class="image-preview">
                   <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />
@@ -129,6 +129,7 @@ import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionRespon
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -543,59 +544,6 @@ const handleFileSelect = async (filePath: string) => {
 }
 
 
-
-// 简单的Markdown渲染函数
-const renderMarkdown = (text: string) => {
-  // 先处理代码块，避免代码块中的标记被处理
-  let codeBlocks: string[] = [];
-  let codeBlockCounter = 0;
-  
-  // 提取代码块
-  text = text.replace(/```[\s\S]*?```/g, (match) => {
-    codeBlocks.push(match);
-    return `{{CODE_BLOCK_${codeBlockCounter++}}}`;
-  });
-  
-  // 处理行内代码
-  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
-  // 按照从h6到h1的顺序处理标题
-  text = text
-    .replace(/^###### (.*$)/gim, '<h6>$1</h6>')
-    .replace(/^##### (.*$)/gim, '<h5>$1</h5>')
-    .replace(/^#### (.*$)/gim, '<h4>$1</h4>')
-    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gim, '<h1>$1</h1>');
-  
-  // 处理粗体和斜体
-  text = text
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>');
-  
-  // 处理链接
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  
-  // 处理无序列表
-  text = text.replace(/^[\*|\-|\+](.*)$/gim, '<li>$1</li>');
-  text = text.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
-  
-  // 处理有序列表
-  text = text.replace(/^\d+\.(.*)$/gim, '<li>$1</li>');
-  text = text.replace(/(<li>.*<\/li>)/gims, '<ol>$1</ol>');
-  
-  // 处理换行（但不在块级元素内部添加<br>）
-  text = text.replace(/\n/g, '<br>');
-  
-  // 恢复代码块
-  for (let i = 0; i < codeBlockCounter; i++) {
-    // 简单地将代码块用pre标签包裹
-    const codeContent = codeBlocks[i].replace(/```/g, '');
-    text = text.replace(`{{CODE_BLOCK_${i}}}`, `<pre><code>${codeContent}</code></pre>`);
-  }
-  
-  return text;
-}
 
 // 判断是否为图片文件
 const isImageFile = (filePath: string): boolean => {
