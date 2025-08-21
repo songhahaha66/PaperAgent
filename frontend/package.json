@@ -39,5 +39,10 @@
     "vite": "^7.0.6",
     "vite-plugin-vue-devtools": "^8.0.0",
     "vue-tsc": "^3.0.4"
+  },
+  "overrides": {
+    "markdown-it-katex":{
+      "katex":"^0.16.0"
+    }
   }
 }

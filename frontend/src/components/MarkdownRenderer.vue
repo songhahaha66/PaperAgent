@@ -105,8 +105,6 @@ onBeforeUnmount(() => {
 <style scoped>
 /* 基础markdown样式 */
 .markdown-content {
-  padding: 16px;
-  line-height: 1.6;
   /* 隐藏横向滚动，优先让内容换行显示 */
   overflow-x: hidden;
   overflow-y: auto;
@@ -203,7 +201,7 @@ onBeforeUnmount(() => {
 
 /* KaTeX 渲染区域微调（行内与块级） */
 .markdown-content :deep(.katex) {
-  font-size: 1.02em;
+  font-size: 1.2em;
 }
 .markdown-content :deep(.katex-display) {
   margin: 12px 0;
