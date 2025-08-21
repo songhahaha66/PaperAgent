@@ -16,6 +16,7 @@
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
+            <p>生成过程中请耐心等待！</p>
           </div>
           <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
