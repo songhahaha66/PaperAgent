@@ -107,7 +107,6 @@ onBeforeUnmount(() => {
 .markdown-content {
   padding: 16px;
   line-height: 1.6;
-  background-color: #f9f9f9;
   /* 隐藏横向滚动，优先让内容换行显示 */
   overflow-x: hidden;
   overflow-y: auto;
