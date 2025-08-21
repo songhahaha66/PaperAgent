@@ -16,6 +16,7 @@
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
+            <p>生成过程中请耐心等待！</p>
           </div>
           <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
@@ -173,7 +174,7 @@ const fileTreeData = ref<FileInfo[]>([])
 // 数据定义
 const currentFileContent = ref('')
 const currentFileName = ref('')
-const fileContents = ref<Record<string, string>>({})
+// 删除文件内容缓存，避免不同work的文件内容被错误缓存
 const currentWorkspaceConfig = ref('')
 
 // 图片URL缓存
@@ -501,7 +502,6 @@ const handleFileSelect = async (filePath: string) => {
   if (isImageFile(filePath)) {
     console.log('图片文件，获取blob URL')
     // 对于图片文件，设置一个特殊标记表示这是图片
-    fileContents.value[filePath] = 'IMAGE_FILE'
     currentFileContent.value = 'IMAGE_FILE'
     
     // 如果已经有缓存的blob URL，直接使用
@@ -521,27 +521,18 @@ const handleFileSelect = async (filePath: string) => {
     }
     return
   }
-  
-  // 检查是否已缓存
-  if (fileContents.value[filePath]) {
-    currentFileContent.value = fileContents.value[filePath]
-    console.log('使用缓存的文件内容')
-    return
-  }
 
-  // 从服务器获取文件内容（仅对非图片文件）
+  // 每次都从服务器重新获取文件内容，避免缓存问题
   try {
     console.log('从服务器获取文件内容:', filePath)
     const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
     
-    // 缓存文件内容
-    fileContents.value[filePath] = content
+    // 直接设置当前文件内容，不缓存
     currentFileContent.value = content
     
     console.log('文件内容获取成功，长度:', content.length)
   } catch (error) {
     console.error('获取文件内容失败:', error)
-    fileContents.value[filePath] = '文件读取失败'
     currentFileContent.value = '文件读取失败'
     MessagePlugin.error('加载文件失败')
   }
@@ -917,6 +908,10 @@ onUnmounted(() => {
     }
   });
   imageUrls.value = {};
+  
+  // 清理当前文件内容
+  currentFileContent.value = '';
+  selectedFile.value = null;
 });
 
 // 监听路由变化
@@ -933,6 +928,18 @@ watch(() => route.params.work_id, (newWorkId) => {
     
     // 停止文件刷新定时器
     stopFileRefreshTimer();
+    
+    // 清理文件内容，避免不同work的文件内容混淆
+    currentFileContent.value = '';
+    selectedFile.value = null;
+    
+    // 清理图片URL缓存，避免不同work的图片混淆
+    Object.values(imageUrls.value).forEach(url => {
+      if (url.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    imageUrls.value = {};
     
     loadWork();
     // 重新初始化聊天会话
