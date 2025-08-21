@@ -73,7 +73,6 @@ const renderedContent = computed(() => {
   padding: 16px;
   line-height: 1.6;
   background-color: #f9f9f9;
-  max-height: 400px;
   overflow-y: auto;
 }
 
