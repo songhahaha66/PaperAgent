@@ -72,15 +72,15 @@
         </div>
         
         <div class="preview-section">
-          <div v-if="selectedFile && fileContents[selectedFile]">
+    <div v-if="selectedFile && (currentFileContent || imageUrls[selectedFile])">
             <t-card :title="`文件预览: ${selectedFile}`">
               <div class="file-preview">
                 <div v-if="selectedFile.endsWith('.py')" class="code-preview">
-                  <pre><code>{{ fileContents[selectedFile] }}</code></pre>
+                  <pre><code>{{ currentFileContent }}</code></pre>
                 </div>
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
                   <MarkdownRenderer
-                    :content="fileContents[selectedFile]"
+                    :content="currentFileContent"
                     :work-id="workId"
                     :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
                   />
@@ -90,7 +90,7 @@
                   <div v-else class="loading-image">正在加载图片...</div>
                 </div>
                 <div v-else class="text-preview">
-                  <pre>{{ fileContents[selectedFile] }}</pre>
+                  <pre>{{ currentFileContent }}</pre>
                 </div>
               </div>
             </t-card>

@@ -235,6 +235,7 @@ const copyMessage = (content: string) => {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
 }
 
