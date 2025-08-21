@@ -109,7 +109,8 @@
           <MarkdownRenderer 
             v-if="selectedTemplate?.file_path?.endsWith('.md')" 
             :content="templateContent"
-          />
+              :base-path="''"
+            />
           <!-- 其他文件格式使用文本域显示 -->
           <t-textarea
             v-else

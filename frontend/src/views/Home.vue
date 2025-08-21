@@ -214,7 +214,8 @@
             <MarkdownRenderer 
               v-if="previewTemplateData?.file_path?.endsWith('.md')" 
               :content="templateContent"
-            />
+                :base-path="''"
+              />
             <t-textarea
               v-else
               v-model="templateContent"

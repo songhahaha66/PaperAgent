@@ -78,7 +78,11 @@
                   <pre><code>{{ fileContents[selectedFile] }}</code></pre>
                 </div>
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
-                  <MarkdownRenderer :content="fileContents[selectedFile]" />
+                  <MarkdownRenderer
+                    :content="fileContents[selectedFile]"
+                    :work-id="workId"
+                    :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
+                  />
                 </div>
                 <div v-else-if="isImageFile(selectedFile)" class="image-preview">
                   <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />

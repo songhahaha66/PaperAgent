@@ -1,69 +1,104 @@
 <template>
-  <div class="markdown-content" v-html="renderedContent"></div>
+  <div ref="rootEl" class="markdown-content" v-html="renderedContent"></div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue';
+import MarkdownIt from 'markdown-it';
+import mila from 'markdown-it-katex';
+import 'katex/dist/katex.min.css';
+import { useAuthStore } from '@/stores/auth';
+import { workspaceFileAPI } from '@/api/workspace';
 
 interface Props {
   content: string;
+  // 渲染上下文（用于相对路径图片解析&鉴权）
+  workId?: string;      // 工作区ID，可选
+  basePath?: string;    // 当前 markdown 文件所在目录，用于解析相对图片路径
 }
 
 const props = defineProps<Props>();
+const authStore = useAuthStore();
 
-// Markdown渲染函数 - 统一来自多个地方的重复实现
-const renderedContent = computed(() => {
-  const text = props.content;
-  if (!text) return '';
-  
-  // 先处理代码块，避免代码块中的标记被处理
-  let codeBlocks: string[] = [];
-  let codeBlockCounter = 0;
-  
-  // 提取代码块（包括语言标识）
-  let processedText = text.replace(/```(\w+)?\n([\s\S]*?)\n```/g, (match, lang, content) => {
-    codeBlocks.push(`<pre><code class="language-${lang || 'plaintext'}">${content}</code></pre>`);
-    return `{{CODE_BLOCK_${codeBlockCounter++}}}`;
-  });
-
-  // 处理行内代码
-  processedText = processedText.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
-  // 按照从h6到h1的顺序处理标题
-  processedText = processedText
-    .replace(/^###### (.*)$/gm, '<h6>$1</h6>')
-    .replace(/^##### (.*)$/gm, '<h5>$1</h5>')
-    .replace(/^#### (.*)$/gm, '<h4>$1</h4>')
-    .replace(/^### (.*)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.*)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.*)$/gm, '<h1>$1</h1>');
-  
-  // 处理粗体和斜体
-  processedText = processedText
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>');
-  
-  // 处理链接
-  processedText = processedText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  
-  // 处理无序列表
-  processedText = processedText.replace(/^\s*[\*|\-|\+]\s(.*)$/gm, '<li>$1</li>');
-  processedText = processedText.replace(/(<li>.*<\/li>)/gms, '<ul>$1</ul>');
-  
-  // 处理有序列表
-  processedText = processedText.replace(/^\s*(\d+)\.\s(.*)$/gm, '<li data-line="$1">$2</li>');
-  processedText = processedText.replace(/(<li data-line="\d+">.*<\/li>)/gms, '<ol>$1</ol>');
-  processedText = processedText.replace(/ data-line="\d+"/g, '');
-  
-  // 处理换行（但不在块级元素内部添加<br>）
-  processedText = processedText.replace(/\n/g, '<br>');
-
-  // 恢复代码块
-  for (let i = 0; i < codeBlockCounter; i++) {
-    processedText = processedText.replace(`{{CODE_BLOCK_${i}}}`, codeBlocks[i]);
+// 简单的相对路径规范化
+function normalizePath(base: string, rel: string): string {
+  if (!base) return rel;
+  const baseParts = base.split('/').filter(Boolean);
+  const relParts = rel.split('/');
+  for (const part of relParts) {
+    if (part === '.' || part === '') continue;
+    if (part === '..') baseParts.pop();
+    else baseParts.push(part);
   }
-  
-  return processedText;
+  return baseParts.join('/');
+}
+
+// markdown-it 实例（支持公式、基础语法）
+const md = new MarkdownIt({
+  html: true,
+  linkify: true,
+  breaks: true,
+});
+md.use(mila);
+
+// 渲染后的 HTML
+const renderedContent = computed(() => {
+  if (!props.content) return '';
+  return md.render(props.content);
+});
+
+// 图片 blob 缓存：key -> blobUrl
+const imageBlobCache = new Map<string, string>();
+const rootEl = ref<HTMLElement | null>(null);
+
+async function ensureImageSrc(img: HTMLImageElement) {
+  const rawSrc = img.getAttribute('src')?.trim();
+  if (!rawSrc) return;
+
+  // 绝对 URL 或 data: 不处理
+  if (/^(https?:)?\/\//i.test(rawSrc) || rawSrc.startsWith('data:') || rawSrc.startsWith('blob:')) return;
+
+  // 没有 workId 或 token，无权转换，直接忽略
+  if (!props.workId || !authStore.token) return;
+
+  // 处理相对路径（相对于 basePath）
+  const filePath = props.basePath ? normalizePath(props.basePath, rawSrc) : rawSrc;
+  const cacheKey = `${props.workId}::${filePath}`;
+  if (imageBlobCache.has(cacheKey)) {
+    img.src = imageBlobCache.get(cacheKey)!;
+    return;
+  }
+
+  try {
+    const url = workspaceFileAPI.getImageUrl(authStore.token!, props.workId, filePath);
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${authStore.token}` } });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    imageBlobCache.set(cacheKey, blobUrl);
+    img.src = blobUrl;
+  } catch (e) {
+    console.error('加载图片失败:', e);
+  }
+}
+
+async function processImages() {
+  await nextTick();
+  if (!rootEl.value) return;
+  const imgs = Array.from(rootEl.value.querySelectorAll('img')) as HTMLImageElement[];
+  // 懒加载标记
+  imgs.forEach(img => img.setAttribute('loading', 'lazy'));
+  await Promise.all(imgs.map(ensureImageSrc));
+}
+
+watch(() => renderedContent.value, () => { processImages(); });
+onMounted(() => { processImages(); });
+onBeforeUnmount(() => {
+  // 释放 blob 资源
+  for (const url of imageBlobCache.values()) {
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+  }
+  imageBlobCache.clear();
 });
 </script>
 
@@ -73,6 +108,8 @@ const renderedContent = computed(() => {
   padding: 16px;
   line-height: 1.6;
   background-color: #f9f9f9;
+  /* 隐藏横向滚动，优先让内容换行显示 */
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -101,13 +138,14 @@ const renderedContent = computed(() => {
   font-family: 'Courier New', monospace;
 }
 
-/* 代码块样式 */
+/* 代码块样式：去除横向滚动，改为自动换行 */
 .markdown-content :deep(pre) {
   background-color: #f5f5f5;
   padding: 12px;
   border-radius: 4px;
-  overflow-x: auto;
   margin: 8px 0;
+  white-space: pre-wrap; /* 换行 */
+  word-break: break-word;
 }
 
 .markdown-content :deep(pre code) {
@@ -143,5 +181,32 @@ const renderedContent = computed(() => {
 
 .markdown-content :deep(em) {
   font-style: italic;
+}
+
+/* 图片在容器内自适应，避免撑宽导致横向滚动 */
+.markdown-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* 表格适配宽度并允许单元格换行 */
+.markdown-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+.markdown-content :deep(td),
+.markdown-content :deep(th) {
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* KaTeX 渲染区域微调（行内与块级） */
+.markdown-content :deep(.katex) {
+  font-size: 1.02em;
+}
+.markdown-content :deep(.katex-display) {
+  margin: 12px 0;
 }
 </style>
