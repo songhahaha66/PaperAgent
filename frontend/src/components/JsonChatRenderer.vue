@@ -11,7 +11,7 @@
       >
         <ChatItem
           :role="message.role"
-          :datetime="message.datetime"
+          :datetime="formatDateTime(message.datetime)"
           :avatar="getSystemAvatar(message)"
         >
           <template #content>
@@ -122,6 +122,43 @@ const getSystemName = (message: ChatMessage) => {
     return systemNames[message.systemType];
   }
   return 'AI助手';
+};
+
+// 格式化时间为人类可读格式
+const formatDateTime = (datetime: string) => {
+  if (!datetime) return '';
+  
+  try {
+    const date = new Date(datetime);
+    
+    // 检查是否是今天
+    const today = new Date();
+    const isToday = date.getDate() === today.getDate() && 
+                    date.getMonth() === today.getMonth() && 
+                    date.getFullYear() === today.getFullYear();
+    
+    if (isToday) {
+      // 如果是今天，只显示时间
+      return `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+    } else {
+      // 如果是昨天
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isYesterday = date.getDate() === yesterday.getDate() && 
+                          date.getMonth() === yesterday.getMonth() && 
+                          date.getFullYear() === yesterday.getFullYear();
+      
+      if (isYesterday) {
+        return `昨天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      } else {
+        // 其他日期显示完整日期和时间
+        return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      }
+    }
+  } catch (e) {
+    // 如果解析失败，返回原始字符串
+    return datetime;
+  }
 };
 
 // 解析JSON块
