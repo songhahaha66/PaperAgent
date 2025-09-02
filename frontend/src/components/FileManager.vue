@@ -481,10 +481,6 @@ defineExpose({
   padding: 0 16px 16px;
 }
 
-.file-tree {
-  max-height: 300px;
-  overflow-y: auto;
-}
 
 .loading-state {
   display: flex;

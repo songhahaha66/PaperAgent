@@ -11,10 +11,29 @@
       >
         <ChatItem
           :role="message.role"
-          :content="renderMessageContent(message)"
-          :datetime="message.datetime"
+          :datetime="formatDateTime(message.datetime)"
           :avatar="getSystemAvatar(message)"
-        />
+        >
+          <template #content>
+            <div class="chat-markdown">
+              <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
+              <MarkdownRenderer
+                v-if="getTextContent(message)"
+                :content="getTextContent(message)"
+              />
+
+              <!-- JSON 块内容（内部也用 Markdown 渲染） -->
+              <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
+                <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
+                  <div class="json-block-header">Type: {{ block.type || 'unknown' }}</div>
+                  <div class="json-block-content">
+                    <MarkdownRenderer :content="String(block.content || '')" />
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </ChatItem>
         <div v-if="message.systemType" :class="['system-label', message.systemType]">
           {{ getSystemName(message) }}
         </div>
@@ -43,6 +62,7 @@
 import { ref, computed } from 'vue';
 import { ChatItem } from '@tdesign-vue-next/chat';
 import { MessagePlugin } from 'tdesign-vue-next';
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 
 // 定义消息类型
 interface ChatMessage {
@@ -104,6 +124,43 @@ const getSystemName = (message: ChatMessage) => {
   return 'AI助手';
 };
 
+// 格式化时间为人类可读格式
+const formatDateTime = (datetime: string) => {
+  if (!datetime) return '';
+  
+  try {
+    const date = new Date(datetime);
+    
+    // 检查是否是今天
+    const today = new Date();
+    const isToday = date.getDate() === today.getDate() && 
+                    date.getMonth() === today.getMonth() && 
+                    date.getFullYear() === today.getFullYear();
+    
+    if (isToday) {
+      // 如果是今天，只显示时间
+      return `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+    } else {
+      // 如果是昨天
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const isYesterday = date.getDate() === yesterday.getDate() && 
+                          date.getMonth() === yesterday.getMonth() && 
+                          date.getFullYear() === yesterday.getFullYear();
+      
+      if (isYesterday) {
+        return `昨天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      } else {
+        // 其他日期显示完整日期和时间
+        return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      }
+    }
+  } catch (e) {
+    // 如果解析失败，返回原始字符串
+    return datetime;
+  }
+};
+
 // 解析JSON块
 const parseJsonBlocks = (content: string) => {
   const blocks: any[] = [];
@@ -151,68 +208,27 @@ const parseJsonBlocks = (content: string) => {
   return { blocks, remainingText: currentBlock.trim() };
 };
 
-// 渲染消息内容
-const renderMessageContent = (message: ChatMessage) => {
-  if (message.role === 'user') {
-    return message.content;
-  }
-  
-  // 对于AI消息，优先使用预解析的JSON块
+// 提取供渲染的纯文本 Markdown
+const getTextContent = (message: ChatMessage) => {
+  if (!message) return '';
+  // 对 assistant，如果有显式 json_blocks，则文本就是 content；
+  // 否则需要从 content 里解析掉 JSON，返回剩余文本。
   if (message.role === 'assistant') {
-    let renderedContent = '';
-    
-    // 如果有预解析的JSON块，直接使用
     if (message.json_blocks && message.json_blocks.length > 0) {
-      // 添加文本内容
-      if (message.content) {
-        renderedContent += message.content;
-      }
-      
-      // 渲染每个JSON块
-      message.json_blocks.forEach((block, index) => {
-        if (index > 0 || message.content) {
-          renderedContent += '\n\n';
-        }
-        
-        // 为每个type创建一个独立的格子
-        const blockType = block.type || 'unknown';
-        const blockContent = block.content || '';
-        
-        renderedContent += `<div class="json-block json-block-${blockType}">`;
-        renderedContent += `<div class="json-block-header">Type: ${blockType}</div>`;
-        renderedContent += `<div class="json-block-content">${blockContent}</div>`;
-        renderedContent += `</div>`;
-      });
-    } else {
-      // 兼容旧格式：解析内容中的JSON块
-      const { blocks, remainingText } = parseJsonBlocks(message.content);
-      
-      // 添加剩余文本
-      if (remainingText) {
-        renderedContent += remainingText;
-      }
-      
-      // 渲染每个JSON块
-      blocks.forEach((block, index) => {
-        if (index > 0 || remainingText) {
-          renderedContent += '\n\n';
-        }
-        
-        // 为每个type创建一个独立的格子
-        const blockType = block.type || 'unknown';
-        const blockContent = block.content || '';
-        
-        renderedContent += `<div class="json-block json-block-${blockType}">`;
-        renderedContent += `<div class="json-block-header">Type: ${blockType}</div>`;
-        renderedContent += `<div class="json-block-content">${blockContent}</div>`;
-        renderedContent += `</div>`;
-      });
+      return message.content || '';
     }
-    
-    return renderedContent;
+    const { remainingText } = parseJsonBlocks(message.content || '');
+    return remainingText || '';
   }
-  
-  return message.content;
+  return message.content || '';
+};
+
+// 提取 JSON 块数组
+const getJsonBlocks = (message: ChatMessage) => {
+  if (!message) return [] as any[];
+  if (message.json_blocks && message.json_blocks.length > 0) return message.json_blocks;
+  const { blocks } = parseJsonBlocks(message.content || '');
+  return blocks;
 };
 
 // 复制消息
@@ -235,6 +251,7 @@ const copyMessage = (content: string) => {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
 }
 
@@ -318,6 +335,23 @@ const copyMessage = (content: string) => {
   background-color: #0052d9;
   border-color: #0052d9;
   color: white;
+}
+
+/* 让 Chat 内部的 Markdown 容器与气泡样式协调，避免内外 padding 叠加导致公式错位 */
+:deep(.t-chat__message-content) .chat-markdown > .markdown-content {
+  padding: 0;              /* 由外层气泡控制内边距 */
+  background: transparent; /* 去掉 MarkdownRenderer 的背景，避免视觉偏移 */
+  overflow: visible;       /* 避免嵌套滚动影响定位 */
+}
+
+/* KaTeX 对齐与间距（块级） */
+:deep(.t-chat__message-content) .katex-display {
+  margin: 12px 0;          /* 合理上下间距 */
+}
+
+/* 行内公式与文本的基线对齐通常由 KaTeX 默认处理，这里确保 line-height 不被异常覆盖 */
+:deep(.t-chat__message-content) {
+  line-height: 1.7; /* 略增大，给行内公式留足空间，减少上/下溢出导致的视觉错位 */
 }
 
 /* JSON块样式 */
@@ -432,7 +466,7 @@ const copyMessage = (content: string) => {
 
 /* 代码块样式 */
 :deep(.t-chat__message-content) {
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 :deep(.t-chat__message-content pre) {

@@ -16,6 +16,9 @@
   },
   "dependencies": {
     "@tdesign-vue-next/chat": "^0.4.5",
+    "katex": "^0.16.22",
+    "markdown-it": "^14.1.0",
+    "markdown-it-katex": "^2.0.3",
     "pinia": "^3.0.3",
     "pinia-plugin-persistedstate": "^4.5.0",
     "tdesign-icons-vue-next": "^0.3.7",
@@ -26,6 +29,7 @@
   },
   "devDependencies": {
     "@tsconfig/node22": "^22.0.2",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.16.5",
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/tsconfig": "^0.7.0",
@@ -35,5 +39,10 @@
     "vite": "^7.0.6",
     "vite-plugin-vue-devtools": "^8.0.0",
     "vue-tsc": "^3.0.4"
+  },
+  "overrides": {
+    "markdown-it-katex":{
+      "katex":"^0.16.0"
+    }
   }
 }

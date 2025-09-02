@@ -41,10 +41,32 @@ class ConnectionManager:
     async def send_message(self, work_id: str, message: str):
         if work_id in self.active_connections:
             try:
-                await self.active_connections[work_id].send_text(message)
+                websocket = self.active_connections[work_id]
+                # 检查连接状态
+                if websocket.client_state.value == 1:  # 1表示连接已建立
+                    await websocket.send_text(message)
+                else:
+                    logger.warning(f"WebSocket连接状态异常: {work_id}, 状态: {websocket.client_state.value}")
+                    self.disconnect(work_id)
             except Exception as e:
                 logger.error(f"发送WebSocket消息失败: {e}")
                 self.disconnect(work_id)
+    
+    def is_connected(self, work_id: str) -> bool:
+        """检查指定work_id的连接是否有效"""
+        if work_id not in self.active_connections:
+            return False
+        
+        websocket = self.active_connections[work_id]
+        try:
+            # 检查连接状态
+            return websocket.client_state.value == 1
+        except Exception:
+            return False
+    
+    def get_connection_count(self) -> int:
+        """获取当前活跃连接数"""
+        return len(self.active_connections)
 
 
 manager = ConnectionManager()
@@ -251,6 +273,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 'content': content
                             }))
                             logger.debug(f"发送流式内容: {repr(content[:30])}")
+                            
+                            # 使用配置参数优化延迟
+                            from ai_system.config.async_config import AsyncConfig
+                            config = AsyncConfig.get_websocket_config()
+                            if len(content) > config["content_yield_threshold"]:
+                                await asyncio.sleep(config["content_yield_delay"])
                         except Exception as e:
                             logger.error(f"发送WebSocket内容失败: {e}")
 
@@ -285,6 +313,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             }))
                             logger.debug(
                                 f"发送JSON块: {block.get('type', 'unknown')}")
+                            
+                            # 减少延迟，JSON块通常较小，不需要额外延迟
+                            # await asyncio.sleep(0.001)  # 移除不必要的延迟
                         except Exception as e:
                             logger.error(f"发送JSON块失败: {e}")
 
@@ -354,15 +385,32 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 await stream_manager.save_user_message(message_data['problem'])
                 logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
 
-                # 执行AI任务
+                # 执行AI任务 - 使用异步任务避免阻塞
                 try:
-                    # 检查main_agent.run是否是异步函数
-                    if asyncio.iscoroutinefunction(main_agent.run):
-                        await main_agent.run(message_data['problem'])
-                    else:
-                        # 如果是同步函数，使用线程池执行
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(None, lambda: main_agent.run(message_data['problem']))
+                    # 检查WebSocket连接状态
+                    if not manager.is_connected(work_id):
+                        logger.error(f"WebSocket连接已断开，无法执行AI任务: {work_id}")
+                        await websocket.send_text(json.dumps({
+                            'type': 'error',
+                            'message': 'WebSocket连接已断开，请重新连接'
+                        }))
+                        break
+                    
+                    # 创建异步任务执行AI处理
+                    ai_task = asyncio.create_task(
+                        main_agent.run(message_data['problem'])
+                    )
+                    
+                    # 等待AI任务完成，添加超时保护
+                    try:
+                        await asyncio.wait_for(ai_task, timeout=300)  # 5分钟超时
+                    except asyncio.TimeoutError:
+                        logger.error(f"AI任务执行超时: {work_id}")
+                        await websocket.send_text(json.dumps({
+                            'type': 'error',
+                            'message': 'AI任务执行超时，请重试'
+                        }))
+                        break
 
                     # AI处理完成后，手动保存最终的AI消息
                     # 获取最终的AI回复内容
@@ -475,6 +523,7 @@ async def generate_work_title(
 
             class TitleCaptureCallback(SimpleStreamCallback):
                 def __init__(self):
+                    super().__init__(output_queue=None)  # 显式传递None给父类
                     self.content = ""
 
                 async def print_stream(self, content: str):

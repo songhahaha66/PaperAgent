@@ -16,6 +16,7 @@
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
+            <p>生成过程中请耐心等待！</p>
           </div>
           <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
@@ -71,21 +72,25 @@
         </div>
         
         <div class="preview-section">
-          <div v-if="selectedFile && fileContents[selectedFile]">
+    <div v-if="selectedFile && (currentFileContent || imageUrls[selectedFile])">
             <t-card :title="`文件预览: ${selectedFile}`">
               <div class="file-preview">
                 <div v-if="selectedFile.endsWith('.py')" class="code-preview">
-                  <pre><code>{{ fileContents[selectedFile] }}</code></pre>
+                  <pre><code>{{ currentFileContent }}</code></pre>
                 </div>
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
-                  <div v-html="renderMarkdown(fileContents[selectedFile])"></div>
+                  <MarkdownRenderer
+                    :content="currentFileContent"
+                    :work-id="workId"
+                    :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
+                  />
                 </div>
                 <div v-else-if="isImageFile(selectedFile)" class="image-preview">
                   <img v-if="imageUrls[selectedFile]" :src="imageUrls[selectedFile]" :alt="selectedFile" style="max-width: 100%; height: auto;" />
                   <div v-else class="loading-image">正在加载图片...</div>
                 </div>
                 <div v-else class="text-preview">
-                  <pre>{{ fileContents[selectedFile] }}</pre>
+                  <pre>{{ currentFileContent }}</pre>
                 </div>
               </div>
             </t-card>
@@ -129,6 +134,7 @@ import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionRespon
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -168,7 +174,7 @@ const fileTreeData = ref<FileInfo[]>([])
 // 数据定义
 const currentFileContent = ref('')
 const currentFileName = ref('')
-const fileContents = ref<Record<string, string>>({})
+// 删除文件内容缓存，避免不同work的文件内容被错误缓存
 const currentWorkspaceConfig = ref('')
 
 // 图片URL缓存
@@ -496,7 +502,6 @@ const handleFileSelect = async (filePath: string) => {
   if (isImageFile(filePath)) {
     console.log('图片文件，获取blob URL')
     // 对于图片文件，设置一个特殊标记表示这是图片
-    fileContents.value[filePath] = 'IMAGE_FILE'
     currentFileContent.value = 'IMAGE_FILE'
     
     // 如果已经有缓存的blob URL，直接使用
@@ -516,86 +521,24 @@ const handleFileSelect = async (filePath: string) => {
     }
     return
   }
-  
-  // 检查是否已缓存
-  if (fileContents.value[filePath]) {
-    currentFileContent.value = fileContents.value[filePath]
-    console.log('使用缓存的文件内容')
-    return
-  }
 
-  // 从服务器获取文件内容（仅对非图片文件）
+  // 每次都从服务器重新获取文件内容，避免缓存问题
   try {
     console.log('从服务器获取文件内容:', filePath)
     const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
     
-    // 缓存文件内容
-    fileContents.value[filePath] = content
+    // 直接设置当前文件内容，不缓存
     currentFileContent.value = content
     
     console.log('文件内容获取成功，长度:', content.length)
   } catch (error) {
     console.error('获取文件内容失败:', error)
-    fileContents.value[filePath] = '文件读取失败'
     currentFileContent.value = '文件读取失败'
     MessagePlugin.error('加载文件失败')
   }
 }
 
 
-
-// 简单的Markdown渲染函数
-const renderMarkdown = (text: string) => {
-  // 先处理代码块，避免代码块中的标记被处理
-  let codeBlocks: string[] = [];
-  let codeBlockCounter = 0;
-  
-  // 提取代码块
-  text = text.replace(/```[\s\S]*?```/g, (match) => {
-    codeBlocks.push(match);
-    return `{{CODE_BLOCK_${codeBlockCounter++}}}`;
-  });
-  
-  // 处理行内代码
-  text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
-  
-  // 按照从h6到h1的顺序处理标题
-  text = text
-    .replace(/^###### (.*$)/gim, '<h6>$1</h6>')
-    .replace(/^##### (.*$)/gim, '<h5>$1</h5>')
-    .replace(/^#### (.*$)/gim, '<h4>$1</h4>')
-    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-    .replace(/^# (.*$)/gim, '<h1>$1</h1>');
-  
-  // 处理粗体和斜体
-  text = text
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>');
-  
-  // 处理链接
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-  
-  // 处理无序列表
-  text = text.replace(/^[\*|\-|\+](.*)$/gim, '<li>$1</li>');
-  text = text.replace(/(<li>.*<\/li>)/gims, '<ul>$1</ul>');
-  
-  // 处理有序列表
-  text = text.replace(/^\d+\.(.*)$/gim, '<li>$1</li>');
-  text = text.replace(/(<li>.*<\/li>)/gims, '<ol>$1</ol>');
-  
-  // 处理换行（但不在块级元素内部添加<br>）
-  text = text.replace(/\n/g, '<br>');
-  
-  // 恢复代码块
-  for (let i = 0; i < codeBlockCounter; i++) {
-    // 简单地将代码块用pre标签包裹
-    const codeContent = codeBlocks[i].replace(/```/g, '');
-    text = text.replace(`{{CODE_BLOCK_${i}}}`, `<pre><code>${codeContent}</code></pre>`);
-  }
-  
-  return text;
-}
 
 // 判断是否为图片文件
 const isImageFile = (filePath: string): boolean => {
@@ -965,6 +908,10 @@ onUnmounted(() => {
     }
   });
   imageUrls.value = {};
+  
+  // 清理当前文件内容
+  currentFileContent.value = '';
+  selectedFile.value = null;
 });
 
 // 监听路由变化
@@ -981,6 +928,18 @@ watch(() => route.params.work_id, (newWorkId) => {
     
     // 停止文件刷新定时器
     stopFileRefreshTimer();
+    
+    // 清理文件内容，避免不同work的文件内容混淆
+    currentFileContent.value = '';
+    selectedFile.value = null;
+    
+    // 清理图片URL缓存，避免不同work的图片混淆
+    Object.values(imageUrls.value).forEach(url => {
+      if (url.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    imageUrls.value = {};
     
     loadWork();
     // 重新初始化聊天会话

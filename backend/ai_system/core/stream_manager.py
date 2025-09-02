@@ -7,6 +7,7 @@ import logging
 from typing import Optional, Callable, List, Dict, Any
 from abc import ABC, abstractmethod
 import json
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -39,31 +40,33 @@ class StreamOutputManager:
         self.current_message_buffer = ""
         self.current_role = "assistant"
         self.current_block_type = "main"
+        # 添加异步锁，防止并发输出问题
+        self._output_lock = asyncio.Lock()
         logger.info("StreamOutputManager初始化完成")
 
     async def _output(self, content: str):
-        """统一的输出方法，确保实时性"""
-        self.output_count += 1
-        logger.debug(
-            f"StreamOutputManager._output() 第 {self.output_count} 次调用: {repr(content[:50])}...")
+        """统一的输出方法，确保实时性和非阻塞性"""
+        async with self._output_lock:
+            self.output_count += 1
+            logger.debug(
+                f"StreamOutputManager._output() 第 {self.output_count} 次调用: {repr(content[:50])}...")
 
-        # 缓冲内容
-        self.current_message_buffer += content
+            # 缓冲内容
+            self.current_message_buffer += content
 
-        if self.stream_callback:
-            try:
-                # 立即调用回调函数，实现实时流式传输
-                await self.stream_callback.on_content(content)
-                logger.debug(f"成功调用回调函数，内容长度: {len(content)}")
+            if self.stream_callback:
+                try:
+                    # 立即调用回调函数，实现实时流式传输
+                    await self.stream_callback.on_content(content)
+                    logger.debug(f"成功调用回调函数，内容长度: {len(content)}")
 
-                # 让出控制权，确保事件循环能处理其他任务
-                import asyncio
-                await asyncio.sleep(0)
-            except Exception as e:
-                logger.error(f"回调函数调用失败: {e}")
-        else:
-            logger.debug("无回调函数，直接打印")
-            print(content, end="", flush=True)
+                    # 让出控制权，确保事件循环能处理其他任务
+                    await asyncio.sleep(0.001)
+                except Exception as e:
+                    logger.error(f"回调函数调用失败: {e}")
+            else:
+                logger.debug("无回调函数，直接打印")
+                print(content, end="", flush=True)
 
     async def send_json_block(self, block_type: str, content: str):
         """发送JSON格式的数据块"""
@@ -80,8 +83,7 @@ class StreamOutputManager:
                 logger.debug(f"成功发送JSON块: {block_type}")
 
                 # 让出控制权
-                import asyncio
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.001)
             except Exception as e:
                 logger.error(f"发送JSON块失败: {e}")
         else:
@@ -155,6 +157,8 @@ class PersistentStreamManager(StreamOutputManager):
         self.session_id = session_id
         self.message_buffer = []
         self.buffer_size = 100  # 缓冲区大小
+        # 添加数据库操作锁，防止并发数据库访问
+        self._db_lock = asyncio.Lock()
 
         if chat_service and session_id:
             logger.info(f"持久化流式管理器初始化完成，会话ID: {session_id}")
@@ -179,17 +183,18 @@ class PersistentStreamManager(StreamOutputManager):
                 work_id = self.session_id.replace(
                     "_main_session", "") if "_main_session" in self.session_id else self.session_id
 
-                # 在事件循环中运行同步方法
-                import asyncio
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    self.chat_service.add_message,
-                    work_id,
-                    "user",
-                    content,
-                    None  # metadata
-                )
+                # 使用锁保护数据库操作
+                async with self._db_lock:
+                    # 在事件循环中运行同步方法
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(
+                        None,
+                        self.chat_service.add_message,
+                        work_id,
+                        "user",
+                        content,
+                        None  # metadata
+                    )
                 logger.info(
                     f"[PERSISTENCE] 用户消息持久化完成，work_id: {work_id}, 长度: {len(content)}")
             except Exception as e:
@@ -207,17 +212,18 @@ class PersistentStreamManager(StreamOutputManager):
                     work_id = self.session_id.replace(
                         "_main_session", "") if "_main_session" in self.session_id else self.session_id
 
-                    # 在事件循环中运行同步方法
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        None,
-                        self.chat_service.add_message,
-                        work_id,
-                        self.current_role,
-                        self.current_message_buffer.strip(),
-                        None  # metadata
-                    )
+                    # 使用锁保护数据库操作
+                    async with self._db_lock:
+                        # 在事件循环中运行同步方法
+                        loop = asyncio.get_event_loop()
+                        await loop.run_in_executor(
+                            None,
+                            self.chat_service.add_message,
+                            work_id,
+                            self.current_role,
+                            self.current_message_buffer.strip(),
+                            None  # metadata
+                        )
                     logger.info(
                         f"[PERSISTENCE] 缓冲消息已保存，work_id: {work_id}, 角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
 
