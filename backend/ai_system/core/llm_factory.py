@@ -37,4 +37,14 @@ class LLMFactory:
         workspace_path = self.get_workspace_path(work_id)
         self._env_manager.setup_workspace(workspace_path)
 
+    async def run_stream(self, system_type: str, messages, stream_manager: Optional[StreamOutputManager] = None, tools=None):
+        handler = self.create_handler(system_type, stream_manager=stream_manager)
+        assistant_message, tool_calls = await handler.process_stream(messages, tools)
+        return assistant_message, tool_calls
+
+    async def run_sync(self, system_type: str, messages, tools=None):
+        handler = self.create_handler(system_type, stream_manager=None)
+        assistant_message, tool_calls = await handler.process_sync(messages, tools)
+        return assistant_message, tool_calls
+
  
