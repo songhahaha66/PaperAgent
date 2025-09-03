@@ -14,10 +14,10 @@ from database.database import get_db
 from auth.auth import get_current_user, verify_token
 from services.chat_services.chat_service import ChatService
 from ai_system.config.environment import setup_environment_from_db
-from ai_system.core.stream_manager import PersistentStreamManager, SimpleStreamCallback
-from ai_system.core.main_agent import MainAgent
-from ai_system.core.llm_handler import LLMHandler
-from ai_system.core.llm_factory import LLMFactory
+from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
+from ai_system.core_agents.main_agent import MainAgent
+from ai_system.core_handlers.llm_handler import LLMHandler
+from ai_system.core_handlers.llm_factory import LLMFactory
 from ..utils import route_guard
 
 logger = logging.getLogger(__name__)
@@ -484,7 +484,7 @@ async def generate_work_title(
             messages = [{"role": "user", "content": title_prompt}]
 
             # 创建临时的流管理器来捕获输出
-            from ai_system.core.stream_manager import SimpleStreamCallback
+            from ai_system.core_managers.stream_manager import SimpleStreamCallback
 
             class TitleCaptureCallback(SimpleStreamCallback):
                 def __init__(self):
@@ -501,7 +501,7 @@ async def generate_work_title(
                     pass
 
             title_callback = TitleCaptureCallback()
-            from ai_system.core.stream_manager import StreamOutputManager
+            from ai_system.core_managers.stream_manager import StreamOutputManager
             title_stream_manager = StreamOutputManager(title_callback)
 
             # 直接通过工厂执行同步（非流式）生成

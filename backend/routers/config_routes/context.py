@@ -125,7 +125,7 @@ async def get_compression_history(
     db: Session = Depends(get_db)
 ):
     """获取指定会话的压缩历史"""
-    from ai_system.core.context_manager import ContextManager
+    from ai_system.core_managers.context_manager import ContextManager
     context_manager = ContextManager()
     mock_compression_history = [
         CompressedMessage(
@@ -164,7 +164,7 @@ async def compress_context(
     db: Session = Depends(get_db)
 ):
     """手动压缩指定会话的上下文"""
-    from ai_system.core.context_manager import ContextManager
+    from ai_system.core_managers.context_manager import ContextManager
     context_manager = ContextManager()
     mock_messages = [
         {"role": "system", "content": "你是AI助手"},
@@ -205,7 +205,7 @@ async def cleanup_old_summaries(
     db: Session = Depends(get_db)
 ):
     """清理过期的摘要（管理员功能）"""
-    from ai_system.core.context_manager import ContextManager
+    from ai_system.core_managers.context_manager import ContextManager
     context_manager = ContextManager()
     context_manager.cleanup_old_summaries(max_age_days)
     return {
@@ -222,7 +222,7 @@ async def export_context_data(
     db: Session = Depends(get_db)
 ):
     """导出指定会话的上下文数据（用于调试和分析）"""
-    from ai_system.core.context_manager import ContextManager
+    from ai_system.core_managers.context_manager import ContextManager
     context_manager = ContextManager()
     export_data = context_manager.export_context_data()
     return {

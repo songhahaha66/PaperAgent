@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from models import models
 from database.database import engine
-from routers import auth_router, template_router, file_router, model_config_router, work_router, workspace_file_router, chat_router, context_router
+from routers import all_routers
 import uvicorn
 import logging
 
@@ -78,15 +78,9 @@ async def async_status():
     from ai_system.config.async_config import get_async_config
     return get_async_config().get_status()
 
-# 注册路由模块
-app.include_router(auth_router.router)
-app.include_router(template_router.router)
-app.include_router(file_router.router)
-app.include_router(model_config_router.router)
-app.include_router(work_router.router)
-app.include_router(workspace_file_router.router)
-app.include_router(chat_router.router)
-app.include_router(context_router.router)
+# 注册路由模块（统一）
+for router in all_routers:
+    app.include_router(router)
 
 if __name__ == "__main__":
     # 优化uvicorn配置，提高并发性能
