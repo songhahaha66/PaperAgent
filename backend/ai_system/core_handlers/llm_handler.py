@@ -11,9 +11,9 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import functools
 
-# 使用字符串类型注解避免循环导入
-# from ..core_managers.stream_manager import StreamOutputManager
-# from ..config.async_config import AsyncConfig
+# 使用字符串类型注解避免循环导入（类型仍用字符串）
+# 运行期需要的配置模块安全地在模块级导入
+from ..config.async_config import AsyncConfig
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,6 @@ class LLMHandler:
                     
                     # 让出控制权，确保WebSocket能及时发送数据
                     # 使用配置参数优化延迟
-                    from ..config.async_config import AsyncConfig
                     config = AsyncConfig.get_llm_stream_config()
                     if chunk_count % config["yield_interval"] == 0:
                         await asyncio.sleep(config["yield_delay"])
