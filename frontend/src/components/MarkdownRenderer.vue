@@ -6,7 +6,10 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue';
 import MarkdownIt from 'markdown-it';
 import mila from 'markdown-it-katex';
+import highlightjs from 'markdown-it-highlightjs';
+import hljs from 'highlight.js';
 import 'katex/dist/katex.min.css';
+import 'highlight.js/styles/github.css';
 import { useAuthStore } from '@/stores/auth';
 import { workspaceFileAPI } from '@/api/workspace';
 
@@ -33,13 +36,22 @@ function normalizePath(base: string, rel: string): string {
   return baseParts.join('/');
 }
 
-// markdown-it 实例（支持公式、基础语法）
+// markdown-it 实例（支持公式、基础语法、代码高亮）
 const md = new MarkdownIt({
   html: true,
   linkify: true,
   breaks: true,
+  highlight: function (str, lang) {
+    if (lang && hljs.getLanguage(lang)) {
+      try {
+        return hljs.highlight(str, { language: lang }).value;
+      } catch (__) {}
+    }
+    return ''; // use external default escaping
+  }
 });
 md.use(mila);
+md.use(highlightjs);
 
 // 渲染后的 HTML
 const renderedContent = computed(() => {
@@ -132,22 +144,34 @@ onBeforeUnmount(() => {
   background-color: #f0f0f0;
   padding: 2px 4px;
   border-radius: 3px;
-  font-family: 'Courier New', monospace;
+  font-family: 'Courier New', 'Monaco', 'Consolas', monospace;
+  font-size: 0.9em;
 }
 
 /* 代码块样式：去除横向滚动，改为自动换行 */
 .markdown-content :deep(pre) {
-  background-color: #f5f5f5;
+  background-color: #f8f8f8;
   padding: 12px;
-  border-radius: 4px;
+  border-radius: 6px;
   margin: 8px 0;
   white-space: pre-wrap; /* 换行 */
   word-break: break-word;
+  border: 1px solid #e1e4e8;
+  overflow-x: auto;
 }
 
 .markdown-content :deep(pre code) {
   background-color: transparent;
   padding: 0;
+  font-family: 'Courier New', 'Monaco', 'Consolas', monospace;
+  font-size: 0.85em;
+  line-height: 1.45;
+}
+
+/* highlight.js 样式覆盖 */
+.markdown-content :deep(.hljs) {
+  background: transparent !important;
+  padding: 0 !important;
 }
 
 /* 列表样式 */
