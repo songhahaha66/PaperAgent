@@ -17,6 +17,8 @@ from ai_system.config.environment import setup_environment_from_db
 from ai_system.core.stream_manager import PersistentStreamManager, SimpleStreamCallback
 from ai_system.core.main_agent import MainAgent
 from ai_system.core.llm_handler import LLMHandler
+from ai_system.core.llm_factory import LLMFactory
+from .router_utils import route_guard
 
 logger = logging.getLogger(__name__)
 
@@ -73,98 +75,83 @@ manager = ConnectionManager()
 
 
 @router.get("/work/{work_id}/history")
+@route_guard
 async def get_work_chat_history(
     work_id: str,
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定工作的聊天记录（前端格式）"""
-    try:
-        chat_service = ChatService(db)
+    chat_service = ChatService(db)
 
-        # 验证用户权限（通过session验证）
-        session = chat_service.get_session_by_work_id(work_id, current_user_id)
-        if not session:
-            # 如果没有session，尝试创建（可能是新work）
-            from services.crud import get_work
-            work = get_work(db, work_id)
-            if not work or work.created_by != current_user_id:
-                raise HTTPException(status_code=403, detail="无权限访问")
+    # 验证用户权限（通过session验证）
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
 
-        # 获取聊天记录（前端格式，包含JSON卡片）
-        messages = chat_service.get_work_chat_history_for_frontend(work_id)
-        context = chat_service.get_work_context(work_id)
+    messages = chat_service.get_work_chat_history_for_frontend(work_id)
+    context = chat_service.get_work_context(work_id)
 
-        return {
-            "work_id": work_id,
-            "messages": messages,
-            "context": context
-        }
-    except Exception as e:
-        logger.error(f"获取聊天记录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "work_id": work_id,
+        "messages": messages,
+        "context": context
+    }
 
 
 @router.get("/work/{work_id}/history/raw")
+@route_guard
 async def get_work_chat_history_raw(
     work_id: str,
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定工作的聊天记录（原始格式）"""
-    try:
-        chat_service = ChatService(db)
+    chat_service = ChatService(db)
 
-        # 验证用户权限
-        session = chat_service.get_session_by_work_id(work_id, current_user_id)
-        if not session:
-            from services.crud import get_work
-            work = get_work(db, work_id)
-            if not work or work.created_by != current_user_id:
-                raise HTTPException(status_code=403, detail="无权限访问")
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
 
-        # 获取原始格式的聊天记录
-        messages = chat_service.get_work_chat_history(work_id)
-        context = chat_service.get_work_context(work_id)
+    messages = chat_service.get_work_chat_history(work_id)
+    context = chat_service.get_work_context(work_id)
 
-        return {
-            "work_id": work_id,
-            "messages": messages,
-            "context": context
-        }
-    except Exception as e:
-        logger.error(f"获取原始聊天记录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "work_id": work_id,
+        "messages": messages,
+        "context": context
+    }
 
 
 @router.get("/work/{work_id}/history/stats")
+@route_guard
 async def get_work_chat_statistics(
     work_id: str,
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定工作的聊天统计信息"""
-    try:
-        chat_service = ChatService(db)
+    chat_service = ChatService(db)
 
-        # 验证用户权限
-        session = chat_service.get_session_by_work_id(work_id, current_user_id)
-        if not session:
-            from services.crud import get_work
-            work = get_work(db, work_id)
-            if not work or work.created_by != current_user_id:
-                raise HTTPException(status_code=403, detail="无权限访问")
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
 
-        # 获取聊天统计信息
-        stats = chat_service.get_chat_statistics(work_id)
+    stats = chat_service.get_chat_statistics(work_id)
 
-        return {
-            "work_id": work_id,
-            "statistics": stats
-        }
-    except Exception as e:
-        logger.error(f"获取聊天统计信息失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "work_id": work_id,
+        "statistics": stats
+    }
 
 
 @router.websocket("/ws/{work_id}")
@@ -319,20 +306,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         except Exception as e:
                             logger.error(f"发送JSON块失败: {e}")
 
-                # 初始化AI环境
-                env_manager = setup_environment_from_db(db)
-                env_manager.initialize_system("brain")
-
-                # 设置工作空间目录，确保代码执行器使用正确路径
-                # 使用与其他服务一致的路径：../pa_data/workspaces/{work_id}
-                workspace_path = os.path.join(
-                    os.path.dirname(os.path.dirname(__file__)),
-                    "..",
-                    "pa_data",
-                    "workspaces",
-                    work_id
-                )
-                env_manager.setup_workspace(workspace_path)
+                # 初始化AI环境与工作空间（通过工厂）
+                llm_factory = LLMFactory(db)
+                llm_factory.initialize_system("brain")
+                llm_factory.setup_workspace(work_id)
 
                 # 创建流式回调和管理器
                 ws_callback = WebSocketStreamCallback(
@@ -344,12 +321,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 )
 
                 # 创建LLM处理器和主代理
-                model_config = env_manager.config_manager.get_model_config(
-                    "brain")
-                llm_handler = LLMHandler(
-                    model=str(model_config.model_id),
-                    stream_manager=stream_manager
-                )
+                llm_handler = llm_factory.create_handler("brain", stream_manager=stream_manager)
 
                 # 获取工作的模板ID
                 template_id = None
@@ -490,16 +462,9 @@ async def generate_work_title(
         if not question:
             raise HTTPException(status_code=400, detail="缺少问题内容")
 
-        # 初始化AI环境
-        env_manager = setup_environment_from_db(db)
-        env_manager.initialize_system("brain")
-
-        # 创建LLM处理器
-        model_config = env_manager.config_manager.get_model_config("brain")
-        llm_handler = LLMHandler(
-            model=str(model_config.model_id),
-            stream_manager=None  # 不需要流式处理
-        )
+        # 初始化AI环境（通过工厂）
+        llm_factory = LLMFactory(db)
+        llm_factory.initialize_system("brain")
 
         # 构建标题生成提示词
         title_prompt = f"""请根据用户的研究问题生成一个简洁、专业的学术论文标题。
@@ -539,14 +504,8 @@ async def generate_work_title(
             from ai_system.core.stream_manager import StreamOutputManager
             title_stream_manager = StreamOutputManager(title_callback)
 
-            # 创建新的LLMHandler实例用于标题生成
-            title_llm_handler = LLMHandler(
-                model=str(model_config.model_id),
-                stream_manager=title_stream_manager
-            )
-
-            # 调用LLM生成标题
-            assistant_message, _ = await title_llm_handler.process_stream(messages)
+            # 直接通过工厂执行同步（非流式）生成
+            assistant_message, _ = await llm_factory.run_sync("brain", messages)
             title = assistant_message.get("content", "")
 
             # 清理标题（移除可能的引号、换行等）

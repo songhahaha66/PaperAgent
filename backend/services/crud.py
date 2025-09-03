@@ -5,6 +5,7 @@ from schemas import schemas
 from auth import auth
 from fastapi import HTTPException, status
 from .template_files import template_file_service
+from .utils import ensure_owner, model_to_dict
 import uuid
 import json
 import os
@@ -238,24 +239,17 @@ def get_public_templates(db: Session, skip: int = 0, limit: int = 100):
 
 def update_paper_template(db: Session, template_id: int, template_update: schemas.PaperTemplateUpdate, user_id: int):
     """更新论文模板"""
-    db_template = get_paper_template(db, template_id)
-    if not db_template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    # 检查权限：只有创建者可以修改
-    if db_template.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to modify this template"
-        )
+    db_template = ensure_owner(
+        get_paper_template(db, template_id),
+        user_id,
+        not_found_detail="Template not found",
+        forbidden_detail="Not authorized to modify this template",
+    )
     
     # 更新字段
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
-        update_data = template_update.model_dump(exclude_unset=True) if hasattr(template_update, 'model_dump') else template_update.dict(exclude_unset=True)
+        update_data = model_to_dict(template_update, exclude_unset=True)
         for field, value in update_data.items():
             setattr(db_template, field, value)
     except Exception as e:
@@ -270,19 +264,12 @@ def update_paper_template(db: Session, template_id: int, template_update: schema
 
 def delete_paper_template(db: Session, template_id: int, user_id: int):
     """删除论文模板"""
-    db_template = get_paper_template(db, template_id)
-    if not db_template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    # 检查权限：只有创建者可以删除
-    if db_template.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this template"
-        )
+    db_template = ensure_owner(
+        get_paper_template(db, template_id),
+        user_id,
+        not_found_detail="Template not found",
+        forbidden_detail="Not authorized to delete this template",
+    )
     
     # 检查是否有works引用该模板
     from models.models import Work
@@ -307,19 +294,12 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
 
 def force_delete_paper_template(db: Session, template_id: int, user_id: int):
     """强制删除论文模板（同时删除引用该模板的工作）"""
-    db_template = get_paper_template(db, template_id)
-    if not db_template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    # 检查权限：只有创建者可以删除
-    if db_template.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this template"
-        )
+    db_template = ensure_owner(
+        get_paper_template(db, template_id),
+        user_id,
+        not_found_detail="Template not found",
+        forbidden_detail="Not authorized to delete this template",
+    )
     
     # 查找并删除引用该模板的所有works
     from models.models import Work
@@ -349,16 +329,14 @@ def get_template_file_content(db: Session, template_id: int, user_id: int) -> st
     """获取模板文件内容"""
     db_template = get_paper_template(db, template_id)
     if not db_template:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Template not found"
-        )
-    
-    # 检查权限：只有创建者或公开模板可以访问
-    if not db_template.is_public and db_template.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this template"
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+    # 公开模板放行，否则需校验所有者
+    if not db_template.is_public:
+        ensure_owner(
+            db_template,
+            user_id,
+            not_found_detail="Template not found",
+            forbidden_detail="Not authorized to access this template",
         )
     
     try:
@@ -495,23 +473,16 @@ def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100,
 
 def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user_id: int):
     """更新工作信息"""
-    db_work = get_work(db, work_id)
-    if not db_work:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Work not found"
-        )
-    
-    # 检查权限：只有创建者可以修改
-    if db_work.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to modify this work"
-        )
+    db_work = ensure_owner(
+        get_work(db, work_id),
+        user_id,
+        not_found_detail="Work not found",
+        forbidden_detail="Not authorized to modify this work",
+    )
     
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
-        update_data = work_update.model_dump(exclude_unset=True) if hasattr(work_update, 'model_dump') else work_update.dict(exclude_unset=True)
+        update_data = model_to_dict(work_update, exclude_unset=True)
         
         for field, value in update_data.items():
             setattr(db_work, field, value)
@@ -528,19 +499,12 @@ def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user
 
 def delete_work(db: Session, work_id: str, user_id: int):
     """删除工作"""
-    db_work = get_work(db, work_id)
-    if not db_work:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Work not found"
-        )
-    
-    # 检查权限：只有创建者可以删除
-    if db_work.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this work"
-        )
+    db_work = ensure_owner(
+        get_work(db, work_id),
+        user_id,
+        not_found_detail="Work not found",
+        forbidden_detail="Not authorized to delete this work",
+    )
     
     try:
         # 删除工作空间文件夹
@@ -564,16 +528,13 @@ def update_work_status(db: Session, work_id: str, status: str, progress: int = N
     """更新工作状态和进度"""
     db_work = get_work(db, work_id)
     if not db_work:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Work not found"
-        )
-    
-    # 检查权限：只有创建者可以修改
-    if user_id and db_work.created_by != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to modify this work"
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+    if user_id:
+        ensure_owner(
+            db_work,
+            user_id,
+            not_found_detail="Work not found",
+            forbidden_detail="Not authorized to modify this work",
         )
     
     try:

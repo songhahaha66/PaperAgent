@@ -6,10 +6,12 @@ from services import crud
 from auth import auth
 from database.database import get_db
 from typing import List
+from .router_utils import route_guard
 
 router = APIRouter(prefix="/templates", tags=["模板管理"])
 
 @router.post("", response_model=schemas.PaperTemplateResponse)
+@route_guard
 async def create_template(
     template: schemas.PaperTemplateCreateWithContent,
     current_user: int = Depends(auth.get_current_user),
@@ -29,6 +31,7 @@ async def create_template(
     return crud.create_paper_template(db, template_data, current_user, content)
 
 @router.get("", response_model=List[schemas.PaperTemplateResponse])
+@route_guard
 async def get_user_templates(
     skip: int = 0,
     limit: int = 100,
@@ -39,6 +42,7 @@ async def get_user_templates(
     return crud.get_user_templates(db, current_user, skip, limit)
 
 @router.get("/public", response_model=List[schemas.PaperTemplateResponse])
+@route_guard
 async def get_public_templates(
     skip: int = 0,
     limit: int = 100,
@@ -48,6 +52,7 @@ async def get_public_templates(
     return crud.get_public_templates(db, skip, limit)
 
 @router.get("/{template_id}", response_model=schemas.PaperTemplateResponse)
+@route_guard
 async def get_template(
     template_id: int,
     current_user: int = Depends(auth.get_current_user),
@@ -71,6 +76,7 @@ async def get_template(
     return template
 
 @router.put("/{template_id}", response_model=schemas.PaperTemplateResponse)
+@route_guard
 async def update_template(
     template_id: int,
     template_update: schemas.PaperTemplateUpdate,
@@ -81,6 +87,7 @@ async def update_template(
     return crud.update_paper_template(db, template_id, template_update, current_user)
 
 @router.delete("/{template_id}")
+@route_guard
 async def delete_template(
     template_id: int,
     current_user: int = Depends(auth.get_current_user),
@@ -90,6 +97,7 @@ async def delete_template(
     return crud.delete_paper_template(db, template_id, current_user)
 
 @router.delete("/{template_id}/force")
+@route_guard
 async def force_delete_template(
     template_id: int,
     current_user: int = Depends(auth.get_current_user),
@@ -99,6 +107,7 @@ async def force_delete_template(
     return crud.force_delete_paper_template(db, template_id, current_user)
 
 @router.get("/{template_id}/content")
+@route_guard
 async def get_template_content(
     template_id: int,
     current_user: int = Depends(auth.get_current_user),
