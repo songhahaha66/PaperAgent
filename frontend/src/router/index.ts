@@ -5,7 +5,6 @@ import Home from '@/views/Home.vue'
 import Work from '@/views/Work.vue'
 import Template from '@/views/Template.vue'
 import ApiKeyConfig from '@/views/ApiKeyConfig.vue'
-import Demo from '@/views/Demo.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = createRouter({
@@ -46,12 +45,7 @@ const router = createRouter({
       component: ApiKeyConfig,
       meta: { requiresAuth: true } // 需要登录才能访问
     },
-    {
-      path: '/demo',
-      name: 'Demo',
-      component: Demo
-    }
-  ],
+    ],
 })
 
 // 路由守卫
