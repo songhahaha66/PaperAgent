@@ -462,10 +462,9 @@ async def generate_work_title(
         if not question:
             raise HTTPException(status_code=400, detail="缺少问题内容")
 
-        # 初始化AI环境并创建LLM处理器（通过工厂）
+        # 初始化AI环境（通过工厂）
         llm_factory = LLMFactory(db)
         llm_factory.initialize_system("brain")
-        llm_handler = llm_factory.create_handler("brain", stream_manager=None)
 
         # 构建标题生成提示词
         title_prompt = f"""请根据用户的研究问题生成一个简洁、专业的学术论文标题。
@@ -505,11 +504,8 @@ async def generate_work_title(
             from ai_system.core.stream_manager import StreamOutputManager
             title_stream_manager = StreamOutputManager(title_callback)
 
-            # 创建新的LLMHandler实例用于标题生成（通过工厂）
-            title_llm_handler = llm_factory.create_handler("brain", stream_manager=title_stream_manager)
-
-            # 调用LLM生成标题
-            assistant_message, _ = await title_llm_handler.process_stream(messages)
+            # 直接通过工厂执行同步（非流式）生成
+            assistant_message, _ = await llm_factory.run_sync("brain", messages)
             title = assistant_message.get("content", "")
 
             # 清理标题（移除可能的引号、换行等）
