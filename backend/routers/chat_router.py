@@ -17,6 +17,7 @@ from ai_system.config.environment import setup_environment_from_db
 from ai_system.core.stream_manager import PersistentStreamManager, SimpleStreamCallback
 from ai_system.core.main_agent import MainAgent
 from ai_system.core.llm_handler import LLMHandler
+from .router_utils import route_guard
 
 logger = logging.getLogger(__name__)
 
@@ -73,98 +74,83 @@ manager = ConnectionManager()
 
 
 @router.get("/work/{work_id}/history")
+@route_guard
 async def get_work_chat_history(
     work_id: str,
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定工作的聊天记录（前端格式）"""
-    try:
-        chat_service = ChatService(db)
+    chat_service = ChatService(db)
 
-        # 验证用户权限（通过session验证）
-        session = chat_service.get_session_by_work_id(work_id, current_user_id)
-        if not session:
-            # 如果没有session，尝试创建（可能是新work）
-            from services.crud import get_work
-            work = get_work(db, work_id)
-            if not work or work.created_by != current_user_id:
-                raise HTTPException(status_code=403, detail="无权限访问")
+    # 验证用户权限（通过session验证）
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
 
-        # 获取聊天记录（前端格式，包含JSON卡片）
-        messages = chat_service.get_work_chat_history_for_frontend(work_id)
-        context = chat_service.get_work_context(work_id)
+    messages = chat_service.get_work_chat_history_for_frontend(work_id)
+    context = chat_service.get_work_context(work_id)
 
-        return {
-            "work_id": work_id,
-            "messages": messages,
-            "context": context
-        }
-    except Exception as e:
-        logger.error(f"获取聊天记录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "work_id": work_id,
+        "messages": messages,
+        "context": context
+    }
 
 
 @router.get("/work/{work_id}/history/raw")
+@route_guard
 async def get_work_chat_history_raw(
     work_id: str,
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定工作的聊天记录（原始格式）"""
-    try:
-        chat_service = ChatService(db)
+    chat_service = ChatService(db)
 
-        # 验证用户权限
-        session = chat_service.get_session_by_work_id(work_id, current_user_id)
-        if not session:
-            from services.crud import get_work
-            work = get_work(db, work_id)
-            if not work or work.created_by != current_user_id:
-                raise HTTPException(status_code=403, detail="无权限访问")
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
 
-        # 获取原始格式的聊天记录
-        messages = chat_service.get_work_chat_history(work_id)
-        context = chat_service.get_work_context(work_id)
+    messages = chat_service.get_work_chat_history(work_id)
+    context = chat_service.get_work_context(work_id)
 
-        return {
-            "work_id": work_id,
-            "messages": messages,
-            "context": context
-        }
-    except Exception as e:
-        logger.error(f"获取原始聊天记录失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "work_id": work_id,
+        "messages": messages,
+        "context": context
+    }
 
 
 @router.get("/work/{work_id}/history/stats")
+@route_guard
 async def get_work_chat_statistics(
     work_id: str,
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取指定工作的聊天统计信息"""
-    try:
-        chat_service = ChatService(db)
+    chat_service = ChatService(db)
 
-        # 验证用户权限
-        session = chat_service.get_session_by_work_id(work_id, current_user_id)
-        if not session:
-            from services.crud import get_work
-            work = get_work(db, work_id)
-            if not work or work.created_by != current_user_id:
-                raise HTTPException(status_code=403, detail="无权限访问")
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
 
-        # 获取聊天统计信息
-        stats = chat_service.get_chat_statistics(work_id)
+    stats = chat_service.get_chat_statistics(work_id)
 
-        return {
-            "work_id": work_id,
-            "statistics": stats
-        }
-    except Exception as e:
-        logger.error(f"获取聊天统计信息失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "work_id": work_id,
+        "statistics": stats
+    }
 
 
 @router.websocket("/ws/{work_id}")
