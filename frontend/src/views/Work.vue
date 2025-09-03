@@ -12,7 +12,10 @@
       <div class="workspace-header" v-if="currentWork">
         <div class="work-info">
           <div class="work-title-row">
-            <h1>{{ currentWork.title }}</h1>
+            <h1>
+            <span v-if="currentWork.title && currentWork.title.trim()">{{ currentWork.title }}</span>
+            <t-loading v-else size="small" text="生成中" />
+          </h1>
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
