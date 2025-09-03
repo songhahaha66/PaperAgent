@@ -6,6 +6,7 @@ from services import crud
 from auth import auth
 from database.database import get_db
 from typing import Dict, Any, Optional
+from .router_utils import route_guard
 
 def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
     """从模型配置中移除 api_key 字段"""
@@ -24,6 +25,7 @@ def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
 router = APIRouter(prefix="/model-configs", tags=["模型配置"])
 
 @router.post("/", response_model=schemas.ModelConfigResponse)
+@route_guard
 async def create_model_config(
     config: schemas.ModelConfigCreate,
     current_user: int = Depends(auth.get_current_user),
@@ -34,6 +36,7 @@ async def create_model_config(
     return _remove_api_key_from_config(result)
 
 @router.get("/", response_model=list[schemas.ModelConfigResponse])
+@route_guard
 async def get_all_model_configs(
     skip: int = 0,
     limit: int = 100,
@@ -45,6 +48,7 @@ async def get_all_model_configs(
     return [_remove_api_key_from_config(config) for config in configs]
 
 @router.get("/{config_id}", response_model=schemas.ModelConfigResponse)
+@route_guard
 async def get_model_config(
     config_id: int,
     current_user: int = Depends(auth.get_current_user),
@@ -60,6 +64,7 @@ async def get_model_config(
     return _remove_api_key_from_config(db_config)
 
 @router.get("/type/{config_type}", response_model=schemas.ModelConfigResponse)
+@route_guard
 async def get_model_config_by_type(
     config_type: str,
     current_user: int = Depends(auth.get_current_user),
@@ -75,6 +80,7 @@ async def get_model_config_by_type(
     return _remove_api_key_from_config(db_config)
 
 @router.put("/{config_id}", response_model=schemas.ModelConfigResponse)
+@route_guard
 async def update_model_config(
     config_id: int,
     config_update: schemas.ModelConfigUpdate,
@@ -86,6 +92,7 @@ async def update_model_config(
     return _remove_api_key_from_config(result)
 
 @router.delete("/{config_id}")
+@route_guard
 async def delete_model_config(
     config_id: int,
     current_user: int = Depends(auth.get_current_user),
@@ -95,6 +102,7 @@ async def delete_model_config(
     return crud.delete_model_config(db=db, config_id=config_id)
 
 @router.delete("/", response_model=dict)
+@route_guard
 async def clear_all_model_configs(
     current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
