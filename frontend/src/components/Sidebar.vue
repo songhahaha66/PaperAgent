@@ -47,7 +47,10 @@
             >
               <div class="history-item-content">
                 <div class="history-header">
-                  <h4>{{ item.title }}</h4>
+                  <h4>
+                    <span v-if="item.title && item.title.trim()">{{ item.title }}</span>
+                    <t-loading v-else size="small" text="生成中" />
+                  </h4>
                   <t-tag 
                     v-if="item.status" 
                     :theme="getStatusTheme(item.status)" 
@@ -589,4 +592,5 @@ const userOptions = [
   margin: 0;
   line-height: 1.4;
 }
+
 </style>
