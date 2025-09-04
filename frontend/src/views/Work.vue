@@ -14,7 +14,7 @@
           <div class="work-title-row">
             <h1>
             <span v-if="currentWork.title && currentWork.title.trim()">{{ currentWork.title }}</span>
-            <t-loading v-else size="small" text="生成中" />
+            <t-loading v-else size="small" text="标题生成中" />
           </h1>
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
