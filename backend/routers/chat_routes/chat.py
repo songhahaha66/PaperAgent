@@ -58,6 +58,7 @@ class GenerationState:
         """添加生成的内容到临时消息"""
         self.temp_message["content"] += content
         self.temp_message["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime())
+        self.temp_message["last_modified"] = time.time()  # 添加最后修改时间戳
         self.last_update = time.time()
         self._save_temp_message()
         
@@ -66,6 +67,7 @@ class GenerationState:
         self.temp_message["json_blocks"].append(block)
         self.temp_message["message_type"] = "json_card"
         self.temp_message["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime())
+        self.temp_message["last_modified"] = time.time()  # 添加最后修改时间戳
         self.last_update = time.time()
         self._save_temp_message()
         
@@ -91,7 +93,7 @@ class GenerationState:
         self._save_temp_message()
         
     def _save_temp_message(self):
-        """保存临时消息到JSON文件"""
+        """保存临时消息到JSON文件（异步优化版本）"""
         try:
             # 获取当前历史记录
             history = self.chat_service.history_manager.get_work_history(self.work_id)
@@ -107,11 +109,52 @@ class GenerationState:
             if not temp_found:
                 history["messages"].append(self.temp_message.copy())
             
-            # 保存到文件
-            self.chat_service.history_manager._save_history(self.work_id, history)
+            # 异步保存到文件，避免阻塞
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 在后台任务中保存文件
+                    asyncio.create_task(self._async_save_history(history))
+                else:
+                    # 直接保存
+                    self.chat_service.history_manager._save_history(self.work_id, history)
+            except Exception as e:
+                # 回退到同步保存
+                self.chat_service.history_manager._save_history(self.work_id, history)
             
         except Exception as e:
             logger.error(f"保存临时消息失败: {e}")
+    
+    async def _async_save_history(self, history):
+        """异步保存历史记录"""
+        try:
+            # 在线程池中执行文件写入
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, 
+                self._safe_save_history, 
+                history
+            )
+        except Exception as e:
+            logger.error(f"异步保存历史记录失败: {e}")
+    
+    def _safe_save_history(self, history):
+        """安全的保存历史记录方法"""
+        try:
+            self.chat_service.history_manager._save_history(self.work_id, history)
+        except Exception as e:
+            logger.error(f"保存历史记录失败 {self.work_id}: {e}")
+            # 如果保存失败，尝试创建新的默认历史
+            try:
+                default_history = self.chat_service.history_manager._create_default_history(self.work_id)
+                # 保留当前临时消息
+                if self.temp_message:
+                    default_history["messages"].append(self.temp_message.copy())
+                self.chat_service.history_manager._save_history(self.work_id, default_history)
+                logger.info(f"已恢复默认历史记录 {self.work_id}")
+            except Exception as recovery_e:
+                logger.error(f"恢复历史记录失败 {self.work_id}: {recovery_e}")
     
     def _save_final_message(self):
         """保存最终消息，移除临时标记"""
@@ -482,23 +525,38 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         logger.info(f"WebSocket回调初始化完成，work_id: {work_id}")
 
                     async def on_content(self, content: str):
-                        """更新临时消息内容，触发前端轮询"""
+                        """更新临时消息内容，实时保存到文件"""
                         self.content += content
                         
                         # 更新生成状态（会自动保存到JSON文件）
                         if self.generation_state:
                             self.generation_state.add_content(content)
                         
-                        # 发送更新通知，让前端知道有新内容
-                        try:
-                            await manager.send_message(self.work_id, json.dumps({
-                                'type': 'content_updated',
-                                'message': '内容已更新，请刷新'
-                            }))
-                            logger.debug(f"内容已更新: {repr(content[:30])}")
+                        # 减少WebSocket通知频率，让前端通过轮询获取更新
+                        # 只在特定条件下发送通知（比如每10个字符或每1秒）
+                        if not hasattr(self, '_last_notify_time'):
+                            self._last_notify_time = 0
+                            self._content_since_notify = 0
+                        
+                        current_time = time.time()
+                        self._content_since_notify += len(content)
+                        
+                        # 每1秒或每50个字符发送一次通知
+                        if (current_time - self._last_notify_time > 1.0 or 
+                            self._content_since_notify > 50):
                             
-                        except Exception as e:
-                            logger.error(f"发送更新通知失败: {e}")
+                            try:
+                                await manager.send_message(self.work_id, json.dumps({
+                                    'type': 'content_updated',
+                                    'message': '内容已更新',
+                                    'timestamp': current_time
+                                }))
+                                self._last_notify_time = current_time
+                                self._content_since_notify = 0
+                                logger.debug(f"发送内容更新通知: {repr(content[:30])}")
+                                
+                            except Exception as e:
+                                logger.error(f"发送更新通知失败: {e}")
 
                     async def on_message_complete(self, role: str, content: str):
                         """消息完成回调"""
@@ -518,12 +576,18 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             if self.generation_state:
                                 self.generation_state.add_json_block(block)
 
-                            # 发送更新通知
-                            await manager.send_message(self.work_id, json.dumps({
-                                'type': 'json_block_updated',
-                                'message': 'JSON块已更新，请刷新'
-                            }))
-                            logger.debug(f"JSON块已更新: {block.get('type', 'unknown')}")
+                            # JSON块更新立即通知，因为这是重要的结构化内容
+                            try:
+                                await manager.send_message(self.work_id, json.dumps({
+                                    'type': 'json_block_updated',
+                                    'message': 'JSON块已更新',
+                                    'block_type': block.get('type', 'unknown'),
+                                    'timestamp': time.time()
+                                }))
+                                logger.debug(f"JSON块已更新: {block.get('type', 'unknown')}")
+                                
+                            except Exception as e:
+                                logger.error(f"发送JSON块更新通知失败: {e}")
                             
                         except Exception as e:
                             logger.error(f"更新JSON块失败: {e}")
@@ -861,6 +925,73 @@ async def get_temp_message(
 
     except Exception as e:
         logger.error(f"获取临时消息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/work/{work_id}/realtime-messages")
+@route_guard
+async def get_realtime_messages(
+    work_id: str,
+    last_modified: float = 0,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取实时消息（用于前端轮询，支持增量更新）"""
+    try:
+        # 验证用户权限
+        from services.data_services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail="无权限访问")
+
+        # 获取聊天服务
+        chat_service = ChatService(db)
+        
+        # 获取生成状态
+        generation_state = manager.get_generation_state(work_id)
+        
+        # 获取历史消息
+        history_messages = chat_service.get_work_chat_history_for_frontend(work_id)
+        
+        # 检查是否有临时消息需要返回
+        temp_message = None
+        has_updates = False
+        
+        if generation_state:
+            temp_message_data = generation_state.get_temp_message()
+            temp_last_modified = temp_message_data.get("last_modified", 0)
+            
+            # 检查是否有更新
+            if temp_last_modified > last_modified:
+                has_updates = True
+                # 转换为前端格式
+                temp_message = {
+                    "id": temp_message_data.get("id", ""),
+                    "role": temp_message_data.get("role", "assistant"),
+                    "content": temp_message_data.get("content", ""),
+                    "datetime": temp_message_data.get("timestamp", ""),
+                    "avatar": "https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9",
+                    "systemType": temp_message_data.get("metadata", {}).get("system_type"),
+                    "json_blocks": temp_message_data.get("json_blocks", []),
+                    "message_type": temp_message_data.get("message_type", "text"),
+                    "is_generating": generation_state.is_generating,
+                    "is_temp": True,
+                    "last_modified": temp_last_modified
+                }
+        
+        return {
+            "work_id": work_id,
+            "has_updates": has_updates,
+            "messages": history_messages,
+            "temp_message": temp_message,
+            "is_generating": generation_state.is_generating if generation_state else False,
+            "is_complete": generation_state.is_complete if generation_state else False,
+            "last_modified": generation_state.last_update if generation_state else 0,
+            "timestamp": time.time()
+        }
+
+    except Exception as e:
+        logger.error(f"获取实时消息失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

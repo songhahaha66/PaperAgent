@@ -48,7 +48,7 @@
         <div class="chat-section">
           <div class="chat-container">
             <div class="chat-messages-container">
-              <JsonChatRenderer :messages="chatMessages" />
+              <JsonChatRenderer :messages="displayMessages" />
             </div>
                           <div class="chat-bottom-section">
                 <FileManager 
@@ -134,6 +134,7 @@ import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
+import { useRealtimePolling } from '@/composables/useRealtimePolling';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
@@ -143,6 +144,9 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const workId = computed(() => route.params.work_id as string);
+
+// 实时轮询
+const { state: pollingState, startPolling, stopPolling, resetState } = useRealtimePolling(workId.value);
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false);
@@ -160,6 +164,29 @@ interface ChatMessageDisplay extends ChatMessage {
 
 // 聊天消息数据
 const chatMessages = ref<ChatMessageDisplay[]>([]);
+
+// 计算合并后的消息列表（历史消息 + 临时消息）
+const displayMessages = computed(() => {
+  const messages = [...chatMessages.value];
+  
+  // 如果有临时消息且正在生成，添加到消息列表
+  if (pollingState.tempMessage && pollingState.isGenerating) {
+    // 检查是否已经存在相同的临时消息
+    const existingTempIndex = messages.findIndex(msg => 
+      msg.is_temp && msg.id === pollingState.tempMessage!.id
+    );
+    
+    if (existingTempIndex >= 0) {
+      // 更新现有的临时消息
+      messages[existingTempIndex] = pollingState.tempMessage as ChatMessageDisplay;
+    } else {
+      // 添加新的临时消息
+      messages.push(pollingState.tempMessage as ChatMessageDisplay);
+    }
+  }
+  
+  return messages;
+});
 
 // 输入框内容
 const inputValue = ref('')
@@ -640,6 +667,8 @@ const sendMessage = async (messageContent?: string) => {
   
   // 发送真实消息
   if (currentChatSession.value && authStore.token) {
+    // 启动实时轮询
+    await startPolling();
     await sendRealMessage(content)
   } else {
     MessagePlugin.error('聊天会话未初始化，请刷新页面重试')
@@ -735,6 +764,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         case 'complete':
           console.log('AI分析完成');
           isStreaming.value = false;
+          // 停止轮询
+          stopPolling();
           // AI处理完成后，智能刷新文件列表
           smartFileRefresh();
           break;
@@ -901,6 +932,9 @@ onUnmounted(() => {
     webSocketHandler.value = null;
   }
   
+  // 停止轮询
+  stopPolling();
+  
   // 重置流式状态，确保输入框不被禁用
   isStreaming.value = false;
   
@@ -929,6 +963,10 @@ watch(() => route.params.work_id, (newWorkId) => {
       webSocketHandler.value = null;
     }
     
+    // 停止轮询和重置状态
+    stopPolling();
+    resetState();
+    
     // 停止文件刷新定时器
     stopFileRefreshTimer();
     
@@ -953,7 +991,7 @@ watch(() => route.params.work_id, (newWorkId) => {
 });
 
 // 监听聊天消息变化，自动滚动到底部
-watch(chatMessages, (newMessages) => {
+watch(displayMessages, (newMessages) => {
   if (newMessages.length > 0) {
     scrollToBottom();
   }
@@ -1026,6 +1064,9 @@ const simulateSendFirstMessage = (content: string) => {
   // 在后台异步创建WebSocket连接并发送消息，不阻塞主流程
   (async () => {
     try {
+      // 启动实时轮询
+      await startPolling();
+      
       // 创建WebSocket处理器
       webSocketHandler.value = new WebSocketChatHandler(
         workId.value!,
@@ -1097,6 +1138,8 @@ const simulateSendFirstMessage = (content: string) => {
             if (finalAiMessageIndex !== -1) {
               chatMessages.value[finalAiMessageIndex].isStreaming = false;
             }
+            // 停止轮询
+            stopPolling();
             console.log('AI回复完成');
             break;
           case 'error':

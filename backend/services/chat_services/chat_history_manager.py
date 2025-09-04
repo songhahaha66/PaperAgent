@@ -28,7 +28,20 @@ class ChatHistoryManager:
 
         try:
             with open(history_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                content = f.read().strip()
+                
+                # 检查文件是否为空
+                if not content:
+                    logger.warning(f"聊天记录文件为空 {work_id}，创建默认历史")
+                    return self._create_default_history(work_id)
+                
+                return json.loads(content)
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析失败 {work_id}: {e}")
+            # 备份损坏的文件
+            self._backup_corrupted_file(history_file, work_id)
+            return self._create_default_history(work_id)
         except Exception as e:
             logger.error(f"读取聊天记录失败 {work_id}: {e}")
             return self._create_default_history(work_id)
@@ -162,15 +175,32 @@ class ChatHistoryManager:
         }
 
     def _save_history(self, work_id: str, history: Dict):
-        """保存聊天记录到文件"""
-        # 确保目录存在
-        work_dir = os.path.join(self.workspace_base, work_id)
-        os.makedirs(work_dir, exist_ok=True)
+        """保存聊天记录到文件（原子性写入）"""
+        try:
+            # 确保目录存在
+            work_dir = os.path.join(self.workspace_base, work_id)
+            os.makedirs(work_dir, exist_ok=True)
 
-        # 保存到文件
-        history_file = self._get_history_file_path(work_id)
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+            # 使用临时文件进行原子性写入
+            history_file = self._get_history_file_path(work_id)
+            temp_file = f"{history_file}.tmp"
+            
+            # 写入临时文件
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+            
+            # 原子性替换
+            os.replace(temp_file, history_file)
+            
+        except Exception as e:
+            logger.error(f"保存聊天记录失败 {work_id}: {e}")
+            # 清理临时文件
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except:
+                pass
+            raise
 
     def _get_avatar_for_role(self, role: str) -> str:
         """根据角色获取头像"""
@@ -222,6 +252,29 @@ class ChatHistoryManager:
 
         self._save_history(work_id, history)
         logger.info(f"聊天记录格式迁移完成 {work_id}: {len(new_messages)} 条消息")
+
+    def _backup_corrupted_file(self, file_path: str, work_id: str):
+        """备份损坏的文件"""
+        try:
+            import shutil
+            from datetime import datetime
+            
+            # 创建备份文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{file_path}.corrupted_{timestamp}.bak"
+            
+            # 备份文件
+            shutil.move(file_path, backup_path)
+            logger.info(f"已备份损坏的聊天记录文件 {work_id}: {backup_path}")
+            
+        except Exception as e:
+            logger.error(f"备份损坏文件失败 {work_id}: {e}")
+            # 如果备份失败，直接删除损坏的文件
+            try:
+                os.remove(file_path)
+                logger.info(f"已删除损坏的聊天记录文件 {work_id}")
+            except Exception as delete_e:
+                logger.error(f"删除损坏文件失败 {work_id}: {delete_e}")
 
     def _extract_json_blocks_from_content(self, content: str) -> List[Dict]:
         """从内容中提取JSON块"""
