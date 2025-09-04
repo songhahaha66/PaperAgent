@@ -303,34 +303,41 @@ if plot_files:
             env['PYTHONIOENCODING'] = 'utf-8'
             
             # 在子进程中执行，设置工作目录为workspace_dir
-            result = subprocess.run(
-                [sys.executable, temp_file],
+            # 使用asyncio.subprocess来避免阻塞事件循环
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, temp_file,
                 cwd=self.workspace_dir,  # 关键：设置工作目录
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                timeout=60,  # 60秒超时
-                env=env,
-                errors='replace'  # 处理编码错误
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
             
-            # 处理执行结果
-            if result.returncode != 0:
-                error_output = result.stderr.strip() if result.stderr else "代码执行失败，无错误信息"
-                return f"执行错误 (返回码: {result.returncode}):\n{error_output}"
-            
-            # 返回标准输出，处理可能的None值
-            if result.stdout is None:
-                output = ""
-            else:
-                output = result.stdout.strip()
-            
-            return output if output else "代码执行完成，无输出"
-            
-        except subprocess.TimeoutExpired:
-            return "代码执行超时（60秒），请检查是否有无限循环或耗时操作"
-        except subprocess.CalledProcessError as e:
-            return f"子进程执行失败: {str(e)}"
+            try:
+                # 等待进程完成，设置超时
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), 
+                    timeout=60  # 60秒超时
+                )
+                
+                # 解码输出
+                stdout_text = stdout.decode('utf-8', errors='replace') if stdout else ""
+                stderr_text = stderr.decode('utf-8', errors='replace') if stderr else ""
+                
+                # 处理执行结果
+                if process.returncode != 0:
+                    error_output = stderr_text.strip() if stderr_text else "代码执行失败，无错误信息"
+                    return f"执行错误 (返回码: {process.returncode}):\n{error_output}"
+                
+                # 返回标准输出
+                output = stdout_text.strip()
+                return output if output else "代码执行完成，无输出"
+                
+            except asyncio.TimeoutError:
+                # 超时处理
+                process.kill()
+                await process.wait()
+                return "代码执行超时（60秒），请检查是否有无限循环或耗时操作"
+                
         except Exception as e:
             logger.error(f"子进程执行异常: {e}")
             return f"子进程执行异常: {str(e)}"

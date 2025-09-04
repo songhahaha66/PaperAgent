@@ -56,7 +56,7 @@
         <div class="chat-section">
           <div class="chat-container">
             <div class="chat-messages-container">
-              <JsonChatRenderer :messages="chatMessages" />
+              <JsonChatRenderer :messages="displayMessages" />
             </div>
             <div class="chat-bottom-section">
               <FileManager
@@ -152,6 +152,7 @@ import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
+import { useRealtimePolling } from '@/composables/useRealtimePolling';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
@@ -162,6 +163,9 @@ const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const workId = computed(() => route.params.work_id as string);
+
+// 实时轮询
+const { state: pollingState, startPolling, stopPolling, resetState } = useRealtimePolling(workId.value);
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false)
@@ -179,6 +183,29 @@ interface ChatMessageDisplay extends ChatMessage {
 
 // 聊天消息数据
 const chatMessages = ref<ChatMessageDisplay[]>([])
+
+// 计算合并后的消息列表（历史消息 + 临时消息）
+const displayMessages = computed(() => {
+  const messages = [...chatMessages.value];
+  
+  // 如果有临时消息且正在生成，添加到消息列表
+  if (pollingState.tempMessage && pollingState.isGenerating) {
+    // 检查是否已经存在相同的临时消息
+    const existingTempIndex = messages.findIndex(msg => 
+      msg.is_temp && msg.id === pollingState.tempMessage!.id
+    );
+    
+    if (existingTempIndex >= 0) {
+      // 更新现有的临时消息
+      messages[existingTempIndex] = pollingState.tempMessage as ChatMessageDisplay;
+    } else {
+      // 添加新的临时消息
+      messages.push(pollingState.tempMessage as ChatMessageDisplay);
+    }
+  }
+  
+  return messages;
+});
 
 // 输入框内容
 const inputValue = ref('')
@@ -662,6 +689,8 @@ const sendMessage = async (messageContent?: string) => {
 
   // 发送真实消息
   if (currentChatSession.value && authStore.token) {
+    // 启动实时轮询
+    await startPolling();
     await sendRealMessage(content)
   } else {
     MessagePlugin.error('聊天会话未初始化，请刷新页面重试')
@@ -754,8 +783,10 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
           break
 
         case 'complete':
-          console.log('AI分析完成')
-          isStreaming.value = false
+          console.log('AI分析完成');
+          isStreaming.value = false;
+          // 停止轮询
+          stopPolling();
           // AI处理完成后，智能刷新文件列表
           smartFileRefresh()
           break
@@ -915,7 +946,10 @@ onUnmounted(() => {
     webSocketHandler.value.disconnect()
     webSocketHandler.value = null
   }
-
+  
+  // 停止轮询
+  stopPolling();
+  
   // 重置流式状态，确保输入框不被禁用
   isStreaming.value = false
 
@@ -933,53 +967,43 @@ onUnmounted(() => {
 })
 
 // 监听路由变化
-watch(
-  () => route.params.work_id,
-  (newWorkId) => {
-    if (newWorkId) {
-      // 重置流式状态，确保输入框不被禁用
-      isStreaming.value = false
-
-      // 清理之前的WebSocket连接
-      if (webSocketHandler.value) {
-        webSocketHandler.value.disconnect()
-        webSocketHandler.value = null
-      }
-
-      // 停止文件刷新定时器
-      stopFileRefreshTimer()
-
-      // 清理文件内容，避免不同work的文件内容混淆
-      currentFileContent.value = ''
-      selectedFile.value = null
-
-      // 清理图片URL缓存，避免不同work的图片混淆
-      Object.values(imageUrls.value).forEach((url) => {
-        if (url.startsWith('blob:')) {
-          URL.revokeObjectURL(url)
-        }
-      })
-      imageUrls.value = {}
-
-      loadWork()
-      // 重新初始化聊天会话
-      if (authStore.token) {
-        initializeChatSession()
+watch(() => route.params.work_id, (newWorkId) => {
+  if (newWorkId) {
+    // 重置流式状态，确保输入框不被禁用
+    isStreaming.value = false;
+    
+    // 清理之前的WebSocket连接
+    if (webSocketHandler.value) {
+      webSocketHandler.value.disconnect();
+      webSocketHandler.value = null;
+    }
+    
+    // 停止轮询和重置状态
+    stopPolling();
+    resetState();
+    
+    // 停止文件刷新定时器
+    stopFileRefreshTimer();
+    
+    // 清理文件内容，避免不同work的文件内容混淆
+    currentFileContent.value = '';
+    selectedFile.value = null;
+    
+    // 清理图片URL缓存，避免不同work的图片混淆
+    Object.values(imageUrls.value).forEach(url => {
+      if (url.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
       }
     }
   },
 )
 
 // 监听聊天消息变化，自动滚动到底部
-watch(
-  chatMessages,
-  (newMessages) => {
-    if (newMessages.length > 0) {
-      scrollToBottom()
-    }
-  },
-  { deep: true },
-)
+watch(displayMessages, (newMessages) => {
+  if (newMessages.length > 0) {
+    scrollToBottom();
+  }
+}, { deep: true });
 
 // 组件挂载时加载工作信息
 onMounted(() => {
@@ -1047,6 +1071,9 @@ const simulateSendFirstMessage = (content: string) => {
   // 在后台异步创建WebSocket连接并发送消息，不阻塞主流程
   ;(async () => {
     try {
+      // 启动实时轮询
+      await startPolling();
+      
       // 创建WebSocket处理器
       webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
 
@@ -1119,8 +1146,10 @@ const simulateSendFirstMessage = (content: string) => {
             if (finalAiMessageIndex !== -1) {
               chatMessages.value[finalAiMessageIndex].isStreaming = false
             }
-            console.log('AI回复完成')
-            break
+            // 停止轮询
+            stopPolling();
+            console.log('AI回复完成');
+            break;
           case 'error':
             console.error('AI处理出错:', data.message)
             break

@@ -113,10 +113,9 @@ class LLMHandler:
                         for i, tool_call in enumerate(delta.tool_calls):
                             logger.debug(f"  Chunk {chunk_count} 工具调用 {i}: id={tool_call.id}, name={getattr(tool_call.function, 'name', 'None') if tool_call.function else 'None'}")
 
-                # 定期让出控制权，确保其他异步任务能够执行
+                # 每次处理chunk后都让出控制权，确保事件循环不被阻塞
                 config = AsyncConfig.get_llm_stream_config()
-                if chunk_count % (config["yield_interval"] * 2) == 0:
-                    await asyncio.sleep(config["yield_delay"])
+                await asyncio.sleep(config["yield_delay"])
 
             # 流式响应结束后，统一处理所有工具调用（完全等待模式）
             if tool_call_chunks:
@@ -140,6 +139,10 @@ class LLMHandler:
                 await self.stream_manager.finalize_message()
 
             # 构建完整的 assistant 消息
+            # 确保content不为空，即使只有工具调用
+            if not full_response_content.strip() and tool_calls:
+                full_response_content = "正在执行工具调用..."
+            
             assistant_message = {"role": "assistant",
                                  "content": full_response_content}
             if tool_calls:

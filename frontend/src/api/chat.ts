@@ -193,14 +193,61 @@ export const chatAPI = {
       {
         method: 'PUT',
         body: JSON.stringify({ title }),
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-    )
-    return response
+        headers: { 
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    return response;
   },
-}
+
+  // 获取实时消息（用于轮询）
+  async getRealtimeMessages(
+    token: string,
+    workId: string,
+    lastModified: number = 0
+  ): Promise<{
+    work_id: string;
+    has_updates: boolean;
+    messages: any[];
+    temp_message: any | null;
+    is_generating: boolean;
+    is_complete: boolean;
+    last_modified: number;
+    timestamp: number;
+  }> {
+    const response = await apiClient.request<any>(
+      `/api/chat/work/${workId}/realtime-messages?last_modified=${lastModified}`,
+      {
+        method: 'GET'
+      }
+    );
+    return response;
+  },
+
+  // 获取临时消息
+  async getTempMessage(
+    token: string,
+    workId: string
+  ): Promise<{
+    work_id: string;
+    has_temp_message: boolean;
+    temp_message: any | null;
+    is_generating: boolean;
+    is_complete: boolean;
+    last_update: number;
+  }> {
+    const response = await apiClient.request<any>(
+      `/api/chat/work/${workId}/temp-message`,
+      {
+        method: 'GET'
+      }
+    );
+    return response;
+  }
+};
+
+
 
 // WebSocket聊天处理器
 export class WebSocketChatHandler {
