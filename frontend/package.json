@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tdesign-vue-next/chat": "^0.4.5",
+    "highlight.js": "^11.11.1",
     "katex": "^0.16.22",
     "markdown-it": "^14.1.0",
     "markdown-it-katex": "^2.0.3",
@@ -41,8 +42,8 @@
     "vue-tsc": "^3.0.4"
   },
   "overrides": {
-    "markdown-it-katex":{
-      "katex":"^0.16.0"
+    "markdown-it-katex": {
+      "katex": "^0.16.0"
     }
   }
 }
