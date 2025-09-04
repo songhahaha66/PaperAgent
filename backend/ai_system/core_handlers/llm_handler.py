@@ -139,6 +139,10 @@ class LLMHandler:
                 await self.stream_manager.finalize_message()
 
             # 构建完整的 assistant 消息
+            # 确保content不为空，即使只有工具调用
+            if not full_response_content.strip() and tool_calls:
+                full_response_content = "正在执行工具调用..."
+            
             assistant_message = {"role": "assistant",
                                  "content": full_response_content}
             if tool_calls:

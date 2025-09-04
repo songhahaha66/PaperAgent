@@ -376,7 +376,12 @@ class MainAgent(Agent):
         # 添加历史消息，但过滤掉tool消息（避免上下文过长）
         for msg in history_messages:
             if msg.get('role') in ["user", "assistant"]:
-                self.messages.append(msg)
+                # 确保消息内容不为空
+                content = msg.get('content', '').strip()
+                if content or msg.get('role') == 'user':  # 用户消息即使为空也要保留
+                    self.messages.append(msg)
+                else:
+                    logger.warning(f"跳过空的assistant消息: {msg.get('id', 'unknown')}")
 
         # 检查是否需要压缩上下文
         self._check_and_compress_context()
@@ -463,9 +468,27 @@ class MainAgent(Agent):
             iteration_count += 1
             logger.info(f"MainAgent第 {iteration_count} 次迭代")
 
+            # 验证消息列表，确保没有空消息
+            valid_messages = []
+            for msg in self.messages:
+                if msg.get('role') == 'assistant' and not msg.get('content', '').strip():
+                    logger.warning(f"跳过空的assistant消息: {msg.get('id', 'unknown')}")
+                    continue
+                valid_messages.append(msg)
+            
+            if len(valid_messages) != len(self.messages):
+                logger.info(f"过滤了 {len(self.messages) - len(valid_messages)} 个空消息")
+                self.messages = valid_messages
+            
             # 使用异步LLM处理
             assistant_message, tool_calls = await self.llm_handler.process_stream(
                 self.messages, self.tools)
+            
+            # 确保assistant消息不为空
+            if not assistant_message.get('content', '').strip() and not tool_calls:
+                logger.warning("收到空的assistant消息，跳过添加")
+                continue
+                
             self.messages.append(assistant_message)
 
             if not tool_calls:
