@@ -16,17 +16,7 @@
         >
           <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
         </t-button>
-        <t-tooltip v-if="isSidebarCollapsed" content="新聊天">
-          <t-button 
-            theme="default" 
-            shape="square" 
-            variant="text" 
-            @click="createNewChat"
-            class="sidebar-action-btn"
-          >
-            <t-icon name="edit-1" />
-          </t-button>
-        </t-tooltip>
+       
       </div>
     </div>
     
@@ -94,7 +84,17 @@
     
     <!-- 收起状态的内容 -->
     <div class="sidebar-content-collapsed" v-if="isSidebarCollapsed">
-     
+      <t-tooltip v-if="isSidebarCollapsed" content="新聊天">
+          <t-button 
+            theme="default" 
+            shape="square" 
+            variant="text" 
+            @click="createNewChat"
+            class="sidebar-action-btn"
+          >
+            <t-icon name="edit-1" />
+          </t-button>
+        </t-tooltip>
     </div>
     
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
