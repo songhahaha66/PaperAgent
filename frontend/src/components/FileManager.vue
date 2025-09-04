@@ -5,12 +5,7 @@
         <template #header>
           <div class="file-manager-header">
             <span>文件管理器</span>
-            <t-button 
-              size="small" 
-              variant="text" 
-              @click.stop="handleRefresh"
-              :loading="isLoading"
-            >
+            <t-button size="small" variant="text" @click.stop="handleRefresh" :loading="isLoading">
               <template #icon>
                 <t-icon name="refresh" />
               </template>
@@ -34,15 +29,11 @@
             @select="handleFileSelect"
           />
         </div>
-        
+
         <!-- 文件信息 -->
         <div class="file-manager-info">
-          <span v-if="selectedFile" class="selected-file-info">
-            当前选中: {{ selectedFile }}
-          </span>
-          <span v-else class="no-file-selected">
-            请点击文件进行选择
-          </span>
+          <span v-if="selectedFile" class="selected-file-info"> 当前选中: {{ selectedFile }} </span>
+          <span v-else class="no-file-selected"> 请点击文件进行选择 </span>
         </div>
       </t-collapse-panel>
     </t-collapse>
@@ -55,23 +46,25 @@ import { Tree, Collapse, CollapsePanel, Loading } from 'tdesign-vue-next'
 
 // 定义props
 interface Props {
-  fileTreeData: Array<{
-    value: string
-    label: string
-    children?: Array<{
-      value: string
-      label: string
-      isLeaf: boolean
-    }>
-  }> | Array<{
-    name: string
-    type: 'file' | 'directory'
-    size?: number
-    modified: number
-    path: string
-    display_path?: string
-    depth?: number
-  }>
+  fileTreeData:
+    | Array<{
+        value: string
+        label: string
+        children?: Array<{
+          value: string
+          label: string
+          isLeaf: boolean
+        }>
+      }>
+    | Array<{
+        name: string
+        type: 'file' | 'directory'
+        size?: number
+        modified: number
+        path: string
+        display_path?: string
+        depth?: number
+      }>
   workId?: string
   loading?: boolean
 }
@@ -104,31 +97,34 @@ const processedFileTreeData = computed(() => {
   if (isLoading.value) {
     return []
   }
-  
+
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
     // 返回默认的空结构
     return [
       {
-          value: 'python_files',
-          label: 'Python脚本 (0)',
-          children: []
-        },
-        {
-          value: 'markdown_files',
-          label: 'Markdown文档 (0)',
-          children: []
-        },
-        {
-          value: 'image_files',
-          label: '图片文件 (0)',
-          children: []
-        }
-      ]
+        value: 'python_files',
+        label: 'Python脚本 (0)',
+        children: [],
+      },
+      {
+        value: 'markdown_files',
+        label: 'Markdown文档 (0)',
+        children: [],
+      },
+      {
+        value: 'image_files',
+        label: '图片文件 (0)',
+        children: [],
+      },
+    ]
   }
-  
+
   // 检查是否为FileInfo[]类型（有path和type属性）
-  const isFileInfoType = props.fileTreeData.length > 0 && 'path' in props.fileTreeData[0] && 'type' in props.fileTreeData[0];
-  
+  const isFileInfoType =
+    props.fileTreeData.length > 0 &&
+    'path' in props.fileTreeData[0] &&
+    'type' in props.fileTreeData[0]
+
   if (isFileInfoType) {
     // 处理FileInfo[]类型的数据
     const fileInfos = props.fileTreeData as Array<{
@@ -139,158 +135,158 @@ const processedFileTreeData = computed(() => {
       path: string
       display_path?: string
       depth?: number
-    }>;
-    
+    }>
+
     // 过滤掉空目录，只保留有文件的目录
-    const hasActualFiles = fileInfos.some(file => file.type === 'file');
-    
+    const hasActualFiles = fileInfos.some((file) => file.type === 'file')
+
     if (!hasActualFiles) {
       // 如果没有实际文件，只显示分类结构
       return [
         {
           value: 'python_files',
           label: 'Python脚本 (0)',
-          children: []
+          children: [],
         },
         {
           value: 'markdown_files',
           label: 'Markdown文档 (0)',
-          children: []
+          children: [],
         },
         {
           value: 'image_files',
           label: '图片文件 (0)',
-          children: []
-        }
+          children: [],
+        },
       ]
     }
-    
+
     // 按文件类型分类
-    const pythonFiles: any[] = [];
-    const markdownFiles: any[] = [];
-    const imageFiles: any[] = [];
-    
-    fileInfos.forEach(file => {
+    const pythonFiles: any[] = []
+    const markdownFiles: any[] = []
+    const imageFiles: any[] = []
+
+    fileInfos.forEach((file) => {
       if (file.path && file.path.endsWith('.py')) {
         pythonFiles.push({
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true
+          isLeaf: true,
         })
       } else if (file.path && file.path.endsWith('.md')) {
         markdownFiles.push({
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true
+          isLeaf: true,
         })
       } else if (file.path && isImageFile(file.path)) {
         imageFiles.push({
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true
+          isLeaf: true,
         })
       }
     })
-    
+
     return [
       {
         value: 'python_files',
         label: `Python脚本 (${pythonFiles.length})`,
-        children: pythonFiles
+        children: pythonFiles,
       },
       {
         value: 'markdown_files',
         label: `Markdown文档 (${markdownFiles.length})`,
-        children: markdownFiles
+        children: markdownFiles,
       },
       {
         value: 'image_files',
         label: `图片文件 (${imageFiles.length})`,
-        children: imageFiles
-      }
+        children: imageFiles,
+      },
     ]
   } else {
     // 处理原有的树形结构数据
     // 过滤掉空目录，只保留有文件的目录
-    const hasActualFiles = props.fileTreeData.some((file: any) => file.type === 'file');
-    
+    const hasActualFiles = props.fileTreeData.some((file: any) => file.type === 'file')
+
     if (!hasActualFiles) {
       // 如果没有实际文件，只显示分类结构
-      const pythonFiles: any[] = [];
-      const markdownFiles: any[] = [];
-      const imageFiles: any[] = [];
-      
+      const pythonFiles: any[] = []
+      const markdownFiles: any[] = []
+      const imageFiles: any[] = []
+
       return [
         {
           value: 'python_files',
           label: 'Python脚本 (0)',
-          children: pythonFiles
+          children: pythonFiles,
         },
         {
           value: 'markdown_files',
           label: 'Markdown文档 (0)',
-          children: markdownFiles
+          children: markdownFiles,
         },
         {
           value: 'image_files',
           label: '图片文件 (0)',
-          children: imageFiles
-        }
+          children: imageFiles,
+        },
       ]
     }
-    
+
     // 构建目录树结构
     const buildDirectoryTree = (files: any[]) => {
-      const tree: any = {};
-      
-      files.forEach(file => {
-        const pathParts = file.path.split('/');
-        let currentLevel = tree;
-        
+      const tree: any = {}
+
+      files.forEach((file) => {
+        const pathParts = file.path.split('/')
+        let currentLevel = tree
+
         // 构建目录路径
         for (let i = 0; i < pathParts.length - 1; i++) {
-          const part = pathParts[i];
+          const part = pathParts[i]
           if (!currentLevel[part]) {
             currentLevel[part] = {
               type: 'directory',
               children: {},
-              files: []
-            };
+              files: [],
+            }
           }
-          currentLevel = currentLevel[part].children;
+          currentLevel = currentLevel[part].children
         }
-        
+
         // 添加文件到对应目录
-        const fileName = pathParts[pathParts.length - 1];
+        const fileName = pathParts[pathParts.length - 1]
         if (currentLevel.files) {
           currentLevel.files.push({
             ...file,
-            displayName: fileName
-          });
+            displayName: fileName,
+          })
         }
-      });
-      
-      return tree;
-    };
-    
+      })
+
+      return tree
+    }
+
     // 将目录树转换为组件需要的格式
     const convertTreeToComponentFormat = (tree: any, parentPath = ''): any[] => {
-      const result: any[] = [];
-      
+      const result: any[] = []
+
       // 先添加目录
-      Object.keys(tree).forEach(key => {
+      Object.keys(tree).forEach((key) => {
         if (key !== 'files' && key !== 'type') {
-          const node = tree[key];
-          const fullPath = parentPath ? `${parentPath}/${key}` : key;
-          
+          const node = tree[key]
+          const fullPath = parentPath ? `${parentPath}/${key}` : key
+
           result.push({
             value: fullPath,
             label: key,
-            children: convertTreeToComponentFormat(node, fullPath)
-          });
+            children: convertTreeToComponentFormat(node, fullPath),
+          })
         }
-      });
-      
+      })
+
       // 再添加文件
       if (tree.files) {
         tree.files.forEach((file: any) => {
@@ -298,72 +294,72 @@ const processedFileTreeData = computed(() => {
             value: file.path,
             label: file.displayName,
             isLeaf: true,
-            fileType: getFileType(file.path)
-          });
-        });
+            fileType: getFileType(file.path),
+          })
+        })
       }
-      
-      return result;
-    };
-    
+
+      return result
+    }
+
     // 获取文件类型
     const getFileType = (filePath: string): string => {
-      if (filePath.endsWith('.py')) return 'python';
-      if (filePath.endsWith('.md')) return 'markdown';
-      if (isImageFile(filePath)) return 'image';
-      return 'text';
-    };
-    
+      if (filePath.endsWith('.py')) return 'python'
+      if (filePath.endsWith('.md')) return 'markdown'
+      if (isImageFile(filePath)) return 'image'
+      return 'text'
+    }
+
     // 构建完整的目录树
-    const fullTree = convertTreeToComponentFormat(buildDirectoryTree(props.fileTreeData));
-    
+    const fullTree = convertTreeToComponentFormat(buildDirectoryTree(props.fileTreeData))
+
     // 按文件类型分类（保持原有逻辑作为备选）
-    const pythonFiles: any[] = [];
-    const markdownFiles: any[] = [];
-    const imageFiles: any[] = [];
-    
+    const pythonFiles: any[] = []
+    const markdownFiles: any[] = []
+    const imageFiles: any[] = []
+
     props.fileTreeData.forEach((file: any) => {
       if (file.path && file.path.endsWith('.py')) {
         pythonFiles.push({
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true
+          isLeaf: true,
         })
       } else if (file.path && file.path.endsWith('.md')) {
         markdownFiles.push({
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true
+          isLeaf: true,
         })
       } else if (file.path && isImageFile(file.path)) {
         imageFiles.push({
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true
+          isLeaf: true,
         })
       }
     })
-    
+
     // 返回完整的目录树结构，如果没有文件则回退到分类显示
     if (fullTree.length > 0 && hasActualFiles) {
-      return fullTree;
+      return fullTree
     } else {
       return [
         {
           value: 'python_files',
           label: `Python脚本 (${pythonFiles.length})`,
-          children: pythonFiles
+          children: pythonFiles,
         },
         {
           value: 'markdown_files',
           label: `Markdown文档 (${markdownFiles.length})`,
-          children: markdownFiles
+          children: markdownFiles,
         },
         {
           value: 'image_files',
           label: `图片文件 (${imageFiles.length})`,
-          children: imageFiles
-        }
+          children: imageFiles,
+        },
       ]
     }
   }
@@ -373,7 +369,7 @@ const processedFileTreeData = computed(() => {
 const isImageFile = (filePath: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
   const lowerPath = filePath.toLowerCase()
-  return imageExtensions.some(ext => lowerPath.endsWith(ext))
+  return imageExtensions.some((ext) => lowerPath.endsWith(ext))
 }
 
 // 检查节点是否为叶子节点
@@ -382,7 +378,7 @@ const checkIfLeaf = (key: string): boolean => {
   if (key === 'python_files' || key === 'markdown_files' || key === 'image_files') {
     return false
   }
-  
+
   // 检查是否在分类的子节点中
   for (const category of processedFileTreeData.value) {
     if (category.value === key) {
@@ -394,7 +390,7 @@ const checkIfLeaf = (key: string): boolean => {
       }
     }
   }
-  
+
   // 对于新的目录树结构，检查是否为文件
   return !key.endsWith('/') && key.includes('.') // 简单判断：包含扩展名的不是目录
 }
@@ -405,7 +401,7 @@ const isCategoryNode = (key: string): boolean => {
 }
 
 // 处理文件点击
-const handleFileClick = (context: { node: any, e: PointerEvent }) => {
+const handleFileClick = (context: { node: any; e: PointerEvent }) => {
   console.log('文件节点点击:', context)
   const node = context.node
   if (node && node.isLeaf && node.value && !isCategoryNode(node.value)) {
@@ -420,15 +416,15 @@ const handleFileClick = (context: { node: any, e: PointerEvent }) => {
 // 处理文件选择
 const handleFileSelect = (selectedKeys: string[]) => {
   console.log('文件选择事件:', selectedKeys)
-  
+
   if (selectedKeys && selectedKeys.length > 0) {
     const selectedKey = selectedKeys[0]
     console.log('选中的key:', selectedKey)
-    
+
     // 检查是否是叶子节点（文件）且不是分类名称
     const isLeaf = checkIfLeaf(selectedKey)
     const isNotCategory = !isCategoryNode(selectedKey)
-    
+
     if (isLeaf && isNotCategory) {
       selectedFile.value = selectedKey
       emit('file-select', selectedKey)
@@ -449,7 +445,7 @@ defineExpose({
   selectedFile,
   setSelectedFile: (file: string | null) => {
     selectedFile.value = file
-  }
+  },
 })
 </script>
 
@@ -480,7 +476,6 @@ defineExpose({
 .file-manager .t-collapse-panel__body {
   padding: 0 16px 16px;
 }
-
 
 .loading-state {
   display: flex;

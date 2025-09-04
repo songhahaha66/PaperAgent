@@ -1,12 +1,12 @@
 <template>
   <div class="json-chat-renderer">
     <div class="chat-messages">
-      <div 
-        v-for="(message, index) in messages" 
-        :key="message.id" 
+      <div
+        v-for="(message, index) in messages"
+        :key="message.id"
         :class="[
           'chat-message-wrapper',
-          { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider }
+          { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider },
         ]"
       >
         <ChatItem
@@ -17,10 +17,7 @@
           <template #content>
             <div class="chat-markdown">
               <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
-              <MarkdownRenderer
-                v-if="getTextContent(message)"
-                :content="getTextContent(message)"
-              />
+              <MarkdownRenderer v-if="getTextContent(message)" :content="getTextContent(message)" />
 
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
               <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
@@ -37,16 +34,13 @@
         <div v-if="message.systemType" :class="['system-label', message.systemType]">
           {{ getSystemName(message) }}
         </div>
-        
+
         <!-- 对话分割线 -->
-        <div 
-          v-if="index < messages.length - 1" 
-          class="message-divider"
-        >
+        <div v-if="index < messages.length - 1" class="message-divider">
           <div class="divider-line"></div>
-          <div 
-            class="divider-icon" 
-            :class="{ 'show': hoveredDivider === index }"
+          <div
+            class="divider-icon"
+            :class="{ show: hoveredDivider === index }"
             @mouseenter="showDivider(index)"
             @mouseleave="hideDivider"
           >
@@ -59,57 +53,57 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import { ChatItem } from '@tdesign-vue-next/chat';
-import { MessagePlugin } from 'tdesign-vue-next';
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
+import { ref, computed } from 'vue'
+import { ChatItem } from '@tdesign-vue-next/chat'
+import { MessagePlugin } from 'tdesign-vue-next'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 // 定义消息类型
 interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'error' | 'model-change' | 'system';
-  content: string;
-  datetime: string;
-  avatar: string;
-  systemType?: 'brain' | 'code' | 'writing';
-  isStreaming?: boolean;
-  json_blocks?: any[];
-  message_type?: 'text' | 'json_card';
+  id: string
+  role: 'user' | 'assistant' | 'error' | 'model-change' | 'system'
+  content: string
+  datetime: string
+  avatar: string
+  systemType?: 'brain' | 'code' | 'writing'
+  isStreaming?: boolean
+  json_blocks?: any[]
+  message_type?: 'text' | 'json_card'
 }
 
 // Props
 interface Props {
-  messages: ChatMessage[];
+  messages: ChatMessage[]
 }
 
-const props = defineProps<Props>();
+const props = defineProps<Props>()
 
 // 分割线悬停状态
-const hoveredDivider = ref<number | null>(null);
+const hoveredDivider = ref<number | null>(null)
 
 // 显示分割线
 const showDivider = (index: number) => {
-  hoveredDivider.value = index;
-};
+  hoveredDivider.value = index
+}
 
 // 隐藏分割线
 const hideDivider = () => {
-  hoveredDivider.value = null;
-};
+  hoveredDivider.value = null
+}
 
 // 获取系统头像
 const getSystemAvatar = (message: ChatMessage) => {
   if (message.systemType) {
     const systemAvatars = {
-      brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9',   // 中枢系统头像 - 蓝色机器人
-      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870',    // 代码执行系统头像 - 绿色机器人
-      writing: 'https://api.dicebear.com/7.x/bottts/svg?seed=writing&backgroundColor=ed7b2f' // 论文生成系统头像 - 橙色机器人
-    };
-    return systemAvatars[message.systemType];
+      brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9', // 中枢系统头像 - 蓝色机器人
+      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870', // 代码执行系统头像 - 绿色机器人
+      writing: 'https://api.dicebear.com/7.x/bottts/svg?seed=writing&backgroundColor=ed7b2f', // 论文生成系统头像 - 橙色机器人
+    }
+    return systemAvatars[message.systemType]
   }
   // 如果没有系统类型，返回默认头像
-  return 'https://tdesign.gtimg.com/site/avatar.jpg';
-};
+  return 'https://tdesign.gtimg.com/site/avatar.jpg'
+}
 
 // 获取系统名称
 const getSystemName = (message: ChatMessage) => {
@@ -117,128 +111,133 @@ const getSystemName = (message: ChatMessage) => {
     const systemNames = {
       brain: '中枢系统',
       code: '代码执行',
-      writing: '论文生成'
-    };
-    return systemNames[message.systemType];
+      writing: '论文生成',
+    }
+    return systemNames[message.systemType]
   }
-  return 'AI助手';
-};
+  return 'AI助手'
+}
 
 // 格式化时间为人类可读格式
 const formatDateTime = (datetime: string) => {
-  if (!datetime) return '';
-  
+  if (!datetime) return ''
+
   try {
-    const date = new Date(datetime);
-    
+    const date = new Date(datetime)
+
     // 检查是否是今天
-    const today = new Date();
-    const isToday = date.getDate() === today.getDate() && 
-                    date.getMonth() === today.getMonth() && 
-                    date.getFullYear() === today.getFullYear();
-    
+    const today = new Date()
+    const isToday =
+      date.getDate() === today.getDate() &&
+      date.getMonth() === today.getMonth() &&
+      date.getFullYear() === today.getFullYear()
+
     if (isToday) {
       // 如果是今天，只显示时间
-      return `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+      return `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
     } else {
       // 如果是昨天
-      const yesterday = new Date(today);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const isYesterday = date.getDate() === yesterday.getDate() && 
-                          date.getMonth() === yesterday.getMonth() && 
-                          date.getFullYear() === yesterday.getFullYear();
-      
+      const yesterday = new Date(today)
+      yesterday.setDate(yesterday.getDate() - 1)
+      const isYesterday =
+        date.getDate() === yesterday.getDate() &&
+        date.getMonth() === yesterday.getMonth() &&
+        date.getFullYear() === yesterday.getFullYear()
+
       if (isYesterday) {
-        return `昨天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+        return `昨天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
       } else {
         // 其他日期显示完整日期和时间
-        return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+        return `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
       }
     }
   } catch (e) {
     // 如果解析失败，返回原始字符串
-    return datetime;
+    return datetime
   }
-};
+}
 
 // 解析JSON块
 const parseJsonBlocks = (content: string) => {
-  const blocks: any[] = [];
-  const lines = content.split('\n');
-  let currentBlock = '';
-  let inJsonBlock = false;
-  
+  const blocks: any[] = []
+  const lines = content.split('\n')
+  let currentBlock = ''
+  let inJsonBlock = false
+
   for (const line of lines) {
     if (line.trim().startsWith('{') && line.trim().endsWith('}')) {
       // 单行JSON
       try {
-        const block = JSON.parse(line.trim());
-        blocks.push(block);
+        const block = JSON.parse(line.trim())
+        blocks.push(block)
       } catch (e) {
         // 不是有效的JSON，作为普通文本处理
         if (!inJsonBlock) {
-          currentBlock += line + '\n';
+          currentBlock += line + '\n'
         }
       }
     } else if (line.trim().startsWith('{')) {
       // 多行JSON开始
-      inJsonBlock = true;
-      currentBlock = line + '\n';
+      inJsonBlock = true
+      currentBlock = line + '\n'
     } else if (line.trim().endsWith('}') && inJsonBlock) {
       // 多行JSON结束
-      currentBlock += line;
+      currentBlock += line
       try {
-        const block = JSON.parse(currentBlock);
-        blocks.push(block);
+        const block = JSON.parse(currentBlock)
+        blocks.push(block)
       } catch (e) {
         // 解析失败，作为普通文本处理
-        currentBlock = '';
+        currentBlock = ''
       }
-      inJsonBlock = false;
-      currentBlock = '';
+      inJsonBlock = false
+      currentBlock = ''
     } else if (inJsonBlock) {
       // 多行JSON中间
-      currentBlock += line + '\n';
+      currentBlock += line + '\n'
     } else {
       // 普通文本
-      currentBlock += line + '\n';
+      currentBlock += line + '\n'
     }
   }
-  
-  return { blocks, remainingText: currentBlock.trim() };
-};
+
+  return { blocks, remainingText: currentBlock.trim() }
+}
 
 // 提取供渲染的纯文本 Markdown
 const getTextContent = (message: ChatMessage) => {
-  if (!message) return '';
+  if (!message) return ''
   // 对 assistant，如果有显式 json_blocks，则文本就是 content；
   // 否则需要从 content 里解析掉 JSON，返回剩余文本。
   if (message.role === 'assistant') {
     if (message.json_blocks && message.json_blocks.length > 0) {
-      return message.content || '';
+      return message.content || ''
     }
-    const { remainingText } = parseJsonBlocks(message.content || '');
-    return remainingText || '';
+    const { remainingText } = parseJsonBlocks(message.content || '')
+    return remainingText || ''
   }
-  return message.content || '';
-};
+  return message.content || ''
+}
 
 // 提取 JSON 块数组
 const getJsonBlocks = (message: ChatMessage) => {
-  if (!message) return [] as any[];
-  if (message.json_blocks && message.json_blocks.length > 0) return message.json_blocks;
-  const { blocks } = parseJsonBlocks(message.content || '');
-  return blocks;
-};
+  if (!message) return [] as any[]
+  if (message.json_blocks && message.json_blocks.length > 0) return message.json_blocks
+  const { blocks } = parseJsonBlocks(message.content || '')
+  return blocks
+}
 
 // 复制消息
 const copyMessage = (content: string) => {
-  navigator.clipboard.writeText(content).then(() => {
-    MessagePlugin.success('消息已复制到剪贴板');
-  }).catch(() => {
-    MessagePlugin.error('复制失败');
-  });
-};
+  navigator.clipboard
+    .writeText(content)
+    .then(() => {
+      MessagePlugin.success('消息已复制到剪贴板')
+    })
+    .catch(() => {
+      MessagePlugin.error('复制失败')
+    })
+}
 </script>
 
 <style scoped>
@@ -339,14 +338,14 @@ const copyMessage = (content: string) => {
 
 /* 让 Chat 内部的 Markdown 容器与气泡样式协调，避免内外 padding 叠加导致公式错位 */
 :deep(.t-chat__message-content) .chat-markdown > .markdown-content {
-  padding: 0;              /* 由外层气泡控制内边距 */
+  padding: 0; /* 由外层气泡控制内边距 */
   background: transparent; /* 去掉 MarkdownRenderer 的背景，避免视觉偏移 */
-  overflow: visible;       /* 避免嵌套滚动影响定位 */
+  overflow: visible; /* 避免嵌套滚动影响定位 */
 }
 
 /* KaTeX 对齐与间距（块级） */
 :deep(.t-chat__message-content) .katex-display {
-  margin: 12px 0;          /* 合理上下间距 */
+  margin: 12px 0; /* 合理上下间距 */
 }
 
 /* 行内公式与文本的基线对齐通常由 KaTeX 默认处理，这里确保 line-height 不被异常覆盖 */
@@ -507,7 +506,7 @@ const copyMessage = (content: string) => {
   .chat-messages {
     padding: 8px;
   }
-  
+
   .system-label {
     margin-left: 32px;
     font-size: 11px;

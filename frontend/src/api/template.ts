@@ -6,7 +6,7 @@ export interface PaperTemplate {
   name: string
   description?: string
   category?: string
-  file_path: string  // 添加文件路径字段
+  file_path: string // 添加文件路径字段
   created_at: string
   updated_at: string
   is_public: boolean
@@ -17,7 +17,7 @@ export interface PaperTemplateCreate {
   name: string
   description?: string
   category?: string
-  file_path: string  // 添加文件路径字段
+  file_path: string // 添加文件路径字段
   is_public: boolean
 }
 
@@ -27,14 +27,14 @@ export interface PaperTemplateCreateWithContent {
   category?: string
   file_path: string
   is_public: boolean
-  content: string  // 添加文件内容字段
+  content: string // 添加文件内容字段
 }
 
 export interface PaperTemplateUpdate {
   name?: string
   description?: string
   category?: string
-  file_path?: string  // 允许更新文件路径
+  file_path?: string // 允许更新文件路径
   is_public?: boolean
 }
 
@@ -44,10 +44,14 @@ class TemplateAPI {
   }
 
   // 获取用户模板列表
-  async getUserTemplates(token: string, skip: number = 0, limit: number = 100): Promise<PaperTemplate[]> {
+  async getUserTemplates(
+    token: string,
+    skip: number = 0,
+    limit: number = 100,
+  ): Promise<PaperTemplate[]> {
     return this.request<PaperTemplate[]>(`/templates?skip=${skip}&limit=${limit}`, {
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
     })
   }
@@ -61,28 +65,35 @@ class TemplateAPI {
   async getTemplate(token: string, templateId: number): Promise<PaperTemplate> {
     return this.request<PaperTemplate>(`/templates/${templateId}`, {
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
     })
   }
 
   // 创建模板（包含文件内容）
-  async createTemplate(token: string, template: PaperTemplateCreateWithContent): Promise<PaperTemplate> {
+  async createTemplate(
+    token: string,
+    template: PaperTemplateCreateWithContent,
+  ): Promise<PaperTemplate> {
     return this.request<PaperTemplate>('/templates', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(template),
     })
   }
 
   // 更新模板
-  async updateTemplate(token: string, templateId: number, template: PaperTemplateUpdate): Promise<PaperTemplate> {
+  async updateTemplate(
+    token: string,
+    templateId: number,
+    template: PaperTemplateUpdate,
+  ): Promise<PaperTemplate> {
     return this.request<PaperTemplate>(`/templates/${templateId}`, {
       method: 'PUT',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(template),
     })
@@ -93,35 +104,46 @@ class TemplateAPI {
     return this.request<{ message: string }>(`/templates/${templateId}`, {
       method: 'DELETE',
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
     })
   }
 
   // 强制删除模板（同时删除引用该模板的工作）
-  async forceDeleteTemplate(token: string, templateId: number): Promise<{ message: string; deleted_works_count: number }> {
-    return this.request<{ message: string; deleted_works_count: number }>(`/templates/${templateId}/force`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
+  async forceDeleteTemplate(
+    token: string,
+    templateId: number,
+  ): Promise<{ message: string; deleted_works_count: number }> {
+    return this.request<{ message: string; deleted_works_count: number }>(
+      `/templates/${templateId}/force`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       },
-    })
+    )
   }
 
   // 获取模板文件内容
   async getTemplateContent(token: string, templateId: number): Promise<{ content: string }> {
     return this.request<{ content: string }>(`/templates/${templateId}/content`, {
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
     })
   }
 
-
-
   // 上传模板文件（创建模板时使用）
-  async uploadTemplateFile(token: string, file: File): Promise<{ message: string; file_path: string; content: string }> {
-    return apiClient.uploadFile<{ message: string; file_path: string; content: string }>('/files/upload', file, token)
+  async uploadTemplateFile(
+    token: string,
+    file: File,
+  ): Promise<{ message: string; file_path: string; content: string }> {
+    return apiClient.uploadFile<{ message: string; file_path: string; content: string }>(
+      '/files/upload',
+      file,
+      token,
+    )
   }
 }
 

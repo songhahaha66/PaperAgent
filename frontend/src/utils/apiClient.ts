@@ -20,7 +20,7 @@ export class ApiClient {
   // 通用请求方法
   async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseURL}${endpoint}`
-    
+
     const config: RequestInit = {
       ...options,
     }
@@ -28,10 +28,10 @@ export class ApiClient {
     // 自动添加Authorization header
     const authStore = useAuthStore()
     const token = authStore.token
-    
+
     if (token) {
       config.headers = {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
         ...config.headers,
       }
     }
@@ -51,22 +51,22 @@ export class ApiClient {
 
     try {
       const response = await fetch(url, config)
-      
+
       // 检查401错误并自动处理
       if (response.status === 401) {
         this.handleUnauthorized()
       }
-      
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         const error = new Error(errorData.detail || `HTTP error! status: ${response.status}`) as any
         error.response = {
           status: response.status,
-          data: errorData
+          data: errorData,
         }
         throw error
       }
-      
+
       return await response.json()
     } catch (error) {
       if (error instanceof Error) {
@@ -86,26 +86,26 @@ export class ApiClient {
       const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: formData,
       })
-      
+
       // 检查401错误并自动处理
       if (response.status === 401) {
         this.handleUnauthorized()
       }
-      
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         const error = new Error(errorData.detail || `HTTP error! status: ${response.status}`) as any
         error.response = {
           status: response.status,
-          data: errorData
+          data: errorData,
         }
         throw error
       }
-      
+
       return await response.json()
     } catch (error) {
       if (error instanceof Error) {

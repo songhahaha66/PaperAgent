@@ -14,12 +14,7 @@
         class="login-form"
       >
         <t-form-item name="email">
-          <t-input
-            v-model="formData.email"
-            placeholder="邮箱地址"
-            type="email"
-            clearable
-          >
+          <t-input v-model="formData.email" placeholder="邮箱地址" type="email" clearable>
             <template #prefix-icon>
               <MailIcon />
             </template>
@@ -27,11 +22,7 @@
         </t-form-item>
 
         <t-form-item v-if="!isLogin" name="username">
-          <t-input
-            v-model="formData.username"
-            placeholder="用户名"
-            clearable
-          >
+          <t-input v-model="formData.username" placeholder="用户名" clearable>
             <template #prefix-icon>
               <UserIcon />
             </template>
@@ -39,11 +30,7 @@
         </t-form-item>
 
         <t-form-item name="password">
-          <t-input
-            v-model="formData.password"
-            placeholder="密码"
-            type="password"
-          >
+          <t-input v-model="formData.password" placeholder="密码" type="password">
             <template #prefix-icon>
               <LockOnIcon />
             </template>
@@ -51,11 +38,7 @@
         </t-form-item>
 
         <t-form-item v-if="!isLogin" name="confirmPassword">
-          <t-input
-            v-model="formData.confirmPassword"
-            placeholder="确认密码"
-            type="password"
-          >
+          <t-input v-model="formData.confirmPassword" placeholder="确认密码" type="password">
             <template #prefix-icon>
               <LockOnIcon />
             </template>
@@ -63,13 +46,7 @@
         </t-form-item>
 
         <t-form-item>
-          <t-button
-            type="submit"
-            theme="primary"
-            size="large"
-            block
-            :loading="authStore.loading"
-          >
+          <t-button type="submit" theme="primary" size="large" block :loading="authStore.loading">
             {{ isLogin ? '登录' : '注册' }}
           </t-button>
         </t-form-item>
@@ -111,31 +88,31 @@ const formData = reactive({
   email: '',
   username: '',
   password: '',
-  confirmPassword: ''
+  confirmPassword: '',
 })
 
 const rules = {
   email: [
     { required: true, message: '邮箱地址必填', type: 'error' },
-    { email: true, message: '请输入正确的邮箱地址', type: 'error' }
+    { email: true, message: '请输入正确的邮箱地址', type: 'error' },
   ],
   username: [
     { required: true, message: '用户名必填', type: 'error' },
     { min: 2, message: '用户名至少2位', type: 'error' },
-    { max: 50, message: '用户名最多50位', type: 'error' }
+    { max: 50, message: '用户名最多50位', type: 'error' },
   ],
   password: [
     { required: true, message: '密码必填', type: 'error' },
-    { min: 6, message: '密码至少6位', type: 'error' }
+    { min: 6, message: '密码至少6位', type: 'error' },
   ],
   confirmPassword: [
     { required: true, message: '请确认密码', type: 'error' },
     {
       validator: (val: string) => val === formData.password,
       message: '两次输入的密码不一致',
-      type: 'error'
-    }
-  ]
+      type: 'error',
+    },
+  ],
 }
 
 const switchMode = () => {
@@ -154,9 +131,9 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
         // 登录逻辑
         const result = await authStore.login({
           email: formData.email,
-          password: formData.password
+          password: formData.password,
         })
-        
+
         if (result.success) {
           MessagePlugin.success('登录成功')
           router.push('/home')
@@ -168,9 +145,9 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
         const result = await authStore.register({
           email: formData.email,
           username: formData.username,
-          password: formData.password
+          password: formData.password,
         })
-        
+
         if (result.success) {
           MessagePlugin.success('注册成功，请登录')
           // 切换到登录模式
@@ -227,7 +204,6 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   margin: 30px 0;
   margin-left: -90px;
 }
-
 
 .form-footer p {
   margin: 0;

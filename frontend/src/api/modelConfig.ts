@@ -3,7 +3,7 @@ import { apiClient } from '@/utils/apiClient'
 
 export interface ModelConfig {
   id: number
-  type: string  // brain(中枢大脑), code(代码实验), writing(论文写作)
+  type: string // brain(中枢大脑), code(代码实验), writing(论文写作)
   model_id: string
   base_url: string
   is_active: boolean
@@ -76,10 +76,13 @@ class ModelConfigAPI {
   }
 
   // 便捷接口：创建指定类型的配置
-  async createConfig(type: 'brain' | 'code' | 'writing', config: Omit<ModelConfigCreate, 'type'>): Promise<ModelConfig> {
+  async createConfig(
+    type: 'brain' | 'code' | 'writing',
+    config: Omit<ModelConfigCreate, 'type'>,
+  ): Promise<ModelConfig> {
     return this.createModelConfig({
       ...config,
-      type
+      type,
     })
   }
 }
