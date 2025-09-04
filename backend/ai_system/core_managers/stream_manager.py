@@ -61,7 +61,7 @@ class StreamOutputManager:
                     logger.debug(f"成功调用回调函数，内容长度: {len(content)}")
 
                     # 让出控制权，确保事件循环能处理其他任务
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(0.0001)  # 减少延迟，提高响应性
                 except Exception as e:
                     logger.error(f"回调函数调用失败: {e}")
             else:

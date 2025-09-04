@@ -375,13 +375,35 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     
                     # 等待AI任务完成，添加超时保护
                     try:
-                        await asyncio.wait_for(ai_task, timeout=300)  # 5分钟超时
-                    except asyncio.TimeoutError:
-                        logger.error(f"AI任务执行超时: {work_id}")
-                        await websocket.send_text(json.dumps({
-                            'type': 'error',
-                            'message': 'AI任务执行超时，请重试'
-                        }))
+                        # 使用更短的超时时间，并定期检查连接状态
+                        timeout_seconds = 300  # 5分钟超时
+                        check_interval = 5  # 每5秒检查一次连接状态
+                        
+                        for _ in range(timeout_seconds // check_interval):
+                            try:
+                                # 等待一小段时间
+                                await asyncio.wait_for(ai_task, timeout=check_interval)
+                                break  # 任务完成
+                            except asyncio.TimeoutError:
+                                # 检查WebSocket连接状态
+                                if not manager.is_connected(work_id):
+                                    logger.error(f"WebSocket连接已断开，取消AI任务: {work_id}")
+                                    ai_task.cancel()
+                                    break
+                                # 继续等待
+                                continue
+                        else:
+                            # 超时
+                            logger.error(f"AI任务执行超时: {work_id}")
+                            ai_task.cancel()
+                            await websocket.send_text(json.dumps({
+                                'type': 'error',
+                                'message': 'AI任务执行超时，请重试'
+                            }))
+                            break
+                            
+                    except asyncio.CancelledError:
+                        logger.info(f"AI任务被取消: {work_id}")
                         break
 
                     # AI处理完成后，手动保存最终的AI消息

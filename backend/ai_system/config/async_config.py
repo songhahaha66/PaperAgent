@@ -11,15 +11,15 @@ class AsyncConfig:
     
     # LLM流式处理配置
     LLM_STREAM_CONFIG = {
-        "yield_interval": 5,  # 每多少个chunk让出控制权
-        "yield_delay": 0.0005,  # 让出控制权的延迟时间（秒）
+        "yield_interval": 3,  # 每多少个chunk让出控制权（减少间隔）
+        "yield_delay": 0.0001,  # 让出控制权的延迟时间（秒）（减少延迟）
         "max_concurrent_tools": 1,  # 最大并发工具调用数（改为1，顺序执行）
     }
     
     # WebSocket配置
     WEBSOCKET_CONFIG = {
-        "content_yield_threshold": 50,  # 内容长度超过此值才让出控制权
-        "content_yield_delay": 0.0005,  # 内容发送的延迟时间
+        "content_yield_threshold": 20,  # 内容长度超过此值才让出控制权（减少阈值）
+        "content_yield_delay": 0.0001,  # 内容发送的延迟时间（减少延迟）
         "json_block_yield_delay": 0,  # JSON块发送的延迟时间（0表示不延迟）
         "heartbeat_interval": 30,  # 心跳间隔（秒）
         "connection_timeout": 300,  # 连接超时时间（秒）
@@ -28,7 +28,7 @@ class AsyncConfig:
     # 工具调用配置
     TOOL_CALL_CONFIG = {
         "sequential_execution": True,  # 是否顺序执行工具调用
-        "execution_yield_delay": 0.001,  # 工具调用间的延迟时间
+        "execution_yield_delay": 0.0001,  # 工具调用间的延迟时间（减少延迟）
         "max_retry_attempts": 2,  # 最大重试次数
         "retry_delay": 0.1,  # 重试延迟时间（秒）
     }

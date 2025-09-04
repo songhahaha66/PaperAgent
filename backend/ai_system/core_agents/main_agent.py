@@ -497,7 +497,7 @@ class MainAgent(Agent):
                         "content": tool_result,
                     })
                     
-                    # 使用配置参数优化延迟
+                    # 使用配置参数优化延迟，确保事件循环不被阻塞
                     await asyncio.sleep(config["execution_yield_delay"])
                     
                 except Exception as e:
@@ -510,8 +510,11 @@ class MainAgent(Agent):
                     })
                     tool_results.append(f"工具执行失败: {str(e)}")
                     
-                    # 使用配置参数优化延迟
+                    # 使用配置参数优化延迟，确保事件循环不被阻塞
                     await asyncio.sleep(config["execution_yield_delay"])
+                
+                # 在每个工具调用之间额外让出控制权，防止长时间阻塞
+                await asyncio.sleep(0.001)
 
         logger.info(
             f"MainAgent执行完成，总共 {iteration_count} 次迭代，最终消息历史长度: {len(self.messages)}")
