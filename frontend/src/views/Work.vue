@@ -87,7 +87,7 @@
             <t-card :title="`文件预览: ${selectedFile}`">
               <div class="file-preview">
                 <div v-if="selectedFile.endsWith('.py')" class="code-preview">
-                  <pre><code>{{ currentFileContent }}</code></pre>
+                  <CodeHighlight :code="currentFileContent" language="python" />
                 </div>
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
                   <MarkdownRenderer
@@ -144,29 +144,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
-import { MessagePlugin } from 'tdesign-vue-next'
-import { ChatItem, ChatSender } from '@tdesign-vue-next/chat'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
+import { MessagePlugin } from 'tdesign-vue-next';
+import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 
-import { useAuthStore } from '@/stores/auth'
-import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace'
-import {
-  chatAPI,
-  WebSocketChatHandler,
-  type ChatMessage,
-  type ChatSessionResponse,
-  type ChatSessionCreateRequest,
-} from '@/api/chat'
-import Sidebar from '@/components/Sidebar.vue'
-import FileManager from '@/components/FileManager.vue'
-import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import { useAuthStore } from '@/stores/auth';
+import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
+import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
+import Sidebar from '@/components/Sidebar.vue';
+import FileManager from '@/components/FileManager.vue';
+import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
+import CodeHighlight from '@/components/CodeHighlight.vue';
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 
-const route = useRoute()
-const router = useRouter()
-const authStore = useAuthStore()
-const workId = computed(() => route.params.work_id as string)
+const route = useRoute();
+const router = useRouter();
+const authStore = useAuthStore();
+const workId = computed(() => route.params.work_id as string);
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = ref(false)
