@@ -519,18 +519,21 @@ const userOptions = [
 .user-avatar {
   width: 40px;
   height: 40px;
-  background-color: #3498db;
+  background-color: #ffffff;
   border-radius: 50%;
   display: flex;
   justify-content: center;
   align-items: center;
   margin-right: 15px;
+  border: 0.5px solid #000000;
 }
 
 .user-avatar-text {
-  color: white;
+  color: #000000;
   font-size: 18px;
-  font-weight: bold;
+  font-weight: 400;
+  letter-spacing: 0.2px;
+  font-family: 'STXingkai', 'HanziPen SC', 'Kaiti SC', 'KaiTi', 'STKaiti', 'DFKai-SB', 'LiSu', 'Segoe Script', 'Brush Script MT', cursive;
 }
 
 .user-details {
@@ -562,11 +565,13 @@ const userOptions = [
 }
 
 .collapsed-avatar {
-  background-color: #3498db;
-  color: white;
-  font-weight: bold;
+  background-color: #ffffff;
+  color: #000000;
+  font-weight: 400;
   font-size: 18px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: none;
+  border: 0.5px solid #000000;
+  font-family: 'STXingkai', 'HanziPen SC', 'Kaiti SC', 'KaiTi', 'STKaiti', 'DFKai-SB', 'LiSu', 'Segoe Script', 'Brush Script MT', cursive;
 }
 
 /* 侧边栏折叠按钮 */
