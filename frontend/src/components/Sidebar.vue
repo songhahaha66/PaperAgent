@@ -5,15 +5,29 @@
         <h2>PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
       </div>
-      <t-button 
-        theme="default" 
-        shape="square" 
-        variant="text" 
-        @click="toggleSidebar"
-        class="sidebar-toggle-btn"
-      >
-        <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-      </t-button>
+      <!-- 折叠状态下新增“新聊天”按钮，参考 ChatGPT 左侧效果 -->
+      <div class="header-actions">
+        <t-button 
+          theme="default" 
+          shape="square" 
+          variant="text" 
+          @click="toggleSidebar"
+          class="sidebar-toggle-btn"
+        >
+          <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
+        </t-button>
+        <t-tooltip v-if="isSidebarCollapsed" content="新聊天">
+          <t-button 
+            theme="default" 
+            shape="square" 
+            variant="text" 
+            @click="createNewChat"
+            class="sidebar-action-btn"
+          >
+            <t-icon name="edit-1" />
+          </t-button>
+        </t-tooltip>
+      </div>
     </div>
     
     <!-- 展开状态的内容 -->
@@ -165,6 +179,11 @@ const toggleSidebar = () => {
 // 新建工作
 const createNewTask = () => {
   // 跳转到home页面
+  router.push('/home');
+};
+
+// 新聊天（折叠态快捷入口，仅前端路由）
+const createNewChat = () => {
   router.push('/home');
 };
 
@@ -464,6 +483,7 @@ const userOptions = [
   color: #666;
   line-height: 1.3;
   display: -webkit-box;
+  line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
@@ -552,6 +572,19 @@ const userOptions = [
 /* 侧边栏折叠按钮 */
 .sidebar-toggle-btn {
   margin-left: auto;
+}
+
+/* 头部动作区域（折叠态显示“新聊天”+折叠按钮） */
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-action-btn {
+  margin-left: 0;
 }
 
 /* 加载状态样式 */
