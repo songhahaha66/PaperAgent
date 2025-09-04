@@ -79,7 +79,7 @@
             <t-card :title="`文件预览: ${selectedFile}`">
               <div class="file-preview">
                 <div v-if="selectedFile.endsWith('.py')" class="code-preview">
-                  <pre><code>{{ currentFileContent }}</code></pre>
+                  <CodeHighlight :code="currentFileContent" language="python" />
                 </div>
                 <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
                   <MarkdownRenderer
@@ -138,6 +138,7 @@ import { useRealtimePolling } from '@/composables/useRealtimePolling';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
+import CodeHighlight from '@/components/CodeHighlight.vue';
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 
 const route = useRoute();
