@@ -2,9 +2,9 @@
   <div class="introduction-page">
     <div class="header">
       <div class="header-content">
-        <t-image 
-          src="/logo.png" 
-          alt="PaperAgent Logo" 
+        <t-image
+          src="/logo.png"
+          alt="PaperAgent Logo"
           class="logo-image"
           :style="{ width: '50px', height: '50px' }"
         />
@@ -28,7 +28,9 @@
         <p>立即登录以体验智能论文生成服务</p>
         <div class="cta-buttons">
           <t-button theme="primary" size="large" @click="goToLogin">登录</t-button>
-          <t-button theme="default" variant="outline" size="large" @click="goToRegister">注册</t-button>
+          <t-button theme="default" variant="outline" size="large" @click="goToRegister"
+            >注册</t-button
+          >
         </div>
       </t-card>
       <div class="features-grid">

@@ -87,19 +87,19 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  isLoading: false
+  isLoading: false,
 })
 
 const chatMessages = ref<HTMLElement>()
 
 // 解析消息，将XML内容转换为结构化消息
 const parsedMessages = computed(() => {
-  return props.messages.map(msg => {
+  return props.messages.map((msg) => {
     // 如果消息内容包含XML标签，进行特殊处理
     if (msg.content.includes('<') && msg.content.includes('>')) {
       return {
         ...msg,
-        content: msg.content
+        content: msg.content,
       }
     }
     return msg
@@ -109,7 +109,7 @@ const parsedMessages = computed(() => {
 // 渲染XML内容
 const renderXmlContent = (content: string): string => {
   if (!content) return ''
-  
+
   // 转义HTML字符
   let escaped = content
     .replace(/&/g, '&amp;')
@@ -117,54 +117,81 @@ const renderXmlContent = (content: string): string => {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
-  
+
   // 处理XML标签
   escaped = escaped
     // 主Agent标签
-    .replace(/&lt;main_agent&gt;/g, '<div class="xml-tag main-agent"><span class="tag-name">主Agent</span>')
+    .replace(
+      /&lt;main_agent&gt;/g,
+      '<div class="xml-tag main-agent"><span class="tag-name">主Agent</span>',
+    )
     .replace(/&lt;\/main_agent&gt;/g, '</div>')
-    
+
     // CodeAgent标签
-    .replace(/&lt;call_code_agent&gt;/g, '<div class="xml-tag code-agent-call"><span class="tag-name">调用代码助手</span>')
+    .replace(
+      /&lt;call_code_agent&gt;/g,
+      '<div class="xml-tag code-agent-call"><span class="tag-name">调用代码助手</span>',
+    )
     .replace(/&lt;\/call_code_agent&gt;/g, '</div>')
-    .replace(/&lt;ret_code_agent&gt;/g, '<div class="xml-tag code-agent-result"><span class="tag-name">代码助手结果</span>')
+    .replace(
+      /&lt;ret_code_agent&gt;/g,
+      '<div class="xml-tag code-agent-result"><span class="tag-name">代码助手结果</span>',
+    )
     .replace(/&lt;\/ret_code_agent&gt;/g, '</div>')
-    
+
     // 代码执行标签
-    .replace(/&lt;call_exec&gt;/g, '<div class="xml-tag code-exec-call"><span class="tag-name">执行代码</span><pre class="code-block">')
+    .replace(
+      /&lt;call_exec&gt;/g,
+      '<div class="xml-tag code-exec-call"><span class="tag-name">执行代码</span><pre class="code-block">',
+    )
     .replace(/&lt;\/call_exec&gt;/g, '</pre></div>')
-    .replace(/&lt;ret_exec&gt;/g, '<div class="xml-tag code-exec-result"><span class="tag-name">执行结果</span><pre class="result-block">')
+    .replace(
+      /&lt;ret_exec&gt;/g,
+      '<div class="xml-tag code-exec-result"><span class="tag-name">执行结果</span><pre class="result-block">',
+    )
     .replace(/&lt;\/ret_exec&gt;/g, '</pre></div>')
-    
+
     // 文件操作标签
-    .replace(/&lt;writemd_result&gt;/g, '<div class="xml-tag file-result"><span class="tag-name">文件写入结果</span>')
+    .replace(
+      /&lt;writemd_result&gt;/g,
+      '<div class="xml-tag file-result"><span class="tag-name">文件写入结果</span>',
+    )
     .replace(/&lt;\/writemd_result&gt;/g, '</div>')
-    .replace(/&lt;tree_result&gt;/g, '<div class="xml-tag tree-result"><span class="tag-name">目录结构</span><pre class="tree-block">')
+    .replace(
+      /&lt;tree_result&gt;/g,
+      '<div class="xml-tag tree-result"><span class="tag-name">目录结构</span><pre class="tree-block">',
+    )
     .replace(/&lt;\/tree_result&gt;/g, '</pre></div>')
-    
+
     // 换行符
     .replace(/\n/g, '<br>')
-  
+
   return escaped
 }
 
 // 监听消息变化，自动滚动到底部
-watch(() => props.messages.length, async () => {
-  await nextTick()
-  if (chatMessages.value) {
-    chatMessages.value.scrollTop = chatMessages.value.scrollHeight
-  }
-})
-
-// 监听加载状态变化
-watch(() => props.isLoading, async (newVal) => {
-  if (newVal) {
+watch(
+  () => props.messages.length,
+  async () => {
     await nextTick()
     if (chatMessages.value) {
       chatMessages.value.scrollTop = chatMessages.value.scrollHeight
     }
-  }
-})
+  },
+)
+
+// 监听加载状态变化
+watch(
+  () => props.isLoading,
+  async (newVal) => {
+    if (newVal) {
+      await nextTick()
+      if (chatMessages.value) {
+        chatMessages.value.scrollTop = chatMessages.value.scrollHeight
+      }
+    }
+  },
+)
 </script>
 
 <style scoped>
@@ -367,7 +394,9 @@ watch(() => props.isLoading, async (newVal) => {
 }
 
 @keyframes typing {
-  0%, 80%, 100% {
+  0%,
+  80%,
+  100% {
     transform: scale(0.8);
     opacity: 0.5;
   }
@@ -382,20 +411,20 @@ watch(() => props.isLoading, async (newVal) => {
   .chat-messages {
     padding: 12px;
   }
-  
+
   .message-content {
     max-width: 90%;
     padding: 10px 12px;
   }
-  
+
   .message-icon {
     font-size: 20px;
   }
-  
+
   .message-header {
     font-size: 13px;
   }
-  
+
   .message-body {
     font-size: 13px;
   }

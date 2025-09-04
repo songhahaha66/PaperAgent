@@ -1,27 +1,25 @@
 <template>
   <div class="template-page">
-        <Sidebar
+    <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
       @toggle-sidebar="toggleSidebar"
       @create-new-task="createNewTask"
       @select-history="selectHistory"
     />
-    
+
     <div class="main-content">
       <div class="workspace-header">
         <h1>我的模板</h1>
         <p>管理和配置您的论文模板</p>
       </div>
-      
+
       <div class="template-content">
         <t-card title="模板列表">
           <template #actions>
-            <t-button theme="primary" @click="showCreateTemplateDialog = true">
-              新建模板
-            </t-button>
+            <t-button theme="primary" @click="showCreateTemplateDialog = true"> 新建模板 </t-button>
           </template>
-          
+
           <t-table
             :data="templateList"
             :columns="columns"
@@ -55,7 +53,7 @@
         </t-card>
       </div>
     </div>
-    
+
     <!-- 新建/编辑模板对话框 -->
     <t-dialog
       v-model:visible="showCreateTemplateDialog"
@@ -106,11 +104,11 @@
       <div class="content-viewer">
         <div class="content-display">
           <!-- 如果是Markdown文件，使用Markdown渲染 -->
-          <MarkdownRenderer 
-            v-if="selectedTemplate?.file_path?.endsWith('.md')" 
+          <MarkdownRenderer
+            v-if="selectedTemplate?.file_path?.endsWith('.md')"
             :content="templateContent"
-              :base-path="''"
-            />
+            :base-path="''"
+          />
           <!-- 其他文件格式使用文本域显示 -->
           <t-textarea
             v-else
@@ -149,44 +147,49 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { MessagePlugin } from 'tdesign-vue-next';
-import { useAuthStore } from '@/stores/auth';
-import { templateAPI, type PaperTemplate, type PaperTemplateCreate, type PaperTemplateUpdate } from '@/api/template';
-import Sidebar from '@/components/Sidebar.vue';
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
+import { ref, reactive, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { MessagePlugin } from 'tdesign-vue-next'
+import { useAuthStore } from '@/stores/auth'
+import {
+  templateAPI,
+  type PaperTemplate,
+  type PaperTemplateCreate,
+  type PaperTemplateUpdate,
+} from '@/api/template'
+import Sidebar from '@/components/Sidebar.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
 // 侧边栏折叠状态
-const isSidebarCollapsed = ref(false);
+const isSidebarCollapsed = ref(false)
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value;
-};
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
+}
 
-const router = useRouter();
-const authStore = useAuthStore();
+const router = useRouter()
+const authStore = useAuthStore()
 
 // 新建工作
 const createNewTask = () => {
   // 这里可以添加创建新任务的逻辑
-  console.log('创建新任务');
-  router.push('/home');
-};
+  console.log('创建新任务')
+  router.push('/home')
+}
 
 // 当前选中的历史工作ID
-const activeHistoryId = ref<number | null>(null);
+const activeHistoryId = ref<number | null>(null)
 
 // 选择历史工作
 const selectHistory = (id: number) => {
-  router.push('/home');
+  router.push('/home')
   // 在主页中实现选中历史工作的逻辑
-};
+}
 
 // 模板列表数据
-const templateList = ref<PaperTemplate[]>([]);
-const loading = ref(false);
+const templateList = ref<PaperTemplate[]>([])
+const loading = ref(false)
 
 // 表格列配置
 const columns = ref([
@@ -195,50 +198,50 @@ const columns = ref([
   { colKey: 'category', title: '分类', width: '100px' },
   { colKey: 'is_public', title: '是否公开', width: '100px' },
   { colKey: 'created_at', title: '创建时间', width: '150px' },
-  { colKey: 'operation', title: '操作', width: '200px' }
-]);
+  { colKey: 'operation', title: '操作', width: '200px' },
+])
 
 // 分页配置
 const pagination = reactive({
   defaultCurrent: 1,
   defaultPageSize: 10,
   total: 0,
-});
+})
 
 // 分页变化处理
 const onPageChange = (curr: number, pageInfo: { current: number; pageSize: number }) => {
-  pagination.defaultCurrent = curr;
-  pagination.defaultPageSize = pageInfo.pageSize;
-  loadTemplates();
-};
+  pagination.defaultCurrent = curr
+  pagination.defaultPageSize = pageInfo.pageSize
+  loadTemplates()
+}
 
 // 加载模板列表
 const loadTemplates = async () => {
-  if (!authStore.token) return;
-  
-  loading.value = true;
+  if (!authStore.token) return
+
+  loading.value = true
   try {
-    const skip = (pagination.defaultCurrent - 1) * pagination.defaultPageSize;
+    const skip = (pagination.defaultCurrent - 1) * pagination.defaultPageSize
     const templates = await templateAPI.getUserTemplates(
       authStore.token,
       skip,
-      pagination.defaultPageSize
-    );
-    templateList.value = templates;
-    pagination.total = templates.length; // 这里应该从后端获取总数
+      pagination.defaultPageSize,
+    )
+    templateList.value = templates
+    pagination.total = templates.length // 这里应该从后端获取总数
   } catch (error) {
-    MessagePlugin.error('加载模板列表失败');
-    console.error('加载模板失败:', error);
+    MessagePlugin.error('加载模板列表失败')
+    console.error('加载模板失败:', error)
   } finally {
-    loading.value = false;
+    loading.value = false
   }
-};
+}
 
 // 控制新建模板对话框显示
-const showCreateTemplateDialog = ref(false);
+const showCreateTemplateDialog = ref(false)
 
 // 正在编辑的模板
-const editingTemplate = ref<PaperTemplate | null>(null);
+const editingTemplate = ref<PaperTemplate | null>(null)
 
 // 模板表单数据
 const templateForm = reactive<PaperTemplateCreate>({
@@ -246,155 +249,150 @@ const templateForm = reactive<PaperTemplateCreate>({
   description: '',
   category: '',
   file_path: '',
-  is_public: false
-});
+  is_public: false,
+})
 
 // 文件相关
-const templateFormFileList = ref<Array<any>>([]);
+const templateFormFileList = ref<Array<any>>([])
 
 // 文件变更处理
 const onFileChange = (fileList: Array<any>) => {
-  console.log('文件变更:', fileList);
+  console.log('文件变更:', fileList)
   if (fileList && fileList.length > 0) {
-    console.log('选择的文件:', fileList[0]);
+    console.log('选择的文件:', fileList[0])
     // 自动设置文件路径
-    const fileName = fileList[0].name || fileList[0].raw?.name;
+    const fileName = fileList[0].name || fileList[0].raw?.name
     if (fileName) {
-      templateForm.file_path = fileName;
+      templateForm.file_path = fileName
     }
   } else {
-    console.log('没有选择文件');
-    templateForm.file_path = '';
+    console.log('没有选择文件')
+    templateForm.file_path = ''
   }
-};
+}
 
 // 编辑模板
 const editTemplate = async (template: PaperTemplate) => {
-  editingTemplate.value = template;
-  templateForm.name = template.name;
-  templateForm.description = template.description || '';
-  templateForm.category = template.category || '';
-  templateForm.file_path = template.file_path || '';
-  templateForm.is_public = template.is_public;
-  
-  showCreateTemplateDialog.value = true;
-};
+  editingTemplate.value = template
+  templateForm.name = template.name
+  templateForm.description = template.description || ''
+  templateForm.category = template.category || ''
+  templateForm.file_path = template.file_path || ''
+  templateForm.is_public = template.is_public
+
+  showCreateTemplateDialog.value = true
+}
 
 // 删除模板
 const deleteTemplate = async (template: PaperTemplate) => {
-  if (!authStore.token) return;
-  
-  console.log('开始删除模板:', template.id);
-  
+  if (!authStore.token) return
+
+  console.log('开始删除模板:', template.id)
+
   try {
-    const result = await templateAPI.deleteTemplate(authStore.token, template.id);
-    console.log('删除成功:', result);
-    MessagePlugin.success('模板删除成功');
-    loadTemplates(); // 重新加载列表
+    const result = await templateAPI.deleteTemplate(authStore.token, template.id)
+    console.log('删除成功:', result)
+    MessagePlugin.success('模板删除成功')
+    loadTemplates() // 重新加载列表
   } catch (error: any) {
-    console.log('删除模板错误详情:', error);
-    console.log('错误类型:', typeof error);
-    console.log('错误响应状态:', error.response?.status);
-    console.log('错误响应数据:', error.response?.data);
-    console.log('错误消息:', error.message);
-    
+    console.log('删除模板错误详情:', error)
+    console.log('错误类型:', typeof error)
+    console.log('错误响应状态:', error.response?.status)
+    console.log('错误响应数据:', error.response?.data)
+    console.log('错误消息:', error.message)
+
     // 检查是否是外键约束错误
-    const isForeignKeyError = error.response?.status === 400 && 
-      (error.response?.data?.detail?.includes('无法删除模板') || 
-       error.response?.data?.detail?.includes('violates foreign key constraint') ||
-       error.message?.includes('无法删除模板'));
-    
-    console.log('是否检测到外键约束错误:', isForeignKeyError);
-    
+    const isForeignKeyError =
+      error.response?.status === 400 &&
+      (error.response?.data?.detail?.includes('无法删除模板') ||
+        error.response?.data?.detail?.includes('violates foreign key constraint') ||
+        error.message?.includes('无法删除模板'))
+
+    console.log('是否检测到外键约束错误:', isForeignKeyError)
+
     if (isForeignKeyError) {
-      console.log('检测到外键约束错误，显示确认对话框');
-      
+      console.log('检测到外键约束错误，显示确认对话框')
+
       // 设置要删除的模板和确认消息
-      templateToDelete.value = template;
-      deleteConfirmMessage.value = error.response?.data?.detail || error.message || '该模板正在被其他工作使用，无法直接删除。';
-      
+      templateToDelete.value = template
+      deleteConfirmMessage.value =
+        error.response?.data?.detail || error.message || '该模板正在被其他工作使用，无法直接删除。'
+
       // 显示确认删除对话框
-      showDeleteConfirmDialog.value = true;
-      
+      showDeleteConfirmDialog.value = true
+
       // 显示警告消息
       MessagePlugin.warning({
         content: '检测到外键约束，请在弹出的对话框中确认是否强制删除',
-        duration: 3000
-      });
+        duration: 3000,
+      })
     } else {
       // 其他类型的错误
-      const errorMessage = error.response?.data?.detail || error.message || '删除模板失败';
-      MessagePlugin.error(errorMessage);
-      console.error('删除模板失败:', error);
+      const errorMessage = error.response?.data?.detail || error.message || '删除模板失败'
+      MessagePlugin.error(errorMessage)
+      console.error('删除模板失败:', error)
     }
   }
-};
+}
 
 // 保存模板
 const saveTemplate = async () => {
-  console.log('开始保存模板...');
-  console.log('表单数据:', templateForm);
-  console.log('认证状态:', !!authStore.token);
-  console.log('编辑状态:', !!editingTemplate.value);
-  
+  console.log('开始保存模板...')
+  console.log('表单数据:', templateForm)
+  console.log('认证状态:', !!authStore.token)
+  console.log('编辑状态:', !!editingTemplate.value)
+
   if (!templateForm.name) {
-    console.log('模板名称为空，显示警告');
-    MessagePlugin.warning('请输入模板名称');
-    return;
+    console.log('模板名称为空，显示警告')
+    MessagePlugin.warning('请输入模板名称')
+    return
   }
 
   if (!authStore.token) {
-    console.log('没有访问令牌，无法保存');
-    MessagePlugin.error('请先登录');
-    return;
+    console.log('没有访问令牌，无法保存')
+    MessagePlugin.error('请先登录')
+    return
   }
 
   try {
     if (editingTemplate.value) {
       // 更新模板
-      console.log('更新现有模板...');
-      
+      console.log('更新现有模板...')
+
       // 只包含有值的字段
-      const updateData: PaperTemplateUpdate = {};
-      if (templateForm.name) updateData.name = templateForm.name;
-      if (templateForm.description !== '') updateData.description = templateForm.description;
-      if (templateForm.category !== '') updateData.category = templateForm.category;
-      if (templateForm.file_path !== '') updateData.file_path = templateForm.file_path;
-      updateData.is_public = templateForm.is_public;
-      
-      console.log('更新数据:', updateData);
-      
-      await templateAPI.updateTemplate(
-        authStore.token,
-        editingTemplate.value.id,
-        updateData
-      );
-      
-      MessagePlugin.success('模板更新成功');
+      const updateData: PaperTemplateUpdate = {}
+      if (templateForm.name) updateData.name = templateForm.name
+      if (templateForm.description !== '') updateData.description = templateForm.description
+      if (templateForm.category !== '') updateData.category = templateForm.category
+      if (templateForm.file_path !== '') updateData.file_path = templateForm.file_path
+      updateData.is_public = templateForm.is_public
+
+      console.log('更新数据:', updateData)
+
+      await templateAPI.updateTemplate(authStore.token, editingTemplate.value.id, updateData)
+
+      MessagePlugin.success('模板更新成功')
     } else {
       // 新建模板
-      console.log('创建新模板...');
-      console.log('创建模板数据:', templateForm);
-      console.log('模板文件:', templateFormFileList.value);
-      
+      console.log('创建新模板...')
+      console.log('创建模板数据:', templateForm)
+      console.log('模板文件:', templateFormFileList.value)
+
       // 检查是否选择了文件
       if (templateFormFileList.value.length === 0) {
-        MessagePlugin.warning('请选择模板文件');
-        return;
+        MessagePlugin.warning('请选择模板文件')
+        return
       }
-      
+
       // 先上传文件获取内容
-      const fileToUpload = templateFormFileList.value[0].raw || templateFormFileList.value[0];
-      console.log('准备上传的文件:', fileToUpload);
-      
+      const fileToUpload = templateFormFileList.value[0].raw || templateFormFileList.value[0]
+      console.log('准备上传的文件:', fileToUpload)
+
       try {
-        const uploadResult = await templateAPI.uploadTemplateFile(
-          authStore.token,
-          fileToUpload
-        );
-        
-        console.log('文件上传成功:', uploadResult);
-        
+        const uploadResult = await templateAPI.uploadTemplateFile(authStore.token, fileToUpload)
+
+        console.log('文件上传成功:', uploadResult)
+
         // 创建符合后端期望的数据对象
         const createData = {
           name: templateForm.name,
@@ -402,119 +400,113 @@ const saveTemplate = async () => {
           category: templateForm.category || undefined,
           file_path: uploadResult.file_path,
           is_public: templateForm.is_public,
-          content: uploadResult.content
-        };
-        
-        console.log('发送给后端的数据:', createData);
-        
-        const newTemplate = await templateAPI.createTemplate(
-          authStore.token,
-          createData
-        );
-        
-        console.log('模板创建成功:', newTemplate);
-        MessagePlugin.success('模板创建成功');
+          content: uploadResult.content,
+        }
+
+        console.log('发送给后端的数据:', createData)
+
+        const newTemplate = await templateAPI.createTemplate(authStore.token, createData)
+
+        console.log('模板创建成功:', newTemplate)
+        MessagePlugin.success('模板创建成功')
       } catch (fileError) {
-        console.error('文件处理失败:', fileError);
-        MessagePlugin.error('模板创建失败：文件处理错误');
-        return;
+        console.error('文件处理失败:', fileError)
+        MessagePlugin.error('模板创建失败：文件处理错误')
+        return
       }
     }
-    
-    console.log('保存完成，重新加载模板列表...');
-    loadTemplates(); // 重新加载列表
-    cancelTemplate();
+
+    console.log('保存完成，重新加载模板列表...')
+    loadTemplates() // 重新加载列表
+    cancelTemplate()
   } catch (error) {
-    console.error('保存模板时发生错误:', error);
-    MessagePlugin.error('保存模板失败');
-    console.error('保存模板失败:', error);
+    console.error('保存模板时发生错误:', error)
+    MessagePlugin.error('保存模板失败')
+    console.error('保存模板失败:', error)
   }
-};
+}
 
 // 格式化日期函数
 const formatDate = (dateString: string) => {
-  if (!dateString) return '';
-  const date = new Date(dateString);
+  if (!dateString) return ''
+  const date = new Date(dateString)
   return date.toLocaleString('zh-CN', {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
-  });
-};
+    minute: '2-digit',
+  })
+}
 
 // 取消编辑/新建模板
 const cancelTemplate = () => {
-  showCreateTemplateDialog.value = false;
-  editingTemplate.value = null;
-  templateForm.name = '';
-  templateForm.description = '';
-  templateForm.category = '';
-  templateForm.file_path = '';
-  templateForm.is_public = false;
-  templateFormFileList.value = [];
-};
+  showCreateTemplateDialog.value = false
+  editingTemplate.value = null
+  templateForm.name = ''
+  templateForm.description = ''
+  templateForm.category = ''
+  templateForm.file_path = ''
+  templateForm.is_public = false
+  templateFormFileList.value = []
+}
 
 // 模板内容相关
-const showContentDialog = ref(false);
-const selectedTemplate = ref<PaperTemplate | null>(null);
-const templateContent = ref('');
+const showContentDialog = ref(false)
+const selectedTemplate = ref<PaperTemplate | null>(null)
+const templateContent = ref('')
 
 const viewTemplateContent = async (template: PaperTemplate) => {
-  if (!authStore.token) return;
-  
-  selectedTemplate.value = template;
-  showContentDialog.value = true;
-  
+  if (!authStore.token) return
+
+  selectedTemplate.value = template
+  showContentDialog.value = true
+
   try {
-    const result = await templateAPI.getTemplateContent(
-      authStore.token,
-      template.id
-    );
-    templateContent.value = result.content;
+    const result = await templateAPI.getTemplateContent(authStore.token, template.id)
+    templateContent.value = result.content
   } catch (error) {
-    MessagePlugin.error('加载模板内容失败');
-    console.error('加载模板内容失败:', error);
-    templateContent.value = '模板内容加载失败';
+    MessagePlugin.error('加载模板内容失败')
+    console.error('加载模板内容失败:', error)
+    templateContent.value = '模板内容加载失败'
   }
-};
+}
 
 const closeContentDialog = () => {
-  showContentDialog.value = false;
-  selectedTemplate.value = null;
-  templateContent.value = '';
-};
+  showContentDialog.value = false
+  selectedTemplate.value = null
+  templateContent.value = ''
+}
 
 // 确认删除对话框相关
-const showDeleteConfirmDialog = ref(false);
-const deleteConfirmMessage = ref('');
-const templateToDelete = ref<PaperTemplate | null>(null);
+const showDeleteConfirmDialog = ref(false)
+const deleteConfirmMessage = ref('')
+const templateToDelete = ref<PaperTemplate | null>(null)
 
 const confirmForceDelete = async () => {
-  if (!authStore.token || !templateToDelete.value) return;
-  
+  if (!authStore.token || !templateToDelete.value) return
+
   try {
-    const result = await templateAPI.forceDeleteTemplate(authStore.token, templateToDelete.value.id);
-    MessagePlugin.success(`强制删除成功！${result.deleted_works_count} 个相关工作已被删除`);
-    loadTemplates(); // 重新加载列表
-    showDeleteConfirmDialog.value = false;
-    templateToDelete.value = null;
+    const result = await templateAPI.forceDeleteTemplate(authStore.token, templateToDelete.value.id)
+    MessagePlugin.success(`强制删除成功！${result.deleted_works_count} 个相关工作已被删除`)
+    loadTemplates() // 重新加载列表
+    showDeleteConfirmDialog.value = false
+    templateToDelete.value = null
   } catch (error) {
-    MessagePlugin.error('强制删除失败');
-    console.error('强制删除失败:', error);
+    MessagePlugin.error('强制删除失败')
+    console.error('强制删除失败:', error)
   }
-};
+}
 
 const cancelForceDelete = () => {
-  showDeleteConfirmDialog.value = false;
-  templateToDelete.value = null;
-};
+  showDeleteConfirmDialog.value = false
+  templateToDelete.value = null
+}
 
 // 检查用户认证状态
 onMounted(() => {
-  loadTemplates();
-});
+  loadTemplates()
+})
 </script>
 
 <style scoped>

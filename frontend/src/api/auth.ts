@@ -50,7 +50,7 @@ class AuthAPI {
   async getCurrentUser(token: string): Promise<UserResponse> {
     return this.request<UserResponse>('/me', {
       headers: {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
       },
     })
   }

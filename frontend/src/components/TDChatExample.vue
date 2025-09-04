@@ -18,15 +18,16 @@ const messages = ref<ChatMessage[]>([
     role: 'user',
     content: '你好！请介绍一下TD Chat组件',
     datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
   },
   {
     id: '2',
     role: 'assistant',
-    content: 'TD Chat 是 TDesign Vue Next 提供的专业聊天组件，专为 AI 对话场景设计。它提供了丰富的功能，包括消息展示、输入框、打字机效果、头像显示等。',
+    content:
+      'TD Chat 是 TDesign Vue Next 提供的专业聊天组件，专为 AI 对话场景设计。它提供了丰富的功能，包括消息展示、输入框、打字机效果、头像显示等。',
     datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
-  }
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+  },
 ])
 
 // 输入框内容
@@ -35,17 +36,17 @@ const inputValue = ref('')
 // 发送消息
 const sendMessage = () => {
   if (!inputValue.value.trim()) return
-  
+
   const newMessage: ChatMessage = {
     id: Date.now().toString(),
     role: 'user',
     content: inputValue.value,
     datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
+    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
   }
-  
+
   messages.value.push(newMessage)
-  
+
   // 模拟AI回复
   setTimeout(() => {
     const aiReply: ChatMessage = {
@@ -53,11 +54,11 @@ const sendMessage = () => {
       role: 'assistant',
       content: `我收到了你的消息："${inputValue.value}"。这是一个使用TD Chat组件构建的专业聊天界面。TD Chat提供了完整的聊天功能，包括消息管理、样式定制、响应式设计等。`,
       datetime: new Date().toLocaleString(),
-      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg'
+      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
     }
     messages.value.push(aiReply)
   }, 1000)
-  
+
   inputValue.value = ''
 }
 
@@ -74,11 +75,12 @@ const copyMessage = (content: string) => {
 
 // 重新生成消息
 const regenerateMessage = (messageId: string) => {
-  const message = messages.value.find(m => m.id === messageId)
+  const message = messages.value.find((m) => m.id === messageId)
   if (message && message.role === 'assistant') {
     message.content = '正在重新生成回复...'
     setTimeout(() => {
-      message.content = '这是重新生成的回复内容。TD Chat组件支持多种操作，包括复制、重新生成、点赞等。'
+      message.content =
+        '这是重新生成的回复内容。TD Chat组件支持多种操作，包括复制、重新生成、点赞等。'
     }, 1000)
   }
 }
@@ -106,20 +108,18 @@ const regenerateMessage = (messageId: string) => {
             :datetime="message.datetime"
             :avatar="message.avatar"
             :actions="message.role === 'assistant' ? 'copy,replay' : undefined"
-            @operation="(action) => {
-              if (action === 'copy') copyMessage(message.content)
-              if (action === 'replay') regenerateMessage(message.id)
-            }"
+            @operation="
+              (action) => {
+                if (action === 'copy') copyMessage(message.content)
+                if (action === 'replay') regenerateMessage(message.id)
+              }
+            "
           />
         </div>
 
         <!-- 聊天输入区域 -->
         <div class="chat-input">
-          <ChatSender
-            v-model="inputValue"
-            placeholder="请输入您的问题..."
-            @send="sendMessage"
-          />
+          <ChatSender v-model="inputValue" placeholder="请输入您的问题..." @send="sendMessage" />
         </div>
       </div>
 

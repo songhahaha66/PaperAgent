@@ -3,34 +3,34 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue';
-import MarkdownIt from 'markdown-it';
-import mila from 'markdown-it-katex';
-import 'katex/dist/katex.min.css';
-import { useAuthStore } from '@/stores/auth';
-import { workspaceFileAPI } from '@/api/workspace';
+import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
+import MarkdownIt from 'markdown-it'
+import mila from 'markdown-it-katex'
+import 'katex/dist/katex.min.css'
+import { useAuthStore } from '@/stores/auth'
+import { workspaceFileAPI } from '@/api/workspace'
 
 interface Props {
-  content: string;
+  content: string
   // 渲染上下文（用于相对路径图片解析&鉴权）
-  workId?: string;      // 工作区ID，可选
-  basePath?: string;    // 当前 markdown 文件所在目录，用于解析相对图片路径
+  workId?: string // 工作区ID，可选
+  basePath?: string // 当前 markdown 文件所在目录，用于解析相对图片路径
 }
 
-const props = defineProps<Props>();
-const authStore = useAuthStore();
+const props = defineProps<Props>()
+const authStore = useAuthStore()
 
 // 简单的相对路径规范化
 function normalizePath(base: string, rel: string): string {
-  if (!base) return rel;
-  const baseParts = base.split('/').filter(Boolean);
-  const relParts = rel.split('/');
+  if (!base) return rel
+  const baseParts = base.split('/').filter(Boolean)
+  const relParts = rel.split('/')
   for (const part of relParts) {
-    if (part === '.' || part === '') continue;
-    if (part === '..') baseParts.pop();
-    else baseParts.push(part);
+    if (part === '.' || part === '') continue
+    if (part === '..') baseParts.pop()
+    else baseParts.push(part)
   }
-  return baseParts.join('/');
+  return baseParts.join('/')
 }
 
 // markdown-it 实例（支持公式、基础语法）
@@ -38,68 +38,76 @@ const md = new MarkdownIt({
   html: true,
   linkify: true,
   breaks: true,
-});
-md.use(mila);
+})
+md.use(mila)
 
 // 渲染后的 HTML
 const renderedContent = computed(() => {
-  if (!props.content) return '';
-  return md.render(props.content);
-});
+  if (!props.content) return ''
+  return md.render(props.content)
+})
 
 // 图片 blob 缓存：key -> blobUrl
-const imageBlobCache = new Map<string, string>();
-const rootEl = ref<HTMLElement | null>(null);
+const imageBlobCache = new Map<string, string>()
+const rootEl = ref<HTMLElement | null>(null)
 
 async function ensureImageSrc(img: HTMLImageElement) {
-  const rawSrc = img.getAttribute('src')?.trim();
-  if (!rawSrc) return;
+  const rawSrc = img.getAttribute('src')?.trim()
+  if (!rawSrc) return
 
   // 绝对 URL 或 data: 不处理
-  if (/^(https?:)?\/\//i.test(rawSrc) || rawSrc.startsWith('data:') || rawSrc.startsWith('blob:')) return;
+  if (/^(https?:)?\/\//i.test(rawSrc) || rawSrc.startsWith('data:') || rawSrc.startsWith('blob:'))
+    return
 
   // 没有 workId 或 token，无权转换，直接忽略
-  if (!props.workId || !authStore.token) return;
+  if (!props.workId || !authStore.token) return
 
   // 处理相对路径（相对于 basePath）
-  const filePath = props.basePath ? normalizePath(props.basePath, rawSrc) : rawSrc;
-  const cacheKey = `${props.workId}::${filePath}`;
+  const filePath = props.basePath ? normalizePath(props.basePath, rawSrc) : rawSrc
+  const cacheKey = `${props.workId}::${filePath}`
   if (imageBlobCache.has(cacheKey)) {
-    img.src = imageBlobCache.get(cacheKey)!;
-    return;
+    img.src = imageBlobCache.get(cacheKey)!
+    return
   }
 
   try {
-    const url = workspaceFileAPI.getImageUrl(authStore.token!, props.workId, filePath);
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${authStore.token}` } });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const blob = await resp.blob();
-    const blobUrl = URL.createObjectURL(blob);
-    imageBlobCache.set(cacheKey, blobUrl);
-    img.src = blobUrl;
+    const url = workspaceFileAPI.getImageUrl(authStore.token!, props.workId, filePath)
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${authStore.token}` } })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    imageBlobCache.set(cacheKey, blobUrl)
+    img.src = blobUrl
   } catch (e) {
-    console.error('加载图片失败:', e);
+    console.error('加载图片失败:', e)
   }
 }
 
 async function processImages() {
-  await nextTick();
-  if (!rootEl.value) return;
-  const imgs = Array.from(rootEl.value.querySelectorAll('img')) as HTMLImageElement[];
+  await nextTick()
+  if (!rootEl.value) return
+  const imgs = Array.from(rootEl.value.querySelectorAll('img')) as HTMLImageElement[]
   // 懒加载标记
-  imgs.forEach(img => img.setAttribute('loading', 'lazy'));
-  await Promise.all(imgs.map(ensureImageSrc));
+  imgs.forEach((img) => img.setAttribute('loading', 'lazy'))
+  await Promise.all(imgs.map(ensureImageSrc))
 }
 
-watch(() => renderedContent.value, () => { processImages(); });
-onMounted(() => { processImages(); });
+watch(
+  () => renderedContent.value,
+  () => {
+    processImages()
+  },
+)
+onMounted(() => {
+  processImages()
+})
 onBeforeUnmount(() => {
   // 释放 blob 资源
   for (const url of imageBlobCache.values()) {
-    if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url)
   }
-  imageBlobCache.clear();
-});
+  imageBlobCache.clear()
+})
 </script>
 
 <style scoped>

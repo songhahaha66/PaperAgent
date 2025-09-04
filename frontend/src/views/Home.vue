@@ -7,14 +7,14 @@
       @create-new-task="createNewTask"
       @select-history="selectHistory"
     />
-    
+
     <div class="home-container">
       <!-- 欢迎标题 -->
       <div class="welcome-header">
         <h1>你好，{{ userName }}</h1>
         <p>智能论文生成助手，让学术写作更高效</p>
       </div>
-      
+
       <!-- 主要任务创建区域 -->
       <div class="main-task-area">
         <div class="input-container">
@@ -27,7 +27,7 @@
                 :autosize="{ minRows: 5, maxRows: 8 }"
                 class="question-input"
               />
-              
+
               <!-- 按钮容器 -->
               <div class="button-container">
                 <!-- 附件按钮 - 左下角 -->
@@ -55,12 +55,12 @@
                   </t-upload>
                   <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
                 </div> -->
-                
+
                 <!-- 下一步按钮 - 右下角 -->
                 <div class="next-btn-wrapper">
-                  <t-button 
-                    theme="primary" 
-                    size="middle" 
+                  <t-button
+                    theme="primary"
+                    size="middle"
                     @click="nextStep"
                     :disabled="!researchQuestion.trim()"
                     class="next-btn"
@@ -74,15 +74,15 @@
               </div>
             </div>
           </div>
-          
+
           <!-- 第二阶段：选择模板 -->
           <div v-if="currentStep === 2" class="step-content">
             <h3>选择论文模板</h3>
-            
+
             <!-- 不使用模板选项 -->
             <div class="no-template-option">
-              <t-card 
-                :class="{ 'selected': selectedTemplateId === null }"
+              <t-card
+                :class="{ selected: selectedTemplateId === null }"
                 @click="selectNoTemplate"
                 class="no-template-card"
               >
@@ -98,39 +98,38 @@
                 </div>
               </t-card>
             </div>
-            
+
             <!-- 或者分割线 -->
             <div class="template-divider">
               <span>或者选择现有模板</span>
             </div>
-            
+
             <!-- 加载状态 -->
             <div v-if="loading" class="loading-state">
               <t-loading size="large" />
               <p>正在加载您的模板...</p>
             </div>
-            
+
             <!-- 模板列表 -->
             <div v-else-if="availableTemplates.length > 0" class="template-list-container">
               <t-list>
                 <t-list-item
                   v-for="template in availableTemplates"
                   :key="template.id"
-                  :class="{ 'selected': selectedTemplateId === template.id }"
+                  :class="{ selected: selectedTemplateId === template.id }"
                   @click="selectTemplate(template.id)"
                 >
                   <t-list-item-meta
                     :title="template.name"
-                    :description="template.description||'暂无描述'"
+                    :description="template.description || '暂无描述'"
                   >
-                    
                   </t-list-item-meta>
-                  
+
                   <template #action>
                     <t-space>
-                      <t-button 
-                        theme="default" 
-                        variant="text" 
+                      <t-button
+                        theme="default"
+                        variant="text"
                         size="small"
                         @click.stop="previewTemplate(template)"
                       >
@@ -139,10 +138,10 @@
                       <div v-if="selectedTemplateId === template.id">
                         <t-icon name="check-circle-filled" theme="success" />
                       </div>
-                      <t-button 
+                      <t-button
                         v-else
-                        theme="primary" 
-                        variant="text" 
+                        theme="primary"
+                        variant="text"
                         size="small"
                         @click.stop="selectTemplate(template.id)"
                       >
@@ -153,7 +152,7 @@
                 </t-list-item>
               </t-list>
             </div>
-            
+
             <!-- 无模板状态 -->
             <div v-else class="no-template-state">
               <div class="no-template-icon">
@@ -165,20 +164,15 @@
                 去创建模板
               </t-button>
             </div>
-            
+
             <div class="step-actions">
-              <t-button 
-                theme="default" 
-                size="middle" 
-                @click="prevStep"
-                class="prev-btn"
-              >
+              <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
                 上一步
               </t-button>
-              
-              <t-button 
-                theme="success" 
-                size="middle" 
+
+              <t-button
+                theme="success"
+                size="middle"
                 @click="startWork"
                 :disabled="creatingWork"
                 class="start-btn"
@@ -193,7 +187,7 @@
         </div>
       </div>
     </div>
-    
+
     <!-- 模板预览对话框 -->
     <t-dialog
       v-model:visible="showPreviewDialog"
@@ -211,11 +205,11 @@
         <div class="template-content">
           <h4>模板内容：</h4>
           <div class="content-display">
-            <MarkdownRenderer 
-              v-if="previewTemplateData?.file_path?.endsWith('.md')" 
+            <MarkdownRenderer
+              v-if="previewTemplateData?.file_path?.endsWith('.md')"
               :content="templateContent"
-                :base-path="''"
-              />
+              :base-path="''"
+            />
             <t-textarea
               v-else
               v-model="templateContent"
@@ -234,225 +228,217 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { useAuthStore } from '@/stores/auth';
-import { MessagePlugin } from 'tdesign-vue-next';
-import { templateAPI, type PaperTemplate } from '@/api/template';
-import { workspaceAPI, type WorkCreate } from '@/api/workspace';
-import Sidebar from '@/components/Sidebar.vue';
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
+import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+import { MessagePlugin } from 'tdesign-vue-next'
+import { templateAPI, type PaperTemplate } from '@/api/template'
+import { workspaceAPI, type WorkCreate } from '@/api/workspace'
+import Sidebar from '@/components/Sidebar.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
-const router = useRouter();
-const authStore = useAuthStore();
+const router = useRouter()
+const authStore = useAuthStore()
 
 // 侧边栏折叠状态
-const isSidebarCollapsed = ref(false);
+const isSidebarCollapsed = ref(false)
 
 // 任务创建步骤
-const currentStep = ref(1);
+const currentStep = ref(1)
 
 // 研究问题
-const researchQuestion = ref('');
+const researchQuestion = ref('')
 
 // 选择的模板ID
-const selectedTemplateId = ref<number | null>(null);
+const selectedTemplateId = ref<number | null>(null)
 
 // 上传的文件
-const uploadedFiles = ref([]);
+const uploadedFiles = ref([])
 
 // 可用模板列表
-const availableTemplates = ref<PaperTemplate[]>([]);
+const availableTemplates = ref<PaperTemplate[]>([])
 
 // 加载状态
-const loading = ref(false);
+const loading = ref(false)
 
 // 创建工作状态
-const creatingWork = ref(false);
+const creatingWork = ref(false)
 
 // 用户名
-const userName = computed(() => authStore.currentUser?.username || '用户');
+const userName = computed(() => authStore.currentUser?.username || '用户')
 
 // 当前选中的历史工作ID
-const activeHistoryId = ref<number | null>(null);
+const activeHistoryId = ref<number | null>(null)
 
 // 模板预览相关
-const showPreviewDialog = ref(false);
-const previewTemplateData = ref<PaperTemplate | null>(null);
-const templateContent = ref('');
+const showPreviewDialog = ref(false)
+const previewTemplateData = ref<PaperTemplate | null>(null)
+const templateContent = ref('')
 
 // 上传相关配置
-const uploadAction = 'http://localhost:8000/upload'; // 替换为实际的上传接口
+const uploadAction = 'http://localhost:8000/upload' // 替换为实际的上传接口
 const uploadHeaders = {
-  'Authorization': `Bearer ${authStore.token}`
-};
+  Authorization: `Bearer ${authStore.token}`,
+}
 const uploadData = {
-  type: 'research_attachment'
-};
+  type: 'research_attachment',
+}
 
 // 加载用户模板
 const loadUserTemplates = async () => {
-  if (!authStore.token) return;
-  
-  loading.value = true;
+  if (!authStore.token) return
+
+  loading.value = true
   try {
-    const templates = await templateAPI.getUserTemplates(authStore.token);
-    availableTemplates.value = templates;
+    const templates = await templateAPI.getUserTemplates(authStore.token)
+    availableTemplates.value = templates
   } catch (error) {
-    console.error('加载模板失败:', error);
-    MessagePlugin.error('加载模板失败');
+    console.error('加载模板失败:', error)
+    MessagePlugin.error('加载模板失败')
   } finally {
-    loading.value = false;
+    loading.value = false
   }
-};
-
-
+}
 
 // 下一步
 const nextStep = () => {
   if (currentStep.value === 1) {
     // 进入第二步时加载模板
-    loadUserTemplates();
+    loadUserTemplates()
   }
-  
+
   if (currentStep.value < 2) {
-    currentStep.value++;
+    currentStep.value++
   }
-};
+}
 
 // 上一步
 const prevStep = () => {
   if (currentStep.value > 1) {
-    currentStep.value--;
+    currentStep.value--
   }
-};
+}
 
 // 选择模板
 const selectTemplate = (templateId: number) => {
-  selectedTemplateId.value = templateId;
-};
+  selectedTemplateId.value = templateId
+}
 
 // 选择"不使用模板"
 const selectNoTemplate = () => {
-  selectedTemplateId.value = null;
-};
+  selectedTemplateId.value = null
+}
 
 // 预览模板
 const previewTemplate = async (template: PaperTemplate) => {
-  if (!authStore.token) return;
-  
-  previewTemplateData.value = template;
-  showPreviewDialog.value = true;
-  
+  if (!authStore.token) return
+
+  previewTemplateData.value = template
+  showPreviewDialog.value = true
+
   try {
-    const result = await templateAPI.getTemplateContent(
-      authStore.token,
-      template.id
-    );
-    templateContent.value = result.content;
+    const result = await templateAPI.getTemplateContent(authStore.token, template.id)
+    templateContent.value = result.content
   } catch (error) {
-    MessagePlugin.error('加载模板内容失败');
-    console.error('加载模板内容失败:', error);
-    templateContent.value = '模板内容加载失败';
+    MessagePlugin.error('加载模板内容失败')
+    console.error('加载模板内容失败:', error)
+    templateContent.value = '模板内容加载失败'
   }
-};
+}
 
 // 关闭预览对话框
 const closePreviewDialog = () => {
-  showPreviewDialog.value = false;
-  previewTemplateData.value = null;
-  templateContent.value = '';
-};
+  showPreviewDialog.value = false
+  previewTemplateData.value = null
+  templateContent.value = ''
+}
 
 // 跳转到模板页面
 const goToTemplatePage = () => {
-  router.push('/template');
-};
+  router.push('/template')
+}
 
 // 上传成功回调
 const onUploadSuccess = (response: any, file: any) => {
-  MessagePlugin.success(`文件 ${file.name} 上传成功`);
-};
+  MessagePlugin.success(`文件 ${file.name} 上传成功`)
+}
 
 // 上传失败回调
 const onUploadFail = (error: any, file: any) => {
-  MessagePlugin.error(`文件 ${file.name} 上传失败`);
-};
+  MessagePlugin.error(`文件 ${file.name} 上传失败`)
+}
 
 // 格式化上传响应
 const formatUploadResponse = (response: any) => {
   return {
     name: response.filename,
     url: response.file_url,
-    status: 'success'
-  };
-};
+    status: 'success',
+  }
+}
 
 // 开始工作
 const startWork = async () => {
   if (!researchQuestion.value.trim() || !authStore.token) {
-    return;
+    return
   }
 
-  creatingWork.value = true;
-  
+  creatingWork.value = true
+
   try {
     // 创建工作数据，标题用空格作为初始值
     const workData: WorkCreate = {
-      title: " ",  // 用空格作为初始标题，后续由AI生成
+      title: ' ', // 用空格作为初始标题，后续由AI生成
       description: `研究问题：${researchQuestion.value}\n${selectedTemplateId.value ? `使用模板：${getSelectedTemplateName()}` : '不使用模板，从头开始创建'}\n`,
       tags: '研究,论文,AI生成',
-      template_id: selectedTemplateId.value || undefined  // 如果为null则传undefined
-    };
+      template_id: selectedTemplateId.value || undefined, // 如果为null则传undefined
+    }
 
     // 调用API创建工作
-    const newWork = await workspaceAPI.createWork(authStore.token, workData);
-    
+    const newWork = await workspaceAPI.createWork(authStore.token, workData)
+
     // 将研究问题存储到localStorage，供Work.vue使用
-    localStorage.setItem('pendingQuestion', researchQuestion.value);
-    
-    MessagePlugin.success('工作创建成功！');
-    
+    localStorage.setItem('pendingQuestion', researchQuestion.value)
+
+    MessagePlugin.success('工作创建成功！')
+
     // 跳转到工作页面
-    router.push(`/work/${newWork.work_id}`);
-    
+    router.push(`/work/${newWork.work_id}`)
   } catch (error) {
-    console.error('创建工作失败:', error);
-    MessagePlugin.error('创建工作失败，请重试');
+    console.error('创建工作失败:', error)
+    MessagePlugin.error('创建工作失败，请重试')
   } finally {
-    creatingWork.value = false;
+    creatingWork.value = false
   }
-};
+}
 
 // 获取选中的模板名称
 const getSelectedTemplateName = () => {
   if (selectedTemplateId.value === null) {
-    return '不使用模板';
+    return '不使用模板'
   }
-  const template = availableTemplates.value.find(t => t.id === selectedTemplateId.value);
-  return template ? template.name : '未选择';
-};
+  const template = availableTemplates.value.find((t) => t.id === selectedTemplateId.value)
+  return template ? template.name : '未选择'
+}
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value;
-};
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
+}
 
 // 创建新工作（侧边栏调用）
 const createNewTask = () => {
-  currentStep.value = 1;
-  researchQuestion.value = '';
-  selectedTemplateId.value = null;  // 重置为null，表示不使用模板
-  uploadedFiles.value = [];
-};
+  currentStep.value = 1
+  researchQuestion.value = ''
+  selectedTemplateId.value = null // 重置为null，表示不使用模板
+  uploadedFiles.value = []
+}
 
 // 选择历史工作（侧边栏调用）
 const selectHistory = (id: number) => {
-  activeHistoryId.value = id;
+  activeHistoryId.value = id
   // 侧边栏会处理跳转逻辑，这里只需要更新选中状态
-};
-
-
+}
 </script>
 
 <style scoped>
@@ -499,14 +485,10 @@ const selectHistory = (id: number) => {
   max-width: 800px;
 }
 
-
-
 .input-container:focus-within {
   border-color: #0052d9;
   background: white;
 }
-
-
 
 .input-wrapper {
   position: relative;
@@ -560,7 +542,6 @@ const selectHistory = (id: number) => {
 
 .next-btn {
   min-width: 80px;
-  
 }
 
 /* 加载状态 */
@@ -692,7 +673,6 @@ const selectHistory = (id: number) => {
   z-index: 0;
 }
 
-
 .step-actions {
   display: flex;
   gap: 16px;
@@ -734,22 +714,20 @@ const selectHistory = (id: number) => {
   .home-container {
     padding: 20px 16px;
   }
-  
+
   .welcome-header h1 {
     font-size: 2rem;
   }
-  
+
   .input-container {
     padding: 24px;
   }
-  
 
-  
   .step-actions {
     flex-direction: column;
     align-items: center;
   }
-  
+
   .prev-btn,
   .start-btn {
     width: 100%;

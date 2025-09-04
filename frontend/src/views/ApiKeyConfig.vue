@@ -1,13 +1,13 @@
 <template>
   <div class="api-key-page">
-        <Sidebar
+    <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
       @toggle-sidebar="toggleSidebar"
       @create-new-task="createNewTask"
       @select-history="selectHistory"
     />
-    
+
     <div class="api-key-container">
       <div class="page-header">
         <h1>API Key 配置</h1>
@@ -17,53 +17,54 @@
       </div>
 
       <div class="config-grid">
-        <t-card 
-          v-for="config in configs" 
+        <t-card
+          v-for="config in configs"
           :key="config.type"
-          class="config-card" 
+          class="config-card"
           :header="config.title"
         >
-          <t-form 
+          <t-form
             :ref="(el: FormInstanceFunctions | null) => setFormRef(el, config.type)"
-            :data="config.data" 
-            @submit="() => saveConfig(config.type)" 
+            :data="config.data"
+            @submit="() => saveConfig(config.type)"
             layout="vertical"
             :rules="formRules"
           >
             <t-form-item label="API Key" name="apiKey" :rules="formRules.apiKey">
-              <t-input 
-                v-model="config.data.apiKey" 
-                type="password" 
+              <t-input
+                v-model="config.data.apiKey"
+                type="password"
                 :placeholder="`请输入${config.title}的API Key`"
                 clearable
               />
             </t-form-item>
             <t-form-item label="Base URL" name="baseUrl" :rules="formRules.baseUrl">
-              <t-input 
-                v-model="config.data.baseUrl" 
+              <t-input
+                v-model="config.data.baseUrl"
                 placeholder="例如: https://api.openai.com/v1"
                 clearable
               />
             </t-form-item>
             <t-form-item label="Model ID" name="modelId" :rules="formRules.modelId">
-              <t-input 
-                v-model="config.data.modelId" 
-                placeholder="例如: gpt-4"
-                clearable
-              />
+              <t-input v-model="config.data.modelId" placeholder="例如: gpt-4" clearable />
             </t-form-item>
             <t-form-item>
               <div class="button-container">
-                <t-button 
-                  theme="primary" 
-                  type="submit" 
-                  :loading="saving[config.type]" 
+                <t-button
+                  theme="primary"
+                  type="submit"
+                  :loading="saving[config.type]"
                   size="middle"
                   :disabled="!isFormValid(config.type)"
                 >
                   {{ config.data.id ? '更新配置' : '保存配置' }}
                 </t-button>
-                <t-button v-if="config.data.id" theme="danger" @click="() => deleteConfig(config.type)" size="middle">
+                <t-button
+                  v-if="config.data.id"
+                  theme="danger"
+                  @click="() => deleteConfig(config.type)"
+                  size="middle"
+                >
                   删除配置
                 </t-button>
               </div>
@@ -76,9 +77,7 @@
         <t-button theme="default" @click="loadAllConfigs" :loading="loading">
           重新加载配置
         </t-button>
-        <t-button theme="danger" @click="clearAllConfigs">
-          清空所有配置
-        </t-button>
+        <t-button theme="danger" @click="clearAllConfigs"> 清空所有配置 </t-button>
       </div>
     </div>
   </div>
@@ -112,7 +111,7 @@ const activeHistoryId = ref<number | null>(null)
 const formRefs = reactive<Record<string, FormInstanceFunctions | null>>({
   brain: null,
   code: null,
-  writing: null
+  writing: null,
 })
 
 // 表单验证规则
@@ -120,13 +119,13 @@ const formRules = {
   apiKey: [{ required: true, message: '请输入API Key', trigger: 'blur' }],
   baseUrl: [
     { required: false, message: '请输入Base URL', trigger: 'blur' },
-    { 
-      pattern: /^https?:\/\/.+/, 
-      message: '请输入有效的URL地址', 
-      trigger: 'blur' 
-    }
+    {
+      pattern: /^https?:\/\/.+/,
+      message: '请输入有效的URL地址',
+      trigger: 'blur',
+    },
   ],
-  modelId: [{ required: true, message: '请输入Model ID', trigger: 'blur' }]
+  modelId: [{ required: true, message: '请输入Model ID', trigger: 'blur' }],
 }
 
 // 配置数据 - 使用循环渲染，大大减少重复代码
@@ -137,8 +136,8 @@ const configs = reactive([
     data: reactive<ModelConfigForm>({
       apiKey: '',
       baseUrl: '',
-      modelId: ''
-    })
+      modelId: '',
+    }),
   },
   {
     type: 'code' as const,
@@ -146,16 +145,16 @@ const configs = reactive([
     data: reactive<ModelConfigForm>({
       apiKey: '',
       baseUrl: '',
-      modelId: ''
-    })
-  }
+      modelId: '',
+    }),
+  },
 ])
 
 // 保存状态
 const saving = reactive({
   brain: false,
   code: false,
-  writing: false
+  writing: false,
 })
 
 const loading = ref(false)
@@ -169,7 +168,7 @@ const setFormRef = (el: FormInstanceFunctions | null, type: string) => {
 
 // 检查表单是否有效
 const isFormValid = (type: string): boolean => {
-  const config = configs.find(c => c.type === type)
+  const config = configs.find((c) => c.type === type)
   if (!config) return false
 
   // apiKey 和 modelId 必填；baseUrl 可选，但若填写则必须是有效的 URL
@@ -185,7 +184,7 @@ const isFormValid = (type: string): boolean => {
 const validateForm = async (type: string): Promise<boolean> => {
   const formRef = formRefs[type]
   if (!formRef) return false
-  
+
   try {
     const result = await formRef.validate()
     return result === true
@@ -209,7 +208,7 @@ const selectHistory = (id: number) => {
 
 // 通用保存配置方法
 const saveConfig = async (type: 'brain' | 'code' | 'writing') => {
-  const config = configs.find(c => c.type === type)
+  const config = configs.find((c) => c.type === type)
   if (!config) return
 
   // 先验证表单
@@ -226,7 +225,7 @@ const saveConfig = async (type: 'brain' | 'code' | 'writing') => {
       await modelConfigAPI.updateModelConfig(config.data.id, {
         model_id: config.data.modelId,
         base_url: config.data.baseUrl,
-        api_key: config.data.apiKey
+        api_key: config.data.apiKey,
       })
       MessagePlugin.success(`${config.title}配置更新成功`)
     } else {
@@ -234,7 +233,7 @@ const saveConfig = async (type: 'brain' | 'code' | 'writing') => {
       const result = await modelConfigAPI.createConfig(type, {
         model_id: config.data.modelId,
         base_url: config.data.baseUrl,
-        api_key: config.data.apiKey
+        api_key: config.data.apiKey,
       })
       config.data.id = result.id
       MessagePlugin.success(`${config.title}配置保存成功`)
@@ -248,7 +247,7 @@ const saveConfig = async (type: 'brain' | 'code' | 'writing') => {
 
 // 通用删除配置方法
 const deleteConfig = async (type: 'brain' | 'code' | 'writing') => {
-  const config = configs.find(c => c.type === type)
+  const config = configs.find((c) => c.type === type)
   if (!config || !config.data.id) return
 
   try {
@@ -272,7 +271,7 @@ const loadAllConfigs = async () => {
           id: result.id,
           apiKey: '', // 安全考虑，不显示api_key
           baseUrl: result.base_url,
-          modelId: result.model_id
+          modelId: result.model_id,
         }
       } catch (error) {
         config.data = { apiKey: '', baseUrl: '', modelId: '' }
@@ -371,11 +370,11 @@ onMounted(async () => {
   .api-key-container {
     padding: 20px 16px;
   }
-  
+
   .page-header h1 {
     font-size: 2rem;
   }
-  
+
   .config-grid {
     grid-template-columns: 1fr;
     gap: 16px;
