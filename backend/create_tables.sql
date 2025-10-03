@@ -59,7 +59,9 @@ CREATE TABLE model_configs (
     base_url VARCHAR(100) NOT NULL,  -- 模型URL
     api_key VARCHAR(255) NOT NULL,  -- API密钥
     is_active BOOLEAN DEFAULT TRUE,  -- 是否激活
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP  -- 创建时间
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- 创建时间
+    created_by INTEGER NOT NULL,  -- 添加用户关联
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 6. 聊天会话表
@@ -99,6 +101,7 @@ CREATE INDEX idx_paper_templates_created_by ON paper_templates(created_by);
 CREATE INDEX idx_paper_templates_category ON paper_templates(category);
 CREATE INDEX idx_model_configs_type ON model_configs(type);
 CREATE INDEX idx_model_configs_is_active ON model_configs(is_active);
+CREATE INDEX idx_model_configs_created_by ON model_configs(created_by);
 CREATE INDEX idx_chat_sessions_session_id ON chat_sessions(session_id);
 CREATE INDEX idx_chat_sessions_work_id ON chat_sessions(work_id);
 CREATE INDEX idx_chat_sessions_created_by ON chat_sessions(created_by);

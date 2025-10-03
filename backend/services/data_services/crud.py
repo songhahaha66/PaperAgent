@@ -78,27 +78,29 @@ def update_system_config(db: Session, is_allow_register: bool):
     return config
 
 # ModelConfig相关的CRUD操作
-def create_model_config(db: Session, config: schemas.ModelConfigCreate):
+def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id: int):
     """创建模型配置"""
     try:
-        # 检查是否已存在相同类型的配置
+        # 检查是否已存在相同类型的配置（同一用户下）
         existing_config = db.query(models.ModelConfig).filter(
-            models.ModelConfig.type == config.type
+            models.ModelConfig.type == config.type,
+            models.ModelConfig.created_by == user_id
         ).first()
-        
+
         if existing_config:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Model config for type '{config.type}' already exists"
+                detail=f"Model config for type '{config.type}' already exists for this user"
             )
-        
+
         db_config = models.ModelConfig(
             type=config.type,
             model_id=config.model_id,
             base_url=config.base_url,
-            api_key=config.api_key
+            api_key=config.api_key,
+            created_by=user_id
         )
-        
+
         db.add(db_config)
         db.commit()
         db.refresh(db_config)
@@ -116,15 +118,21 @@ def get_model_config(db: Session, config_id: int):
     """根据ID获取模型配置（不包含api_key）"""
     return db.query(models.ModelConfig).filter(models.ModelConfig.id == config_id).first()
 
-def get_model_config_by_type(db: Session, config_type: str):
+def get_model_config_by_type(db: Session, config_type: str, user_id: int = None):
     """根据类型获取模型配置（不包含api_key）"""
-    return db.query(models.ModelConfig).filter(models.ModelConfig.type == config_type).first()
+    query = db.query(models.ModelConfig).filter(models.ModelConfig.type == config_type)
+    if user_id is not None:
+        query = query.filter(models.ModelConfig.created_by == user_id)
+    return query.first()
 
-def get_all_model_configs(db: Session, skip: int = 0, limit: int = 100):
+def get_all_model_configs(db: Session, skip: int = 0, limit: int = 100, user_id: int = None):
     """获取所有模型配置（不包含api_key）"""
-    return db.query(models.ModelConfig).offset(skip).limit(limit).all()
+    query = db.query(models.ModelConfig)
+    if user_id is not None:
+        query = query.filter(models.ModelConfig.created_by == user_id)
+    return query.offset(skip).limit(limit).all()
 
-def update_model_config(db: Session, config_id: int, config_update: schemas.ModelConfigUpdate):
+def update_model_config(db: Session, config_id: int, config_update: schemas.ModelConfigUpdate, user_id: int = None):
     """更新模型配置"""
     db_config = get_model_config(db, config_id)
     if not db_config:
@@ -132,14 +140,21 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Model config not found"
         )
-    
+
+    # 如果指定了用户ID，检查权限
+    if user_id is not None and db_config.created_by != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to modify this model config"
+        )
+
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
         update_data = config_update.model_dump(exclude_unset=True) if hasattr(config_update, 'model_dump') else config_update.dict(exclude_unset=True)
-        
+
         for field, value in update_data.items():
             setattr(db_config, field, value)
-        
+
         db.commit()
         db.refresh(db_config)
         return db_config
@@ -150,7 +165,7 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
             detail=f"Model config update failed: {str(e)}"
         )
 
-def delete_model_config(db: Session, config_id: int):
+def delete_model_config(db: Session, config_id: int, user_id: int = None):
     """删除模型配置"""
     db_config = get_model_config(db, config_id)
     if not db_config:
@@ -158,7 +173,14 @@ def delete_model_config(db: Session, config_id: int):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Model config not found"
         )
-    
+
+    # 如果指定了用户ID，检查权限
+    if user_id is not None and db_config.created_by != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this model config"
+        )
+
     try:
         db.delete(db_config)
         db.commit()
@@ -170,10 +192,13 @@ def delete_model_config(db: Session, config_id: int):
             detail=f"Model config deletion failed: {str(e)}"
         )
 
-def clear_all_model_configs(db: Session):
+def clear_all_model_configs(db: Session, user_id: int = None):
     """清空所有模型配置"""
     try:
-        db.query(models.ModelConfig).delete()
+        query = db.query(models.ModelConfig)
+        if user_id is not None:
+            query = query.filter(models.ModelConfig.created_by == user_id)
+        query.delete()
         db.commit()
         return {"message": "All model configs cleared successfully"}
     except Exception as e:

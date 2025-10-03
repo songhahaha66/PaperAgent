@@ -32,7 +32,7 @@ async def create_model_config(
     db: Session = Depends(get_db)
 ):
     """创建模型配置"""
-    result = crud.create_model_config(db=db, config=config)
+    result = crud.create_model_config(db=db, config=config, user_id=current_user)
     return _remove_api_key_from_config(result)
 
 @router.get("", response_model=list[schemas.ModelConfigResponse])
@@ -43,8 +43,8 @@ async def get_all_model_configs(
     current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    """获取所有模型配置（不包含api_key）"""
-    configs = crud.get_all_model_configs(db=db, skip=skip, limit=limit)
+    """获取当前用户的所有模型配置（不包含api_key）"""
+    configs = crud.get_all_model_configs(db=db, skip=skip, limit=limit, user_id=current_user)
     return [_remove_api_key_from_config(config) for config in configs]
 
 @router.get("/{config_id}", response_model=schemas.ModelConfigResponse)
@@ -61,6 +61,12 @@ async def get_model_config(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Model config not found"
         )
+    # 检查权限：只有配置的创建者才能查看
+    if db_config.created_by != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this model config"
+        )
     return _remove_api_key_from_config(db_config)
 
 @router.get("/type/{config_type}", response_model=schemas.ModelConfigResponse)
@@ -70,8 +76,8 @@ async def get_model_config_by_type(
     current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    """根据类型获取模型配置（不包含api_key）"""
-    db_config = crud.get_model_config_by_type(db=db, config_type=config_type)
+    """根据类型获取当前用户的模型配置（不包含api_key）"""
+    db_config = crud.get_model_config_by_type(db=db, config_type=config_type, user_id=current_user)
     if not db_config:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -88,7 +94,7 @@ async def update_model_config(
     db: Session = Depends(get_db)
 ):
     """更新模型配置"""
-    result = crud.update_model_config(db=db, config_id=config_id, config_update=config_update)
+    result = crud.update_model_config(db=db, config_id=config_id, config_update=config_update, user_id=current_user)
     return _remove_api_key_from_config(result)
 
 @router.delete("/{config_id}")
@@ -99,7 +105,7 @@ async def delete_model_config(
     db: Session = Depends(get_db)
 ):
     """删除模型配置"""
-    return crud.delete_model_config(db=db, config_id=config_id)
+    return crud.delete_model_config(db=db, config_id=config_id, user_id=current_user)
 
 @router.delete("", response_model=dict)
 @route_guard
@@ -107,5 +113,5 @@ async def clear_all_model_configs(
     current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    """清空所有模型配置"""
-    return crud.clear_all_model_configs(db=db)
+    """清空当前用户的所有模型配置"""
+    return crud.clear_all_model_configs(db=db, user_id=current_user)
