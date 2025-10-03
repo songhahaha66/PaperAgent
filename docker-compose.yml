@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ${ALIYUN_REGISTRY}:latest
+    container_name: paperagent
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./backend/.env:/app/.env:ro  # 挂载 .env 文件，只读模式
+
+networks:
+  default:
+    name: paperagent-network
