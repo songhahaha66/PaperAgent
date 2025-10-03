@@ -249,7 +249,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.5" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=2.3.1" },
-    { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
+    { name = "passlib", extras = ["bcrypt"], specifier = "==1.7.4" },
     { name = "psycopg2-binary", specifier = ">=2.9.0" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.0.0" },
     { name = "pytest", specifier = ">=8.4.1" },
