@@ -43,10 +43,10 @@ jobs:
           cd ${{ secrets.SERVER_PATH }}
 
           # 拉取最新镜像
-          docker-compose pull
+          docker compose pull
 
           # 重启服务
-          docker-compose up -d
+          docker compose up -d
 
           # 清理旧镜像
           docker image prune -f
