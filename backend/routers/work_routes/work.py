@@ -9,7 +9,7 @@ from ..utils import route_guard
 
 router = APIRouter(prefix="/api/works", tags=["works"])
 
-@router.post("/", response_model=schemas.WorkResponse)
+@router.post("", response_model=schemas.WorkResponse)
 @route_guard
 async def create_work(
     work: schemas.WorkCreate,
@@ -19,7 +19,7 @@ async def create_work(
     """创建工作"""
     return crud.create_work(db, work, current_user)
 
-@router.get("/", response_model=schemas.WorkListResponse)
+@router.get("", response_model=schemas.WorkListResponse)
 @route_guard
 async def get_works(
     skip: int = Query(0, ge=0, description="跳过记录数"),

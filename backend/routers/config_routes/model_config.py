@@ -24,7 +24,7 @@ def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
 
 router = APIRouter(prefix="/model-configs", tags=["模型配置"])
 
-@router.post("/", response_model=schemas.ModelConfigResponse)
+@router.post("", response_model=schemas.ModelConfigResponse)
 @route_guard
 async def create_model_config(
     config: schemas.ModelConfigCreate,
@@ -35,7 +35,7 @@ async def create_model_config(
     result = crud.create_model_config(db=db, config=config)
     return _remove_api_key_from_config(result)
 
-@router.get("/", response_model=list[schemas.ModelConfigResponse])
+@router.get("", response_model=list[schemas.ModelConfigResponse])
 @route_guard
 async def get_all_model_configs(
     skip: int = 0,
@@ -101,7 +101,7 @@ async def delete_model_config(
     """删除模型配置"""
     return crud.delete_model_config(db=db, config_id=config_id)
 
-@router.delete("/", response_model=dict)
+@router.delete("", response_model=dict)
 @route_guard
 async def clear_all_model_configs(
     current_user: int = Depends(auth.get_current_user),
