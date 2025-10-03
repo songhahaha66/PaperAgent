@@ -156,39 +156,36 @@ class FileTools:
 
             return error_msg
 
-    async def update_template(self, template_name: str = "paper.md", content: str = "", section: Optional[str] = None) -> str:
+    async def update_template(self, template_name: str = "paper.md", content: str = "", section: str = "") -> str:
         """
-        专门用于更新论文文件的工具方法
-        
+        专门用于更新论文文件的工具方法，只支持章节级别更新
+
         Args:
             template_name: 论文文件名，默认为paper.md
             content: 要更新的内容
-            section: 要更新的章节名称（可选）
-            
+            section: 要更新的章节名称（必需）
+
         Returns:
             操作结果信息
         """
         try:
             file_path = os.path.join(self.workspace_dir, template_name)
-            
+
             if not os.path.exists(file_path):
                 return f"模板文件不存在: {template_name}"
-            
+
+            if not section.strip():
+                return f"错误：必须指定章节名称。update_template工具只支持章节级别更新，不支持全文覆盖。"
+
             # 读取原模板内容
             with open(file_path, 'r', encoding='utf-8') as f:
                 original_content = f.read()
-            
-            if section:
-                # 如果指定了章节，尝试更新特定章节
-                updated_content = self._update_section_content(original_content, section, content)
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(updated_content)
-                result = f"成功更新论文文件 {template_name} 的章节 '{section}'"
-            else:
-                # 更新整个论文内容
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                result = f"成功更新论文文件: {template_name}"
+
+            # 更新指定章节
+            updated_content = self._update_section_content(original_content, section, content)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(updated_content)
+            result = f"成功更新论文文件 {template_name} 的章节 '{section}'"
             
             # 获取文件信息
             file_size = os.path.getsize(file_path)
