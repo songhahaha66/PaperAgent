@@ -29,6 +29,8 @@ RUN uv venv .venv && \
 # 复制应用代码
 COPY . .
 
+# .env 文件将通过 volume 挂载，不包含在镜像中
+
 # 激活虚拟环境并暴露端口
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
