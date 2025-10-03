@@ -2,19 +2,13 @@ version: '3.8'
 
 services:
   backend:
-    image: ${DOCKER_REGISTRY}/paperagent-backend:latest
-    container_name: paperagent-backend
+    image: ${ALIYUN_REGISTRY}:latest
+    container_name: paperagent
     restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
       - ./backend/.env:/app/.env:ro  # 挂载 .env 文件，只读模式
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
 networks:
   default:

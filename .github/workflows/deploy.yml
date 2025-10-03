@@ -16,16 +16,31 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
+    - name: Login to Aliyun Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ secrets.ALIYUN_REGISTRY }}
+        username: ${{ secrets.ALIYUN_USERNAME }}
+        password: ${{ secrets.ALIYUN_PASSWORD }}
+
     - name: Build and push backend image
       uses: docker/build-push-action@v5
       with:
         context: ./backend
         push: true
         tags: |
-          ${{ secrets.DOCKER_REGISTRY }}/paperagent-backend:latest
-          ${{ secrets.DOCKER_REGISTRY }}/paperagent-backend:${{ github.sha }}
+          ${{ secrets.ALIYUN_REGISTRY }}:latest
+          ${{ secrets.ALIYUN_REGISTRY }}:${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    - name: Copy docker-compose.yml to server
+      run: |
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > deploy_key
+        chmod 600 deploy_key
+        # 替换环境变量后复制到服务器
+        sed "s/\${ALIYUN_REGISTRY}/${{ secrets.ALIYUN_REGISTRY }}/g" docker-compose.yml > docker-compose-processed.yml
+        scp -i deploy_key -o StrictHostKeyChecking=no docker-compose-processed.yml ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/docker-compose.yml
 
     - name: Deploy to server
       run: |
