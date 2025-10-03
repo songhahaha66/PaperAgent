@@ -1,67 +1,68 @@
 <template>
   <div class="introduction-page">
-    <div class="header">
-      <div class="header-content">
-        <t-image
-          src="/logo.png"
-          alt="PaperAgent Logo"
-          class="logo-image"
-          :style="{ width: '50px', height: '50px' }"
-        />
-        <div class="title-section">
-          <h1>PaperAgent 论文智能生成系统</h1>
-          <p class="subtitle">基于AI技术的学术论文自动生成平台</p>
+    <div class="scroll-container">
+      <div class="header">
+        <div class="header-content">
+          <t-image
+            src="/logo.png"
+            alt="PaperAgent Logo"
+            class="logo-image"
+          />
+          <div class="title-section">
+            <h1>PaperAgent 论文智能生成系统</h1>
+            <p class="subtitle">基于AI技术的学术论文自动生成平台</p>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="content">
-      <t-card class="feature-card">
-        <h2>项目介绍</h2>
-        <p>
-          PaperAgent是一个基于人工智能技术的学术论文自动生成系统，旨在帮助研究人员和学生快速生成高质量的学术论文。
-          通过先进的自然语言处理技术和深度学习模型，系统能够根据用户提供的主题和要求自动生成结构完整、内容丰富的学术论文。
-        </p>
-      </t-card>
-      <t-card class="cta-card">
-        <h2>开始使用PaperAgent</h2>
-        <p>立即登录以体验智能论文生成服务</p>
-        <div class="cta-buttons">
-          <t-button theme="primary" size="large" @click="goToLogin">登录</t-button>
-          <t-button theme="default" variant="outline" size="large" @click="goToRegister"
-            >注册</t-button
-          >
+      <div class="content">
+        <t-card class="feature-card">
+          <h2>项目介绍</h2>
+          <p>
+            PaperAgent是一个基于人工智能技术的学术论文自动生成系统，旨在帮助研究人员和学生快速生成高质量的学术论文。
+            通过先进的自然语言处理技术和深度学习模型，系统能够根据用户提供的主题和要求自动生成结构完整、内容丰富的学术论文。
+          </p>
+        </t-card>
+        <t-card class="cta-card">
+          <h2>开始使用PaperAgent</h2>
+          <p>立即登录以体验智能论文生成服务</p>
+          <div class="cta-buttons">
+            <t-button theme="primary" size="large" @click="goToLogin">登录</t-button>
+            <t-button theme="default" variant="outline" size="large" @click="goToRegister"
+              >注册</t-button
+            >
+          </div>
+        </t-card>
+        <div class="features-grid">
+          <t-card class="feature-card">
+            <t-icon name="edit-1" class="feature-icon" />
+            <h3>智能写作</h3>
+            <p>基于AI技术自动生成论文内容，包括摘要、引言、正文和结论等部分</p>
+          </t-card>
+
+          <t-card class="feature-card">
+            <t-icon name="book" class="feature-icon" />
+            <h3>多模型适配</h3>
+            <p>基本适配市面主流所有大模型，可自行选择</p>
+          </t-card>
+
+          <t-card class="feature-card">
+            <t-icon name="format-horizontal-align-bottom" class="feature-icon" />
+            <h3>格式规范</h3>
+            <p>支持上传模板，可以让AI根据你的模板定制</p>
+          </t-card>
+
+          <t-card class="feature-card">
+            <t-icon name="check-circle" class="feature-icon" />
+            <h3>质量保证</h3>
+            <p>所生成图片均由AI根据代码生成，保证数据真实</p>
+          </t-card>
         </div>
-      </t-card>
-      <div class="features-grid">
-        <t-card class="feature-card">
-          <t-icon name="edit-1" class="feature-icon" />
-          <h3>智能写作</h3>
-          <p>基于AI技术自动生成论文内容，包括摘要、引言、正文和结论等部分</p>
-        </t-card>
-
-        <t-card class="feature-card">
-          <t-icon name="book" class="feature-icon" />
-          <h3>多模型适配</h3>
-          <p>基本适配市面主流所有大模型，可自行选择</p>
-        </t-card>
-
-        <t-card class="feature-card">
-          <t-icon name="format-horizontal-align-bottom" class="feature-icon" />
-          <h3>格式规范</h3>
-          <p>支持上传模板，可以让AI根据你的模板定制</p>
-        </t-card>
-
-        <t-card class="feature-card">
-          <t-icon name="check-circle" class="feature-icon" />
-          <h3>质量保证</h3>
-          <p>所生成图片均由AI根据代码生成，保证数据真实</p>
-        </t-card>
       </div>
-    </div>
 
-    <div class="footer">
-      <p>&copy; 2025 PaperAgent. All rights reserved.</p>
+      <div class="footer">
+        <p>&copy; 2025 PaperAgent. All rights reserved.</p>
+      </div>
     </div>
   </div>
 </template>
@@ -92,10 +93,31 @@ const goToRegister = () => {
 
 <style scoped>
 .introduction-page {
-  min-height: 100vh;
   background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
   padding: 20px;
+  overflow-x: hidden;
+  height: 100vh;
 }
+
+.scroll-container {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+
+  /* 隐藏滚动条 - Webkit浏览器 */
+  &::-webkit-scrollbar {
+    width: 0px;
+    background: transparent;
+  }
+
+  /* 隐藏滚动条 - Firefox */
+  scrollbar-width: none;
+
+  /* 隐藏滚动条 - IE/Edge */
+  -ms-overflow-style: none;
+}
+
 
 .header {
   text-align: center;
@@ -106,6 +128,12 @@ const goToRegister = () => {
   font-size: 2.5rem;
   color: #2c3e50;
   margin-bottom: 16px;
+}
+
+@media (max-width: 768px) {
+  .header h1 {
+    font-size: 1.8rem;
+  }
 }
 
 .subtitle {
@@ -119,6 +147,14 @@ const goToRegister = () => {
   align-items: center;
   justify-content: center;
   gap: 24px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .header-content {
+    flex-direction: column;
+    gap: 16px;
+  }
 }
 
 .title-section {
@@ -132,6 +168,7 @@ const goToRegister = () => {
 .content {
   max-width: 1200px;
   margin: 0 auto;
+  overflow-y: auto;
 }
 
 .feature-card {
@@ -197,5 +234,15 @@ const goToRegister = () => {
 .logo-image {
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  width: 60px;
+  height: 60px;
+  object-fit: contain;
+}
+
+@media (max-width: 768px) {
+  .logo-image {
+    width: 50px;
+    height: 50px;
+  }
 }
 </style>

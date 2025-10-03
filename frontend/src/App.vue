@@ -9,10 +9,21 @@
   </div>
 </template>
 
+<style>
+/* 全局样式确保页面可以正常滚动 */
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  height: auto;
+  min-height: 100vh;
+}
+</style>
+
 <style scoped>
 .app-container {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  overflow-x: hidden;
 }
 </style>
