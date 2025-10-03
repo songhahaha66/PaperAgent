@@ -26,7 +26,7 @@ class SystemConfig(Base):
 
 class ModelConfig(Base):
     __tablename__ = "model_configs"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     type = Column(String(50), nullable=False)  # 模型种类：brain(中枢大脑), code(代码实验), writing(论文写作)
     model_id = Column(String(50), nullable=False)  # 模型ID
@@ -34,6 +34,10 @@ class ModelConfig(Base):
     api_key = Column(String(255), nullable=False)  # API密钥
     is_active = Column(Boolean, default=True)  # 是否激活
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)  # 添加用户关联
+
+    # 关联关系
+    creator = relationship("User", back_populates="model_configs")
 
 class PaperTemplate(Base):
     __tablename__ = "paper_templates"
@@ -53,6 +57,7 @@ class PaperTemplate(Base):
 
 # 添加反向关系
 User.templates = relationship("PaperTemplate", back_populates="creator")
+User.model_configs = relationship("ModelConfig", back_populates="creator")
 
 class Work(Base):
     __tablename__ = "works"
