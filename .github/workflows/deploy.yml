@@ -40,7 +40,7 @@ jobs:
         echo "${{ secrets.SSH_PRIVATE_KEY }}" > deploy_key
         chmod 600 deploy_key
         # 替换环境变量后复制到服务器
-        sed "s/\${ALIYUN_REGISTRY}/${{ secrets.ALIYUN_REGISTRY }}/g" docker-compose.yml > docker-compose-processed.yml
+        sed 's/${ALIYUN_REGISTRY}/'"${{ secrets.ALIYUN_REGISTRY }}"'/g' docker-compose.yml > docker-compose-processed.yml
         scp -i deploy_key -o StrictHostKeyChecking=no docker-compose-processed.yml ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.SERVER_PATH }}/docker-compose.yml
 
     - name: Deploy to server
