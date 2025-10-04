@@ -30,7 +30,8 @@ class LLMHandler:
         # 创建线程池执行器，用于处理同步的litellm调用
         # 增加线程池大小以支持并发LLM处理
         import os
-        max_workers = min(12, os.cpu_count() * 3)  # 动态调整，最多12个
+        cpu = os.cpu_count() or 1
+        max_workers = min(12, cpu * 3)  # 动态调整，最多12个
         self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="LLMHandler")
         logger.info(f"LLMHandler初始化完成，模型: {model}")
 
