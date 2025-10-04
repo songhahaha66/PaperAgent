@@ -1,4 +1,4 @@
-# 使用官方 Python 3.11 slim 镜像作为基础镜像
+# 使用官方 Python 3.11 slim 镜像
 FROM python:3.11-slim
 
 # 设置工作目录
@@ -9,12 +9,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# 复制依赖文件（利用 Docker 层缓存）
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
 COPY pyproject.toml ./
 
-# 安装 uv 和项目依赖到系统 Python（避免虚拟环境开销）
-RUN pip install --no-cache-dir uv && \
-    uv pip install --no-cache-dir --system -r pyproject.toml
+# 安装 uv
+RUN pip install --no-cache-dir uv
+
+# 创建虚拟环境并安装所有依赖（内置到镜像）
+RUN uv venv && \
+    . .venv/bin/activate && \
+    uv pip install -r pyproject.toml
 
 # 复制应用代码
 COPY . .
@@ -24,7 +34,6 @@ RUN chmod +x docker-entrypoint.sh
 
 # 暴露端口
 EXPOSE 8000
-
 
 # 启动命令
 ENTRYPOINT ["./docker-entrypoint.sh"]
