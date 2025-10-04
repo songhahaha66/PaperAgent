@@ -76,24 +76,6 @@
       </div>
     </div>
 
-    <!-- 收起状态的内容 - 桌面端留空，手机端隐藏 -->
-    <div class="sidebar-content-collapsed" v-if="isSidebarCollapsed"></div>
-
-    <!-- 手机端侧边栏收起时的浮动展开按钮 -->
-    <div
-      v-if="isSidebarCollapsed"
-      class="mobile-expand-btn-container"
-    >
-      <t-button
-        theme="primary"
-        shape="round"
-        @click="toggleSidebar"
-        class="mobile-expand-btn"
-      >
-        <t-icon name="chevron-right" />
-      </t-button>
-    </div>
-
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
       <t-dropdown :options="userOptions" placement="top-left" trigger="click">
         <div class="user-info">
@@ -121,6 +103,21 @@
         </div>
       </t-dropdown>
     </div>
+  </div>
+
+  <!-- 手机端侧边栏收起时的浮动展开按钮 -->
+  <div
+    v-if="isSidebarCollapsed"
+    class="mobile-expand-btn-container"
+  >
+    <t-button
+      theme="primary"
+      shape="round"
+      @click="toggleSidebar"
+      class="mobile-expand-btn"
+    >
+      <t-icon name="chevron-right" />
+    </t-button>
   </div>
 </template>
 
@@ -358,39 +355,6 @@ const userOptions = [
   min-height: 0;
 }
 
-/* 收起状态下的样式 */
-.sidebar-content-collapsed {
-  flex: 1;
-  padding: 20px 10px;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  align-items: center;
-  min-height: 0;
-}
-
-.collapsed-menu-section {
-  width: 100%;
-  display: flex;
-  justify-content: center;
-  margin-bottom: 20px;
-}
-
-.create-button-collapsed {
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transition: all 0.2s ease;
-}
-
-.create-button-collapsed:hover {
-  transform: scale(1.05);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
 
 .menu-section {
   margin-bottom: 25px;
@@ -487,6 +451,7 @@ const userOptions = [
   display: flex;
   justify-content: center;
   align-items: center;
+  margin-top: auto;
 }
 
 /* 用户信息样式 */
@@ -583,8 +548,20 @@ const userOptions = [
 
 /* 手机端样式 - 当侧边栏收起时完全隐藏内容区域 */
 @media (max-width: 768px) {
-  .sidebar-collapsed .sidebar-content-collapsed {
-    display: none;
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 300px;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease, width 0.3s ease;
+  }
+
+  .sidebar:not(.sidebar-collapsed) {
+    transform: translateX(0);
+    width: 100vw;
   }
 
   .sidebar-collapsed {

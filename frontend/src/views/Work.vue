@@ -1,5 +1,9 @@
 <template>
-  <div class="work-page">
+  <!-- 手机端提示界面 -->
+  <MobileWarning v-if="isMobile" />
+
+  <!-- 正常工作界面 -->
+  <div v-else class="work-page">
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
@@ -153,6 +157,7 @@ import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
+import MobileWarning from '@/components/MobileWarning.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 import CodeHighlight from '@/components/CodeHighlight.vue';
@@ -163,8 +168,11 @@ const router = useRouter();
 const authStore = useAuthStore();
 const workId = computed(() => route.params.work_id as string);
 
-// 侧边栏折叠状态
-const isSidebarCollapsed = ref(false)
+// 侧边栏折叠状态 - 手机端默认收起
+const isSidebarCollapsed = ref(window.innerWidth <= 768)
+
+// 检测是否为手机端
+const isMobile = ref(window.innerWidth <= 768)
 
 // 当前工作信息
 const currentWork = ref<Work | null>(null)
@@ -1132,29 +1140,15 @@ const simulateSendFirstMessage = (content: string) => {
   })()
 }
 
-// 生成工作标题
+// 生成工作标题并自动更新到数据库
 const generateWorkTitle = async (question: string) => {
   try {
-    // 调用标题生成API
-    const titleResponse = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
-
-    // 调用标题更新API
-    await updateWorkTitle(titleResponse.title)
-  } catch (error) {
-    console.error('生成标题失败:', error)
-    // 如果标题生成失败，使用问题作为备选标题
-    await updateWorkTitle(question)
-  }
-}
-
-// 更新工作标题
-const updateWorkTitle = async (newTitle: string) => {
-  try {
-    await chatAPI.updateWorkTitle(authStore.token!, workId.value!, newTitle)
+    // 调用标题生成API，会自动更新数据库
+    const response = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
 
     // 更新本地状态
     if (currentWork.value) {
-      currentWork.value.title = newTitle
+      currentWork.value.title = response.title
     }
 
     // 通知侧边栏刷新工作列表
@@ -1163,14 +1157,14 @@ const updateWorkTitle = async (newTitle: string) => {
       new CustomEvent('work-title-updated', {
         detail: {
           workId: workId.value,
-          newTitle: newTitle,
+          newTitle: response.title,
         },
       }),
     )
 
-    console.log('标题已更新:', newTitle)
+    console.log('标题已更新:', response.title)
   } catch (error) {
-    console.error('更新标题失败:', error)
+    console.error('生成标题失败:', error)
   }
 }
 </script>

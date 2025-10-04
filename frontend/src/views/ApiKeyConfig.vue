@@ -101,8 +101,8 @@ interface ModelConfigForm {
 
 const router = useRouter()
 
-// 侧边栏状态
-const isSidebarCollapsed = ref(false)
+// 侧边栏状态 - 手机端默认收起
+const isSidebarCollapsed = ref(window.innerWidth <= 768)
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null)

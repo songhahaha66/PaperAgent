@@ -160,8 +160,8 @@ import {
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
-// 侧边栏折叠状态
-const isSidebarCollapsed = ref(false)
+// 侧边栏折叠状态 - 手机端默认收起
+const isSidebarCollapsed = ref(window.innerWidth <= 768)
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
