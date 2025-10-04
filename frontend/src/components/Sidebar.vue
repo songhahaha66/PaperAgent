@@ -451,6 +451,7 @@ const userOptions = [
   display: flex;
   justify-content: center;
   align-items: center;
+  margin-top: auto;
 }
 
 /* 用户信息样式 */
