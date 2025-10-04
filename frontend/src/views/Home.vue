@@ -240,8 +240,8 @@ import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 const router = useRouter()
 const authStore = useAuthStore()
 
-// 侧边栏折叠状态
-const isSidebarCollapsed = ref(false)
+// 侧边栏折叠状态 - 手机端默认收起
+const isSidebarCollapsed = ref(window.innerWidth <= 768)
 
 // 任务创建步骤
 const currentStep = ref(1)

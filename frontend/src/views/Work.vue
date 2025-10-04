@@ -163,8 +163,8 @@ const router = useRouter();
 const authStore = useAuthStore();
 const workId = computed(() => route.params.work_id as string);
 
-// 侧边栏折叠状态
-const isSidebarCollapsed = ref(false)
+// 侧边栏折叠状态 - 手机端默认收起
+const isSidebarCollapsed = ref(window.innerWidth <= 768)
 
 // 当前工作信息
 const currentWork = ref<Work | null>(null)
