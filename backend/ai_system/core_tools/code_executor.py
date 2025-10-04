@@ -11,6 +11,7 @@ import tempfile
 import subprocess
 import time
 import asyncio
+from datetime import datetime
 from typing import Dict, Any, Optional
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
@@ -339,24 +340,138 @@ if plot_files:
             logger.error(f"子进程执行异常: {e}")
             return f"子进程执行异常: {str(e)}"
 
-    # 保留兼容性方法，但标记为过时
-    async def pyexec_file(self, code_file_path: str) -> str:
-        """过时方法：使用execute_file替代"""
-        logger.warning("pyexec_file方法已过时，请使用execute_file方法")
-        return await self.execute_file(code_file_path)
+    
+    async def edit_code_file(self, filename: str, new_code_content: str) -> str:
+        """
+        修改已存在的代码文件
 
-    def _save_plots(self) -> Dict[str, str]:
-        """过时方法：图表保存现在在子进程中完成"""
-        logger.info("_save_plots方法已过时，图表保存现在在子进程中完成")
-        return {}
+        Args:
+            filename: 文件名（不需要.py后缀）
+            new_code_content: 新的代码内容
 
-    def get_workspace_dir(self) -> str:
-        """获取工作空间目录"""
-        return self.workspace_dir
-
-    def list_workspace_files(self) -> list:
-        """列出工作空间文件"""
+        Returns:
+            修改结果信息
+        """
         try:
-            return os.listdir(self.workspace_dir) if os.path.exists(self.workspace_dir) else []
-        except Exception:
-            return []
+            # 参数验证
+            if not new_code_content or not new_code_content.strip():
+                return "错误：新代码内容不能为空"
+
+            if not filename or not filename.strip():
+                return "错误：文件名不能为空"
+
+            # 清理文件名，移除不安全的字符
+            safe_filename = "".join(
+                c for c in filename if c.isalnum() or c in "._-")
+            if not safe_filename:
+                safe_filename = "code"
+
+            # 确保文件名有.py后缀
+            if not safe_filename.endswith('.py'):
+                safe_filename = safe_filename + '.py'
+
+            # 构建完整的文件路径
+            code_files_dir = os.path.join(self.workspace_dir, "code_files")
+            file_path = os.path.join(code_files_dir, safe_filename)
+
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                return f"错误：文件 {safe_filename} 不存在，无法修改。请先使用 save_and_execute 创建文件。"
+
+            # 备份原文件
+            backup_path = file_path + f".backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            with open(file_path, 'r', encoding='utf-8') as f:
+                original_content = f.read()
+
+            with open(backup_path, 'w', encoding='utf-8') as f:
+                f.write(original_content)
+
+            # 写入新代码
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(new_code_content)
+
+            logger.info(f"代码文件已修改: {file_path}")
+
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    # 发送工具调用开始通知
+                    await self.stream_manager.send_json_block("code_agent_tool_call", f"CodeAgent正在执行工具调用: edit_code_file")
+
+                    # 发送工具调用结果通知
+                    await self.stream_manager.send_json_block("code_agent_tool_result", f"代码文件 {safe_filename} 修改成功")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+
+            # 返回相对路径，这样execute_file就能正确找到文件
+            relative_path = os.path.join("code_files", safe_filename)
+
+            return f"代码文件 {safe_filename} 已成功修改\n文件路径: {file_path}\n相对路径: {relative_path}\n新代码长度: {len(new_code_content)} 字符\n原文件已备份到: {os.path.basename(backup_path)}"
+
+        except Exception as e:
+            error_msg = f"修改代码文件失败: {str(e)}"
+            logger.error(error_msg)
+
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.send_json_block("code_agent_tool_error", f"工具调用失败: {error_msg}")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+
+            return error_msg
+
+    async def list_code_files(self) -> str:
+        """
+        列出工作空间中的所有代码文件
+
+        Returns:
+            代码文件列表信息
+        """
+        try:
+            code_files_dir = os.path.join(self.workspace_dir, "code_files")
+
+            if not os.path.exists(code_files_dir):
+                return "代码文件目录不存在，还没有创建任何代码文件。"
+
+            files = os.listdir(code_files_dir)
+            python_files = [f for f in files if f.endswith('.py')]
+
+            if not python_files:
+                return "代码文件目录为空，还没有创建任何Python代码文件。"
+
+            # 通过stream_manager发送工具调用通知到前端
+            if self.stream_manager:
+                try:
+                    # 发送工具调用开始通知
+                    await self.stream_manager.send_json_block("code_agent_tool_call", f"CodeAgent正在执行工具调用: list_code_files")
+
+                    # 发送工具调用结果通知
+                    await self.stream_manager.send_json_block("code_agent_tool_result", f"找到 {len(python_files)} 个Python代码文件")
+                except Exception as e:
+                    logger.warning(f"发送工具调用通知失败: {e}")
+
+            # 构建文件列表信息
+            file_info = []
+            for file in python_files:
+                file_path = os.path.join(code_files_dir, file)
+                try:
+                    file_size = os.path.getsize(file_path)
+                    file_info.append(f"- {file} ({file_size} bytes)")
+                except OSError:
+                    file_info.append(f"- {file} (无法获取文件大小)")
+
+            return f"代码文件目录: {code_files_dir}\n找到 {len(python_files)} 个Python代码文件:\n" + "\n".join(file_info)
+
+        except Exception as e:
+            error_msg = f"列出代码文件失败: {str(e)}"
+            logger.error(error_msg)
+
+            # 发送错误通知到前端
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.send_json_block("code_agent_tool_error", f"工具调用失败: {error_msg}")
+                except Exception as ws_error:
+                    logger.warning(f"发送错误通知失败: {ws_error}")
+
+            return error_msg

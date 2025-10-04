@@ -359,9 +359,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             else:
                 logger.info("没有找到历史消息，将创建新的对话")
 
-            # 在正确位置添加用户消息到MainAgent的消息历史
-            main_agent.add_user_message(message_data['problem'])
-
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
             await stream_manager.save_user_message(message_data['problem'])
             logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
@@ -377,7 +374,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     }))
                     break
 
-                # 创建异步任务执行AI处理
+                # 创建异步任务执行AI处理（MainAgent.run内部会添加用户消息）
                 ai_task = asyncio.create_task(
                     main_agent.run(message_data['problem'])
                 )
