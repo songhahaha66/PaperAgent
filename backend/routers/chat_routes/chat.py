@@ -214,7 +214,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
         manager.active_connections[work_id] = websocket
 
         # 创建聊天服务 - 使用线程池避免阻塞事件循环
-        loop = asyncio.get_event_loop()
 
         # 在线程池中执行同步数据库操作
         def init_chat_service():
