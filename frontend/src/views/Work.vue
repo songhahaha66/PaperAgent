@@ -1140,29 +1140,15 @@ const simulateSendFirstMessage = (content: string) => {
   })()
 }
 
-// 生成工作标题
+// 生成工作标题并自动更新到数据库
 const generateWorkTitle = async (question: string) => {
   try {
-    // 调用标题生成API
-    const titleResponse = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
-
-    // 调用标题更新API
-    await updateWorkTitle(titleResponse.title)
-  } catch (error) {
-    console.error('生成标题失败:', error)
-    // 如果标题生成失败，使用问题作为备选标题
-    await updateWorkTitle(question)
-  }
-}
-
-// 更新工作标题
-const updateWorkTitle = async (newTitle: string) => {
-  try {
-    await chatAPI.updateWorkTitle(authStore.token!, workId.value!, newTitle)
+    // 调用标题生成API，会自动更新数据库
+    const response = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
 
     // 更新本地状态
     if (currentWork.value) {
-      currentWork.value.title = newTitle
+      currentWork.value.title = response.title
     }
 
     // 通知侧边栏刷新工作列表
@@ -1171,14 +1157,14 @@ const updateWorkTitle = async (newTitle: string) => {
       new CustomEvent('work-title-updated', {
         detail: {
           workId: workId.value,
-          newTitle: newTitle,
+          newTitle: response.title,
         },
       }),
     )
 
-    console.log('标题已更新:', newTitle)
+    console.log('标题已更新:', response.title)
   } catch (error) {
-    console.error('更新标题失败:', error)
+    console.error('生成标题失败:', error)
   }
 }
 </script>

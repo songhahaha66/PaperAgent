@@ -449,7 +449,7 @@ async def generate_work_title(
     current_user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """AI生成工作标题"""
+    """AI生成工作标题并自动更新到数据库"""
     try:
         # 验证用户权限
         from services.data_services.crud import get_work
@@ -483,27 +483,6 @@ async def generate_work_title(
             # 使用现有的process_stream方法，但不使用流式处理
             messages = [{"role": "user", "content": title_prompt}]
 
-            # 创建临时的流管理器来捕获输出
-            from ai_system.core_managers.stream_manager import SimpleStreamCallback
-
-            class TitleCaptureCallback(SimpleStreamCallback):
-                def __init__(self):
-                    super().__init__(output_queue=None)  # 显式传递None给父类
-                    self.content = ""
-
-                async def print_stream(self, content: str):
-                    self.content += content
-
-                async def print_content(self, content: str):
-                    self.content += content
-
-                async def finalize_message(self):
-                    pass
-
-            title_callback = TitleCaptureCallback()
-            from ai_system.core_managers.stream_manager import StreamOutputManager
-            title_stream_manager = StreamOutputManager(title_callback)
-
             # 直接通过工厂执行同步（非流式）生成
             assistant_message, _ = await llm_factory.run_sync("brain", messages)
             title = assistant_message.get("content", "")
@@ -511,60 +490,42 @@ async def generate_work_title(
             # 清理标题（移除可能的引号、换行等）
             title = title.strip().strip('"').strip("'").strip()
 
-            return {
-                "title": title,
-                "status": "success"
-            }
+            # 如果AI生成失败或为空，使用问题作为备选标题
+            if not title:
+                title = question[:50] if len(question) > 50 else question
+                status = "fallback"
+            else:
+                status = "success"
+
         except Exception as e:
             logger.error(f"AI生成标题失败: {e}")
             # 如果AI生成失败，使用问题作为备选标题
-            fallback_title = question[:50] if len(question) > 50 else question
+            title = question[:50] if len(question) > 50 else question
+            status = "fallback"
+
+        # 直接更新数据库中的标题
+        try:
+            from services.data_services.crud import update_work
+            from schemas.schemas import WorkUpdate
+
+            # 创建WorkUpdate对象
+            work_update = WorkUpdate(title=title.strip())
+            updated_work = update_work(db, work_id, work_update, current_user_id)
+
+            if not updated_work:
+                raise HTTPException(status_code=404, detail="工作不存在")
+
             return {
-                "title": fallback_title,
-                "status": "fallback"
+                "title": updated_work.title,
+                "status": status,
+                "message": "标题生成并更新成功"
             }
+        except Exception as e:
+            logger.error(f"更新标题到数据库失败: {e}")
+            raise HTTPException(status_code=500, detail=f"标题更新失败: {str(e)}")
 
     except Exception as e:
         logger.error(f"生成工作标题失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/work/{work_id}/title")
-async def update_work_title(
-    work_id: str,
-    request: dict,
-    current_user_id: int = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """更新工作标题"""
-    try:
-        # 验证用户权限
-        from services.data_services.crud import get_work
-        work = get_work(db, work_id)
-        if not work or work.created_by != current_user_id:
-            raise HTTPException(status_code=403, detail="无权限访问")
-
-        # 获取新标题
-        new_title = request.get("title", "")
-        if not new_title or new_title.strip() == "":
-            raise HTTPException(status_code=400, detail="标题不能为空")
-
-        # 更新数据库中的标题
-        from services.data_services.crud import update_work
-        from schemas.schemas import WorkUpdate
-
-        # 创建WorkUpdate对象
-        work_update = WorkUpdate(title=new_title.strip())
-        updated_work = update_work(db, work_id, work_update, current_user_id)
-
-        if not updated_work:
-            raise HTTPException(status_code=404, detail="工作不存在")
-
-        return {
-            "status": "success",
-            "message": "标题更新成功"
-        }
-
-    except Exception as e:
-        logger.error(f"更新工作标题失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
