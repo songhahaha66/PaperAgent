@@ -10,6 +10,7 @@ import sys
 import tempfile
 import subprocess
 import time
+import asyncio
 from typing import Dict, Any, Optional
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
@@ -286,7 +287,7 @@ if plot_files:
         return header + code + footer
 
     async def _run_in_subprocess(self, temp_file: str) -> str:
-        """在子进程中运行代码"""
+        """在子进程中运行代码（异步版本，不阻塞事件循环）"""
         try:
             # 构建环境变量
             env = os.environ.copy()
@@ -297,40 +298,43 @@ if plot_files:
                 env['PYTHONPATH'] = f"{workspace_code_files}{os.pathsep}{current_pythonpath}"
             else:
                 env['PYTHONPATH'] = workspace_code_files
-            
+
             env['WORKSPACE_DIR'] = self.workspace_dir
             # 设置编码环境变量
             env['PYTHONIOENCODING'] = 'utf-8'
-            
-            # 在子进程中执行，设置工作目录为workspace_dir
-            result = subprocess.run(
-                [sys.executable, temp_file],
+
+            # 使用异步subprocess，不阻塞事件循环
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, temp_file,
                 cwd=self.workspace_dir,  # 关键：设置工作目录
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                timeout=60,  # 60秒超时
-                env=env,
-                errors='replace'  # 处理编码错误
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
-            
-            # 处理执行结果
-            if result.returncode != 0:
-                error_output = result.stderr.strip() if result.stderr else "代码执行失败，无错误信息"
-                return f"执行错误 (返回码: {result.returncode}):\n{error_output}"
-            
-            # 返回标准输出，处理可能的None值
-            if result.stdout is None:
-                output = ""
-            else:
-                output = result.stdout.strip()
-            
-            return output if output else "代码执行完成，无输出"
-            
-        except subprocess.TimeoutExpired:
-            return "代码执行超时（60秒），请检查是否有无限循环或耗时操作"
-        except subprocess.CalledProcessError as e:
-            return f"子进程执行失败: {str(e)}"
+
+            try:
+                # 等待进程完成，但不阻塞事件循环
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+
+                # 处理执行结果
+                if proc.returncode != 0:
+                    error_output = stderr.decode('utf-8', errors='replace').strip() if stderr else "代码执行失败，无错误信息"
+                    return f"执行错误 (返回码: {proc.returncode}):\n{error_output}"
+
+                # 返回标准输出，处理可能的None值
+                if stdout is None:
+                    output = ""
+                else:
+                    output = stdout.decode('utf-8', errors='replace').strip()
+
+                return output if output else "代码执行完成，无输出"
+
+            except asyncio.TimeoutError:
+                # 超时后终止进程
+                proc.kill()
+                await proc.wait()
+                return "代码执行超时（60秒），请检查是否有无限循环或耗时操作"
+
         except Exception as e:
             logger.error(f"子进程执行异常: {e}")
             return f"子进程执行异常: {str(e)}"
