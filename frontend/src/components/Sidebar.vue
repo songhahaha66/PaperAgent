@@ -5,15 +5,18 @@
         <h2>PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
       </div>
-      <t-button
-        theme="default"
-        shape="square"
-        variant="text"
-        @click="toggleSidebar"
-        class="sidebar-toggle-btn"
-      >
-        <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-      </t-button>
+      <div class="header-controls">
+        <t-button
+          theme="default"
+          shape="square"
+          variant="text"
+          @click="toggleSidebar"
+          class="sidebar-toggle-btn"
+          title="展开/收起侧边栏"
+        >
+          <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
+        </t-button>
+      </div>
     </div>
 
     <!-- 展开状态的内容 -->
@@ -91,6 +94,19 @@
     </div>
 
     <!-- 收起状态下的用户头像 -->
+    <!-- 收起时居中的新建按钮（位于 header 和 footer-collapsed 之间） -->
+    <div v-if="isSidebarCollapsed" class="collapsed-center">
+      <t-button
+        theme="primary"
+        shape="square"
+        @click="createNewTask"
+        class="sidebar-create-btn"
+        title="新建工作"
+      >
+        <t-icon name="add" />
+      </t-button>
+    </div>
+
     <div class="sidebar-footer-collapsed" v-if="isSidebarCollapsed">
       <t-dropdown :options="userOptions" placement="top-left" trigger="click">
         <div class="user-avatar-collapsed">
@@ -435,8 +451,9 @@ const userOptions = [
   color: #666;
   line-height: 1.3;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
 }
 
@@ -523,7 +540,22 @@ const userOptions = [
 
 /* 侧边栏折叠按钮 */
 .sidebar-toggle-btn {
-  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 侧边栏收起时的新建工作按钮 */
+.sidebar-create-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 收起时中间区域的新建按钮 */
+.collapsed-center {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
 }
 
 
