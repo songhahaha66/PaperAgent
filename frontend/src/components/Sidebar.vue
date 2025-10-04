@@ -76,8 +76,23 @@
       </div>
     </div>
 
-    <!-- 收起状态的内容 -->
+    <!-- 收起状态的内容 - 桌面端留空，手机端隐藏 -->
     <div class="sidebar-content-collapsed" v-if="isSidebarCollapsed"></div>
+
+    <!-- 手机端侧边栏收起时的浮动展开按钮 -->
+    <div
+      v-if="isSidebarCollapsed"
+      class="mobile-expand-btn-container"
+    >
+      <t-button
+        theme="primary"
+        shape="round"
+        @click="toggleSidebar"
+        class="mobile-expand-btn"
+      >
+        <t-icon name="chevron-right" />
+      </t-button>
+    </div>
 
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
       <t-dropdown :options="userOptions" placement="top-left" trigger="click">
@@ -544,6 +559,43 @@ const userOptions = [
 /* 侧边栏折叠按钮 */
 .sidebar-toggle-btn {
   margin-left: auto;
+}
+
+
+/* 手机端浮动展开按钮容器 */
+.mobile-expand-btn-container {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  z-index: 1000;
+  display: none; /* 默认隐藏，只在手机端显示 */
+}
+
+.mobile-expand-btn {
+  width: 48px;
+  height: 48px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border-radius: 50%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 手机端样式 - 当侧边栏收起时完全隐藏内容区域 */
+@media (max-width: 768px) {
+  .sidebar-collapsed .sidebar-content-collapsed {
+    display: none;
+  }
+
+  .sidebar-collapsed {
+    width: 0;
+    min-width: 0;
+  }
+
+  /* 在手机端显示浮动展开按钮 */
+  .mobile-expand-btn-container {
+    display: block;
+  }
 }
 
 /* 加载状态样式 */
