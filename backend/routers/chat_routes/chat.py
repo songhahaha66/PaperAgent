@@ -184,7 +184,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             return
 
         # 验证work权限 - 使用线程池避免阻塞事件循环
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def verify_work_permission():
             db = next(get_db())
