@@ -1,5 +1,9 @@
 <template>
-  <div class="work-page">
+  <!-- 手机端提示界面 -->
+  <MobileWarning v-if="isMobile" />
+
+  <!-- 正常工作界面 -->
+  <div v-else class="work-page">
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
@@ -153,6 +157,7 @@ import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
+import MobileWarning from '@/components/MobileWarning.vue';
 import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 import CodeHighlight from '@/components/CodeHighlight.vue';
@@ -165,6 +170,9 @@ const workId = computed(() => route.params.work_id as string);
 
 // 侧边栏折叠状态 - 手机端默认收起
 const isSidebarCollapsed = ref(window.innerWidth <= 768)
+
+// 检测是否为手机端
+const isMobile = ref(window.innerWidth <= 768)
 
 // 当前工作信息
 const currentWork = ref<Work | null>(null)
