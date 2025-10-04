@@ -19,9 +19,12 @@ RUN pip install --no-cache-dir uv && \
 # 复制应用代码
 COPY . .
 
+# 确保入口脚本可执行
+RUN chmod +x docker-entrypoint.sh
+
 # 暴露端口
 EXPOSE 8000
 
 
-# 启动命令（先执行数据库迁移再启动应用）
-CMD ["sh", "-c", "uv run alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"]
+# 启动命令
+ENTRYPOINT ["./docker-entrypoint.sh"]
