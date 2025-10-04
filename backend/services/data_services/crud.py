@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from models import models
 from schemas import schemas
@@ -11,6 +12,7 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
+import asyncio
 
 def get_user_by_email(db: Session, email: str):
     return db.query(models.User).filter(models.User.email == email).first()
@@ -464,6 +466,14 @@ def create_workspace_folders(work_id: str):
 def get_work(db: Session, work_id: str):
     """根据工作ID获取工作"""
     return db.query(models.Work).filter(models.Work.work_id == work_id).first()
+
+async def get_work_async(db: AsyncSession, work_id: str):
+    """异步版本：根据工作ID获取工作"""
+    # 使用异步select查询
+    from sqlalchemy import select
+    stmt = select(models.Work).where(models.Work.work_id == work_id)
+    result = await db.execute(stmt)
+    return result.scalar_one_or_none()
 
 def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100, 
                    status: str = None, search: str = None):

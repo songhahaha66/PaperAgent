@@ -17,34 +17,39 @@ __version__ = "0.1.0"
 # 定义可导出的类名，但不立即导入
 __all__ = [
     'MainAgent',
-    'Agent', 
+    'CodeAgent',
+    'BaseAgent',
     'LLMHandler',
     'LLMFactory',
     'StreamOutputManager',
     'ContextManager',
     'CodeExecutor',
     'FileTools',
-    'TemplateAgentTools'
+    'TemplateAgentTools',
+    'ToolManager'
 ]
 
 def _import_core_components():
     """延迟导入核心组件"""
-    from .core_agents import MainAgent, Agent
+    from .core_agents import MainAgent, CodeAgent, BaseAgent
     from .core_handlers.llm_handler import LLMHandler
     from .core_handlers.llm_factory import LLMFactory
     from .core_managers.stream_manager import StreamOutputManager
     from .core_managers.context_manager import ContextManager
+    from .core_managers.tool_manager import ToolManager
     from .core_tools.code_executor import CodeExecutor
     from .core_tools.file_tools import FileTools
     from .core_tools.template_tools import TemplateAgentTools
-    
+
     return {
         'MainAgent': MainAgent,
-        'Agent': Agent,
+        'CodeAgent': CodeAgent,
+        'BaseAgent': BaseAgent,
         'LLMHandler': LLMHandler,
         'LLMFactory': LLMFactory,
         'StreamOutputManager': StreamOutputManager,
         'ContextManager': ContextManager,
+        'ToolManager': ToolManager,
         'CodeExecutor': CodeExecutor,
         'FileTools': FileTools,
         'TemplateAgentTools': TemplateAgentTools
