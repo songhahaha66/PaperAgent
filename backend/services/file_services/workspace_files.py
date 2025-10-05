@@ -189,29 +189,107 @@ class WorkspaceFileService:
             )
 
     @handle_service_errors()
-    def read_file(self, work_id: str, file_path: str) -> str:
+    def read_file(self, work_id: str, file_path: str) -> Dict[str, Any]:
         """读取工作空间中的文件内容"""
         workspace_path = self.ensure_workspace_exists(work_id)
-        # 允许图片走旧逻辑（返回base64）
         target_file = workspace_path / file_path
-        if self._is_image_file(file_path):
+
+        if not target_file.exists() or not target_file.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+        # 检测文件类型
+        file_type = self.detect_file_type(file_path)
+
+        if file_type == 'image':
+            # 图片文件：返回base64编码的内容
             import base64
-            if not target_file.exists() or not target_file.is_file():
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
             if target_file.stat().st_size > 10 * 1024 * 1024:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File too large to read")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image file too large to read")
             with open(target_file, 'rb') as f:
-                return base64.b64encode(f.read()).decode('utf-8')
-        # 非图片：借助 FileHelper
-        relative = str(Path(work_id) / file_path)
-        # 这里不能用 helper 的 base 为 work_id，因为 helper 的 base 是 workspaces 根
-        helper = FileHelper(self.base_path / work_id)
-        return helper.read_text(Path(file_path).as_posix())
+                content = base64.b64encode(f.read()).decode('utf-8')
+            return {
+                "type": "image",
+                "content": content,
+                "filename": target_file.name,
+                "size": target_file.stat().st_size
+            }
+
+        elif file_type == 'text':
+            # 文本文件：返回文件内容
+            helper = FileHelper(workspace_path)
+            content = helper.read_text(file_path)
+            return {
+                "type": "text",
+                "content": content,
+                "filename": target_file.name,
+                "size": target_file.stat().st_size
+            }
+
+        else:  # binary
+            # 二进制文件：返回元数据和下载信息
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(str(target_file))
+            if not mime_type:
+                mime_type = "application/octet-stream"
+
+            return {
+                "type": "binary",
+                "filename": target_file.name,
+                "size": target_file.stat().st_size,
+                "mime_type": mime_type,
+                "download_url": f"/api/workspace/{work_id}/files/{file_path}/download",
+                "message": "Binary file - use download button to view"
+            }
 
     def _is_image_file(self, file_path: str) -> bool:
         """判断文件是否为图片文件"""
         image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
         return any(file_path.lower().endswith(ext) for ext in image_extensions)
+
+    def detect_file_type(self, file_path: str) -> str:
+        """检测文件类型：返回 'text', 'image', 'binary'"""
+
+        # 图片文件扩展名
+        image_extensions = {
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp',
+            '.ico', '.tiff', '.tif'
+        }
+
+        # 文本文件扩展名
+        text_extensions = {
+            '.txt', '.md', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
+            '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+            '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
+            '.java', '.kt', '.scala', '.rs', '.go', '.php', '.rb', '.swift',
+            '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+            '.sql', '.r', '.m', '.pl', '.lua', '.vim', '.dockerfile',
+            '.gitignore', '.gitattributes', '.editorconfig', '.eslintrc', '.prettierrc',
+            '.log', '.out', '.err', '.debug', '.trace'
+        }
+
+        # 二进制文件扩展名（常见文档、压缩包、可执行文件等）
+        binary_extensions = {
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
+            '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
+            '.mp3', '.mp4', '.avi', '.mov', 'wmv', '.flv', '.mkv',
+            '.ttf', '.otf', '.woff', '.woff2', '.eot',
+            '.psd', '.ai', '.eps', '.sketch', '.fig'
+        }
+
+        # 获取文件扩展名
+        ext = Path(file_path).suffix.lower()
+
+        # 根据扩展名判断文件类型
+        if ext in image_extensions:
+            return 'image'
+        elif ext in text_extensions:
+            return 'text'
+        elif ext in binary_extensions:
+            return 'binary'
+        else:
+            # 未知扩展名，默认为二进制文件
+            return 'binary'
 
     @handle_service_errors()
     def write_file(self, work_id: str, file_path: str, content: str) -> Dict[str, Any]:

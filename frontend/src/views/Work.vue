@@ -109,20 +109,25 @@
             </t-card>
           </div>
           <!-- 普通文件预览 -->
-          <div v-else-if="selectedFile && (currentFileContent || imageUrls[selectedFile])">
+          <div v-else-if="selectedFile">
             <t-card :title="`文件预览: ${selectedFile}`">
               <div class="file-preview">
-                <div v-if="selectedFile.endsWith('.py')" class="code-preview">
-                  <CodeHighlight :code="currentFileContent" language="python" />
+                <!-- 加载状态 -->
+                <div v-if="!currentFileData" class="loading-container">
                 </div>
-                <div v-else-if="selectedFile.endsWith('.md')" class="markdown-preview">
+                <!-- 文本文件预览 -->
+                <div v-else-if="currentFileData.type === 'text'" class="text-preview">
+                  <CodeHighlight v-if="selectedFile.endsWith('.py')" :code="currentFileContent" language="python" />
                   <MarkdownRenderer
+                    v-else-if="selectedFile.endsWith('.md')"
                     :content="currentFileContent"
                     :work-id="workId"
                     :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
                   />
+                  <pre v-else>{{ currentFileContent }}</pre>
                 </div>
-                <div v-else-if="isImageFile(selectedFile)" class="image-preview">
+                <!-- 图片文件预览 -->
+                <div v-else-if="currentFileData.type === 'image'" class="image-preview">
                   <img
                     v-if="imageUrls[selectedFile]"
                     :src="imageUrls[selectedFile]"
@@ -131,8 +136,21 @@
                   />
                   <div v-else class="loading-image">正在加载图片...</div>
                 </div>
-                <div v-else class="text-preview">
-                  <pre>{{ currentFileContent }}</pre>
+                <!-- 二进制文件信息 -->
+                <div v-else-if="currentFileData.type === 'binary'" class="binary-preview">
+                  <BinaryFileViewer
+                    :file-info="currentFileData"
+                    :work-id="workId"
+                    :token="authStore.token"
+                  />
+                </div>
+                <!-- 未知文件类型 -->
+                <div v-else class="no-preview">
+                  <t-icon name="file" size="48px" />
+                  <p>无法预览此文件类型</p>
+                  <t-button theme="primary" variant="outline" @click="downloadWorkspaceFile(selectedFile)">
+                    下载文件
+                  </t-button>
                 </div>
               </div>
             </t-card>
@@ -184,6 +202,7 @@ import FileManager from '@/components/FileManager.vue';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 import CodeHighlight from '@/components/CodeHighlight.vue';
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
+import BinaryFileViewer from '@/components/BinaryFileViewer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -222,6 +241,7 @@ const selectedFile = ref<string | null>(null)
 // 文件内容映射
 const currentFileContent = ref('')
 const currentFileName = ref('')
+const currentFileData = ref<any>(null) // 存储完整的文件响应数据
 
 // 图片URL缓存
 const imageUrls = ref<Record<string, string>>({})
@@ -573,42 +593,39 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
   currentFileName.value = filePath
   selectedFile.value = filePath // 设置选中的文件
 
-  // 检查是否为图片文件
-  if (isImageFile(filePath)) {
-    console.log('图片文件，获取blob URL')
-    // 对于图片文件，设置一个特殊标记表示这是图片
-    currentFileContent.value = 'IMAGE_FILE'
-
-    // 如果已经有缓存的blob URL，直接使用
-    if (imageUrls.value[filePath]) {
-      console.log('使用缓存的图片URL')
-      return
-    }
-
-    // 获取图片blob URL
-    try {
-      const blobUrl = await getImageBlobUrl(filePath)
-      imageUrls.value[filePath] = blobUrl
-      console.log('图片blob URL获取成功')
-    } catch (error) {
-      console.error('获取图片失败:', error)
-      MessagePlugin.error('加载图片失败')
-    }
-    return
-  }
-
   // 每次都从服务器重新获取文件内容，避免缓存问题
   try {
     console.log('从服务器获取文件内容:', filePath)
-    const content = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
+    const fileData = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
+    console.log('API返回的文件数据:', fileData)
 
-    // 直接设置当前文件内容，不缓存
-    currentFileContent.value = content
+    // 存储完整的文件数据
+    currentFileData.value = fileData
 
-    console.log('文件内容获取成功，长度:', content.length)
+    // 根据文件类型处理响应
+    if (fileData.type === 'image') {
+      console.log('图片文件，处理base64内容')
+      currentFileContent.value = fileData.content
+
+      // 直接使用base64内容创建图片URL，不需要额外的blob URL
+      const fileExtension = filePath.split('.').pop()?.toLowerCase()
+      const mimeType = `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`
+      imageUrls.value[filePath] = `data:${mimeType};base64,${fileData.content}`
+      console.log('图片base64 URL创建成功:', imageUrls.value[filePath])
+    } else if (fileData.type === 'text') {
+      console.log('文本文件，设置内容')
+      currentFileContent.value = fileData.content
+      console.log('文件内容获取成功，长度:', fileData.content.length)
+    } else if (fileData.type === 'binary') {
+      console.log('二进制文件，设置元数据')
+      currentFileContent.value = 'BINARY_FILE'
+      console.log('二进制文件信息:', fileData)
+    }
+
   } catch (error) {
     console.error('获取文件内容失败:', error)
     currentFileContent.value = '文件读取失败'
+    currentFileData.value = null
     MessagePlugin.error('加载文件失败')
   }
 }
@@ -618,6 +635,44 @@ const isImageFile = (filePath: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
   const lowerPath = filePath.toLowerCase()
   return imageExtensions.some((ext) => lowerPath.endsWith(ext))
+}
+
+// 获取文件类型
+const getFileType = (filePath: string): 'text' | 'image' | 'binary' => {
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif']
+
+  const textExtensions = [
+    '.txt', '.md', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
+    '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+    '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
+    '.java', '.kt', '.scala', '.rs', '.go', '.php', '.rb', '.swift',
+    '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+    '.sql', '.r', '.m', '.pl', '.lua', '.vim', '.dockerfile',
+    '.gitignore', '.gitattributes', '.editorconfig', '.eslintrc', '.prettierrc',
+    '.log', '.out', '.err', '.debug', '.trace'
+  ]
+
+  const binaryExtensions = [
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
+    '.mp3', '.mp4', '.avi', '.mov', 'wmv', '.flv', '.mkv',
+    '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    '.psd', '.ai', '.eps', '.sketch', '.fig'
+  ]
+
+  const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.'))
+
+  if (imageExtensions.includes(ext)) {
+    return 'image'
+  } else if (textExtensions.includes(ext)) {
+    return 'text'
+  } else if (binaryExtensions.includes(ext)) {
+    return 'binary'
+  } else {
+    // 未知扩展名，默认为二进制文件
+    return 'binary'
+  }
 }
 
 // 获取图片URL（使用新的图片API）

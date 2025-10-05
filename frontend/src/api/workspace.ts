@@ -235,15 +235,31 @@ export const workspaceFileAPI = {
   },
 
   // 读取文件
-  async readFile(token: string, workId: string, filePath: string): Promise<string> {
-    const response = await apiClient.request<{ content: string }>(
+  async readFile(token: string, workId: string, filePath: string): Promise<{
+    type: 'text' | 'image' | 'binary';
+    content?: string;
+    filename: string;
+    size: number;
+    mime_type?: string;
+    download_url?: string;
+    message?: string;
+  }> {
+    const response = await apiClient.request<{
+      type: 'text' | 'image' | 'binary';
+      content?: string;
+      filename: string;
+      size: number;
+      mime_type?: string;
+      download_url?: string;
+      message?: string;
+    }>(
       `/api/workspace/${workId}/files/${encodeURIComponent(filePath)}`,
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
       },
     )
-    return response.content
+    return response
   },
 
   // 获取图片文件URL
