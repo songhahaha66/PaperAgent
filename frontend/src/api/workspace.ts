@@ -45,7 +45,7 @@ export interface FileInfo {
   path: string
   display_path?: string // 显示路径（相对于当前目录）
   depth?: number // 目录深度
-  category?: string // 文件分类：code, logs, outputs, papers
+  category?: string // 文件分类：code, logs, outputs, papers, attachments
   category_path?: string // 分类内的相对路径
 }
 
@@ -54,6 +54,7 @@ export interface CategorizedFiles {
   logs: FileInfo[]
   outputs: FileInfo[]
   papers: FileInfo[]
+  attachments: FileInfo[]
 }
 
 export interface FileUploadResponse {
@@ -82,6 +83,25 @@ export interface WorkMetadata {
   created_at: string
   status: string
   progress: number
+}
+
+export interface AttachmentInfo {
+  filename: string           // 存储的文件名
+  original_filename: string  // 原始文件名
+  file_type: string         // 文件类型
+  file_size: number         // 文件大小
+  mime_type: string         // MIME类型
+  upload_time: string       // 上传时间
+}
+
+export interface AttachmentListResponse {
+  attachments: AttachmentInfo[]
+  total: number
+}
+
+export interface AttachmentUploadResponse {
+  message: string
+  attachment: AttachmentInfo
 }
 
 export interface ChatMessage {
@@ -365,5 +385,58 @@ export const workspaceFileAPI = {
     }
 
     return response.blob()
+  },
+}
+
+// 附件管理API
+export const attachmentAPI = {
+  // 上传附件
+  async uploadAttachment(
+    token: string,
+    workId: string,
+    file: File
+  ): Promise<AttachmentUploadResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await apiClient.request<AttachmentUploadResponse>(
+      `/api/works/${workId}/attachment`,
+      {
+        method: 'POST',
+        body: formData,
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    )
+    return response
+  },
+
+  // 获取附件列表
+  async getAttachments(token: string, workId: string): Promise<AttachmentListResponse> {
+    const response = await apiClient.request<AttachmentListResponse>(
+      `/api/works/${workId}/attachments`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
+    return response
+  },
+
+  // 删除附件
+  async deleteAttachment(
+    token: string,
+    workId: string,
+    filename: string
+  ): Promise<{ message: string }> {
+    const response = await apiClient.request<{ message: string }>(
+      `/api/works/${workId}/attachment/${encodeURIComponent(filename)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
+    return response
   },
 }

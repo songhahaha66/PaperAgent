@@ -51,7 +51,7 @@ class WorkspaceFileService:
             work_id: 工作ID
 
         Returns:
-            包含四个分类的字典：{'code': [...], 'logs': [...], 'outputs': [...], 'papers': [...]}
+            包含五个分类的字典：{'code': [...], 'logs': [...], 'outputs': [...], 'papers': [...], 'attachments': [...]}
         """
         try:
             workspace_path = self.ensure_workspace_exists(work_id)
@@ -93,7 +93,7 @@ class WorkspaceFileService:
                             }
                             files.append(file_info)
 
-  
+
                 # 按名称排序
                 files.sort(key=lambda x: x["name"].lower())
                 result[category_name] = files
@@ -114,6 +114,31 @@ class WorkspaceFileService:
                 papers_files.append(file_info)
 
             result["papers"] = papers_files
+
+            # 处理attachments分类：扫描attachment文件夹
+            attachments_files = []
+            attachment_dir = workspace_path / 'attachment'
+            if attachment_dir.exists():
+                for item in attachment_dir.rglob('*'):
+                    if item.is_file():
+                        # 计算相对路径
+                        rel_path = str(item.relative_to(attachment_dir))
+                        full_path = str(item.relative_to(workspace_path))
+
+                        file_info = {
+                            "name": item.name,
+                            "type": "file",
+                            "size": item.stat().st_size,
+                            "modified": item.stat().st_mtime,
+                            "path": full_path,
+                            "category_path": rel_path,
+                            "category": "attachments"
+                        }
+                        attachments_files.append(file_info)
+
+            # 按名称排序
+            attachments_files.sort(key=lambda x: x["name"].lower())
+            result["attachments"] = attachments_files
 
             return result
 

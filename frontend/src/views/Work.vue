@@ -67,7 +67,7 @@
                 :work-id="workId"
                 :loading="loading"
                 :file-tree-data="workspaceFiles"
-                @file-select="handleFileSelect"
+                @file-select="handleWorkspaceFileSelect"
                 @refresh="handleFileRefresh"
                 @main-paper-click="handleMainPaperClick"
               />
@@ -76,10 +76,11 @@
                   v-model="inputValue"
                   placeholder="请输入您的问题..."
                   @send="sendMessage"
+                  @file-select="handleFileSelect"
                   :disabled="isStreaming"
                 >
                   <template #suffix="{ renderPresets }">
-                    <component :is="renderPresets([])" />
+                    <component :is="renderPresets([{ name: 'uploadAttachment' }])" />
                   </template>
                 </ChatSender>
               </div>
@@ -515,8 +516,73 @@ const exportWorkspace = async () => {
   }
 }
 
-// 处理文件选择
-const handleFileSelect = async (filePath: string) => {
+// 处理ChatSender文件上传
+const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
+  console.log('ChatSender文件选择:', fileInfo)
+
+  const { files, name } = fileInfo
+  if (!files || files.length === 0) return
+
+  const file = files[0] // 取第一个文件
+  console.log('上传文件:', file.name, file.size, file.type)
+
+  if (!authStore.token || !workId.value) {
+    MessagePlugin.error('请先登录并选择工作空间')
+    return
+  }
+
+  try {
+    MessagePlugin.info(`正在上传文件: ${file.name}`)
+
+    // 使用与Home.vue相同的上传逻辑
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(
+      `${import.meta.env.VITE_API_BASE_URL || ''}/api/works/${workId.value}/attachment`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authStore.token}`,
+        },
+        body: formData,
+      }
+    )
+
+    if (!response.ok) {
+      throw new Error(`上传失败: ${response.statusText}`)
+    }
+
+    const result = await response.json()
+    console.log('附件上传成功:', result)
+
+    MessagePlugin.success(`文件上传成功: ${file.name}`)
+
+    // 刷新文件列表
+    await loadWorkspaceFiles()
+
+    // 添加上传成功的消息到聊天
+    const uploadMessage: ChatMessageDisplay = {
+      id: Date.now().toString(),
+      role: 'user' as const,
+      content: `已上传文件: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`,
+      datetime: new Date().toLocaleString(),
+      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+    }
+
+    chatMessages.value.push(uploadMessage)
+
+    // 自动滚动到底部
+    scrollToBottom()
+
+  } catch (error) {
+    console.error('文件上传失败:', error)
+    MessagePlugin.error(`文件上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
+  }
+}
+
+// 处理FileManager文件选择
+const handleWorkspaceFileSelect = async (filePath: string) => {
   console.log('文件被选中:', filePath)
   currentFileName.value = filePath
   selectedFile.value = filePath // 设置选中的文件

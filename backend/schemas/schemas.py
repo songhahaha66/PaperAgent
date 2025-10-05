@@ -189,6 +189,23 @@ class WorkFlowStateResponse(BaseModel):
     state_data: Optional[dict]
     transition_reason: Optional[str]
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
+
+# 附件相关schemas
+class AttachmentInfo(BaseModel):
+    filename: str           # 存储的文件名
+    original_filename: str  # 原始文件名
+    file_type: str         # 文件类型
+    file_size: int         # 文件大小
+    mime_type: str         # MIME类型
+    upload_time: str       # 上传时间
+
+class AttachmentListResponse(BaseModel):
+    attachments: List[AttachmentInfo]
+    total: int
+
+class AttachmentUploadResponse(BaseModel):
+    message: str
+    attachment: AttachmentInfo

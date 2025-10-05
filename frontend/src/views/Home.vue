@@ -31,19 +31,15 @@
               <!-- 按钮容器 -->
               <div class="button-container">
                 <!-- 附件按钮 - 左下角 -->
-                <!-- <div class="attachment-btn">
+                <div class="attachment-btn">
                   <t-upload
                     v-model="uploadedFiles"
-                    :action="uploadAction"
-                    :headers="uploadHeaders"
-                    :data="uploadData"
                     :auto-upload="false"
                     :multiple="true"
-                    :accept="'.pdf,.doc,.docx,.tex,.txt'"
-                    :max="5"
-                    :format-response="formatUploadResponse"
-                    @success="onUploadSuccess"
-                    @fail="onUploadFail"
+                    :accept="'.pdf,.doc,.docx,.tex,.txt,.zip,.rar,.png,.jpg,.jpeg,.gif'"
+                    :max="10"
+                    :drag="false"
+                    :show-upload-progress="true"
                     class="file-upload"
                   >
                     <t-button theme="default" variant="text" size="middle">
@@ -54,7 +50,7 @@
                     </t-button>
                   </t-upload>
                   <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
-                </div> -->
+                </div>
 
                 <!-- 下一步按钮 - 右下角 -->
                 <div class="next-btn-wrapper">
@@ -276,13 +272,7 @@ const previewTemplateData = ref<PaperTemplate | null>(null)
 const templateContent = ref('')
 
 // 上传相关配置
-const uploadAction = 'http://localhost:8000/upload' // 替换为实际的上传接口
-const uploadHeaders = {
-  Authorization: `Bearer ${authStore.token}`,
-}
-const uploadData = {
-  type: 'research_attachment',
-}
+const tempWorkId = ref<string | null>(null) // 临时存储的工作ID
 
 // 加载用户模板
 const loadUserTemplates = async () => {
@@ -396,9 +386,15 @@ const startWork = async () => {
 
     // 调用API创建工作
     const newWork = await workspaceAPI.createWork(authStore.token, workData)
+    tempWorkId.value = newWork.work_id
 
     // 将研究问题存储到localStorage，供Work.vue使用
     localStorage.setItem('pendingQuestion', researchQuestion.value)
+
+    // 如果有附件，先上传附件
+    if (uploadedFiles.value.length > 0) {
+      await uploadAttachments(newWork.work_id)
+    }
 
     MessagePlugin.success('工作创建成功！')
 
@@ -409,6 +405,54 @@ const startWork = async () => {
     MessagePlugin.error('创建工作失败，请重试')
   } finally {
     creatingWork.value = false
+    tempWorkId.value = null
+  }
+}
+
+// 上传附件
+const uploadAttachments = async (workId: string) => {
+  if (!authStore.token || uploadedFiles.value.length === 0) return
+
+  const uploadPromises = uploadedFiles.value.map(async (file: any) => {
+    try {
+      const formData = new FormData()
+      formData.append('file', file.raw || file)
+
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL || ''}/api/works/${workId}/attachment`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${authStore.token}`,
+          },
+          body: formData,
+        }
+      )
+
+      if (!response.ok) {
+        throw new Error(`上传失败: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+      console.log('附件上传成功:', result)
+      return result
+    } catch (error) {
+      console.error(`文件 ${file.name} 上传失败:`, error)
+      throw error
+    }
+  })
+
+  try {
+    const results = await Promise.allSettled(uploadPromises)
+    const failed = results.filter(result => result.status === 'rejected')
+
+    if (failed.length > 0) {
+      MessagePlugin.warning(`${failed.length} 个文件上传失败，${results.length - failed.length} 个文件上传成功`)
+    } else {
+      MessagePlugin.success(`所有 ${results.length} 个附件上传成功`)
+    }
+  } catch (error) {
+    MessagePlugin.error('附件上传过程中出现错误')
   }
 }
 
@@ -432,6 +476,7 @@ const createNewTask = () => {
   researchQuestion.value = ''
   selectedTemplateId.value = null // 重置为null，表示不使用模板
   uploadedFiles.value = []
+  tempWorkId.value = null
 }
 
 // 选择历史工作（侧边栏调用）
@@ -531,6 +576,11 @@ const selectHistory = (id: number) => {
   justify-content: center;
   font-size: 12px;
   font-weight: 600;
+}
+
+.attachment-hint {
+  color: #999;
+  font-size: 12px;
 }
 
 /* 下一步按钮 - 右下角 */
