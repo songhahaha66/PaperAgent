@@ -230,6 +230,7 @@ import { useAuthStore } from '@/stores/auth'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { templateAPI, type PaperTemplate } from '@/api/template'
 import { workspaceAPI, type WorkCreate } from '@/api/workspace'
+import { attachmentAPI } from '@/api/workspace'
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
@@ -415,25 +416,11 @@ const uploadAttachments = async (workId: string) => {
 
   const uploadPromises = uploadedFiles.value.map(async (file: any) => {
     try {
-      const formData = new FormData()
-      formData.append('file', file.raw || file)
-
-      const response = await fetch(
-        `${import.meta.env.VITE_API_BASE_URL || ''}/api/works/${workId}/attachment`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${authStore.token}`,
-          },
-          body: formData,
-        }
+      const result = await attachmentAPI.uploadAttachment(
+        authStore.token!,
+        workId,
+        file.raw || file
       )
-
-      if (!response.ok) {
-        throw new Error(`上传失败: ${response.statusText}`)
-      }
-
-      const result = await response.json()
       console.log('附件上传成功:', result)
       return result
     } catch (error) {

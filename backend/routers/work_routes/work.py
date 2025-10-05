@@ -187,13 +187,24 @@ async def upload_attachment(
     if file_size > max_size:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 50MB)")
 
-    # 生成唯一文件名
-    file_ext = Path(file.filename).suffix
-    unique_filename = f"{uuid.uuid4()}{file_ext}"
-
-    # 确保附件目录存在
+    # 使用原始文件名，处理文件名冲突
+    original_filename = file.filename
     attachment_dir = get_attachment_dir(work_id)
-    file_path = attachment_dir / unique_filename
+
+    # 处理文件名冲突：如果文件已存在，添加序号
+    base_name = Path(original_filename).stem
+    file_ext = Path(original_filename).suffix
+    counter = 0
+
+    # 先尝试使用原始文件名
+    final_filename = original_filename
+    file_path = attachment_dir / final_filename
+
+    # 如果文件已存在，添加序号
+    while file_path.exists():
+        counter += 1
+        final_filename = f"{base_name}_{counter}{file_ext}"
+        file_path = attachment_dir / final_filename
 
     # 保存文件
     try:
@@ -205,9 +216,9 @@ async def upload_attachment(
 
     # 创建附件信息
     attachment_info = schemas.AttachmentInfo(
-        filename=unique_filename,
-        original_filename=file.filename,
-        file_type=get_file_type(file.filename),
+        filename=final_filename,
+        original_filename=original_filename,
+        file_type=get_file_type(original_filename),
         file_size=file_size,
         mime_type=file.content_type or "application/octet-stream",
         upload_time=datetime.now().isoformat()

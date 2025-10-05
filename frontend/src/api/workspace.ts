@@ -396,20 +396,11 @@ export const attachmentAPI = {
     workId: string,
     file: File
   ): Promise<AttachmentUploadResponse> {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const response = await apiClient.request<AttachmentUploadResponse>(
+    return await apiClient.uploadFile<AttachmentUploadResponse>(
       `/api/works/${workId}/attachment`,
-      {
-        method: 'POST',
-        body: formData,
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }
+      file,
+      token
     )
-    return response
   },
 
   // 获取附件列表

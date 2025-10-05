@@ -176,7 +176,7 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 
 import { useAuthStore } from '@/stores/auth';
-import { workspaceAPI, workspaceFileAPI, type Work, type FileInfo } from '@/api/workspace';
+import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import MobileWarning from '@/components/MobileWarning.vue';
@@ -534,29 +534,15 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
   try {
     MessagePlugin.info(`正在上传文件: ${file.name}`)
 
-    // 使用与Home.vue相同的上传逻辑
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const response = await fetch(
-      `${import.meta.env.VITE_API_BASE_URL || ''}/api/works/${workId.value}/attachment`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${authStore.token}`,
-        },
-        body: formData,
-      }
+    // 使用attachmentAPI上传，保持与Home.vue一致
+    const result = await attachmentAPI.uploadAttachment(
+      authStore.token,
+      workId.value,
+      file
     )
 
-    if (!response.ok) {
-      throw new Error(`上传失败: ${response.statusText}`)
-    }
-
-    const result = await response.json()
     console.log('附件上传成功:', result)
-
-    MessagePlugin.success(`文件上传成功: ${file.name}`)
+    MessagePlugin.success(`文件上传成功: ${result.attachment.original_filename}`)
 
     // 刷新文件列表
     await loadWorkspaceFiles()
@@ -565,7 +551,7 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
     const uploadMessage: ChatMessageDisplay = {
       id: Date.now().toString(),
       role: 'user' as const,
-      content: `已上传文件: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`,
+      content: `已上传文件: ${result.attachment.original_filename} (${(result.attachment.file_size / 1024).toFixed(2)} KB)`,
       datetime: new Date().toLocaleString(),
       avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
     }
