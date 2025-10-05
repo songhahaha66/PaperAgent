@@ -295,68 +295,6 @@ async def create_workspace_directory(
             detail=f"Internal server error: {str(e)}"
         )
 
-@router.get("/{work_id}/files/{file_path:path}/info")
-async def get_file_info(
-    work_id: str,
-    file_path: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """获取文件信息"""
-    try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-        
-        return workspace_file_service.get_file_info(work_id, file_path)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-@router.get("/{work_id}/files/by-category")
-async def list_workspace_files_by_category(
-    work_id: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """按分类列出工作空间中的文件"""
-    try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-
-        return workspace_file_service.list_files_by_category(work_id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
 
 @router.get("/{work_id}/paper")
 async def get_paper_content(
@@ -417,6 +355,12 @@ async def download_workspace_file(
         # 构建文件路径
         workspace_path = workspace_file_service.get_workspace_path(work_id)
         target_file = workspace_path / file_path
+
+        # 如果在工作空间根目录找不到，尝试从attachment目录找
+        if not target_file.exists() or not target_file.is_file():
+            from routers.work_routes.work import get_attachment_dir
+            attachment_dir = get_attachment_dir(work_id)
+            target_file = attachment_dir / file_path
 
         if not target_file.exists() or not target_file.is_file():
             raise HTTPException(

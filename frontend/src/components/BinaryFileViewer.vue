@@ -81,21 +81,15 @@ const downloadFile = async () => {
       throw new Error(`下载失败: ${response.status} ${response.statusText}`)
     }
 
-    // 获取文件blob
     const blob = await response.blob()
-
-    // 创建下载链接
     const downloadUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = downloadUrl
     link.download = props.fileInfo.filename
 
-    // 触发下载
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-
-    // 清理URL对象
     window.URL.revokeObjectURL(downloadUrl)
 
     MessagePlugin.success('文件下载成功')

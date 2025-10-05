@@ -49,13 +49,6 @@ export interface FileInfo {
   category_path?: string // 分类内的相对路径
 }
 
-export interface CategorizedFiles {
-  code: FileInfo[]
-  logs: FileInfo[]
-  outputs: FileInfo[]
-  papers: FileInfo[]
-  attachments: FileInfo[]
-}
 
 export interface FileUploadResponse {
   message: string
@@ -348,27 +341,7 @@ export const workspaceFileAPI = {
     return response
   },
 
-  // 获取文件信息
-  async getFileInfo(token: string, workId: string, filePath: string): Promise<FileInfo> {
-    const response = await apiClient.request<FileInfo>(
-      `/api/workspace/${workId}/files/${encodeURIComponent(filePath)}/info`,
-      {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    )
-    return response
-  },
-
-  // 按分类列出文件
-  async listFilesByCategory(token: string, workId: string): Promise<CategorizedFiles> {
-    const response = await apiClient.request<CategorizedFiles>(`/api/workspace/${workId}/files/by-category`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return response
-  },
-
+  
   // 获取论文内容
   async getPaperContent(token: string, workId: string, paperName: string = 'paper.md'): Promise<{ content: string }> {
     const params = new URLSearchParams()

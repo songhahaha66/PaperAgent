@@ -187,24 +187,19 @@ async def upload_attachment(
     if file_size > max_size:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 50MB)")
 
-    # 使用原始文件名，处理文件名冲突
+    # 使用原始文件名，不允许重名
     original_filename = file.filename
     attachment_dir = get_attachment_dir(work_id)
 
-    # 处理文件名冲突：如果文件已存在，添加序号
-    base_name = Path(original_filename).stem
-    file_ext = Path(original_filename).suffix
-    counter = 0
-
-    # 先尝试使用原始文件名
+    # 检查文件是否已存在
     final_filename = original_filename
     file_path = attachment_dir / final_filename
 
-    # 如果文件已存在，添加序号
-    while file_path.exists():
-        counter += 1
-        final_filename = f"{base_name}_{counter}{file_ext}"
-        file_path = attachment_dir / final_filename
+    if file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"文件名已存在: {original_filename}"
+        )
 
     # 保存文件
     try:
@@ -299,49 +294,3 @@ async def delete_attachment(
         return {"message": "Attachment deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete file: {str(e)}")
-
-@router.get("/{work_id}/attachment/download/{filename}")
-@route_guard
-async def download_attachment(
-    work_id: str,
-    filename: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """下载指定附件"""
-    # 检查工作是否存在且属于当前用户
-    work = crud.get_work(db, work_id)
-    if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
-    if work.created_by != current_user:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
-
-    # 构建文件路径
-    attachment_dir = get_attachment_dir(work_id)
-    file_path = attachment_dir / filename
-
-    # 检查文件是否存在
-    if not file_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
-
-    # 返回文件响应
-    try:
-        def iterfile(file_path: Path):
-            with open(file_path, mode="rb") as file_like:
-                yield from file_like
-
-        # 获取MIME类型
-        import mimetypes
-        mime_type, _ = mimetypes.guess_type(str(file_path))
-        if mime_type is None:
-            mime_type = "application/octet-stream"
-
-        return StreamingResponse(
-            iterfile(file_path),
-            media_type=mime_type,
-            headers={
-                "Content-Disposition": f"attachment; filename={file_path.name}"
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to download file: {str(e)}")

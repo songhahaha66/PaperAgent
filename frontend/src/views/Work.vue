@@ -141,14 +141,14 @@
                   <BinaryFileViewer
                     :file-info="currentFileData"
                     :work-id="workId"
-                    :token="authStore.token"
+                    :token="authStore.token || ''"
                   />
                 </div>
                 <!-- 未知文件类型 -->
                 <div v-else class="no-preview">
                   <t-icon name="file" size="48px" />
                   <p>无法预览此文件类型</p>
-                  <t-button theme="primary" variant="outline" @click="downloadWorkspaceFile(selectedFile)">
+                  <t-button theme="primary" variant="outline" @click="downloadFile(selectedFile)">
                     下载文件
                   </t-button>
                 </div>
@@ -605,17 +605,17 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
     // 根据文件类型处理响应
     if (fileData.type === 'image') {
       console.log('图片文件，处理base64内容')
-      currentFileContent.value = fileData.content
+      currentFileContent.value = fileData.content || ''
 
       // 直接使用base64内容创建图片URL，不需要额外的blob URL
       const fileExtension = filePath.split('.').pop()?.toLowerCase()
       const mimeType = `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`
-      imageUrls.value[filePath] = `data:${mimeType};base64,${fileData.content}`
+      imageUrls.value[filePath] = `data:${mimeType};base64,${fileData.content || ''}`
       console.log('图片base64 URL创建成功:', imageUrls.value[filePath])
     } else if (fileData.type === 'text') {
       console.log('文本文件，设置内容')
-      currentFileContent.value = fileData.content
-      console.log('文件内容获取成功，长度:', fileData.content.length)
+      currentFileContent.value = fileData.content || ''
+      console.log('文件内容获取成功，长度:', (fileData.content || '').length)
     } else if (fileData.type === 'binary') {
       console.log('二进制文件，设置元数据')
       currentFileContent.value = 'BINARY_FILE'
@@ -627,6 +627,52 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
     currentFileContent.value = '文件读取失败'
     currentFileData.value = null
     MessagePlugin.error('加载文件失败')
+  }
+}
+
+// 下载文件（用于未知文件类型的下载）
+const downloadFile = async (filePath: string) => {
+  try {
+    const token = authStore.token
+    if (!token) {
+      MessagePlugin.error('未登录，无法下载文件')
+      return
+    }
+
+    // 使用工作空间文件下载API
+    const url = `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/files/${encodeURIComponent(filePath)}/download`
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`下载失败: ${response.status} ${response.statusText}`)
+    }
+
+    // 获取文件blob
+    const blob = await response.blob()
+
+    // 创建下载链接
+    const downloadUrl = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = downloadUrl
+    link.download = filePath.split('/').pop() || 'download'
+
+    // 触发下载
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+
+    // 清理URL对象
+    window.URL.revokeObjectURL(downloadUrl)
+
+    MessagePlugin.success('文件下载成功')
+  } catch (error) {
+    console.error('下载文件失败:', error)
+    MessagePlugin.error('文件下载失败，请重试')
   }
 }
 

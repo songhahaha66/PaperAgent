@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(mkdir:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "Bash(find:*)",
+      "Bash(python:*)",
+      "mcp__context7__get-library-docs"
     ],
     "deny": [],
     "ask": []
