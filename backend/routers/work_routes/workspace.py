@@ -302,6 +302,70 @@ async def get_file_info(
             detail=f"Internal server error: {str(e)}"
         )
 
+@router.get("/{work_id}/files/by-category")
+async def list_workspace_files_by_category(
+    work_id: str,
+    db: Session = Depends(get_db),
+    current_user: int = Depends(get_current_user)
+):
+    """按分类列出工作空间中的文件"""
+    try:
+        # 检查工作是否存在且用户有权限
+        work = crud.get_work(db, work_id)
+        if not work:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Work not found"
+            )
+
+        if work.created_by != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this workspace"
+            )
+
+        return workspace_file_service.list_files_by_category(work_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
+@router.get("/{work_id}/paper")
+async def get_paper_content(
+    work_id: str,
+    paper_name: str = Query("paper.md", description="论文文件名"),
+    db: Session = Depends(get_db),
+    current_user: int = Depends(get_current_user)
+):
+    """获取论文内容"""
+    try:
+        # 检查工作是否存在且用户有权限
+        work = crud.get_work(db, work_id)
+        if not work:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Work not found"
+            )
+
+        if work.created_by != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this workspace"
+            )
+
+        content = workspace_file_service.get_paper_content(work_id, paper_name)
+        return {"content": content}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 @router.get("/{work_id}/export")
 async def export_workspace(
     work_id: str,
@@ -317,16 +381,16 @@ async def export_workspace(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Work not found"
             )
-        
+
         if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to export this workspace"
             )
-        
+
         # 生成ZIP文件
         zip_path = workspace_file_service.export_workspace(work_id)
-        
+
         # 返回ZIP文件
         return FileResponse(
             path=zip_path,
@@ -334,7 +398,7 @@ async def export_workspace(
             filename=f"workspace_{work_id}.zip",
             headers={"Content-Disposition": f"attachment; filename=workspace_{work_id}.zip"}
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:

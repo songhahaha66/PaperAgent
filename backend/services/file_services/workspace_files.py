@@ -13,11 +13,11 @@ class WorkspaceFileService:
     def __init__(self):
         self.base_path = Path("../pa_data/workspaces")
         self.helper = FileHelper(self.base_path)
-    
+
     def get_workspace_path(self, work_id: str) -> Path:
         """获取工作空间路径"""
         return self.base_path / work_id
-    
+
     def ensure_workspace_exists(self, work_id: str) -> Path:
         """确保工作空间存在"""
         workspace_path = self.get_workspace_path(work_id)
@@ -25,93 +25,144 @@ class WorkspaceFileService:
             # 只创建工作空间目录，不创建子目录
             workspace_path.mkdir(parents=True, exist_ok=True)
         return workspace_path
-    
+
     def list_files(self, work_id: str, relative_path: str = "", recursive: bool = True) -> List[Dict[str, Any]]:
-        """列出工作空间中的文件，支持递归遍历
-        
+        """列出工作空间中的文件（新版本：按分类返回）
+
         Args:
             work_id: 工作ID
             relative_path: 相对路径，默认为根目录
             recursive: 是否递归遍历子目录，默认为True
         """
+        # 直接调用新的分类方法，然后转换为平面列表格式
+        categorized_files = self.list_files_by_category(work_id)
+        result = []
+
+        for category, files in categorized_files.items():
+            for file_info in files:
+                result.append(file_info)
+
+        return result
+
+    def list_files_by_category(self, work_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        """按分类列出工作空间中的文件
+
+        Args:
+            work_id: 工作ID
+
+        Returns:
+            包含四个分类的字典：{'code': [...], 'logs': [...], 'outputs': [...], 'papers': [...]}
+        """
         try:
             workspace_path = self.ensure_workspace_exists(work_id)
-            target_path = workspace_path / relative_path if relative_path else workspace_path
-            
-            if not target_path.exists():
-                return []
-            
-            files = []
-            
-            if recursive:
-                # 使用更直接的方法递归遍历
-                def scan_directory(current_path: Path, current_depth: int = 0):
-                    try:
-                        for item in current_path.iterdir():
-                            # 计算相对于工作空间的路径
-                            rel_path = str(item.relative_to(workspace_path))
-                            
-                            # 计算深度
-                            depth = current_depth
-                            
+
+            # 确保三个分类文件夹存在（不包括papers）
+            categories = {
+                'code': workspace_path / 'code',
+                'logs': workspace_path / 'logs',
+                'outputs': workspace_path / 'outputs'
+            }
+
+            # 创建分类文件夹（如果不存在）
+            for category_name, category_path in categories.items():
+                if not category_path.exists():
+                    category_path.mkdir(parents=True, exist_ok=True)
+
+            result = {}
+
+            # 处理三个分类文件夹
+            for category_name, category_path in categories.items():
+                files = []
+
+                if category_path.exists():
+                    # 扫描分类文件夹
+                    for item in category_path.rglob('*'):
+                        if item.is_file():
+                            # 计算相对路径
+                            rel_path = str(item.relative_to(category_path))
+                            full_path = str(item.relative_to(workspace_path))
+
                             file_info = {
                                 "name": item.name,
-                                "type": "directory" if item.is_dir() else "file",
-                                "size": item.stat().st_size if item.is_file() else None,
+                                "type": "file",
+                                "size": item.stat().st_size,
                                 "modified": item.stat().st_mtime,
-                                "path": rel_path,
-                                "depth": depth
+                                "path": full_path,
+                                "category_path": rel_path,
+                                "category": category_name
                             }
                             files.append(file_info)
-                            
-                            # 调试输出
-                            print(f"找到文件: {rel_path}, 类型: {file_info['type']}, 深度: {depth}")
-                            
-                            # 如果是目录且需要递归，继续扫描
-                            if item.is_dir() and recursive:
-                                scan_directory(item, current_depth + 1)
-                    except Exception as e:
-                        print(f"扫描目录 {current_path} 时出错: {e}")
-                
-                # 开始扫描
-                scan_directory(target_path)
-                
-            else:
-                # 只遍历当前目录
-                for item in target_path.iterdir():
-                    file_info = {
-                        "name": item.name,
-                        "type": "directory" if item.is_dir() else "file",
-                        "size": item.stat().st_size if item.is_file() else None,
-                        "modified": item.stat().st_mtime,
-                        "path": str(item.relative_to(workspace_path)),
-                        "depth": 0
-                    }
-                    files.append(file_info)
-            
-            # 按类型、深度和名称排序：目录在前，文件在后，同类型按深度和名称排序
-            files.sort(key=lambda x: (x["type"] == "file", x["depth"], x["name"].lower()))
-            
-            # 添加调试日志
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"列出工作空间 {work_id} 的文件，路径: {relative_path}，递归: {recursive}，找到 {len(files)} 个文件")
-            for file in files:
-                logger.info(f"  - {file['type']}: {file['path']}")
-            
-            return files
+
+  
+                # 按名称排序
+                files.sort(key=lambda x: x["name"].lower())
+                result[category_name] = files
+
+            # 特殊处理papers分类：扫描根目录的paper.md文件
+            papers_files = []
+            paper_md = workspace_path / 'paper.md'
+            if paper_md.exists():
+                file_info = {
+                    "name": paper_md.name,
+                    "type": "file",
+                    "size": paper_md.stat().st_size,
+                    "modified": paper_md.stat().st_mtime,
+                    "path": "paper.md",
+                    "category_path": "paper.md",
+                    "category": "papers"
+                }
+                papers_files.append(file_info)
+
+            result["papers"] = papers_files
+
+            return result
+
         except HTTPException:
             raise
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f"列出文件失败: {e}")
-            print(f"错误: {e}")  # 直接打印错误
+            logger.error(f"按分类列出文件失败: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to list files: {str(e)}"
+                detail=f"Failed to list files by category: {str(e)}"
             )
-    
+
+    def get_paper_content(self, work_id: str, paper_name: str = "paper.md") -> str:
+        """获取论文内容
+
+        Args:
+            work_id: 工作ID
+            paper_name: 论文文件名，默认为paper.md
+
+        Returns:
+            论文文件内容
+        """
+        try:
+            workspace_path = self.ensure_workspace_exists(work_id)
+            paper_path = workspace_path / paper_name
+
+            if not paper_path.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Paper file '{paper_name}' not found"
+                )
+
+            # 读取文件内容
+            helper = FileHelper(workspace_path)
+            return helper.read_text(str(paper_path.relative_to(workspace_path)))
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"读取论文内容失败: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to read paper content: {str(e)}"
+            )
+
     @handle_service_errors()
     def read_file(self, work_id: str, file_path: str) -> str:
         """读取工作空间中的文件内容"""
@@ -131,12 +182,12 @@ class WorkspaceFileService:
         # 这里不能用 helper 的 base 为 work_id，因为 helper 的 base 是 workspaces 根
         helper = FileHelper(self.base_path / work_id)
         return helper.read_text(Path(file_path).as_posix())
-    
+
     def _is_image_file(self, file_path: str) -> bool:
         """判断文件是否为图片文件"""
         image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
         return any(file_path.lower().endswith(ext) for ext in image_extensions)
-    
+
     @handle_service_errors()
     def write_file(self, work_id: str, file_path: str, content: str) -> Dict[str, Any]:
         """写入文件到工作空间"""
@@ -148,7 +199,7 @@ class WorkspaceFileService:
             "path": Path(written_path).relative_to(self.base_path / work_id).as_posix(),
             "size": len(content)
         }
-    
+
     @handle_service_errors()
     def upload_file(self, work_id: str, file_path: str, file: UploadFile) -> Dict[str, Any]:
         """上传文件到工作空间"""
@@ -162,7 +213,7 @@ class WorkspaceFileService:
             "size": size,
             "filename": file.filename
         }
-    
+
     @handle_service_errors()
     def delete_file(self, work_id: str, file_path: str) -> Dict[str, str]:
         """删除工作空间中的文件或目录"""
@@ -173,7 +224,7 @@ class WorkspaceFileService:
         helper = FileHelper(workspace_path)
         helper.delete(Path(file_path).as_posix())
         return {"message": "File or directory deleted successfully"}
-    
+
     @handle_service_errors()
     def create_directory(self, work_id: str, dir_path: str) -> Dict[str, str]:
         """在工作空间中创建目录"""
@@ -183,7 +234,7 @@ class WorkspaceFileService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Directory already exists")
         target_dir.mkdir(parents=True, exist_ok=True)
         return {"message": "Directory created successfully"}
-    
+
     @handle_service_errors()
     def get_file_info(self, work_id: str, file_path: str) -> Dict[str, Any]:
         """获取文件信息"""
@@ -200,17 +251,17 @@ class WorkspaceFileService:
             "modified": stat.st_mtime,
             "path": str(target_file.relative_to(workspace_path))
         }
-    
+
     def export_workspace(self, work_id: str) -> str:
         """导出工作空间为ZIP文件，返回临时文件路径"""
         try:
             workspace_path = self.ensure_workspace_exists(work_id)
-            
+
             # 创建临时ZIP文件
             temp_dir = tempfile.mkdtemp()
             zip_filename = f"workspace_{work_id}.zip"
             zip_path = os.path.join(temp_dir, zip_filename)
-            
+
             # 创建ZIP文件
             with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 # 遍历工作空间目录
@@ -220,13 +271,13 @@ class WorkspaceFileService:
                         # 计算相对路径
                         arcname = os.path.relpath(file_path, workspace_path)
                         zip_file.write(file_path, arcname)
-                        
+
                 # 如果工作空间为空，添加一个空的README文件
                 if not os.listdir(workspace_path):
                     zip_file.writestr("README.txt", "This workspace is empty.")
-            
+
             return zip_path
-            
+
         except HTTPException:
             raise
         except Exception as e:
