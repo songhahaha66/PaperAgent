@@ -252,9 +252,35 @@ try:
 except ImportError:
     pass
 
-# 设置matplotlib输出目录
-plt_output_dir = "outputs/plots"
-os.makedirs(plt_output_dir, exist_ok=True)
+# 设置输出目录
+plt_output_dir = "outputs"
+log_output_dir = "logs"
+
+# 设置日志文件
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = os.path.join(log_output_dir, "code_execution_" + timestamp + ".log")
+
+# 重定向print输出到日志文件
+import sys
+class TeeOutput:
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'w', encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def __del__(self):
+        self.log.close()
+
+sys.stdout = TeeOutput(log_file)
 
 # 用户代码开始
 '''
@@ -264,17 +290,23 @@ os.makedirs(plt_output_dir, exist_ok=True)
 
 # 保存所有图表
 plot_files = []
+from datetime import datetime
+plot_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 for fig_num in plt.get_fignums():
     fig = plt.figure(fig_num)
-    filename = f"plot_{fig_num}.png"
+    filename = f"plot_{plot_timestamp}_{fig_num}.png"
     filepath = os.path.join(plt_output_dir, filename)
     fig.savefig(filepath, dpi=300, bbox_inches='tight')
-    plot_files.append(f"outputs/plots/{filename}")
+    plot_files.append(f"outputs/{filename}")
     plt.close(fig)
 
 # 输出图表保存信息
 if plot_files:
     print(f"\\n图表已保存: {', '.join(plot_files)}")
+    log_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    current_log_file = os.path.join(log_output_dir, f"code_execution_{log_timestamp}.log")
+    print(f"\\n执行日志已保存到: {current_log_file}")
 '''
         
         return header + code + footer
