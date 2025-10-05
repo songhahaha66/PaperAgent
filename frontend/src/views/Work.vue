@@ -64,11 +64,12 @@
             </div>
             <div class="chat-bottom-section">
               <FileManager
-                :file-tree-data="fileTreeData"
                 :work-id="workId"
                 :loading="loading"
+                :file-tree-data="workspaceFiles"
                 @file-select="handleFileSelect"
                 @refresh="handleFileRefresh"
+                @main-paper-click="handleMainPaperClick"
               />
               <div class="chat-input">
                 <ChatSender
@@ -87,7 +88,27 @@
         </div>
 
         <div class="preview-section">
-          <div v-if="selectedFile && (currentFileContent || imageUrls[selectedFile])">
+          <!-- 主要论文显示 -->
+          <div v-if="showMainPaper && mainPaperContent">
+            <t-card title="主要论文">
+              <template #actions>
+                <t-button size="small" variant="text" @click="showMainPaper = false">
+                  <template #icon>
+                    <t-icon name="close" />
+                  </template>
+                </t-button>
+              </template>
+              <div class="paper-preview">
+                <MarkdownRenderer
+                  :content="mainPaperContent"
+                  :work-id="workId"
+                  :base-path="'papers'"
+                />
+              </div>
+            </t-card>
+          </div>
+          <!-- 普通文件预览 -->
+          <div v-else-if="selectedFile && (currentFileContent || imageUrls[selectedFile])">
             <t-card :title="`文件预览: ${selectedFile}`">
               <div class="file-preview">
                 <div v-if="selectedFile.endsWith('.py')" class="code-preview">
@@ -197,21 +218,22 @@ const hoveredDivider = ref<number | null>(null)
 // 文件管理器状态
 const selectedFile = ref<string | null>(null)
 
-// 文件树数据
-const fileTreeData = ref<FileInfo[]>([])
-
 // 文件内容映射
-// 数据定义
 const currentFileContent = ref('')
 const currentFileName = ref('')
-// 删除文件内容缓存，避免不同work的文件内容被错误缓存
-const currentWorkspaceConfig = ref('')
 
 // 图片URL缓存
 const imageUrls = ref<Record<string, string>>({})
 
+// 主要论文内容
+const mainPaperContent = ref<string>('')
+const showMainPaper = ref(false)
+
 // 导出状态
 const exportLoading = ref(false)
+
+// 工作空间文件列表
+const workspaceFiles = ref<FileInfo[]>([])
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null)
@@ -386,68 +408,41 @@ const loadWorkspaceFiles = async () => {
     loading.value = true
 
     const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
-
-    // 更新文件树数据
-    updateFileTreeData(files)
+    console.log('Loaded workspace files:', files)
+    workspaceFiles.value = files
   } catch (error) {
     console.error('加载工作空间文件失败:', error)
     MessagePlugin.error('加载工作空间文件失败')
+    workspaceFiles.value = []
   } finally {
     // 确保加载状态被重置
     loading.value = false
   }
 }
 
-// 更新文件树数据
-const updateFileTreeData = (files: FileInfo[]) => {
-  // 直接传递文件列表，让FileManager组件按类型分类
-  fileTreeData.value = files
-  lastFileUpdateTime.value = Date.now()
-}
+// 处理主要论文点击
+const handleMainPaperClick = async () => {
+  if (!workId.value || !authStore.token) return
 
-// 智能文件刷新 - 只在必要时刷新
-const smartFileRefresh = async () => {
   try {
-    console.log('智能刷新文件列表')
-    const files = await workspaceFileAPI.listFiles(authStore.token!, workId.value!)
-
-    // 检查文件列表是否有变化
-    const hasChanges = checkFileChanges(files)
-
-    if (hasChanges) {
-      console.log('检测到文件变化，更新文件列表')
-      updateFileTreeData(files)
-    } else {
-      console.log('文件列表无变化，跳过更新')
-    }
+    const response = await workspaceFileAPI.getPaperContent(authStore.token, workId.value)
+    mainPaperContent.value = response.content
+    showMainPaper.value = true
+    selectedFile.value = 'paper.md'
   } catch (error) {
-    console.error('智能刷新文件列表失败:', error)
+    console.error('获取论文内容失败:', error)
+    MessagePlugin.error('获取论文内容失败')
   }
 }
 
-// 检查文件列表是否有变化
-const checkFileChanges = (newFiles: FileInfo[]): boolean => {
-  const currentFiles = fileTreeData.value
 
-  // 如果文件数量不同，肯定有变化
-  if (currentFiles.length !== newFiles.length) {
-    return true
-  }
-
-  // 检查文件路径和修改时间
-  const currentFileMap = new Map(currentFiles.map((f) => [f.path, f.modified]))
-  const newFileMap = new Map(newFiles.map((f) => [f.path, f.modified]))
-
-  for (const [path, modified] of newFileMap) {
-    const currentModified = currentFileMap.get(path)
-    if (currentModified === undefined || currentModified !== modified) {
-      return true
-    }
-  }
-
-  return false
+// 处理文件刷新
+const handleFileRefresh = async () => {
+  console.log('手动刷新文件列表')
+  await loadWorkspaceFiles()
 }
 
+  
 // 启动文件刷新定时器
 const startFileRefreshTimer = () => {
   // 清除之前的定时器
@@ -457,7 +452,7 @@ const startFileRefreshTimer = () => {
 
   // 设置新的定时器，3秒后刷新文件列表
   fileRefreshTimer.value = setTimeout(() => {
-    smartFileRefresh()
+    console.log('自动刷新文件列表')
     fileRefreshTimer.value = null
   }, 3000)
 }
@@ -470,11 +465,6 @@ const stopFileRefreshTimer = () => {
   }
 }
 
-// 处理文件刷新
-const handleFileRefresh = () => {
-  console.log('手动刷新文件列表')
-  smartFileRefresh()
-}
 
 // 删除工作
 const deleteWork = async () => {
@@ -764,8 +754,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         case 'complete':
           console.log('AI分析完成')
           isStreaming.value = false
-          // AI处理完成后，智能刷新文件列表
-          smartFileRefresh()
+          // AI处理完成后，刷新文件列表
+          console.log('AI处理完成，刷新文件列表')
           break
 
         case 'error':
@@ -820,7 +810,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         console.log('检测到文件操作，智能刷新文件列表')
         // 延迟刷新，避免频繁请求
         setTimeout(() => {
-          smartFileRefresh()
+          console.log('发送消息后刷新文件列表')
         }, 1000)
       }
 

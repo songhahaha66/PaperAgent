@@ -64,6 +64,8 @@ interface Props {
         path: string
         display_path?: string
         depth?: number
+        category?: string
+        category_path?: string
       }>
   workId?: string
   loading?: boolean
@@ -91,7 +93,7 @@ const isLoading = computed(() => {
   return !props.fileTreeData || props.fileTreeData.length === 0
 })
 
-// 处理文件树数据，按文件类型分类
+// 处理文件树数据，按后端新的分类结构组织
 const processedFileTreeData = computed(() => {
   // 如果正在加载，返回空数组，避免显示默认结构
   if (isLoading.value) {
@@ -99,21 +101,26 @@ const processedFileTreeData = computed(() => {
   }
 
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
-    // 返回默认的空结构
+    // 返回默认的空结构，使用后端的四个分类
     return [
-      {
-        value: 'python_files',
-        label: 'Python脚本 (0)',
+       {
+        value: 'papers',
+        label: '论文文档 (0)',
         children: [],
       },
       {
-        value: 'markdown_files',
-        label: 'Markdown文档 (0)',
+        value: 'code',
+        label: '代码文件 (0)',
         children: [],
       },
       {
-        value: 'image_files',
-        label: '图片文件 (0)',
+        value: 'logs',
+        label: '日志文件 (0)',
+        children: [],
+      },
+      {
+        value: 'outputs',
+        label: '输出文件 (0)',
         children: [],
       },
     ]
@@ -135,74 +142,62 @@ const processedFileTreeData = computed(() => {
       path: string
       display_path?: string
       depth?: number
+      category?: string
+      category_path?: string
     }>
 
-    // 过滤掉空目录，只保留有文件的目录
-    const hasActualFiles = fileInfos.some((file) => file.type === 'file')
-
-    if (!hasActualFiles) {
-      // 如果没有实际文件，只显示分类结构
-      return [
-        {
-          value: 'python_files',
-          label: 'Python脚本 (0)',
-          children: [],
-        },
-        {
-          value: 'markdown_files',
-          label: 'Markdown文档 (0)',
-          children: [],
-        },
-        {
-          value: 'image_files',
-          label: '图片文件 (0)',
-          children: [],
-        },
-      ]
+    // 按照后端的四个分类组织文件
+    const categorizedFiles = {
+      code: [] as any[],
+      logs: [] as any[],
+      outputs: [] as any[],
+      papers: [] as any[]
     }
 
-    // 按文件类型分类
-    const pythonFiles: any[] = []
-    const markdownFiles: any[] = []
-    const imageFiles: any[] = []
-
     fileInfos.forEach((file) => {
-      if (file.path && file.path.endsWith('.py')) {
-        pythonFiles.push({
+      if (file.type === 'file') {
+        const category = file.category || 'outputs' // 默认归类到outputs
+        const fileItem = {
           value: file.path,
           label: file.name || file.path.split('/').pop() || 'Unknown',
           isLeaf: true,
-        })
-      } else if (file.path && file.path.endsWith('.md')) {
-        markdownFiles.push({
-          value: file.path,
-          label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true,
-        })
-      } else if (file.path && isImageFile(file.path)) {
-        imageFiles.push({
-          value: file.path,
-          label: file.name || file.path.split('/').pop() || 'Unknown',
-          isLeaf: true,
-        })
+          category: category,
+          category_path: file.category_path
+        }
+
+        if (categorizedFiles[category as keyof typeof categorizedFiles]) {
+          categorizedFiles[category as keyof typeof categorizedFiles].push(fileItem)
+        }
       }
     })
 
+    // 对每个分类的文件进行排序
+    Object.keys(categorizedFiles).forEach(category => {
+      categorizedFiles[category as keyof typeof categorizedFiles].sort((a, b) =>
+        a.label.localeCompare(b.label)
+      )
+    })
+
     return [
-      {
-        value: 'python_files',
-        label: `Python脚本 (${pythonFiles.length})`,
-        children: pythonFiles,
+       {
+        value: 'papers',
+        label: `论文文档 (${categorizedFiles.papers.length})`,
+        children: categorizedFiles.papers,
       },
       {
-        value: 'markdown_files',
-        label: `Markdown文档 (${markdownFiles.length})`,
-        children: markdownFiles,
+        value: 'code',
+        label: `代码文件 (${categorizedFiles.code.length})`,
+        children: categorizedFiles.code,
       },
       {
-        value: 'image_files',
-        label: `图片文件 (${imageFiles.length})`,
-        children: imageFiles,
+        value: 'logs',
+        label: `日志文件 (${categorizedFiles.logs.length})`,
+        children: categorizedFiles.logs,
+      },
+      {
+        value: 'outputs',
+        label: `输出文件 (${categorizedFiles.outputs.length})`,
+        children: categorizedFiles.outputs,
       },
     ]
   } else {
@@ -397,7 +392,7 @@ const checkIfLeaf = (key: string): boolean => {
 
 // 检查是否为分类节点
 const isCategoryNode = (key: string): boolean => {
-  return key === 'python_files' || key === 'markdown_files' || key === 'image_files'
+  return key === 'code' || key === 'logs' || key === 'outputs' || key === 'papers'
 }
 
 // 处理文件点击

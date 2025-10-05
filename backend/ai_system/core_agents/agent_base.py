@@ -210,7 +210,8 @@ class BaseAgent(ABC):
             code_agent = CodeAgent(
                 self.llm_handler,
                 code_agent_stream,
-                self.workspace_dir
+                self.workspace_dir,
+                self.work_id
             )
 
             # 执行任务
@@ -361,7 +362,7 @@ class CodeAgent(BaseAgent):
     代码生成和执行Agent，专注于代码相关任务
     """
 
-    def __init__(self, llm_handler: 'LLMHandler', stream_manager: 'StreamOutputManager', workspace_dir: str):
+    def __init__(self, llm_handler: 'LLMHandler', stream_manager: 'StreamOutputManager', workspace_dir: str, work_id: Optional[str] = None):
         """
         初始化CodeAgent
 
@@ -369,11 +370,12 @@ class CodeAgent(BaseAgent):
             llm_handler: LLM处理器
             stream_manager: 流式输出管理器
             workspace_dir: 工作空间目录（必需）
+            work_id: 工作ID
         """
         if not workspace_dir:
             raise ValueError("CodeAgent必须提供workspace_dir参数")
 
-        super().__init__(llm_handler, stream_manager, workspace_dir)
+        super().__init__(llm_handler, stream_manager, workspace_dir, work_id)
 
     def get_system_prompt(self) -> str:
         """获取CodeAgent的系统提示词"""
@@ -389,7 +391,7 @@ class CodeAgent(BaseAgent):
             "- 推荐使用 save_and_execute 工具，一次性完成保存和执行\n"
             "- 代码执行失败时，仔细分析错误信息，然后修改代码重试\n"
             "- 代码应该包含必要的导入语句和完整的逻辑\n"
-            "- 文件操作使用相对路径，例如：plt.savefig('outputs/plots/filename.png')\n"
+            "- 文件操作使用相对路径，例如：plt.savefig('outputs/filename.png')\n"
             "- 必须要保证保存图片且图片名字含有时间戳，否则会覆盖之前的图片\n\n"
             "**重复执行直到成功**"
         )

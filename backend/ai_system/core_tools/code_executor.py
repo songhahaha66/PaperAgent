@@ -34,12 +34,7 @@ class CodeExecutor:
             # 必须传入工作空间目录，不能使用默认路径
             raise ValueError("必须传入workspace_dir参数，指定具体的工作空间目录（包含work_id）")
         
-        # 创建必要目录 - 保持现有结构
-        os.makedirs(self.workspace_dir, exist_ok=True)
-        os.makedirs(os.path.join(self.workspace_dir, "code_files"), exist_ok=True)
-        os.makedirs(os.path.join(self.workspace_dir, "execution_logs"), exist_ok=True)
-        os.makedirs(os.path.join(self.workspace_dir, "outputs", "plots"), exist_ok=True)
-        os.makedirs(os.path.join(self.workspace_dir, "outputs", "data"), exist_ok=True)
+        # 设置工作空间路径，目录结构应由crud.py在work创建时创建
         
         logger.info(f"CodeExecutor初始化完成，工作空间: {self.workspace_dir}")
 
@@ -161,15 +156,12 @@ class CodeExecutor:
                 full_path = file_path
             else:
                 # 相对路径处理
-                if file_path.startswith('code_files/'):
-                    # 如果已经是code_files/开头的路径，直接拼接workspace_dir
-                    full_path = os.path.join(self.workspace_dir, file_path)
-                elif file_path.startswith(('outputs/', 'execution_logs/')):
-                    # 其他目录的路径
+                if file_path.startswith(('code/', 'outputs/', 'logs/', 'temp/')):
+                    # 如果已经是目录开头的路径，直接拼接workspace_dir
                     full_path = os.path.join(self.workspace_dir, file_path)
                 else:
-                    # 默认假设是相对于code_files目录的文件名
-                    full_path = os.path.join(self.workspace_dir, "code_files", file_path)
+                    # 默认假设是相对于code目录的文件名
+                    full_path = os.path.join(self.workspace_dir, "code", file_path)
             
             # 标准化路径
             full_path = os.path.normpath(full_path)
@@ -210,7 +202,7 @@ class CodeExecutor:
                 safe_filename += '.py'
             
             # 保存文件
-            file_path = os.path.join(self.workspace_dir, "code_files", safe_filename)
+            file_path = os.path.join(self.workspace_dir, "code", safe_filename)
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             
             with open(file_path, 'w', encoding='utf-8') as f:
@@ -260,9 +252,35 @@ try:
 except ImportError:
     pass
 
-# 设置matplotlib输出目录
-plt_output_dir = "outputs/plots"
-os.makedirs(plt_output_dir, exist_ok=True)
+# 设置输出目录
+plt_output_dir = "outputs"
+log_output_dir = "logs"
+
+# 设置日志文件
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+log_file = os.path.join(log_output_dir, "code_execution_" + timestamp + ".log")
+
+# 重定向print输出到日志文件
+import sys
+class TeeOutput:
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, 'w', encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
+
+    def __del__(self):
+        self.log.close()
+
+sys.stdout = TeeOutput(log_file)
 
 # 用户代码开始
 '''
@@ -272,17 +290,23 @@ os.makedirs(plt_output_dir, exist_ok=True)
 
 # 保存所有图表
 plot_files = []
+from datetime import datetime
+plot_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 for fig_num in plt.get_fignums():
     fig = plt.figure(fig_num)
-    filename = f"plot_{fig_num}.png"
+    filename = f"plot_{plot_timestamp}_{fig_num}.png"
     filepath = os.path.join(plt_output_dir, filename)
     fig.savefig(filepath, dpi=300, bbox_inches='tight')
-    plot_files.append(f"outputs/plots/{filename}")
+    plot_files.append(f"outputs/{filename}")
     plt.close(fig)
 
 # 输出图表保存信息
 if plot_files:
     print(f"\\n图表已保存: {', '.join(plot_files)}")
+    log_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    current_log_file = os.path.join(log_output_dir, f"code_execution_{log_timestamp}.log")
+    print(f"\\n执行日志已保存到: {current_log_file}")
 '''
         
         return header + code + footer
@@ -292,13 +316,13 @@ if plot_files:
         try:
             # 构建环境变量
             env = os.environ.copy()
-            # 设置Python路径，包含工作空间的code_files目录
+            # 设置Python路径，包含工作空间的code目录
             current_pythonpath = env.get('PYTHONPATH', '')
-            workspace_code_files = os.path.join(self.workspace_dir, "code_files")
+            workspace_code = os.path.join(self.workspace_dir, "code")
             if current_pythonpath:
-                env['PYTHONPATH'] = f"{workspace_code_files}{os.pathsep}{current_pythonpath}"
+                env['PYTHONPATH'] = f"{workspace_code}{os.pathsep}{current_pythonpath}"
             else:
-                env['PYTHONPATH'] = workspace_code_files
+                env['PYTHONPATH'] = workspace_code
 
             env['WORKSPACE_DIR'] = self.workspace_dir
             # 设置编码环境变量
@@ -371,8 +395,8 @@ if plot_files:
                 safe_filename = safe_filename + '.py'
 
             # 构建完整的文件路径
-            code_files_dir = os.path.join(self.workspace_dir, "code_files")
-            file_path = os.path.join(code_files_dir, safe_filename)
+            code_dir = os.path.join(self.workspace_dir, "code")
+            file_path = os.path.join(code_dir, safe_filename)
 
             # 检查文件是否存在
             if not os.path.exists(file_path):
@@ -404,7 +428,7 @@ if plot_files:
                     logger.warning(f"发送工具调用通知失败: {e}")
 
             # 返回相对路径，这样execute_file就能正确找到文件
-            relative_path = os.path.join("code_files", safe_filename)
+            relative_path = os.path.join("code", safe_filename)
 
             return f"代码文件 {safe_filename} 已成功修改\n文件路径: {file_path}\n相对路径: {relative_path}\n新代码长度: {len(new_code_content)} 字符\n原文件已备份到: {os.path.basename(backup_path)}"
 
@@ -429,12 +453,12 @@ if plot_files:
             代码文件列表信息
         """
         try:
-            code_files_dir = os.path.join(self.workspace_dir, "code_files")
+            code_dir = os.path.join(self.workspace_dir, "code")
 
-            if not os.path.exists(code_files_dir):
+            if not os.path.exists(code_dir):
                 return "代码文件目录不存在，还没有创建任何代码文件。"
 
-            files = os.listdir(code_files_dir)
+            files = os.listdir(code_dir)
             python_files = [f for f in files if f.endswith('.py')]
 
             if not python_files:
@@ -454,14 +478,14 @@ if plot_files:
             # 构建文件列表信息
             file_info = []
             for file in python_files:
-                file_path = os.path.join(code_files_dir, file)
+                file_path = os.path.join(code_dir, file)
                 try:
                     file_size = os.path.getsize(file_path)
                     file_info.append(f"- {file} ({file_size} bytes)")
                 except OSError:
                     file_info.append(f"- {file} (无法获取文件大小)")
 
-            return f"代码文件目录: {code_files_dir}\n找到 {len(python_files)} 个Python代码文件:\n" + "\n".join(file_info)
+            return f"代码文件目录: {code_dir}\n找到 {len(python_files)} 个Python代码文件:\n" + "\n".join(file_info)
 
         except Exception as e:
             error_msg = f"列出代码文件失败: {str(e)}"

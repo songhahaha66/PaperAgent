@@ -400,8 +400,10 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
         db.commit()
         db.refresh(db_work)
         
-        # 创建工作空间文件夹
-        create_workspace_folders(work_id)
+        # 创建工作空间目录结构和初始文件
+        from ..file_services.workspace_structure import WorkspaceStructureManager
+        base_path = Path("../pa_data/workspaces") / work_id
+        WorkspaceStructureManager.create_workspace_structure(base_path, work_id)
         
         return db_work
     except Exception as e:
@@ -411,57 +413,6 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
             detail=f"Work creation failed: {str(e)}"
         )
 
-def create_workspace_folders(work_id: str):
-    """创建工作空间文件夹结构"""
-    try:
-        # 基础路径：../pa_data/workspaces/{work_id}/
-        base_path = Path("../pa_data/workspaces") / work_id
-        
-        # 创建主要目录结构
-        folders = [
-            "user_inputs",
-            "user_inputs/attachments",
-            "paper_drafts",
-            "paper_drafts/sections"
-        ]
-        
-        for folder in folders:
-            (base_path / folder).mkdir(parents=True, exist_ok=True)
-        
-        # 创建初始元数据文件
-        metadata = {
-            "work_id": work_id,
-            "created_at": str(datetime.now()),
-            "status": "created",
-            "progress": 0
-        }
-        
-        metadata_file = base_path / "metadata.json"
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
-        
-        # 创建初始对话历史文件
-        chat_history = {
-            "work_id": work_id,
-            "session_id": f"{work_id}_session",
-            "messages": [],
-            "context": {
-                "current_topic": "",
-                "generated_files": [],
-                "workflow_state": "created"
-            },
-            "created_at": str(datetime.now())
-        }
-        chat_file = base_path / "chat_history.json"
-        with open(chat_file, 'w', encoding='utf-8') as f:
-            json.dump(chat_history, f, ensure_ascii=False, indent=2)
-        
-        return str(base_path)
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create workspace folders: {str(e)}"
-        )
 
 def get_work(db: Session, work_id: str):
     """根据工作ID获取工作"""
