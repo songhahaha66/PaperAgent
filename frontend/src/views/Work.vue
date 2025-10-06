@@ -250,6 +250,9 @@ const currentFileData = ref<any>(null) // 存储完整的文件响应数据
 // 图片URL缓存
 const imageUrls = ref<Record<string, string>>({})
 
+// 主要论文内容
+const mainPaperContent = ref<string>('')
+const showMainPaper = ref(false)
 
 // 导出状态
 const exportLoading = ref(false)
@@ -447,8 +450,8 @@ const handleMainPaperClick = async () => {
   if (!workId.value || !authStore.token) return
 
   try {
-    const response = await workspaceFileAPI.getPaperContent(authStore.token, workId.value)
-    mainPaperContent.value = response.content
+    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.md')
+    mainPaperContent.value = response.content || ''
     showMainPaper.value = true
     selectedFile.value = 'paper.md'
   } catch (error) {
