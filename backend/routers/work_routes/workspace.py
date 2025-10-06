@@ -43,6 +43,60 @@ async def list_workspace_files(
             detail=f"Internal server error: {str(e)}"
         )
 
+@router.get("/{work_id}/download/{file_path:path}")
+async def download_workspace_file(
+    work_id: str,
+    file_path: str,
+    db: Session = Depends(get_db),
+    current_user: int = Depends(get_current_user)
+):
+    """下载工作空间中的文件"""
+    try:
+        # 检查工作是否存在且用户有权限
+        work = crud.get_work(db, work_id)
+        if not work:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Work not found"
+            )
+
+        if work.created_by != current_user:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this workspace"
+            )
+
+        # 构建文件路径
+        workspace_path = workspace_file_service.get_workspace_path(work_id)
+        target_file = workspace_path / file_path
+
+        if not target_file.exists() or not target_file.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
+
+        # 获取MIME类型
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(str(target_file))
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+
+        # 返回文件下载响应
+        return FileResponse(
+            path=str(target_file),
+            media_type=mime_type,
+            filename=target_file.name
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}"
+        )
+
 @router.get("/{work_id}/files/{file_path:path}")
 async def read_workspace_file(
     work_id: str,
@@ -59,20 +113,45 @@ async def read_workspace_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Work not found"
             )
-        
+
         if work.created_by != current_user:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this workspace"
             )
-        
-        # 检查是否为图片文件
-        if workspace_file_service._is_image_file(file_path):
-            # 对于图片文件，直接返回文件
-            return await get_workspace_image(work_id, file_path, db, current_user)
-        
-        # 对于文本文件，返回内容
-        return {"content": workspace_file_service.read_file(work_id, file_path)}
+
+        # 使用新的文件读取方法，它会返回不同类型文件的处理结果
+        file_data = workspace_file_service.read_file(work_id, file_path)
+
+        # 如果是图片文件，返回base64内容
+        if file_data["type"] == "image":
+            return {
+                "type": "image",
+                "content": file_data["content"],
+                "filename": file_data["filename"],
+                "size": file_data["size"]
+            }
+
+        # 如果是文本文件，返回内容
+        elif file_data["type"] == "text":
+            return {
+                "type": "text",
+                "content": file_data["content"],
+                "filename": file_data["filename"],
+                "size": file_data["size"]
+            }
+
+        # 如果是二进制文件，返回元数据
+        elif file_data["type"] == "binary":
+            return {
+                "type": "binary",
+                "filename": file_data["filename"],
+                "size": file_data["size"],
+                "mime_type": file_data["mime_type"],
+                "download_url": file_data["download_url"],
+                "message": file_data["message"]
+            }
+
     except HTTPException:
         raise
     except Exception as e:
@@ -270,101 +349,8 @@ async def create_workspace_directory(
             detail=f"Internal server error: {str(e)}"
         )
 
-@router.get("/{work_id}/files/{file_path:path}/info")
-async def get_file_info(
-    work_id: str,
-    file_path: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """获取文件信息"""
-    try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-        
-        return workspace_file_service.get_file_info(work_id, file_path)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
 
-@router.get("/{work_id}/files/by-category")
-async def list_workspace_files_by_category(
-    work_id: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """按分类列出工作空间中的文件"""
-    try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
 
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-
-        return workspace_file_service.list_files_by_category(work_id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
-
-@router.get("/{work_id}/paper")
-async def get_paper_content(
-    work_id: str,
-    paper_name: str = Query("paper.md", description="论文文件名"),
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """获取论文内容"""
-    try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-
-        content = workspace_file_service.get_paper_content(work_id, paper_name)
-        return {"content": content}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
 
 @router.get("/{work_id}/export")
 async def export_workspace(

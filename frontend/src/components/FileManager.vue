@@ -101,7 +101,7 @@ const processedFileTreeData = computed(() => {
   }
 
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
-    // 返回默认的空结构，使用后端的四个分类
+    // 返回默认的空结构，使用后端的五个分类
     return [
        {
         value: 'papers',
@@ -121,6 +121,11 @@ const processedFileTreeData = computed(() => {
       {
         value: 'outputs',
         label: '输出文件 (0)',
+        children: [],
+      },
+      {
+        value: 'attachments',
+        label: '附件 (0)',
         children: [],
       },
     ]
@@ -146,12 +151,13 @@ const processedFileTreeData = computed(() => {
       category_path?: string
     }>
 
-    // 按照后端的四个分类组织文件
+    // 按照后端的五个分类组织文件
     const categorizedFiles = {
       code: [] as any[],
       logs: [] as any[],
       outputs: [] as any[],
-      papers: [] as any[]
+      papers: [] as any[],
+      attachments: [] as any[]
     }
 
     fileInfos.forEach((file) => {
@@ -198,6 +204,11 @@ const processedFileTreeData = computed(() => {
         value: 'outputs',
         label: `输出文件 (${categorizedFiles.outputs.length})`,
         children: categorizedFiles.outputs,
+      },
+      {
+        value: 'attachments',
+        label: `附件 (${categorizedFiles.attachments.length})`,
+        children: categorizedFiles.attachments,
       },
     ]
   } else {
@@ -392,7 +403,7 @@ const checkIfLeaf = (key: string): boolean => {
 
 // 检查是否为分类节点
 const isCategoryNode = (key: string): boolean => {
-  return key === 'code' || key === 'logs' || key === 'outputs' || key === 'papers'
+  return key === 'code' || key === 'logs' || key === 'outputs' || key === 'papers' || key === 'attachments'
 }
 
 // 处理文件点击
