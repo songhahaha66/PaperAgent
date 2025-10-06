@@ -153,41 +153,7 @@ class WorkspaceFileService:
                 detail=f"Failed to list files by category: {str(e)}"
             )
 
-    def get_paper_content(self, work_id: str, paper_name: str = "paper.md") -> str:
-        """获取论文内容
-
-        Args:
-            work_id: 工作ID
-            paper_name: 论文文件名，默认为paper.md
-
-        Returns:
-            论文文件内容
-        """
-        try:
-            workspace_path = self.ensure_workspace_exists(work_id)
-            paper_path = workspace_path / paper_name
-
-            if not paper_path.exists():
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Paper file '{paper_name}' not found"
-                )
-
-            # 读取文件内容
-            helper = FileHelper(workspace_path)
-            return helper.read_text(str(paper_path.relative_to(workspace_path)))
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"读取论文内容失败: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to read paper content: {str(e)}"
-            )
-
+    
     @handle_service_errors()
     def read_file(self, work_id: str, file_path: str) -> Dict[str, Any]:
         """读取工作空间中的文件内容"""
@@ -237,7 +203,7 @@ class WorkspaceFileService:
                 "filename": target_file.name,
                 "size": target_file.stat().st_size,
                 "mime_type": mime_type,
-                "download_url": f"/api/workspace/{work_id}/files/{file_path}/download",
+                "download_url": f"/api/workspace/{work_id}/download/{file_path}",
                 "message": "Binary file - use download button to view"
             }
 

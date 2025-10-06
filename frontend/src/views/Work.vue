@@ -144,13 +144,17 @@
                     :token="authStore.token || ''"
                   />
                 </div>
-                <!-- 未知文件类型 -->
+                <!-- 未知文件类型 - 使用 BinaryFileViewer 统一处理 -->
+                <div v-else-if="currentFileData" class="binary-preview">
+                  <BinaryFileViewer
+                    :file-info="currentFileData"
+                    :work-id="workId"
+                    :token="authStore.token || ''"
+                  />
+                </div>
                 <div v-else class="no-preview">
                   <t-icon name="file" size="48px" />
-                  <p>无法预览此文件类型</p>
-                  <t-button theme="primary" variant="outline" @click="downloadFile(selectedFile)">
-                    下载文件
-                  </t-button>
+                  <p>文件信息加载中...</p>
                 </div>
               </div>
             </t-card>
@@ -246,9 +250,6 @@ const currentFileData = ref<any>(null) // 存储完整的文件响应数据
 // 图片URL缓存
 const imageUrls = ref<Record<string, string>>({})
 
-// 主要论文内容
-const mainPaperContent = ref<string>('')
-const showMainPaper = ref(false)
 
 // 导出状态
 const exportLoading = ref(false)
@@ -630,50 +631,15 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
   }
 }
 
-// 下载文件（用于未知文件类型的下载）
-const downloadFile = async (filePath: string) => {
-  try {
-    const token = authStore.token
-    if (!token) {
-      MessagePlugin.error('未登录，无法下载文件')
-      return
-    }
+// 文件下载统一由 BinaryFileViewer 组件处理
 
-    // 使用工作空间文件下载API
-    const url = `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/files/${encodeURIComponent(filePath)}/download`
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`下载失败: ${response.status} ${response.statusText}`)
-    }
-
-    // 获取文件blob
-    const blob = await response.blob()
-
-    // 创建下载链接
-    const downloadUrl = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = downloadUrl
-    link.download = filePath.split('/').pop() || 'download'
-
-    // 触发下载
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-
-    // 清理URL对象
-    window.URL.revokeObjectURL(downloadUrl)
-
-    MessagePlugin.success('文件下载成功')
-  } catch (error) {
-    console.error('下载文件失败:', error)
-    MessagePlugin.error('文件下载失败，请重试')
-  }
+// 格式化文件大小
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
 // 判断是否为图片文件

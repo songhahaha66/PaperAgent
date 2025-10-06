@@ -342,21 +342,7 @@ export const workspaceFileAPI = {
   },
 
   
-  // 获取论文内容
-  async getPaperContent(token: string, workId: string, paperName: string = 'paper.md'): Promise<{ content: string }> {
-    const params = new URLSearchParams()
-    params.append('paper_name', paperName)
-
-    const response = await apiClient.request<{ content: string }>(
-      `/api/workspace/${workId}/paper?${params.toString()}`,
-      {
-        method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
-      }
-    )
-    return response
-  },
-
+  
   // 导出工作空间
   async exportWorkspace(token: string, workId: string): Promise<Blob> {
     // 获取API基础URL

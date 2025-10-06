@@ -43,7 +43,7 @@ async def list_workspace_files(
             detail=f"Internal server error: {str(e)}"
         )
 
-@router.get("/{work_id}/files/{file_path:path}/download")
+@router.get("/{work_id}/download/{file_path:path}")
 async def download_workspace_file(
     work_id: str,
     file_path: str,
@@ -350,38 +350,6 @@ async def create_workspace_directory(
         )
 
 
-@router.get("/{work_id}/paper")
-async def get_paper_content(
-    work_id: str,
-    paper_name: str = Query("paper.md", description="论文文件名"),
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """获取论文内容"""
-    try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-
-        content = workspace_file_service.get_paper_content(work_id, paper_name)
-        return {"content": content}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal server error: {str(e)}"
-        )
 
 
 @router.get("/{work_id}/export")

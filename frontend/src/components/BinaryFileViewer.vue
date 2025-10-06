@@ -29,7 +29,7 @@
     </div>
 
     <div class="file-message">
-      <t-alert theme="info" message="这是一个二进制文件，请使用下载按钮查看文件内容" />
+      <t-alert theme="info" message="此文件类型无法预览，请使用下载按钮查看文件内容" />
     </div>
   </div>
 </template>
