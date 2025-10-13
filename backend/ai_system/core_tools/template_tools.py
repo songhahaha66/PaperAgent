@@ -237,3 +237,57 @@ class TemplateAgentTools:
         except Exception as e:
             logger.error(f"添加章节失败: {e}")
             return f"❌ 添加章节失败: {str(e)}"
+
+    async def rename_section_title(self, old_title: str, new_title: str) -> str:
+        """修改paper.md文件中指定章节的标题"""
+        template_content = self._read_paper_md()
+        if not template_content:
+            return "错误：当前工作目录中没有找到paper.md文件"
+
+        try:
+            import re
+            lines = template_content.split('\n')
+            result_lines = []
+            title_found = False
+            original_title = ""
+            i = 0
+
+            while i < len(lines):
+                line = lines[i]
+                stripped_line = line.strip()
+
+                # 检查是否是目标标题
+                if (stripped_line.startswith('#') and
+                    old_title.lower() in stripped_line.lower()):
+
+                    # 使用正则表达式提取标题信息
+                    header_match = re.match(r'^(#{1,6})\s+(.+)$', stripped_line)
+                    if header_match:
+                        level = header_match.group(1)  # 保持原标题层级
+                        original_title = header_match.group(2).strip()
+
+                        # 创建新的标题行
+                        new_line = f"{level} {new_title}"
+                        result_lines.append(new_line)
+                        title_found = True
+                        i += 1
+                        continue
+
+                result_lines.append(line)
+                i += 1
+
+            if not title_found:
+                return f"❌ 未找到匹配的标题: {old_title}"
+
+            # 保存修改后的内容
+            updated_content = '\n'.join(result_lines)
+            save_result = self._save_paper_md(updated_content)
+
+            if "✅" in save_result:
+                return f"✅ 标题修改成功：\"{original_title}\" → \"{new_title}\""
+            else:
+                return f"❌ 标题修改失败: {save_result}"
+
+        except Exception as e:
+            logger.error(f"修改标题失败: {e}")
+            return f"❌ 修改标题失败: {str(e)}"

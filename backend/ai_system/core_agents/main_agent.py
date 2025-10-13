@@ -238,11 +238,29 @@ class MainAgent(BaseAgent):
                 },
             }
 
+            # rename_section_title工具
+            rename_section_title_tool = {
+                "type": "function",
+                "function": {
+                    "name": "rename_section_title",
+                    "description": "修改paper.md文件中指定章节的标题，保持标题层级不变",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "old_title": {"type": "string", "description": "原章节标题（支持模糊匹配）"},
+                            "new_title": {"type": "string", "description": "新章节标题"}
+                        },
+                        "required": ["old_title", "new_title"],
+                    },
+                },
+            }
+
             tools.extend([
                 analyze_template_tool,
                 get_section_content_tool,
                 update_section_content_tool,
-                add_section_tool
+                add_section_tool,
+                rename_section_title_tool
             ])
 
         self.tools = tools
@@ -270,7 +288,8 @@ class MainAgent(BaseAgent):
                 "analyze_template": template_tool.analyze_template,
                 "get_section_content": template_tool.get_section_content,
                 "update_section_content": template_tool.update_section_content,
-                "add_section": template_tool.add_section
+                "add_section": template_tool.add_section,
+                "rename_section_title": template_tool.rename_section_title
             })
 
     async def _execute_code_agent_wrapper(self, task_prompt: str) -> str:
