@@ -25,4 +25,6 @@ dependencies = [
     "pandas>=2.3.1",
     "seaborn>=0.13.2",
     "alembic>=1.16.5",
+    "python-docx>=1.1.2",
+    "markdown>=3.6.0",
 ]
