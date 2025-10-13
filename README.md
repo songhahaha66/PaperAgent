@@ -1,7 +1,7 @@
 # PaperAgent - 智能学术论文写作助手
 
 [![wakatime](https://wakatime.com/badge/user/ef685785-b2de-4416-b5c6-df540c453238/project/e2409803-47c5-4f66-835f-714caf1d3d9e.svg)](https://wakatime.com/badge/user/ef685785-b2de-4416-b5c6-df540c453238/project/e2409803-47c5-4f66-835f-714caf1d3d9e)
-
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/songhahaha66/PaperAgent)
 <p align="center">
     <img src="./image/logo.png" height="250px">
 </p>
