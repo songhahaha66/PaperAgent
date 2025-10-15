@@ -398,24 +398,45 @@ class FileTools:
                         "extension": file_ext
                     })
 
+            logger.info(f"成功处理 {len(attachments)} 个附件，开始格式化输出")
+
             if not attachments:
                 return "附件目录为空"
 
-            # 格式化输出
-            result = f"发现 {len(attachments)} 个附件文件：\n\n"
-            for i, att in enumerate(attachments, 1):
-                result += f"{i}. **{att['name']}**\n"
-                result += f"   - 路径: {att['path']}\n"
-                result += f"   - 大小: {self._format_file_size(att['size'])}\n"
-                result += f"   - 类型: {att['type']}\n\n"
+            # 格式化输出 - 添加详细日志
+            try:
+                logger.info("开始格式化输出")
+                result = f"发现 {len(attachments)} 个附件文件：\n\n"
+                logger.info(f"结果字符串初始化完成: {len(result)} 字符")
 
-            if self.stream_manager:
-                await self.stream_manager.send_json_block("attachments_list", {
-                    "count": len(attachments),
-                    "attachments": attachments
-                })
+                for i, att in enumerate(attachments, 1):
+                    logger.info(f"处理附件 {i}: {att}")
+                    result += f"{i}. **{att['name']}**\n"
+                    result += f"   - 路径: {att['path']}\n"
+                    result += f"   - 大小: {self._format_file_size(att['size'])}\n"
+                    result += f"   - 类型: {att['type']}\n\n"
+                    logger.info(f"附件 {i} 格式化完成")
 
-            return result.strip()
+                logger.info("格式化输出完成，准备发送JSON块")
+
+                if self.stream_manager:
+                    import json
+                    json_data = {
+                        "count": len(attachments),
+                        "attachments": attachments
+                    }
+                    json_content = json.dumps(json_data, ensure_ascii=False)
+                    await self.stream_manager.send_json_block("attachments_list", json_content)
+                    logger.info("JSON块发送完成")
+
+                logger.info("准备返回结果")
+                return result.strip()
+
+            except Exception as format_error:
+                logger.error(f"格式化输出时出错: {format_error}")
+                logger.error(f"attachments内容: {attachments}")
+                logger.error(f"当前结果长度: {len(result) if 'result' in locals() else '未定义'}")
+                raise format_error
 
         except Exception as e:
             error_msg = f"列出附件失败: {str(e)}"
@@ -462,13 +483,16 @@ class FileTools:
             result += f"**文件内容:**\n{content}"
 
             if self.stream_manager:
-                await self.stream_manager.send_json_block("attachment_content", {
+                import json
+                json_data = {
                     "file_path": file_path,
                     "file_size": file_size,
                     "file_type": self._get_file_type_description(file_ext),
                     "content": content[:1000] + "..." if len(content) > 1000 else content,
                     "truncated": len(content) > 1000
-                })
+                }
+                json_content = json.dumps(json_data, ensure_ascii=False)
+                await self.stream_manager.send_json_block("attachment_content", json_content)
 
             return result
 
@@ -603,11 +627,14 @@ class FileTools:
                 result += "\n"
 
             if self.stream_manager:
-                await self.stream_manager.send_json_block("search_results", {
+                import json
+                json_data = {
                     "keyword": keyword,
                     "file_type": file_type,
                     "results": search_results
-                })
+                }
+                json_content = json.dumps(json_data, ensure_ascii=False)
+                await self.stream_manager.send_json_block("search_results", json_content)
 
             return result.strip()
 
