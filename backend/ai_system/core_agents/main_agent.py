@@ -61,13 +61,19 @@ class MainAgent(BaseAgent):
             "你是论文生成助手的中枢大脑，负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n"
             "请你记住：论文尽可能使用图表等清晰表示！涉及图表等务必使用代码执行得到！\n"
             "请你记住：如果最后tree发现没找到代码或者图片就重新调用CodeAgent生成！\n"
+            "请你记住：CodeAgent生成图表后，要使用图片插入工具将图表插入到论文中！\n"
             "你的职责：\n"
             "0. 请你生成论文为paper.md文档！！！\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. **主动检查和分析附件**：当用户上传附件时，使用list_attachments工具查看所有附件，然后使用read_attachment工具读取相关内容\n"
             "3. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
-            "4. 维护对话上下文，理解整个工作流程的连续性\n"
-            "5. 最终使用tree工具检查生成的文件\n\n"
+            "4. **图表生成后，使用图片插入工具**：\n"
+            "   - 使用list_output_images查看生成的图表\n"
+            "   - 使用insert_latest_image将最新图表插入论文\n"
+            "   - 使用insert_image_by_name插入指定图表\n"
+            "   - 使用get_latest_image_info获取图表详情\n"
+            "5. 维护对话上下文，理解整个工作流程的连续性\n"
+            "6. 最终使用tree工具检查生成的文件\n\n"
             "**附件处理能力**：\n"
             "- 你可以读取和分析各种格式的附件文件（PDF、Word、Excel、CSV、文本文件、代码文件等）\n"
             "- 使用list_attachments查看所有可用附件\n"
@@ -75,10 +81,17 @@ class MainAgent(BaseAgent):
             "- 使用get_attachment_info获取附件详细信息\n"
             "- 使用search_attachments在附件中搜索关键词\n"
             "- 基于附件内容进行论文写作和数据分析\n\n"
+            "**图片插入能力**：\n"
+            "- 使用list_output_images列出所有生成的图表\n"
+            "- 使用insert_latest_image插入最新生成的图表到论文\n"
+            "- 使用insert_image_by_name插入指定名称的图表\n"
+            "- 使用get_latest_image_info获取最新图表的详细信息\n"
+            "- 图表会以markdown格式插入：![描述](outputs/图片名.png)\n\n"
             "重要原则：\n"
             "- 保持对话连贯性，不重复询问已明确的信息\n"
             "- 你是中枢大脑，负责规划和协调，不能直接编写、执行代码\n"
             "- CodeAgent负责具体执行，你负责规划和协调\n"
+            "- **图表生成后必须立即插入到论文中相应位置**\n"
             "- **充分利用用户上传的附件内容，确保论文基于真实的资料和数据**\n"
             "- 所有生成的文件都要在最终论文中引用\n"
             "- 请自己执行迭代，直到任务完成\n"
@@ -246,6 +259,90 @@ class MainAgent(BaseAgent):
             },
         }
 
+        # 图片插入工具
+        insert_latest_image_tool = {
+            "type": "function",
+            "function": {
+                "name": "insert_latest_image",
+                "description": "将最新生成的图片插入到markdown文件中，支持智能位置选择",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target_file": {
+                            "type": "string",
+                            "description": "目标markdown文件名，默认为paper.md",
+                            "default": "paper.md"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "图片描述文字",
+                            "default": "生成的图表"
+                        },
+                        "position": {
+                            "type": "string",
+                            "description": "插入位置: smart(智能位置), end(文件末尾), beginning(文件开头)",
+                            "default": "smart"
+                        }
+                    },
+                    "required": [],
+                },
+            },
+        }
+
+        list_output_images_tool = {
+            "type": "function",
+            "function": {
+                "name": "list_output_images",
+                "description": "列出outputs目录中的所有图片文件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+
+        insert_image_by_name_tool = {
+            "type": "function",
+            "function": {
+                "name": "insert_image_by_name",
+                "description": "插入指定名称的图片到markdown文件中",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "image_name": {
+                            "type": "string",
+                            "description": "图片文件名（如：plot_20241015_143022_1.png）"
+                        },
+                        "target_file": {
+                            "type": "string",
+                            "description": "目标markdown文件名，默认为paper.md",
+                            "default": "paper.md"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "图片描述文字",
+                            "default": "图表"
+                        }
+                    },
+                    "required": ["image_name"],
+                },
+            },
+        }
+
+        get_latest_image_info_tool = {
+            "type": "function",
+            "function": {
+                "name": "get_latest_image_info",
+                "description": "获取最新图片文件的详细信息",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+
         # 模板操作工具（仅在有模板时添加）
         tools = [
             code_interpreter_tool,
@@ -255,7 +352,11 @@ class MainAgent(BaseAgent):
             list_attachments_tool,
             read_attachment_tool,
             get_attachment_info_tool,
-            search_attachments_tool
+            search_attachments_tool,
+            insert_latest_image_tool,
+            list_output_images_tool,
+            insert_image_by_name_tool,
+            get_latest_image_info_tool
         ]
 
         if self.template_id:
@@ -374,6 +475,16 @@ class MainAgent(BaseAgent):
             "search_attachments": file_tool.search_attachments,
             "CodeAgent": self._execute_code_agent_wrapper
         }
+
+        # 添加图片插入工具函数
+        if self.tool_manager.has_tool('image_inserter'):
+            image_inserter = self.tool_manager.image_inserter()
+            self.available_functions.update({
+                "insert_latest_image": image_inserter.insert_latest_image,
+                "list_output_images": image_inserter.list_output_images,
+                "insert_image_by_name": image_inserter.insert_image_by_name,
+                "get_latest_image_info": image_inserter.get_latest_image_info
+            })
 
         # 模板工具函数（仅在有模板时注册）
         if self.template_id:

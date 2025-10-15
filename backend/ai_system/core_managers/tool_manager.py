@@ -3,12 +3,12 @@
 集中管理所有工具类，提供统一的初始化、获取和注册接口
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from ..core_tools.file_tools import FileTools
 from ..core_tools.template_tools import TemplateAgentTools
 from ..core_tools.code_executor import CodeExecutor
+from ..core_tools.image_inserter import ImageInserter
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +34,20 @@ class ToolRegistry:
         """初始化所有可用的工具"""
         try:
             # 初始化文件工具
-            self._tools['file'] = FileTools(self.stream_manager)
-
-            # 初始化代码执行器
-            self._tools['code_executor'] = CodeExecutor(self.stream_manager, self.workspace_dir)
-
-            # 初始化模板工具（如果需要）
             if self.workspace_dir:
+                self._tools['file'] = FileTools(self.stream_manager)
+                # 初始化代码执行器
+                self._tools['code_executor'] = CodeExecutor(self.stream_manager, self.workspace_dir)
+                # 初始化模板工具
                 self._tools['template'] = TemplateAgentTools(self.workspace_dir)
+                # 初始化图片插入工具（需要file_tools和workspace_dir）
+                self._tools['image_inserter'] = ImageInserter(
+                    self.workspace_dir,
+                    self._tools['file'],
+                    self.stream_manager
+                )
+            else:
+                logger.warning("工作空间目录为空，跳过需要工作空间的工具初始化")
 
             logger.info(f"工具初始化完成，已注册工具: {list(self._tools.keys())}")
 
@@ -136,6 +142,10 @@ class ToolManager:
         """获取代码执行器"""
         return self.registry.get_tool('code_executor')
 
+    def image_inserter(self):
+        """获取图片插入工具"""
+        return self.registry.get_tool('image_inserter')
+
     def register(self, name: str, tool_instance: Any):
         """注册工具的便捷方法"""
         self.registry.register_tool(name, tool_instance)
@@ -143,3 +153,7 @@ class ToolManager:
     def list_all(self) -> Dict[str, str]:
         """列出所有工具"""
         return self.registry.list_tools()
+
+    def has_tool(self, tool_name: str) -> bool:
+        """检查指定工具是否存在"""
+        return self.registry.has_tool(tool_name)
