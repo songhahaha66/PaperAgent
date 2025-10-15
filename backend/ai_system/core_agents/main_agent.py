@@ -64,13 +64,22 @@ class MainAgent(BaseAgent):
             "你的职责：\n"
             "0. 请你生成论文为paper.md文档！！！\n"
             "1. 分析用户需求，制定论文生成计划\n"
-            "2. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
-            "3. 维护对话上下文，理解整个工作流程的连续性\n"
-            "4. 最终使用tree工具检查生成的文件\n\n"
+            "2. **主动检查和分析附件**：当用户上传附件时，使用list_attachments工具查看所有附件，然后使用read_attachment工具读取相关内容\n"
+            "3. 当需要代码执行、数据分析、图表生成时，调用CodeAgent工具\n"
+            "4. 维护对话上下文，理解整个工作流程的连续性\n"
+            "5. 最终使用tree工具检查生成的文件\n\n"
+            "**附件处理能力**：\n"
+            "- 你可以读取和分析各种格式的附件文件（PDF、Word、Excel、CSV、文本文件、代码文件等）\n"
+            "- 使用list_attachments查看所有可用附件\n"
+            "- 使用read_attachment读取具体附件内容\n"
+            "- 使用get_attachment_info获取附件详细信息\n"
+            "- 使用search_attachments在附件中搜索关键词\n"
+            "- 基于附件内容进行论文写作和数据分析\n\n"
             "重要原则：\n"
             "- 保持对话连贯性，不重复询问已明确的信息\n"
             "- 你是中枢大脑，负责规划和协调，不能直接编写、执行代码\n"
             "- CodeAgent负责具体执行，你负责规划和协调\n"
+            "- **充分利用用户上传的附件内容，确保论文基于真实的资料和数据**\n"
             "- 所有生成的文件都要在最终论文中引用\n"
             "- 请自己执行迭代，直到任务完成\n"
             "- 生成的论文不要杜撰，确保科学性"
@@ -165,8 +174,89 @@ class MainAgent(BaseAgent):
             },
         }
 
+        # 附件读取工具
+        list_attachments_tool = {
+            "type": "function",
+            "function": {
+                "name": "list_attachments",
+                "description": "列出工作空间中所有上传的附件文件",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+
+        read_attachment_tool = {
+            "type": "function",
+            "function": {
+                "name": "read_attachment",
+                "description": "读取指定附件文件的内容，支持txt、pdf、docx、csv、excel等格式",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "附件文件路径（相对于attachment目录的路径）"
+                        }
+                    },
+                    "required": ["file_path"],
+                },
+            },
+        }
+
+        get_attachment_info_tool = {
+            "type": "function",
+            "function": {
+                "name": "get_attachment_info",
+                "description": "获取附件文件的详细信息，包括文件大小、类型、创建时间等元数据",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "附件文件路径（相对于attachment目录的路径）"
+                        }
+                    },
+                    "required": ["file_path"],
+                },
+            },
+        }
+
+        search_attachments_tool = {
+            "type": "function",
+            "function": {
+                "name": "search_attachments",
+                "description": "在所有附件文件中搜索关键词，支持文件名和文件内容搜索",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "keyword": {
+                            "type": "string",
+                            "description": "要搜索的关键词"
+                        },
+                        "file_type": {
+                            "type": "string",
+                            "description": "可选的文件类型过滤（如 'pdf', 'docx', 'txt' 等）"
+                        }
+                    },
+                    "required": ["keyword"],
+                },
+            },
+        }
+
         # 模板操作工具（仅在有模板时添加）
-        tools = [code_interpreter_tool, writemd_tool, update_template_tool, tree_tool]
+        tools = [
+            code_interpreter_tool,
+            writemd_tool,
+            update_template_tool,
+            tree_tool,
+            list_attachments_tool,
+            read_attachment_tool,
+            get_attachment_info_tool,
+            search_attachments_tool
+        ]
 
         if self.template_id:
             # analyze_template工具
@@ -278,6 +368,10 @@ class MainAgent(BaseAgent):
             "writemd": file_tool.writemd,
             "update_template": file_tool.update_template,
             "tree": file_tool.tree,
+            "list_attachments": file_tool.list_attachments,
+            "read_attachment": file_tool.read_attachment,
+            "get_attachment_info": file_tool.get_attachment_info,
+            "search_attachments": file_tool.search_attachments,
             "CodeAgent": self._execute_code_agent_wrapper
         }
 

@@ -27,4 +27,7 @@ dependencies = [
     "alembic>=1.16.5",
     "python-docx>=1.1.2",
     "markdown>=3.6.0",
+    "PyPDF2>=3.0.0",
+    "pdfplumber>=0.7.0",
+    "openpyxl>=3.0.0",
 ]

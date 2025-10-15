@@ -5,7 +5,8 @@
 
 import os
 import logging
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any, List
+from pathlib import Path
 from ..core_managers.stream_manager import StreamOutputManager
 
 logger = logging.getLogger(__name__)
@@ -362,3 +363,417 @@ class FileTools:
         except Exception as e:
             logger.error(f"列出目录失败: {e}")
             return []
+
+    async def list_attachments(self) -> str:
+        """
+        列出工作空间中所有附件文件
+
+        Returns:
+            附件文件列表信息
+        """
+        try:
+            attachment_dir = os.path.join(self.workspace_dir, "attachment")
+
+            if not os.path.exists(attachment_dir):
+                return "工作空间中没有附件目录或没有上传任何附件"
+
+            attachments = []
+
+            # 递归遍历附件目录
+            for root, dirs, files in os.walk(attachment_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, attachment_dir)
+                    file_size = os.path.getsize(file_path)
+
+                    # 获取文件类型
+                    file_ext = Path(file).suffix.lower()
+                    file_type = self._get_file_type_description(file_ext)
+
+                    attachments.append({
+                        "name": file,
+                        "path": relative_path,
+                        "size": file_size,
+                        "type": file_type,
+                        "extension": file_ext
+                    })
+
+            logger.info(f"成功处理 {len(attachments)} 个附件，开始格式化输出")
+
+            if not attachments:
+                return "附件目录为空"
+
+            # 格式化输出 - 添加详细日志
+            try:
+                logger.info("开始格式化输出")
+                result = f"发现 {len(attachments)} 个附件文件：\n\n"
+                logger.info(f"结果字符串初始化完成: {len(result)} 字符")
+
+                for i, att in enumerate(attachments, 1):
+                    logger.info(f"处理附件 {i}: {att}")
+                    result += f"{i}. **{att['name']}**\n"
+                    result += f"   - 路径: {att['path']}\n"
+                    result += f"   - 大小: {self._format_file_size(att['size'])}\n"
+                    result += f"   - 类型: {att['type']}\n\n"
+                    logger.info(f"附件 {i} 格式化完成")
+
+                logger.info("格式化输出完成，准备发送JSON块")
+
+                if self.stream_manager:
+                    import json
+                    json_data = {
+                        "count": len(attachments),
+                        "attachments": attachments
+                    }
+                    json_content = json.dumps(json_data, ensure_ascii=False)
+                    await self.stream_manager.send_json_block("attachments_list", json_content)
+                    logger.info("JSON块发送完成")
+
+                logger.info("准备返回结果")
+                return result.strip()
+
+            except Exception as format_error:
+                logger.error(f"格式化输出时出错: {format_error}")
+                logger.error(f"attachments内容: {attachments}")
+                logger.error(f"当前结果长度: {len(result) if 'result' in locals() else '未定义'}")
+                raise format_error
+
+        except Exception as e:
+            error_msg = f"列出附件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    async def read_attachment(self, file_path: str) -> str:
+        """
+        读取附件文件内容
+
+        Args:
+            file_path: 附件文件路径（相对于attachment目录）
+
+        Returns:
+            文件内容或错误信息
+        """
+        try:
+            # 构建完整的文件路径
+            full_path = os.path.join(self.workspace_dir, "attachment", file_path)
+
+            if not os.path.exists(full_path):
+                return f"附件文件不存在: {file_path}"
+
+            if not os.path.isfile(full_path):
+                return f"指定的路径不是文件: {file_path}"
+
+            # 检查文件大小限制（10MB）
+            file_size = os.path.getsize(full_path)
+            if file_size > 10 * 1024 * 1024:
+                return f"文件过大 ({self._format_file_size(file_size)})，超过10MB限制"
+
+            # 获取文件扩展名
+            file_ext = Path(full_path).suffix.lower()
+
+            # 根据文件类型选择合适的读取方法
+            content = await self._extract_file_content(full_path, file_ext)
+
+            # 准备返回信息
+            result = f"**文件信息:**\n"
+            result += f"- 文件名: {Path(full_path).name}\n"
+            result += f"- 文件路径: {file_path}\n"
+            result += f"- 文件大小: {self._format_file_size(file_size)}\n"
+            result += f"- 文件类型: {self._get_file_type_description(file_ext)}\n\n"
+            result += f"**文件内容:**\n{content}"
+
+            if self.stream_manager:
+                import json
+                json_data = {
+                    "file_path": file_path,
+                    "file_size": file_size,
+                    "file_type": self._get_file_type_description(file_ext),
+                    "content": content[:1000] + "..." if len(content) > 1000 else content,
+                    "truncated": len(content) > 1000
+                }
+                json_content = json.dumps(json_data, ensure_ascii=False)
+                await self.stream_manager.send_json_block("attachment_content", json_content)
+
+            return result
+
+        except Exception as e:
+            error_msg = f"读取附件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    async def get_attachment_info(self, file_path: str) -> str:
+        """
+        获取附件文件的详细信息
+
+        Args:
+            file_path: 附件文件路径（相对于attachment目录）
+
+        Returns:
+            文件详细信息
+        """
+        try:
+            # 构建完整的文件路径
+            full_path = os.path.join(self.workspace_dir, "attachment", file_path)
+
+            if not os.path.exists(full_path):
+                return f"附件文件不存在: {file_path}"
+
+            if not os.path.isfile(full_path):
+                return f"指定的路径不是文件: {file_path}"
+
+            # 获取文件统计信息
+            stat_info = os.stat(full_path)
+            file_ext = Path(full_path).suffix.lower()
+
+            result = f"**附件文件详细信息:**\n\n"
+            result += f"- **文件名**: {Path(full_path).name}\n"
+            result += f"- **相对路径**: {file_path}\n"
+            result += f"- **完整路径**: {full_path}\n"
+            result += f"- **文件大小**: {self._format_file_size(stat_info.st_size)}\n"
+            result += f"- **文件类型**: {self._get_file_type_description(file_ext)}\n"
+            result += f"- **扩展名**: {file_ext}\n"
+            result += f"- **创建时间**: {self._format_timestamp(stat_info.st_ctime)}\n"
+            result += f"- **修改时间**: {self._format_timestamp(stat_info.st_mtime)}\n"
+
+            # 如果是可读的文本文件，显示前几行内容预览
+            if self._is_text_file(file_ext) and stat_info.st_size < 1024 * 1024:  # 1MB以下
+                try:
+                    with open(full_path, 'r', encoding='utf-8') as f:
+                        preview = f.read(500)
+                        if len(preview) == 500:
+                            preview += "..."
+                        result += f"- **内容预览**:\n```\n{preview}\n```\n"
+                except UnicodeDecodeError:
+                    result += f"- **内容预览**: 二进制文件无法预览\n"
+
+            return result
+
+        except Exception as e:
+            error_msg = f"获取附件信息失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    async def search_attachments(self, keyword: str, file_type: Optional[str] = None) -> str:
+        """
+        在附件文件中搜索关键词
+
+        Args:
+            keyword: 搜索关键词
+            file_type: 可选的文件类型过滤（如 'pdf', 'docx', 'txt'）
+
+        Returns:
+            搜索结果
+        """
+        try:
+            attachment_dir = os.path.join(self.workspace_dir, "attachment")
+
+            if not os.path.exists(attachment_dir):
+                return "工作空间中没有附件目录"
+
+            search_results = []
+            keyword_lower = keyword.lower()
+
+            # 递归搜索附件
+            for root, dirs, files in os.walk(attachment_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, attachment_dir)
+                    file_ext = Path(file).suffix.lower()
+
+                    # 文件类型过滤
+                    if file_type and file_ext != f".{file_type.lower()}":
+                        continue
+
+                    # 文件名匹配
+                    if keyword_lower in file.lower():
+                        search_results.append({
+                            "file": relative_path,
+                            "match_type": "文件名",
+                            "match_text": file
+                        })
+                        continue
+
+                    # 文件内容匹配（仅对文本文件）
+                    if self._is_text_file(file_ext):
+                        try:
+                            content = await self._extract_file_content(file_path, file_ext)
+                            if keyword_lower in content.lower():
+                                # 找到匹配的行
+                                lines = content.split('\n')
+                                matching_lines = []
+                                for i, line in enumerate(lines, 1):
+                                    if keyword_lower in line.lower():
+                                        matching_lines.append(f"第{i}行: {line.strip()}")
+                                        if len(matching_lines) >= 3:  # 最多显示3个匹配行
+                                            break
+
+                                search_results.append({
+                                    "file": relative_path,
+                                    "match_type": "文件内容",
+                                    "match_text": "\n".join(matching_lines)
+                                })
+                        except Exception as e:
+                            logger.warning(f"搜索文件内容失败 {file_path}: {e}")
+
+            if not search_results:
+                return f"未找到包含关键词 '{keyword}' 的附件文件"
+
+            # 格式化搜索结果
+            result = f"**搜索结果** (关键词: '{keyword}'):\n\n"
+            for i, item in enumerate(search_results, 1):
+                result += f"{i}. **{item['file']}** (匹配类型: {item['match_type']})\n"
+                if item['match_type'] == '文件内容':
+                    result += f"   匹配内容:\n   {item['match_text']}\n"
+                result += "\n"
+
+            if self.stream_manager:
+                import json
+                json_data = {
+                    "keyword": keyword,
+                    "file_type": file_type,
+                    "results": search_results
+                }
+                json_content = json.dumps(json_data, ensure_ascii=False)
+                await self.stream_manager.send_json_block("search_results", json_content)
+
+            return result.strip()
+
+        except Exception as e:
+            error_msg = f"搜索附件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    # 辅助方法
+    def _get_file_type_description(self, file_ext: str) -> str:
+        """获取文件类型描述"""
+        type_map = {
+            # 文本文档
+            '.txt': '纯文本文件',
+            '.md': 'Markdown文档',
+            '.rtf': '富文本格式',
+
+            # Word文档
+            '.doc': 'Word文档 (旧版)',
+            '.docx': 'Word文档',
+
+            # PDF文档
+            '.pdf': 'PDF文档',
+
+            # 表格文件
+            '.csv': 'CSV表格文件',
+            '.xlsx': 'Excel表格文件',
+            '.xls': 'Excel表格文件 (旧版)',
+
+            # 代码文件
+            '.py': 'Python源代码',
+            '.js': 'JavaScript源代码',
+            '.ts': 'TypeScript源代码',
+            '.java': 'Java源代码',
+            '.cpp': 'C++源代码',
+            '.c': 'C源代码',
+            '.html': 'HTML文件',
+            '.css': 'CSS样式表',
+            '.vue': 'Vue组件',
+            '.json': 'JSON数据文件',
+            '.xml': 'XML文件',
+            '.yaml': 'YAML配置文件',
+            '.yml': 'YAML配置文件',
+            '.toml': 'TOML配置文件',
+            '.ini': 'INI配置文件',
+            '.sql': 'SQL脚本',
+            '.sh': 'Shell脚本',
+            '.bat': '批处理文件',
+        }
+        return type_map.get(file_ext, f'{file_ext} 文件')
+
+    def _format_file_size(self, size_bytes: int) -> str:
+        """格式化文件大小"""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+    def _format_timestamp(self, timestamp: float) -> str:
+        """格式化时间戳"""
+        import datetime
+        return datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+    def _is_text_file(self, file_ext: str) -> bool:
+        """判断是否为文本文件"""
+        text_extensions = {
+            '.txt', '.md', '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.hpp',
+            '.html', '.css', '.vue', '.json', '.xml', '.yaml', '.yml', '.toml', '.ini',
+            '.sql', '.sh', '.bat', '.cmd', '.log', '.csv', '.rtf'
+        }
+        return file_ext in text_extensions
+
+    async def _extract_file_content(self, file_path: str, file_ext: str) -> str:
+        """根据文件类型提取内容"""
+        try:
+            if file_ext in ['.txt', '.md', '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.hpp',
+                           '.html', '.css', '.vue', '.json', '.xml', '.yaml', '.yml', '.toml', '.ini',
+                           '.sql', '.sh', '.bat', '.cmd', '.log', '.rtf']:
+                # 直接读取文本文件
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+
+            elif file_ext == '.csv':
+                # 使用pandas读取CSV文件
+                import pandas as pd
+                df = pd.read_csv(file_path)
+                return f"CSV文件内容预览:\n{df.head().to_string()}\n\n总行数: {len(df)}\n总列数: {len(df.columns)}\n列名: {list(df.columns)}"
+
+            elif file_ext in ['.xlsx', '.xls']:
+                # 使用pandas读取Excel文件
+                import pandas as pd
+                df = pd.read_excel(file_path)
+                return f"Excel文件内容预览:\n{df.head().to_string()}\n\n总行数: {len(df)}\n总列数: {len(df.columns)}\n列名: {list(df.columns)}"
+
+            elif file_ext == '.docx':
+                # 使用python-docx读取Word文档
+                from docx import Document
+                doc = Document(file_path)
+                content = []
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        content.append(para.text)
+                return "\n".join(content)
+
+            elif file_ext == '.pdf':
+                # 使用PyPDF2读取PDF文件
+                try:
+                    import PyPDF2
+                    with open(file_path, 'rb') as file:
+                        pdf_reader = PyPDF2.PdfReader(file)
+                        content = []
+                        for page_num in range(min(len(pdf_reader.pages), 10)):  # 限制读取前10页
+                            page = pdf_reader.pages[page_num]
+                            text = page.extract_text()
+                            if text.strip():
+                                content.append(f"--- 第{page_num + 1}页 ---\n{text}")
+                        return "\n".join(content)
+                except Exception as e:
+                    # 如果PyPDF2失败，尝试pdfplumber
+                    try:
+                        import pdfplumber
+                        with pdfplumber.open(file_path) as pdf:
+                            content = []
+                            for page_num in range(min(len(pdf.pages), 10)):  # 限制读取前10页
+                                page = pdf.pages[page_num]
+                                text = page.extract_text()
+                                if text.strip():
+                                    content.append(f"--- 第{page_num + 1}页 ---\n{text}")
+                            return "\n".join(content)
+                    except Exception as e2:
+                        return f"PDF文件读取失败:\nPyPDF2错误: {str(e)}\npdfplumber错误: {str(e2)}"
+
+            else:
+                return f"不支持的文件类型: {file_ext}"
+
+        except Exception as e:
+            logger.error(f"提取文件内容失败 {file_path}: {e}")
+            return f"读取文件内容失败: {str(e)}"
