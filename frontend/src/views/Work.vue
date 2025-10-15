@@ -900,7 +900,10 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
       console.log('处理JSON块:', block)
 
       const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-      if (messageIndex === -1) return
+      if (messageIndex === -1) {
+        console.warn('未找到对应的消息ID:', messageId)
+        return
+      }
 
       // 获取当前消息
       const currentMessage = chatMessages.value[messageIndex]
@@ -917,6 +920,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
       // 使用Vue的响应式更新
       chatMessages.value.splice(messageIndex, 1, updatedMessage)
+      console.log('JSON块已添加到消息，当前JSON块数量:', updatedJsonBlocks.length)
 
       // 检查是否是文件操作相关的JSON块，如果是则智能刷新文件列表
       if (
@@ -933,6 +937,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
         // 延迟刷新，避免频繁请求
         setTimeout(() => {
           console.log('发送消息后刷新文件列表')
+          loadWorkspaceFiles()
         }, 1000)
       }
 
@@ -1197,21 +1202,65 @@ const simulateSendFirstMessage = (content: string) => {
       console.log('第一句话已真正发送给AI:', content)
 
       // 设置消息监听器来处理AI的回复
+      let aiMessageCreated = false
       webSocketHandler.value.onMessage((data) => {
         console.log('收到AI回复:', data)
 
         // 处理AI的回复
         switch (data.type) {
           case 'start':
-            // AI开始处理
+            // AI开始处理，创建AI回复消息框架
+            if (!aiMessageCreated) {
+              const aiMessage = {
+                id: `ai_msg_${Date.now()}`,
+                role: 'assistant' as const,
+                content: '',
+                datetime: new Date().toLocaleString(),
+                avatar: getSystemAvatar({ systemType: 'brain' }),
+                systemType: 'brain' as const,
+                isStreaming: true,
+                json_blocks: [],
+                message_type: 'json_card' as const,
+              }
+              chatMessages.value.push(aiMessage)
+              aiMessageCreated = true
+              console.log('创建AI回复消息框架')
+            }
+            break
+          case 'json_block':
+            // 处理JSON块，确保有AI消息框架
+            if (!aiMessageCreated) {
+              const aiMessage = {
+                id: `ai_msg_${Date.now()}`,
+                role: 'assistant' as const,
+                content: '',
+                datetime: new Date().toLocaleString(),
+                avatar: getSystemAvatar({ systemType: 'brain' }),
+                systemType: 'brain' as const,
+                isStreaming: true,
+                json_blocks: [],
+                message_type: 'json_card' as const,
+              }
+              chatMessages.value.push(aiMessage)
+              aiMessageCreated = true
+            }
+
+            // 添加JSON块到最新的AI消息
+            const jsonBlockIndex = chatMessages.value.findIndex(
+              (m) => m.role === 'assistant' && m.isStreaming
+            )
+            if (jsonBlockIndex > -1) {
+              const updatedMessage = {
+                ...chatMessages.value[jsonBlockIndex],
+                json_blocks: [...(chatMessages.value[jsonBlockIndex].json_blocks || []), data.block],
+              }
+              chatMessages.value.splice(jsonBlockIndex, 1, updatedMessage)
+              console.log('添加JSON块到AI消息:', data.block.type)
+            }
             break
           case 'content':
-            // 创建或更新AI回复消息
-            let aiMessageIndex = chatMessages.value.findIndex(
-              (m) => m.role === 'assistant' && m.isStreaming,
-            )
-            if (aiMessageIndex === -1) {
-              // 创建新的AI回复消息
+            // 处理文本内容，确保有AI消息框架
+            if (!aiMessageCreated) {
               const aiMessage = {
                 id: `ai_msg_${Date.now()}`,
                 role: 'assistant' as const,
@@ -1220,16 +1269,20 @@ const simulateSendFirstMessage = (content: string) => {
                 avatar: getSystemAvatar({ systemType: 'brain' }),
                 systemType: 'brain' as const,
                 isStreaming: true,
+                json_blocks: [],
+                message_type: 'text' as const,
               }
               chatMessages.value.push(aiMessage)
-              aiMessageIndex = chatMessages.value.length - 1
+              aiMessageCreated = true
             } else {
-              // 更新现有的AI回复消息
-              chatMessages.value[aiMessageIndex].content += data.content
+              // 更新现有的AI回复消息内容
+              const contentIndex = chatMessages.value.findIndex(
+                (m) => m.role === 'assistant' && m.isStreaming
+              )
+              if (contentIndex > -1) {
+                chatMessages.value[contentIndex].content += data.content
+              }
             }
-
-            // 自动滚动到底部
-            scrollToBottom()
             break
           case 'complete':
             // AI回复完成
@@ -1238,16 +1291,40 @@ const simulateSendFirstMessage = (content: string) => {
             )
             if (finalAiMessageIndex !== -1) {
               chatMessages.value[finalAiMessageIndex].isStreaming = false
+              console.log('AI回复完成，停止流式状态')
             }
-            console.log('AI回复完成')
+            aiMessageCreated = false
             break
           case 'error':
             console.error('AI处理出错:', data.message)
+            // 如果有正在流式的消息，停止并显示错误
+            const errorIndex = chatMessages.value.findIndex(
+              (m) => m.role === 'assistant' && m.isStreaming,
+            )
+            if (errorIndex > -1) {
+              chatMessages.value[errorIndex].content = `错误: ${data.message}`
+              chatMessages.value[errorIndex].isStreaming = false
+            }
+            aiMessageCreated = false
             break
         }
+
+        // 自动滚动到底部
+        scrollToBottom()
       })
     } catch (error) {
       console.error('发送第一句话给AI失败:', error)
+      // 如果连接失败，显示错误消息
+      const errorMessage: ChatMessageDisplay = {
+        id: `ai_error_${Date.now()}`,
+        role: 'assistant' as const,
+        content: '连接AI服务失败，请检查网络连接或稍后重试',
+        datetime: new Date().toLocaleString(),
+        avatar: getSystemAvatar({ systemType: 'brain' }),
+        systemType: 'brain' as const,
+        isStreaming: false,
+      }
+      chatMessages.value.push(errorMessage)
     }
   })()
 }

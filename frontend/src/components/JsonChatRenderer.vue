@@ -222,8 +222,24 @@ const getTextContent = (message: ChatMessage) => {
 // 提取 JSON 块数组
 const getJsonBlocks = (message: ChatMessage) => {
   if (!message) return [] as any[]
-  if (message.json_blocks && message.json_blocks.length > 0) return message.json_blocks
+
+  // 添加调试日志
+  console.log('getJsonBlocks called for message:', {
+    id: message.id,
+    role: message.role,
+    hasJsonBlocks: !!(message.json_blocks && message.json_blocks.length > 0),
+    jsonBlocksCount: message.json_blocks?.length || 0,
+    messageType: message.message_type,
+    contentLength: message.content?.length || 0
+  })
+
+  if (message.json_blocks && message.json_blocks.length > 0) {
+    console.log('Using explicit json_blocks for message:', message.id, 'blocks:', message.json_blocks)
+    return message.json_blocks
+  }
+
   const { blocks } = parseJsonBlocks(message.content || '')
+  console.log('Parsed json blocks from content for message:', message.id, 'count:', blocks.length)
   return blocks
 }
 
