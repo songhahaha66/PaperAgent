@@ -45,9 +45,12 @@ md.use(mila)
 function preprocessLatex(content: string): string {
   if (!content) return ''
   
-  // 处理行内公式 [ ... ] -> $ ... $
-  // 匹配 [ 后面跟着非空格字符，然后是 LaTeX 内容，最后是 ]
-  content = content.replace(/\[([^[\]]*\\[^[\]]*)\]/g, '$$$1$$')
+  // 处理方括号公式 [ ... ] -> $...$（行内公式，不要空格）
+  // markdown-it-katex 要求 $ 紧跟公式内容，不能有空格
+  content = content.replace(/\[\s*([^[\]]*\\[^[\]]*?)\s*\]/g, (match, formula) => {
+    // 使用单个 $ 表示行内公式
+    return '$' + formula.trim() + '$'
+  })
   
   return content
 }
