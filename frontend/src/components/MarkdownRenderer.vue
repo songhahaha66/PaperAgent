@@ -41,22 +41,10 @@ const md = new MarkdownIt({
 })
 md.use(mila)
 
-// 预处理内容，将方括号LaTeX公式转换为美元符号格式
-function preprocessLatex(content: string): string {
-  if (!content) return ''
-  
-  // 处理行内公式 [ ... ] -> $ ... $
-  // 匹配 [ 后面跟着非空格字符，然后是 LaTeX 内容，最后是 ]
-  content = content.replace(/\[([^[\]]*\\[^[\]]*)\]/g, '$$$1$$')
-  
-  return content
-}
-
 // 渲染后的 HTML
 const renderedContent = computed(() => {
   if (!props.content) return ''
-  const processedContent = preprocessLatex(props.content)
-  return md.render(processedContent)
+  return md.render(props.content)
 })
 
 // 图片 blob 缓存：key -> blobUrl
