@@ -45,10 +45,19 @@ md.use(mila)
 function preprocessLatex(content: string): string {
   if (!content) return ''
   
-  // 步骤1：处理方括号公式 [ ... ] -> $$...$$
+  // 步骤1：处理 LaTeX 标准块级公式 \[ ... \] -> $$...$$
+  content = content.replace(/\\\[\s*(.+?)\s*\\\]/gs, (match, formula) => {
+    return '\n\n$$' + formula.trim() + '$$\n\n'
+  })
+  
+  // 步骤2：处理 LaTeX 行内公式 \( ... \) -> $...$
+  content = content.replace(/\\\(\s*(.+?)\s*\\\)/g, (match, formula) => {
+    return '$' + formula.trim() + '$'
+  })
+  
+  // 步骤3：处理普通方括号公式 [ ... ] -> $$...$$（如果包含反斜杠）
   content = content.replace(/\[\s*([^[\]]*\\[^[\]]*?)\s*\]/g, (match, formula) => {
     const trimmedFormula = formula.trim()
-    // 检查是否是复杂公式
     if (trimmedFormula.length > 30 || /\\frac|\\sum|\\int|\\sqrt/.test(trimmedFormula)) {
       return '\n\n$$' + trimmedFormula + '$$\n\n'
     } else {
@@ -56,7 +65,7 @@ function preprocessLatex(content: string): string {
     }
   })
   
-  // 步骤2：修复已存在的美元符号公式，移除 $ 后面和 $ 前面的空格
+  // 步骤4：修复已存在的美元符号公式，移除 $ 后面和 $ 前面的空格
   // 修复行内公式：$ ... $ -> $...$
   content = content.replace(/\$\s+([^\$]+?)\s+\$/g, '$$$1$')
   
