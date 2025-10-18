@@ -41,36 +41,10 @@ const md = new MarkdownIt({
 })
 md.use(mila)
 
-// 预处理内容，修复LaTeX公式格式
-function preprocessLatex(content: string): string {
-  if (!content) return ''
-  
-  // 步骤1：处理方括号公式 [ ... ] -> $$...$$
-  content = content.replace(/\[\s*([^[\]]*\\[^[\]]*?)\s*\]/g, (match, formula) => {
-    const trimmedFormula = formula.trim()
-    // 检查是否是复杂公式
-    if (trimmedFormula.length > 30 || /\\frac|\\sum|\\int|\\sqrt/.test(trimmedFormula)) {
-      return '\n\n$$' + trimmedFormula + '$$\n\n'
-    } else {
-      return '$' + trimmedFormula + '$'
-    }
-  })
-  
-  // 步骤2：修复已存在的美元符号公式，移除 $ 后面和 $ 前面的空格
-  // 修复行内公式：$ ... $ -> $...$
-  content = content.replace(/\$\s+([^\$]+?)\s+\$/g, '$$$1$')
-  
-  // 修复块级公式：$$ ... $$ -> $$...$$（但保留公式内部的空格）
-  content = content.replace(/\$\$\s+([^\$]+?)\s+\$\$/g, '$$$$1$$')
-  
-  return content
-}
-
 // 渲染后的 HTML
 const renderedContent = computed(() => {
   if (!props.content) return ''
-  const processedContent = preprocessLatex(props.content)
-  return md.render(processedContent)
+  return md.render(props.content)
 })
 
 // 图片 blob 缓存：key -> blobUrl
