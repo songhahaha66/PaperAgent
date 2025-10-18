@@ -41,16 +41,27 @@ const md = new MarkdownIt({
 })
 md.use(mila)
 
-// 预处理内容，将方括号LaTeX公式转换为美元符号格式
+// 预处理内容，修复LaTeX公式格式
 function preprocessLatex(content: string): string {
   if (!content) return ''
   
-  // 处理方括号公式 [ ... ] -> $...$（行内公式，不要空格）
-  // markdown-it-katex 要求 $ 紧跟公式内容，不能有空格
+  // 步骤1：处理方括号公式 [ ... ] -> $$...$$
   content = content.replace(/\[\s*([^[\]]*\\[^[\]]*?)\s*\]/g, (match, formula) => {
-    // 使用单个 $ 表示行内公式
-    return '$' + formula.trim() + '$'
+    const trimmedFormula = formula.trim()
+    // 检查是否是复杂公式
+    if (trimmedFormula.length > 30 || /\\frac|\\sum|\\int|\\sqrt/.test(trimmedFormula)) {
+      return '\n\n$$' + trimmedFormula + '$$\n\n'
+    } else {
+      return '$' + trimmedFormula + '$'
+    }
   })
+  
+  // 步骤2：修复已存在的美元符号公式，移除 $ 后面和 $ 前面的空格
+  // 修复行内公式：$ ... $ -> $...$
+  content = content.replace(/\$\s+([^\$]+?)\s+\$/g, '$$$1$')
+  
+  // 修复块级公式：$$ ... $$ -> $$...$$（但保留公式内部的空格）
+  content = content.replace(/\$\$\s+([^\$]+?)\s+\$\$/g, '$$$$1$$')
   
   return content
 }
