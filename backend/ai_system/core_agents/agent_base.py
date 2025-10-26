@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Callable, Optional
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from ..core_managers.tool_manager import ToolManager
+from ..core_managers.langchain_tool_manager import LangChainToolManager, SmolAgentManager
 from ..core_managers.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,16 @@ class BaseAgent(ABC):
         self.work_id = work_id
         self.workspace_dir = workspace_dir
 
-        # 初始化工具管理器
+        # 初始化 LangChain 工具管理器
         if workspace_dir:
-            self.tool_manager = ToolManager(workspace_dir, stream_manager)
+            self.tool_manager = LangChainToolManager(workspace_dir, stream_manager)
+            # 初始化 SmolAgent 管理器用于代码执行
+            self.smolagent_manager = SmolAgentManager(
+                workspace_dir, llm_handler.llm, stream_manager
+            )
         else:
             self.tool_manager = None
+            self.smolagent_manager = None
 
         # 消息和工具管理
         self.messages: List[Dict[str, Any]] = []
@@ -67,11 +72,11 @@ class BaseAgent(ABC):
             "content": system_prompt
         }]
 
-        # 设置工具
-        self._setup_tools()
-
-        # 注册工具函数
-        self._register_tool_functions()
+        # 设置工具 - 使用 LangChain 工具
+        if self.tool_manager:
+            self.tools = self.tool_manager.get_tools()
+        else:
+            self.tools = []
 
     @abstractmethod
     def get_system_prompt(self) -> str:

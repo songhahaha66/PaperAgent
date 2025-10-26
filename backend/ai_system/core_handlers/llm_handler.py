@@ -1,351 +1,329 @@
 """
 LLM通信处理器
-处理与litellm API的所有通信，包括流式响应和工具调用
+重构支持多种AI提供商的LLM通信处理器，基于 LangChain Agent
 """
 
 import logging
 import json
-from typing import List, Dict, Any
-import litellm
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-import functools
+from typing import List, Dict, Any, Optional, AsyncGenerator
+from langchain_core.language_models import BaseLanguageModel
+from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # 使用字符串类型注解避免循环导入（类型仍用字符串）
 # 运行期需要的配置模块安全地在模块级导入
 from ..config.async_config import AsyncConfig
+from .llm_providers import LLMProviderFactory, create_llm_from_model_config
 
 logger = logging.getLogger(__name__)
 
 
 class LLMHandler:
     """
-    处理与 litellm API 的所有通信，包括流式响应和工具调用。
-    完全异步化，避免阻塞事件循环。
+    支持多AI提供商的LLM处理器，基于 LangChain Agent，支持按步骤流式传输代理进度
     """
 
-    def __init__(self, model: str, stream_manager: 'StreamOutputManager' = None):
-        self.model = model
-        self.stream_manager = stream_manager
-        # 创建线程池执行器，用于处理同步的litellm调用
-        # 增加线程池大小以支持并发LLM处理
-        import os
-        cpu = os.cpu_count() or 1
-        max_workers = min(12, cpu * 3)  # 动态调整，最多12个
-        self.executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="LLMHandler")
-        logger.info(f"LLMHandler初始化完成，模型: {model}")
+    def __init__(self,
+                 model: Optional[str] = None,
+                 stream_manager: Optional['StreamOutputManager'] = None,
+                 provider: Optional[str] = None,
+                 api_key: Optional[str] = None,
+                 base_url: Optional[str] = None,
+                 model_config: Optional[Any] = None,
+                 **llm_kwargs):
+        """
+        初始化LLM处理器
 
-    async def process_stream(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None):
+        Args:
+            model: 模型ID（可选，如果提供了model_config则从中获取）
+            stream_manager: 流式输出管理器
+            provider: AI提供商名称（可选，如果提供了model_config则从中获取）
+            api_key: API密钥（可选，如果提供了model_config则从中获取）
+            base_url: API基础URL（可选，如果提供了model_config则从中获取）
+            model_config: 数据库ModelConfig对象
+            **llm_kwargs: 传递给LLM实例的额外参数
         """
-        异步调用 LLM API 并处理流式响应，返回完整的响应和工具调用信息。
-        使用线程池避免阻塞事件循环。
+        self.stream_manager = stream_manager
+        self.llm_kwargs = {
+            'temperature': llm_kwargs.get('temperature', 0.7),
+            'max_tokens': llm_kwargs.get('max_tokens', 4000),
+            'streaming': llm_kwargs.get('streaming', True)
+        }
+
+        # 构建配置字典
+        if model_config:
+            # 从数据库配置对象创建LLM实例
+            self.llm = create_llm_from_model_config(model_config, **self.llm_kwargs)
+            self.provider = getattr(model_config, 'provider', 'openai')
+            self.model = model_config.model_id
+            logger.info(f"LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
+        else:
+            # 从直接参数创建LLM实例
+            config = {
+                'provider': provider or 'openai',
+                'model_id': model,
+                'api_key': api_key,
+                'base_url': base_url,
+                'is_active': True
+            }
+            self.llm = LLMProviderFactory.create_llm_instance(config, **self.llm_kwargs)
+            self.provider = provider or 'openai'
+            self.model = model
+            logger.info(f"LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
+
+        # 创建论文写作专用的 prompt
+        self.system_prompt = "你是一个专业的论文写作助手，能够帮助用户生成、修改和完善学术论文。请仔细分析用户需求，并调用相应的工具来完成任务。"
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", self.system_prompt),
+            MessagesPlaceholder(variable_name="chat_history", optional=True),
+            ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
+        ])
+
+        logger.info(f"多提供商LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
+
+    def _convert_messages_to_input(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """将消息列表转换为 Agent 输入格式"""
+        # 新版 LangChain agent 期望 messages 格式
+        return {
+            "messages": messages
+        }
+
+    def _convert_to_langchain_messages(self, messages: List[Dict[str, Any]]) -> List:
+        """将消息列表转换为 LangChain 消息格式"""
+        langchain_messages = []
+
+        for message in messages:
+            role = message.get("role", "")
+            content = message.get("content", "")
+
+            if role == "system":
+                langchain_messages.append(SystemMessage(content=content))
+            elif role == "user":
+                langchain_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                langchain_messages.append(AIMessage(content=content))
+            else:
+                # 默认作为用户消息处理
+                langchain_messages.append(HumanMessage(content=content))
+
+        return langchain_messages
+
+    async def _handle_agent_step(self, step: str, data: Dict[str, Any]) -> str:
+        """处理代理步骤并返回可显示的内容"""
+        if step == "agent":
+            # LLM 节点，处理 AI 响应
+            if "messages" in data and data["messages"]:
+                message = data["messages"][-1]
+                if hasattr(message, 'content') and message.content:
+                    return message.content
+                elif hasattr(message, 'content_blocks'):
+                    # 处理内容块
+                    content = ""
+                    for block in message.content_blocks:
+                        if hasattr(block, 'text'):
+                            content += block.text
+                    return content
+
+        elif step == "tools":
+            # 工具节点，处理工具执行结果
+            if "messages" in data and data["messages"]:
+                message = data["messages"][-1]
+                if hasattr(message, 'content'):
+                    return f"\n🔧 工具执行结果: {message.content}\n"
+
+        return ""
+
+    async def process_stream(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None):
         """
-        logger.info(f"开始调用LLM API，消息数量: {len(messages)}")
-        
-        # 打印消息列表的详细信息，帮助调试
-        logger.info("=== 消息列表详情 ===")
-        for i, msg in enumerate(messages):
-            role = msg.get('role', 'unknown')
-            content = msg.get('content', '')[:1000]  # 只显示前100个字符
-            logger.info(f"消息 {i}: role={role}, content={repr(content)}...")
-        logger.info("=== 消息列表结束 ===")
-        
+        基于 LangChain Agent 的流式处理，按步骤传输代理进度
+        """
+        logger.info(f"开始调用 LangChain Agent，消息数量: {len(messages)}")
+
         if tools:
             logger.info(f"使用工具数量: {len(tools)}")
 
         try:
-            # 在线程池中执行同步的litellm调用，避免阻塞事件循环
-            loop = asyncio.get_event_loop()
-            response_stream = await loop.run_in_executor(
-                self.executor,
-                functools.partial(
-                    litellm.completion,
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    stream=True
-                )
-            )
+            # 如果有工具，创建 agent
+            if tools:
+                # 转换工具为 LangChain 格式
+                agent = create_agent(self.llm, tools=tools, system_prompt=self.system_prompt)
 
-            full_response_content = ""
-            tool_calls = []
-            # 改为收集所有工具调用chunk，不进行实时解析
-            tool_call_chunks = []
-            chunk_count = 0
+                # 转换消息格式
+                input_data = self._convert_messages_to_input(messages)
 
-            # 异步处理流式响应
-            for chunk in response_stream:
-                chunk_count += 1
-                delta = chunk.choices[0].delta
+                # 简化处理：直接调用 agent
+                try:
+                    result = await agent.ainvoke(input_data)
 
-                # 1. 累积文本内容（保持不变）
-                if delta.content:
-                    content = delta.content
+                    # 新版 LangChain agent 返回 messages 列表
+                    messages = result.get("messages", [])
+                    content = ""
+
+                    # 找到最后一条 AI 消息
+                    for message in reversed(messages):
+                        if isinstance(message, dict) and message.get("role") == "assistant":
+                            content = message.get("content", "")
+                            break
+                        elif hasattr(message, 'content'):
+                            content = message.content or ""
+                            break
+
+                    # 如果没有找到 AI 消息，使用 messages 的最后一个元素
+                    if not content and messages:
+                        last_message = messages[-1]
+                        if isinstance(last_message, dict):
+                            content = last_message.get("content", "")
+                        elif hasattr(last_message, 'content'):
+                            content = last_message.content or ""
+
+                    # 发送到流式管理器
                     if self.stream_manager:
                         await self.stream_manager.print_stream(content)
+                        await self.stream_manager.finalize_message()
                     else:
-                        print(content, end="", flush=True)
-                    full_response_content += content
-                    logger.debug(
-                        f"接收到文本内容块 {chunk_count}: {repr(content[:30])}...")
-                    
-                    # 让出控制权，确保WebSocket能及时发送数据
-                    # 使用配置参数优化延迟
-                    config = AsyncConfig.get_llm_stream_config()
-                    if chunk_count % config["yield_interval"] == 0:
-                        await asyncio.sleep(config["yield_delay"])
+                        print(content)
 
-                # 2. 收集工具调用chunk，但不解析（改为完全等待模式）
-                if delta.tool_calls:
-                    # 只收集chunk，不进行任何解析
-                    chunk_info = {
-                        "chunk_id": chunk_count,
-                        "delta": delta.tool_calls
-                    }
-                    tool_call_chunks.append(chunk_info)
-                    
-                    # 添加详细的调试日志
-                    tool_call_count = len(delta.tool_calls)
-                    logger.debug(f"收集工具调用chunk {chunk_count}，包含 {tool_call_count} 个工具调用")
-                    
-                    # 如果chunk数量异常多，记录警告
-                    if chunk_count > 1000:
-                        logger.warning(f"工具调用chunk数量异常多: {chunk_count}，可能存在无限循环")
-                    
-                    # 记录前几个chunk的详细信息
-                    if chunk_count <= 5:
-                        for i, tool_call in enumerate(delta.tool_calls):
-                            logger.debug(f"  Chunk {chunk_count} 工具调用 {i}: id={tool_call.id}, name={getattr(tool_call.function, 'name', 'None') if tool_call.function else 'None'}")
+                    assistant_message = {"role": "assistant", "content": content}
+                    return assistant_message, []
 
-                # 定期让出控制权，确保其他异步任务能够执行
-                config = AsyncConfig.get_llm_stream_config()
-                if chunk_count % (config["yield_interval"] * 2) == 0:
-                    await asyncio.sleep(config["yield_delay"])
-
-            # 流式响应结束后，统一处理所有工具调用（完全等待模式）
-            if tool_call_chunks:
-                logger.info(f"开始处理 {len(tool_call_chunks)} 个工具调用chunk")
-                try:
-                    tool_calls = self._extract_tool_calls_from_chunks(tool_call_chunks)
-                    logger.info(f"成功提取 {len(tool_calls)} 个完整工具调用")
                 except Exception as e:
-                    logger.error(f"工具调用提取失败: {e}", exc_info=True)
-                    tool_calls = []
+                    logger.error(f"Agent 调用失败: {e}")
+                    # 降级为直接 LLM 调用
+                    langchain_messages = self._convert_to_langchain_messages(messages)
+                    response = await self.llm.ainvoke(langchain_messages)
+
+                    content = response.content or ""
+
+                    if self.stream_manager:
+                        await self.stream_manager.print_stream(content)
+                        await self.stream_manager.finalize_message()
+                    else:
+                        print(content)
+
+                    return {"role": "assistant", "content": content}, []
+
             else:
-                logger.info("没有工具调用需要处理")
+                # 没有工具的情况，直接调用 LLM
+                langchain_messages = self._convert_to_langchain_messages(messages)
+                response = await self.llm.ainvoke(langchain_messages)
 
-            if not self.stream_manager:
-                print()  # 确保换行
+                content = response.content or ""
 
-            logger.info(f"LLM API调用完成，总块数: {chunk_count}，工具调用数: {len(tool_calls)}")
+                if self.stream_manager:
+                    await self.stream_manager.print_stream(content)
+                    await self.stream_manager.finalize_message()
+                else:
+                    print(content)
 
-            # 确保触发消息完成回调
-            if self.stream_manager:
-                await self.stream_manager.finalize_message()
+                logger.info(f"LangChain LLM 调用完成，内容长度: {len(content)}")
 
-            # 构建完整的 assistant 消息
-            assistant_message = {"role": "assistant",
-                                 "content": full_response_content}
-            if tool_calls:
-                assistant_message["tool_calls"] = tool_calls
-
-            return assistant_message, tool_calls
+                return {"role": "assistant", "content": content}, []
 
         except Exception as e:
-            logger.error(f"LLM API调用失败: {e}")
-            error_message = f"LLM API调用失败: {str(e)}"
+            logger.error(f"LangChain 调用失败: {e}", exc_info=True)
+            error_message = f"LLM 调用失败: {str(e)}"
             if self.stream_manager:
                 await self.stream_manager.print_content(error_message)
-            
-            # 返回错误消息
+
             return {"role": "assistant", "content": error_message}, []
 
-    async def process_sync(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]] = None):
+    async def process_sync(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None):
         """
-        同步调用LLM API（在线程池中执行），用于不需要流式处理的场景
+        同步调用 LangChain LLM（非流式），用于不需要流式处理的场景
         """
-        logger.info(f"开始同步调用LLM API，消息数量: {len(messages)}")
-        
+        logger.info(f"开始同步调用 LangChain LLM，消息数量: {len(messages)}")
+
         try:
-            # 在线程池中执行同步调用
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                self.executor,
-                functools.partial(
-                    litellm.completion,
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    stream=False
-                )
-            )
-            
-            content = response.choices[0].message.content
-            tool_calls = []
-            
-            # 处理工具调用
-            if hasattr(response.choices[0].message, 'tool_calls') and response.choices[0].message.tool_calls:
-                for tool_call in response.choices[0].message.tool_calls:
-                    tool_calls.append({
-                        "id": tool_call.id,
-                        "type": "function",
-                        "function": {
-                            "name": tool_call.function.name,
-                            "arguments": tool_call.function.arguments
-                        }
-                    })
-            
-            logger.info(f"同步LLM API调用完成，内容长度: {len(content)}，工具调用数: {len(tool_calls)}")
-            
-            return {"role": "assistant", "content": content}, tool_calls
-            
+            # 如果有工具，创建 agent
+            if tools:
+                agent = create_agent(self.llm, tools=tools, system_prompt=self.system_prompt)
+
+                # 转换消息格式
+                input_data = self._convert_messages_to_input(messages)
+
+                # 同步调用
+                result = await agent.ainvoke(input_data)
+
+                # 新版 LangChain agent 返回 messages 列表
+                messages = result.get("messages", [])
+                content = ""
+
+                # 找到最后一条 AI 消息
+                for message in reversed(messages):
+                    if isinstance(message, dict) and message.get("role") == "assistant":
+                        content = message.get("content", "")
+                        break
+                    elif hasattr(message, 'content'):
+                        content = message.content or ""
+                        break
+
+                # 如果没有找到 AI 消息，使用 messages 的最后一个元素
+                if not content and messages:
+                    last_message = messages[-1]
+                    if isinstance(last_message, dict):
+                        content = last_message.get("content", "")
+                    elif hasattr(last_message, 'content'):
+                        content = last_message.content or ""
+
+                logger.info(f"同步 LangChain Agent 调用完成，内容长度: {len(content)}")
+
+                return {"role": "assistant", "content": content}, []
+
+            else:
+                # 没有工具的情况，直接调用 LLM
+                langchain_messages = self._convert_to_langchain_messages(messages)
+                response = await self.llm.ainvoke(langchain_messages)
+
+                content = response.content or ""
+
+                logger.info(f"同步 LangChain LLM 调用完成，内容长度: {len(content)}")
+
+                return {"role": "assistant", "content": content}, []
+
         except Exception as e:
-            logger.error(f"同步LLM API调用失败: {e}")
-            error_message = f"LLM API调用失败: {str(e)}"
+            logger.error(f"同步 LangChain LLM 调用失败: {e}", exc_info=True)
+            error_message = f"LLM 调用失败: {str(e)}"
             return {"role": "assistant", "content": error_message}, []
 
-    def _finalize_tool_call(self, tool_call_data: Dict) -> Dict:
-        """构建完整的工具调用对象"""
-        return {
-            "id": tool_call_data["id"],
-            "type": "function",
-            "function": {
-                "name": tool_call_data["name"],
-                "arguments": tool_call_data["arguments"]
-            }
+    def set_model(self, model: str, provider: Optional[str] = None, **kwargs):
+        """
+        设置LLM模型和提供商
+
+        Args:
+            model: 模型ID
+            provider: AI提供商名称（可选，默认使用当前提供商）
+            **kwargs: 其他LLM参数
+        """
+        self.model = model
+        if provider:
+            self.provider = provider
+
+        # 构建配置并创建新的LLM实例
+        config = {
+            'provider': self.provider or 'openai',
+            'model_id': model,
+            'api_key': kwargs.get('api_key', ''),
+            'base_url': kwargs.get('base_url', ''),
+            'is_active': True
         }
 
-    def _extract_tool_calls_from_chunks(self, tool_call_chunks: List[Dict]) -> List[Dict]:
-        """
-        从完整的工具调用chunk列表中提取完整的工具调用
-        采用完全等待模式，确保所有参数都完整
-        """
-        if not tool_call_chunks:
-            return []
-        
-        logger.info(f"开始从 {len(tool_call_chunks)} 个chunk中提取工具调用")
-        
-        # 按工具调用ID分组收集所有chunk
-        tool_call_groups = {}
-        current_tool_call_id = None
-        
-        for chunk_info in tool_call_chunks:
-            chunk_id = chunk_info["chunk_id"]
-            deltas = chunk_info["delta"]
-            
-            for delta in deltas:
-                # 处理工具调用ID
-                if delta.id:
-                    # 新的工具调用开始
-                    current_tool_call_id = delta.id
-                    if current_tool_call_id not in tool_call_groups:
-                        tool_call_groups[current_tool_call_id] = {
-                            "id": current_tool_call_id,
-                            "name": "",
-                            "arguments": ""
-                        }
-                        logger.debug(f"开始收集工具调用 {current_tool_call_id} 的chunk")
-                
-                # 只有在有有效工具调用ID时才处理function信息
-                if current_tool_call_id and delta.function:
-                    if delta.function.name:
-                        tool_call_groups[current_tool_call_id]["name"] = delta.function.name
-                    if delta.function.arguments:
-                        tool_call_groups[current_tool_call_id]["arguments"] += delta.function.arguments
-        
-        # 构建完整的工具调用列表
-        complete_tool_calls = []
-        for tool_call_id, tool_call_data in tool_call_groups.items():
-            # 验证工具调用是否完整
-            if tool_call_data["name"] and tool_call_data["arguments"]:
-                # 验证JSON参数是否完整
-                if self._is_valid_json(tool_call_data["arguments"]):
-                    complete_tool_calls.append(self._finalize_tool_call(tool_call_data))
-                    logger.info(f"工具调用 {tool_call_data['name']} 参数完整，长度: {len(tool_call_data['arguments'])}")
-                else:
-                    logger.warning(f"工具调用 {tool_call_data['name']} 参数不完整，跳过: {repr(tool_call_data['arguments'][:100])}")
-            else:
-                logger.warning(f"工具调用 {tool_call_id} 缺少必要信息，跳过")
-        
-        logger.info(f"成功提取 {len(complete_tool_calls)} 个完整工具调用")
-        return complete_tool_calls
-
-    def _is_valid_json(self, json_str: str) -> bool:
-        """检查字符串是否是有效的JSON"""
-        try:
-            json.loads(json_str)
-            return True
-        except json.JSONDecodeError:
-            return False
-    
-    def _try_fix_incomplete_json(self, json_str: str) -> str:
-        """尝试修复不完整的JSON字符串"""
-        if not json_str.strip():
-            return json_str
-            
-        try:
-            # 尝试直接解析
-            json.loads(json_str)
-            return json_str
-        except json.JSONDecodeError as e:
-            logger.debug(f"JSON解析失败，尝试修复: {e}")
-            
-            # 常见的修复策略
-            fixed_str = json_str
-            
-            # 1. 检查未闭合的引号
-            quote_count = json_str.count('"') - json_str.count('\\"')
-            if quote_count % 2 != 0:
-                # 找到最后一个未闭合的引号位置
-                last_quote_pos = json_str.rfind('"')
-                if last_quote_pos > 0:
-                    # 检查是否在字符串内部
-                    before_quote = json_str[:last_quote_pos]
-                    if before_quote.count('"') % 2 == 0:
-                        # 在字符串末尾添加引号
-                        fixed_str = json_str + '"'
-                        logger.debug("修复未闭合的引号")
-            
-            # 2. 检查未闭合的大括号
-            brace_count = json_str.count('{') - json_str.count('}')
-            if brace_count > 0:
-                fixed_str = json_str + '}' * brace_count
-                logger.debug(f"修复未闭合的大括号，添加 {brace_count} 个")
-            
-            # 3. 检查未闭合的方括号
-            bracket_count = json_str.count('[') - json_str.count(']')
-            if bracket_count > 0:
-                fixed_str = json_str + ']' * bracket_count
-                logger.debug(f"修复未闭合的方括号，添加 {bracket_count} 个")
-            
-            # 4. 尝试解析修复后的字符串
-            try:
-                json.loads(fixed_str)
-                logger.info(f"JSON修复成功，原始长度: {len(json_str)}, 修复后长度: {len(fixed_str)}")
-                return fixed_str
-            except json.JSONDecodeError:
-                logger.warning(f"JSON修复失败，原始字符串: {repr(json_str[:100])}")
-                return json_str
-
-    def set_model(self, model: str):
-        """设置LLM模型"""
-        self.model = model
-        logger.info(f"LLM模型已更新为: {model}")
+        # 更新LLM参数
+        llm_params = {**self.llm_kwargs, **kwargs}
+        self.llm = LLMProviderFactory.create_llm_instance(config, **llm_params)
+        logger.info(f"LLM已更新，提供商: {self.provider}, 模型: {model}")
 
     def get_model_info(self) -> Dict[str, Any]:
         """获取当前模型信息"""
         return {
+            "provider": self.provider,
             "model": self.model,
-            "stream_manager_configured": self.stream_manager is not None
+            "stream_manager_configured": self.stream_manager is not None,
+            "langchain_based": True,
+            "supported_providers": LLMProviderFactory.get_supported_providers()
         }
 
     async def close(self):
-        """关闭线程池执行器"""
-        if self.executor:
-            self.executor.shutdown(wait=True)
-            logger.info("LLMHandler线程池已关闭")
-
-    def __del__(self):
-        """析构函数，确保线程池被正确关闭"""
-        if hasattr(self, 'executor') and self.executor:
-            self.executor.shutdown(wait=False)
+        """清理资源"""
+        logger.info("LangChain LLMHandler 资源清理完成")

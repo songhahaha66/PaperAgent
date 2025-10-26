@@ -30,4 +30,11 @@ dependencies = [
     "PyPDF2>=3.0.0",
     "pdfplumber>=0.7.0",
     "openpyxl>=3.0.0",
+    "langchain>=1.0.2",
+    "langchain-openai>=1.0.1",
+    "langchain-community>=0.4",
+    "smolagents>=1.22.0",
+    "ddgs>=9.6.1",
+    "langchain-anthropic>=1.0.0",
+    "langchain-google-genai>=3.0.0",
 ]

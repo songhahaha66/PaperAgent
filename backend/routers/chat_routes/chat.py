@@ -17,7 +17,6 @@ from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
 from ai_system.core_agents.main_agent import MainAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
-from ai_system.core_handlers.llm_factory import LLMFactory
 from ..utils import route_guard
 
 logger = logging.getLogger(__name__)
@@ -315,10 +314,13 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except Exception as e:
                         logger.error(f"发送JSON块失败: {e}")
 
-            # 初始化AI环境与工作空间（通过工厂）
-            llm_factory = LLMFactory(db)
-            llm_factory.initialize_system("brain")
-            llm_factory.setup_workspace(work_id)
+            # 初始化AI环境与工作空间
+            env_manager = setup_environment_from_db(db, work_id)
+            model_config = env_manager.config_manager.get_model_config("brain")
+
+            # 创建工作空间目录
+            workspace_dir = os.path.join("pa_data", "workspaces", work_id)
+            os.makedirs(workspace_dir, exist_ok=True)
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(
@@ -329,8 +331,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 session_id=str(session.session_id)
             )
 
-            # 创建LLM处理器和主代理
-            llm_handler = llm_factory.create_handler("brain", stream_manager=stream_manager)
+            # 创建支持多AI提供商的LLM处理器
+            llm_handler = LLMHandler(
+                model_config=model_config,
+                stream_manager=stream_manager
+            )
 
             # 获取工作的模板ID
             template_id = None
@@ -468,9 +473,9 @@ async def generate_work_title(
         if not question:
             raise HTTPException(status_code=400, detail="缺少问题内容")
 
-        # 初始化AI环境（通过工厂）
-        llm_factory = LLMFactory(db)
-        llm_factory.initialize_system("brain")
+        # 初始化AI环境
+        env_manager = setup_environment_from_db(db)
+        model_config = env_manager.config_manager.get_model_config("brain")
 
         # 构建标题生成提示词
         title_prompt = f"""请根据用户的研究问题生成一个简洁、专业的学术论文标题。
@@ -489,8 +494,11 @@ async def generate_work_title(
             # 使用现有的process_stream方法，但不使用流式处理
             messages = [{"role": "user", "content": title_prompt}]
 
-            # 直接通过工厂执行同步（非流式）生成
-            assistant_message, _ = await llm_factory.run_sync("brain", messages)
+            # 使用支持多AI提供商的LLM处理器执行同步生成
+            llm_handler = LLMHandler(
+                model_config=model_config
+            )
+            assistant_message, _ = await llm_handler.process_sync(messages)
             title = assistant_message.get("content", "")
 
             # 清理标题（移除可能的引号、换行等）
