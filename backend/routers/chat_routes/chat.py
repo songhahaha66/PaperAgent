@@ -320,8 +320,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             model_config = env_manager.config_manager.get_model_config("brain")
             codeagent_model_config = env_manager.config_manager.get_model_config("code")
 
-            # 创建工作空间目录
-            workspace_dir = os.path.join("pa_data", "workspaces", work_id)
+            # 创建工作空间目录 - 使用绝对路径
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            project_root = os.path.dirname(backend_dir)
+            workspace_dir = os.path.join(project_root, "pa_data", "workspaces", work_id)
             os.makedirs(workspace_dir, exist_ok=True)
 
             # 创建流式回调和管理器

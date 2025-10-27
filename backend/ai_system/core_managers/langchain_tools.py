@@ -131,7 +131,7 @@ class LangChainToolFactory:
                     # 创建SmolAgents CodeAgent，使用传入的LLM
                     logger.info(f"使用模型创建SmolAgents CodeAgent: {llm}")
 
-                    # 配置额外的授权导入，支持科学计算和数据可视化
+                    # 配置额外的授权导入,支持科学计算和数据可视化
                     additional_authorized_imports = [
                         # 基础科学计算库
                         'numpy',
@@ -140,24 +140,13 @@ class LangChainToolFactory:
                         # 可视化库
                         'matplotlib.pyplot',
                         'matplotlib',
-                        'seaborn',
-                        # 机器学习库
-                        'sklearn',
-                        'sklearn.datasets',
-                        'sklearn.model_selection',
-                        'sklearn.metrics',
-                        'sklearn.preprocessing',
-                        'sklearn.linear_model',
-                        'sklearn.ensemble',
-                        # 其他常用科学计算库
-                        'sympy',
-                        'statsmodels',
-                        'networkx',
-                        'plotly',
-                        'plotly.express',
-                        'plotly.graph_objects'
+                        'seaborn'
                     ]
 
+                    # 配置 matplotlib 使用非交互式后端
+                    import os
+                    os.environ['MPLBACKEND'] = 'Agg'
+                    
                     agent = CodeAgent(
                         tools=[],
                         model=llm,  # 使用传入的LLM实例，应该是SmolAgents原生模型
@@ -372,8 +361,7 @@ def create_paper_writing_tools(workspace_dir: str, stream_manager=None) -> List[
 
 def create_data_analysis_tools(workspace_dir: str, stream_manager=None) -> List[BaseTool]:
     """创建数据分析工具集的便捷函数"""
-    return LangChainToolFactory.create_code_tools(workspace_dir, stream_manager) + \
-           LangChainToolFactory.create_file_tools(workspace_dir, stream_manager)
+    return LangChainToolFactory.create_file_tools(workspace_dir, stream_manager)
 
 
 def create_research_tools(workspace_dir: str, stream_manager=None) -> List[BaseTool]:

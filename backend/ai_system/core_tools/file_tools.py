@@ -29,7 +29,7 @@ class FileTools:
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
-    async def writemd(self, filename: str, content: str, mode: str = "overwrite") -> str:
+    def writemd(self, filename: str, content: str, mode: str = "overwrite") -> str:
         """
         写入Markdown文件到workspace目录，支持多种写入模式
 
@@ -55,8 +55,6 @@ class FileTools:
 
             # 确保目录存在
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-            logger.info(f"写入Markdown文件: {file_path}，模式: {mode}")
 
             if mode == "append":
                 # 附加模式：在文件末尾追加内容
@@ -144,7 +142,7 @@ class FileTools:
             result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
 
             if self.stream_manager:
-                await self.stream_manager.send_json_block("writemd_result", result)
+                self._send_json_block_sync("writemd_result", result)
 
             return result
 
@@ -153,11 +151,11 @@ class FileTools:
             logger.error(error_msg)
 
             if self.stream_manager:
-                await self.stream_manager.send_json_block("writemd_result", error_msg)
+                self._send_json_block_sync("writemd_result", error_msg)
 
             return error_msg
 
-    async def update_template(self, template_name: str = "paper.md", content: str = "", section: str = "") -> str:
+    def update_template(self, template_name: str = "paper.md", content: str = "", section: str = "") -> str:
         """
         专门用于更新论文文件的工具方法，只支持章节级别更新
 
@@ -193,7 +191,7 @@ class FileTools:
             result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
             
             if self.stream_manager:
-                await self.stream_manager.send_json_block("template_update_result", result)
+                self._send_json_block_sync("template_update_result", result)
             
             return result
             
@@ -202,7 +200,7 @@ class FileTools:
             logger.error(error_msg)
             
             if self.stream_manager:
-                await self.stream_manager.send_json_block("template_update_result", error_msg)
+                self._send_json_block_sync("template_update_result", error_msg)
             
             return error_msg
 
@@ -287,7 +285,7 @@ class FileTools:
         
         return '\n'.join(updated_lines)
 
-    async def tree(self, directory: Optional[str] = None) -> str:
+    def tree(self, directory: Optional[str] = None) -> str:
         """显示目录树结构"""
         try:
             if directory is None:
@@ -322,7 +320,7 @@ class FileTools:
                 _tree_helper(directory)
 
             if self.stream_manager:
-                await self.stream_manager.send_json_block("tree_result", tree_result)
+                self._send_json_block_sync("tree_result", tree_result)
 
             return tree_result
 
@@ -364,7 +362,7 @@ class FileTools:
             logger.error(f"列出目录失败: {e}")
             return []
 
-    async def list_attachments(self) -> str:
+    def list_attachments(self) -> str:
         """
         列出工作空间中所有附件文件
 
@@ -426,7 +424,7 @@ class FileTools:
                         "attachments": attachments
                     }
                     json_content = json.dumps(json_data, ensure_ascii=False)
-                    await self.stream_manager.send_json_block("attachments_list", json_content)
+                    self._send_json_block_sync("attachments_list", json_content)
                     logger.info("JSON块发送完成")
 
                 logger.info("准备返回结果")
@@ -443,7 +441,7 @@ class FileTools:
             logger.error(error_msg)
             return error_msg
 
-    async def read_attachment(self, file_path: str) -> str:
+    def read_attachment(self, file_path: str) -> str:
         """
         读取附件文件内容
 
@@ -472,7 +470,7 @@ class FileTools:
             file_ext = Path(full_path).suffix.lower()
 
             # 根据文件类型选择合适的读取方法
-            content = await self._extract_file_content(full_path, file_ext)
+            content = self._extract_file_content(full_path, file_ext)
 
             # 准备返回信息
             result = f"**文件信息:**\n"
@@ -492,7 +490,7 @@ class FileTools:
                     "truncated": len(content) > 1000
                 }
                 json_content = json.dumps(json_data, ensure_ascii=False)
-                await self.stream_manager.send_json_block("attachment_content", json_content)
+                self._send_json_block_sync("attachment_content", json_content)
 
             return result
 
@@ -501,7 +499,7 @@ class FileTools:
             logger.error(error_msg)
             return error_msg
 
-    async def get_attachment_info(self, file_path: str) -> str:
+    def get_attachment_info(self, file_path: str) -> str:
         """
         获取附件文件的详细信息
 
@@ -553,7 +551,7 @@ class FileTools:
             logger.error(error_msg)
             return error_msg
 
-    async def search_attachments(self, keyword: str, file_type: Optional[str] = None) -> str:
+    def search_attachments(self, keyword: str, file_type: Optional[str] = None) -> str:
         """
         在附件文件中搜索关键词
 
@@ -596,7 +594,7 @@ class FileTools:
                     # 文件内容匹配（仅对文本文件）
                     if self._is_text_file(file_ext):
                         try:
-                            content = await self._extract_file_content(file_path, file_ext)
+                            content = self._extract_file_content(file_path, file_ext)
                             if keyword_lower in content.lower():
                                 # 找到匹配的行
                                 lines = content.split('\n')
@@ -634,7 +632,7 @@ class FileTools:
                     "results": search_results
                 }
                 json_content = json.dumps(json_data, ensure_ascii=False)
-                await self.stream_manager.send_json_block("search_results", json_content)
+                self._send_json_block_sync("search_results", json_content)
 
             return result.strip()
 
@@ -711,7 +709,8 @@ class FileTools:
         }
         return file_ext in text_extensions
 
-    async def _extract_file_content(self, file_path: str, file_ext: str) -> str:
+    
+    def _extract_file_content(self, file_path: str, file_ext: str) -> str:
         """根据文件类型提取内容"""
         try:
             if file_ext in ['.txt', '.md', '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.hpp',
@@ -777,3 +776,26 @@ class FileTools:
         except Exception as e:
             logger.error(f"提取文件内容失败 {file_path}: {e}")
             return f"读取文件内容失败: {str(e)}"
+
+    def _send_json_block_sync(self, block_type: str, data: Any):
+        """同步发送JSON块到stream_manager"""
+        try:
+            if self.stream_manager:
+                import asyncio
+                try:
+                    # 尝试获取当前事件循环
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 如果循环正在运行，使用create_task
+                        asyncio.create_task(self.stream_manager.send_json_block(block_type, data))
+                    else:
+                        # 如果循环没有运行，直接运行
+                        loop.run_until_complete(self.stream_manager.send_json_block(block_type, data))
+                except RuntimeError:
+                    # 如果没有事件循环，创建新的
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(self.stream_manager.send_json_block(block_type, data))
+                    loop.close()
+        except Exception as e:
+            logger.warning(f"发送JSON块失败: {e}")
