@@ -208,3 +208,67 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
     }
 
     return LLMProviderFactory.create_llm_instance(config, **kwargs)
+
+
+def create_smolagents_model_from_config(model_config, **kwargs):
+    """
+    从数据库ModelConfig对象创建SmolAgents原生模型实例
+
+    Args:
+        model_config: 数据库ModelConfig对象
+        **kwargs: 额外的模型参数
+
+    Returns:
+        SmolAgents原生模型实例
+    """
+    try:
+        from smolagents.models import OpenAIServerModel
+
+        provider = getattr(model_config, 'provider', 'openai').lower()
+        model_id = model_config.model_id
+        api_key = model_config.api_key
+        base_url = model_config.base_url
+
+        logger.info(f"创建SmolAgents模型: {provider}/{model_id}")
+
+        # 根据provider创建对应的SmolAgents模型
+        if provider == 'openai' or provider == 'local':
+            # OpenAI兼容模型，包括本地服务
+            return OpenAIServerModel(
+                model_id=model_id,
+                api_key=api_key,
+                api_base=base_url,
+                **kwargs
+            )
+        elif provider == 'anthropic':
+            # Anthropic通过OpenAI兼容接口使用
+            return OpenAIServerModel(
+                model_id=model_id,
+                api_key=api_key,
+                api_base="https://api.anthropic.com",
+                **kwargs
+            )
+        elif provider == 'azure':
+            # Azure OpenAI
+            return OpenAIServerModel(
+                model_id=model_id,
+                api_key=api_key,
+                api_base=base_url,
+                **kwargs
+            )
+        else:
+            # 默认使用OpenAI兼容格式
+            logger.warning(f"提供商 {provider} 使用OpenAI兼容格式")
+            return OpenAIServerModel(
+                model_id=model_id,
+                api_key=api_key,
+                api_base=base_url,
+                **kwargs
+            )
+
+    except ImportError:
+        logger.error("SmolAgents未安装，无法创建模型实例")
+        raise ImportError("请安装smolagents库: pip install smolagents")
+    except Exception as e:
+        logger.error(f"创建SmolAgents模型失败: {e}")
+        raise ValueError(f"创建SmolAgents模型失败: {str(e)}")

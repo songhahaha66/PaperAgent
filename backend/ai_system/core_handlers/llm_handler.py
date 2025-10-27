@@ -1,32 +1,29 @@
 """
-LLM通信处理器
-重构支持多种AI提供商的LLM通信处理器，基于 LangChain Agent
+LLM处理器 - LangChain 重构版本
+简化的LLM处理器，专注于创建LLM实例和Agent，不再处理复杂的流式逻辑
 """
 
 import logging
-import json
-from typing import List, Dict, Any, Optional, AsyncGenerator
+from typing import Optional, Any, Dict
 from langchain_core.language_models import BaseLanguageModel
-from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-# 使用字符串类型注解避免循环导入（类型仍用字符串）
-# 运行期需要的配置模块安全地在模块级导入
-from ..config.async_config import AsyncConfig
 from .llm_providers import LLMProviderFactory, create_llm_from_model_config
+from ..core_agents.main_agent import MainAgent
 
 logger = logging.getLogger(__name__)
 
 
 class LLMHandler:
     """
-    支持多AI提供商的LLM处理器，基于 LangChain Agent，支持按步骤流式传输代理进度
+    简化的LLM处理器
+    - 只负责创建LangChain LLM实例
+    - 提供创建Agent的便捷方法
+    - 不再处理复杂的流式输出逻辑
     """
 
     def __init__(self,
                  model: Optional[str] = None,
-                 stream_manager: Optional['StreamOutputManager'] = None,
+                 stream_manager=None,
                  provider: Optional[str] = None,
                  api_key: Optional[str] = None,
                  base_url: Optional[str] = None,
@@ -51,7 +48,7 @@ class LLMHandler:
             'streaming': llm_kwargs.get('streaming', True)
         }
 
-        # 构建配置字典
+        # 构建配置字典并创建LLM实例
         if model_config:
             # 从数据库配置对象创建LLM实例
             self.llm = create_llm_from_model_config(model_config, **self.llm_kwargs)
@@ -72,220 +69,40 @@ class LLMHandler:
             self.model = model
             logger.info(f"LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
 
-        # 创建论文写作专用的 prompt
-        self.system_prompt = "你是一个专业的论文写作助手，能够帮助用户生成、修改和完善学术论文。请仔细分析用户需求，并调用相应的工具来完成任务。"
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", self.system_prompt),
-            MessagesPlaceholder(variable_name="chat_history", optional=True),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
+        logger.info(f"简化LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
 
-        logger.info(f"多提供商LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
-
-    def _convert_messages_to_input(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """将消息列表转换为 Agent 输入格式"""
-        # 新版 LangChain agent 期望 messages 格式
-        return {
-            "messages": messages
-        }
-
-    def _convert_to_langchain_messages(self, messages: List[Dict[str, Any]]) -> List:
-        """将消息列表转换为 LangChain 消息格式"""
-        langchain_messages = []
-
-        for message in messages:
-            role = message.get("role", "")
-            content = message.get("content", "")
-
-            if role == "system":
-                langchain_messages.append(SystemMessage(content=content))
-            elif role == "user":
-                langchain_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                langchain_messages.append(AIMessage(content=content))
-            else:
-                # 默认作为用户消息处理
-                langchain_messages.append(HumanMessage(content=content))
-
-        return langchain_messages
-
-    async def _handle_agent_step(self, step: str, data: Dict[str, Any]) -> str:
-        """处理代理步骤并返回可显示的内容"""
-        if step == "agent":
-            # LLM 节点，处理 AI 响应
-            if "messages" in data and data["messages"]:
-                message = data["messages"][-1]
-                if hasattr(message, 'content') and message.content:
-                    return message.content
-                elif hasattr(message, 'content_blocks'):
-                    # 处理内容块
-                    content = ""
-                    for block in message.content_blocks:
-                        if hasattr(block, 'text'):
-                            content += block.text
-                    return content
-
-        elif step == "tools":
-            # 工具节点，处理工具执行结果
-            if "messages" in data and data["messages"]:
-                message = data["messages"][-1]
-                if hasattr(message, 'content'):
-                    return f"\n🔧 工具执行结果: {message.content}\n"
-
-        return ""
-
-    async def process_stream(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None):
+    def create_main_agent(self, workspace_dir: str = None, work_id: str = None,
+                         template_id: int = None) -> MainAgent:
         """
-        基于 LangChain Agent 的流式处理，按步骤传输代理进度
+        创建 MainAgent 实例的便捷方法
+
+        Args:
+            workspace_dir: 工作空间目录
+            work_id: 工作ID
+            template_id: 模板ID
+
+        Returns:
+            MainAgent 实例
         """
-        logger.info(f"开始调用 LangChain Agent，消息数量: {len(messages)}")
+        return MainAgent(
+            llm=self.llm,
+            stream_manager=self.stream_manager,
+            workspace_dir=workspace_dir,
+            work_id=work_id,
+            template_id=template_id
+        )
 
-        if tools:
-            logger.info(f"使用工具数量: {len(tools)}")
+    # CodeAgent 已移除，直接使用 smolagents 库
 
-        try:
-            # 如果有工具，创建 agent
-            if tools:
-                # 转换工具为 LangChain 格式
-                agent = create_agent(self.llm, tools=tools, system_prompt=self.system_prompt)
-
-                # 转换消息格式
-                input_data = self._convert_messages_to_input(messages)
-
-                # 简化处理：直接调用 agent
-                try:
-                    result = await agent.ainvoke(input_data)
-
-                    # 新版 LangChain agent 返回 messages 列表
-                    messages = result.get("messages", [])
-                    content = ""
-
-                    # 找到最后一条 AI 消息
-                    for message in reversed(messages):
-                        if isinstance(message, dict) and message.get("role") == "assistant":
-                            content = message.get("content", "")
-                            break
-                        elif hasattr(message, 'content'):
-                            content = message.content or ""
-                            break
-
-                    # 如果没有找到 AI 消息，使用 messages 的最后一个元素
-                    if not content and messages:
-                        last_message = messages[-1]
-                        if isinstance(last_message, dict):
-                            content = last_message.get("content", "")
-                        elif hasattr(last_message, 'content'):
-                            content = last_message.content or ""
-
-                    # 发送到流式管理器
-                    if self.stream_manager:
-                        await self.stream_manager.print_stream(content)
-                        await self.stream_manager.finalize_message()
-                    else:
-                        print(content)
-
-                    assistant_message = {"role": "assistant", "content": content}
-                    return assistant_message, []
-
-                except Exception as e:
-                    logger.error(f"Agent 调用失败: {e}")
-                    # 降级为直接 LLM 调用
-                    langchain_messages = self._convert_to_langchain_messages(messages)
-                    response = await self.llm.ainvoke(langchain_messages)
-
-                    content = response.content or ""
-
-                    if self.stream_manager:
-                        await self.stream_manager.print_stream(content)
-                        await self.stream_manager.finalize_message()
-                    else:
-                        print(content)
-
-                    return {"role": "assistant", "content": content}, []
-
-            else:
-                # 没有工具的情况，直接调用 LLM
-                langchain_messages = self._convert_to_langchain_messages(messages)
-                response = await self.llm.ainvoke(langchain_messages)
-
-                content = response.content or ""
-
-                if self.stream_manager:
-                    await self.stream_manager.print_stream(content)
-                    await self.stream_manager.finalize_message()
-                else:
-                    print(content)
-
-                logger.info(f"LangChain LLM 调用完成，内容长度: {len(content)}")
-
-                return {"role": "assistant", "content": content}, []
-
-        except Exception as e:
-            logger.error(f"LangChain 调用失败: {e}", exc_info=True)
-            error_message = f"LLM 调用失败: {str(e)}"
-            if self.stream_manager:
-                await self.stream_manager.print_content(error_message)
-
-            return {"role": "assistant", "content": error_message}, []
-
-    async def process_sync(self, messages: List[Dict[str, Any]], tools: Optional[List[Any]] = None):
+    def get_llm_instance(self) -> BaseLanguageModel:
         """
-        同步调用 LangChain LLM（非流式），用于不需要流式处理的场景
+        获取原始的 LangChain LLM 实例
+        用于高级用例，直接使用 LangChain 功能
+
+        Returns:
+            LangChain LLM 实例
         """
-        logger.info(f"开始同步调用 LangChain LLM，消息数量: {len(messages)}")
-
-        try:
-            # 如果有工具，创建 agent
-            if tools:
-                agent = create_agent(self.llm, tools=tools, system_prompt=self.system_prompt)
-
-                # 转换消息格式
-                input_data = self._convert_messages_to_input(messages)
-
-                # 同步调用
-                result = await agent.ainvoke(input_data)
-
-                # 新版 LangChain agent 返回 messages 列表
-                messages = result.get("messages", [])
-                content = ""
-
-                # 找到最后一条 AI 消息
-                for message in reversed(messages):
-                    if isinstance(message, dict) and message.get("role") == "assistant":
-                        content = message.get("content", "")
-                        break
-                    elif hasattr(message, 'content'):
-                        content = message.content or ""
-                        break
-
-                # 如果没有找到 AI 消息，使用 messages 的最后一个元素
-                if not content and messages:
-                    last_message = messages[-1]
-                    if isinstance(last_message, dict):
-                        content = last_message.get("content", "")
-                    elif hasattr(last_message, 'content'):
-                        content = last_message.content or ""
-
-                logger.info(f"同步 LangChain Agent 调用完成，内容长度: {len(content)}")
-
-                return {"role": "assistant", "content": content}, []
-
-            else:
-                # 没有工具的情况，直接调用 LLM
-                langchain_messages = self._convert_to_langchain_messages(messages)
-                response = await self.llm.ainvoke(langchain_messages)
-
-                content = response.content or ""
-
-                logger.info(f"同步 LangChain LLM 调用完成，内容长度: {len(content)}")
-
-                return {"role": "assistant", "content": content}, []
-
-        except Exception as e:
-            logger.error(f"同步 LangChain LLM 调用失败: {e}", exc_info=True)
-            error_message = f"LLM 调用失败: {str(e)}"
-            return {"role": "assistant", "content": error_message}, []
+        return self.llm
 
     def set_model(self, model: str, provider: Optional[str] = None, **kwargs):
         """
@@ -321,9 +138,10 @@ class LLMHandler:
             "model": self.model,
             "stream_manager_configured": self.stream_manager is not None,
             "langchain_based": True,
+            "simplified": True,
             "supported_providers": LLMProviderFactory.get_supported_providers()
         }
 
     async def close(self):
         """清理资源"""
-        logger.info("LangChain LLMHandler 资源清理完成")
+        logger.info("简化 LLMHandler 资源清理完成")

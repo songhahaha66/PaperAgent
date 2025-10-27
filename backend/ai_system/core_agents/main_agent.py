@@ -4,174 +4,223 @@
 """
 
 import logging
-import json
 import os
 import asyncio
-import shutil
 from typing import List, Dict, Any, Optional
+from langchain.agents import create_agent
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.language_models import BaseLanguageModel
+from langchain_core.messages import HumanMessage
 
-from .agent_base import BaseAgent
+from ..core_managers.langchain_tools import LangChainToolFactory
 
 logger = logging.getLogger(__name__)
 
 
-class MainAgent(BaseAgent):
+class MainAgent:
     """
     主LLM Agent (Orchestrator)，负责分析问题并委派任务
-    基于 LangChain Agent，支持按步骤流式传输代理进度
+    基于 LangChain Agent，极简实现
     """
 
-    def __init__(self, llm_handler: 'LLMHandler', stream_manager: 'StreamOutputManager',
-                 work_id: Optional[str] = None, template_id: Optional[int] = None):
+    def __init__(self, llm: BaseLanguageModel, stream_manager=None,
+                 workspace_dir: str = None, work_id: Optional[str] = None,
+                 template_id: Optional[int] = None, codeagent_llm=None):
         """
         初始化MainAgent
 
         Args:
-            llm_handler: LLM处理器
+            llm: LangChain LLM 实例
             stream_manager: 流式输出管理器
+            workspace_dir: 工作空间目录路径
             work_id: 工作ID
             template_id: 模板ID
         """
-        # MainAgent特有属性必须在基类初始化之前设置
+        logger.info(f"MainAgent初始化开始，codeagent_llm: {codeagent_llm}")
+        self.llm = llm
+        self.stream_manager = stream_manager
+        self.work_id = work_id
         self.template_id = template_id
+        self.workspace_dir = workspace_dir
 
-        # 构建工作空间目录路径
-        workspace_dir = None
-        if work_id:
-            workspace_dir = os.path.join(
+        # 如果没有提供workspace_dir但有work_id，构建路径
+        if not workspace_dir and work_id:
+            self.workspace_dir = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
                 "pa_data", "workspaces", work_id
             )
             # 设置环境变量，供工具使用
-            os.environ["WORKSPACE_DIR"] = workspace_dir
+            os.environ["WORKSPACE_DIR"] = self.workspace_dir
 
-        # 初始化基类
-        super().__init__(llm_handler, stream_manager, workspace_dir, work_id)
+        # 创建所有需要的工具
+        self.tools = LangChainToolFactory.create_all_tools(
+            self.workspace_dir, stream_manager, include_template=True
+        )
 
-        # 如果有模板ID，复制模板文件到工作空间
-        if self.template_id and work_id:
-            self._copy_template_to_workspace()
+        # 添加SmolAgents工具（使用codeagent_llm）
+        if codeagent_llm:
+            smolagents_tool = LangChainToolFactory.create_smolagents_tool(
+                self.workspace_dir, stream_manager, codeagent_llm
+            )
+            if smolagents_tool:
+                self.tools.append(smolagents_tool)
+                logger.info("成功添加SmolAgents工具，使用codeagent配置")
+        else:
+            logger.warning("未提供codeagent_llm，跳过SmolAgents工具")
 
-        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}")
+        # 创建 LangChain Agent
+        self.system_prompt = self._create_system_prompt()
+        self.agent = create_agent(
+            model=llm,
+            tools=self.tools
+        )
 
-    def get_system_prompt(self) -> str:
-        """获取MainAgent的系统提示词 - 适配 LangChain Agent"""
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, 工具数量: {len(self.tools)}")
+
+    def _create_system_prompt(self) -> str:
+        """创建 MainAgent 的系统提示词"""
         # 基础系统提示
         system_content = (
-            "你是基于 LangChain Agent 的学术论文写作助手，负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n"
+            "你是基于 LangChain Agent 的学术论文写作助手，负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n\n"
             "请你记住：论文尽可能使用图表等清晰表示！涉及图表等务必使用代码执行得到！\n"
-            "请你记住：如果最后发现没找到代码或者图片就重新执行数据分析！\n"
+            "请你记住：如果最后发现没找到代码或者图片就重新执行数据分析！\n\n"
             "你的职责：\n"
-            "0. 请你生成论文为paper.md文档！！！\n"
             "1. 分析用户需求，制定论文生成计划\n"
-            "2. **主动检查和分析附件**：当用户上传附件时，使用load_file工具读取附件内容\n"
-            "3. 当需要代码执行、数据分析、图表生成时，使用execute_python_code工具\n"
-            "4. 维护对话上下文，理解整个工作流程的连续性\n"
-            "5. 使用save_file工具保存论文草稿\n\n"
+            "2. **主动检查和分析附件**：当用户上传附件时，使用read_attachment工具读取附件内容\n"
+            "3. 当需要代码执行、数据分析、图表生成时，使用smolagents_execute工具\n"
+            "4. 使用writemd工具保存论文草稿到paper.md\n\n"
             "**你的工具集**：\n"
-            "- save_file: 保存论文草稿和内容到文件\n"
-            "- load_file: 读取已保存的文件和附件内容\n"
+            "- writemd: 保存论文草稿和内容到文件（推荐使用）\n"
+            "- update_template: 更新论文模板的特定章节\n"
+            "- read_attachment: 读取附件内容（PDF、Word、Excel等）\n"
+            "- list_attachments: 列出所有附件文件\n"
             "- web_search: 搜索最新的学术资料和背景信息\n"
-            "- execute_python_code: 执行数据分析、统计计算和图表生成\n\n"
-            "重要原则：\n"
-            "- 保持对话连贯性，按步骤执行任务\n"
-            "- 你是中枢大脑，负责规划和协调，使用工具完成具体任务\n"
-            "- **充分利用用户上传的附件内容，确保论文基于真实的资料和数据**\n"
-            "- 所有生成的文件都要在最终论文中引用\n"
-            "- 请自己执行迭代，直到任务完成\n"
-            "- 生成的论文不要杜撰，确保科学性"
+            "- smolagents_execute: 使用SmolAgents执行复杂的代码任务，包括数据分析、图表生成、统计计算等（推荐用于复杂任务）\n"
+            "- tree: 显示工作空间目录结构\n"
         )
 
         # 根据模板添加额外信息
         if self.template_id:
-            system_content += f"\n\n**使用模板模式**：\n"
-            system_content += f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
-            system_content += f"- 模板是一个大纲，你要填满大纲！\n"
-            system_content += f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
-            system_content += f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
+            system_content += (
+                f"\n\n**使用模板模式**（template_id: {self.template_id}）：\n"
+                f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
+                f"- 模板是一个大纲，你要填满大纲！\n"
+                f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
+                f"- 优先使用update_template工具来更新特定章节\n"
+                f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
+            )
         else:
-            system_content += f"\n\n**不使用模板模式**：\n"
-            system_content += f"- 你需要从头开始创建完整的论文结构\n"
-            system_content += f"- 根据用户需求设计合适的论文章节结构\n"
-            system_content += f"- 确保论文结构完整、逻辑清晰\n"
+            system_content += (
+                f"\n\n**不使用模板模式**：\n"
+                f"- 你需要从头开始创建完整的论文结构\n"
+                f"- 根据用户需求设计合适的论文章节结构\n"
+                f"- 使用writemd工具创建paper.md文件\n"
+                f"- 确保论文结构完整、逻辑清晰\n"
+            )
+
+        system_content += (
+            "\n\n重要原则：\n"
+            "- 保持对话连贯性，按步骤执行任务\n"
+            "- **充分利用用户上传的附件内容，确保论文基于真实的资料和数据**\n"
+            "- 生成的图表要保存在outputs目录，并在论文中正确引用\n"
+            "- 论文不要杜撰，确保科学性和准确性\n"
+            "- 每完成一个重要章节，使用writemd保存一次\n"
+            "- 最终输出应该是完整的paper.md文件\n"
+        )
 
         return system_content
 
-    def _setup_tools(self):
-        """MainAgent 使用 LangChain 工具管理器，不需要手动设置工具定义"""
-        pass
-
-    def _register_tool_functions(self):
-        """MainAgent 使用 LangChain 工具，不需要手动注册工具函数"""
-        pass
-
-    def _copy_template_to_workspace(self):
-        """复制模板文件到工作空间"""
-        try:
-            # 这里应该有复制模板的逻辑
-            # 暂时简化实现
-            logger.info(f"模板 {self.template_id} 复制到工作空间")
-        except Exception as e:
-            logger.error(f"复制模板失败: {e}")
-
-    async def run(self, user_problem: str) -> str:
+    async def run(self, user_input: str) -> str:
         """
-        执行主Agent逻辑，使用 LangChain Agent 流式处理
+        执行主Agent逻辑，使用 LangChain Agent 处理
         """
-        logger.info(f"MainAgent开始执行任务: {user_problem}")
+        logger.info(f"MainAgent开始执行任务: {user_input[:100]}...")
 
         try:
-            # 添加用户消息到历史
-            user_message = {"role": "user", "content": user_problem}
-            self.messages.append(user_message)
+            # 发送开始通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.send_json_block(
+                        "main_agent_start",
+                        f"MainAgent开始执行: {user_input[:100]}..."
+                    )
+                except Exception as e:
+                    logger.warning(f"发送开始通知失败: {e}")
 
-            # 使用 LangChain LLM 处理器进行流式处理
-            if self.tool_manager:
-                tools = self.tool_manager.get_tools()
-            else:
-                tools = []
+            # 使用 LangChain Agent 执行
+            inputs = {"messages": [HumanMessage(content=user_input)]}
+            result = await self.agent.ainvoke(inputs)
 
-            assistant_message, tool_calls = await self.llm_handler.process_stream(
-                self.messages, tools
-            )
+            # 提取最后的AI回复
+            messages = result.get("messages", [])
+            output = ""
+            for message in reversed(messages):
+                if hasattr(message, 'content') and message.content:
+                    output = message.content
+                    break
+                elif isinstance(message, dict) and message.get("role") == "assistant":
+                    output = message.get("content", "")
+                    break
 
-            # 处理工具调用（如果有的话）
-            if tool_calls:
-                logger.info(f"执行 {len(tool_calls)} 个工具调用")
-                # 这里可以添加工具调用的处理逻辑
+            logger.info(f"MainAgent任务完成，结果长度: {len(output)}")
 
-            # 添加助手回复到历史
-            self.messages.append(assistant_message)
+            # 发送完成通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.send_json_block(
+                        "main_agent_complete",
+                        f"任务完成，结果长度: {len(output)} 字符"
+                    )
+                except Exception as e:
+                    logger.warning(f"发送完成通知失败: {e}")
 
-            # 返回最终结果
-            result = assistant_message.get("content", "")
-            logger.info(f"MainAgent任务完成，结果长度: {len(result)}")
-
-            return result
+            return output
 
         except Exception as e:
             logger.error(f"MainAgent执行失败: {e}", exc_info=True)
             error_msg = f"任务执行失败: {str(e)}"
+
+            # 发送错误通知
+            if self.stream_manager:
+                try:
+                    await self.stream_manager.send_json_block("main_agent_error", error_msg)
+                except Exception as e:
+                    logger.warning(f"发送错误通知失败: {e}")
+
             return error_msg
 
-    async def _execute_code_task(self, task_prompt: str) -> str:
-        """使用 SmolAgent 执行代码任务"""
-        if not self.smolagent_manager:
-            return "❌ SmolAgent 未初始化"
+    async def stream_run(self, user_input: str):
+        """
+        流式执行，逐个输出Agent步骤
+        """
+        logger.info(f"MainAgent开始流式执行: {user_input[:100]}...")
 
         try:
-            result = await self.smolagent_manager.run(task_prompt)
-            return result
+            # 使用异步流式执行
+            inputs = {"messages": [HumanMessage(content=user_input)]}
+            async for chunk in self.agent.astream(inputs, stream_mode="updates"):
+                if self.stream_manager:
+                    try:
+                        await self.stream_manager.print_stream(str(chunk))
+                    except Exception as e:
+                        logger.warning(f"流式输出失败: {e}")
+                else:
+                    print(str(chunk))
+
         except Exception as e:
-            logger.error(f"代码任务执行失败: {e}")
-            return f"❌ 代码执行失败: {str(e)}"
+            logger.error(f"流式执行失败: {e}")
+            error_msg = f"流式执行失败: {str(e)}"
+            if self.stream_manager:
+                await self.stream_manager.print_content(error_msg)
 
     def get_execution_summary(self) -> Dict[str, Any]:
         """获取执行摘要"""
         return {
             "agent_type": "MainAgent",
             "template_id": self.template_id,
+            "work_id": self.work_id,
             "workspace_dir": self.workspace_dir,
-            "tools_count": len(self.tools) if self.tools else 0,
+            "tools_count": len(self.tools),
+            "tool_names": [tool.name for tool in self.tools],
             "langchain_based": True
         }
