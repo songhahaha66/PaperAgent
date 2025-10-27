@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 from langchain_core.tools import StructuredTool, Tool
 from langchain_core.tools.base import BaseTool
 from langchain_community.tools import DuckDuckGoSearchRun
+from smolagents import CodeAgent, PythonInterpreterTool, WebSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,30 @@ class LangChainToolManager:
             logger.error(f"工具初始化失败: {e}")
             raise
 
-    def _save_file(self, file_path: str, content: str) -> str:
-        """保存文件到工作空间"""
+    def _save_file(self, input_str: str) -> str:
+        """保存文件到工作空间
+
+        Args:
+            input_str: JSON 格式的字符串
+
+        Returns:
+            保存结果信息
+        """
         try:
+            if input_str.strip().startswith('{') and input_str.strip().endswith('}'):
+                # JSON 格式
+                import json
+                data = json.loads(input_str)
+                file_path = data.get('file_path', data.get('path', ''))
+                content = data.get('content', '')
+            else:
+                # 简单格式，将整个输入作为内容，使用默认文件名
+                file_path = "output.txt"
+                content = input_str
+
+            if not file_path:
+                return "保存失败: 未指定文件路径"
+
             full_path = os.path.join(self.workspace_dir, file_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
@@ -124,33 +146,22 @@ class SmolAgentManager:
         self.model = model
         self.stream_manager = stream_manager
 
-        try:
-            from smolagents import CodeAgent, PythonTool
-            from smolagents.tools import WebSearchTool
+        # 创建工具集
+        tools = [
+            PythonInterpreterTool(description="执行 Python 代码进行数据分析和计算"),
+            WebSearchTool(description="搜索网络信息"),
+            self._create_file_tool()
+        ]
 
-            # 创建工具集
-            tools = [
-                PythonTool(description="执行 Python 代码进行数据分析和计算"),
-                WebSearchTool(description="搜索网络信息"),
-                self._create_file_tool()
-            ]
+        # 创建 CodeAgent
+        self.agent = CodeAgent(
+            tools=tools,
+            model=model,
+            max_iterations=5,
+            verbosity_level=1
+        )
 
-            # 创建 CodeAgent
-            self.agent = CodeAgent(
-                tools=tools,
-                model=model,
-                max_iterations=5,
-                verbosity_level=1
-            )
-
-            logger.info("SmolAgentManager 初始化完成")
-
-        except ImportError:
-            logger.warning("smolagents 未安装，CodeAgent 功能将受限")
-            self.agent = None
-        except Exception as e:
-            logger.error(f"SmolAgentManager 初始化失败: {e}")
-            self.agent = None
+        logger.info("SmolAgentManager 初始化完成")
 
     def _create_file_tool(self):
         """创建文件操作工具"""
