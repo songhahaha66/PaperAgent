@@ -25,8 +25,8 @@ __all__ = [
     'ContextManager',
     'CodeExecutor',
     'FileTools',
-    'TemplateAgentTools',
-    'ToolManager'
+    'TemplateAgentTools'
+    # 'ToolManager'  # 已移除
 ]
 
 def _import_core_components():
@@ -36,7 +36,7 @@ def _import_core_components():
     from .core_handlers.llm_factory import LLMFactory
     from .core_managers.stream_manager import StreamOutputManager
     from .core_managers.context_manager import ContextManager
-    from .core_managers.tool_manager import ToolManager
+    # ToolManager 已移除，不再导入
     from .core_tools.code_executor import CodeExecutor
     from .core_tools.file_tools import FileTools
     from .core_tools.template_tools import TemplateAgentTools
@@ -49,7 +49,7 @@ def _import_core_components():
         'LLMFactory': LLMFactory,
         'StreamOutputManager': StreamOutputManager,
         'ContextManager': ContextManager,
-        'ToolManager': ToolManager,
+        # 'ToolManager': ToolManager,  # 已移除
         'CodeExecutor': CodeExecutor,
         'FileTools': FileTools,
         'TemplateAgentTools': TemplateAgentTools

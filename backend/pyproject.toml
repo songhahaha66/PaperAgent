@@ -3,7 +3,7 @@ name = "backend"
 version = "0.1.0"
 description = "PaperAgent Backend API"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.68.0",
     "requests>=2.32.4",
@@ -12,8 +12,8 @@ dependencies = [
     "bcrypt>=4.0.0",
     "python-multipart>=0.0.5",
     "sqlalchemy>=2.0.0",
-    "psycopg2-binary>=2.9.0",
     "asyncpg>=0.29.0",
+    "psycopg[binary]>=3.0.0",
     "aiosqlite>=0.19.0",
     "python-dotenv>=0.19.0",
     "pydantic[email]>=2.0.0",
@@ -30,4 +30,11 @@ dependencies = [
     "PyPDF2>=3.0.0",
     "pdfplumber>=0.7.0",
     "openpyxl>=3.0.0",
+    "langchain>=1.0.2",
+    "langchain-openai>=1.0.1",
+    "langchain-community>=0.4",
+    "smolagents>=1.22.0",
+    "ddgs>=9.6.1",
+    "langchain-anthropic>=1.0.0",
+    "langchain-google-genai>=3.0.0",
 ]

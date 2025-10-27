@@ -282,6 +282,14 @@ class TeeOutput:
 
 sys.stdout = TeeOutput(log_file)
 
+# 禁用 plt.show() 以避免 GUI 线程问题
+# 在非交互式后端下，plt.show() 会被自动替换为无操作
+def _disabled_show(*args, **kwargs):
+    """在非交互式后端下禁用 plt.show()，避免 GUI 线程错误"""
+    pass
+
+plt.show = _disabled_show
+
 # 用户代码开始
 '''
         

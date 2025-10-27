@@ -29,6 +29,7 @@ class ModelConfig(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     type = Column(String(50), nullable=False)  # 模型种类：brain(中枢大脑), code(代码实验), writing(论文写作)
+    provider = Column(String(50), nullable=False, server_default="openai")  # AI提供商：openai, anthropic, google, local
     model_id = Column(String(50), nullable=False)  # 模型ID
     base_url = Column(String(100), nullable=False)  # 模型URL
     api_key = Column(String(255), nullable=False)  # API密钥
