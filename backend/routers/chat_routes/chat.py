@@ -17,7 +17,7 @@ from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
 from ai_system.core_agents.main_agent import MainAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
-from ai_system.core_handlers.llm_factory import LLMFactory
+from langchain_core.messages import HumanMessage
 from ..utils import route_guard
 
 logger = logging.getLogger(__name__)
@@ -315,10 +315,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except Exception as e:
                         logger.error(f"发送JSON块失败: {e}")
 
-            # 初始化AI环境与工作空间（通过工厂）
-            llm_factory = LLMFactory(db)
-            llm_factory.initialize_system("brain")
-            llm_factory.setup_workspace(work_id)
+            # 创建工作空间目录 - 使用绝对路径
+            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            project_root = os.path.dirname(backend_dir)
+            workspace_dir = os.path.join(project_root, "pa_data", "workspaces", work_id)
+
+            # 初始化AI环境与工作空间
+            env_manager = setup_environment_from_db(db, workspace_dir)
+            workspace_dir = env_manager.get_workspace_dir()
+            model_config = env_manager.config_manager.get_model_config("brain")
+            codeagent_model_config = env_manager.config_manager.get_model_config("code")
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(
@@ -329,8 +335,25 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 session_id=str(session.session_id)
             )
 
-            # 创建LLM处理器和主代理
-            llm_handler = llm_factory.create_handler("brain", stream_manager=stream_manager)
+            # 创建支持多AI提供商的LLM处理器
+            llm_handler = LLMHandler(
+                model_config=model_config,
+                stream_manager=stream_manager
+            )
+
+            # 获取codeagent的LLM实例（仅使用LangChain模型，禁止SmolAgents）
+            codeagent_llm = None
+            if codeagent_model_config:
+                from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+                try:
+                    codeagent_llm = create_llm_from_model_config(codeagent_model_config)
+                    logger.info(f"使用LangChain模型作为CodeAgent: {codeagent_llm}")
+                except Exception as e:
+                    logger.error(f"创建CodeAgent专用LangChain模型失败: {e}")
+                    codeagent_llm = llm_handler.get_llm_instance()
+            else:
+                logger.info("未提供codeagent配置，使用主LLM")
+                codeagent_llm = llm_handler.get_llm_instance()
 
             # 获取工作的模板ID
             template_id = None
@@ -343,21 +366,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             except Exception as e:
                 logger.warning(f"获取工作模板ID失败: {e}")
 
-            # 创建MainAgent，传入work_id和template_id
-            main_agent = MainAgent(llm_handler, stream_manager, work_id, template_id)
-
-            # 先加载真正的历史消息（排除当前这次对话）
-            history_messages = chat_service.get_work_chat_history(
-                work_id, limit=20)
-            if history_messages:
-                # 过滤掉可能包含当前消息的历史记录
-                # 只加载真正属于历史的消息
-                history_data = [{"role": msg["role"], "content": msg["content"]}
-                                for msg in history_messages]
-                main_agent.load_conversation_history(history_data)
-                logger.info(f"已加载 {len(history_data)} 条历史消息到MainAgent")
-            else:
-                logger.info("没有找到历史消息，将创建新的对话")
+            # 创建MainAgent，传入workspace_dir、work_id、template_id和codeagent_llm
+            main_agent = MainAgent(llm_handler.get_llm_instance(), stream_manager, workspace_dir, work_id, template_id, codeagent_llm)
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
             await stream_manager.save_user_message(message_data['problem'])
@@ -468,9 +478,9 @@ async def generate_work_title(
         if not question:
             raise HTTPException(status_code=400, detail="缺少问题内容")
 
-        # 初始化AI环境（通过工厂）
-        llm_factory = LLMFactory(db)
-        llm_factory.initialize_system("brain")
+        # 初始化AI环境
+        env_manager = setup_environment_from_db(db)
+        model_config = env_manager.config_manager.get_model_config("brain")
 
         # 构建标题生成提示词
         title_prompt = f"""请根据用户的研究问题生成一个简洁、专业的学术论文标题。
@@ -486,12 +496,18 @@ async def generate_work_title(
 
         # 调用AI生成标题
         try:
-            # 使用现有的process_stream方法，但不使用流式处理
-            messages = [{"role": "user", "content": title_prompt}]
+            # 使用新的LangChain方式生成标题
+            llm_handler = LLMHandler(
+                model_config=model_config
+            )
+            llm = llm_handler.get_llm_instance()
 
-            # 直接通过工厂执行同步（非流式）生成
-            assistant_message, _ = await llm_factory.run_sync("brain", messages)
-            title = assistant_message.get("content", "")
+            # 使用LangChain标准消息格式
+            messages = [HumanMessage(content=title_prompt)]
+
+            # 同步调用LLM
+            response = await llm.ainvoke(messages)
+            title = response.content
 
             # 清理标题（移除可能的引号、换行等）
             title = title.strip().strip('"').strip("'").strip()
@@ -533,5 +549,3 @@ async def generate_work_title(
     except Exception as e:
         logger.error(f"生成工作标题失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-

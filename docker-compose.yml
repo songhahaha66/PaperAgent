@@ -7,6 +7,7 @@ services:
       - "8002:8000"
     volumes:
       - ./backend/.env:/app/.env:ro  # 挂载 .env 文件，只读模式
+      - ./pa_data:/app/pa_data       # 持久化工作目录数据
 
 networks:
   default:

@@ -18,8 +18,18 @@ class DatabaseConfigManager:
     def __init__(self, db_session: Session):
         self.db_session = db_session
 
-    def get_model_config(self, system_type: str, user_id: int = None):
-        """获取指定系统类型的模型配置"""
+    def get_model_config(self, system_type: str, user_id: int = None, provider: str = None):
+        """
+        获取指定系统类型的模型配置
+
+        Args:
+            system_type: 系统类型（brain, code, writing）
+            user_id: 用户ID（可选）
+            provider: AI提供商（可选，用于筛选特定提供商的配置）
+
+        Returns:
+            ModelConfig对象
+        """
         from models.models import ModelConfig
 
         query = self.db_session.query(ModelConfig).filter(
@@ -31,25 +41,54 @@ class DatabaseConfigManager:
         if user_id is not None:
             query = query.filter(ModelConfig.created_by == user_id)
 
+        # 如果指定了提供商，只获取该提供商的配置
+        if provider is not None:
+            query = query.filter(ModelConfig.provider == provider)
+
         config = query.first()
 
         if not config:
-            raise ValueError(f"未找到系统类型 {system_type} 的配置")
+            raise ValueError(f"未找到系统类型 {system_type} 的配置" +
+                           (f"，提供商: {provider}" if provider else ""))
         return config
 
-    def get_api_key(self, system_type: str, user_id: int = None) -> str:
+    def get_api_key(self, system_type: str, user_id: int = None, provider: str = None) -> str:
         """获取指定系统类型的API密钥"""
-        config = self.get_model_config(system_type, user_id)
+        config = self.get_model_config(system_type, user_id, provider)
         return config.api_key
 
-    def get_model_info(self, system_type: str, user_id: int = None) -> Dict[str, Any]:
+    def get_model_info(self, system_type: str, user_id: int = None, provider: str = None) -> Dict[str, Any]:
         """获取模型信息（不包含敏感信息）"""
-        config = self.get_model_config(system_type, user_id)
+        config = self.get_model_config(system_type, user_id, provider)
         return {
+            "provider": getattr(config, 'provider', 'openai'),
             "model_id": config.model_id,
             "base_url": config.base_url,
             "is_active": config.is_active
         }
+
+    def get_available_providers(self, system_type: str, user_id: int = None) -> List[str]:
+        """获取指定系统类型可用的AI提供商列表"""
+        from models.models import ModelConfig
+
+        query = self.db_session.query(ModelConfig.provider).filter(
+            ModelConfig.type == system_type,
+            ModelConfig.is_active == True
+        )
+
+        if user_id is not None:
+            query = query.filter(ModelConfig.created_by == user_id)
+
+        providers = [row.provider for row in query.distinct()]
+        return providers
+
+    def validate_provider_config(self, system_type: str, provider: str, user_id: int = None) -> bool:
+        """验证指定提供商的配置是否有效"""
+        try:
+            config = self.get_model_config(system_type, user_id, provider)
+            return bool(config.api_key and config.model_id)
+        except ValueError:
+            return False
 
 
 class AIEnvironmentManager:
@@ -67,12 +106,9 @@ class AIEnvironmentManager:
             self.workspace_dir = workspace_path
         else:
             # 使用与其他服务一致的路径：../pa_data/workspaces
-            self.workspace_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "..",
-                "pa_data",
-                "workspaces"
-            )
+            # 以项目根目录（PaperAgent）为基准，避免落在 backend/pa_data 下
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            self.workspace_dir = os.path.join(project_root, "pa_data", "workspaces")
 
         # 确保工作空间目录存在
         os.makedirs(self.workspace_dir, exist_ok=True)
@@ -144,4 +180,3 @@ def setup_environment_from_db(db_session: Session, workspace_path: Optional[str]
 
     logger.info("AI环境初始化完成")
     return env_manager
-
