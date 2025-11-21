@@ -315,16 +315,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except Exception as e:
                         logger.error(f"发送JSON块失败: {e}")
 
-            # 初始化AI环境与工作空间
-            env_manager = setup_environment_from_db(db, work_id)
-            model_config = env_manager.config_manager.get_model_config("brain")
-            codeagent_model_config = env_manager.config_manager.get_model_config("code")
-
             # 创建工作空间目录 - 使用绝对路径
             backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
             project_root = os.path.dirname(backend_dir)
             workspace_dir = os.path.join(project_root, "pa_data", "workspaces", work_id)
-            os.makedirs(workspace_dir, exist_ok=True)
+
+            # 初始化AI环境与工作空间
+            env_manager = setup_environment_from_db(db, workspace_dir)
+            workspace_dir = env_manager.get_workspace_dir()
+            model_config = env_manager.config_manager.get_model_config("brain")
+            codeagent_model_config = env_manager.config_manager.get_model_config("code")
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(

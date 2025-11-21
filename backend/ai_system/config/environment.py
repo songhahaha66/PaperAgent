@@ -106,12 +106,9 @@ class AIEnvironmentManager:
             self.workspace_dir = workspace_path
         else:
             # 使用与其他服务一致的路径：../pa_data/workspaces
-            self.workspace_dir = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "..",
-                "pa_data",
-                "workspaces"
-            )
+            # 以项目根目录（PaperAgent）为基准，避免落在 backend/pa_data 下
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            self.workspace_dir = os.path.join(project_root, "pa_data", "workspaces")
 
         # 确保工作空间目录存在
         os.makedirs(self.workspace_dir, exist_ok=True)
@@ -183,4 +180,3 @@ def setup_environment_from_db(db_session: Session, workspace_path: Optional[str]
 
     logger.info("AI环境初始化完成")
     return env_manager
-
