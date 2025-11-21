@@ -193,8 +193,8 @@ class BaseAgent(ABC):
             CodeAgent执行结果
         """
         try:
-            # 避免循环导入，直接引用当前文件中的CodeAgent类
-            CodeAgent = globals()['CodeAgent']
+            # 避免循环导入，延迟导入CodeAgent
+            from .code_agent import CodeAgent
 
             # 创建独立的StreamManager给CodeAgent使用
             from ..core_managers.stream_manager import CodeAgentStreamManager
@@ -205,10 +205,10 @@ class BaseAgent(ABC):
 
             # 创建CodeAgent实例
             code_agent = CodeAgent(
-                self.llm_handler,
-                code_agent_stream,
-                self.workspace_dir,
-                self.work_id
+                llm=self.llm_handler.get_llm_instance(),
+                stream_manager=code_agent_stream,
+                workspace_dir=self.workspace_dir,
+                work_id=self.work_id
             )
 
             # 执行任务

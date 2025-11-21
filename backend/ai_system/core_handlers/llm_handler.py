@@ -92,7 +92,7 @@ class LLMHandler:
             template_id=template_id
         )
 
-    # CodeAgent 已移除，直接使用 smolagents 库
+    # CodeAgent 由 code_agent.py 提供 LangChain 实现，可按需直接创建
 
     def get_llm_instance(self) -> BaseLanguageModel:
         """

@@ -99,87 +99,50 @@ class LangChainToolFactory:
             logger.error(f"创建文件工具失败: {e}")
             return []
 
-    # CodeAgent已移除，直接使用smolagents库
-
     @staticmethod
-    def create_smolagents_tool(workspace_dir: str, stream_manager=None, llm=None) -> Optional[StructuredTool]:
+    def create_code_agent_tool(workspace_dir: str, stream_manager=None, llm=None) -> Optional[StructuredTool]:
         """
-        创建 SmolAgents 代码执行工具
+        创建 LangChain CodeAgent 代码执行工具
 
         Args:
             workspace_dir: 工作空间目录
             stream_manager: 流式输出管理器
-            llm: LLM实例
+            llm: LangChain LLM实例
 
         Returns:
-            SmolAgents 工具或 None
+            CodeAgent 工具或 None
         """
         try:
-            # 直接同步调用SmolAgents
-            def sync_smolagents_execute(task_description: str) -> str:
-                """同步调用SmolAgents"""
-                try:
-                    # 直接使用smolagents，不通过异步包装
-                    from smolagents import CodeAgent
+            if llm is None:
+                logger.error("创建CodeAgent工具失败：未提供LLM实例")
+                return None
 
-                    # 检查模型类型
-                    if hasattr(llm, 'invoke'):
-                        # 这是LangChain LLM，不兼容SmolAgents
-                        logger.error("传入了LangChain LLM实例，但SmolAgents需要原生模型")
-                        return "错误：传入了不兼容的LangChain LLM实例。请使用SmolAgents原生模型。"
+            from ..core_agents.code_agent import CodeAgent
 
-                    # 创建SmolAgents CodeAgent，使用传入的LLM
-                    logger.info(f"使用模型创建SmolAgents CodeAgent: {llm}")
-
-                    # 配置额外的授权导入,支持科学计算和数据可视化
-                    additional_authorized_imports = [
-                        # 基础科学计算库
-                        'numpy',
-                        'scipy',
-                        'pandas',
-                        # 可视化库
-                        'matplotlib.pyplot',
-                        'matplotlib',
-                        'seaborn'
-                    ]
-
-                    # 配置 matplotlib 使用非交互式后端
-                    import os
-                    os.environ['MPLBACKEND'] = 'Agg'
-                    
-                    agent = CodeAgent(
-                        tools=[],
-                        model=llm,  # 使用传入的LLM实例，应该是SmolAgents原生模型
-                        max_steps=10,
-                        additional_authorized_imports=additional_authorized_imports
-                    )
-
-                    # 直接运行任务
-                    result = agent.run(task_description)
-
-                    if hasattr(result, 'content'):
-                        return result.content
-                    else:
-                        return str(result)
-
-                except Exception as e:
-                    logger.error(f"SmolAgents 执行失败: {e}")
-                    error_msg = str(e)
-                    if "'ChatMessage' object is not iterable" in error_msg:
-                        return "错误：模型类型不兼容。请确保使用SmolAgents原生模型而不是LangChain LLM。"
-                    return f"SmolAgents 执行失败: {error_msg}\n请检查任务描述是否清晰。"
-
-            tool = StructuredTool.from_function(
-                func=sync_smolagents_execute,
-                name="smolagents_execute",
-                description="使用 SmolAgents 执行复杂的代码任务，包括数据分析、图表生成、统计计算等。这是处理复杂代码任务的强大工具。输入应该是一个详细描述要执行的代码任务的字符串。"
+            code_agent = CodeAgent(
+                llm=llm,
+                stream_manager=stream_manager,
+                workspace_dir=workspace_dir,
             )
 
-            logger.info("创建了 SmolAgents 代码执行工具")
+            async def run_code_agent(task_description: str) -> str:
+                try:
+                    return await code_agent.run(task_description)
+                except Exception as e:
+                    logger.error(f"CodeAgent 工具执行失败: {e}", exc_info=True)
+                    return f"CodeAgent 执行失败: {str(e)}"
+
+            tool = StructuredTool.from_function(
+                coroutine=run_code_agent,
+                name="code_agent_execute",
+                description="使用专用CodeAgent执行代码任务（生成、执行、修改、列出文件）。输入详细的代码需求或分析任务描述。",
+            )
+
+            logger.info("创建了 LangChain CodeAgent 工具")
             return tool
 
         except Exception as e:
-            logger.error(f"创建 SmolAgents 工具失败: {e}")
+            logger.error(f"创建 CodeAgent 工具失败: {e}")
             return None
 
     @staticmethod

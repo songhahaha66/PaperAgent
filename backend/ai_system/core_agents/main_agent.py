@@ -59,16 +59,16 @@ class MainAgent:
             self.workspace_dir, stream_manager, include_template=True
         )
 
-        # 添加SmolAgents工具（使用codeagent_llm）
-        if codeagent_llm:
-            smolagents_tool = LangChainToolFactory.create_smolagents_tool(
-                self.workspace_dir, stream_manager, codeagent_llm
-            )
-            if smolagents_tool:
-                self.tools.append(smolagents_tool)
-                logger.info("成功添加SmolAgents工具，使用codeagent配置")
+        # 添加代码执行工具（使用CodeAgent，默认复用主LLM，可指定codeagent_llm）
+        code_llm = codeagent_llm or self.llm
+        code_agent_tool = LangChainToolFactory.create_code_agent_tool(
+            self.workspace_dir, stream_manager, code_llm
+        )
+        if code_agent_tool:
+            self.tools.append(code_agent_tool)
+            logger.info("成功添加CodeAgent工具，使用langchain实现")
         else:
-            logger.warning("未提供codeagent_llm，跳过SmolAgents工具")
+            logger.warning("CodeAgent工具创建失败，代码能力可能受限")
 
         # 创建 LangChain Agent
         self.system_prompt = self._create_system_prompt()
@@ -89,7 +89,7 @@ class MainAgent:
             "你的职责：\n"
             "1. 分析用户需求，制定论文生成计划\n"
             "2. **主动检查和分析附件**：当用户上传附件时，使用read_attachment工具读取附件内容\n"
-            "3. 当需要代码执行、数据分析、图表生成时，使用smolagents_execute工具\n"
+            "3. 当需要代码执行、数据分析、图表生成时，使用code_agent_execute工具\n"
             "4. 使用writemd工具保存论文草稿到paper.md\n\n"
             "**你的工具集**：\n"
             "- writemd: 保存论文草稿和内容到文件（推荐使用）\n"
@@ -97,7 +97,7 @@ class MainAgent:
             "- read_attachment: 读取附件内容（PDF、Word、Excel等）\n"
             "- list_attachments: 列出所有附件文件\n"
             "- web_search: 搜索最新的学术资料和背景信息\n"
-            "- smolagents_execute: 使用SmolAgents执行复杂的代码任务，包括数据分析、图表生成、统计计算等（推荐用于复杂任务）\n"
+            "- code_agent_execute: 使用专用CodeAgent执行复杂的代码任务，包括数据分析、图表生成、统计计算等（推荐用于复杂任务）\n"
             "- tree: 显示工作空间目录结构\n"
         )
 

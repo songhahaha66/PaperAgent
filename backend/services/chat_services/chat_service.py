@@ -104,9 +104,6 @@ class ChatService:
     def get_work_chat_history_for_frontend(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
         """获取work的聊天记录（前端格式）"""
         try:
-            # 首先尝试迁移旧格式
-            self.migrate_old_format_if_needed(work_id)
-
             messages = self.history_manager.get_messages_for_frontend(
                 work_id, limit)
             logger.info(f"获取前端格式聊天记录: {work_id}, 数量: {len(messages)}")
@@ -164,14 +161,6 @@ class ChatService:
             logger.error(f"删除work会话失败: {e}")
             self.db_session.rollback()
             return False
-
-    def migrate_old_format_if_needed(self, work_id: str):
-        """如果需要，迁移旧格式的聊天记录到新格式"""
-        try:
-            self.history_manager.migrate_old_format(work_id)
-            logger.info(f"聊天记录格式迁移检查完成: {work_id}")
-        except Exception as e:
-            logger.error(f"聊天记录格式迁移失败: {e}")
 
     def get_chat_statistics(self, work_id: str) -> Dict:
         """获取聊天统计信息"""

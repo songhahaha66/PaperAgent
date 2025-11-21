@@ -341,31 +341,18 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 stream_manager=stream_manager
             )
 
-            # 获取codeagent的LLM实例
+            # 获取codeagent的LLM实例（仅使用LangChain模型，禁止SmolAgents）
             codeagent_llm = None
             if codeagent_model_config:
-                from ai_system.core_handlers.llm_providers import create_smolagents_model_from_config
+                from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
-                    codeagent_llm = create_smolagents_model_from_config(codeagent_model_config)
-                    logger.info(f"成功创建SmolAgents模型: {codeagent_llm}")
+                    codeagent_llm = create_llm_from_model_config(codeagent_model_config)
+                    logger.info(f"使用LangChain模型作为CodeAgent: {codeagent_llm}")
                 except Exception as e:
-                    logger.warning(f"创建SmolAgents模型失败: {e}")
-                    # 回退到LangChain LLM，但MainAgent会处理兼容性
-                    from ai_system.core_handlers.llm_providers import create_llm_from_model_config
-                    try:
-                        codeagent_llm = create_llm_from_model_config(codeagent_model_config)
-                        logger.info(f"回退使用LangChain LLM: {codeagent_llm}")
-                    except Exception as e2:
-                        logger.error(f"创建LangChain LLM也失败: {e2}")
-                        codeagent_llm = llm_handler.get_llm_instance()  # 备用
+                    logger.error(f"创建CodeAgent专用LangChain模型失败: {e}")
+                    codeagent_llm = llm_handler.get_llm_instance()
             else:
-                logger.warning("未找到codeagent配置，使用brain LLM")
-                codeagent_llm = llm_handler.get_llm_instance()
-
-            # 最终确保codeagent_llm不为None
-            if codeagent_llm is None:
-                logger.error("codeagent_llm仍然为None，强制使用brain LLM")
-                # brain LLM是LangChain格式，需要适配器处理
+                logger.info("未提供codeagent配置，使用主LLM")
                 codeagent_llm = llm_handler.get_llm_instance()
 
             # 获取工作的模板ID
@@ -381,19 +368,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             # 创建MainAgent，传入workspace_dir、work_id、template_id和codeagent_llm
             main_agent = MainAgent(llm_handler.get_llm_instance(), stream_manager, workspace_dir, work_id, template_id, codeagent_llm)
-
-            # 先加载真正的历史消息（排除当前这次对话）
-            history_messages = chat_service.get_work_chat_history(
-                work_id, limit=20)
-            if history_messages:
-                # 过滤掉可能包含当前消息的历史记录
-                # 只加载真正属于历史的消息
-                history_data = [{"role": msg["role"], "content": msg["content"]}
-                                for msg in history_messages]
-                main_agent.load_conversation_history(history_data)
-                logger.info(f"已加载 {len(history_data)} 条历史消息到MainAgent")
-            else:
-                logger.info("没有找到历史消息，将创建新的对话")
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
             await stream_manager.save_user_message(message_data['problem'])
@@ -575,5 +549,3 @@ async def generate_work_title(
     except Exception as e:
         logger.error(f"生成工作标题失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
