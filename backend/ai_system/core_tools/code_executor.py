@@ -33,6 +33,9 @@ class CodeExecutor:
         else:
             # 必须传入工作空间目录，不能使用默认路径
             raise ValueError("必须传入workspace_dir参数，指定具体的工作空间目录（包含work_id）")
+
+        # 确保基础目录存在，避免日志/代码保存失败
+        self._ensure_workspace_dirs()
         
         # 设置工作空间路径，目录结构应由crud.py在work创建时创建
         
@@ -125,6 +128,9 @@ class CodeExecutor:
     async def _execute_code_directly(self, code: str) -> str:
         """直接在子进程中执行代码"""
         try:
+            # 自动归档原始代码，便于追踪
+            autosave_path = self._auto_save_code(code)
+
             # 创建临时代码文件
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
                 # 添加必要的导入和设置
@@ -135,6 +141,10 @@ class CodeExecutor:
             try:
                 # 在子进程中执行，设置工作目录为workspace_dir
                 result = await self._run_in_subprocess(temp_file)
+
+                # 执行成功时补充提示保存位置
+                if autosave_path:
+                    result = f"{result}\n\n[自动保存] 原始代码已保存到: {autosave_path}"
                 return result
                 
             finally:
@@ -193,6 +203,7 @@ class CodeExecutor:
     async def _save_code_only(self, code_content: str, filename: str) -> str:
         """仅保存代码到文件"""
         try:
+            self._ensure_workspace_dirs()
             # 清理文件名
             safe_filename = "".join(c for c in filename if c.isalnum() or c in "._-")
             if not safe_filename:
@@ -372,6 +383,35 @@ if plot_files:
             logger.error(f"子进程执行异常: {e}")
             return f"子进程执行异常: {str(e)}"
 
+    def _ensure_workspace_dirs(self):
+        """确保代码、输出、日志等目录存在"""
+        required_dirs = [
+            os.path.join(self.workspace_dir, "code"),
+            os.path.join(self.workspace_dir, "outputs"),
+            os.path.join(self.workspace_dir, "logs"),
+            os.path.join(self.workspace_dir, "temp"),
+        ]
+        for path in required_dirs:
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception as e:
+                logger.warning(f"创建工作空间目录失败: {path}, 错误: {e}")
+
+    def _auto_save_code(self, code: str) -> Optional[str]:
+        """自动保存当前执行的代码到code目录，便于追踪"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"autosave_{timestamp}.py"
+            dest = os.path.join(self.workspace_dir, "code", filename)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(code)
+            logger.info(f"自动保存代码到: {dest}")
+            return dest
+        except Exception as e:
+            logger.warning(f"自动保存代码失败: {e}")
+            return None
+
     
     async def edit_code_file(self, filename: str, new_code_content: str) -> str:
         """
@@ -385,6 +425,7 @@ if plot_files:
             修改结果信息
         """
         try:
+            self._ensure_workspace_dirs()
             # 参数验证
             if not new_code_content or not new_code_content.strip():
                 return "错误：新代码内容不能为空"
@@ -461,6 +502,7 @@ if plot_files:
             代码文件列表信息
         """
         try:
+            self._ensure_workspace_dirs()
             code_dir = os.path.join(self.workspace_dir, "code")
 
             if not os.path.exists(code_dir):
