@@ -116,10 +116,9 @@ class AIEnvironmentManager:
         if workspace_path:
             self.workspace_dir = workspace_path
         else:
-            # 使用与其他服务一致的路径：../pa_data/workspaces
-            # 以项目根目录（PaperAgent）为基准，避免落在 backend/pa_data 下
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            self.workspace_dir = os.path.join(project_root, "pa_data", "workspaces")
+            # 使用统一的路径配置
+            from config.paths import get_workspaces_path
+            self.workspace_dir = str(get_workspaces_path())
 
         # 确保工作空间目录存在
         os.makedirs(self.workspace_dir, exist_ok=True)

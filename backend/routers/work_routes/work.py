@@ -102,7 +102,8 @@ async def get_work_metadata(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
     import json
     from pathlib import Path
-    metadata_file = Path("../pa_data/workspaces") / work_id / "metadata.json"
+    from config.paths import get_workspace_path
+    metadata_file = get_workspace_path(work_id) / "metadata.json"
     if not metadata_file.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work metadata not found")
     with open(metadata_file, 'r', encoding='utf-8') as f:
@@ -124,7 +125,8 @@ async def get_work_chat_history(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
     import json
     from pathlib import Path
-    chat_file = Path("../pa_data/workspaces") / work_id / "chat_history.json"
+    from config.paths import get_workspace_path
+    chat_file = get_workspace_path(work_id) / "chat_history.json"
     if not chat_file.exists():
         return {}
     with open(chat_file, 'r', encoding='utf-8') as f:
@@ -138,7 +140,8 @@ async def get_work_chat_history(
 # 附件相关路由
 def get_attachment_dir(work_id: str) -> Path:
     """获取附件目录路径"""
-    base_dir = Path("../pa_data/workspaces") / work_id / "attachment"
+    from config.paths import get_workspace_path
+    base_dir = get_workspace_path(work_id) / "attachment"
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
 

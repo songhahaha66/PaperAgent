@@ -5,13 +5,13 @@ from fastapi import HTTPException, status
 from typing import Optional
 from .file_helper import FileHelper
 from ..data_services.utils import handle_service_errors
+from config.paths import get_templates_path
 
 class TemplateFileService:
     """模板文件管理服务 - 简化版：一个模板对应一个文件"""
     
-    def __init__(self, base_path: str = "../pa_data/templates"):
-        self.base_path = Path(base_path)
-        self.base_path.mkdir(parents=True, exist_ok=True)
+    def __init__(self):
+        self.base_path = get_templates_path()
         self.helper = FileHelper(self.base_path)
     
     def generate_file_path(self, template_id: int, filename: str = None) -> str:

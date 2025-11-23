@@ -16,8 +16,13 @@ logger = logging.getLogger(__name__)
 class ChatHistoryManager:
     """管理JSON卡片格式的聊天记录"""
 
-    def __init__(self, workspace_base: str = "../pa_data/workspaces"):
-        self.workspace_base = workspace_base
+    def __init__(self, workspace_base: str = None):
+        if workspace_base is None:
+            # 使用统一的路径配置
+            from config.paths import get_workspaces_path
+            self.workspace_base = str(get_workspaces_path())
+        else:
+            self.workspace_base = workspace_base
 
     def get_work_history(self, work_id: str) -> Dict:
         """获取指定工作的聊天记录"""

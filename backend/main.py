@@ -29,6 +29,14 @@ async def lifespan(app: FastAPI):
     """应用生命周期事件处理器"""
     # 启动时执行
     logger.info("应用启动中...")
+    
+    # 显示路径配置
+    from config.paths import get_project_root, get_pa_data_base, get_workspaces_path, get_templates_path
+    logger.info(f"项目根目录: {get_project_root()}")
+    logger.info(f"PA_DATA 目录: {get_pa_data_base()}")
+    logger.info(f"工作空间目录: {get_workspaces_path()}")
+    logger.info(f"模板目录: {get_templates_path()}")
+    
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")
