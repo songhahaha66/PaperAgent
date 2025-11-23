@@ -213,17 +213,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
         # 注册连接
         manager.active_connections[work_id] = websocket
 
-        # 创建聊天服务 - 使用线程池避免阻塞事件循环
-
-        # 在线程池中执行同步数据库操作
-        def init_chat_service():
-            db = next(get_db())
-            chat_service = ChatService(db)
-            session = chat_service.create_or_get_work_session(work_id, user_id)
-            return db, chat_service, session
-
-        db, chat_service, session = await loop.run_in_executor(None, init_chat_service)
-
         while True:
             # 接收用户消息
             data = await websocket.receive_text()
@@ -246,6 +235,15 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 'type': 'start',
                 'message': '开始AI分析...'
             }))
+
+            # 为每次消息处理创建新的数据库会话，避免长连接问题
+            def init_message_processing():
+                db = next(get_db())
+                chat_service = ChatService(db)
+                session = chat_service.create_or_get_work_session(work_id, user_id)
+                return db, chat_service, session
+
+            db, chat_service, session = await loop.run_in_executor(None, init_message_processing)
 
             # 创建流式回调
             class WebSocketStreamCallback(SimpleStreamCallback):
@@ -323,8 +321,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             # 初始化AI环境与工作空间
             env_manager = setup_environment_from_db(db, workspace_dir)
             workspace_dir = env_manager.get_workspace_dir()
-            model_config = env_manager.config_manager.get_model_config("brain")
-            codeagent_model_config = env_manager.config_manager.get_model_config("code")
+            model_config = env_manager.config_manager.get_model_config("brain", user_id)
+            codeagent_model_config = env_manager.config_manager.get_model_config("code", user_id)
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(
@@ -480,7 +478,7 @@ async def generate_work_title(
 
         # 初始化AI环境
         env_manager = setup_environment_from_db(db)
-        model_config = env_manager.config_manager.get_model_config("brain")
+        model_config = env_manager.config_manager.get_model_config("brain", current_user_id)
 
         # 构建标题生成提示词
         title_prompt = f"""请根据用户的研究问题生成一个简洁、专业的学术论文标题。

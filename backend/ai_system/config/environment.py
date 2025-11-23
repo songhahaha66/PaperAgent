@@ -5,9 +5,8 @@ AI系统环境配置管理
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
-import litellm
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +17,10 @@ class DatabaseConfigManager:
     def __init__(self, db_session: Session):
         self.db_session = db_session
 
-    def get_model_config(self, system_type: str, user_id: int = None, provider: str = None):
+    def get_model_config(self, system_type: str, user_id: int, provider: Optional[str] = None):
         """
         获取指定系统类型的模型配置
+        优先级：用户特定配置 -> 系统全局配置
 
         Args:
             system_type: 系统类型（brain, code, writing）
@@ -32,32 +32,45 @@ class DatabaseConfigManager:
         """
         from models.models import ModelConfig
 
-        query = self.db_session.query(ModelConfig).filter(
-            ModelConfig.type == system_type,
-            ModelConfig.is_active == True
-        )
+        def query_configs(user_id_filter):
+            """内部查询函数"""
+            query = self.db_session.query(ModelConfig).filter(
+                ModelConfig.type == system_type,
+                ModelConfig.is_active == True
+            )
 
-        # 如果指定了用户ID，只获取该用户的配置
-        if user_id is not None:
-            query = query.filter(ModelConfig.created_by == user_id)
+            if user_id_filter is not None:
+                query = query.filter(ModelConfig.created_by == user_id_filter)
 
-        # 如果指定了提供商，只获取该提供商的配置
-        if provider is not None:
-            query = query.filter(ModelConfig.provider == provider)
+            if provider is not None:
+                query = query.filter(ModelConfig.provider == provider)
 
-        config = query.first()
+            return query.first()
+
+        config = None
+
+        # 强制要求用户ID，确保每个用户只能调用自己的模型
+        if user_id is None:
+            raise ValueError("必须指定用户ID才能获取模型配置")
+
+        # 只获取用户特定ID的配置，严格权限控制
+        config = query_configs(user_id_filter=user_id)
 
         if not config:
-            raise ValueError(f"未找到系统类型 {system_type} 的配置" +
+            logger.error(f"用户 {user_id} 未配置 {system_type}" +
+                        (f"，提供商: {provider}" if provider else ""))
+            raise ValueError(f"用户 {user_id} 未配置 {system_type}" +
                            (f"，提供商: {provider}" if provider else ""))
+        
+        logger.info(f"成功加载 {system_type} 配置，提供商: {config.provider}, 模型: {config.model_id}")
         return config
 
-    def get_api_key(self, system_type: str, user_id: int = None, provider: str = None) -> str:
+    def get_api_key(self, system_type: str, user_id: int, provider: Optional[str] = None) -> str:
         """获取指定系统类型的API密钥"""
         config = self.get_model_config(system_type, user_id, provider)
         return config.api_key
 
-    def get_model_info(self, system_type: str, user_id: int = None, provider: str = None) -> Dict[str, Any]:
+    def get_model_info(self, system_type: str, user_id: int, provider: Optional[str] = None) -> Dict[str, Any]:
         """获取模型信息（不包含敏感信息）"""
         config = self.get_model_config(system_type, user_id, provider)
         return {
@@ -67,22 +80,20 @@ class DatabaseConfigManager:
             "is_active": config.is_active
         }
 
-    def get_available_providers(self, system_type: str, user_id: int = None) -> List[str]:
+    def get_available_providers(self, system_type: str, user_id: int) -> List[str]:
         """获取指定系统类型可用的AI提供商列表"""
         from models.models import ModelConfig
 
         query = self.db_session.query(ModelConfig.provider).filter(
             ModelConfig.type == system_type,
-            ModelConfig.is_active == True
+            ModelConfig.is_active == True,
+            ModelConfig.created_by == user_id
         )
-
-        if user_id is not None:
-            query = query.filter(ModelConfig.created_by == user_id)
 
         providers = [row.provider for row in query.distinct()]
         return providers
 
-    def validate_provider_config(self, system_type: str, provider: str, user_id: int = None) -> bool:
+    def validate_provider_config(self, system_type: str, provider: str, user_id: int) -> bool:
         """验证指定提供商的配置是否有效"""
         try:
             config = self.get_model_config(system_type, user_id, provider)
@@ -125,12 +136,11 @@ class AIEnvironmentManager:
             if not config or not config.is_active:
                 raise ValueError(f"系统 {system_type} 未配置或未激活")
 
-            # 设置LiteLLM配置
-            litellm.api_key = config.api_key
-            if config.base_url:
-                litellm.api_base = config.base_url
+            # 注意：不再设置LiteLLM全局配置，因为系统使用LangChain LLM实例
+            # API密钥将通过LLM providers直接传递给具体的LLM实例
+            # 这样可以支持多个不同的模型配置同时使用
 
-            logger.info(f"系统 {system_type} 初始化成功，模型: {config.model_id}")
+            logger.info(f"系统 {system_type} 配置验证成功，模型: {config.model_id}")
             return config
 
         except Exception as e:
