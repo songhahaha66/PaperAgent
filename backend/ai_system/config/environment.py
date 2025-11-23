@@ -17,7 +17,7 @@ class DatabaseConfigManager:
     def __init__(self, db_session: Session):
         self.db_session = db_session
 
-    def get_model_config(self, system_type: str, user_id: int = None, provider: str = None):
+    def get_model_config(self, system_type: str, user_id: int, provider: Optional[str] = None):
         """
         获取指定系统类型的模型配置
         优先级：用户特定配置 -> 系统全局配置
@@ -32,16 +32,16 @@ class DatabaseConfigManager:
         """
         from models.models import ModelConfig
 
-        def query_configs(created_by=None):
+        def query_configs(user_id_filter):
             """内部查询函数"""
             query = self.db_session.query(ModelConfig).filter(
                 ModelConfig.type == system_type,
                 ModelConfig.is_active == True
             )
 
-            if created_by is not None:
-                query = query.filter(ModelConfig.created_by == created_by)
-            
+            if user_id_filter is not None:
+                query = query.filter(ModelConfig.created_by == user_id_filter)
+
             if provider is not None:
                 query = query.filter(ModelConfig.provider == provider)
 
@@ -49,38 +49,28 @@ class DatabaseConfigManager:
 
         config = None
 
-        # 如果指定了用户ID，首先尝试获取用户特定的配置
-        if user_id is not None:
-            config = query_configs(created_by=user_id)
-            if config:
-                logger.info(f"找到用户 {user_id} 的 {system_type} 配置")
-            else:
-                logger.info(f"用户 {user_id} 没有特定的 {system_type} 配置，尝试使用系统配置")
+        # 强制要求用户ID，确保每个用户只能调用自己的模型
+        if user_id is None:
+            raise ValueError("必须指定用户ID才能获取模型配置")
 
-        # 如果没有找到用户特定配置，尝试获取系统全局配置（created_by 为空或为系统管理员）
-        if config is None:
-            # 首先尝试查找 created_by 为 NULL 的配置（真正的系统配置）
-            config = query_configs(created_by=None)
-            
-            # 如果还是没有找到，查找第一个可用的配置（兼容旧数据）
-            if config is None:
-                config = query_configs()
-                if config:
-                    logger.warning(f"使用兼容模式找到 {system_type} 配置，建议设置正确的系统配置")
+        # 只获取用户特定ID的配置，严格权限控制
+        config = query_configs(user_id_filter=user_id)
 
         if not config:
-            raise ValueError(f"未找到系统类型 {system_type} 的配置" +
+            logger.error(f"用户 {user_id} 未配置 {system_type}" +
+                        (f"，提供商: {provider}" if provider else ""))
+            raise ValueError(f"用户 {user_id} 未配置 {system_type}" +
                            (f"，提供商: {provider}" if provider else ""))
         
         logger.info(f"成功加载 {system_type} 配置，提供商: {config.provider}, 模型: {config.model_id}")
         return config
 
-    def get_api_key(self, system_type: str, user_id: int = None, provider: str = None) -> str:
+    def get_api_key(self, system_type: str, user_id: int, provider: Optional[str] = None) -> str:
         """获取指定系统类型的API密钥"""
         config = self.get_model_config(system_type, user_id, provider)
         return config.api_key
 
-    def get_model_info(self, system_type: str, user_id: int = None, provider: str = None) -> Dict[str, Any]:
+    def get_model_info(self, system_type: str, user_id: int, provider: Optional[str] = None) -> Dict[str, Any]:
         """获取模型信息（不包含敏感信息）"""
         config = self.get_model_config(system_type, user_id, provider)
         return {
@@ -90,22 +80,20 @@ class DatabaseConfigManager:
             "is_active": config.is_active
         }
 
-    def get_available_providers(self, system_type: str, user_id: int = None) -> List[str]:
+    def get_available_providers(self, system_type: str, user_id: int) -> List[str]:
         """获取指定系统类型可用的AI提供商列表"""
         from models.models import ModelConfig
 
         query = self.db_session.query(ModelConfig.provider).filter(
             ModelConfig.type == system_type,
-            ModelConfig.is_active == True
+            ModelConfig.is_active == True,
+            ModelConfig.created_by == user_id
         )
-
-        if user_id is not None:
-            query = query.filter(ModelConfig.created_by == user_id)
 
         providers = [row.provider for row in query.distinct()]
         return providers
 
-    def validate_provider_config(self, system_type: str, provider: str, user_id: int = None) -> bool:
+    def validate_provider_config(self, system_type: str, provider: str, user_id: int) -> bool:
         """验证指定提供商的配置是否有效"""
         try:
             config = self.get_model_config(system_type, user_id, provider)
