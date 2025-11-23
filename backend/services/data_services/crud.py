@@ -7,6 +7,7 @@ from auth import auth
 from fastapi import HTTPException, status
 from ..file_services.template_files import template_file_service
 from .utils import ensure_owner, model_to_dict
+from config.paths import get_workspace_path
 import uuid
 import json
 import os
@@ -402,7 +403,6 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
         
         # 创建工作空间目录结构和初始文件
         from ..file_services.workspace_structure import WorkspaceStructureManager
-        from config.paths import get_workspace_path
         base_path = get_workspace_path(work_id)
         WorkspaceStructureManager.create_workspace_structure(base_path, work_id)
         
@@ -495,7 +495,6 @@ def delete_work(db: Session, work_id: str, user_id: int):
     
     try:
         # 删除工作空间文件夹
-        from config.paths import get_workspace_path
         workspace_path = get_workspace_path(work_id)
         if workspace_path.exists():
             import shutil

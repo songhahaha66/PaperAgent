@@ -9,6 +9,7 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import uuid
+from config.paths import get_workspaces_path
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,6 @@ class ChatHistoryManager:
     def __init__(self, workspace_base: str = None):
         if workspace_base is None:
             # 使用统一的路径配置
-            from config.paths import get_workspaces_path
             self.workspace_base = str(get_workspaces_path())
         else:
             self.workspace_base = workspace_base

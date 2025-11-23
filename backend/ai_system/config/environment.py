@@ -7,6 +7,7 @@ import os
 import logging
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
+from config.paths import get_workspaces_path
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,6 @@ class AIEnvironmentManager:
             self.workspace_dir = workspace_path
         else:
             # 使用统一的路径配置
-            from config.paths import get_workspaces_path
             self.workspace_dir = str(get_workspaces_path())
 
         # 确保工作空间目录存在
