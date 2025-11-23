@@ -5,9 +5,8 @@ AI系统环境配置管理
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
-import litellm
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ class DatabaseConfigManager:
     def get_model_config(self, system_type: str, user_id: int = None, provider: str = None):
         """
         获取指定系统类型的模型配置
+        优先级：用户特定配置 -> 系统全局配置
 
         Args:
             system_type: 系统类型（brain, code, writing）
@@ -32,24 +32,47 @@ class DatabaseConfigManager:
         """
         from models.models import ModelConfig
 
-        query = self.db_session.query(ModelConfig).filter(
-            ModelConfig.type == system_type,
-            ModelConfig.is_active == True
-        )
+        def query_configs(created_by=None):
+            """内部查询函数"""
+            query = self.db_session.query(ModelConfig).filter(
+                ModelConfig.type == system_type,
+                ModelConfig.is_active == True
+            )
 
-        # 如果指定了用户ID，只获取该用户的配置
+            if created_by is not None:
+                query = query.filter(ModelConfig.created_by == created_by)
+            
+            if provider is not None:
+                query = query.filter(ModelConfig.provider == provider)
+
+            return query.first()
+
+        config = None
+
+        # 如果指定了用户ID，首先尝试获取用户特定的配置
         if user_id is not None:
-            query = query.filter(ModelConfig.created_by == user_id)
+            config = query_configs(created_by=user_id)
+            if config:
+                logger.info(f"找到用户 {user_id} 的 {system_type} 配置")
+            else:
+                logger.info(f"用户 {user_id} 没有特定的 {system_type} 配置，尝试使用系统配置")
 
-        # 如果指定了提供商，只获取该提供商的配置
-        if provider is not None:
-            query = query.filter(ModelConfig.provider == provider)
-
-        config = query.first()
+        # 如果没有找到用户特定配置，尝试获取系统全局配置（created_by 为空或为系统管理员）
+        if config is None:
+            # 首先尝试查找 created_by 为 NULL 的配置（真正的系统配置）
+            config = query_configs(created_by=None)
+            
+            # 如果还是没有找到，查找第一个可用的配置（兼容旧数据）
+            if config is None:
+                config = query_configs()
+                if config:
+                    logger.warning(f"使用兼容模式找到 {system_type} 配置，建议设置正确的系统配置")
 
         if not config:
             raise ValueError(f"未找到系统类型 {system_type} 的配置" +
                            (f"，提供商: {provider}" if provider else ""))
+        
+        logger.info(f"成功加载 {system_type} 配置，提供商: {config.provider}, 模型: {config.model_id}")
         return config
 
     def get_api_key(self, system_type: str, user_id: int = None, provider: str = None) -> str:
@@ -125,12 +148,11 @@ class AIEnvironmentManager:
             if not config or not config.is_active:
                 raise ValueError(f"系统 {system_type} 未配置或未激活")
 
-            # 设置LiteLLM配置
-            litellm.api_key = config.api_key
-            if config.base_url:
-                litellm.api_base = config.base_url
+            # 注意：不再设置LiteLLM全局配置，因为系统使用LangChain LLM实例
+            # API密钥将通过LLM providers直接传递给具体的LLM实例
+            # 这样可以支持多个不同的模型配置同时使用
 
-            logger.info(f"系统 {system_type} 初始化成功，模型: {config.model_id}")
+            logger.info(f"系统 {system_type} 配置验证成功，模型: {config.model_id}")
             return config
 
         except Exception as e:
