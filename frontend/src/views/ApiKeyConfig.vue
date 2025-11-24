@@ -13,7 +13,7 @@
         <h1>API Key 配置</h1>
         <p>配置不同模型服务的API密钥和连接信息</p>
         <p>为防止Key泄露，此页面不回显API Key，这是正常现象</p>
-        <a href="https://docs.litellm.ai/docs/providers/">如何填写参考这里</a>
+        <a href="https://python.langchain.com/docs/integrations/llms/">如何填写参考这里</a>
       </div>
 
       <div class="config-grid">

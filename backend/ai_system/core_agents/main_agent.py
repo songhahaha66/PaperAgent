@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from config.paths import get_workspace_path
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,8 @@ class MainAgent:
 
         # 如果没有提供workspace_dir但有work_id，构建路径
         if not workspace_dir and work_id:
-            # 使用绝对路径，从backend目录向上一级到项目根目录
-            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            project_root = os.path.dirname(backend_dir)
-            self.workspace_dir = os.path.join(
-                project_root, "pa_data", "workspaces", work_id
-            )
+            # 使用统一的路径配置
+            self.workspace_dir = str(get_workspace_path(work_id))
             # 设置环境变量，供工具使用
             os.environ["WORKSPACE_DIR"] = self.workspace_dir
 

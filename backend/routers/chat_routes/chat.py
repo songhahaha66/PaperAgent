@@ -18,6 +18,7 @@ from ai_system.core_managers.stream_manager import PersistentStreamManager, Simp
 from ai_system.core_agents.main_agent import MainAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
+from config.paths import get_workspace_path
 from ..utils import route_guard
 
 logger = logging.getLogger(__name__)
@@ -313,10 +314,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except Exception as e:
                         logger.error(f"发送JSON块失败: {e}")
 
-            # 创建工作空间目录 - 使用绝对路径
-            backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            project_root = os.path.dirname(backend_dir)
-            workspace_dir = os.path.join(project_root, "pa_data", "workspaces", work_id)
+            # 创建工作空间目录 - 使用统一路径配置
+            workspace_dir = str(get_workspace_path(work_id))
 
             # 初始化AI环境与工作空间
             env_manager = setup_environment_from_db(db, workspace_dir)

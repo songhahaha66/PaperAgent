@@ -25,13 +25,6 @@ def setup_simple_logging(level: str = "INFO"):
         ]
     )
     
-    # 关闭LiteLLM的详细输出
-    try:
-        import litellm
-        litellm.set_verbose = False
-        print(f"LiteLLM日志已关闭")
-    except ImportError:
-        pass
     
     # 关闭其他库的冗余日志
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
@@ -46,12 +39,6 @@ def set_log_level(level: str):
     log_level = getattr(logging, level.upper(), logging.INFO)
     logging.getLogger().setLevel(log_level)
     
-    # 重新设置LiteLLM
-    try:
-        import litellm
-        litellm.set_verbose = False
-    except ImportError:
-        pass
     
     print(f"日志级别已更新为: {level}")
 
