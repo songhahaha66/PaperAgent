@@ -9,6 +9,7 @@ from fastapi import HTTPException, status, UploadFile
 from typing import List, Dict, Any, Optional
 from .file_helper import FileHelper
 from ..data_services.utils import handle_service_errors
+from config.paths import get_workspaces_path
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ except ImportError:
 
 class WorkspaceFileService:
     def __init__(self):
-        self.base_path = Path("../pa_data/workspaces")
+        self.base_path = get_workspaces_path()
         self.helper = FileHelper(self.base_path)
 
     def get_workspace_path(self, work_id: str) -> Path:

@@ -11,6 +11,7 @@ import logging
 from ai_system.config.logging_config import setup_simple_logging
 # 导入异步配置管理器
 from ai_system.config.async_config import initialize_async_config, shutdown_async_config
+from config.paths import get_project_root, get_pa_data_base, get_workspaces_path, get_templates_path
 
 # 设置日志系统（只显示在终端，关闭LiteLLM日志）
 setup_simple_logging("INFO")
@@ -29,6 +30,13 @@ async def lifespan(app: FastAPI):
     """应用生命周期事件处理器"""
     # 启动时执行
     logger.info("应用启动中...")
+    
+    # 显示路径配置
+    logger.info(f"项目根目录: {get_project_root()}")
+    logger.info(f"PA_DATA 目录: {get_pa_data_base()}")
+    logger.info(f"工作空间目录: {get_workspaces_path()}")
+    logger.info(f"模板目录: {get_templates_path()}")
+    
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")
