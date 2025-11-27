@@ -404,7 +404,7 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
         # 创建工作空间目录结构和初始文件
         from ..file_services.workspace_structure import WorkspaceStructureManager
         base_path = get_workspace_path(work_id)
-        WorkspaceStructureManager.create_workspace_structure(base_path, work_id)
+        WorkspaceStructureManager.create_workspace_structure(base_path, work_id, template_id=db_work.template_id)
         
         return db_work
     except Exception as e:
