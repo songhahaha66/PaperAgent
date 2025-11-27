@@ -95,6 +95,7 @@
             <div class="user-name">{{ userName }}</div>
             <div class="user-email">{{ userEmail }}</div>
           </div>
+          <t-icon name="setting" class="settings-icon" />
         </div>
       </t-dropdown>
     </div>
@@ -500,10 +501,17 @@ const userOptions = [
   border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.2s;
+  gap: 10px;
 }
 
 .user-info:hover {
   background-color: #f0f0f0;
+}
+
+.settings-icon {
+  margin-left: auto;
+  color: #7f8c8d;
+  font-size: 18px;
 }
 
 .user-avatar {
