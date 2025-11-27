@@ -120,27 +120,6 @@ class ChatHistoryManager:
             return messages[-limit:]  # 返回最新的limit条消息
         return messages
 
-    def get_messages_for_frontend(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
-        """获取适合前端渲染的消息格式"""
-        messages = self.get_messages(work_id, limit)
-
-        # 转换为前端期望的格式
-        frontend_messages = []
-        for msg in messages:
-            frontend_msg = {
-                "id": msg.get("id", ""),
-                "role": msg.get("role", "assistant"),
-                "content": msg.get("content", ""),
-                "datetime": msg.get("timestamp", ""),
-                "avatar": self._get_avatar_for_role(msg.get("role", "assistant")),
-                "systemType": self._get_system_type_from_metadata(msg.get("metadata", {})),
-                "json_blocks": msg.get("json_blocks", []),
-                "message_type": msg.get("message_type", "text")
-            }
-            frontend_messages.append(frontend_msg)
-
-        return frontend_messages
-
     def clear_history(self, work_id: str):
         """清空聊天记录"""
         history = self._create_default_history(work_id)
@@ -176,22 +155,6 @@ class ChatHistoryManager:
         history_file = self._get_history_file_path(work_id)
         with open(history_file, 'w', encoding='utf-8') as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
-
-    def _get_avatar_for_role(self, role: str) -> str:
-        """根据角色获取头像"""
-        avatars = {
-            "user": "https://tdesign.gtimg.com/site/avatar.jpg",
-            "assistant": "https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9",
-            "system": "https://api.dicebear.com/7.x/bottts/svg?seed=system&backgroundColor=ed7b2f"
-        }
-        return avatars.get(role, avatars["assistant"])
-
-    def _get_system_type_from_metadata(self, metadata: Dict) -> Optional[str]:
-        """从元数据中获取系统类型"""
-        system_type = metadata.get("system_type")
-        if system_type in ["brain", "code", "writing"]:
-            return system_type
-        return None
 
     def migrate_old_format(self, work_id: str):
         """迁移旧格式的聊天记录到新格式"""

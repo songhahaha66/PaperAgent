@@ -103,7 +103,6 @@ export function useChat() {
         content: msg.content,
         datetime: new Date(msg.created_at).toLocaleString(),
         avatar: getAvatarForRole(msg.role),
-        systemType: getSystemTypeFromSession(currentSession.value?.system_type),
         json_blocks: msg.json_blocks || [],
         message_type: msg.message_type || 'text',
       }))
@@ -164,7 +163,6 @@ export function useChat() {
       content: '',
       datetime: new Date().toLocaleString(),
       avatar: getAvatarForRole('assistant'),
-      systemType: getSystemTypeFromSession(currentSession.value.system_type),
       isStreaming: true,
     }
 
@@ -357,41 +355,6 @@ export function useChat() {
     return avatars[role as keyof typeof avatars] || avatars.assistant
   }
 
-  // 从会话类型获取系统类型
-  const getSystemTypeFromSession = (
-    systemType?: string,
-  ): 'brain' | 'code' | 'writing' | undefined => {
-    if (!systemType) return undefined
-
-    const typeMap: Record<string, 'brain' | 'code' | 'writing'> = {
-      brain: 'brain',
-      code: 'code',
-      writing: 'writing',
-    }
-
-    return typeMap[systemType]
-  }
-
-  // 获取系统名称
-  const getSystemName = (systemType?: 'brain' | 'code' | 'writing'): string => {
-    const names = {
-      brain: '中枢系统',
-      code: '代码执行',
-      writing: '论文生成',
-    }
-    return systemType ? names[systemType] : 'AI助手'
-  }
-
-  // 获取系统头像
-  const getSystemAvatar = (systemType?: 'brain' | 'code' | 'writing'): string => {
-    const avatars = {
-      brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9',
-      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870',
-      writing: 'https://api.dicebear.com/7.x/bottts/svg?seed=writing&backgroundColor=ed7b2f',
-    }
-    return systemType ? avatars[systemType] : avatars.brain
-  }
-
   // 计算属性
   const hasMessages = computed(() => messages.value.length > 0)
   const lastMessage = computed(() => messages.value[messages.value.length - 1])
@@ -432,7 +395,5 @@ export function useChat() {
     regenerateMessage,
     resetChat,
     loadChatHistory,
-    getSystemName,
-    getSystemAvatar,
   }
 }
