@@ -302,6 +302,12 @@ const copyMessage = (content: string) => {
   color: white;
 }
 
+/* Ensure chat-markdown container uses full width */
+.chat-markdown {
+  width: 100%;
+  display: block;
+}
+
 /* 让 Chat 内部的 Markdown 容器与气泡样式协调，避免内外 padding 叠加导致公式错位 */
 :deep(.t-chat__message-content) .chat-markdown > .markdown-content {
   padding: 0; /* 由外层气泡控制内边距 */
@@ -316,11 +322,15 @@ const copyMessage = (content: string) => {
 
 /* 行内公式与文本的基线对齐通常由 KaTeX 默认处理，这里确保 line-height 不被异常覆盖 */
 :deep(.t-chat__message-content) {
+  width: 100%;
+  max-width: none;
   line-height: 1.7; /* 略增大，给行内公式留足空间，减少上/下溢出导致的视觉错位 */
 }
 
 /* JSON块样式 */
 :deep(.json-block) {
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   margin: 8px 0;
