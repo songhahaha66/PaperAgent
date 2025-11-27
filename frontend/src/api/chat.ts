@@ -456,7 +456,6 @@ export interface ChatMessage {
   content: string
   datetime: string
   avatar: string
-  systemType?: 'brain' | 'code' | 'writing'
   isLoading?: boolean
   isStreaming?: boolean
   json_blocks?: any[]

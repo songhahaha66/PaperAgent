@@ -104,12 +104,11 @@ class ChatService:
     def get_work_chat_history_for_frontend(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
         """获取work的聊天记录（前端格式）"""
         try:
-            messages = self.history_manager.get_messages_for_frontend(
-                work_id, limit)
-            logger.info(f"获取前端格式聊天记录: {work_id}, 数量: {len(messages)}")
+            messages = self.history_manager.get_messages(work_id, limit)
+            logger.info(f"获取聊天记录: {work_id}, 数量: {len(messages)}")
             return messages
         except Exception as e:
-            logger.error(f"获取前端格式聊天记录失败: {e}")
+            logger.error(f"获取聊天记录失败: {e}")
             return []
 
     def get_work_context(self, work_id: str) -> Dict:

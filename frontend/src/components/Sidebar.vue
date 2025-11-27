@@ -1,6 +1,12 @@
 <template>
   <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
+    <!-- 收起状态 - logo 单独在最顶部 -->
+    <div v-if="isSidebarCollapsed" class="collapsed-logo-section">
+      <img src="/logo.png" alt="PaperAgent Logo" class="header-logo-small" />
+    </div>
+
     <div class="sidebar-header">
+      <!-- 展开状态 -->
       <div v-if="!isSidebarCollapsed" class="header-title">
         <h2>PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
@@ -89,6 +95,7 @@
             <div class="user-name">{{ userName }}</div>
             <div class="user-email">{{ userEmail }}</div>
           </div>
+          <t-icon name="setting" class="settings-icon" />
         </div>
       </t-dropdown>
     </div>
@@ -364,6 +371,21 @@ const userOptions = [
   object-fit: contain;
 }
 
+/* 收起状态下的 logo 区域 */
+.collapsed-logo-section {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.header-logo-small {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+
 .sidebar-content {
   flex: 1;
   padding: 20px 15px;
@@ -479,10 +501,17 @@ const userOptions = [
   border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.2s;
+  gap: 10px;
 }
 
 .user-info:hover {
   background-color: #f0f0f0;
+}
+
+.settings-icon {
+  margin-left: auto;
+  color: #7f8c8d;
+  font-size: 18px;
 }
 
 .user-avatar {

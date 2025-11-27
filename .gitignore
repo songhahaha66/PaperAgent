@@ -2,3 +2,4 @@ pa_data
 frontend/.env
 .claude
 .DS_Store
+.kiro

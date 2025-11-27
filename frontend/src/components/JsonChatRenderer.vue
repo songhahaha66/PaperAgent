@@ -31,9 +31,6 @@
             </div>
           </template>
         </ChatItem>
-        <div v-if="message.systemType" :class="['system-label', message.systemType]">
-          {{ getSystemName(message) }}
-        </div>
 
         <!-- 对话分割线 -->
         <div v-if="index < messages.length - 1" class="message-divider">
@@ -65,7 +62,6 @@ interface ChatMessage {
   content: string
   datetime: string
   avatar: string
-  systemType?: 'brain' | 'code' | 'writing'
   isStreaming?: boolean
   json_blocks?: any[]
   message_type?: 'text' | 'json_card'
@@ -93,29 +89,8 @@ const hideDivider = () => {
 
 // 获取系统头像
 const getSystemAvatar = (message: ChatMessage) => {
-  if (message.systemType) {
-    const systemAvatars = {
-      brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9', // 中枢系统头像 - 蓝色机器人
-      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870', // 代码执行系统头像 - 绿色机器人
-      writing: 'https://api.dicebear.com/7.x/bottts/svg?seed=writing&backgroundColor=ed7b2f', // 论文生成系统头像 - 橙色机器人
-    }
-    return systemAvatars[message.systemType]
-  }
-  // 如果没有系统类型，返回默认头像
-  return 'https://tdesign.gtimg.com/site/avatar.jpg'
-}
-
-// 获取系统名称
-const getSystemName = (message: ChatMessage) => {
-  if (message.systemType) {
-    const systemNames = {
-      brain: '中枢系统',
-      code: '代码执行',
-      writing: '论文生成',
-    }
-    return systemNames[message.systemType]
-  }
-  return 'AI助手'
+  // 直接使用消息中的头像
+  return message.avatar || 'https://tdesign.gtimg.com/site/avatar.jpg'
 }
 
 // 格式化时间为人类可读格式
@@ -279,31 +254,6 @@ const copyMessage = (content: string) => {
   opacity: 0.3;
 }
 
-.system-label {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-  margin-top: 4px;
-  margin-left: 48px;
-}
-
-.system-label.brain {
-  background-color: #e6f3ff;
-  color: #0052d9;
-}
-
-.system-label.code {
-  background-color: #e6fff2;
-  color: #00a870;
-}
-
-.system-label.writing {
-  background-color: #fff2e6;
-  color: #ed7b2f;
-}
-
 .message-divider {
   position: relative;
   height: 20px;
@@ -352,6 +302,12 @@ const copyMessage = (content: string) => {
   color: white;
 }
 
+/* Ensure chat-markdown container uses full width */
+.chat-markdown {
+  width: 100%;
+  display: block;
+}
+
 /* 让 Chat 内部的 Markdown 容器与气泡样式协调，避免内外 padding 叠加导致公式错位 */
 :deep(.t-chat__message-content) .chat-markdown > .markdown-content {
   padding: 0; /* 由外层气泡控制内边距 */
@@ -366,11 +322,15 @@ const copyMessage = (content: string) => {
 
 /* 行内公式与文本的基线对齐通常由 KaTeX 默认处理，这里确保 line-height 不被异常覆盖 */
 :deep(.t-chat__message-content) {
+  width: 100%;
+  max-width: none;
   line-height: 1.7; /* 略增大，给行内公式留足空间，减少上/下溢出导致的视觉错位 */
 }
 
 /* JSON块样式 */
 :deep(.json-block) {
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   margin: 8px 0;
@@ -521,11 +481,6 @@ const copyMessage = (content: string) => {
 @media (max-width: 768px) {
   .chat-messages {
     padding: 8px;
-  }
-
-  .system-label {
-    margin-left: 32px;
-    font-size: 11px;
   }
 }
 </style>

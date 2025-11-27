@@ -227,7 +227,6 @@ const loading = ref(false)
 
 // 定义聊天消息类型（使用API中的类型）
 interface ChatMessageDisplay extends ChatMessage {
-  systemType?: 'brain' | 'code' | 'writing' // 更新为API中的系统类型
 }
 
 // 聊天消息数据
@@ -269,28 +268,6 @@ const isStreaming = ref(false)
 const webSocketHandler = ref<WebSocketChatHandler | null>(null)
 const fileRefreshTimer = ref<number | null>(null)
 const lastFileUpdateTime = ref<number>(0)
-
-// 根据消息内容判断系统类型
-const getSystemTypeFromContent = (content: string): 'brain' | 'code' | 'writing' | undefined => {
-  if (content.includes('<main_agent>')) {
-    return 'brain'
-  } else if (
-    content.includes('<call_code_agent>') ||
-    content.includes('<ret_code_agent>') ||
-    content.includes('<call_exec>') ||
-    content.includes('<ret_exec>') ||
-    content.includes('<tool_call>') ||
-    content.includes('<tool_result>') ||
-    content.includes('<execution_start>') ||
-    content.includes('<execution_complete>') ||
-    content.includes('<tool_error>')
-  ) {
-    return 'code'
-  } else if (content.includes('<writemd_result>') || content.includes('<tree_result>')) {
-    return 'writing'
-  }
-  return undefined
-}
 
 // 加载工作信息
 const loadWork = async () => {
@@ -381,34 +358,12 @@ const loadChatHistory = async () => {
 
     // 转换消息格式
     chatMessages.value = historyData.messages.map((msg, index) => {
-      let systemType: 'brain' | 'code' | 'writing' | undefined = undefined
-
-      if (msg.role === 'assistant') {
-        // 优先使用消息中的systemType
-        if (msg.systemType) {
-          systemType = msg.systemType
-        } else {
-          // 根据消息内容判断系统类型
-          systemType = getSystemTypeFromContent(msg.content)
-
-          // 如果没有明确的XML标签，默认为brain类型（中枢系统）
-          if (!systemType) {
-            systemType = 'brain'
-          }
-        }
-      }
-
       return {
         id: msg.id || `msg_${index}`,
         role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
         content: msg.content,
         datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
-        avatar:
-          msg.avatar ||
-          (msg.role === 'user'
-            ? 'https://tdesign.gtimg.com/site/avatar.jpg'
-            : getSystemAvatar({ systemType })),
-        systemType: systemType,
+        avatar: getAvatarByRole(msg.role),
         json_blocks: msg.json_blocks || [],
         message_type: msg.message_type || 'text',
         isStreaming: false,
@@ -734,33 +689,14 @@ const hideDivider = () => {
   hoveredDivider.value = null
 }
 
-// 获取系统头像
-const getSystemAvatar = (
-  message: ChatMessageDisplay | { systemType?: 'brain' | 'code' | 'writing' },
-) => {
-  if (message.systemType) {
-    const systemAvatars = {
-      brain: 'https://api.dicebear.com/7.x/bottts/svg?seed=brain&backgroundColor=0052d9', // 中枢系统头像 - 蓝色机器人
-      code: 'https://api.dicebear.com/7.x/bottts/svg?seed=code&backgroundColor=00a870', // 代码执行系统头像 - 绿色机器人
-      writing: 'https://api.dicebear.com/7.x/bottts/svg?seed=writing&backgroundColor=ed7b2f', // 论文生成系统头像 - 橙色机器人
-    }
-    return systemAvatars[message.systemType]
+// 根据角色获取头像
+const getAvatarByRole = (role: string) => {
+  const avatars = {
+    user: 'https://tdesign.gtimg.com/site/avatar.jpg',
+    assistant: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
+    system: 'https://api.dicebear.com/7.x/bottts/svg?seed=system&backgroundColor=ed7b2f',
   }
-  // 如果没有系统类型，返回默认头像
-  return 'https://tdesign.gtimg.com/site/avatar.jpg'
-}
-
-// 获取系统名称
-const getSystemName = (message: ChatMessageDisplay) => {
-  if (message.systemType) {
-    const systemNames = {
-      brain: '中枢系统',
-      code: '代码执行',
-      writing: '论文生成',
-    }
-    return systemNames[message.systemType]
-  }
-  return 'AI助手'
+  return avatars[role as keyof typeof avatars] || avatars.assistant
 }
 
 // 发送消息
@@ -801,8 +737,7 @@ const sendRealMessage = async (message: string) => {
     role: 'assistant' as const,
     content: '',
     datetime: new Date().toLocaleString(),
-    avatar: getSystemAvatar({ systemType: 'brain' }), // 默认使用brain类型，后续会根据内容更新
-    systemType: 'brain', // 默认使用brain类型，后续会根据内容更新
+    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
     isStreaming: true,
   }
 
@@ -820,7 +755,6 @@ const sendRealMessage = async (message: string) => {
     if (messageIndex > -1) {
       chatMessages.value[messageIndex].content = '发送消息失败，请稍后重试'
       chatMessages.value[messageIndex].isStreaming = false
-      chatMessages.value[messageIndex].avatar = getSystemAvatar({ systemType: 'brain' })
     }
     isStreaming.value = false
     MessagePlugin.error('发送消息失败')
@@ -843,8 +777,6 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     console.log('WebSocket connected successfully')
 
     let fullContent = ''
-    let currentSystemType: 'brain' | 'code' | 'writing' = 'brain' // 默认从brain开始，后续根据内容更新
-    let systemTypeChanged = false
 
     // 设置断开连接回调
     webSocketHandler.value.onDisconnect(() => {
@@ -1160,7 +1092,6 @@ const simulateSendFirstMessage = (content: string) => {
     content: content,
     datetime: new Date().toLocaleString(),
     avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    systemType: undefined,
     isStreaming: false,
   }
 
@@ -1216,8 +1147,7 @@ const simulateSendFirstMessage = (content: string) => {
                 role: 'assistant' as const,
                 content: '',
                 datetime: new Date().toLocaleString(),
-                avatar: getSystemAvatar({ systemType: 'brain' }),
-                systemType: 'brain' as const,
+                avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
                 isStreaming: true,
                 json_blocks: [],
                 message_type: 'json_card' as const,
@@ -1235,8 +1165,7 @@ const simulateSendFirstMessage = (content: string) => {
                 role: 'assistant' as const,
                 content: '',
                 datetime: new Date().toLocaleString(),
-                avatar: getSystemAvatar({ systemType: 'brain' }),
-                systemType: 'brain' as const,
+                avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
                 isStreaming: true,
                 json_blocks: [],
                 message_type: 'json_card' as const,
@@ -1266,8 +1195,7 @@ const simulateSendFirstMessage = (content: string) => {
                 role: 'assistant' as const,
                 content: data.content,
                 datetime: new Date().toLocaleString(),
-                avatar: getSystemAvatar({ systemType: 'brain' }),
-                systemType: 'brain' as const,
+                avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
                 isStreaming: true,
                 json_blocks: [],
                 message_type: 'text' as const,
@@ -1320,8 +1248,7 @@ const simulateSendFirstMessage = (content: string) => {
         role: 'assistant' as const,
         content: '连接AI服务失败，请检查网络连接或稍后重试',
         datetime: new Date().toLocaleString(),
-        avatar: getSystemAvatar({ systemType: 'brain' }),
-        systemType: 'brain' as const,
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
         isStreaming: false,
       }
       chatMessages.value.push(errorMessage)
