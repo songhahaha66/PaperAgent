@@ -1,6 +1,12 @@
 <template>
   <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
+    <!-- 收起状态 - logo 单独在最顶部 -->
+    <div v-if="isSidebarCollapsed" class="collapsed-logo-section">
+      <img src="/logo.png" alt="PaperAgent Logo" class="header-logo-small" />
+    </div>
+
     <div class="sidebar-header">
+      <!-- 展开状态 -->
       <div v-if="!isSidebarCollapsed" class="header-title">
         <h2>PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
@@ -361,6 +367,21 @@ const userOptions = [
 .header-logo {
   width: 24px;
   height: 24px;
+  object-fit: contain;
+}
+
+/* 收起状态下的 logo 区域 */
+.collapsed-logo-section {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 16px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.header-logo-small {
+  width: 36px;
+  height: 36px;
   object-fit: contain;
 }
 
