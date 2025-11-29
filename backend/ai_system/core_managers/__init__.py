@@ -13,5 +13,6 @@ __all__ = [
     'ContextSummary',
     'CompressedMessage',
     'ToolManager',
-    'ToolRegistry'
+    'ToolRegistry',
+    'MCPClientManager'
 ]
