@@ -104,7 +104,7 @@ class WorkBase(BaseModel):
     template_id: Optional[int] = None  # 关联的论文模板ID
 
 class WorkCreate(WorkBase):
-    pass
+    output_mode: str = "markdown"  # 输出模式：markdown, word, latex
 
 class WorkUpdate(BaseModel):
     title: Optional[str] = None
@@ -113,6 +113,7 @@ class WorkUpdate(BaseModel):
     progress: Optional[int] = None
     tags: Optional[str] = None
     template_id: Optional[int] = None  # 关联的论文模板ID
+    output_mode: Optional[str] = None  # 输出模式：markdown, word, latex
 
 class WorkResponse(WorkBase):
     id: int
@@ -120,6 +121,7 @@ class WorkResponse(WorkBase):
     status: str
     progress: int
     template_id: Optional[int] = None  # 关联的论文模板ID
+    output_mode: str = "markdown"  # 输出模式：markdown, word, latex
     created_at: datetime
     updated_at: datetime
     created_by: int
