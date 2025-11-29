@@ -34,7 +34,7 @@ class MCPClientManager:
             # __file__ is in backend/ai_system/core_managers/mcp_client_manager.py
             # We need to go up to backend/ directory
             backend_dir = Path(__file__).parent.parent.parent
-            word_mcp_path = backend_dir / "Office-Word-MCP-Server" / "word_mcp_server.py"
+            word_mcp_path = backend_dir / "office_word_mcp" / "word_mcp_server.py"
             
             if not word_mcp_path.exists():
                 logger.error(f"Word MCP server not found at: {word_mcp_path}")

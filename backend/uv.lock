@@ -253,7 +253,7 @@ requires-dist = [
     { name = "markdown", specifier = ">=3.6.0" },
     { name = "matplotlib", specifier = ">=3.10.5" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "office-word-mcp-server", editable = "Office-Word-MCP-Server" },
+    { name = "office-word-mcp-server", editable = "office_word_mcp" },
     { name = "openpyxl", specifier = ">=3.0.0" },
     { name = "pandas", specifier = ">=2.3.1" },
     { name = "pdfplumber", specifier = ">=0.7.0" },
@@ -1821,7 +1821,7 @@ wheels = [
 [[package]]
 name = "office-word-mcp-server"
 version = "1.1.10"
-source = { editable = "Office-Word-MCP-Server" }
+source = { editable = "office_word_mcp" }
 dependencies = [
     { name = "docx2pdf" },
     { name = "fastmcp" },

@@ -42,7 +42,7 @@ dependencies = [
 
 [tool.uv.workspace]
 members = [
-    "Office-Word-MCP-Server",
+    "office_word_mcp",
 ]
 
 [tool.uv.sources]
