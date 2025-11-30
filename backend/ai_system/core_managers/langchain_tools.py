@@ -211,12 +211,20 @@ class LangChainToolFactory:
             return []
 
     @staticmethod
-    async def create_word_tools(mcp_client, workspace_dir: str, stream_manager=None) -> List[BaseTool]:
+    def create_word_tools(workspace_dir: str, stream_manager=None) -> List[StructuredTool]:
         """
-        创建 Word 文档工具（通过 MCP）
+        创建 Word 文档工具（直接调用）
+        
+        Tool Categories:
+        1. Document Creation and Properties
+        2. Content Addition
+        3. Advanced Content Manipulation
+        4. Content Extraction
+        5. Text Formatting
+        6. Table Formatting
+        7. Comment Extraction
 
         Args:
-            mcp_client: MCP client instance from MCPClientManager
             workspace_dir: 工作空间目录
             stream_manager: 流式输出管理器
 
@@ -224,26 +232,187 @@ class LangChainToolFactory:
             LangChain 格式的 Word 工具列表
         """
         try:
-            from .word_tools import WordToolWrapper
+            from ..core_tools.word_tools import WordTools
             
-            if not mcp_client:
-                logger.warning("MCP client not available, Word tools not created")
-                return []
+            # Create WordTools instance
+            word_tools = WordTools(workspace_dir, stream_manager)
             
-            # Create Word tool wrapper
-            word_wrapper = WordToolWrapper(mcp_client, workspace_dir, stream_manager)
+            # Category 1: Document Creation and Properties
+            doc_creation_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.create_document,
+                    name="word_create_document",
+                    description="[Document Creation] Create a new Word document with optional title and author"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.get_document_info,
+                    name="word_get_document_info",
+                    description="[Document Properties] Get document metadata and properties including title, author, and statistics"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.get_document_text,
+                    name="word_get_document_text",
+                    description="[Document Properties] Extract all text content from the document"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.get_document_outline,
+                    name="word_get_document_outline",
+                    description="[Document Properties] Get the document structure and outline showing headings hierarchy"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.list_available_documents,
+                    name="word_list_available_documents",
+                    description="[Document Properties] List all .docx files available in the workspace"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.copy_document,
+                    name="word_copy_document",
+                    description="[Document Creation] Create a copy of the current document with a new filename"
+                ),
+            ]
             
-            # Initialize the wrapper (loads MCP tools)
-            success = await word_wrapper.initialize()
-            if not success:
-                logger.error("Failed to initialize Word tools")
-                return []
+            # Category 2: Content Addition
+            content_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.add_heading,
+                    name="word_add_heading",
+                    description="[Content Addition] Add a heading to the document with specified level (1-5) and optional formatting"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.add_paragraph,
+                    name="word_add_paragraph",
+                    description="[Content Addition] Add a paragraph to the document with optional style and formatting"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.add_table,
+                    name="word_add_table",
+                    description="[Content Addition] Add a table to the document with specified rows and columns, optionally filled with data"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.add_picture,
+                    name="word_add_picture",
+                    description="[Content Addition] Add an image to the document from a file path with optional width specification"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.add_page_break,
+                    name="word_add_page_break",
+                    description="[Content Addition] Insert a page break in the document"
+                ),
+            ]
             
-            # Create LangChain-compatible tools
-            tools = word_wrapper.create_langchain_tools()
+            # Category 3: Advanced Content Manipulation
+            manipulation_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.insert_header_near_text,
+                    name="word_insert_header_near_text",
+                    description="[Advanced Content Manipulation] Insert a header before or after specific text or paragraph index"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.insert_line_or_paragraph_near_text,
+                    name="word_insert_line_or_paragraph_near_text",
+                    description="[Advanced Content Manipulation] Insert a line or paragraph before or after specific text or paragraph index"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.insert_numbered_list_near_text,
+                    name="word_insert_numbered_list_near_text",
+                    description="[Advanced Content Manipulation] Insert a numbered or bulleted list before or after specific text or paragraph index"
+                ),
+            ]
             
-            logger.info(f"创建了 {len(tools)} 个 Word 工具")
-            return tools
+            # Category 4: Content Extraction
+            extraction_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.get_paragraph_text_from_document,
+                    name="word_get_paragraph_text",
+                    description="[Content Extraction] Get text content from a specific paragraph by index"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.find_text_in_document,
+                    name="word_find_text",
+                    description="[Content Extraction] Find text in the document with options for case-sensitive and whole-word matching"
+                ),
+            ]
+            
+            # Category 5: Text Formatting
+            text_format_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.format_text,
+                    name="word_format_text",
+                    description="[Text Formatting] Format text in a specific paragraph with bold, italic, underline, color, font size, and font name"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.search_and_replace,
+                    name="word_search_and_replace",
+                    description="[Text Formatting] Search for text and replace it with new text throughout the document"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.delete_paragraph,
+                    name="word_delete_paragraph",
+                    description="[Text Formatting] Delete a specific paragraph from the document by index"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.create_custom_style,
+                    name="word_create_custom_style",
+                    description="[Text Formatting] Create a custom style with specified formatting options"
+                ),
+            ]
+            
+            # Category 6: Table Formatting
+            table_format_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.format_table,
+                    name="word_format_table",
+                    description="[Table Formatting] Format a table with header row, border style, and cell shading"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.set_table_cell_shading,
+                    name="word_set_table_cell_shading",
+                    description="[Table Formatting] Set shading color for a specific table cell"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.merge_table_cells,
+                    name="word_merge_table_cells",
+                    description="[Table Formatting] Merge a range of cells in a table"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.set_table_cell_alignment,
+                    name="word_set_table_cell_alignment",
+                    description="[Table Formatting] Set horizontal and vertical alignment for a table cell"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.set_table_column_width,
+                    name="word_set_table_column_width",
+                    description="[Table Formatting] Set the width of a table column in points or percentage"
+                ),
+            ]
+            
+            # Category 7: Comment Extraction
+            comment_tools = [
+                StructuredTool.from_function(
+                    coroutine=word_tools.get_all_comments,
+                    name="word_get_all_comments",
+                    description="[Comment Extraction] Get all comments from the document"
+                ),
+                StructuredTool.from_function(
+                    coroutine=word_tools.get_comments_by_author,
+                    name="word_get_comments_by_author",
+                    description="[Comment Extraction] Get comments from the document filtered by author name"
+                ),
+            ]
+            
+            # Combine all tools
+            all_tools = (
+                doc_creation_tools +
+                content_tools +
+                manipulation_tools +
+                extraction_tools +
+                text_format_tools +
+                table_format_tools +
+                comment_tools
+            )
+            
+            logger.info(f"创建了 {len(all_tools)} 个 Word 工具 (直接调用)")
+            return all_tools
 
         except Exception as e:
             logger.error(f"创建 Word 工具失败: {e}", exc_info=True)

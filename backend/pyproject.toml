@@ -36,7 +36,6 @@ dependencies = [
     "ddgs>=9.6.1",
     "langchain-anthropic>=1.0.0",
     "langchain-google-genai>=3.0.0",
-    "langchain-mcp-adapters>=0.1.0",
     "office-word-mcp-server",
 ]
 

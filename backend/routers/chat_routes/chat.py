@@ -380,22 +380,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             except Exception as e:
                 logger.warning(f"获取工作配置失败: {e}")
 
-            # 获取MCP管理器（如果可用）
-            mcp_manager = None
-            try:
-                app = get_app_instance()
-                if app and hasattr(app, 'state'):
-                    mcp_manager = getattr(app.state, 'mcp_manager', None)
-                    if mcp_manager:
-                        logger.info("成功获取MCP管理器")
-                    else:
-                        logger.info("MCP管理器未初始化")
-                else:
-                    logger.warning("无法访问app实例，MCP管理器不可用")
-            except Exception as e:
-                logger.warning(f"获取MCP管理器失败: {e}")
-
-            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode和mcp_manager
+            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode
             main_agent = MainAgent(
                 llm_handler.get_llm_instance(), 
                 stream_manager, 
@@ -403,8 +388,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 work_id, 
                 template_id, 
                 codeagent_llm,
-                output_mode=output_mode,
-                mcp_manager=mcp_manager
+                output_mode=output_mode
             )
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
