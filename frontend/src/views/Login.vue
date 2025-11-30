@@ -2,7 +2,10 @@
   <div class="login-page">
     <div class="login-container">
       <div class="login-header">
-        <h1>PaperAgent</h1>
+        <div class="title-with-logo">
+          <img src="/logo.png" alt="PaperAgent Logo" class="logo" />
+          <h1>PaperAgent</h1>
+        </div>
         <p>{{ isLogin ? '登录到您的账户' : '创建新账户' }}</p>
       </div>
 
@@ -189,10 +192,25 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   text-align: center;
 }
 
+.login-header .title-with-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.login-header .logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
 .login-header h1 {
   font-size: 2rem;
   color: #2c3e50;
-  margin-bottom: 8px;
+  margin: 0;
+  line-height: 1;
 }
 
 .login-header p {
