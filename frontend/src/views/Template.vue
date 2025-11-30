@@ -433,6 +433,7 @@ const saveTemplate = async () => {
           name: templateForm.name,
           description: templateForm.description || undefined,
           category: templateForm.category || undefined,
+          output_format: templateForm.output_format,
           file_path: uploadResult.file_path,
           is_public: templateForm.is_public,
           content: uploadResult.content,
