@@ -72,23 +72,6 @@ class LangChainToolFactory:
                     func=file_tools.list_attachments,
                     name="list_attachments",
                     description="列出工作空间中所有附件文件，包括文件类型、大小等信息"
-                ),
-                StructuredTool.from_function(
-                    func=file_tools.read_attachment,
-                    name="read_attachment",
-                    description="读取附件文件内容，支持多种格式（PDF、Word、Excel、文本等）",
-                    args_schema={
-                        "file_path": {"type": "string", "description": "附件文件路径（相对于attachment目录）"}
-                    }
-                ),
-                StructuredTool.from_function(
-                    func=file_tools.search_attachments,
-                    name="search_attachments",
-                    description="在附件文件中搜索关键词",
-                    args_schema={
-                        "keyword": {"type": "string", "description": "搜索关键词"},
-                        "file_type": {"type": "string", "description": "可选的文件类型过滤（如pdf、docx、txt等）"}
-                    }
                 )
             ]
 
@@ -442,10 +425,54 @@ class LangChainToolFactory:
             return []
 
     @staticmethod
+    def create_base_tools(workspace_dir: str, stream_manager=None) -> List[BaseTool]:
+        """
+        创建基础工具（不包含writemd等Markdown工具）
+        用于Word模式，只包含附件读取、搜索、目录树等通用工具
+
+        Args:
+            workspace_dir: 工作空间目录
+            stream_manager: 流式输出管理器
+
+        Returns:
+            基础工具列表
+        """
+        try:
+            os.environ["WORKSPACE_DIR"] = workspace_dir
+            file_tools_instance = FileTools(stream_manager)
+
+            base_tools = [
+                StructuredTool.from_function(
+                    func=file_tools_instance.tree,
+                    name="tree",
+                    description="显示工作空间的目录树结构，帮助了解文件组织",
+                    args_schema={
+                        "directory": {"type": "string", "description": "要显示的目录路径（可选，默认显示整个工作空间）"}
+                    }
+                ),
+                StructuredTool.from_function(
+                    func=file_tools_instance.list_attachments,
+                    name="list_attachments",
+                    description="列出工作空间中所有附件文件，包括文件类型、大小等信息"
+                )
+            ]
+
+            # 添加标准工具（搜索）
+            standard_tools = LangChainToolFactory.create_standard_tools()
+            base_tools.extend(standard_tools)
+
+            logger.info(f"创建了 {len(base_tools)} 个基础工具（不含writemd）")
+            return base_tools
+
+        except Exception as e:
+            logger.error(f"创建基础工具失败: {e}")
+            return []
+
+    @staticmethod
     def create_all_tools(workspace_dir: str, stream_manager=None,
                         include_template: bool = False) -> List[BaseTool]:
         """
-        创建论文写作需要的所有工具
+        创建论文写作需要的所有工具（包括writemd等Markdown工具）
 
         Args:
             workspace_dir: 工作空间目录
@@ -458,7 +485,7 @@ class LangChainToolFactory:
         try:
             all_tools = []
 
-            # 添加文件工具
+            # 添加文件工具（包含writemd）
             file_tools = LangChainToolFactory.create_file_tools(workspace_dir, stream_manager)
             all_tools.extend(file_tools)
 

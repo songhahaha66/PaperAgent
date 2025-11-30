@@ -91,8 +91,9 @@ class WorkspaceStructureManager:
             cls._create_paper_md(workspace_path, template_id)
             logger.info(f"Markdown 模式：已创建 paper.md")
         elif output_mode == "word":
-            # Word 模式：不创建 paper.md，AI 会创建 paper.docx
-            logger.info(f"Word 模式：跳过创建 paper.md，等待 AI 生成 paper.docx")
+            # Word 模式：创建空的 paper.docx 文件
+            cls._create_paper_docx(workspace_path)
+            logger.info(f"Word 模式：已创建 paper.docx")
         elif output_mode == "latex":
             # LaTeX 模式：暂时回退到 Markdown
             cls._create_paper_md(workspace_path, template_id)
@@ -101,6 +102,39 @@ class WorkspaceStructureManager:
             # 未知模式：默认创建 paper.md
             logger.warning(f"未知的输出模式 '{output_mode}'，默认创建 paper.md")
             cls._create_paper_md(workspace_path, template_id)
+    
+    @classmethod
+    def _create_paper_docx(cls, workspace_path: Path) -> None:
+        """创建初始的 paper.docx 文件
+        
+        Args:
+            workspace_path: 工作空间路径
+            
+        Note:
+            创建一个空的 Word 文档，供 AI 后续添加内容
+        """
+        paper_docx_path = workspace_path / "paper.docx"
+        
+        # 如果文件已存在，不覆盖
+        if paper_docx_path.exists():
+            logger.info(f"paper.docx 已存在，跳过创建: {paper_docx_path}")
+            return
+        
+        try:
+            from docx import Document
+            
+            # 创建空文档
+            doc = Document()
+            
+            # 保存文档
+            doc.save(str(paper_docx_path))
+            
+            logger.info(f"成功创建空的 paper.docx: {paper_docx_path}")
+            
+        except Exception as e:
+            logger.error(f"创建 paper.docx 失败: {e}")
+            # Word 文档创建失败不应该阻止工作空间创建
+            # 只记录错误，让 AI 后续通过工具创建
     
     @classmethod
     def _create_paper_md(cls, workspace_path: Path, template_id: Optional[int] = None) -> None:
