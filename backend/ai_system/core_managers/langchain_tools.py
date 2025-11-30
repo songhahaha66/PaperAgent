@@ -133,7 +133,8 @@ class LangChainToolFactory:
         workspace_dir: str,
         output_mode: str,
         stream_manager=None,
-        llm=None
+        llm=None,
+        writer_llm=None
     ) -> Optional[StructuredTool]:
         """
         Create LangChain WriterAgent tool for document writing operations
@@ -146,13 +147,17 @@ class LangChainToolFactory:
             workspace_dir: Workspace directory path
             output_mode: Document format mode ("word", "markdown", or "latex")
             stream_manager: Stream manager for output notifications
-            llm: LangChain LLM instance for WriterAgent
+            llm: LangChain LLM instance for WriterAgent (fallback if writer_llm not provided)
+            writer_llm: Dedicated LangChain LLM instance for WriterAgent from "writing" config
 
         Returns:
             WriterAgent tool or None if creation fails
         """
         try:
-            if llm is None:
+            # Use writer_llm if provided, otherwise fall back to llm
+            writer_model = writer_llm if writer_llm is not None else llm
+            
+            if writer_model is None:
                 logger.error("创建WriterAgent工具失败：未提供LLM实例")
                 return None
             
@@ -160,13 +165,19 @@ class LangChainToolFactory:
                 logger.error("创建WriterAgent工具失败：未提供workspace_dir")
                 return None
 
+            # Log which LLM is being used
+            if writer_llm is not None:
+                logger.info("WriterAgent使用专用的'writing'配置LLM")
+            else:
+                logger.info("WriterAgent使用MainAgent的LLM（未找到'writing'配置）")
+
             # Import WriterAgent
             from ..core_agents.writer_agent import WriterAgent
 
             # Instantiate WriterAgent with provided parameters
             try:
                 writer_agent = WriterAgent(
-                    llm=llm,
+                    llm=writer_model,
                     output_mode=output_mode,
                     workspace_dir=workspace_dir,
                     stream_manager=stream_manager,

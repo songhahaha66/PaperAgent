@@ -27,7 +27,7 @@ class MainAgent:
     def __init__(self, llm: BaseLanguageModel, stream_manager=None,
                  workspace_dir: str = None, work_id: Optional[str] = None,
                  template_id: Optional[int] = None, codeagent_llm=None,
-                 output_mode: str = "markdown"):
+                 output_mode: str = "markdown", writer_llm=None):
         """
         初始化MainAgent
 
@@ -39,8 +39,9 @@ class MainAgent:
             template_id: 模板ID
             codeagent_llm: CodeAgent使用的LLM实例
             output_mode: 输出模式 ("markdown", "word", "latex")
+            writer_llm: WriterAgent使用的LLM实例（从"writing"配置加载）
         """
-        logger.info(f"MainAgent初始化开始，output_mode: {output_mode}, codeagent_llm: {codeagent_llm}")
+        logger.info(f"MainAgent初始化开始，output_mode: {output_mode}, codeagent_llm: {codeagent_llm}, writer_llm: {writer_llm}")
         self.llm = llm
         self.stream_manager = stream_manager
         self.work_id = work_id
@@ -78,7 +79,8 @@ class MainAgent:
             workspace_dir=self.workspace_dir,
             output_mode=self.output_mode,
             stream_manager=stream_manager,
-            llm=self.llm
+            llm=self.llm,
+            writer_llm=writer_llm
         )
         if writer_agent_tool:
             self.tools.append(writer_agent_tool)

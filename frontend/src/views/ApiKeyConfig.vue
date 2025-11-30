@@ -148,6 +148,15 @@ const configs = reactive([
       modelId: '',
     }),
   },
+  {
+    type: 'writing' as const,
+    title: '论文写作',
+    data: reactive<ModelConfigForm>({
+      apiKey: '',
+      baseUrl: '',
+      modelId: '',
+    }),
+  },
 ])
 
 // 保存状态

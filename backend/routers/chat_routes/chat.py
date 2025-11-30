@@ -334,6 +334,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             workspace_dir = env_manager.get_workspace_dir()
             model_config = env_manager.config_manager.get_model_config("brain", user_id)
             codeagent_model_config = env_manager.config_manager.get_model_config("code", user_id)
+            writer_model_config = env_manager.config_manager.get_model_config("writing", user_id)
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(
@@ -364,6 +365,20 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 logger.info("未提供codeagent配置，使用主LLM")
                 codeagent_llm = llm_handler.get_llm_instance()
 
+            # 获取writer的LLM实例（从"writing"配置加载）
+            writer_llm = None
+            if writer_model_config:
+                from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+                try:
+                    writer_llm = create_llm_from_model_config(writer_model_config)
+                    logger.info(f"使用LangChain模型作为WriterAgent: {writer_llm}")
+                except Exception as e:
+                    logger.error(f"创建WriterAgent专用LangChain模型失败: {e}")
+                    writer_llm = None
+            else:
+                logger.info("未提供writer配置，WriterAgent将使用主LLM")
+                writer_llm = None
+
             # 获取工作的模板ID和输出模式
             template_id = None
             output_mode = "markdown"  # 默认值
@@ -380,7 +395,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             except Exception as e:
                 logger.warning(f"获取工作配置失败: {e}")
 
-            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode
+            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode、writer_llm
             main_agent = MainAgent(
                 llm_handler.get_llm_instance(), 
                 stream_manager, 
@@ -388,7 +403,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 work_id, 
                 template_id, 
                 codeagent_llm,
-                output_mode=output_mode
+                output_mode=output_mode,
+                writer_llm=writer_llm
             )
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
