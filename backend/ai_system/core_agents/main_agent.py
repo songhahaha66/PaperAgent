@@ -76,12 +76,37 @@ class MainAgent:
 
         # 创建 LangChain Agent
         self.system_prompt = self._create_system_prompt()
+        
+        # 检查 LLM 是否支持工具调用
+        logger.info(f"LLM 类型: {type(llm).__name__}")
+        logger.info(f"LLM 模型: {getattr(llm, 'model_name', getattr(llm, 'model', 'unknown'))}")
+        
+        # 检查是否有 bind_tools 方法（表示支持工具调用）
+        if hasattr(llm, 'bind_tools'):
+            logger.info("✓ LLM 支持 bind_tools 方法")
+            # 测试绑定工具
+            try:
+                test_bound = llm.bind_tools(self.tools[:1])
+                logger.info("✓ 工具绑定测试成功")
+            except Exception as e:
+                logger.error(f"✗ 工具绑定测试失败: {e}")
+        else:
+            logger.warning("⚠️ LLM 不支持 bind_tools 方法，工具调用可能不可用")
+        
+        # 检查 LLM 的配置
+        if hasattr(llm, 'model_kwargs'):
+            logger.info(f"LLM model_kwargs: {llm.model_kwargs}")
+        
+        logger.info(f"创建 Agent，工具数量: {len(self.tools)}")
         self.agent = create_agent(
             model=llm,
-            tools=self.tools
+            tools=self.tools,
+            system_prompt=self.system_prompt,
+            debug=True  # 启用调试模式
         )
 
         logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, output_mode: {output_mode}, 工具数量: {len(self.tools)}")
+        logger.info(f"已注册工具: {[tool.name for tool in self.tools]}")
 
     async def _load_word_tools(self) -> None:
         """加载Word工具（直接调用），包含回退逻辑"""
@@ -137,6 +162,7 @@ class MainAgent:
         # 基础系统提示
         system_content = (
             "你是基于 LangChain Agent 的学术论文写作助手，负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n\n"
+            "**重要：你必须使用提供的工具来完成任务，不要只是回复文本！**\n\n"
             "请你记住：论文尽可能使用图表等清晰表示！涉及图表等务必使用代码执行得到！\n"
             "请你记住：如果最后发现没找到代码或者图片就重新执行数据分析！\n\n"
             "你的职责：\n"
@@ -249,12 +275,39 @@ class MainAgent:
                     logger.warning(f"发送开始通知失败: {e}")
 
             # 使用 LangChain Agent 执行
+            logger.info(f"调用 Agent，可用工具数量: {len(self.tools)}")
+            logger.info(f"工具列表: {[tool.name for tool in self.tools]}")
+            
             inputs = {"messages": [HumanMessage(content=user_input)]}
             result = await self.agent.ainvoke(inputs)
 
             # 提取最后的AI回复
             messages = result.get("messages", [])
             output = ""
+            
+            # 记录所有消息用于调试
+            logger.info(f"Agent返回了 {len(messages)} 条消息")
+            tool_calls_count = 0
+            for i, message in enumerate(messages):
+                msg_type = type(message).__name__
+                logger.info(f"消息 {i}: 类型={msg_type}")
+                
+                # 检查是否有工具调用
+                if hasattr(message, 'tool_calls') and message.tool_calls:
+                    tool_calls_count += len(message.tool_calls)
+                    logger.info(f"  包含 {len(message.tool_calls)} 个工具调用")
+                    for tc in message.tool_calls:
+                        logger.info(f"    工具: {tc.get('name', 'unknown')}")
+                
+                if hasattr(message, 'content') and message.content:
+                    content_preview = str(message.content)[:100]
+                    logger.info(f"  内容预览: {content_preview}")
+            
+            if tool_calls_count == 0:
+                logger.warning("⚠️ 没有检测到任何工具调用！")
+            else:
+                logger.info(f"✓ 总共执行了 {tool_calls_count} 个工具调用")
+            
             for message in reversed(messages):
                 if hasattr(message, 'content') and message.content:
                     output = message.content
