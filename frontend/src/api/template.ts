@@ -6,6 +6,7 @@ export interface PaperTemplate {
   name: string
   description?: string
   category?: string
+  output_format: string // 添加输出格式字段
   file_path: string // 添加文件路径字段
   created_at: string
   updated_at: string
@@ -17,6 +18,7 @@ export interface PaperTemplateCreate {
   name: string
   description?: string
   category?: string
+  output_format: string // 添加输出格式字段
   file_path: string // 添加文件路径字段
   is_public: boolean
 }
@@ -25,6 +27,7 @@ export interface PaperTemplateCreateWithContent {
   name: string
   description?: string
   category?: string
+  output_format: string // 添加输出格式字段
   file_path: string
   is_public: boolean
   content: string // 添加文件内容字段
@@ -34,6 +37,7 @@ export interface PaperTemplateUpdate {
   name?: string
   description?: string
   category?: string
+  output_format?: string // 添加输出格式字段
   file_path?: string // 允许更新文件路径
   is_public?: boolean
 }
@@ -48,8 +52,13 @@ class TemplateAPI {
     token: string,
     skip: number = 0,
     limit: number = 100,
+    outputFormat?: string,
   ): Promise<PaperTemplate[]> {
-    return this.request<PaperTemplate[]>(`/templates?skip=${skip}&limit=${limit}`, {
+    let url = `/templates?skip=${skip}&limit=${limit}`
+    if (outputFormat) {
+      url += `&output_format=${outputFormat}`
+    }
+    return this.request<PaperTemplate[]>(url, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -57,8 +66,16 @@ class TemplateAPI {
   }
 
   // 获取公开模板列表
-  async getPublicTemplates(skip: number = 0, limit: number = 100): Promise<PaperTemplate[]> {
-    return this.request<PaperTemplate[]>(`/templates/public?skip=${skip}&limit=${limit}`)
+  async getPublicTemplates(
+    skip: number = 0,
+    limit: number = 100,
+    outputFormat?: string,
+  ): Promise<PaperTemplate[]> {
+    let url = `/templates/public?skip=${skip}&limit=${limit}`
+    if (outputFormat) {
+      url += `&output_format=${outputFormat}`
+    }
+    return this.request<PaperTemplate[]>(url)
   }
 
   // 获取指定模板

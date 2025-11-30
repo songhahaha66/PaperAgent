@@ -253,17 +253,19 @@ def get_paper_template(db: Session, template_id: int):
     """根据ID获取论文模板"""
     return db.query(models.PaperTemplate).filter(models.PaperTemplate.id == template_id).first()
 
-def get_user_templates(db: Session, user_id: int, skip: int = 0, limit: int = 100):
+def get_user_templates(db: Session, user_id: int, skip: int = 0, limit: int = 100, output_format: str = None):
     """获取指定用户的模板"""
-    return db.query(models.PaperTemplate).filter(
-        models.PaperTemplate.created_by == user_id
-    ).offset(skip).limit(limit).all()
+    query = db.query(models.PaperTemplate).filter(models.PaperTemplate.created_by == user_id)
+    if output_format:
+        query = query.filter(models.PaperTemplate.output_format == output_format)
+    return query.offset(skip).limit(limit).all()
 
-def get_public_templates(db: Session, skip: int = 0, limit: int = 100):
+def get_public_templates(db: Session, skip: int = 0, limit: int = 100, output_format: str = None):
     """获取公开模板"""
-    return db.query(models.PaperTemplate).filter(
-        models.PaperTemplate.is_public == True
-    ).offset(skip).limit(limit).all()
+    query = db.query(models.PaperTemplate).filter(models.PaperTemplate.is_public == True)
+    if output_format:
+        query = query.filter(models.PaperTemplate.output_format == output_format)
+    return query.offset(skip).limit(limit).all()
 
 def update_paper_template(db: Session, template_id: int, template_update: schemas.PaperTemplateUpdate, user_id: int):
     """更新论文模板"""

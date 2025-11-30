@@ -71,9 +71,90 @@
             </div>
           </div>
 
-          <!-- 第二阶段：选择模板 -->
+          <!-- 第二阶段：选择输出格式 -->
           <div v-if="currentStep === 2" class="step-content">
-            <h3>选择论文模板</h3>
+            <h3>选择输出格式</h3>
+
+            <!-- 输出模式选择 -->
+            <div class="output-mode-selector">
+              <!-- Markdown 选项 -->
+              <t-card
+                :class="{ selected: selectedOutputMode === 'markdown' }"
+                @click="selectOutputMode('markdown')"
+                class="output-mode-card"
+              >
+                <div class="output-mode-content">
+                  <t-icon name="file-1" size="24px" />
+                  <div class="output-mode-text">
+                    <h4>Markdown</h4>
+                    <p>轻量级标记语言（默认）</p>
+                  </div>
+                  <div v-if="selectedOutputMode === 'markdown'" class="selection-indicator">
+                    <t-icon name="check-circle-filled" theme="success" />
+                  </div>
+                </div>
+              </t-card>
+
+              <!-- Word 选项 -->
+              <t-card
+                :class="{ selected: selectedOutputMode === 'word' }"
+                @click="selectOutputMode('word')"
+                class="output-mode-card"
+              >
+                <div class="output-mode-content">
+                  <t-icon name="file-word" size="24px" />
+                  <div class="output-mode-text">
+                    <h4>Word (.docx)</h4>
+                    <p>Microsoft Word 格式</p>
+                  </div>
+                  <div v-if="selectedOutputMode === 'word'" class="selection-indicator">
+                    <t-icon name="check-circle-filled" theme="success" />
+                  </div>
+                </div>
+              </t-card>
+
+              <!-- LaTeX 选项 -->
+              <t-card
+                :class="{ selected: selectedOutputMode === 'latex' }"
+                @click="selectOutputMode('latex')"
+                class="output-mode-card"
+                :disabled="true"
+              >
+                <div class="output-mode-content">
+                  <t-icon name="file-pdf" size="24px" />
+                  <div class="output-mode-text">
+                    <h4>LaTeX</h4>
+                    <p>专业排版系统（即将推出）</p>
+                  </div>
+                  <div v-if="selectedOutputMode === 'latex'" class="selection-indicator">
+                    <t-icon name="check-circle-filled" theme="success" />
+                  </div>
+                </div>
+              </t-card>
+            </div>
+
+            <div class="step-actions">
+              <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
+                上一步
+              </t-button>
+
+              <t-button
+                theme="primary"
+                size="middle"
+                @click="nextStep"
+                class="next-btn"
+              >
+                下一步
+                <template #icon>
+                  <t-icon name="arrow-right" />
+                </template>
+              </t-button>
+            </div>
+          </div>
+
+          <!-- 第三阶段：选择模板 -->
+          <div v-if="currentStep === 3" class="step-content">
+            <h3>选择{{ getOutputModeLabel() }}模板</h3>
 
             <!-- 不使用模板选项 -->
             <div class="no-template-option">
@@ -97,13 +178,13 @@
 
             <!-- 或者分割线 -->
             <div class="template-divider">
-              <span>或者选择现有模板</span>
+              <span>或者选择现有{{ getOutputModeLabel() }}模板</span>
             </div>
 
             <!-- 加载状态 -->
             <div v-if="loading" class="loading-state">
               <t-loading size="large" />
-              <p>正在加载您的模板...</p>
+              <p>正在加载{{ getOutputModeLabel() }}模板...</p>
             </div>
 
             <!-- 模板列表 -->
@@ -154,67 +235,11 @@
               <div class="no-template-icon">
                 <t-icon name="file" theme="default" size="48px" />
               </div>
-              <h4>暂无模板</h4>
-              <p>您还没有创建任何论文模板</p>
+              <h4>暂无{{ getOutputModeLabel() }}模板</h4>
+              <p>您还没有创建任何{{ getOutputModeLabel() }}模板</p>
               <t-button theme="primary" variant="outline" @click="goToTemplatePage">
                 去创建模板
               </t-button>
-            </div>
-
-            <div class="step-actions">
-              <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
-                上一步
-              </t-button>
-
-              <t-button
-                theme="primary"
-                size="middle"
-                @click="nextStep"
-                class="next-btn"
-              >
-                下一步
-                <template #icon>
-                  <t-icon name="arrow-right" />
-                </template>
-              </t-button>
-            </div>
-          </div>
-
-          <!-- 第三阶段：选择输出格式 -->
-          <div v-if="currentStep === 3" class="step-content">
-            <h3>选择输出格式</h3>
-            
-            <!-- 输出模式选择 -->
-            <div class="output-mode-selector">
-              <t-radio-group v-model="selectedOutputMode" class="output-mode-group">
-                <t-radio value="markdown" class="output-mode-option">
-                  <div class="output-mode-content">
-                    <t-icon name="file-1" size="24px" />
-                    <div class="output-mode-text">
-                      <strong>Markdown</strong>
-                      <span class="output-mode-desc">轻量级标记语言（默认）</span>
-                    </div>
-                  </div>
-                </t-radio>
-                <t-radio value="word" class="output-mode-option">
-                  <div class="output-mode-content">
-                    <t-icon name="file-word" size="24px" />
-                    <div class="output-mode-text">
-                      <strong>Word (.docx)</strong>
-                      <span class="output-mode-desc">Microsoft Word 格式</span>
-                    </div>
-                  </div>
-                </t-radio>
-                <t-radio value="latex" class="output-mode-option" disabled>
-                  <div class="output-mode-content">
-                    <t-icon name="file-pdf" size="24px" />
-                    <div class="output-mode-text">
-                      <strong>LaTeX</strong>
-                      <span class="output-mode-desc">专业排版系统（即将推出）</span>
-                    </div>
-                  </div>
-                </t-radio>
-              </t-radio-group>
             </div>
 
             <div class="step-actions">
@@ -334,13 +359,13 @@ const templateContent = ref('')
 // 上传相关配置
 const tempWorkId = ref<string | null>(null) // 临时存储的工作ID
 
-// 加载用户模板
+// 加载用户模板（根据选定的输出格式）
 const loadUserTemplates = async () => {
   if (!authStore.token) return
 
   loading.value = true
   try {
-    const templates = await templateAPI.getUserTemplates(authStore.token)
+    const templates = await templateAPI.getUserTemplates(authStore.token, 0, 100, selectedOutputMode.value)
     availableTemplates.value = templates
   } catch (error) {
     console.error('加载模板失败:', error)
@@ -352,14 +377,22 @@ const loadUserTemplates = async () => {
 
 // 下一步
 const nextStep = () => {
-  if (currentStep.value === 1) {
-    // 进入第二步时加载模板
+  if (currentStep.value === 2) {
+    // 进入第三步时加载对应格式的模板
     loadUserTemplates()
   }
 
   if (currentStep.value < 3) {
     currentStep.value++
   }
+}
+
+
+// 选择输出格式
+const selectOutputMode = (mode: 'markdown' | 'word' | 'latex') => {
+  selectedOutputMode.value = mode
+  // 清除已选择的模板
+  selectedTemplateId.value = null
 }
 
 // 上一步
@@ -755,52 +788,61 @@ const selectHistory = (id: number) => {
 
 /* 输出模式选择器 */
 .output-mode-selector {
-  margin-bottom: 32px;
-  padding: 20px;
-  background-color: #f5f7fa;
-  border-radius: 8px;
-  border: 1px solid #e0e6ed;
-}
-
-.output-mode-group {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
+  margin-bottom: 32px;
   width: 100%;
 }
 
-.output-mode-option {
-  width: 100%;
+.output-mode-card {
+  cursor: pointer;
+  border: 2px solid #e0e6ed;
+  border-radius: 8px;
+  padding: 12px;
+  transition: all 0.2s ease;
+  background-color: #f5f7fa;
 }
 
-.output-mode-content {
+.output-mode-card:hover {
+  background-color: #e6f4ff;
+  border-color: #0052d9;
+}
+
+.output-mode-card.selected {
+  background-color: #e6f4ff;
+  border-color: #0052d9;
+  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
+}
+
+.output-mode-card .output-mode-content {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px;
-  border-radius: 6px;
-  transition: all 0.2s ease;
-}
-
-.output-mode-option:hover .output-mode-content {
-  background-color: #e6f4ff;
+  width: 100%;
 }
 
 .output-mode-text {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex: 1;
 }
 
-.output-mode-text strong {
+.output-mode-text h4 {
+  margin: 0 0 4px 0;
   color: #2c3e50;
   font-size: 1rem;
   font-weight: 600;
 }
 
-.output-mode-desc {
+.output-mode-text p {
+  margin: 0;
   color: #7f8c8d;
   font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.selection-indicator {
+  margin-left: auto;
+  color: #00a870;
 }
 
 /* 分割线 */

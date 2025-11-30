@@ -42,11 +42,12 @@ class ModelConfig(Base):
 
 class PaperTemplate(Base):
     __tablename__ = "paper_templates"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     description = Column(Text)
     category = Column(String(50))
+    output_format = Column(String(10), nullable=False, default="markdown")  # 输出格式：md, word, latex
     file_path = Column(String(500), nullable=False)  # 模板文件路径
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
