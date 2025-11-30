@@ -12,6 +12,8 @@ from ai_system.config.logging_config import setup_simple_logging
 # 导入异步配置管理器
 from ai_system.config.async_config import initialize_async_config, shutdown_async_config
 from config.paths import get_project_root, get_pa_data_base, get_workspaces_path, get_templates_path
+# 导入MCP客户端管理器
+from ai_system.core_managers.mcp_client_manager import MCPClientManager
 
 # 设置日志系统（只显示在终端，关闭LiteLLM日志）
 setup_simple_logging("INFO")
@@ -37,9 +39,30 @@ async def lifespan(app: FastAPI):
     logger.info(f"工作空间目录: {get_workspaces_path()}")
     logger.info(f"模板目录: {get_templates_path()}")
     
+    # 初始化MCP客户端
+    logger.info("初始化MCP客户端...")
+    mcp_manager = MCPClientManager()
+    success = await mcp_manager.initialize()
+    
+    if success:
+        logger.info("MCP客户端初始化成功")
+        app.state.mcp_manager = mcp_manager
+        app.state.mcp_available = True
+    else:
+        logger.warning("MCP客户端初始化失败，Word模式将不可用")
+        app.state.mcp_manager = None
+        app.state.mcp_available = False
+    
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")
+    
+    # 清理MCP客户端
+    if hasattr(app.state, 'mcp_manager') and app.state.mcp_manager:
+        logger.info("清理MCP客户端...")
+        await app.state.mcp_manager.cleanup()
+        logger.info("MCP客户端已清理")
+    
     shutdown_async_config()
     logger.info("异步配置已关闭")
 
@@ -89,6 +112,10 @@ async def async_status():
 # 注册路由模块（统一）
 for router in all_routers:
     app.include_router(router)
+
+# 设置app实例引用，供WebSocket路由使用
+from routers.chat_routes.chat import set_app_instance
+set_app_instance(app)
 
 if __name__ == "__main__":
     # 优化uvicorn配置，提高并发性能

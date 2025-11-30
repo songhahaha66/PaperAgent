@@ -26,7 +26,8 @@ class MainAgent:
 
     def __init__(self, llm: BaseLanguageModel, stream_manager=None,
                  workspace_dir: str = None, work_id: Optional[str] = None,
-                 template_id: Optional[int] = None, codeagent_llm=None):
+                 template_id: Optional[int] = None, codeagent_llm=None,
+                 output_mode: str = "markdown", mcp_manager=None):
         """
         初始化MainAgent
 
@@ -36,13 +37,18 @@ class MainAgent:
             workspace_dir: 工作空间目录路径
             work_id: 工作ID
             template_id: 模板ID
+            codeagent_llm: CodeAgent使用的LLM实例
+            output_mode: 输出模式 ("markdown", "word", "latex")
+            mcp_manager: MCP客户端管理器，用于Word工具
         """
-        logger.info(f"MainAgent初始化开始，codeagent_llm: {codeagent_llm}")
+        logger.info(f"MainAgent初始化开始，output_mode: {output_mode}, codeagent_llm: {codeagent_llm}")
         self.llm = llm
         self.stream_manager = stream_manager
         self.work_id = work_id
         self.template_id = template_id
         self.workspace_dir = workspace_dir
+        self.output_mode = output_mode
+        self.mcp_manager = mcp_manager
 
         # 如果没有提供workspace_dir但有work_id，构建路径
         if not workspace_dir and work_id:
@@ -67,6 +73,10 @@ class MainAgent:
         else:
             logger.warning("CodeAgent工具创建失败，代码能力可能受限")
 
+        # 标记是否需要加载Word工具（延迟到第一次run时加载）
+        self.word_tool_wrapper = None
+        self._word_tools_loaded = False
+
         # 创建 LangChain Agent
         self.system_prompt = self._create_system_prompt()
         self.agent = create_agent(
@@ -74,7 +84,77 @@ class MainAgent:
             tools=self.tools
         )
 
-        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, 工具数量: {len(self.tools)}")
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, output_mode: {output_mode}, 工具数量: {len(self.tools)}")
+
+    async def _load_word_tools_async(self) -> None:
+        """异步加载Word工具，包含回退逻辑"""
+        try:
+            # 检查LaTeX模式（尚未实现）
+            if self.output_mode == "latex":
+                logger.warning("LaTeX模式尚未实现，回退到Markdown模式")
+                self.output_mode = "markdown"
+                if self.stream_manager:
+                    await self.stream_manager.send_json_block(
+                        "warning",
+                        "LaTeX模式即将推出，当前已回退到Markdown模式"
+                    )
+                return
+
+            # 检查Word模式的MCP可用性
+            if not self.mcp_manager or not self.mcp_manager.is_available():
+                logger.warning("Word模式请求但MCP服务器不可用，将回退到Markdown模式")
+                self.output_mode = "markdown"
+                if self.stream_manager:
+                    await self.stream_manager.send_json_block(
+                        "error",
+                        "Word模式不可用：MCP服务器未连接。已回退到Markdown模式。"
+                    )
+                return
+
+            # 导入WordToolWrapper
+            from ..core_managers.word_tools import WordToolWrapper
+
+            # 创建WordToolWrapper
+            mcp_client = self.mcp_manager.get_client()
+            self.word_tool_wrapper = WordToolWrapper(
+                mcp_client=mcp_client,
+                workspace_dir=self.workspace_dir,
+                stream_manager=self.stream_manager
+            )
+
+            # 初始化Word工具
+            success = await self.word_tool_wrapper.initialize()
+            if not success:
+                logger.warning("Word工具初始化失败，回退到Markdown模式")
+                self.output_mode = "markdown"
+                self.word_tool_wrapper = None
+                if self.stream_manager:
+                    await self.stream_manager.send_json_block(
+                        "warning",
+                        "Word工具初始化失败，已回退到Markdown模式"
+                    )
+                return
+
+            # 获取LangChain兼容的工具
+            word_tools = self.word_tool_wrapper.create_langchain_tools()
+            self.tools.extend(word_tools)
+
+            logger.info(f"成功加载 {len(word_tools)} 个Word工具到MainAgent")
+            if self.stream_manager:
+                await self.stream_manager.send_json_block(
+                    "info",
+                    f"Word模式已启用，加载了 {len(word_tools)} 个Word工具"
+                )
+
+        except Exception as e:
+            logger.error(f"加载Word工具失败: {e}", exc_info=True)
+            self.output_mode = "markdown"
+            self.word_tool_wrapper = None
+            if self.stream_manager:
+                await self.stream_manager.send_json_block(
+                    "error",
+                    f"Word工具加载失败: {str(e)}，已回退到Markdown模式"
+                )
 
     def _create_system_prompt(self) -> str:
         """创建 MainAgent 的系统提示词"""
@@ -87,10 +167,47 @@ class MainAgent:
             "1. 分析用户需求，制定论文生成计划\n"
             "2. **主动检查和分析附件**：当用户上传附件时，使用read_attachment工具读取附件内容\n"
             "3. 当需要代码执行、数据分析、图表生成时，使用code_agent_execute工具\n"
-            "4. 使用writemd工具保存论文草稿到paper.md\n\n"
-            "**你的工具集**：\n"
-            "- writemd: 保存论文草稿和内容到文件（推荐使用）\n"
-            "- update_template: 更新论文模板的特定章节\n"
+        )
+
+        # 根据输出模式添加文档生成指令
+        if self.output_mode == "word":
+            system_content += (
+                "4. **使用Word工具生成论文文档**：你正在Word模式下工作，必须使用Word工具创建.docx格式的论文\n\n"
+                "**Word模式工具集**：\n"
+                "- word_create_document: 创建新的Word文档（必须首先调用）\n"
+                "- word_add_heading: 添加标题（level 1-5，1为最大标题）\n"
+                "  * 示例：word_add_heading(text=\"Introduction\", level=1)\n"
+                "- word_add_paragraph: 添加段落文本\n"
+                "  * 示例：word_add_paragraph(text=\"This paper presents...\")\n"
+                "- word_add_table: 添加表格\n"
+                "  * 示例：word_add_table(rows=3, cols=4, data=[[\"Header1\", \"Header2\", ...], ...])\n"
+                "- word_add_picture: 插入图片（路径相对于工作空间）\n"
+                "  * 示例：word_add_picture(image_path=\"outputs/chart.png\", width=6.0)\n"
+                "- word_save_document: 保存文档到paper.docx（完成后必须调用）\n\n"
+                "**Word模式工作流程**：\n"
+                "1. 首先调用 word_create_document 创建文档\n"
+                "2. 使用 word_add_heading 添加章节标题\n"
+                "3. 使用 word_add_paragraph 添加段落内容\n"
+                "4. 使用 word_add_table 添加数据表格\n"
+                "5. 使用 word_add_picture 插入图表（图片需先通过code_agent_execute生成）\n"
+                "6. 最后调用 word_save_document 保存文档\n\n"
+                "**重要提示**：\n"
+                "- 图片路径使用相对路径（如 \"outputs/chart.png\"）\n"
+                "- 标题层级：1=章节标题，2=小节标题，3=子小节标题\n"
+                "- 每次添加内容后无需保存，只在最后调用一次 word_save_document\n"
+                "- 如果图片文件不存在，系统会跳过该图片并继续\n\n"
+            )
+        else:
+            system_content += (
+                "4. 使用writemd工具保存论文草稿到paper.md\n\n"
+                "**Markdown模式工具集**：\n"
+                "- writemd: 保存论文草稿和内容到文件（推荐使用）\n"
+                "- update_template: 更新论文模板的特定章节\n"
+            )
+
+        # 通用工具
+        system_content += (
+            "\n**通用工具**：\n"
             "- read_attachment: 读取附件内容（PDF、Word、Excel等）\n"
             "- list_attachments: 列出所有附件文件\n"
             "- web_search: 搜索最新的学术资料和背景信息\n"
@@ -136,6 +253,24 @@ class MainAgent:
         logger.info(f"MainAgent开始执行任务: {user_input[:100]}...")
 
         try:
+            # 首次运行时处理输出模式和加载工具
+            if not self._word_tools_loaded:
+                # 处理LaTeX模式回退
+                if self.output_mode == "latex":
+                    logger.warning("LaTeX模式尚未实现，回退到Markdown模式")
+                    self.output_mode = "markdown"
+                    if self.stream_manager:
+                        await self.stream_manager.send_json_block(
+                            "warning",
+                            "LaTeX模式即将推出，当前已回退到Markdown模式"
+                        )
+                
+                # 加载Word工具（如果需要）
+                elif self.output_mode == "word":
+                    await self._load_word_tools_async()
+                
+                self._word_tools_loaded = True
+
             # 发送开始通知
             if self.stream_manager:
                 try:

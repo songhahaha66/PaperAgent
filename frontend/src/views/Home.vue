@@ -167,6 +167,62 @@
               </t-button>
 
               <t-button
+                theme="primary"
+                size="middle"
+                @click="nextStep"
+                class="next-btn"
+              >
+                下一步
+                <template #icon>
+                  <t-icon name="arrow-right" />
+                </template>
+              </t-button>
+            </div>
+          </div>
+
+          <!-- 第三阶段：选择输出格式 -->
+          <div v-if="currentStep === 3" class="step-content">
+            <h3>选择输出格式</h3>
+            
+            <!-- 输出模式选择 -->
+            <div class="output-mode-selector">
+              <t-radio-group v-model="selectedOutputMode" class="output-mode-group">
+                <t-radio value="markdown" class="output-mode-option">
+                  <div class="output-mode-content">
+                    <t-icon name="file-1" size="24px" />
+                    <div class="output-mode-text">
+                      <strong>Markdown</strong>
+                      <span class="output-mode-desc">轻量级标记语言（默认）</span>
+                    </div>
+                  </div>
+                </t-radio>
+                <t-radio value="word" class="output-mode-option">
+                  <div class="output-mode-content">
+                    <t-icon name="file-word" size="24px" />
+                    <div class="output-mode-text">
+                      <strong>Word (.docx)</strong>
+                      <span class="output-mode-desc">Microsoft Word 格式</span>
+                    </div>
+                  </div>
+                </t-radio>
+                <t-radio value="latex" class="output-mode-option" disabled>
+                  <div class="output-mode-content">
+                    <t-icon name="file-pdf" size="24px" />
+                    <div class="output-mode-text">
+                      <strong>LaTeX</strong>
+                      <span class="output-mode-desc">专业排版系统（即将推出）</span>
+                    </div>
+                  </div>
+                </t-radio>
+              </t-radio-group>
+            </div>
+
+            <div class="step-actions">
+              <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
+                上一步
+              </t-button>
+
+              <t-button
                 theme="success"
                 size="middle"
                 @click="startWork"
@@ -240,7 +296,7 @@ const authStore = useAuthStore()
 // 侧边栏折叠状态 - 手机端默认收起
 const isSidebarCollapsed = ref(window.innerWidth <= 768)
 
-// 任务创建步骤
+// 任务创建步骤（现在有3步：1.输入问题 2.选择模板 3.选择输出格式）
 const currentStep = ref(1)
 
 // 研究问题
@@ -248,6 +304,9 @@ const researchQuestion = ref('')
 
 // 选择的模板ID
 const selectedTemplateId = ref<number | null>(null)
+
+// 选择的输出模式
+const selectedOutputMode = ref<'markdown' | 'word' | 'latex'>('markdown')
 
 // 上传的文件
 const uploadedFiles = ref([])
@@ -298,7 +357,7 @@ const nextStep = () => {
     loadUserTemplates()
   }
 
-  if (currentStep.value < 2) {
+  if (currentStep.value < 3) {
     currentStep.value++
   }
 }
@@ -380,9 +439,10 @@ const startWork = async () => {
     // 创建工作数据，标题用空格作为初始值
     const workData: WorkCreate = {
       title: ' ', // 用空格作为初始标题，后续由AI生成
-      description: `研究问题：${researchQuestion.value}\n${selectedTemplateId.value ? `使用模板：${getSelectedTemplateName()}` : '不使用模板，从头开始创建'}\n`,
+      description: `研究问题：${researchQuestion.value}\n${selectedTemplateId.value ? `使用模板：${getSelectedTemplateName()}` : '不使用模板，从头开始创建'}\n输出格式：${getOutputModeLabel()}\n`,
       tags: '研究,论文,AI生成',
       template_id: selectedTemplateId.value || undefined, // 如果为null则传undefined
+      output_mode: selectedOutputMode.value, // 添加输出模式
     }
 
     // 调用API创建工作
@@ -452,6 +512,16 @@ const getSelectedTemplateName = () => {
   return template ? template.name : '未选择'
 }
 
+// 获取输出模式标签
+const getOutputModeLabel = () => {
+  const labels = {
+    markdown: 'Markdown',
+    word: 'Word (.docx)',
+    latex: 'LaTeX'
+  }
+  return labels[selectedOutputMode.value]
+}
+
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
@@ -462,6 +532,7 @@ const createNewTask = () => {
   currentStep.value = 1
   researchQuestion.value = ''
   selectedTemplateId.value = null // 重置为null，表示不使用模板
+  selectedOutputMode.value = 'markdown' // 重置为默认的markdown模式
   uploadedFiles.value = []
   tempWorkId.value = null
 }
@@ -680,6 +751,56 @@ const selectHistory = (id: number) => {
 
 .selection-indicator {
   margin-left: auto;
+}
+
+/* 输出模式选择器 */
+.output-mode-selector {
+  margin-bottom: 32px;
+  padding: 20px;
+  background-color: #f5f7fa;
+  border-radius: 8px;
+  border: 1px solid #e0e6ed;
+}
+
+.output-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.output-mode-option {
+  width: 100%;
+}
+
+.output-mode-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.output-mode-option:hover .output-mode-content {
+  background-color: #e6f4ff;
+}
+
+.output-mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.output-mode-text strong {
+  color: #2c3e50;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.output-mode-desc {
+  color: #7f8c8d;
+  font-size: 0.85rem;
 }
 
 /* 分割线 */

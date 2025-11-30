@@ -211,6 +211,45 @@ class LangChainToolFactory:
             return []
 
     @staticmethod
+    async def create_word_tools(mcp_client, workspace_dir: str, stream_manager=None) -> List[BaseTool]:
+        """
+        创建 Word 文档工具（通过 MCP）
+
+        Args:
+            mcp_client: MCP client instance from MCPClientManager
+            workspace_dir: 工作空间目录
+            stream_manager: 流式输出管理器
+
+        Returns:
+            LangChain 格式的 Word 工具列表
+        """
+        try:
+            from .word_tools import WordToolWrapper
+            
+            if not mcp_client:
+                logger.warning("MCP client not available, Word tools not created")
+                return []
+            
+            # Create Word tool wrapper
+            word_wrapper = WordToolWrapper(mcp_client, workspace_dir, stream_manager)
+            
+            # Initialize the wrapper (loads MCP tools)
+            success = await word_wrapper.initialize()
+            if not success:
+                logger.error("Failed to initialize Word tools")
+                return []
+            
+            # Create LangChain-compatible tools
+            tools = word_wrapper.create_langchain_tools()
+            
+            logger.info(f"创建了 {len(tools)} 个 Word 工具")
+            return tools
+
+        except Exception as e:
+            logger.error(f"创建 Word 工具失败: {e}", exc_info=True)
+            return []
+
+    @staticmethod
     def create_standard_tools() -> List[BaseTool]:
         """
         创建 LangChain 标准工具

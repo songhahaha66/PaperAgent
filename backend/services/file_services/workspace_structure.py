@@ -23,13 +23,14 @@ class WorkspaceStructureManager:
     ]
 
     @classmethod
-    def create_workspace_structure(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None) -> None:
+    def create_workspace_structure(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None, output_mode: str = "markdown") -> None:
         """创建统一的工作空间目录结构和初始文件
         
         Args:
             workspace_path: 工作空间路径
             work_id: 工作ID
             template_id: 可选的模板ID，如果提供则使用模板内容初始化 paper.md
+            output_mode: 输出模式，可选值：markdown, word, latex
         """
         try:
             # 创建目录结构
@@ -38,21 +39,22 @@ class WorkspaceStructureManager:
                 dir_path.mkdir(parents=True, exist_ok=True)
 
             # 创建初始文件
-            cls._create_workspace_files(workspace_path, work_id, template_id)
+            cls._create_workspace_files(workspace_path, work_id, template_id, output_mode)
 
-            logger.info(f"工作空间目录结构和初始文件创建完成: {workspace_path}")
+            logger.info(f"工作空间目录结构和初始文件创建完成: {workspace_path}, 输出模式: {output_mode}")
         except Exception as e:
             logger.error(f"创建工作空间目录和文件失败: {e}")
             raise Exception(f"创建工作空间目录和文件失败: {e}")
 
     @classmethod
-    def _create_workspace_files(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None) -> None:
+    def _create_workspace_files(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None, output_mode: str = "markdown") -> None:
         """创建工作空间初始文件
         
         Args:
             workspace_path: 工作空间路径
             work_id: 工作ID
             template_id: 可选的模板ID
+            output_mode: 输出模式，可选值：markdown, word, latex
         """
         # 创建初始元数据文件
         metadata = {
@@ -83,8 +85,22 @@ class WorkspaceStructureManager:
         with open(chat_file, 'w', encoding='utf-8') as f:
             json.dump(chat_history, f, ensure_ascii=False, indent=2)
         
-        # 创建 paper.md 文件
-        cls._create_paper_md(workspace_path, template_id)
+        # 根据输出模式创建相应的初始文件
+        if output_mode == "markdown":
+            # Markdown 模式：创建 paper.md 文件
+            cls._create_paper_md(workspace_path, template_id)
+            logger.info(f"Markdown 模式：已创建 paper.md")
+        elif output_mode == "word":
+            # Word 模式：不创建 paper.md，AI 会创建 paper.docx
+            logger.info(f"Word 模式：跳过创建 paper.md，等待 AI 生成 paper.docx")
+        elif output_mode == "latex":
+            # LaTeX 模式：暂时回退到 Markdown
+            cls._create_paper_md(workspace_path, template_id)
+            logger.info(f"LaTeX 模式暂未实现，回退到 Markdown 模式：已创建 paper.md")
+        else:
+            # 未知模式：默认创建 paper.md
+            logger.warning(f"未知的输出模式 '{output_mode}'，默认创建 paper.md")
+            cls._create_paper_md(workspace_path, template_id)
     
     @classmethod
     def _create_paper_md(cls, workspace_path: Path, template_id: Optional[int] = None) -> None:

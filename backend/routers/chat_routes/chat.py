@@ -25,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["聊天系统"])
 
+# 全局变量用于存储app实例的引用（在WebSocket中使用）
+_app_instance = None
+
+def set_app_instance(app):
+    """设置app实例引用，供WebSocket使用"""
+    global _app_instance
+    _app_instance = app
+
+def get_app_instance():
+    """获取app实例引用"""
+    return _app_instance
+
 
 # 简化的WebSocket连接管理器
 class ConnectionManager:
@@ -352,19 +364,48 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 logger.info("未提供codeagent配置，使用主LLM")
                 codeagent_llm = llm_handler.get_llm_instance()
 
-            # 获取工作的模板ID
+            # 获取工作的模板ID和输出模式
             template_id = None
+            output_mode = "markdown"  # 默认值
             try:
                 from services.data_services.crud import get_work
                 work = get_work(db, work_id)
-                if work and hasattr(work, 'template_id') and work.template_id:
-                    template_id = work.template_id
-                    logger.info(f"工作 {work_id} 使用模板: {template_id}")
+                if work:
+                    if hasattr(work, 'template_id') and work.template_id:
+                        template_id = work.template_id
+                        logger.info(f"工作 {work_id} 使用模板: {template_id}")
+                    if hasattr(work, 'output_mode') and work.output_mode:
+                        output_mode = work.output_mode
+                        logger.info(f"工作 {work_id} 输出模式: {output_mode}")
             except Exception as e:
-                logger.warning(f"获取工作模板ID失败: {e}")
+                logger.warning(f"获取工作配置失败: {e}")
 
-            # 创建MainAgent，传入workspace_dir、work_id、template_id和codeagent_llm
-            main_agent = MainAgent(llm_handler.get_llm_instance(), stream_manager, workspace_dir, work_id, template_id, codeagent_llm)
+            # 获取MCP管理器（如果可用）
+            mcp_manager = None
+            try:
+                app = get_app_instance()
+                if app and hasattr(app, 'state'):
+                    mcp_manager = getattr(app.state, 'mcp_manager', None)
+                    if mcp_manager:
+                        logger.info("成功获取MCP管理器")
+                    else:
+                        logger.info("MCP管理器未初始化")
+                else:
+                    logger.warning("无法访问app实例，MCP管理器不可用")
+            except Exception as e:
+                logger.warning(f"获取MCP管理器失败: {e}")
+
+            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode和mcp_manager
+            main_agent = MainAgent(
+                llm_handler.get_llm_instance(), 
+                stream_manager, 
+                workspace_dir, 
+                work_id, 
+                template_id, 
+                codeagent_llm,
+                output_mode=output_mode,
+                mcp_manager=mcp_manager
+            )
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
             await stream_manager.save_user_message(message_data['problem'])

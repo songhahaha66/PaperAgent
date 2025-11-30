@@ -112,7 +112,7 @@ class WorkspaceFileService:
                 files.sort(key=lambda x: x["name"].lower())
                 result[category_name] = files
 
-            # 特殊处理papers分类：扫描根目录的paper.md文件
+            # 特殊处理papers分类：扫描根目录的paper.md和paper.docx文件
             papers_files = []
             paper_md = workspace_path / 'paper.md'
             if paper_md.exists():
@@ -123,6 +123,20 @@ class WorkspaceFileService:
                     "modified": paper_md.stat().st_mtime,
                     "path": "paper.md",
                     "category_path": "paper.md",
+                    "category": "papers"
+                }
+                papers_files.append(file_info)
+            
+            # 添加paper.docx文件（如果存在）
+            paper_docx = workspace_path / 'paper.docx'
+            if paper_docx.exists():
+                file_info = {
+                    "name": paper_docx.name,
+                    "type": "file",
+                    "size": paper_docx.stat().st_size,
+                    "modified": paper_docx.stat().st_mtime,
+                    "path": "paper.docx",
+                    "category_path": "paper.docx",
                     "category": "papers"
                 }
                 papers_files.append(file_info)
@@ -252,7 +266,7 @@ class WorkspaceFileService:
             '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
             '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
             '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
-            '.mp3', '.mp4', '.avi', '.mov', 'wmv', '.flv', '.mkv',
+            '.mp3', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv',
             '.ttf', '.otf', '.woff', '.woff2', '.eot',
             '.psd', '.ai', '.eps', '.sketch', '.fig'
         }

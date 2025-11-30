@@ -5,6 +5,7 @@ export interface WorkCreate {
   description?: string
   tags?: string
   template_id?: number // 关联的论文模板ID
+  output_mode?: 'markdown' | 'word' | 'latex' // 输出模式
 }
 
 export interface WorkUpdate {
@@ -14,6 +15,7 @@ export interface WorkUpdate {
   progress?: number
   tags?: string
   template_id?: number // 关联的论文模板ID
+  output_mode?: 'markdown' | 'word' | 'latex' // 输出模式
 }
 
 export interface Work {
@@ -25,6 +27,7 @@ export interface Work {
   progress: number
   tags?: string
   template_id?: number // 关联的论文模板ID
+  output_mode?: 'markdown' | 'word' | 'latex' // 输出模式
   created_at: string
   updated_at: string
   created_by: number
