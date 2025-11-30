@@ -129,6 +129,90 @@ class LangChainToolFactory:
             return None
 
     @staticmethod
+    def create_writer_agent_tool(
+        workspace_dir: str,
+        output_mode: str,
+        stream_manager=None,
+        llm=None
+    ) -> Optional[StructuredTool]:
+        """
+        Create LangChain WriterAgent tool for document writing operations
+        
+        The WriterAgent is a specialized agent that handles document writing by directly
+        calling Word or Markdown tools based on the output mode. This allows the MainAgent
+        to delegate document writing tasks through a single tool interface.
+
+        Args:
+            workspace_dir: Workspace directory path
+            output_mode: Document format mode ("word", "markdown", or "latex")
+            stream_manager: Stream manager for output notifications
+            llm: LangChain LLM instance for WriterAgent
+
+        Returns:
+            WriterAgent tool or None if creation fails
+        """
+        try:
+            if llm is None:
+                logger.error("创建WriterAgent工具失败：未提供LLM实例")
+                return None
+            
+            if not workspace_dir:
+                logger.error("创建WriterAgent工具失败：未提供workspace_dir")
+                return None
+
+            # Import WriterAgent
+            from ..core_agents.writer_agent import WriterAgent
+
+            # Instantiate WriterAgent with provided parameters
+            try:
+                writer_agent = WriterAgent(
+                    llm=llm,
+                    output_mode=output_mode,
+                    workspace_dir=workspace_dir,
+                    stream_manager=stream_manager,
+                )
+            except Exception as e:
+                logger.error(f"WriterAgent 实例化失败: {e}", exc_info=True)
+                return None
+
+            # Create async wrapper function for WriterAgent.run()
+            async def run_writer_agent(instruction: str) -> str:
+                """
+                Execute writing instruction through WriterAgent
+                
+                Args:
+                    instruction: Natural language writing instruction
+                    
+                Returns:
+                    Execution result or error message
+                """
+                try:
+                    return await writer_agent.run(instruction)
+                except Exception as e:
+                    logger.error(f"WriterAgent 工具执行失败: {e}", exc_info=True)
+                    return f"WriterAgent 执行失败: {str(e)}"
+
+            # Create StructuredTool with clear description
+            tool = StructuredTool.from_function(
+                coroutine=run_writer_agent,
+                name="writer_agent_execute",
+                description=(
+                    f"使用专用WriterAgent执行文档写作任务（当前模式: {output_mode}）。"
+                    "WriterAgent可以处理各种文档操作，包括添加标题、段落、表格、图片、分页符等。"
+                    "输入详细的写作指令，例如：'添加一级标题Introduction'、'添加段落内容：...'、"
+                    "'添加3行4列的表格，包含以下数据：...'、'插入图片outputs/chart.png，宽度6英寸'。"
+                    "WriterAgent会自动选择合适的工具来完成任务。"
+                ),
+            )
+
+            logger.info(f"创建了 LangChain WriterAgent 工具 (output_mode: {output_mode})")
+            return tool
+
+        except Exception as e:
+            logger.error(f"创建 WriterAgent 工具失败: {e}", exc_info=True)
+            return None
+
+    @staticmethod
     def create_template_tools(workspace_dir: str, stream_manager=None) -> List[StructuredTool]:
         """
         基于现有 TemplateAgentTools 创建 LangChain 工具
