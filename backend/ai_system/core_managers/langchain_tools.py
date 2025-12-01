@@ -43,30 +43,17 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     func=file_tools.writemd,
                     name="writemd",
-                    description="写入Markdown文件到工作空间。支持多种模式：append(追加)、overwrite(覆盖)、modify(修改)、insert(插入)、section_update(章节更新)",
-                    args_schema={
-                        "filename": {"type": "string", "description": "文件名（不需要.md后缀）"},
-                        "content": {"type": "string", "description": "Markdown内容"},
-                        "mode": {"type": "string", "description": "写入模式：append/overwrite/modify/insert/section_update/smart_replace", "default": "overwrite"}
-                    }
+                    description="写入Markdown文件到工作空间。支持多种模式：append(追加)、overwrite(覆盖)、modify(修改)、insert(插入)、section_update(章节更新)"
                 ),
                 StructuredTool.from_function(
                     func=file_tools.update_template,
                     name="update_template",
-                    description="专门用于更新论文模板的特定章节，只支持章节级别的更新",
-                    args_schema={
-                        "template_name": {"type": "string", "description": "论文文件名，默认为paper.md", "default": "paper.md"},
-                        "content": {"type": "string", "description": "要更新的章节内容"},
-                        "section": {"type": "string", "description": "要更新的章节名称（必需）"}
-                    }
+                    description="专门用于更新论文模板的特定章节，只支持章节级别的更新"
                 ),
                 StructuredTool.from_function(
                     func=file_tools.tree,
                     name="tree",
-                    description="显示工作空间的目录树结构，帮助了解文件组织",
-                    args_schema={
-                        "directory": {"type": "string", "description": "要显示的目录路径（可选，默认显示整个工作空间）"}
-                    }
+                    description="显示工作空间的目录树结构，帮助了解文件组织"
                 ),
                 StructuredTool.from_function(
                     func=file_tools.list_attachments,
@@ -247,37 +234,22 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     func=template_tools.get_section_content,
                     name="get_section_content",
-                    description="获取paper.md文件中指定章节的内容",
-                    args_schema={
-                        "section_title": {"type": "string", "description": "章节标题"}
-                    }
+                    description="获取paper.md文件中指定章节的内容"
                 ),
                 StructuredTool.from_function(
                     func=template_tools.update_section_content,
                     name="update_section_content",
-                    description="更新paper.md文件中指定章节的内容",
-                    args_schema={
-                        "section_title": {"type": "string", "description": "章节标题"},
-                        "new_content": {"type": "string", "description": "新的章节内容"}
-                    }
+                    description="更新paper.md文件中指定章节的内容"
                 ),
                 StructuredTool.from_function(
                     func=template_tools.add_section,
                     name="add_section",
-                    description="在paper.md文件末尾添加新章节",
-                    args_schema={
-                        "section_title": {"type": "string", "description": "新章节标题"},
-                        "content": {"type": "string", "description": "章节内容", "default": ""}
-                    }
+                    description="在paper.md文件末尾添加新章节"
                 ),
                 StructuredTool.from_function(
                     func=template_tools.rename_section_title,
                     name="rename_section_title",
-                    description="修改paper.md文件中指定章节的标题",
-                    args_schema={
-                        "old_title": {"type": "string", "description": "原标题"},
-                        "new_title": {"type": "string", "description": "新标题"}
-                    }
+                    description="修改paper.md文件中指定章节的标题"
                 )
             ]
 
@@ -540,10 +512,7 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     func=file_tools_instance.tree,
                     name="tree",
-                    description="显示工作空间的目录树结构，帮助了解文件组织",
-                    args_schema={
-                        "directory": {"type": "string", "description": "要显示的目录路径（可选，默认显示整个工作空间）"}
-                    }
+                    description="显示工作空间的目录树结构，帮助了解文件组织"
                 ),
                 StructuredTool.from_function(
                     func=file_tools_instance.list_attachments,
