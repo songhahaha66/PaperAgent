@@ -78,6 +78,10 @@ class WordTools:
         if not self.stream_manager:
             return
         
+        # Skip word_tool_result notifications
+        if notification_type == "word_tool_result":
+            return
+        
         try:
             # Send notification asynchronously
             asyncio.create_task(

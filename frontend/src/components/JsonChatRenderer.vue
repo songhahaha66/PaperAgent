@@ -22,8 +22,24 @@
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
               <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
                 <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
-                  <div class="json-block-header">Type: {{ block.type || 'unknown' }}</div>
-                  <div class="json-block-content">
+                  <div 
+                    class="json-block-header" 
+                    @click="toggleBlock(message.id, bIndex)"
+                    :class="{ 'collapsed': isBlockCollapsed(message.id, bIndex) }"
+                  >
+                    <span class="header-text">Type: {{ block.type || 'unknown' }}</span>
+                    <span class="content-preview" v-if="isBlockCollapsed(message.id, bIndex)">
+                      {{ getContentPreview(block.content) }}
+                    </span>
+                    <t-icon 
+                      :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'" 
+                      class="toggle-icon"
+                    />
+                  </div>
+                  <div 
+                    class="json-block-content" 
+                    v-show="!isBlockCollapsed(message.id, bIndex)"
+                  >
                     <MarkdownRenderer :content="String(block.content || '')" />
                   </div>
                 </div>
@@ -77,6 +93,9 @@ const props = defineProps<Props>()
 // 分割线悬停状态
 const hoveredDivider = ref<number | null>(null)
 
+// JSON块折叠状态 (messageId-blockIndex -> collapsed)
+const collapsedBlocks = ref<Map<string, boolean>>(new Map())
+
 // 显示分割线
 const showDivider = (index: number) => {
   hoveredDivider.value = index
@@ -85,6 +104,29 @@ const showDivider = (index: number) => {
 // 隐藏分割线
 const hideDivider = () => {
   hoveredDivider.value = null
+}
+
+// 切换JSON块的折叠状态
+const toggleBlock = (messageId: string, blockIndex: number) => {
+  const key = `${messageId}-${blockIndex}`
+  const currentState = collapsedBlocks.value.get(key) ?? false // 默认展开
+  collapsedBlocks.value.set(key, !currentState)
+}
+
+// 检查JSON块是否折叠
+const isBlockCollapsed = (messageId: string, blockIndex: number) => {
+  const key = `${messageId}-${blockIndex}`
+  return collapsedBlocks.value.get(key) ?? false // 默认展开
+}
+
+// 获取内容预览（前N个字符）
+const getContentPreview = (content: any) => {
+  const str = String(content || '')
+  const maxLength = 100
+  if (str.length <= maxLength) {
+    return str
+  }
+  return str.substring(0, maxLength) + '...'
 }
 
 // 获取系统头像
@@ -345,6 +387,40 @@ const copyMessage = (content: string) => {
   font-size: 14px;
   border-bottom: 1px solid #e0e0e0;
   color: #333;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  transition: background-color 0.2s ease;
+}
+
+:deep(.json-block-header:hover) {
+  background-color: #e8e8e8;
+}
+
+:deep(.json-block-header.collapsed) {
+  border-bottom: none;
+}
+
+:deep(.json-block-header .header-text) {
+  flex-shrink: 0;
+}
+
+:deep(.json-block-header .content-preview) {
+  flex: 1;
+  font-weight: 400;
+  font-size: 13px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0 8px;
+}
+
+:deep(.json-block-header .toggle-icon) {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
 }
 
 :deep(.json-block-content) {
@@ -437,6 +513,33 @@ const copyMessage = (content: string) => {
 :deep(.json-block-tree_result .json-block-header) {
   background-color: #e6fff2;
   color: #27ae60;
+}
+
+:deep(.json-block-word_tool_call) {
+  border-left: 4px solid #2980b9;
+}
+
+:deep(.json-block-word_tool_call .json-block-header) {
+  background-color: #e8f4f8;
+  color: #2980b9;
+}
+
+:deep(.json-block-word_tool_result) {
+  border-left: 4px solid #2980b9;
+}
+
+:deep(.json-block-word_tool_result .json-block-header) {
+  background-color: #e8f4f8;
+  color: #2980b9;
+}
+
+:deep(.json-block-word_tool_error) {
+  border-left: 4px solid #e74c3c;
+}
+
+:deep(.json-block-word_tool_error .json-block-header) {
+  background-color: #fdecea;
+  color: #e74c3c;
 }
 
 /* 代码块样式 */

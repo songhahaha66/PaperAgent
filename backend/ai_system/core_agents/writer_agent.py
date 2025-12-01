@@ -272,7 +272,7 @@ class WriterAgent:
                 try:
                     await self.stream_manager.send_json_block(
                         "writer_agent_result",
-                        f"WriterAgent task completed, result length: {len(output)}"
+                        output
                     )
                 except Exception as e:
                     logger.warning("Failed to send WriterAgent completion notification: %s", e)

@@ -361,7 +361,7 @@ class MainAgent:
                 try:
                     await self.stream_manager.send_json_block(
                         "main_agent_complete",
-                        f"任务完成，结果长度: {len(output)} 字符"
+                        output
                     )
                 except Exception as e:
                     logger.warning(f"发送完成通知失败: {e}")
