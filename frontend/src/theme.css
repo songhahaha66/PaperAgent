@@ -7,6 +7,12 @@
   font-display: swap;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root,
 :root[theme-mode='light'] {
   --td-brand-color-1: #f3f3f3;
