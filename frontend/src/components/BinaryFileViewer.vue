@@ -111,27 +111,35 @@ const downloadFile = async () => {
   background: #f5f7fa;
   border-radius: 8px;
   border: 1px solid #e0e6ed;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .file-info {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 16px;
 }
 
 .file-header {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .file-icon {
   color: #0052d9;
   flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .file-details {
   flex: 1;
+  min-width: 0;
 }
 
 .file-name {
@@ -155,6 +163,7 @@ const downloadFile = async () => {
 
 .file-actions {
   flex-shrink: 0;
+  align-self: flex-start;
 }
 
 .download-btn {
