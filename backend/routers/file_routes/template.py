@@ -25,6 +25,7 @@ async def create_template(
         name=template.name,
         description=template.description,
         category=template.category,
+        output_format=template.output_format,
         file_path=template.file_path,
         is_public=template.is_public
     )
@@ -35,21 +36,23 @@ async def create_template(
 async def get_user_templates(
     skip: int = 0,
     limit: int = 100,
+    output_format: str = None,
     current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
     """获取当前用户的模板"""
-    return crud.get_user_templates(db, current_user, skip, limit)
+    return crud.get_user_templates(db, current_user, skip, limit, output_format)
 
 @router.get("/public", response_model=List[schemas.PaperTemplateResponse])
 @route_guard
 async def get_public_templates(
     skip: int = 0,
     limit: int = 100,
+    output_format: str = None,
     db: Session = Depends(get_db)
 ):
     """获取公开模板"""
-    return crud.get_public_templates(db, skip, limit)
+    return crud.get_public_templates(db, skip, limit, output_format)
 
 @router.get("/{template_id}", response_model=schemas.PaperTemplateResponse)
 @route_guard

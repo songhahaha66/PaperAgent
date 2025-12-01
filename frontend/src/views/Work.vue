@@ -168,6 +168,15 @@
                 <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
                 <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
                 <p>
+                  <strong>输出格式：</strong>
+                  <t-tag :theme="getOutputModeTheme(currentWork.output_mode)" variant="light" size="small">
+                    <template #icon>
+                      <t-icon :name="getOutputModeIcon(currentWork.output_mode)" />
+                    </template>
+                    {{ getOutputModeText(currentWork.output_mode) }}
+                  </t-tag>
+                </p>
+                <p>
                   <strong>模板：</strong
                   >{{
                     currentWork.template_id ? `模板ID: ${currentWork.template_id}` : '未选择模板'
@@ -964,6 +973,36 @@ const getStatusText = (status: string) => {
     cancelled: '已取消',
   }
   return texts[status] || status
+}
+
+// 获取输出模式文本
+const getOutputModeText = (mode?: string) => {
+  const texts: Record<string, string> = {
+    markdown: 'Markdown',
+    word: 'Word (.docx)',
+    latex: 'LaTeX'
+  }
+  return texts[mode || 'markdown'] || 'Markdown'
+}
+
+// 获取输出模式图标
+const getOutputModeIcon = (mode?: string) => {
+  const icons: Record<string, string> = {
+    markdown: 'file-1',
+    word: 'file-word',
+    latex: 'file-pdf'
+  }
+  return icons[mode || 'markdown'] || 'file-1'
+}
+
+// 获取输出模式主题
+const getOutputModeTheme = (mode?: string) => {
+  const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
+    markdown: 'primary',
+    word: 'success',
+    latex: 'warning'
+  }
+  return themes[mode || 'markdown'] || 'primary'
 }
 
 // 组件卸载时清理资源

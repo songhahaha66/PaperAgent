@@ -36,4 +36,13 @@ dependencies = [
     "ddgs>=9.6.1",
     "langchain-anthropic>=1.0.0",
     "langchain-google-genai>=3.0.0",
+    "office-word-mcp-server",
 ]
+
+[tool.uv.workspace]
+members = [
+    "office_word_mcp",
+]
+
+[tool.uv.sources]
+office-word-mcp-server = { workspace = true }

@@ -25,6 +25,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["聊天系统"])
 
+# 全局变量用于存储app实例的引用（在WebSocket中使用）
+_app_instance = None
+
+def set_app_instance(app):
+    """设置app实例引用，供WebSocket使用"""
+    global _app_instance
+    _app_instance = app
+
+def get_app_instance():
+    """获取app实例引用"""
+    return _app_instance
+
 
 # 简化的WebSocket连接管理器
 class ConnectionManager:
@@ -322,6 +334,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             workspace_dir = env_manager.get_workspace_dir()
             model_config = env_manager.config_manager.get_model_config("brain", user_id)
             codeagent_model_config = env_manager.config_manager.get_model_config("code", user_id)
+            writer_model_config = env_manager.config_manager.get_model_config("writing", user_id)
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(
@@ -352,19 +365,47 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 logger.info("未提供codeagent配置，使用主LLM")
                 codeagent_llm = llm_handler.get_llm_instance()
 
-            # 获取工作的模板ID
+            # 获取writer的LLM实例（从"writing"配置加载）
+            writer_llm = None
+            if writer_model_config:
+                from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+                try:
+                    writer_llm = create_llm_from_model_config(writer_model_config)
+                    logger.info(f"使用LangChain模型作为WriterAgent: {writer_llm}")
+                except Exception as e:
+                    logger.error(f"创建WriterAgent专用LangChain模型失败: {e}")
+                    writer_llm = None
+            else:
+                logger.info("未提供writer配置，WriterAgent将使用主LLM")
+                writer_llm = None
+
+            # 获取工作的模板ID和输出模式
             template_id = None
+            output_mode = "markdown"  # 默认值
             try:
                 from services.data_services.crud import get_work
                 work = get_work(db, work_id)
-                if work and hasattr(work, 'template_id') and work.template_id:
-                    template_id = work.template_id
-                    logger.info(f"工作 {work_id} 使用模板: {template_id}")
+                if work:
+                    if hasattr(work, 'template_id') and work.template_id:
+                        template_id = work.template_id
+                        logger.info(f"工作 {work_id} 使用模板: {template_id}")
+                    if hasattr(work, 'output_mode') and work.output_mode:
+                        output_mode = work.output_mode
+                        logger.info(f"工作 {work_id} 输出模式: {output_mode}")
             except Exception as e:
-                logger.warning(f"获取工作模板ID失败: {e}")
+                logger.warning(f"获取工作配置失败: {e}")
 
-            # 创建MainAgent，传入workspace_dir、work_id、template_id和codeagent_llm
-            main_agent = MainAgent(llm_handler.get_llm_instance(), stream_manager, workspace_dir, work_id, template_id, codeagent_llm)
+            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode、writer_llm
+            main_agent = MainAgent(
+                llm_handler.get_llm_instance(), 
+                stream_manager, 
+                workspace_dir, 
+                work_id, 
+                template_id, 
+                codeagent_llm,
+                output_mode=output_mode,
+                writer_llm=writer_llm
+            )
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
             await stream_manager.save_user_message(message_data['problem'])

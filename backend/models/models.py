@@ -42,11 +42,12 @@ class ModelConfig(Base):
 
 class PaperTemplate(Base):
     __tablename__ = "paper_templates"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     description = Column(Text)
     category = Column(String(50))
+    output_format = Column(String(10), nullable=False, default="markdown")  # 输出格式：md, word, latex
     file_path = Column(String(500), nullable=False)  # 模板文件路径
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -71,6 +72,7 @@ class Work(Base):
     progress = Column(Integer, default=0)  # 进度百分比 (0-100)
     tags = Column(Text)  # 标签，JSON格式存储
     template_id = Column(Integer, ForeignKey("paper_templates.id"), nullable=True)  # 关联的论文模板ID
+    output_mode = Column(String(20), nullable=False, default="markdown")  # 输出模式：markdown, word, latex
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)

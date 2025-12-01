@@ -28,6 +28,11 @@
             @page-change="onPageChange"
             :loading="loading"
           >
+            <template #output_format="{ row }">
+              <t-tag :theme="getOutputFormatTheme(row.output_format)" variant="light">
+                {{ getOutputFormatLabel(row.output_format) }}
+              </t-tag>
+            </template>
             <template #is_public="{ row }">
               <t-tag :theme="row.is_public ? 'success' : 'warning'" variant="light">
                 {{ row.is_public ? '是' : '否' }}
@@ -71,6 +76,13 @@
         </t-form-item>
         <t-form-item label="模板分类" name="category">
           <t-input v-model="templateForm.category" placeholder="请输入模板分类" />
+        </t-form-item>
+        <t-form-item label="输出格式" name="output_format">
+          <t-select v-model="templateForm.output_format" placeholder="请选择输出格式">
+            <t-option value="markdown" label="Markdown (.md)" />
+            <t-option value="word" label="Word (.docx)" />
+            <t-option value="latex" label="LaTeX (.tex)" disabled />
+          </t-select>
         </t-form-item>
         <t-form-item label="是否公开" name="is_public">
           <t-switch v-model="templateForm.is_public" />
@@ -196,6 +208,7 @@ const columns = ref([
   { colKey: 'name', title: '模板名称', width: '150px' },
   { colKey: 'description', title: '描述', width: '200px' },
   { colKey: 'category', title: '分类', width: '100px' },
+  { colKey: 'output_format', title: '输出格式', width: '100px' },
   { colKey: 'is_public', title: '是否公开', width: '100px' },
   { colKey: 'created_at', title: '创建时间', width: '150px' },
   { colKey: 'operation', title: '操作', width: '200px' },
@@ -248,6 +261,7 @@ const templateForm = reactive<PaperTemplateCreate>({
   name: '',
   description: '',
   category: '',
+  output_format: 'markdown', // 默认为markdown格式
   file_path: '',
   is_public: false,
 })
@@ -271,12 +285,33 @@ const onFileChange = (fileList: Array<any>) => {
   }
 }
 
+// 输出格式标签转换
+const getOutputFormatLabel = (format: string) => {
+  const labels = {
+    markdown: 'Markdown',
+    word: 'Word',
+    latex: 'LaTeX'
+  }
+  return labels[format as keyof typeof labels] || format
+}
+
+// 输出格式主题
+const getOutputFormatTheme = (format: string) => {
+  const themes = {
+    markdown: 'primary',
+    word: 'success',
+    latex: 'warning'
+  }
+  return themes[format as keyof typeof themes] || 'default'
+}
+
 // 编辑模板
 const editTemplate = async (template: PaperTemplate) => {
   editingTemplate.value = template
   templateForm.name = template.name
   templateForm.description = template.description || ''
   templateForm.category = template.category || ''
+  templateForm.output_format = template.output_format || 'markdown'
   templateForm.file_path = template.file_path || ''
   templateForm.is_public = template.is_public
 
@@ -398,6 +433,7 @@ const saveTemplate = async () => {
           name: templateForm.name,
           description: templateForm.description || undefined,
           category: templateForm.category || undefined,
+          output_format: templateForm.output_format,
           file_path: uploadResult.file_path,
           is_public: templateForm.is_public,
           content: uploadResult.content,

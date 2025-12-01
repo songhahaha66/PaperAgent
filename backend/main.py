@@ -37,9 +37,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"工作空间目录: {get_workspaces_path()}")
     logger.info(f"模板目录: {get_templates_path()}")
     
+    # Word tools are now directly integrated, no MCP initialization needed
+    logger.info("Word tools ready (direct integration)")
+    
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")
+    
     shutdown_async_config()
     logger.info("异步配置已关闭")
 
@@ -89,6 +93,10 @@ async def async_status():
 # 注册路由模块（统一）
 for router in all_routers:
     app.include_router(router)
+
+# 设置app实例引用，供WebSocket路由使用
+from routers.chat_routes.chat import set_app_instance
+set_app_instance(app)
 
 if __name__ == "__main__":
     # 优化uvicorn配置，提高并发性能

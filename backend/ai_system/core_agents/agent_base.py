@@ -164,7 +164,7 @@ class BaseAgent(ABC):
                 # 发送工具调用完成通知
                 if self.stream_manager:
                     try:
-                        await self.stream_manager.print_main_content(f"工具 {function_name} 执行完成，结果长度: {len(tool_result)} 字符")
+                        await self.stream_manager.print_main_content(f"工具 {function_name} 执行完成")
                     except Exception as e:
                         logger.warning(f"发送工具完成通知失败: {e}")
 

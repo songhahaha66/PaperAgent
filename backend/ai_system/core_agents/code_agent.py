@@ -118,7 +118,7 @@ class CodeAgent:
                 try:
                     await self.stream_manager.send_json_block(
                         "code_agent_result",
-                        f"CodeAgent任务完成，结果长度: {len(output)}",
+                        output,
                     )
                 except Exception as e:
                     logger.warning("发送CodeAgent完成通知失败: %s", e)

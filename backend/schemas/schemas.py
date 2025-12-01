@@ -65,6 +65,7 @@ class PaperTemplateBase(BaseModel):
     name: str
     description: Optional[str] = None
     category: Optional[str] = None
+    output_format: str = "markdown"  # 输出格式：md, word, latex
     file_path: str  # 模板文件路径
     is_public: bool = False
 
@@ -76,6 +77,7 @@ class PaperTemplateCreateWithContent(BaseModel):
     name: str
     description: Optional[str] = None
     category: Optional[str] = None
+    output_format: str = "markdown"  # 输出格式：md, word, latex
     file_path: str  # 模板文件路径
     is_public: bool = False
     content: str = ""  # 模板文件内容
@@ -84,6 +86,7 @@ class PaperTemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
+    output_format: Optional[str] = None  # 输出格式：md, word, latex
     file_path: Optional[str] = None  # 允许更新文件路径
     is_public: Optional[bool] = None
 
@@ -104,7 +107,7 @@ class WorkBase(BaseModel):
     template_id: Optional[int] = None  # 关联的论文模板ID
 
 class WorkCreate(WorkBase):
-    pass
+    output_mode: str = "markdown"  # 输出模式：markdown, word, latex
 
 class WorkUpdate(BaseModel):
     title: Optional[str] = None
@@ -113,6 +116,7 @@ class WorkUpdate(BaseModel):
     progress: Optional[int] = None
     tags: Optional[str] = None
     template_id: Optional[int] = None  # 关联的论文模板ID
+    output_mode: Optional[str] = None  # 输出模式：markdown, word, latex
 
 class WorkResponse(WorkBase):
     id: int
@@ -120,6 +124,7 @@ class WorkResponse(WorkBase):
     status: str
     progress: int
     template_id: Optional[int] = None  # 关联的论文模板ID
+    output_mode: str = "markdown"  # 输出模式：markdown, word, latex
     created_at: datetime
     updated_at: datetime
     created_by: int

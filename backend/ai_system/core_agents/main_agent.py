@@ -26,7 +26,8 @@ class MainAgent:
 
     def __init__(self, llm: BaseLanguageModel, stream_manager=None,
                  workspace_dir: str = None, work_id: Optional[str] = None,
-                 template_id: Optional[int] = None, codeagent_llm=None):
+                 template_id: Optional[int] = None, codeagent_llm=None,
+                 output_mode: str = "markdown", writer_llm=None):
         """
         初始化MainAgent
 
@@ -36,13 +37,17 @@ class MainAgent:
             workspace_dir: 工作空间目录路径
             work_id: 工作ID
             template_id: 模板ID
+            codeagent_llm: CodeAgent使用的LLM实例
+            output_mode: 输出模式 ("markdown", "word", "latex")
+            writer_llm: WriterAgent使用的LLM实例（从"writing"配置加载）
         """
-        logger.info(f"MainAgent初始化开始，codeagent_llm: {codeagent_llm}")
+        logger.info(f"MainAgent初始化开始，output_mode: {output_mode}, codeagent_llm: {codeagent_llm}, writer_llm: {writer_llm}")
         self.llm = llm
         self.stream_manager = stream_manager
         self.work_id = work_id
         self.template_id = template_id
         self.workspace_dir = workspace_dir
+        self.output_mode = output_mode
 
         # 如果没有提供workspace_dir但有work_id，构建路径
         if not workspace_dir and work_id:
@@ -51,10 +56,12 @@ class MainAgent:
             # 设置环境变量，供工具使用
             os.environ["WORKSPACE_DIR"] = self.workspace_dir
 
-        # 创建所有需要的工具
-        self.tools = LangChainToolFactory.create_all_tools(
-            self.workspace_dir, stream_manager, include_template=True
+        # 加载基础工具（不包括文档写作工具，文档操作由WriterAgent处理）
+        # 基础工具包括：tree, list_attachments, web_search 等通用工具
+        self.tools = LangChainToolFactory.create_base_tools(
+            self.workspace_dir, stream_manager
         )
+        logger.info("MainAgent加载基础工具（文档操作由WriterAgent处理）")
 
         # 添加代码执行工具（使用CodeAgent，默认复用主LLM，可指定codeagent_llm）
         code_llm = codeagent_llm or self.llm
@@ -67,35 +74,186 @@ class MainAgent:
         else:
             logger.warning("CodeAgent工具创建失败，代码能力可能受限")
 
+        # 添加WriterAgent工具（用于文档写作任务）
+        writer_agent_tool = LangChainToolFactory.create_writer_agent_tool(
+            workspace_dir=self.workspace_dir,
+            output_mode=self.output_mode,
+            stream_manager=stream_manager,
+            llm=self.llm,
+            writer_llm=writer_llm
+        )
+        if writer_agent_tool:
+            self.tools.append(writer_agent_tool)
+            logger.info("成功添加WriterAgent工具，output_mode: %s", self.output_mode)
+        else:
+            logger.warning("WriterAgent工具创建失败，文档写作能力可能受限")
+
         # 创建 LangChain Agent
         self.system_prompt = self._create_system_prompt()
+        
+        # 检查 LLM 是否支持工具调用
+        logger.info(f"LLM 类型: {type(llm).__name__}")
+        logger.info(f"LLM 模型: {getattr(llm, 'model_name', getattr(llm, 'model', 'unknown'))}")
+        
+        # 检查是否有 bind_tools 方法（表示支持工具调用）
+        if hasattr(llm, 'bind_tools'):
+            logger.info("✓ LLM 支持 bind_tools 方法")
+            # 测试绑定工具
+            try:
+                test_bound = llm.bind_tools(self.tools[:1])
+                logger.info("✓ 工具绑定测试成功")
+            except Exception as e:
+                logger.error(f"✗ 工具绑定测试失败: {e}")
+        else:
+            logger.warning("⚠️ LLM 不支持 bind_tools 方法，工具调用可能不可用")
+        
+        # 检查 LLM 的配置
+        if hasattr(llm, 'model_kwargs'):
+            logger.info(f"LLM model_kwargs: {llm.model_kwargs}")
+        
+        logger.info(f"创建 Agent，工具数量: {len(self.tools)}")
         self.agent = create_agent(
             model=llm,
-            tools=self.tools
+            tools=self.tools,
+            system_prompt=self.system_prompt,
+            debug=True  # 启用调试模式
         )
 
-        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, 工具数量: {len(self.tools)}")
+        logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, output_mode: {output_mode}, 工具数量: {len(self.tools)}")
+        logger.info(f"已注册工具: {[tool.name for tool in self.tools]}")
 
     def _create_system_prompt(self) -> str:
         """创建 MainAgent 的系统提示词"""
         # 基础系统提示
         system_content = (
-            "你是基于 LangChain Agent 的学术论文写作助手，负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n\n"
+            "你是基于 LangChain Agent 的学术论文写作助手（MainAgent），负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n\n"
+            "**🔴 核心行为准则**：\n"
+            "1. **主动执行，不要问用户要写什么内容！**\n"
+            "2. **根据用户的需求描述，自己思考并生成完整的论文内容**\n"
+            "3. **立即使用工具开始写作，不要只是回复文本说明！**\n"
+            "4. **如果用户说\"写论文\"、\"生成论文\"，你要立即开始调用工具写入内容，而不是问用户要写什么**\n\n"
+            "**重要：你必须使用提供的工具来完成任务，不要只是回复文本！**\n\n"
             "请你记住：论文尽可能使用图表等清晰表示！涉及图表等务必使用代码执行得到！\n"
             "请你记住：如果最后发现没找到代码或者图片就重新执行数据分析！\n\n"
-            "你的职责：\n"
-            "1. 分析用户需求，制定论文生成计划\n"
-            "2. **主动检查和分析附件**：当用户上传附件时，使用read_attachment工具读取附件内容\n"
-            "3. 当需要代码执行、数据分析、图表生成时，使用code_agent_execute工具\n"
-            "4. 使用writemd工具保存论文草稿到paper.md\n\n"
-            "**你的工具集**：\n"
-            "- writemd: 保存论文草稿和内容到文件（推荐使用）\n"
-            "- update_template: 更新论文模板的特定章节\n"
-            "- read_attachment: 读取附件内容（PDF、Word、Excel等）\n"
+            "**你的身份和职责**：\n"
+            "- 你是MainAgent，负责论文写作的整体协调和文档生成\n"
+            "- 你有一个助手CodeAgent，专门负责编程任务（数据分析、图表生成等）\n"
+            "- 你需要明确区分哪些任务由你完成，哪些任务委派给CodeAgent\n"
+            "- **你要主动思考论文内容，不要总是问用户要写什么**\n\n"
+            "**核心工作流程**：\n"
+            "1. 分析用户需求，**立即制定论文生成计划并开始执行**\n"
+            "2. **委派编程任务给CodeAgent**：当需要数据分析、图表生成、统计计算时，使用code_agent_execute工具\n"
+            "3. **你自己负责文档生成**：创建Word文档、添加内容、格式化等由你直接使用Word工具完成\n"
+            "4. **主动生成内容**：根据用户需求和模板结构，自己思考并生成合适的论文内容\n"
+        )
+
+        # 根据输出模式添加文档生成指令
+        if self.output_mode == "word":
+            system_content += (
+                "4. **委派文档写作任务给WriterAgent**：你正在Word模式下工作，必须使用WriterAgent来处理所有文档操作\n\n"
+                "**🔴 核心原则：高层指令，WriterAgent自主创作**\n"
+                "- **你（MainAgent）只需要给WriterAgent高层次的写作目标，不要指定具体内容**\n"
+                "- **WriterAgent是专业的写作助手，会根据你的目标自主扩充和创作内容**\n"
+                "- 使用 writer_agent_execute 工具来委派文档操作\n\n"
+                "**WriterAgent工具使用方法**：\n"
+                "- 工具名称：writer_agent_execute\n"
+                "- 输入：高层次的写作目标（不是具体内容）\n"
+                "- WriterAgent会理解目标，自主创作内容，并选择合适的Word工具完成\n\n"
+                "**✅ 正确的指令示例（高层次目标）**：\n"
+                "- \"写一个Introduction章节，介绍圆周率的重要性和研究意义\"\n"
+                "- \"写一个History章节，讲述圆周率的历史发展\"\n"
+                "- \"写一个Applications章节，说明圆周率在各领域的应用\"\n"
+                "- \"插入图片outputs/chart.png并配上说明文字\"\n"
+                "- \"创建一个表格展示实验结果数据\"\n\n"
+                "**❌ 错误的指令示例（过于具体）**：\n"
+                "- \"添加一级标题Introduction\" ← 太具体，WriterAgent无法发挥\n"
+                "- \"添加段落内容：圆周率π是...\" ← 不要写具体内容，让WriterAgent自己写\n"
+                "- \"添加3行4列的表格\" ← 不要指定格式细节\n\n"
+                "**Word模式工作流程（立即执行，不要问用户）**：\n"
+                "1. 分析用户需求，确定论文需要哪些章节和内容主题\n"
+                "2. **给WriterAgent下达高层次的写作目标**（例如：\"写Introduction章节\"）\n"
+                "3. WriterAgent会自主决定：\n"
+                "   - 章节标题的具体文字\n"
+                "   - 段落的具体内容和表述\n"
+                "   - 内容的组织结构和逻辑\n"
+                "   - 使用哪些Word工具（标题、段落、表格等）\n"
+                "4. 如果需要图表，先使用code_agent_execute生成图片，然后让WriterAgent插入并配文字\n"
+                "5. 文档会自动保存到 paper.docx\n\n"
+                "**任务分工原则（重要）**：\n"
+                "- **你（MainAgent）负责**：战略规划、章节划分、主题确定\n"
+                "  * 决定论文需要哪些章节（Introduction, Methods, Results等）\n"
+                "  * 给WriterAgent下达章节级别的写作目标\n"
+                "  * 协调CodeAgent生成数据和图表\n"
+                "  * 不要写具体内容，不要指定格式细节\n"
+                "- **WriterAgent负责**：内容创作、文档操作、格式控制\n"
+                "  * 根据MainAgent的目标自主创作具体内容\n"
+                "  * 决定标题文字、段落内容、表格结构等细节\n"
+                "  * 选择合适的Word工具完成文档操作\n"
+                "- **CodeAgent负责**：数据分析、图表生成、复杂计算\n"
+                "  * 使用 code_agent_execute 工具委派编程任务\n"
+                "  * 例如：\"分析数据并生成柱状图\"、\"计算统计指标\"\n\n"
+            )
+        else:
+            system_content += (
+                "4. **委派文档写作任务给WriterAgent**：你正在Markdown模式下工作，必须使用WriterAgent来处理所有文档操作\n\n"
+                "**🔴 核心原则：高层指令，WriterAgent自主创作**\n"
+                "- **你（MainAgent）只需要给WriterAgent高层次的写作目标，不要指定具体内容**\n"
+                "- **WriterAgent是专业的写作助手，会根据你的目标自主扩充和创作内容**\n"
+                "- 使用 writer_agent_execute 工具来委派文档操作\n\n"
+                "**WriterAgent工具使用方法**：\n"
+                "- 工具名称：writer_agent_execute\n"
+                "- 输入：高层次的写作目标（不是具体内容）\n"
+                "- WriterAgent会理解目标，自主创作内容，并选择合适的Markdown工具完成\n\n"
+                "**✅ 正确的指令示例（高层次目标）**：\n"
+                "- \"写一个Introduction章节，介绍研究背景和意义\"\n"
+                "- \"写一个Methods章节，描述研究方法\"\n"
+                "- \"更新Abstract章节，总结全文要点\"\n\n"
+                "**❌ 错误的指令示例（过于具体）**：\n"
+                "- \"将以下内容追加到paper.md：# Introduction...\" ← 不要写具体内容\n"
+                "- \"添加段落：本文研究...\" ← 让WriterAgent自己写\n\n"
+                "**Markdown模式工作流程（立即执行，不要问用户）**：\n"
+                "1. 分析用户需求，确定论文需要哪些章节\n"
+                "2. **给WriterAgent下达高层次的写作目标**\n"
+                "3. WriterAgent会自主创作内容并选择合适的工具\n"
+                "4. 文档会自动保存到 paper.md\n\n"
+                "**任务分工原则（重要）**：\n"
+                "- **你（MainAgent）负责**：战略规划、章节划分、主题确定\n"
+                "  * 决定论文结构和章节主题\n"
+                "  * 给WriterAgent下达章节级别的写作目标\n"
+                "  * 不要写具体内容\n"
+                "- **WriterAgent负责**：内容创作、文档操作\n"
+                "  * 根据目标自主创作具体内容\n"
+                "  * 选择合适的Markdown工具完成操作\n"
+                "- **CodeAgent负责**：数据分析、图表生成\n"
+                "  * 使用 code_agent_execute 工具委派编程任务\n"
+            )
+
+        # 通用工具
+        system_content += (
+            "\n**通用工具**：\n"
             "- list_attachments: 列出所有附件文件\n"
             "- web_search: 搜索最新的学术资料和背景信息\n"
-            "- code_agent_execute: 使用专用CodeAgent执行复杂的代码任务，包括数据分析、图表生成、统计计算等（推荐用于复杂任务）\n"
-            "- tree: 显示工作空间目录结构\n"
+            "- tree: 显示工作空间目录结构\n\n"
+            "**WriterAgent工具（用于所有文档写作任务）**：\n"
+            "- writer_agent_execute: 委派给专用WriterAgent执行文档写作任务\n"
+            "  * ✅ 适用场景：创建文档、添加标题、添加段落、添加表格、插入图片、格式化文档等所有文档操作\n"
+            "  * 示例任务：\"添加一级标题Introduction\"、\"添加段落：This paper...\"、\"插入图片outputs/chart.png\"\n"
+            "  * **所有文档写作任务必须通过WriterAgent完成**\n"
+            "  * WriterAgent会根据output_mode自动使用Word或Markdown工具\n\n"
+            "**CodeAgent工具（仅用于编程任务）**：\n"
+            "- code_agent_execute: 委派给专用CodeAgent执行编程任务\n"
+            "  * ✅ 适用场景：数据分析、图表生成（matplotlib/seaborn）、统计计算、文件处理、Python脚本执行\n"
+            "  * 示例任务：\"读取data.csv并生成销售趋势图\"、\"计算数据的均值和标准差\"、\"处理Excel文件并提取关键信息\"\n"
+            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来创建、编辑、修改文档**\n"
+            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来添加文档内容、格式化文档**\n"
+            "  * 文档操作必须委派给WriterAgent\n\n"
+            "**🚫 严格禁止事项**：\n"
+            "- **永远不要让CodeAgent操作文档（Word或Markdown）！**\n"
+            "- **永远不要让CodeAgent使用python-docx库或直接写入.md文件！**\n"
+            "- **所有文档操作必须通过writer_agent_execute委派给WriterAgent！**\n"
+            "- **你（MainAgent）不应该直接调用Word工具或writemd工具**\n"
+            "- 如果需要编辑文档，使用writer_agent_execute委派给WriterAgent\n"
+            "- CodeAgent只负责生成数据、图表等内容，不负责将内容写入文档\n"
         )
 
         # 根据模板添加额外信息
@@ -118,13 +276,21 @@ class MainAgent:
             )
 
         system_content += (
-            "\n\n重要原则：\n"
+            "\n\n**🎯 重要原则**：\n"
+            "- **主动执行，不要问用户要写什么！根据需求自己思考并生成内容！**\n"
+            "- **立即使用工具开始写作，不要只是说明你会怎么做！**\n"
             "- 保持对话连贯性，按步骤执行任务\n"
-            "- **充分利用用户上传的附件内容，确保论文基于真实的资料和数据**\n"
             "- 生成的图表要保存在outputs目录，并在论文中正确引用\n"
             "- 论文不要杜撰，确保科学性和准确性\n"
             "- 每完成一个重要章节，使用writemd保存一次\n"
-            "- 最终输出应该是完整的paper.md文件\n"
+            "- 最终输出应该是完整的paper.md或paper.docx文件\n"
+            "\n**🔴 关键要求：任务完成标准**\n"
+            "- **你的任务只有在将最终结果输出到文件后才算真正完成！**\n"
+            "- Word模式：必须使用Word工具将所有内容写入paper.docx文件\n"
+            "- Markdown模式：必须使用writemd工具将所有内容写入paper.md文件\n"
+            "- **不要只是在对话中回复内容，必须调用相应的工具将内容保存到文件中**\n"
+            "- 在完成文件输出后，向用户确认文件已生成并说明文件路径\n"
+            "- 如果没有将内容写入docx或md文件，任务视为未完成\n"
         )
 
         return system_content
@@ -147,12 +313,39 @@ class MainAgent:
                     logger.warning(f"发送开始通知失败: {e}")
 
             # 使用 LangChain Agent 执行
+            logger.info(f"调用 Agent，可用工具数量: {len(self.tools)}")
+            logger.info(f"工具列表: {[tool.name for tool in self.tools]}")
+            
             inputs = {"messages": [HumanMessage(content=user_input)]}
             result = await self.agent.ainvoke(inputs)
 
             # 提取最后的AI回复
             messages = result.get("messages", [])
             output = ""
+            
+            # 记录所有消息用于调试
+            logger.info(f"Agent返回了 {len(messages)} 条消息")
+            tool_calls_count = 0
+            for i, message in enumerate(messages):
+                msg_type = type(message).__name__
+                logger.info(f"消息 {i}: 类型={msg_type}")
+                
+                # 检查是否有工具调用
+                if hasattr(message, 'tool_calls') and message.tool_calls:
+                    tool_calls_count += len(message.tool_calls)
+                    logger.info(f"  包含 {len(message.tool_calls)} 个工具调用")
+                    for tc in message.tool_calls:
+                        logger.info(f"    工具: {tc.get('name', 'unknown')}")
+                
+                if hasattr(message, 'content') and message.content:
+                    content_preview = str(message.content)[:100]
+                    logger.info(f"  内容预览: {content_preview}")
+            
+            if tool_calls_count == 0:
+                logger.warning("⚠️ 没有检测到任何工具调用！")
+            else:
+                logger.info(f"✓ 总共执行了 {tool_calls_count} 个工具调用")
+            
             for message in reversed(messages):
                 if hasattr(message, 'content') and message.content:
                     output = message.content
@@ -168,7 +361,7 @@ class MainAgent:
                 try:
                     await self.stream_manager.send_json_block(
                         "main_agent_complete",
-                        f"任务完成，结果长度: {len(output)} 字符"
+                        output
                     )
                 except Exception as e:
                     logger.warning(f"发送完成通知失败: {e}")

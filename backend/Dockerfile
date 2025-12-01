@@ -15,8 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖文件
+# 复制依赖文件和工作区成员
 COPY pyproject.toml ./
+COPY office_word_mcp ./office_word_mcp
 
 # 安装 uv
 RUN pip install --no-cache-dir uv
