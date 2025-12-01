@@ -101,7 +101,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 // 副标题轮播文字
-const rotatingTexts = ['排版', '生成图表','执行代码','写作']
+const rotatingTexts = ['排版', '生成图表','执行代码','编辑Word']
 const currentTextIndex = ref(0)
 const previousTextIndex = ref(-1)
 let textRotateInterval: number | null = null
