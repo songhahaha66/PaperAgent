@@ -155,11 +155,13 @@ class TemplateAPI {
   async uploadTemplateFile(
     token: string,
     file: File,
-  ): Promise<{ message: string; file_path: string; content: string }> {
-    return apiClient.uploadFile<{ message: string; file_path: string; content: string }>(
+    outputFormat: string,
+  ): Promise<{ message: string; file_path: string; content: string; output_format: string }> {
+    return apiClient.uploadFile<{ message: string; file_path: string; content: string; output_format: string }>(
       '/files/upload',
       file,
       token,
+      { output_format: outputFormat },
     )
   }
 }
