@@ -24,7 +24,7 @@ jobs:
         password: ${{ secrets.ALIYUN_PASSWORD }}
 
     - name: Build and push backend image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: ./backend
         push: true
