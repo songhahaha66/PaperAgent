@@ -134,6 +134,8 @@ const goToRegister = () => {
 <style scoped>
 .introduction-page {
   height: 100vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   background: white;
@@ -145,7 +147,6 @@ const goToRegister = () => {
   align-items: center;
   justify-content: space-between;
   padding: 0 40px;
-  border-bottom: 1px solid var(--td-component-stroke);
   background: white;
   width: 100%;
 }
@@ -311,6 +312,12 @@ const goToRegister = () => {
   .left-section,
   .right-section {
     max-width: 100%;
+    width: 70%;
+  }
+
+  .hero-content {
+    max-width: 100%;
+    width: 100%;
   }
 
   .main-title {
@@ -323,6 +330,16 @@ const goToRegister = () => {
 }
 
 @media (max-width: 768px) {
+  .custom-header {
+    height: 56px;
+    padding: 12px 16px 0 16px;
+  }
+
+  .main-content {
+    padding: 20px 16px;
+    justify-content: flex-start;
+  }
+
   .main-title {
     font-size: 2rem;
   }
