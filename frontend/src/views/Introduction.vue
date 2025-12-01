@@ -27,9 +27,12 @@
       <!-- 左侧文字区域 -->
       <div class="left-section">
         <div class="hero-content">
-          <h1 class="main-title">新一代文章写作助手</h1>
+          <h1 class="main-title">新一代写作助手</h1>
           <p class="main-subtitle">
-            为你
+            全流程智能全自动写作助手
+          </p>
+          <p class="main-subtitle">
+            为你自动
             <span class="rotating-text-wrapper">
               <span
                 v-for="(text, index) in rotatingTexts"
@@ -59,22 +62,22 @@
       <!-- 右侧特性展示区域 -->
       <div class="right-section">
         <div class="features-grid">
-          <div class="feature-card">
+          <div class="feature-card card-blue">
             <h3>一键生成完整论文</h3>
             <p>从选题到成稿，AI全程辅助</p>
           </div>
 
-          <div class="feature-card">
+          <div class="feature-card card-purple">
             <h3>支持多种大模型</h3>
             <p>兼容主流AI模型，自由选择</p>
           </div>
 
-          <div class="feature-card">
+          <div class="feature-card card-green">
             <h3>自定义论文模板</h3>
             <p>上传模板，按格式生成</p>
           </div>
 
-          <div class="feature-card">
+          <div class="feature-card card-orange">
             <h3>真实数据可视化</h3>
             <p>AI自动生成图表和数据</p>
           </div>
@@ -98,7 +101,7 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 // 副标题轮播文字
-const rotatingTexts = ['排版', '生成图表','执行代码']
+const rotatingTexts = ['排版', '生成图表','执行代码','编辑Word']
 const currentTextIndex = ref(0)
 const previousTextIndex = ref(-1)
 let textRotateInterval: number | null = null
@@ -261,18 +264,37 @@ const goToRegister = () => {
 }
 
 .feature-card {
-  background: #f8f9fa;
   border-radius: 12px;
   padding: 30px 20px;
   text-align: center;
   transition: all 0.3s ease;
-  border: 1px solid #e8e8e8;
+  border: none;
 }
 
 .feature-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 20px rgba(0, 82, 217, 0.1);
-  border-color: #0052d9;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+}
+
+/* 四种不同颜色的卡片 - 浅色调 */
+.card-blue {
+  background: #e3f2fd;
+  border: 1px solid #bbdefb;
+}
+
+.card-purple {
+  background: #f3e5f5;
+  border: 1px solid #e1bee7;
+}
+
+.card-green {
+  background: #e8f5e9;
+  border: 1px solid #c8e6c9;
+}
+
+.card-orange {
+  background: #fff3e0;
+  border: 1px solid #ffe0b2;
 }
 
 .feature-card h3 {
