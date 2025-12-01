@@ -33,7 +33,7 @@
     "@tsconfig/node22": "^22.0.2",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.16.5",
-    "@vitejs/plugin-vue": "^6.0.1",
+    "@vitejs/plugin-vue": "^6.0.2",
     "@vue/tsconfig": "^0.7.0",
     "npm-run-all2": "^8.0.4",
     "prettier": "3.6.2",
