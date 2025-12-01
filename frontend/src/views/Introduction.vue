@@ -1,5 +1,29 @@
 <template>
   <div class="introduction-page">
+    <t-head-menu style="padding: 0 5%">
+      <template #logo>
+        <div style="display: flex; align-items: center; gap: 12px">
+          <img src="/logo.png" alt="Logo" width="36" />
+          <h1 style="font-size: 1.5rem; color: #2c3e50; margin: 0">PaperAgent</h1>
+        </div>
+      </template>
+      <template #operations>
+        <t-button
+          theme="default"
+          variant="outline"
+          href="https://github.com/songhahaha66/PaperAgent"
+          target="_blank"
+          tag="a"
+          style="background: white; color: #24292e; border: 1px solid #24292e"
+        >
+          <template #icon>
+            <t-icon name="logo-github" />
+          </template>
+          GitHub
+        </t-button>
+      </template>
+    </t-head-menu>
+
     <div class="scroll-container">
       <div class="header">
         <div class="header-content">
@@ -93,17 +117,17 @@ const goToRegister = () => {
 
 <style scoped>
 .introduction-page {
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
-  padding: 20px;
-  overflow-x: hidden;
   height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .scroll-container {
-  height: 100%;
+  flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
+  padding: 20px;
 
   /* 隐藏滚动条 - Webkit浏览器 */
   &::-webkit-scrollbar {
