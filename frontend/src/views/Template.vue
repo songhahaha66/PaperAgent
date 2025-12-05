@@ -93,11 +93,11 @@
             action="#"
             :auto-upload="false"
             :max="1"
-            accept=".tex,.md,.txt,.doc,.docx"
+            :accept="getAcceptedFileTypes()"
             @change="onFileChange"
             :show-upload-progress="false"
             :draggable="false"
-            tips="支持 .tex, .md, .txt, .doc, .docx 文件，一个模板对应一个文件"
+            :tips="getUploadTips()"
           >
             <t-button variant="outline">选择文件</t-button>
           </t-upload>
@@ -242,8 +242,9 @@ const loadTemplates = async () => {
     )
     templateList.value = templates
     pagination.total = templates.length // 这里应该从后端获取总数
-  } catch (error) {
-    MessagePlugin.error('加载模板列表失败')
+  } catch (error: any) {
+    const errorMessage = error?.response?.data?.detail || error?.message || '加载模板列表失败'
+    MessagePlugin.error(errorMessage)
     console.error('加载模板失败:', error)
   } finally {
     loading.value = false
@@ -283,6 +284,26 @@ const onFileChange = (fileList: Array<any>) => {
     console.log('没有选择文件')
     templateForm.file_path = ''
   }
+}
+
+// 根据输出格式获取允许的文件类型
+const getAcceptedFileTypes = () => {
+  const acceptMap: Record<string, string> = {
+    markdown: '.md',
+    word: '.docx',
+    latex: '.tex'
+  }
+  return acceptMap[templateForm.output_format] || '.md,.docx,.tex'
+}
+
+// 根据输出格式获取上传提示
+const getUploadTips = () => {
+  const tipsMap: Record<string, string> = {
+    markdown: '只能上传 .md 文件',
+    word: '只能上传 .docx 文件',
+    latex: '只能上传 .tex 文件'
+  }
+  return tipsMap[templateForm.output_format] || '请先选择输出格式'
 }
 
 // 输出格式标签转换
@@ -424,7 +445,11 @@ const saveTemplate = async () => {
       console.log('准备上传的文件:', fileToUpload)
 
       try {
-        const uploadResult = await templateAPI.uploadTemplateFile(authStore.token, fileToUpload)
+        const uploadResult = await templateAPI.uploadTemplateFile(
+          authStore.token, 
+          fileToUpload, 
+          templateForm.output_format
+        )
 
         console.log('文件上传成功:', uploadResult)
 
@@ -445,9 +470,10 @@ const saveTemplate = async () => {
 
         console.log('模板创建成功:', newTemplate)
         MessagePlugin.success('模板创建成功')
-      } catch (fileError) {
+      } catch (fileError: any) {
         console.error('文件处理失败:', fileError)
-        MessagePlugin.error('模板创建失败：文件处理错误')
+        const errorMessage = fileError?.response?.data?.detail || fileError?.message || '文件处理错误'
+        MessagePlugin.error(`模板创建失败：${errorMessage}`)
         return
       }
     }
@@ -455,10 +481,10 @@ const saveTemplate = async () => {
     console.log('保存完成，重新加载模板列表...')
     loadTemplates() // 重新加载列表
     cancelTemplate()
-  } catch (error) {
+  } catch (error: any) {
     console.error('保存模板时发生错误:', error)
-    MessagePlugin.error('保存模板失败')
-    console.error('保存模板失败:', error)
+    const errorMessage = error?.response?.data?.detail || error?.message || '保存模板失败'
+    MessagePlugin.error(errorMessage)
   }
 }
 
@@ -501,8 +527,9 @@ const viewTemplateContent = async (template: PaperTemplate) => {
   try {
     const result = await templateAPI.getTemplateContent(authStore.token, template.id)
     templateContent.value = result.content
-  } catch (error) {
-    MessagePlugin.error('加载模板内容失败')
+  } catch (error: any) {
+    const errorMessage = error?.response?.data?.detail || error?.message || '加载模板内容失败'
+    MessagePlugin.error(errorMessage)
     console.error('加载模板内容失败:', error)
     templateContent.value = '模板内容加载失败'
   }

@@ -77,10 +77,17 @@ export class ApiClient {
   }
 
   // 文件上传方法
-  async uploadFile<T>(endpoint: string, file: File, token: string): Promise<T> {
+  async uploadFile<T>(endpoint: string, file: File, token: string, additionalData?: Record<string, string>): Promise<T> {
     const url = `${this.baseURL}${endpoint}`
     const formData = new FormData()
     formData.append('file', file)
+    
+    // 添加额外的表单数据
+    if (additionalData) {
+      Object.entries(additionalData).forEach(([key, value]) => {
+        formData.append(key, value)
+      })
+    }
 
     try {
       const response = await fetch(url, {

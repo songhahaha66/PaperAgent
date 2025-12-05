@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@tdesign-vue-next/chat": "^0.4.5",
+    "docx-preview": "^0.3.7",
     "embla-carousel-vue": "^8.6.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.22",
