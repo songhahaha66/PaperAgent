@@ -138,7 +138,16 @@
                 </div>
                 <!-- 二进制文件信息 -->
                 <div v-else-if="currentFileData.type === 'binary'" class="binary-preview">
+                  <!-- DOCX文件使用DocxViewer预览 -->
+                  <DocxViewer
+                    v-if="isDocxFile(selectedFile)"
+                    :file-info="currentFileData"
+                    :work-id="workId"
+                    :token="authStore.token || ''"
+                  />
+                  <!-- 其他二进制文件使用BinaryFileViewer -->
                   <BinaryFileViewer
+                    v-else
                     :file-info="currentFileData"
                     :work-id="workId"
                     :token="authStore.token || ''"
@@ -146,7 +155,16 @@
                 </div>
                 <!-- 未知文件类型 - 使用 BinaryFileViewer 统一处理 -->
                 <div v-else-if="currentFileData" class="binary-preview">
+                  <!-- DOCX文件使用DocxViewer预览 -->
+                  <DocxViewer
+                    v-if="isDocxFile(selectedFile)"
+                    :file-info="currentFileData"
+                    :work-id="workId"
+                    :token="authStore.token || ''"
+                  />
+                  <!-- 其他文件使用BinaryFileViewer -->
                   <BinaryFileViewer
+                    v-else
                     :file-info="currentFileData"
                     :work-id="workId"
                     :token="authStore.token || ''"
@@ -216,6 +234,7 @@ import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 import CodeHighlight from '@/components/CodeHighlight.vue';
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
 import BinaryFileViewer from '@/components/BinaryFileViewer.vue';
+import DocxViewer from '@/components/DocxViewer.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -614,6 +633,13 @@ const isImageFile = (filePath: string): boolean => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
   const lowerPath = filePath.toLowerCase()
   return imageExtensions.some((ext) => lowerPath.endsWith(ext))
+}
+
+// 判断是否为DOCX文件
+const isDocxFile = (filePath: string | null): boolean => {
+  if (!filePath) return false
+  return filePath.toLowerCase().endsWith('.docx') || 
+         filePath.toLowerCase().includes('wordprocessingml')
 }
 
 // 获取文件类型
