@@ -41,7 +41,7 @@
     "typescript": "~5.9.3",
     "vite": "^7.2.7",
     "vite-plugin-vue-devtools": "^8.0.0",
-    "vue-tsc": "^3.0.4"
+    "vue-tsc": "^3.1.8"
   },
   "overrides": {
     "markdown-it-katex": {
