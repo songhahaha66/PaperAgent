@@ -1,58 +1,47 @@
-import os
-import shutil
+import base64
 from pathlib import Path
-from fastapi import HTTPException, status
-from typing import Optional
-from .file_helper import FileHelper
-from ..data_services.utils import handle_service_errors
 from config.paths import get_templates_path
 
+
 class TemplateFileService:
-    """模板文件管理服务 - 简化版：一个模板对应一个文件"""
+    """模板文件管理服务"""
     
     def __init__(self):
         self.base_path = get_templates_path()
-        self.helper = FileHelper(self.base_path)
     
-    def generate_file_path(self, template_id: int, filename: str = None) -> str:
-        """生成模板文件路径"""
-        if filename:
-            # 如果提供了文件名，使用原文件名
-            file_path = self.base_path / f"{template_id}_{filename}"
-        else:
-            # 否则使用默认的模板文件扩展名
-            file_path = self.base_path / f"{template_id}_template.md"
+    def save_file(self, template_id: int, filename: str, content: str, is_binary: bool = False) -> str:
+        """保存模板文件，返回文件名"""
+        file_name = f"{template_id}_{filename}"
+        file_path = self.base_path / file_name
         
-        return str(file_path)
-    
-    @handle_service_errors()
-    def save_template_file(self, template_id: int, content: str, filename: str = None) -> str:
-        """保存模板文件内容"""
-        relative = Path(self.generate_file_path(template_id, filename)).name
-        # 写入
-        return self.helper.write_text(relative, content)
-    
-    @handle_service_errors()
-    def get_template_file_content(self, template_id: int, filename: str = None) -> str:
-        """获取模板文件内容"""
-        relative = Path(self.generate_file_path(template_id, filename)).name
-        return self.helper.read_text(relative)
-    
-    @handle_service_errors()
-    def delete_template_file(self, template_id: int, filename: str = None) -> bool:
-        """删除模板文件"""
-        relative = Path(self.generate_file_path(template_id, filename)).name
-        # 若不存在则视为成功
-        target = self.helper.resolve(relative)
-        if not target.exists():
-            return True
-        if target.is_file():
-            target.unlink()
+        # 确保目录存在
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if is_binary:
+            # 解码base64并写入二进制文件
+            binary_content = base64.b64decode(content)
+            with open(file_path, 'wb') as f:
+                f.write(binary_content)
         else:
-            import shutil
-            shutil.rmtree(target)
-        return True
+            # 写入文本文件
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+        
+        return file_name
     
+    def get_text_content(self, filename: str) -> str:
+        """获取文本文件内容（用于创建工作空间时）"""
+        file_path = self.base_path / filename
+        if not file_path.exists():
+            raise FileNotFoundError(f"Template file not found: {filename}")
+        return file_path.read_text(encoding='utf-8')
+    
+    def delete_file(self, filename: str) -> bool:
+        """删除模板文件"""
+        file_path = self.base_path / filename
+        if file_path.exists():
+            file_path.unlink()
+        return True
 
 
 # 创建全局实例

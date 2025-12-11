@@ -14,25 +14,6 @@ export interface PaperTemplate {
   created_by: number
 }
 
-export interface PaperTemplateCreate {
-  name: string
-  description?: string
-  category?: string
-  output_format: string // 添加输出格式字段
-  file_path: string // 添加文件路径字段
-  is_public: boolean
-}
-
-export interface PaperTemplateCreateWithContent {
-  name: string
-  description?: string
-  category?: string
-  output_format: string // 添加输出格式字段
-  file_path: string
-  is_public: boolean
-  content: string // 添加文件内容字段
-}
-
 export interface PaperTemplateUpdate {
   name?: string
   description?: string
@@ -87,18 +68,38 @@ class TemplateAPI {
     })
   }
 
-  // 创建模板（包含文件内容）
+  // 创建模板（直接上传文件）
   async createTemplate(
     token: string,
-    template: PaperTemplateCreateWithContent,
+    file: File,
+    name: string,
+    outputFormat: string,
+    description?: string,
+    category?: string,
+    isPublic: boolean = false,
   ): Promise<PaperTemplate> {
-    return this.request<PaperTemplate>('/templates', {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('name', name)
+    formData.append('output_format', outputFormat)
+    if (description) formData.append('description', description)
+    if (category) formData.append('category', category)
+    formData.append('is_public', String(isPublic))
+
+    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/templates/upload`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(template),
+      body: formData,
     })
+
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.detail || '创建模板失败')
+    }
+
+    return response.json()
   }
 
   // 更新模板
@@ -142,28 +143,31 @@ class TemplateAPI {
     )
   }
 
-  // 获取模板文件内容
-  async getTemplateContent(token: string, templateId: number): Promise<{ content: string }> {
-    return this.request<{ content: string }>(`/templates/${templateId}/content`, {
+  // 获取模板预览内容（支持不同文件类型）
+  async getTemplatePreview(token: string, templateId: number): Promise<{
+    type: 'text' | 'image' | 'binary'
+    content?: string
+    filename: string
+    size: number
+    mime_type?: string
+    download_url?: string
+    message?: string
+  }> {
+    return this.request<{
+      type: 'text' | 'image' | 'binary'
+      content?: string
+      filename: string
+      size: number
+      mime_type?: string
+      download_url?: string
+      message?: string
+    }>(`/templates/${templateId}/preview`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },
     })
   }
 
-  // 上传模板文件（创建模板时使用）
-  async uploadTemplateFile(
-    token: string,
-    file: File,
-    outputFormat: string,
-  ): Promise<{ message: string; file_path: string; content: string; output_format: string }> {
-    return apiClient.uploadFile<{ message: string; file_path: string; content: string; output_format: string }>(
-      '/files/upload',
-      file,
-      token,
-      { output_format: outputFormat },
-    )
-  }
 }
 
 export const templateAPI = new TemplateAPI()

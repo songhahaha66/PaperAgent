@@ -112,12 +112,12 @@ const loadDocx = async () => {
     console.log('DocxViewer - 开始渲染...')
     await renderAsync(blob, docxContainer.value, undefined, {
       className: 'docx-preview-content',
-      inWrapper: false,
+      inWrapper: true,  // 使用包装器以支持分页
       ignoreWidth: false,
-      ignoreHeight: true,
+      ignoreHeight: false,  // 保持页面高度
       ignoreFonts: false,
       breakPages: true,
-      ignoreLastRenderedPageBreak: true,
+      ignoreLastRenderedPageBreak: false,
       experimental: false,
       trimXmlDeclaration: true,
       useBase64URL: false,
@@ -246,8 +246,9 @@ onMounted(() => {
 
 .preview-area {
   position: relative;
+  max-height: 600px;
+  overflow-y: auto;
   overflow-x: auto;
-  overflow-y: visible;
 }
 
 .loading-overlay {
@@ -276,12 +277,18 @@ onMounted(() => {
   padding: 20px;
 }
 
+.docx-container :deep(.docx-wrapper) {
+  background: #e8e8e8 !important;
+  padding: 20px !important;
+}
+
 .docx-container :deep(section.docx) {
   background: white !important;
   padding: 40px 60px !important;
   margin: 0 auto 20px !important;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
   box-sizing: border-box !important;
+  min-height: 800px;
 }
 
 .docx-container :deep(table) {

@@ -160,8 +160,18 @@ class WorkspaceStructureManager:
             if template_id is not None:
                 try:
                     from .template_files import template_file_service
-                    content = template_file_service.get_template_file_content(template_id)
-                    logger.info(f"成功获取模板 {template_id} 的内容用于 paper.md")
+                    from database.database import SessionLocal
+                    from models.models import PaperTemplate
+                    
+                    # 从数据库获取模板信息
+                    db = SessionLocal()
+                    try:
+                        template = db.query(PaperTemplate).filter(PaperTemplate.id == template_id).first()
+                        if template and template.file_path:
+                            content = template_file_service.get_text_content(template.file_path)
+                            logger.info(f"成功获取模板 {template_id} 的内容用于 paper.md")
+                    finally:
+                        db.close()
                 except Exception as e:
                     logger.warning(f"获取模板 {template_id} 内容失败，将使用默认内容: {e}")
                     content = None

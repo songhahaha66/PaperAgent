@@ -72,16 +72,6 @@ class PaperTemplateBase(BaseModel):
 class PaperTemplateCreate(PaperTemplateBase):
     pass
 
-class PaperTemplateCreateWithContent(BaseModel):
-    """创建模板时包含文件内容的schema"""
-    name: str
-    description: Optional[str] = None
-    category: Optional[str] = None
-    output_format: str = "markdown"  # 输出格式：md, word, latex
-    file_path: str  # 模板文件路径
-    is_public: bool = False
-    content: str = ""  # 模板文件内容
-
 class PaperTemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
