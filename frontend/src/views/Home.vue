@@ -282,18 +282,74 @@
         <div class="template-content">
           <h4>模板内容：</h4>
           <div class="content-display">
-            <MarkdownRenderer
-              v-if="previewTemplateData?.file_path?.endsWith('.md')"
-              :content="templateContent"
-              :base-path="''"
-            />
-            <t-textarea
-              v-else
-              v-model="templateContent"
-              readonly
-              :autosize="{ minRows: 15, maxRows: 25 }"
-              placeholder="模板内容加载中..."
-            />
+            <!-- 加载状态 -->
+            <div v-if="templatePreviewLoading" class="loading-container">
+              <t-loading size="large" text="加载中..." />
+            </div>
+            
+            <!-- 文本文件预览 -->
+            <div v-else-if="templatePreviewData?.type === 'text'" class="text-preview">
+              <MarkdownRenderer
+                v-if="previewTemplateData?.file_path?.endsWith('.md')"
+                :content="templatePreviewData.content || ''"
+                :base-path="''"
+              />
+              <t-textarea
+                v-else
+                :model-value="templatePreviewData.content || ''"
+                readonly
+                :autosize="{ minRows: 15, maxRows: 25 }"
+                placeholder="模板内容加载中..."
+              />
+            </div>
+            
+            <!-- 图片文件预览 -->
+            <div v-else-if="templatePreviewData?.type === 'image'" class="image-preview">
+              <img
+                :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
+                :alt="templatePreviewData.filename"
+                style="max-width: 100%; height: auto;"
+              />
+            </div>
+            
+            <!-- 二进制文件预览 -->
+            <div v-else-if="templatePreviewData?.type === 'binary'" class="binary-preview">
+              <!-- DOCX文件使用DocxViewer预览 -->
+              <DocxViewer
+                v-if="templatePreviewData.filename?.toLowerCase().endsWith('.docx')"
+                :file-info="{
+                  filename: templatePreviewData.filename || '',
+                  size: templatePreviewData.size,
+                  mime_type: templatePreviewData.mime_type || '',
+                  download_url: templatePreviewData.download_url || '',
+                  message: templatePreviewData.message || ''
+                }"
+                :work-id="''"
+                :token="authStore.token || ''"
+              />
+              <!-- 其他二进制文件显示下载信息 -->
+              <div v-else class="file-info">
+                <t-icon name="file" size="48px" />
+                <p><strong>文件名：</strong>{{ templatePreviewData.filename }}</p>
+                <p><strong>文件大小：</strong>{{ formatFileSize(templatePreviewData.size) }}</p>
+                <p><strong>文件类型：</strong>{{ templatePreviewData.mime_type }}</p>
+                <p>{{ templatePreviewData.message }}</p>
+                <t-button 
+                  theme="primary" 
+                  @click="downloadTemplateFile"
+                  style="margin-top: 16px;"
+                >
+                  下载文件
+                </t-button>
+              </div>
+            </div>
+            
+            <!-- 预览失败 -->
+            <div v-else-if="templatePreviewError" class="error-preview">
+              <t-icon name="error-circle" size="48px" />
+              <p>模板预览加载失败</p>
+              <p>{{ templatePreviewError }}</p>
+            </div>
           </div>
         </div>
       </div>
@@ -314,6 +370,7 @@ import { workspaceAPI, type WorkCreate } from '@/api/workspace'
 import { attachmentAPI } from '@/api/workspace'
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import DocxViewer from '@/components/DocxViewer.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -355,6 +412,17 @@ const activeHistoryId = ref<number | null>(null)
 const showPreviewDialog = ref(false)
 const previewTemplateData = ref<PaperTemplate | null>(null)
 const templateContent = ref('')
+const templatePreviewLoading = ref(false)
+const templatePreviewData = ref<{
+  type: 'text' | 'image' | 'binary'
+  content?: string
+  filename: string
+  size: number
+  mime_type?: string
+  download_url?: string
+  message?: string
+} | null>(null)
+const templatePreviewError = ref('')
 
 // 上传相关配置
 const tempWorkId = ref<string | null>(null) // 临时存储的工作ID
@@ -418,14 +486,24 @@ const previewTemplate = async (template: PaperTemplate) => {
 
   previewTemplateData.value = template
   showPreviewDialog.value = true
+  templatePreviewLoading.value = true
+  templatePreviewError.value = ''
+  templatePreviewData.value = null
 
   try {
-    const result = await templateAPI.getTemplateContent(authStore.token, template.id)
-    templateContent.value = result.content
+    const result = await templateAPI.getTemplatePreview(authStore.token, template.id)
+    templatePreviewData.value = result
+    
+    // 为了向后兼容，如果是文本类型，也设置templateContent
+    if (result.type === 'text') {
+      templateContent.value = result.content || ''
+    }
   } catch (error) {
-    MessagePlugin.error('加载模板内容失败')
-    console.error('加载模板内容失败:', error)
-    templateContent.value = '模板内容加载失败'
+    templatePreviewError.value = '加载模板预览失败'
+    MessagePlugin.error('加载模板预览失败')
+    console.error('加载模板预览失败:', error)
+  } finally {
+    templatePreviewLoading.value = false
   }
 }
 
@@ -434,6 +512,25 @@ const closePreviewDialog = () => {
   showPreviewDialog.value = false
   previewTemplateData.value = null
   templateContent.value = ''
+  templatePreviewData.value = null
+  templatePreviewError.value = ''
+  templatePreviewLoading.value = false
+}
+
+// 格式化文件大小
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// 下载模板文件
+const downloadTemplateFile = () => {
+  if (templatePreviewData.value?.download_url) {
+    window.open(templatePreviewData.value.download_url, '_blank')
+  }
 }
 
 // 跳转到模板页面
@@ -908,6 +1005,55 @@ const selectHistory = (id: number) => {
   border: 1px solid #e0e6ed;
   border-radius: 8px;
   overflow: hidden;
+}
+
+/* 预览内容样式 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 60px 20px;
+}
+
+.text-preview {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.image-preview {
+  text-align: center;
+  padding: 16px;
+  background-color: #fafafa;
+}
+
+.binary-preview {
+  padding: 20px;
+  text-align: center;
+}
+
+.file-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+}
+
+.file-info p {
+  margin: 4px 0;
+  color: #495057;
+}
+
+.error-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: #dc3545;
 }
 
 @media (max-width: 768px) {

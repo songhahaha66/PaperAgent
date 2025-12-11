@@ -115,20 +115,65 @@
     >
       <div class="content-viewer">
         <div class="content-display">
-          <!-- 如果是Markdown文件，使用Markdown渲染 -->
-          <MarkdownRenderer
-            v-if="selectedTemplate?.file_path?.endsWith('.md')"
-            :content="templateContent"
-            :base-path="''"
-          />
-          <!-- 其他文件格式使用文本域显示 -->
-          <t-textarea
-            v-else
-            v-model="templateContent"
-            readonly
-            :autosize="{ minRows: 15, maxRows: 25 }"
-            placeholder="模板内容加载中..."
-          />
+          <!-- 加载状态 -->
+          <div v-if="templatePreviewLoading" class="loading-container">
+            <t-loading size="large" text="加载中..." />
+          </div>
+          
+          <!-- 文本文件预览 -->
+          <div v-else-if="templatePreviewData?.type === 'text'" class="text-preview">
+            <MarkdownRenderer
+              v-if="selectedTemplate?.file_path?.endsWith('.md')"
+              :content="templatePreviewData.content || ''"
+              :base-path="''"
+            />
+            <t-textarea
+              v-else
+              :model-value="templatePreviewData.content || ''"
+              readonly
+              :autosize="{ minRows: 15, maxRows: 25 }"
+            />
+          </div>
+          
+          <!-- 图片文件预览 -->
+          <div v-else-if="templatePreviewData?.type === 'image'" class="image-preview">
+            <img
+              :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
+              :alt="templatePreviewData.filename"
+              style="max-width: 100%; height: auto;"
+            />
+          </div>
+          
+          <!-- 二进制文件预览 -->
+          <div v-else-if="templatePreviewData?.type === 'binary'" class="binary-preview">
+            <!-- DOCX文件使用DocxViewer预览 -->
+            <DocxViewer
+              v-if="templatePreviewData.filename?.toLowerCase().endsWith('.docx')"
+              :file-info="{
+                filename: templatePreviewData.filename,
+                size: templatePreviewData.size,
+                mime_type: templatePreviewData.mime_type || '',
+                download_url: templatePreviewData.download_url || '',
+                message: templatePreviewData.message || ''
+              }"
+              :work-id="''"
+              :token="authStore.token || ''"
+            />
+            <!-- 其他二进制文件显示下载信息 -->
+            <div v-else class="file-info-display">
+              <t-icon name="file" size="48px" />
+              <p><strong>文件名：</strong>{{ templatePreviewData.filename }}</p>
+              <p><strong>文件大小：</strong>{{ formatFileSize(templatePreviewData.size) }}</p>
+              <p><strong>文件类型：</strong>{{ templatePreviewData.mime_type }}</p>
+            </div>
+          </div>
+          
+          <!-- 预览失败 -->
+          <div v-else-if="templatePreviewError" class="error-preview">
+            <t-icon name="error-circle" size="48px" />
+            <p>模板预览加载失败</p>
+            <p>{{ templatePreviewError }}</p>
+          </div>
         </div>
       </div>
       <template #footer>
@@ -166,11 +211,11 @@ import { useAuthStore } from '@/stores/auth'
 import {
   templateAPI,
   type PaperTemplate,
-  type PaperTemplateCreate,
   type PaperTemplateUpdate,
 } from '@/api/template'
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import DocxViewer from '@/components/DocxViewer.vue'
 
 // 侧边栏折叠状态 - 手机端默认收起
 const isSidebarCollapsed = ref(window.innerWidth <= 768)
@@ -258,12 +303,12 @@ const showCreateTemplateDialog = ref(false)
 const editingTemplate = ref<PaperTemplate | null>(null)
 
 // 模板表单数据
-const templateForm = reactive<PaperTemplateCreate>({
+const templateForm = reactive({
   name: '',
   description: '',
   category: '',
   output_format: 'markdown', // 默认为markdown格式
-  file_path: '',
+  file_path: '',  // 用于显示当前文件名
   is_public: false,
 })
 
@@ -431,8 +476,6 @@ const saveTemplate = async () => {
     } else {
       // 新建模板
       console.log('创建新模板...')
-      console.log('创建模板数据:', templateForm)
-      console.log('模板文件:', templateFormFileList.value)
 
       // 检查是否选择了文件
       if (templateFormFileList.value.length === 0) {
@@ -440,40 +483,25 @@ const saveTemplate = async () => {
         return
       }
 
-      // 先上传文件获取内容
       const fileToUpload = templateFormFileList.value[0].raw || templateFormFileList.value[0]
-      console.log('准备上传的文件:', fileToUpload)
 
       try {
-        const uploadResult = await templateAPI.uploadTemplateFile(
-          authStore.token, 
-          fileToUpload, 
-          templateForm.output_format
+        const newTemplate = await templateAPI.createTemplate(
+          authStore.token,
+          fileToUpload,
+          templateForm.name,
+          templateForm.output_format,
+          templateForm.description || undefined,
+          templateForm.category || undefined,
+          templateForm.is_public
         )
-
-        console.log('文件上传成功:', uploadResult)
-
-        // 创建符合后端期望的数据对象
-        const createData = {
-          name: templateForm.name,
-          description: templateForm.description || undefined,
-          category: templateForm.category || undefined,
-          output_format: templateForm.output_format,
-          file_path: uploadResult.file_path,
-          is_public: templateForm.is_public,
-          content: uploadResult.content,
-        }
-
-        console.log('发送给后端的数据:', createData)
-
-        const newTemplate = await templateAPI.createTemplate(authStore.token, createData)
 
         console.log('模板创建成功:', newTemplate)
         MessagePlugin.success('模板创建成功')
-      } catch (fileError: any) {
-        console.error('文件处理失败:', fileError)
-        const errorMessage = fileError?.response?.data?.detail || fileError?.message || '文件处理错误'
-        MessagePlugin.error(`模板创建失败：${errorMessage}`)
+      } catch (error: any) {
+        console.error('模板创建失败:', error)
+        const errorMessage = error?.message || '模板创建失败'
+        MessagePlugin.error(errorMessage)
         return
       }
     }
@@ -517,21 +545,42 @@ const cancelTemplate = () => {
 const showContentDialog = ref(false)
 const selectedTemplate = ref<PaperTemplate | null>(null)
 const templateContent = ref('')
+const templatePreviewLoading = ref(false)
+const templatePreviewData = ref<{
+  type: 'text' | 'image' | 'binary'
+  content?: string
+  filename: string
+  size: number
+  mime_type?: string
+  download_url?: string
+  message?: string
+} | null>(null)
+const templatePreviewError = ref('')
 
 const viewTemplateContent = async (template: PaperTemplate) => {
   if (!authStore.token) return
 
   selectedTemplate.value = template
   showContentDialog.value = true
+  templatePreviewLoading.value = true
+  templatePreviewError.value = ''
+  templatePreviewData.value = null
 
   try {
-    const result = await templateAPI.getTemplateContent(authStore.token, template.id)
-    templateContent.value = result.content
+    const result = await templateAPI.getTemplatePreview(authStore.token, template.id)
+    templatePreviewData.value = result
+    
+    // 为了向后兼容，如果是文本类型，也设置templateContent
+    if (result.type === 'text') {
+      templateContent.value = result.content || ''
+    }
   } catch (error: any) {
-    const errorMessage = error?.response?.data?.detail || error?.message || '加载模板内容失败'
+    const errorMessage = error?.response?.data?.detail || error?.message || '加载模板预览失败'
+    templatePreviewError.value = errorMessage
     MessagePlugin.error(errorMessage)
-    console.error('加载模板内容失败:', error)
-    templateContent.value = '模板内容加载失败'
+    console.error('加载模板预览失败:', error)
+  } finally {
+    templatePreviewLoading.value = false
   }
 }
 
@@ -539,6 +588,18 @@ const closeContentDialog = () => {
   showContentDialog.value = false
   selectedTemplate.value = null
   templateContent.value = ''
+  templatePreviewData.value = null
+  templatePreviewError.value = ''
+  templatePreviewLoading.value = false
+}
+
+// 格式化文件大小
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
 // 确认删除对话框相关
@@ -636,6 +697,54 @@ onMounted(() => {
 .content-display .t-textarea {
   min-height: 100%;
   box-sizing: border-box;
+}
+
+/* 预览内容样式 */
+.loading-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 60px 20px;
+}
+
+.text-preview {
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.image-preview {
+  text-align: center;
+  padding: 16px;
+  background-color: #fafafa;
+}
+
+.binary-preview {
+  padding: 20px;
+}
+
+.file-info-display {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 20px;
+  background-color: #f8f9fa;
+  border-radius: 8px;
+}
+
+.file-info-display p {
+  margin: 4px 0;
+  color: #495057;
+}
+
+.error-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 20px;
+  color: #dc3545;
 }
 
 .delete-confirm-content {

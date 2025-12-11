@@ -212,8 +212,16 @@ def clear_all_model_configs(db: Session, user_id: int = None):
         )
 
 # 模板相关的CRUD操作
-def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, user_id: int, file_content: str = ""):
-    """创建论文模板"""
+def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, user_id: int, file_content: str = "", is_binary: bool = False):
+    """创建论文模板
+    
+    Args:
+        db: 数据库会话
+        template: 模板创建数据
+        user_id: 用户ID
+        file_content: 文件内容（文本或base64编码的二进制）
+        is_binary: 是否为二进制文件（如docx）
+    """
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
         template_data = template.model_dump() if hasattr(template, 'model_dump') else template.dict()
@@ -229,12 +237,15 @@ def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, us
         
         # 创建对应的模板文件
         if file_content:
-            file_path = template_file_service.save_template_file(
-                db_template.id, 
-                file_content
+            filename = Path(template.file_path).name if template.file_path else "template.md"
+            saved_filename = template_file_service.save_file(
+                db_template.id,
+                filename,
+                file_content,
+                is_binary
             )
-            # 更新数据库中的文件路径
-            db_template.file_path = file_path
+            # 保存文件名到数据库
+            db_template.file_path = saved_filename
             db.commit()
             db.refresh(db_template)
         
@@ -242,8 +253,8 @@ def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, us
     except Exception as e:
         db.rollback()
         # 如果创建失败，尝试删除已创建的文件
-        if 'db_template' in locals() and hasattr(db_template, 'id'):
-            template_file_service.delete_template_file(db_template.id)
+        if 'db_template' in locals() and db_template.file_path:
+            template_file_service.delete_file(db_template.file_path)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Template creation failed: {str(e)}"
@@ -315,7 +326,8 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
         )
     
     # 删除关联的模板文件
-    template_file_service.delete_template_file(template_id)
+    if db_template.file_path:
+        template_file_service.delete_file(db_template.file_path)
     
     # 删除数据库记录
     db.delete(db_template)
@@ -343,7 +355,8 @@ def force_delete_paper_template(db: Session, template_id: int, user_id: int):
             db.delete(work)
     
     # 删除关联的模板文件
-    template_file_service.delete_template_file(template_id)
+    if db_template.file_path:
+        template_file_service.delete_file(db_template.file_path)
     
     # 删除数据库记录
     db.delete(db_template)
