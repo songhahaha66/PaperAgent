@@ -152,9 +152,9 @@
               :file-info="{
                 filename: templatePreviewData.filename,
                 size: templatePreviewData.size,
-                mime_type: templatePreviewData.mime_type,
-                download_url: templatePreviewData.download_url,
-                message: templatePreviewData.message
+                mime_type: templatePreviewData.mime_type || '',
+                download_url: templatePreviewData.download_url || '',
+                message: templatePreviewData.message || ''
               }"
               :work-id="''"
               :token="authStore.token || ''"
@@ -308,6 +308,7 @@ const templateForm = reactive({
   description: '',
   category: '',
   output_format: 'markdown', // 默认为markdown格式
+  file_path: '',  // 用于显示当前文件名
   is_public: false,
 })
 
