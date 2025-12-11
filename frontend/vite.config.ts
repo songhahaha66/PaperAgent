@@ -20,4 +20,52 @@ export default defineConfig({
     port: 5173,       // 明确指定端口
     strictPort: true, // 如果端口被占用则失败而不是尝试下一个端口
   },
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            // TDesign 优先判断（因为包含 vue 字样）
+            if (id.includes('tdesign-icons')) {
+              return 'vendor-tdesign-icons'
+            }
+            if (id.includes('tdesign')) {
+              return 'vendor-tdesign-core'
+            }
+            // highlight.js 按语言拆分
+            if (id.includes('highlight.js/lib/languages')) {
+              return 'vendor-highlight-langs'
+            }
+            if (id.includes('highlight.js')) {
+              return 'vendor-highlight-core'
+            }
+            // Vue 生态
+            if (id.includes('/vue-router/')) {
+              return 'vendor-vue-router'
+            }
+            if (id.includes('/pinia')) {
+              return 'vendor-pinia'
+            }
+            if (id.includes('/vue/') || id.includes('/@vue/')) {
+              return 'vendor-vue'
+            }
+            if (id.includes('vue-i18n')) {
+              return 'vendor-i18n'
+            }
+            // 其他
+            if (id.includes('katex')) {
+              return 'vendor-katex'
+            }
+            if (id.includes('markdown-it')) {
+              return 'vendor-markdown'
+            }
+            if (id.includes('docx-preview')) {
+              return 'vendor-docx'
+            }
+          }
+        },
+      },
+    },
+  },
 })

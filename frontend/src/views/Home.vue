@@ -318,11 +318,11 @@
               <DocxViewer
                 v-if="templatePreviewData.filename?.toLowerCase().endsWith('.docx')"
                 :file-info="{
-                  filename: templatePreviewData.filename,
+                  filename: templatePreviewData.filename || '',
                   size: templatePreviewData.size,
-                  mime_type: templatePreviewData.mime_type,
-                  download_url: templatePreviewData.download_url,
-                  message: templatePreviewData.message
+                  mime_type: templatePreviewData.mime_type || '',
+                  download_url: templatePreviewData.download_url || '',
+                  message: templatePreviewData.message || ''
                 }"
                 :work-id="''"
                 :token="authStore.token || ''"
