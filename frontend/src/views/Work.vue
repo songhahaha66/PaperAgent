@@ -531,6 +531,8 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
   if (!files || files.length === 0) return
 
   const file = files[0] // 取第一个文件
+  if (!file) return
+  
   console.log('上传文件:', file.name, file.size, file.type)
 
   if (!authStore.token || !workId.value) {
@@ -788,8 +790,11 @@ const sendRealMessage = async (message: string) => {
     console.error('发送消息失败:', error)
     const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
     if (messageIndex > -1) {
-      chatMessages.value[messageIndex].content = '发送消息失败，请稍后重试'
-      chatMessages.value[messageIndex].isStreaming = false
+      const msg = chatMessages.value[messageIndex]
+      if (msg) {
+        msg.content = '发送消息失败，请稍后重试'
+        msg.isStreaming = false
+      }
     }
     isStreaming.value = false
     MessagePlugin.error('发送消息失败')
@@ -851,8 +856,11 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
           console.error('WebSocket错误:', data.message)
           const errorIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
           if (errorIndex > -1) {
-            chatMessages.value[errorIndex].content = `错误: ${data.message}`
-            chatMessages.value[errorIndex].isStreaming = false
+            const errorMsg = chatMessages.value[errorIndex]
+            if (errorMsg) {
+              errorMsg.content = `错误: ${data.message}`
+              errorMsg.isStreaming = false
+            }
           }
           isStreaming.value = false
           break
@@ -874,12 +882,13 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
       // 获取当前消息
       const currentMessage = chatMessages.value[messageIndex]
+      if (!currentMessage) return
 
       // 添加JSON块到json_blocks数组
       const updatedJsonBlocks = [...(currentMessage.json_blocks || []), block]
 
       // 更新消息，设置为JSON卡片格式
-      const updatedMessage = {
+      const updatedMessage: ChatMessageDisplay = {
         ...currentMessage,
         json_blocks: updatedJsonBlocks,
         message_type: 'json_card' as const,
@@ -922,7 +931,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
       const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
       if (messageIndex > -1) {
         const currentMessage = chatMessages.value[messageIndex]
-        const updatedMessage = {
+        if (!currentMessage) return
+        const updatedMessage: ChatMessageDisplay = {
           ...currentMessage,
           content: currentMessage.content + content,
         }
@@ -1244,12 +1254,15 @@ const simulateSendFirstMessage = (content: string) => {
               (m) => m.role === 'assistant' && m.isStreaming
             )
             if (jsonBlockIndex > -1) {
-              const updatedMessage = {
-                ...chatMessages.value[jsonBlockIndex],
-                json_blocks: [...(chatMessages.value[jsonBlockIndex].json_blocks || []), data.block],
+              const existingMsg = chatMessages.value[jsonBlockIndex]
+              if (existingMsg) {
+                const updatedMessage: ChatMessageDisplay = {
+                  ...existingMsg,
+                  json_blocks: [...(existingMsg.json_blocks || []), data.block],
+                }
+                chatMessages.value.splice(jsonBlockIndex, 1, updatedMessage)
+                console.log('添加JSON块到AI消息:', data.block.type)
               }
-              chatMessages.value.splice(jsonBlockIndex, 1, updatedMessage)
-              console.log('添加JSON块到AI消息:', data.block.type)
             }
             break
           case 'content':
@@ -1273,7 +1286,10 @@ const simulateSendFirstMessage = (content: string) => {
                 (m) => m.role === 'assistant' && m.isStreaming
               )
               if (contentIndex > -1) {
-                chatMessages.value[contentIndex].content += data.content
+                const contentMsg = chatMessages.value[contentIndex]
+                if (contentMsg) {
+                  contentMsg.content += data.content
+                }
               }
             }
             break
@@ -1283,7 +1299,10 @@ const simulateSendFirstMessage = (content: string) => {
               (m) => m.role === 'assistant' && m.isStreaming,
             )
             if (finalAiMessageIndex !== -1) {
-              chatMessages.value[finalAiMessageIndex].isStreaming = false
+              const finalMsg = chatMessages.value[finalAiMessageIndex]
+              if (finalMsg) {
+                finalMsg.isStreaming = false
+              }
               console.log('AI回复完成，停止流式状态')
             }
             aiMessageCreated = false
@@ -1295,8 +1314,11 @@ const simulateSendFirstMessage = (content: string) => {
               (m) => m.role === 'assistant' && m.isStreaming,
             )
             if (errorIndex > -1) {
-              chatMessages.value[errorIndex].content = `错误: ${data.message}`
-              chatMessages.value[errorIndex].isStreaming = false
+              const errorMsg = chatMessages.value[errorIndex]
+              if (errorMsg) {
+                errorMsg.content = `错误: ${data.message}`
+                errorMsg.isStreaming = false
+              }
             }
             aiMessageCreated = false
             break
