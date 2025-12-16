@@ -1,17 +1,21 @@
 version: 2
 updates:
-  # Backend Python dependencies (uv
+  # Backend Python dependencies (uv)
   - package-ecosystem: "pip"
     directory: "/backend"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     labels:
       - "dependencies"
       - "backend"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      python-all:
+        patterns:
+          - "*"
 
   # Frontend npm dependencies
   - package-ecosystem: "npm"
@@ -19,14 +23,25 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     labels:
       - "dependencies"
       - "frontend"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      npm-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      npm-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
     ignore:
-      # Ignore major version updates for Vue to avoid breaking changes
       - dependency-name: "vue"
         update-types: ["version-update:semver-major"]
 
@@ -36,12 +51,16 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 2
     labels:
       - "dependencies"
       - "docker"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      docker-all:
+        patterns:
+          - "*"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -49,9 +68,13 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 2
     labels:
       - "dependencies"
       - "ci"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      actions-all:
+        patterns:
+          - "*"
