@@ -522,9 +522,12 @@ export class ChatStateManager {
       case 'UPDATE_MESSAGE':
         const messageIndex = this.state.messages.findIndex((m) => m.id === action.payload.id)
         if (messageIndex > -1) {
-          this.state.messages[messageIndex] = {
-            ...this.state.messages[messageIndex],
-            ...action.payload.updates,
+          const existingMessage = this.state.messages[messageIndex]
+          if (existingMessage) {
+            this.state.messages[messageIndex] = {
+              ...existingMessage,
+              ...action.payload.updates,
+            } as ChatMessage
           }
         }
         break

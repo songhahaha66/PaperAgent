@@ -41,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, defineProps, defineEmits, computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Tree, Collapse, CollapsePanel, Loading } from 'tdesign-vue-next'
 
 // 定义props
@@ -134,6 +134,7 @@ const processedFileTreeData = computed(() => {
   // 检查是否为FileInfo[]类型（有path和type属性）
   const isFileInfoType =
     props.fileTreeData.length > 0 &&
+    props.fileTreeData[0] &&
     'path' in props.fileTreeData[0] &&
     'type' in props.fileTreeData[0]
 
@@ -425,6 +426,8 @@ const handleFileSelect = (selectedKeys: string[]) => {
 
   if (selectedKeys && selectedKeys.length > 0) {
     const selectedKey = selectedKeys[0]
+    if (!selectedKey) return
+    
     console.log('选中的key:', selectedKey)
 
     // 检查是否是叶子节点（文件）且不是分类名称

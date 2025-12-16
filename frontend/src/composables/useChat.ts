@@ -315,8 +315,9 @@ export function useChat() {
     let userMessage: ChatMessage | null = null
 
     for (let i = userMessageIndex - 1; i >= 0; i--) {
-      if (messages.value[i].role === 'user') {
-        userMessage = messages.value[i]
+      const msg = messages.value[i]
+      if (msg && msg.role === 'user') {
+        userMessage = msg
         break
       }
     }
