@@ -273,7 +273,7 @@ class WriterAgent:
         # Execute instruction
         try:
             inputs = {"messages": [HumanMessage(content=instruction)]}
-            result = await self.agent.ainvoke(inputs)
+            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 100})
             output = self._extract_output(result)
             
             # Send completion notification

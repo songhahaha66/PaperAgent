@@ -111,7 +111,7 @@ class CodeAgent:
 
         try:
             inputs = {"messages": [HumanMessage(content=task_prompt)]}
-            result = await self.agent.ainvoke(inputs)
+            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 50})
             output = self._extract_output(result)
 
             if self.stream_manager:

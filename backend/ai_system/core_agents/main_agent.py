@@ -317,7 +317,7 @@ class MainAgent:
             logger.info(f"工具列表: {[tool.name for tool in self.tools]}")
             
             inputs = {"messages": [HumanMessage(content=user_input)]}
-            result = await self.agent.ainvoke(inputs)
+            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 50})
 
             # 提取最后的AI回复
             messages = result.get("messages", [])
