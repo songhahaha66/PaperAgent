@@ -341,7 +341,7 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     coroutine=word_tools.add_picture,
                     name="word_add_picture",
-                    description="[Content Addition] Add an image to the document from a file path with optional width specification"
+                    description="[Content Addition] Add an image to the document. Parameters: image_path (relative path like 'outputs/chart.png'), width (optional, in INCHES, e.g. 5.0 for 5 inches, typical range 3-6 inches for A4 paper). If width not specified, auto-scales with max 6 inches."
                 ),
                 StructuredTool.from_function(
                     coroutine=word_tools.add_page_break,

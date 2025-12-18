@@ -166,7 +166,7 @@ class WriterAgent:
                 "1. word_add_heading - 添加标题（1-5级）\n"
                 "2. word_add_paragraph - 添加段落\n"
                 "3. word_add_table - 添加表格\n"
-                "4. word_add_picture - 插入图片\n"
+                "4. word_add_picture - 插入图片（⚠️ width参数单位是英寸，典型值3-6，如width=5.0表示5英寸宽）\n"
                 "5. word_add_page_break - 插入分页符\n"
                 "6. 其他格式化工具\n\n"
                 "**工作流程示例**：\n"
