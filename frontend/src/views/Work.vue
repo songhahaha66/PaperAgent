@@ -296,6 +296,7 @@ const isStreaming = ref(false)
 const webSocketHandler = ref<WebSocketChatHandler | null>(null)
 const fileRefreshTimer = ref<number | null>(null)
 const lastFileUpdateTime = ref<number>(0)
+const isFileRefreshing = ref(false) // 防止重复刷新文件列表
 
 // 加载工作信息
 const loadWork = async () => {
@@ -559,13 +560,22 @@ const loadChatHistory = async () => {
   }
 }
 
-// 加载工作空间文件
+// 加载工作空间文件（带防抖）
 const loadWorkspaceFiles = async () => {
   if (!workId.value || !authStore.token) return
+  
+  // 防止重复刷新：如果正在刷新或距离上次刷新不足1秒，跳过
+  const now = Date.now()
+  if (isFileRefreshing.value || (now - lastFileUpdateTime.value < 1000)) {
+    console.log('跳过文件刷新：正在刷新或间隔太短')
+    return
+  }
 
   try {
     // 设置加载状态
+    isFileRefreshing.value = true
     loading.value = true
+    lastFileUpdateTime.value = now
 
     const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
     console.log('Loaded workspace files:', files)
@@ -577,6 +587,7 @@ const loadWorkspaceFiles = async () => {
   } finally {
     // 确保加载状态被重置
     loading.value = false
+    isFileRefreshing.value = false
   }
 }
 
@@ -1131,11 +1142,8 @@ watch(
       })
       imageUrls.value = {}
 
+      // loadWork 内部已经会调用 initializeChatSession，不需要重复调用
       loadWork()
-      // 重新初始化聊天会话
-      if (authStore.token) {
-        initializeChatSession()
-      }
     }
   },
 )
@@ -1154,11 +1162,8 @@ watch(
 // 组件挂载时加载工作信息
 onMounted(() => {
   if (workId.value) {
+    // loadWork 内部已经会调用 initializeChatSession，不需要重复调用
     loadWork()
-    // 初始化聊天会话
-    if (authStore.token) {
-      initializeChatSession()
-    }
   }
 
   // 组件挂载完成后，如果有聊天消息，自动滚动到底部
