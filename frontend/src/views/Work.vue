@@ -346,6 +346,9 @@ const initializeChatSession = async () => {
       created_by: 0,
       total_messages: chatMessages.value.length,
     }
+
+    // 检查是否有正在进行的AI任务（断线重连场景）
+    await checkAndResumeRunningTask()
   } catch (error) {
     console.error('初始化聊天会话失败:', error)
     // 如果加载失败，创建空的session
@@ -362,6 +365,155 @@ const initializeChatSession = async () => {
       total_messages: 0,
     }
   }
+}
+
+// 当前恢复任务的消息ID
+const reconnectMessageId = ref<string | null>(null)
+
+// 检查并恢复正在进行的AI任务
+const checkAndResumeRunningTask = async () => {
+  if (!authStore.token || !workId.value) return
+
+  try {
+    // 查询任务状态
+    const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
+    
+    if (taskStatus.has_task && taskStatus.status === 'running') {
+      console.log('检测到正在进行的AI任务，准备恢复...', taskStatus)
+      
+      // 设置流式状态
+      isStreaming.value = true
+      
+      // 创建AI回复消息框架
+      const aiMessageId = `reconnect_${Date.now()}`
+      reconnectMessageId.value = aiMessageId
+      
+      const aiMessage: ChatMessageDisplay = {
+        id: aiMessageId,
+        role: 'assistant' as const,
+        content: '',
+        datetime: new Date().toLocaleString(),
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
+        isStreaming: true,
+        json_blocks: [],
+        message_type: 'json_card' as const,
+      }
+      chatMessages.value.push(aiMessage)
+      
+      // 建立WebSocket连接恢复流式输出
+      await setupWebSocketForReconnect()
+    }
+  } catch (error) {
+    console.error('检查任务状态失败:', error)
+  }
+}
+
+// 为重连建立WebSocket连接
+const setupWebSocketForReconnect = async () => {
+  // 如果已有连接，先断开
+  if (webSocketHandler.value) {
+    webSocketHandler.value.disconnect()
+    webSocketHandler.value = null
+  }
+  
+  try {
+    webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
+    
+    // 设置重连回调
+    webSocketHandler.value.onReconnect((data) => {
+      console.log('重连事件:', data)
+      if (data.type === 'reconnect') {
+        MessagePlugin.info('正在恢复AI任务输出...')
+      } else if (data.type === 'reconnect_complete') {
+        MessagePlugin.success('历史输出恢复完成，继续接收...')
+      }
+    })
+    
+    // 设置消息监听 - 使用统一的消息处理
+    webSocketHandler.value.onMessage((data) => {
+      if (reconnectMessageId.value) {
+        handleStreamMessage(data, reconnectMessageId.value)
+      }
+    })
+    
+    // 设置断开回调
+    webSocketHandler.value.onDisconnect(() => {
+      console.log('WebSocket连接断开')
+      // 不立即重置 isStreaming，可能是临时断开
+    })
+    
+    // 连接WebSocket
+    await webSocketHandler.value.connect()
+    console.log('WebSocket重连成功')
+    
+  } catch (error) {
+    console.error('恢复WebSocket连接失败:', error)
+    isStreaming.value = false
+    reconnectMessageId.value = null
+    MessagePlugin.error('恢复AI任务失败')
+  }
+}
+
+// 统一的流式消息处理函数
+const handleStreamMessage = (data: any, messageId: string) => {
+  const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
+  if (messageIndex === -1) return
+  
+  const currentMessage = chatMessages.value[messageIndex]
+  if (!currentMessage) return
+
+  switch (data.type) {
+    case 'content':
+      chatMessages.value[messageIndex] = {
+        ...currentMessage,
+        content: currentMessage.content + data.content,
+      }
+      break
+
+    case 'json_block':
+      const block = data.block
+      chatMessages.value[messageIndex] = {
+        ...currentMessage,
+        json_blocks: [...(currentMessage.json_blocks || []), block],
+        message_type: 'json_card' as const,
+      }
+      
+      // 检查是否是文件操作相关的JSON块
+      if (block?.type && (
+        block.type.includes('save_and_execute') ||
+        block.type.includes('edit_code_file') ||
+        block.type.includes('execute_file') ||
+        block.type.includes('code_agent')
+      )) {
+        // 延迟刷新文件列表
+        setTimeout(() => loadWorkspaceFiles(), 1000)
+      }
+      break
+
+    case 'complete':
+      chatMessages.value[messageIndex] = {
+        ...currentMessage,
+        isStreaming: false,
+      }
+      isStreaming.value = false
+      reconnectMessageId.value = null
+      // 刷新文件列表
+      loadWorkspaceFiles()
+      break
+
+    case 'error':
+      chatMessages.value[messageIndex] = {
+        ...currentMessage,
+        content: currentMessage.content || `错误: ${data.message}`,
+        isStreaming: false,
+      }
+      isStreaming.value = false
+      reconnectMessageId.value = null
+      break
+  }
+
+  // 自动滚动
+  scrollToBottom()
 }
 
 // 重构后不再需要显式创建聊天会话，MainAgent会自动处理
@@ -804,149 +956,35 @@ const sendRealMessage = async (message: string) => {
 // WebSocket方式发送消息
 const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => {
   try {
-    console.log('Starting WebSocket connection for message:', {
-      messageId: aiMessageId,
-      message: message,
+    console.log('Starting WebSocket connection for message:', aiMessageId)
+
+    // 如果已有连接，先断开
+    if (webSocketHandler.value) {
+      webSocketHandler.value.disconnect()
+      webSocketHandler.value = null
+    }
+
+    // 创建WebSocket处理器
+    webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
+
+    // 设置断开连接回调
+    webSocketHandler.value.onDisconnect(() => {
+      console.log('WebSocket连接已断开')
     })
 
-    // 创建WebSocket处理器（使用workId）
-    webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
+    // 设置消息监听器 - 使用统一的处理函数
+    webSocketHandler.value.onMessage((data) => {
+      // 忽略 start 和 auth_success 消息
+      if (data.type === 'start' || data.type === 'auth_success') {
+        console.log('收到消息:', data.type)
+        return
+      }
+      handleStreamMessage(data, aiMessageId)
+    })
 
     // 连接WebSocket
     await webSocketHandler.value.connect()
     console.log('WebSocket connected successfully')
-
-    let fullContent = ''
-
-    // 设置断开连接回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接已断开，重置流式状态')
-      isStreaming.value = false
-    })
-
-    // 设置消息监听器
-    webSocketHandler.value.onMessage((data) => {
-      console.log('WebSocket message received:', data)
-
-      switch (data.type) {
-        case 'start':
-          console.log('AI分析开始')
-          break
-
-        case 'json_block':
-          // 处理JSON格式的数据块
-          if (data.block) {
-            handleJsonBlock(data.block, aiMessageId)
-          }
-          break
-
-        case 'content':
-          // 兼容旧的内容格式
-          handleContentUpdate(data.content, aiMessageId)
-          break
-
-        case 'complete':
-          console.log('AI分析完成')
-          isStreaming.value = false
-          // AI处理完成后，刷新文件列表
-          console.log('AI处理完成，刷新文件列表')
-          break
-
-        case 'error':
-          console.error('WebSocket错误:', data.message)
-          const errorIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
-          if (errorIndex > -1) {
-            const errorMsg = chatMessages.value[errorIndex]
-            if (errorMsg) {
-              errorMsg.content = `错误: ${data.message}`
-              errorMsg.isStreaming = false
-            }
-          }
-          isStreaming.value = false
-          break
-
-        default:
-          console.log('未知消息类型:', data.type)
-      }
-    })
-
-    // 处理JSON块数据
-    const handleJsonBlock = (block: any, messageId: string) => {
-      console.log('处理JSON块:', block)
-
-      const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-      if (messageIndex === -1) {
-        console.warn('未找到对应的消息ID:', messageId)
-        return
-      }
-
-      // 获取当前消息
-      const currentMessage = chatMessages.value[messageIndex]
-      if (!currentMessage) return
-
-      // 添加JSON块到json_blocks数组
-      const updatedJsonBlocks = [...(currentMessage.json_blocks || []), block]
-
-      // 更新消息，设置为JSON卡片格式
-      const updatedMessage: ChatMessageDisplay = {
-        ...currentMessage,
-        json_blocks: updatedJsonBlocks,
-        message_type: 'json_card' as const,
-      }
-
-      // 使用Vue的响应式更新
-      chatMessages.value.splice(messageIndex, 1, updatedMessage)
-      console.log('JSON块已添加到消息，当前JSON块数量:', updatedJsonBlocks.length)
-
-      // 检查是否是文件操作相关的JSON块，如果是则智能刷新文件列表
-      if (
-        block.type &&
-        (block.type.includes('save_and_execute') ||
-          block.type.includes('edit_code_file') ||
-          block.type.includes('execute_file') ||
-          block.type.includes('code_agent') ||
-          block.content?.includes('文件') ||
-          block.content?.includes('保存') ||
-          block.content?.includes('创建'))
-      ) {
-        console.log('检测到文件操作，智能刷新文件列表')
-        // 延迟刷新，避免频繁请求
-        setTimeout(() => {
-          console.log('发送消息后刷新文件列表')
-          loadWorkspaceFiles()
-        }, 1000)
-      }
-
-      // 自动滚动到底部
-      nextTick(() => {
-        const chatContainer = document.querySelector('.chat-messages')
-        if (chatContainer) {
-          chatContainer.scrollTop = chatContainer.scrollHeight
-        }
-      })
-    }
-
-    // 处理内容更新（兼容旧格式）
-    const handleContentUpdate = (content: string, messageId: string) => {
-      const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-      if (messageIndex > -1) {
-        const currentMessage = chatMessages.value[messageIndex]
-        if (!currentMessage) return
-        const updatedMessage: ChatMessageDisplay = {
-          ...currentMessage,
-          content: currentMessage.content + content,
-        }
-        chatMessages.value.splice(messageIndex, 1, updatedMessage)
-
-        // 自动滚动到底部
-        nextTick(() => {
-          const chatContainer = document.querySelector('.chat-messages')
-          if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight
-          }
-        })
-      }
-    }
 
     // 等待一下确保监听器设置完成
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -1160,187 +1198,8 @@ const checkAndAutoSendFirstMessage = async () => {
 
 // 真正发送第一句话给AI
 const simulateSendFirstMessage = (content: string) => {
-  // 直接添加用户消息到界面
-  const userMessage: ChatMessageDisplay = {
-    id: `msg_${Date.now()}`,
-    role: 'user' as const,
-    content: content,
-    datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    isStreaming: false,
-  }
-
-  chatMessages.value.push(userMessage)
-
-  // 自动滚动到底部
-  scrollToBottom()
-
-  // 在后台异步创建WebSocket连接并发送消息，不阻塞主流程
-  ;(async () => {
-    try {
-      // 创建WebSocket处理器
-      webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
-
-      // 连接WebSocket
-      await webSocketHandler.value.connect()
-      console.log('WebSocket已连接，准备发送第一句话')
-
-      // 等待连接状态确认
-      let retryCount = 0
-      const maxRetries = 10
-
-      while (retryCount < maxRetries) {
-        if (webSocketHandler.value.isConnected()) {
-          console.log('WebSocket连接状态确认成功')
-          break
-        }
-        console.log(`等待WebSocket连接建立... (${retryCount + 1}/${maxRetries})`)
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        retryCount++
-      }
-
-      if (!webSocketHandler.value.isConnected()) {
-        throw new Error('WebSocket连接建立超时')
-      }
-
-      // 发送消息给AI
-      webSocketHandler.value.sendMessage(content)
-      console.log('第一句话已真正发送给AI:', content)
-
-      // 设置消息监听器来处理AI的回复
-      let aiMessageCreated = false
-      webSocketHandler.value.onMessage((data) => {
-        console.log('收到AI回复:', data)
-
-        // 处理AI的回复
-        switch (data.type) {
-          case 'start':
-            // AI开始处理，创建AI回复消息框架
-            if (!aiMessageCreated) {
-              const aiMessage = {
-                id: `ai_msg_${Date.now()}`,
-                role: 'assistant' as const,
-                content: '',
-                datetime: new Date().toLocaleString(),
-                avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-                isStreaming: true,
-                json_blocks: [],
-                message_type: 'json_card' as const,
-              }
-              chatMessages.value.push(aiMessage)
-              aiMessageCreated = true
-              console.log('创建AI回复消息框架')
-            }
-            break
-          case 'json_block':
-            // 处理JSON块，确保有AI消息框架
-            if (!aiMessageCreated) {
-              const aiMessage = {
-                id: `ai_msg_${Date.now()}`,
-                role: 'assistant' as const,
-                content: '',
-                datetime: new Date().toLocaleString(),
-                avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-                isStreaming: true,
-                json_blocks: [],
-                message_type: 'json_card' as const,
-              }
-              chatMessages.value.push(aiMessage)
-              aiMessageCreated = true
-            }
-
-            // 添加JSON块到最新的AI消息
-            const jsonBlockIndex = chatMessages.value.findIndex(
-              (m) => m.role === 'assistant' && m.isStreaming
-            )
-            if (jsonBlockIndex > -1) {
-              const existingMsg = chatMessages.value[jsonBlockIndex]
-              if (existingMsg) {
-                const updatedMessage: ChatMessageDisplay = {
-                  ...existingMsg,
-                  json_blocks: [...(existingMsg.json_blocks || []), data.block],
-                }
-                chatMessages.value.splice(jsonBlockIndex, 1, updatedMessage)
-                console.log('添加JSON块到AI消息:', data.block.type)
-              }
-            }
-            break
-          case 'content':
-            // 处理文本内容，确保有AI消息框架
-            if (!aiMessageCreated) {
-              const aiMessage = {
-                id: `ai_msg_${Date.now()}`,
-                role: 'assistant' as const,
-                content: data.content,
-                datetime: new Date().toLocaleString(),
-                avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-                isStreaming: true,
-                json_blocks: [],
-                message_type: 'text' as const,
-              }
-              chatMessages.value.push(aiMessage)
-              aiMessageCreated = true
-            } else {
-              // 更新现有的AI回复消息内容
-              const contentIndex = chatMessages.value.findIndex(
-                (m) => m.role === 'assistant' && m.isStreaming
-              )
-              if (contentIndex > -1) {
-                const contentMsg = chatMessages.value[contentIndex]
-                if (contentMsg) {
-                  contentMsg.content += data.content
-                }
-              }
-            }
-            break
-          case 'complete':
-            // AI回复完成
-            const finalAiMessageIndex = chatMessages.value.findIndex(
-              (m) => m.role === 'assistant' && m.isStreaming,
-            )
-            if (finalAiMessageIndex !== -1) {
-              const finalMsg = chatMessages.value[finalAiMessageIndex]
-              if (finalMsg) {
-                finalMsg.isStreaming = false
-              }
-              console.log('AI回复完成，停止流式状态')
-            }
-            aiMessageCreated = false
-            break
-          case 'error':
-            console.error('AI处理出错:', data.message)
-            // 如果有正在流式的消息，停止并显示错误
-            const errorIndex = chatMessages.value.findIndex(
-              (m) => m.role === 'assistant' && m.isStreaming,
-            )
-            if (errorIndex > -1) {
-              const errorMsg = chatMessages.value[errorIndex]
-              if (errorMsg) {
-                errorMsg.content = `错误: ${data.message}`
-                errorMsg.isStreaming = false
-              }
-            }
-            aiMessageCreated = false
-            break
-        }
-
-        // 自动滚动到底部
-        scrollToBottom()
-      })
-    } catch (error) {
-      console.error('发送第一句话给AI失败:', error)
-      // 如果连接失败，显示错误消息
-      const errorMessage: ChatMessageDisplay = {
-        id: `ai_error_${Date.now()}`,
-        role: 'assistant' as const,
-        content: '连接AI服务失败，请检查网络连接或稍后重试',
-        datetime: new Date().toLocaleString(),
-        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-        isStreaming: false,
-      }
-      chatMessages.value.push(errorMessage)
-    }
-  })()
+  // 直接调用 sendMessage，复用统一的消息发送逻辑
+  sendMessage(content)
 }
 
 // 生成工作标题并自动更新到数据库
