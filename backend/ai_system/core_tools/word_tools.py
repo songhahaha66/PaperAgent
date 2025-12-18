@@ -112,13 +112,19 @@ class WordTools:
     
     # ===== Category 1: Document Creation and Properties =====
     
-    async def create_document(self, title: Optional[str] = None, author: Optional[str] = None) -> str:
-        """Create new Word document"""
+    async def create_document(self, title: Optional[str] = None, author: Optional[str] = None, overwrite: bool = False) -> str:
+        """Create new Word document
+        
+        Args:
+            title: Optional document title
+            author: Optional document author
+            overwrite: If True, overwrite existing document. If False (default), skip if file exists.
+        """
         from word_document_server.tools import document_tools
         
         try:
             self._send_notification("word_tool_call", "Creating Word document")
-            result = await document_tools.create_document(self.document_path, title, author)
+            result = await document_tools.create_document(self.document_path, title, author, overwrite)
             self._send_notification("word_tool_result", result)
             return result
         except Exception as e:

@@ -286,10 +286,30 @@ class FileTools:
         return '\n'.join(updated_lines)
 
     def tree(self, directory: Optional[str] = None) -> str:
-        """显示目录树结构"""
+        """显示目录树结构，只允许访问workspace_dir内的目录"""
         try:
-            if directory is None:
-                directory = self.workspace_dir
+            # 始终使用workspace_dir作为根目录
+            base_dir = self.workspace_dir
+            
+            if directory is not None:
+                # 如果传入了directory，将其解析为相对于workspace_dir的路径
+                # 处理相对路径
+                if not os.path.isabs(directory):
+                    target_dir = os.path.join(base_dir, directory)
+                else:
+                    target_dir = directory
+                
+                # 解析为绝对路径并规范化
+                target_dir = os.path.realpath(target_dir)
+                base_dir_real = os.path.realpath(base_dir)
+                
+                # 安全检查：确保目标目录在workspace_dir内
+                if not target_dir.startswith(base_dir_real):
+                    return f"安全限制：只能访问workspace目录内的内容，不允许访问: {directory}"
+                
+                directory = target_dir
+            else:
+                directory = base_dir
 
             if not os.path.exists(directory):
                 return f"目录不存在: {directory}"

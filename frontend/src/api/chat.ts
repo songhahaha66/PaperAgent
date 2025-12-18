@@ -181,6 +181,23 @@ export const chatAPI = {
     )
     return response
   },
+
+  // 获取AI任务状态（用于断线重连）
+  async getTaskStatus(
+    token: string,
+    workId: string,
+  ): Promise<{
+    has_task: boolean
+    task_id?: string
+    status?: string
+    message?: string
+    output_count?: number
+  }> {
+    const response = await apiClient.request<any>(`/api/chat/work/${workId}/task-status`, {
+      method: 'GET',
+    })
+    return response
+  },
 }
 
 // WebSocket聊天处理器
@@ -199,6 +216,8 @@ export class WebSocketChatHandler {
   private messageCallback: ((data: any) => void) | null = null
   private disconnectCallback: (() => void) | null = null
   private jsonBlockCallback: ((block: any) => void) | null = null
+  private reconnectCallback: ((data: any) => void) | null = null
+  private isReconnecting = false
 
   constructor(workId: string, token: string) {
     // 参数改为workId
@@ -229,6 +248,9 @@ export class WebSocketChatHandler {
           console.log('WebSocket连接已建立')
           this.isConnecting = false
           this.reconnectAttempts = 0
+
+          // 绑定消息处理器（如果已设置回调）
+          this.bindMessageHandler()
 
           // 发送认证信息
           try {
@@ -366,10 +388,8 @@ export class WebSocketChatHandler {
     }
   }
 
-  // 监听消息
-  onMessage(callback: (data: any) => void) {
-    this.messageCallback = callback
-
+  // 绑定消息处理器到当前 WebSocket 实例
+  private bindMessageHandler() {
     if (!this.ws) return
 
     this.ws.onmessage = (event) => {
@@ -381,6 +401,25 @@ export class WebSocketChatHandler {
           return
         }
 
+        // 处理重连相关消息
+        if (data.type === 'reconnect') {
+          console.log('检测到正在进行的AI任务，开始恢复...')
+          this.isReconnecting = true
+          if (this.reconnectCallback) {
+            this.reconnectCallback(data)
+          }
+          // 不 return，继续传递给 messageCallback
+        }
+
+        if (data.type === 'reconnect_complete') {
+          console.log('历史输出恢复完成')
+          this.isReconnecting = false
+          if (this.reconnectCallback) {
+            this.reconnectCallback(data)
+          }
+          // 不 return，继续传递给 messageCallback
+        }
+
         if (this.messageCallback) {
           this.messageCallback(data)
         }
@@ -388,6 +427,13 @@ export class WebSocketChatHandler {
         console.error('解析WebSocket消息失败:', error)
       }
     }
+  }
+
+  // 监听消息
+  onMessage(callback: (data: any) => void) {
+    this.messageCallback = callback
+    // 如果 ws 已存在，立即绑定
+    this.bindMessageHandler()
   }
 
   // 监听JSON块消息
@@ -398,6 +444,16 @@ export class WebSocketChatHandler {
   // 监听断开连接
   onDisconnect(callback: () => void) {
     this.disconnectCallback = callback
+  }
+
+  // 监听重连恢复事件
+  onReconnect(callback: (data: any) => void) {
+    this.reconnectCallback = callback
+  }
+
+  // 检查是否正在重连恢复
+  isReconnectingTask(): boolean {
+    return this.isReconnecting
   }
 
   // 关闭连接

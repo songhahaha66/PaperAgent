@@ -1,6 +1,7 @@
 """
 简化版聊天系统API路由
 使用JSON存储聊天记录，简化WebSocket逻辑
+支持断线重连恢复AI任务
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
@@ -13,6 +14,7 @@ import os
 from database.database import get_db
 from auth.auth import get_current_user, verify_token
 from services.chat_services.chat_service import ChatService
+from services.chat_services.task_manager import task_manager, TaskStatus
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
 from ai_system.core_agents.main_agent import MainAgent
@@ -58,14 +60,18 @@ class ConnectionManager:
             try:
                 websocket = self.active_connections[work_id]
                 # 检查连接状态
-                if websocket.client_state.value == 1:  # 1表示连接已建立
+                state = websocket.client_state.value
+                logger.debug(f"[WS] 发送消息到 {work_id}, 连接状态: {state}")
+                if state == 1:  # 1表示连接已建立
                     await websocket.send_text(message)
                 else:
-                    logger.warning(f"WebSocket连接状态异常: {work_id}, 状态: {websocket.client_state.value}")
+                    logger.warning(f"WebSocket连接状态异常: {work_id}, 状态: {state}")
                     self.disconnect(work_id)
             except Exception as e:
                 logger.error(f"发送WebSocket消息失败: {e}")
                 self.disconnect(work_id)
+        else:
+            logger.warning(f"[WS] 没有找到活跃连接: {work_id}")
     
     def is_connected(self, work_id: str) -> bool:
         """检查指定work_id的连接是否有效"""
@@ -167,9 +173,29 @@ async def get_work_chat_statistics(
     }
 
 
+@router.get("/work/{work_id}/task-status")
+@route_guard
+async def get_task_status(
+    work_id: str,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """获取当前工作的AI任务状态"""
+    # 验证权限
+    from services.data_services.crud import get_work
+    work = get_work(db, work_id)
+    if not work or work.created_by != current_user_id:
+        raise HTTPException(status_code=403, detail="无权限访问")
+    
+    return task_manager.get_task_status(work_id)
+
+
 @router.websocket("/ws/{work_id}")
 async def websocket_chat(websocket: WebSocket, work_id: str):
-    """简化版WebSocket聊天接口"""
+    """WebSocket聊天接口，支持断线重连恢复"""
+    ws_callback = None
+    is_reconnect_mode = False  # 标记是否为重连模式
+    
     try:
         # 接受连接
         await websocket.accept()
@@ -196,7 +222,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             await websocket.close()
             return
 
-        # 验证work权限 - 使用线程池避免阻塞事件循环
+        # 验证work权限
         loop = asyncio.get_running_loop()
 
         def verify_work_permission():
@@ -223,8 +249,51 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             'message': '认证成功'
         }))
 
-        # 注册连接
+        # 注册连接（会覆盖旧连接，这是预期行为）
         manager.active_connections[work_id] = websocket
+        
+        # 检查是否有正在运行的任务（断线重连场景）
+        running_task = task_manager.get_running_task(work_id)
+        if running_task:
+            is_reconnect_mode = True
+            logger.info(f"[RECONNECT] 检测到正在运行的任务: {running_task.task_id}")
+            
+            await websocket.send_text(json.dumps({
+                'type': 'reconnect',
+                'message': '检测到正在进行的AI任务，正在恢复...',
+                'task_id': running_task.task_id
+            }))
+            
+            # 发送已累积的输出
+            output_count = len(running_task.outputs)
+            logger.info(f"[RECONNECT] 恢复 {output_count} 条历史输出")
+            
+            for output in list(running_task.outputs):  # 使用list复制避免迭代时修改
+                try:
+                    if websocket.client_state.value != 1:
+                        logger.warning("[RECONNECT] 连接已断开，停止恢复")
+                        break
+                    if output.type == 'content':
+                        await websocket.send_text(json.dumps({
+                            'type': 'content',
+                            'content': output.data
+                        }))
+                    elif output.type == 'json_block':
+                        await websocket.send_text(json.dumps({
+                            'type': 'json_block',
+                            'block': output.data
+                        }))
+                except Exception as e:
+                    logger.error(f"[RECONNECT] 恢复输出失败: {e}")
+                    break
+            
+            await websocket.send_text(json.dumps({
+                'type': 'reconnect_complete',
+                'message': '历史输出恢复完成，继续接收新输出...'
+            }))
+            
+            # 重连模式下，只需要等待任务完成或接收心跳，不处理新消息
+            # 任务的新输出会通过 task_manager 自动发送到当前连接
 
         while True:
             # 接收用户消息
@@ -235,6 +304,22 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             if message_data.get('type') == 'ping':
                 await websocket.send_text(json.dumps({'type': 'pong'}))
                 continue
+            
+            # 重连模式下，检查任务是否已完成
+            if is_reconnect_mode:
+                running_task = task_manager.get_running_task(work_id)
+                if not running_task:
+                    # 任务已完成，退出重连模式
+                    is_reconnect_mode = False
+                    logger.info(f"[RECONNECT] 任务已完成，退出重连模式")
+                else:
+                    # 任务还在运行，忽略新消息请求
+                    if 'problem' in message_data:
+                        await websocket.send_text(json.dumps({
+                            'type': 'error',
+                            'message': '当前有任务正在执行，请等待完成'
+                        }))
+                    continue
 
             if 'problem' not in message_data:
                 await websocket.send_text(json.dumps({
@@ -260,26 +345,27 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             # 创建流式回调
             class WebSocketStreamCallback(SimpleStreamCallback):
-                def __init__(self, websocket: WebSocket, work_id: str, chat_service: ChatService):
+                def __init__(self, work_id: str, chat_service: ChatService):
                     super().__init__()
-                    self.websocket = websocket
                     self.work_id = work_id
                     self.chat_service = chat_service
                     self.content = ""
-                    self.current_message_id = None
                     self.json_blocks = []
                     logger.info(f"WebSocket回调初始化完成，work_id: {work_id}")
 
                 async def on_content(self, content: str):
                     """实时发送流式内容到WebSocket"""
                     self.content += content
+                    
+                    # 记录到任务管理器（用于断线重连恢复）
+                    task_manager.add_output(self.work_id, 'content', content)
+                    
+                    # 通过manager发送消息（自动处理连接状态和重连）
                     try:
-                        # 立即发送内容，不等待
-                        await self.websocket.send_text(json.dumps({
+                        await manager.send_message(self.work_id, json.dumps({
                             'type': 'content',
                             'content': content
                         }))
-                        logger.debug(f"发送流式内容: {repr(content[:30])}")
 
                         # 使用配置参数优化延迟
                         from ai_system.config.async_config import AsyncConfig
@@ -291,38 +377,22 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
                 async def on_message_complete(self, role: str, content: str):
                     """消息完成回调"""
-                    try:
-                        # 注意：这里不立即保存消息，因为MainAgent可能会多次调用这个方法
-                        # 我们只在MainAgent完全执行完成后才保存消息
-                        # 这里只是记录内容，不保存到数据库
-                        logger.debug(
-                            f"收到消息完成回调，角色: {role}, 长度: {len(content)}, JSON块数: {len(self.json_blocks)}")
-
-                        # 不发送complete消息，因为MainAgent可能还会继续执行
-                        # await self.websocket.send_text(json.dumps({
-                        #     'type': 'complete',
-                        #     'message': 'AI分析完成'
-                        # }))
-
-                    except Exception as e:
-                        logger.error(f"处理消息完成失败: {e}")
+                    logger.debug(f"消息完成，角色: {role}, 长度: {len(content)}, JSON块数: {len(self.json_blocks)}")
 
                 async def on_json_block(self, block: dict):
                     """处理JSON格式的数据块"""
+                    self.json_blocks.append(block)
+                    
+                    # 记录到任务管理器（用于断线重连恢复）
+                    task_manager.add_output(self.work_id, 'json_block', block)
+                    
+                    # 通过manager发送消息（自动处理连接状态和重连）
                     try:
-                        # 添加到JSON块列表
-                        self.json_blocks.append(block)
-
-                        # 直接发送JSON块到WebSocket
-                        await self.websocket.send_text(json.dumps({
+                        await manager.send_message(self.work_id, json.dumps({
                             'type': 'json_block',
                             'block': block
                         }))
-                        logger.debug(
-                            f"发送JSON块: {block.get('type', 'unknown')}")
-
-                        # 减少延迟，JSON块通常较小，不需要额外延迟
-                        # await asyncio.sleep(0.001)  # 移除不必要的延迟
+                        logger.debug(f"发送JSON块: {block.get('type', 'unknown')}")
                     except Exception as e:
                         logger.error(f"发送JSON块失败: {e}")
 
@@ -337,13 +407,15 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             writer_model_config = env_manager.config_manager.get_model_config("writing", user_id)
 
             # 创建流式回调和管理器
-            ws_callback = WebSocketStreamCallback(
-                websocket, work_id, chat_service)
+            ws_callback = WebSocketStreamCallback(work_id, chat_service)
             stream_manager = PersistentStreamManager(
                 stream_callback=ws_callback,
                 chat_service=chat_service,  # 传入chat_service实例以支持消息持久化
                 session_id=str(session.session_id)
             )
+            
+            # 创建任务记录
+            task = task_manager.create_task(work_id, user_id, message_data['problem'])
 
             # 创建支持多AI提供商的LLM处理器
             llm_handler = LLMHandler(
@@ -413,85 +485,176 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             # 执行AI任务 - 使用异步任务避免阻塞
             try:
-                # 检查WebSocket连接状态
-                if not manager.is_connected(work_id):
-                    logger.error(f"WebSocket连接已断开，无法执行AI任务: {work_id}")
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': 'WebSocket连接已断开，请重新连接'
-                    }))
-                    break
+                # 标记任务开始
+                task_manager.start_task(work_id)
 
-                # 创建异步任务执行AI处理（MainAgent.run内部会添加用户消息）
-                ai_task = asyncio.create_task(
-                    main_agent.run(message_data['problem'])
-                )
+                # 定义AI任务执行函数
+                async def run_ai_task():
+                    try:
+                        await main_agent.run(message_data['problem'])
+                        
+                        # AI处理完成后，保存最终的AI消息
+                        # 使用新的数据库连接，避免长时间运行后连接断开的问题
+                        final_content = ws_callback.content.strip()
+                        
+                        def save_final_message():
+                            save_db = next(get_db())
+                            try:
+                                save_chat_service = ChatService(save_db)
+                                if ws_callback.json_blocks:
+                                    save_chat_service.add_json_card_message(
+                                        work_id,
+                                        "assistant",
+                                        final_content,
+                                        ws_callback.json_blocks,
+                                        {"system_type": "brain"}
+                                    )
+                                    logger.info(f"[PERSISTENCE] JSON卡片消息已保存，块数: {len(ws_callback.json_blocks)}")
+                                else:
+                                    save_chat_service.add_message(
+                                        work_id,
+                                        "assistant",
+                                        final_content,
+                                        {"system_type": "brain"}
+                                    )
+                                    logger.info(f"[PERSISTENCE] 普通文本消息已保存，长度: {len(final_content)}")
+                            finally:
+                                save_db.close()
+                        
+                        await loop.run_in_executor(None, save_final_message)
 
-                # 等待AI任务完成，添加超时保护
-                try:
-                    await asyncio.wait_for(ai_task, timeout=300)  # 5分钟超时
-                except asyncio.TimeoutError:
-                    logger.error(f"AI任务执行超时: {work_id}")
-                    await websocket.send_text(json.dumps({
-                        'type': 'error',
-                        'message': 'AI任务执行超时，请重试'
-                    }))
-                    break
+                        # 标记任务完成
+                        task_manager.complete_task(work_id)
+                        
+                        # 发送完成消息到前端（通过manager获取当前活跃连接）
+                        try:
+                            await manager.send_message(work_id, json.dumps({
+                                'type': 'complete',
+                                'message': 'AI分析完成'
+                            }))
+                            logger.info(f"[COMPLETE] 完成消息已发送到前端: {work_id}")
+                        except Exception as e:
+                            logger.debug(f"发送完成消息失败: {e}")
+                        
+                        logger.info(f"[PERSISTENCE] AI处理完成，最终消息已保存到持久化存储")
+                        
+                    except asyncio.CancelledError:
+                        logger.info(f"AI任务被取消: {work_id}")
+                        
+                        # 取消时也保存已生成的内容
+                        partial_content = ws_callback.content.strip()
+                        partial_json_blocks = ws_callback.json_blocks
+                        
+                        if partial_content or partial_json_blocks:
+                            logger.info(f"[CANCELLED] 保存取消前已生成的内容")
+                            
+                            def save_cancelled_message():
+                                save_db = next(get_db())
+                                try:
+                                    save_chat_service = ChatService(save_db)
+                                    cancel_notice = "\n\n---\n⚠️ *任务已取消，以上为部分生成内容*"
+                                    final_content = partial_content + cancel_notice
+                                    
+                                    if partial_json_blocks:
+                                        save_chat_service.add_json_card_message(
+                                            work_id, "assistant", final_content,
+                                            partial_json_blocks,
+                                            {"system_type": "brain", "status": "cancelled"}
+                                        )
+                                    else:
+                                        save_chat_service.add_message(
+                                            work_id, "assistant", final_content,
+                                            {"system_type": "brain", "status": "cancelled"}
+                                        )
+                                except Exception as save_error:
+                                    logger.error(f"[CANCELLED] 保存部分内容失败: {save_error}")
+                                finally:
+                                    save_db.close()
+                            
+                            await loop.run_in_executor(None, save_cancelled_message)
+                        
+                        task_manager.cancel_task(work_id)
+                        raise
+                    except Exception as e:
+                        logger.error(f"AI任务执行失败: {e}")
+                        
+                        # 失败时也保存已生成的内容
+                        partial_content = ws_callback.content.strip()
+                        partial_json_blocks = ws_callback.json_blocks
+                        
+                        if partial_content or partial_json_blocks:
+                            logger.info(f"[FAILED] 保存失败前已生成的内容")
+                            
+                            def save_failed_message():
+                                save_db = next(get_db())
+                                try:
+                                    save_chat_service = ChatService(save_db)
+                                    error_notice = f"\n\n---\n⚠️ *任务执行失败: {str(e)[:100]}*"
+                                    final_content = partial_content + error_notice
+                                    
+                                    if partial_json_blocks:
+                                        save_chat_service.add_json_card_message(
+                                            work_id, "assistant", final_content,
+                                            partial_json_blocks,
+                                            {"system_type": "brain", "status": "failed", "error": str(e)}
+                                        )
+                                    else:
+                                        save_chat_service.add_message(
+                                            work_id, "assistant", final_content,
+                                            {"system_type": "brain", "status": "failed", "error": str(e)}
+                                        )
+                                except Exception as save_error:
+                                    logger.error(f"[FAILED] 保存部分内容失败: {save_error}")
+                                finally:
+                                    save_db.close()
+                            
+                            await loop.run_in_executor(None, save_failed_message)
+                        
+                        task_manager.fail_task(work_id, str(e))
+                        
+                        # 尝试发送错误消息
+                        if ws_callback._is_connection_open():
+                            try:
+                                ws = ws_callback._get_websocket()
+                                if ws:
+                                    await ws.send_text(json.dumps({
+                                        'type': 'error',
+                                        'message': f'AI处理失败: {str(e)}'
+                                    }))
+                            except Exception:
+                                pass
+                        raise
 
-                # AI处理完成后，手动保存最终的AI消息
-                # 获取最终的AI回复内容
-                final_content = ws_callback.content.strip()
+                # 创建异步任务
+                ai_task = asyncio.create_task(run_ai_task())
+                task_manager.set_async_task(work_id, ai_task)
 
-                # 保存最终的AI消息
-                if ws_callback.json_blocks:
-                    # 保存JSON卡片格式的消息
-                    chat_service.add_json_card_message(
-                        work_id,
-                        "assistant",
-                        final_content,
-                        ws_callback.json_blocks,
-                        {"system_type": "brain"}
-                    )
-                    logger.info(
-                        f"[PERSISTENCE] JSON卡片消息已保存，块数: {len(ws_callback.json_blocks)}")
-                else:
-                    # 保存普通文本消息
-                    chat_service.add_message(
-                        work_id,
-                        "assistant",
-                        final_content,
-                        {"system_type": "brain"}
-                    )
-                    logger.info(
-                        f"[PERSISTENCE] 普通文本消息已保存，长度: {len(final_content)}")
-
-                # 发送完成消息到前端
-                await websocket.send_text(json.dumps({
-                    'type': 'complete',
-                    'message': 'AI分析完成'
-                }))
-                logger.info(f"[PERSISTENCE] AI处理完成，最终消息已保存到持久化存储")
+                # 等待AI任务完成，不设置超时
+                await ai_task
 
             except Exception as e:
                 logger.error(f"AI任务执行失败: {e}")
-                await websocket.send_text(json.dumps({
-                    'type': 'error',
-                    'message': f'AI处理失败: {str(e)}'
-                }))
 
             finally:
-                db.close()
+                # 确保数据库连接被正确关闭
+                try:
+                    db.close()
+                except Exception as close_error:
+                    logger.warning(f"关闭数据库连接时出错: {close_error}")
 
     except WebSocketDisconnect:
+        logger.info(f"WebSocket客户端断开连接: {work_id}")
         manager.disconnect(work_id)
     except Exception as e:
         logger.error(f"WebSocket处理失败: {e}")
         try:
-            await websocket.send_text(json.dumps({
-                'type': 'error',
-                'message': f'处理失败: {str(e)}'
-            }))
-        except:
+            # 检查连接状态再发送错误消息
+            if websocket.client_state.value == 1:
+                await websocket.send_text(json.dumps({
+                    'type': 'error',
+                    'message': f'处理失败: {str(e)}'
+                }))
+        except Exception:
             pass
         manager.disconnect(work_id)
 

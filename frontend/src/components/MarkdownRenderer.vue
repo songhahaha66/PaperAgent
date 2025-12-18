@@ -162,11 +162,17 @@ onBeforeUnmount(() => {
 .markdown-content :deep(ul),
 .markdown-content :deep(ol) {
   margin: 8px 0;
-  padding-left: 20px;
+  padding-left: 2em;
+  list-style-position: outside;
+}
+
+.markdown-content :deep(ol) {
+  list-style-type: decimal;
 }
 
 .markdown-content :deep(li) {
   margin: 4px 0;
+  padding-left: 0.5em;
 }
 
 /* 链接样式 */

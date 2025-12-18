@@ -13,7 +13,17 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is not set")
 
 # 同步数据库引擎和会话（保持兼容性）
-engine = create_engine(DATABASE_URL)
+# pool_pre_ping: 使用前检测连接是否有效，避免使用已断开的连接
+# pool_recycle: 连接回收时间（秒），防止数据库服务器端超时断开
+# pool_size: 连接池大小
+# max_overflow: 允许超出pool_size的连接数
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,  # 5分钟回收一次连接
+    pool_size=10,
+    max_overflow=20
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # 异步数据库引擎和会话
@@ -26,7 +36,14 @@ elif DATABASE_URL.startswith("postgresql://"):
 elif DATABASE_URL.startswith("mysql://"):
     ASYNC_DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+aiomysql://")
 
-async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
+async_engine = create_async_engine(
+    ASYNC_DATABASE_URL, 
+    echo=False,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    pool_size=10,
+    max_overflow=20
+)
 AsyncSessionLocal = async_sessionmaker(
     async_engine, 
     class_=AsyncSession, 
