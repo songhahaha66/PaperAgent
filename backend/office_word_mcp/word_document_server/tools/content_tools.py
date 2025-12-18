@@ -219,13 +219,14 @@ async def add_table(filename: str, rows: int, cols: int, data: Optional[List[Lis
         return f"Failed to add table: {str(e)}"
 
 
-async def add_picture(filename: str, image_path: str, width: Optional[float] = None) -> str:
+async def add_picture(filename: str, image_path: str, width: Optional[float] = None, max_width: float = 6.0) -> str:
     """Add an image to a Word document.
     
     Args:
         filename: Path to the Word document
         image_path: Path to the image file
         width: Optional width in inches (proportional scaling)
+        max_width: Maximum width in inches (default 6.0, suitable for A4/Letter paper margins)
     """
     filename = ensure_docx_extension(filename)
     
@@ -261,9 +262,34 @@ async def add_picture(filename: str, image_path: str, width: Optional[float] = N
         
         try:
             if width:
+                # Use specified width
                 doc.add_picture(abs_image_path, width=Inches(width))
             else:
-                doc.add_picture(abs_image_path)
+                # Auto-scale: check image dimensions and limit to max_width
+                from PIL import Image
+                try:
+                    with Image.open(abs_image_path) as img:
+                        img_width_px, img_height_px = img.size
+                        # Assume 96 DPI for conversion (common screen DPI)
+                        dpi = img.info.get('dpi', (96, 96))
+                        if isinstance(dpi, tuple):
+                            dpi_x = dpi[0] if dpi[0] else 96
+                        else:
+                            dpi_x = dpi if dpi else 96
+                        img_width_inches = img_width_px / dpi_x
+                        
+                        if img_width_inches > max_width:
+                            # Scale down to max_width
+                            doc.add_picture(abs_image_path, width=Inches(max_width))
+                        else:
+                            # Use original size
+                            doc.add_picture(abs_image_path)
+                except ImportError:
+                    # PIL not available, use max_width as fallback
+                    doc.add_picture(abs_image_path, width=Inches(max_width))
+                except Exception:
+                    # If image dimension check fails, use max_width as safe default
+                    doc.add_picture(abs_image_path, width=Inches(max_width))
             doc.save(abs_filename)
             return f"Picture {image_path} added to {filename}"
         except Exception as inner_error:

@@ -424,13 +424,25 @@ const copyMessage = (content: string) => {
 }
 
 :deep(.json-block-content) {
-  padding: 12px;
+  padding: 12px 12px 12px 16px;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
   background-color: white;
+  overflow: visible;
+}
+
+/* 确保json-block内的列表数字不被截断 */
+:deep(.json-block-content .markdown-content) {
+  overflow: visible;
+}
+
+:deep(.json-block-content ol),
+:deep(.json-block-content ul) {
+  padding-left: 2.5em;
+  list-style-position: outside;
 }
 
 /* 不同type的JSON块样式 */
