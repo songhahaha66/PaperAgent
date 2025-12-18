@@ -292,7 +292,7 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     coroutine=word_tools.create_document,
                     name="word_create_document",
-                    description="[Document Creation] Create a new Word document with optional title and author"
+                    description="[Document Creation] Create a new Word document with optional title and author. If document already exists, it will NOT be overwritten by default (preserves existing content). Set overwrite=True only if you explicitly want to replace the existing document."
                 ),
                 StructuredTool.from_function(
                     coroutine=word_tools.get_document_info,

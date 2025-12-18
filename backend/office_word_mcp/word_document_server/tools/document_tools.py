@@ -11,15 +11,23 @@ from word_document_server.utils.document_utils import get_document_properties, e
 from word_document_server.core.styles import ensure_heading_style, ensure_table_style
 
 
-async def create_document(filename: str, title: Optional[str] = None, author: Optional[str] = None) -> str:
+async def create_document(filename: str, title: Optional[str] = None, author: Optional[str] = None, overwrite: bool = False) -> str:
     """Create a new Word document with optional metadata.
+    
+    If the document already exists and overwrite is False, returns success without modifying the file.
+    This prevents accidental data loss when the document already has content.
     
     Args:
         filename: Name of the document to create (with or without .docx extension)
         title: Optional title for the document metadata
         author: Optional author for the document metadata
+        overwrite: If True, overwrite existing document. If False (default), skip if file exists.
     """
     filename = ensure_docx_extension(filename)
+    
+    # Check if file already exists - don't overwrite unless explicitly requested
+    if os.path.exists(filename) and not overwrite:
+        return f"Document {filename} already exists, skipping creation to preserve existing content"
     
     # Check if file is writeable
     is_writeable, error_message = check_file_writeable(filename)
