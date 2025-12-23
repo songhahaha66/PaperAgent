@@ -25,9 +25,9 @@
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",
     "tdesign-icons-vue-next": "^0.4.1",
-    "tdesign-vue-next": "^1.17.6",
-    "vue": "^3.5.25",
-    "vue-i18n": "^11.2.2",
+    "tdesign-vue-next": "^1.17.7",
+    "vue": "^3.5.26",
+    "vue-i18n": "^11.2.7",
     "vue-router": "^4.6.4"
   },
   "devDependencies": {
@@ -41,7 +41,7 @@
     "typescript": "~5.9.3",
     "vite": "^7.3.0",
     "vite-plugin-vue-devtools": "^8.0.5",
-    "vue-tsc": "^3.1.8"
+    "vue-tsc": "^3.2.1"
   },
   "overrides": {
     "markdown-it-katex": {
