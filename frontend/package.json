@@ -19,12 +19,12 @@
     "docx-preview": "^0.3.7",
     "embla-carousel-vue": "^8.6.0",
     "highlight.js": "^11.11.1",
-    "katex": "^0.16.27",
+    "katex": "^0.16.28",
     "markdown-it": "^14.1.0",
     "markdown-it-katex": "^2.0.3",
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",
-    "tdesign-icons-vue-next": "^0.4.1",
+    "tdesign-icons-vue-next": "^0.4.2",
     "tdesign-vue-next": "^1.18.0",
     "vue": "^3.5.27",
     "vue-i18n": "^11.2.8",
@@ -33,15 +33,15 @@
   "devDependencies": {
     "@tsconfig/node22": "^22.0.5",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^25.0.9",
+    "@types/node": "^25.0.10",
     "@vitejs/plugin-vue": "^6.0.3",
     "@vue/tsconfig": "^0.8.1",
     "npm-run-all2": "^8.0.4",
-    "prettier": "3.8.0",
+    "prettier": "3.8.1",
     "typescript": "~5.9.3",
     "vite": "^7.3.1",
     "vite-plugin-vue-devtools": "^8.0.5",
-    "vue-tsc": "^3.2.2"
+    "vue-tsc": "^3.2.4"
   },
   "overrides": {
     "markdown-it-katex": {
