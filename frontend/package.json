@@ -20,7 +20,7 @@
     "embla-carousel-vue": "^8.6.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.28",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^14.1.1",
     "markdown-it-katex": "^2.0.3",
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",
