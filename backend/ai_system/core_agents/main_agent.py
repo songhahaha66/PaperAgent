@@ -161,10 +161,12 @@ class MainAgent:
             "- 待写章节标记为「⬜ 待写」\n"
             "- 需要数据分析/图表的章节，先规划CodeAgent任务\n\n"
             "**Phase 3: 逐步执行并更新计划**\n"
-            "- 按计划逐章节执行，每次只委派一个章节给WriterAgent\n"
-            "- **每开始一个章节，调用 update_plan 将该章节状态改为「⏳ 进行中」**\n"
-            "- **每完成一个章节，调用 update_plan 将该章节状态改为「✅ 已完成」**\n"
-            "- 需要图表的章节，先让CodeAgent生成数据/图表，再让WriterAgent写入\n"
+            "- 按计划逐章节执行，每次只写一个章节\n"
+            "- **不要每个章节前后都调 update_plan，只在关键节点更新**：\n"
+            "  * 开始写作前更新一次（标记第一个章节为⏳）\n"
+            "  * 每完成 2-3 个章节后批量更新一次状态\n"
+            "  * 全部完成后最终更新一次\n"
+            "- 需要图表的章节，先让CodeAgent生成数据/图表，再写入\n"
             "- 每完成一个章节，调用 get_paper_status 确认写入成功\n\n"
             "**Phase 4: 验收检查**\n"
             "- 所有章节完成后，调用 get_paper_status 做最终确认\n"
@@ -235,6 +237,16 @@ class MainAgent:
                 "**Markdown模式工作流程（立即执行，不要问用户）**：\n"
                 "1. **首先调用 get_paper_status** 查看论文当前结构和各章节写作进度\n"
                 "2. 如果 paper.md 不存在或为空，用 writemd(mode='overwrite') 写入初始骨架（仅限首次）\n"
+                "   - **骨架的一级标题必须是论文的真实标题**，不要写「# 论文标题」这种占位符\n"
+                "   - 从用户需求中提取论文主题，生成恰当的标题\n"
+                "   - 骨架只包含标题层级，不包含正文内容，例如：\n"
+                "     ```\n"
+                "     # 基于深度学习的图像分类研究\n"
+                "     ## 摘要\n"
+                "     ## 1. 引言\n"
+                "     ## 2. 相关工作\n"
+                "     ...\n"
+                "     ```\n"
                 "3. 逐章节写作：\n"
                 "   a. 调用 readmd 读取当前文档内容\n"
                 "   b. 思考该章节要写什么具体内容\n"
@@ -285,11 +297,14 @@ class MainAgent:
         system_content += (
             "**CodeAgent工具（仅用于编程任务）**：\n"
             "- code_agent_execute: 委派给专用CodeAgent执行编程任务\n"
-            "  * ✅ 适用场景：数据分析、图表生成（matplotlib/seaborn）、统计计算、文件处理、Python脚本执行\n"
-            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来创建、编辑、修改文档**\n\n"
+            "  * ✅ 适用场景：数据分析、图表生成（matplotlib/seaborn）、统计计算、需要执行Python代码的复杂计算\n"
+            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来创建、编辑、修改文档**\n"
+            "  * ❌ 禁止场景：**不要用CodeAgent读取文本文件！** 读文件请直接用 readmd / list_attachments / tree\n"
+            "  * ⚠️ CodeAgent每次调用会消耗大量执行步数，请谨慎使用，仅在真正需要执行代码时才调用\n\n"
             "**🚫 严格禁止事项**：\n"
             "- **永远不要让CodeAgent操作文档（Word或Markdown）！**\n"
             "- **永远不要让CodeAgent使用python-docx库或直接写入.md文件！**\n"
+            "- **不要用CodeAgent读取.txt/.csv/.md等文本文件，用readmd或list_attachments代替！**\n"
             "- CodeAgent只负责生成数据、图表等内容，不负责将内容写入文档\n"
         )
 
@@ -354,7 +369,7 @@ class MainAgent:
             logger.info(f"工具列表: {[tool.name for tool in self.tools]}")
             
             inputs = {"messages": [HumanMessage(content=user_input)]}
-            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 50})
+            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 150})
 
             # 提取最后的AI回复
             messages = result.get("messages", [])

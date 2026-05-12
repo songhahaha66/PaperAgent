@@ -271,6 +271,14 @@ if not _cn_font_found:
 
 matplotlib.rcParams['axes.unicode_minus'] = False
 
+_saved_cn_font = list(matplotlib.rcParams['font.sans-serif'])
+_original_style_use = plt.style.use
+def _patched_style_use(*args, **kwargs):
+    _original_style_use(*args, **kwargs)
+    matplotlib.rcParams['font.sans-serif'] = _saved_cn_font
+    matplotlib.rcParams['axes.unicode_minus'] = False
+plt.style.use = _patched_style_use
+
 # 设置工作空间目录
 os.chdir(r"{self.workspace_dir}")  # 改变当前工作目录
 

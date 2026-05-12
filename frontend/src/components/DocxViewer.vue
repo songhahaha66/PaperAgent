@@ -83,7 +83,7 @@ const loadDocx = async () => {
     error.value = null
     loading.value = true
 
-    const url = `${import.meta.env.VITE_API_BASE_URL || ''}${props.fileInfo.download_url}`
+    const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${props.fileInfo.download_url}`
     console.log('DocxViewer - 加载文件:', url)
 
     const response = await fetch(url, {
@@ -139,7 +139,7 @@ const downloadFile = async () => {
   downloading.value = true
 
   try {
-    const url = `${import.meta.env.VITE_API_BASE_URL || ''}${props.fileInfo.download_url}`
+    const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${props.fileInfo.download_url}`
 
     const response = await fetch(url, {
       headers: {

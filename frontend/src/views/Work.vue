@@ -830,8 +830,7 @@ const getFileType = (filePath: string): 'text' | 'image' | 'binary' => {
 
 // 获取图片URL（使用新的图片API）
 const getImageUrl = (filePath: string): string => {
-  // 使用新的图片API端点
-  return `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`
+  return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`
 }
 
 // 获取图片的blob URL（带认证）
@@ -842,7 +841,7 @@ const getImageBlobUrl = async (filePath: string): Promise<string> => {
       throw new Error('未登录')
     }
 
-    const url = `${import.meta.env.VITE_API_BASE_URL || ''}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`
+    const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId.value}/images/${encodeURIComponent(filePath)}`
 
     const response = await fetch(url, {
       headers: {
