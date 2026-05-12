@@ -9,7 +9,7 @@ import asyncio
 from typing import List, Dict, Any, Callable, Optional
 from abc import ABC, abstractmethod
 from datetime import datetime
-from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain.agents import create_agent
 from langchain_core.prompts import ChatPromptTemplate
 
 from ..core_managers.context_manager import ContextManager

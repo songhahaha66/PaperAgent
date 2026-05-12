@@ -6,6 +6,7 @@
 
 import logging
 import os
+import re
 import sys
 import tempfile
 import subprocess
@@ -14,7 +15,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 import matplotlib
-matplotlib.use('Agg')  # 非交互式后端
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
@@ -59,9 +60,9 @@ class CodeExecutor:
             # 直接在子进程中执行代码
             result = await self._execute_code_directly(code_content)
             
-            # 发送执行结果
             if self.stream_manager:
                 await self.stream_manager.print_code_execution_result(result)
+                await self.stream_manager.send_json_block("file_changed", "code_execution")
             
             return result
             
@@ -221,10 +222,10 @@ class CodeExecutor:
             
             logger.info(f"代码已保存到文件: {file_path}")
             
-            # 通过stream_manager发送工具调用通知到前端
             if self.stream_manager:
                 try:
                     await self.stream_manager.print_code_execution_call(f"代码文件 {safe_filename} 保存成功")
+                    await self.stream_manager.send_json_block("file_changed", safe_filename)
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
@@ -243,6 +244,40 @@ import sys
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
+
+# 配置中文字体支持
+import platform
+_system = platform.system()
+_cn_font_found = False
+if _system == 'Darwin':
+    _cn_candidates = ['PingFang SC', 'Heiti SC', 'STHeiti', 'Songti SC', 'Arial Unicode MS']
+elif _system == 'Windows':
+    _cn_candidates = ['Microsoft YaHei', 'SimHei', 'SimSun', 'FangSong', 'KaiTi']
+else:
+    _cn_candidates = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC', 'AR PL UMing CN', 'Droid Sans Fallback']
+
+from matplotlib.font_manager import fontManager as _fm
+_available = set(f.name for f in _fm.ttflist)
+for _font in _cn_candidates:
+    if _font in _available:
+        matplotlib.rcParams['font.sans-serif'] = [_font] + matplotlib.rcParams.get('font.sans-serif', [])
+        _cn_font_found = True
+        break
+
+if not _cn_font_found:
+    _cjk = [f.name for f in _fm.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'chinese', 'hei', 'song', 'fang', 'kai', 'ming', 'gothic', 'pingfang', 'yahei', 'noto sans sc'])]
+    if _cjk:
+        matplotlib.rcParams['font.sans-serif'] = [_cjk[0]] + matplotlib.rcParams.get('font.sans-serif', [])
+
+matplotlib.rcParams['axes.unicode_minus'] = False
+
+_saved_cn_font = list(matplotlib.rcParams['font.sans-serif'])
+_original_style_use = plt.style.use
+def _patched_style_use(*args, **kwargs):
+    _original_style_use(*args, **kwargs)
+    matplotlib.rcParams['font.sans-serif'] = _saved_cn_font
+    matplotlib.rcParams['axes.unicode_minus'] = False
+plt.style.use = _patched_style_use
 
 # 设置工作空间目录
 os.chdir(r"{self.workspace_dir}")  # 改变当前工作目录
@@ -328,7 +363,48 @@ if plot_files:
     print(f"\\n执行日志已保存到: {current_log_file}")
 '''
         
+        code = self._strip_user_font_config(code)
         return header + code + footer
+
+    @staticmethod
+    def _strip_user_font_config(code: str) -> str:
+        code = re.sub(
+            r"^[^\S\n]*matplotlib\.rcParams\s*\[\s*['\"]font\.sans-serif['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*matplotlib\.rcParams\s*\[\s*['\"]axes\.unicode_minus['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*plt\.rcParams\s*\[\s*['\"]font\.sans-serif['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*plt\.rcParams\s*\[\s*['\"]axes\.unicode_minus['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*rcParams\s*\[\s*['\"]font\.sans-serif['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*rcParams\s*\[\s*['\"]axes\.unicode_minus['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        return code
 
     async def _run_in_subprocess(self, temp_file: str) -> str:
         """在子进程中运行代码（异步版本，不阻塞事件循环）"""
@@ -465,14 +541,11 @@ if plot_files:
 
             logger.info(f"代码文件已修改: {file_path}")
 
-            # 通过stream_manager发送工具调用通知到前端
             if self.stream_manager:
                 try:
-                    # 发送工具调用开始通知
                     await self.stream_manager.send_json_block("code_agent_tool_call", f"CodeAgent正在执行工具调用: edit_code_file")
-
-                    # 发送工具调用结果通知
                     await self.stream_manager.send_json_block("code_agent_tool_result", f"代码文件 {safe_filename} 修改成功")
+                    await self.stream_manager.send_json_block("file_changed", safe_filename)
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
 

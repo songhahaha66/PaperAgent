@@ -29,6 +29,181 @@ class FileTools:
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
+    def get_paper_status(self, filename: str = "paper") -> str:
+        """
+        分析paper.md的章节结构和写作进度，返回结构化的状态概览。
+        MainAgent在委派写作任务前必须调用此工具了解当前论文状态。
+
+        Args:
+            filename: 文件名（不需要.md后缀），默认为paper
+
+        Returns:
+            论文结构和进度概览
+        """
+        try:
+            if not filename.endswith('.md'):
+                filename = filename + '.md'
+
+            file_path = os.path.join(self.workspace_dir, filename)
+
+            if not os.path.exists(file_path):
+                return f"文件 {filename} 不存在，尚未开始写作。"
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            if not content.strip():
+                return f"文件 {filename} 存在但为空，尚未写入任何内容。"
+
+            lines = content.split('\n')
+            sections = []
+            current_section = None
+            current_body_lines = []
+
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith('#'):
+                    if current_section is not None:
+                        body_text = '\n'.join(current_body_lines).strip()
+                        word_count = len(body_text) if body_text else 0
+                        current_section['char_count'] = word_count
+                        current_section['has_content'] = word_count > 10
+                        if body_text and word_count > 0:
+                            preview = body_text[:80].replace('\n', ' ')
+                            current_section['preview'] = preview + ('...' if word_count > 80 else '')
+                        sections.append(current_section)
+                        current_body_lines = []
+
+                    level = len(stripped) - len(stripped.lstrip('#'))
+                    title = stripped.lstrip('#').strip()
+                    current_section = {
+                        'level': level,
+                        'title': title,
+                        'char_count': 0,
+                        'has_content': False,
+                        'preview': ''
+                    }
+                elif current_section is not None:
+                    current_body_lines.append(line)
+
+            if current_section is not None:
+                body_text = '\n'.join(current_body_lines).strip()
+                word_count = len(body_text) if body_text else 0
+                current_section['char_count'] = word_count
+                current_section['has_content'] = word_count > 10
+                if body_text and word_count > 0:
+                    preview = body_text[:80].replace('\n', ' ')
+                    current_section['preview'] = preview + ('...' if word_count > 80 else '')
+                sections.append(current_section)
+
+            if not sections:
+                return f"文件 {filename} 存在但未检测到章节标题结构。文件大小: {len(content)} 字符。"
+
+            result = f"=== {filename} 写作状态 ===\n"
+            result += f"总字符数: {len(content)}\n"
+            result += f"章节数: {len(sections)}\n\n"
+
+            completed = 0
+            empty = 0
+            for s in sections:
+                indent = '  ' * (s['level'] - 1)
+                status = '✅' if s['has_content'] else '⬜'
+                if s['has_content']:
+                    completed += 1
+                else:
+                    empty += 1
+                result += f"{indent}{status} {'#' * s['level']} {s['title']} ({s['char_count']}字符)\n"
+                if s['preview']:
+                    result += f"{indent}   摘要: {s['preview']}\n"
+
+            result += f"\n进度: {completed}/{len(sections)} 章节已完成"
+            if empty > 0:
+                empty_sections = [s['title'] for s in sections if not s['has_content']]
+                result += f"\n待写章节: {', '.join(empty_sections)}"
+
+            return result
+
+        except Exception as e:
+            error_msg = f"获取论文状态失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    def update_plan(self, plan_content: str) -> str:
+        """
+        更新论文写作计划文件(plan.md)。
+        MainAgent在Phase 2制定计划后调用此工具保存计划，
+        在Phase 3每完成一个章节后更新计划进度。
+
+        计划格式示例：
+        # 写作计划
+        
+        ## 当前进度: 2/6 章节已完成
+        
+        | 序号 | 章节 | 状态 | 说明 |
+        |------|------|------|------|
+        | 1 | Abstract | ✅ 已完成 | 摘要已撰写 |
+        | 2 | Introduction | ✅ 已完成 | 背景和意义 |
+        | 3 | Methods | ⏳ 进行中 | 研究方法描述 |
+        | 4 | Results | ⬜ 待写 | 实验结果 |
+        | 5 | Discussion | ⬜ 待写 | 讨论分析 |
+        | 6 | Conclusion | ⬜ 待写 | 结论总结 |
+
+        Args:
+            plan_content: 完整的计划内容（Markdown格式）
+
+        Returns:
+            操作结果信息
+        """
+        try:
+            file_path = os.path.join(self.workspace_dir, "plan.md")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(plan_content)
+
+            result = f"成功更新写作计划: plan.md"
+            file_size = os.path.getsize(file_path)
+            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+
+            if self.stream_manager:
+                self._send_json_block_sync("plan_updated", plan_content)
+                self._send_json_block_sync("file_changed", "plan.md")
+
+            return result
+
+        except Exception as e:
+            error_msg = f"更新写作计划失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
+    def readmd(self, filename: str = "paper") -> str:
+        """
+        读取Markdown文件内容
+
+        Args:
+            filename: 文件名（不需要.md后缀），默认为paper
+
+        Returns:
+            文件内容字符串，如果文件不存在则返回提示信息
+        """
+        try:
+            if not filename.endswith('.md'):
+                filename = filename + '.md'
+
+            file_path = os.path.join(self.workspace_dir, filename)
+
+            if not os.path.exists(file_path):
+                return f"文件不存在: {filename}"
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            file_size = os.path.getsize(file_path)
+            return f"=== {filename} 内容（{file_size} 字节）===\n{content}"
+
+        except Exception as e:
+            error_msg = f"读取Markdown文件失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
+
     def writemd(self, filename: str, content: str, mode: str = "overwrite") -> str:
         """
         写入Markdown文件到workspace目录，支持多种写入模式
@@ -63,25 +238,40 @@ class FileTools:
                 result = f"成功附加内容到Markdown文件: {filename}"
 
             elif mode == "overwrite":
-                # 重写覆盖模式：完全覆盖原文件内容
+                if os.path.exists(file_path):
+                    existing_size = os.path.getsize(file_path)
+                    if existing_size > 500:
+                        import shutil
+                        import time
+                        backup_path = file_path + f".bak.{int(time.time())}"
+                        shutil.copy2(file_path, backup_path)
+                        logger.warning(
+                            f"overwrite模式：已有文件 {filename} ({existing_size} 字节) 将被覆盖，"
+                            f"已自动备份到 {os.path.basename(backup_path)}"
+                        )
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 result = f"成功重写覆盖Markdown文件: {filename}"
 
             elif mode == "modify":
-                # 修改模式：替换文件中的特定内容
                 if os.path.exists(file_path):
-                    # 读取原文件内容
                     with open(file_path, 'r', encoding='utf-8') as f:
                         original_content = f.read()
 
-                    # 这里可以根据需要实现更复杂的修改逻辑
-                    # 目前简单地将新内容替换原内容
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    result = f"成功修改Markdown文件: {filename}"
+                    import re as _re
+                    heading_match = _re.match(r'^(#{1,6})\s+(.+)', content.strip())
+                    if heading_match:
+                        section_name = heading_match.group(2).strip()
+                        updated_content = self._update_section_content(
+                            original_content, section_name, content.strip())
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(updated_content)
+                        result = f"成功修改章节 '{section_name}' 到Markdown文件: {filename}"
+                    else:
+                        with open(file_path, 'a', encoding='utf-8') as f:
+                            f.write('\n\n' + content)
+                        result = f"modify模式：内容无章节标题，已追加到Markdown文件末尾: {filename}"
                 else:
-                    # 如果文件不存在，创建新文件
                     with open(file_path, 'w', encoding='utf-8') as f:
                         f.write(content)
                     result = f"文件不存在，创建并写入Markdown文件: {filename}"
@@ -104,31 +294,60 @@ class FileTools:
                     result = f"文件不存在，创建并写入Markdown文件: {filename}"
 
             elif mode == "smart_replace":
-                # 智能替换模式：根据内容特征智能替换
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8') as f:
                         original_content = f.read()
                     
-                    # 智能替换逻辑：保持模板结构，替换内容部分
-                    # 这里可以实现更复杂的智能替换算法
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    result = f"成功智能替换Markdown文件: {filename}"
+                    import re
+                    heading_match = re.match(r'^(#{1,6})\s+(.+)', content.strip())
+                    if heading_match:
+                        section_name = heading_match.group(2).strip()
+                        updated_content = self._update_section_content(original_content, section_name, content.strip())
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(updated_content)
+                        result = f"成功智能替换章节 '{section_name}' 到Markdown文件: {filename}"
+                    else:
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        result = f"成功智能替换Markdown文件: {filename}"
                 else:
                     with open(file_path, 'w', encoding='utf-8') as f:
                         f.write(content)
                     result = f"文件不存在，创建并写入Markdown文件: {filename}"
 
             elif mode == "section_update":
-                # 章节更新模式：更新特定章节内容
                 if os.path.exists(file_path):
                     with open(file_path, 'r', encoding='utf-8') as f:
                         original_content = f.read()
                     
-                    # 这里可以实现章节级别的更新逻辑
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    result = f"成功更新章节内容到Markdown文件: {filename}"
+                    import re
+                    heading_match = re.match(r'^(#{1,6})\s+(.+)', content.strip())
+                    if heading_match:
+                        heading_level = len(heading_match.group(1))
+                        section_name = heading_match.group(2).strip()
+
+                        if heading_level == 1:
+                            doc_lines = original_content.split('\n')
+                            replaced = False
+                            for idx, doc_line in enumerate(doc_lines):
+                                if re.match(r'^#\s+', doc_line.strip()):
+                                    doc_lines[idx] = f'# {section_name}'
+                                    replaced = True
+                                    break
+                            if not replaced:
+                                doc_lines.insert(0, f'# {section_name}')
+                            updated_content = '\n'.join(doc_lines)
+                            logger.info(f"H1标题更新: 替换为 '# {section_name}'")
+                        else:
+                            updated_content = self._update_section_content(original_content, section_name, content.strip())
+
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(updated_content)
+                        result = f"成功更新章节 '{section_name}' 到Markdown文件: {filename}"
+                    else:
+                        with open(file_path, 'a', encoding='utf-8') as f:
+                            f.write('\n\n' + content)
+                        result = f"内容无章节标题，已追加到Markdown文件末尾: {filename}"
                 else:
                     with open(file_path, 'w', encoding='utf-8') as f:
                         f.write(content)
@@ -143,6 +362,7 @@ class FileTools:
 
             if self.stream_manager:
                 self._send_json_block_sync("writemd_result", result)
+                self._send_json_block_sync("file_changed", filename)
 
             return result
 
@@ -192,6 +412,7 @@ class FileTools:
             
             if self.stream_manager:
                 self._send_json_block_sync("template_update_result", result)
+                self._send_json_block_sync("file_changed", template_name)
             
             return result
             
@@ -204,15 +425,36 @@ class FileTools:
             
             return error_msg
 
+    @staticmethod
+    def _normalize_section_name(raw: str) -> str:
+        """去除章节名中的Markdown装饰（**加粗**等）并统一空白"""
+        import re
+        cleaned = re.sub(r'\*+', '', raw)
+        return cleaned.strip()
+
+    def _match_section_title(self, line_title: str, target_name: str) -> bool:
+        """
+        精确匹配章节标题：
+        1. 先做精确比较（去掉**装饰后）
+        2. 如果精确不匹配，再做包含匹配作为降级
+        """
+        norm_line = self._normalize_section_name(line_title)
+        norm_target = self._normalize_section_name(target_name)
+        if norm_line == norm_target:
+            return True
+        if norm_target in norm_line and len(norm_target) > 2:
+            return True
+        return False
+
     def _update_section_content(self, original_content: str, section_name: str, new_content: str) -> str:
         """
-        更新指定章节的内容
-        
+        更新指定章节的内容，保留其余所有章节不变。
+
         Args:
             original_content: 原始文件内容
             section_name: 章节名称
             new_content: 新的章节内容
-            
+
         Returns:
             更新后的完整文件内容
         """
@@ -220,69 +462,77 @@ class FileTools:
         updated_lines = []
         section_found = False
         i = 0
-        
+
         while i < len(lines):
             line = lines[i]
-            line_matched = False
-            
-            # 简化的匹配方式：检查是否包含章节名称且以#开头
             stripped_line = line.strip()
-            if (stripped_line.startswith('#') and 
-                section_name in stripped_line):
-                
-                # 找到目标章节
+
+            if (not section_found
+                    and stripped_line.startswith('#')
+                    and self._match_section_title(
+                        stripped_line.lstrip('#').strip(), section_name)):
+
                 section_found = True
-                line_matched = True
-                
-                logger.info(f"找到匹配章节: {stripped_line}")
-                
-                # 添加章节标题
+                section_level = len(stripped_line) - len(stripped_line.lstrip('#'))
+                logger.info(f"找到匹配章节: {stripped_line} (level={section_level})")
+
+                if section_level == 1:
+                    new_title_lines = [l for l in new_content.strip().split('\n') if l.strip().startswith('# ')]
+                    if new_title_lines:
+                        updated_lines.append(new_title_lines[0])
+                    else:
+                        updated_lines.append(line)
+                    i += 1
+                    logger.info("H1标题：仅替换标题行，保留子章节")
+                    continue
+
                 updated_lines.append(line)
-                
-                # 计算当前章节的级别
-                section_level = len(line) - len(line.lstrip('#'))
-                
-                # 跳过空行
+
                 i += 1
                 while i < len(lines) and lines[i].strip() == '':
-                    updated_lines.append(lines[i])
                     i += 1
-                
-                # 添加新内容
+
                 if new_content.strip():
-                    updated_lines.append('')
-                    updated_lines.append(new_content.strip())
-                    updated_lines.append('')
-                
-                # 跳过原有章节内容直到下一个同级或更高级标题
+                    content_to_write = new_content.strip()
+                    content_lines = content_to_write.split('\n')
+                    if content_lines and content_lines[0].strip().startswith('#'):
+                        first_heading = content_lines[0].strip().lstrip('#').strip()
+                        current_heading = stripped_line.lstrip('#').strip()
+                        if self._match_section_title(first_heading, self._normalize_section_name(current_heading)):
+                            content_lines = content_lines[1:]
+                            while content_lines and content_lines[0].strip() == '':
+                                content_lines.pop(0)
+                            content_to_write = '\n'.join(content_lines)
+
+                    if content_to_write.strip():
+                        updated_lines.append('')
+                        updated_lines.append(content_to_write.strip())
+                        updated_lines.append('')
+
                 while i < len(lines):
                     next_line = lines[i]
-                    # 检查是否是新的章节标题
                     if next_line.strip().startswith('#'):
-                        next_level = len(next_line) - len(next_line.lstrip('#'))
+                        next_level = len(next_line.strip()) - len(next_line.strip().lstrip('#'))
                         if next_level <= section_level:
-                            # 遇到同级或更高级标题，停止跳过
                             logger.info(f"遇到新章节，停止跳过: {next_line.strip()}")
                             break
                     i += 1
-                
-                break
-            
-            if not line_matched:
-                updated_lines.append(line)
-                i += 1
-        
-        # 如果没有找到章节，在文件末尾添加
+
+                continue
+
+            updated_lines.append(line)
+            i += 1
+
         if not section_found:
             logger.warning(f"没有找到匹配的章节: {section_name}，将在末尾添加")
             if original_content.strip():
                 updated_lines.append('')
-            updated_lines.append(f'# **{section_name}**')
+            updated_lines.append(f'## {section_name}')
             updated_lines.append('')
             if new_content.strip():
                 updated_lines.append(new_content.strip())
                 updated_lines.append('')
-        
+
         return '\n'.join(updated_lines)
 
     def tree(self, directory: Optional[str] = None) -> str:

@@ -5,13 +5,57 @@ AI提供商抽象层
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Mapping, cast
 from langchain_core.language_models import BaseLanguageModel
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 logger = logging.getLogger(__name__)
+
+
+def _patch_reasoning_content():
+    """
+    Monkey-patch langchain-openai to preserve reasoning_content
+    for thinking-mode models (DeepSeek-R1, Volcengine thinking, etc.).
+
+    langchain-openai (as of 1.2.1) strips reasoning_content from API
+    responses, causing 400 errors on subsequent tool-calling turns because
+    the API requires it to be passed back.
+    """
+    import langchain_openai.chat_models.base as _base
+
+    _orig_dict_to_msg = _base._convert_dict_to_message
+    _orig_msg_to_dict = _base._convert_message_to_dict
+    _orig_delta_to_chunk = _base._convert_delta_to_message_chunk
+
+    def _patched_dict_to_message(_dict: Mapping[str, Any]):
+        msg = _orig_dict_to_msg(_dict)
+        if _dict.get("role") == "assistant" and _dict.get("reasoning_content"):
+            msg.additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
+        return msg
+
+    def _patched_message_to_dict(message, api="chat/completions"):
+        d = _orig_msg_to_dict(message, api)
+        if d.get("role") == "assistant":
+            rc = getattr(message, "additional_kwargs", {}).get("reasoning_content")
+            if rc:
+                d["reasoning_content"] = rc
+        return d
+
+    def _patched_delta_to_chunk(_dict: Mapping[str, Any], default_class):
+        chunk = _orig_delta_to_chunk(_dict, default_class)
+        if _dict.get("reasoning_content"):
+            chunk.additional_kwargs["reasoning_content"] = _dict["reasoning_content"]
+        return chunk
+
+    _base._convert_dict_to_message = _patched_dict_to_message
+    _base._convert_message_to_dict = _patched_message_to_dict
+    _base._convert_delta_to_message_chunk = _patched_delta_to_chunk
+    logger.info("reasoning_content monkey-patch applied to langchain-openai")
+
+
+_patch_reasoning_content()
 
 
 class BaseLLMProvider(ABC):

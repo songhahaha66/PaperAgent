@@ -35,15 +35,47 @@ class LangChainToolFactory:
             LangChain 格式的文件工具列表
         """
         try:
-            # 设置环境变量供 FileTools 使用
             os.environ["WORKSPACE_DIR"] = workspace_dir
             file_tools = FileTools(stream_manager)
 
+            _SAFE_MODES = {"section_update", "append", "insert", "smart_replace"}
+
+            def safe_writemd(filename: str, content: str, mode: str = "section_update") -> str:
+                if mode == "overwrite":
+                    file_path = os.path.join(workspace_dir, filename if filename.endswith('.md') else filename + '.md')
+                    if os.path.exists(file_path) and os.path.getsize(file_path) > 500:
+                        logger.warning(
+                            f"safe_writemd: 拦截了对 {filename} 的 overwrite 操作 "
+                            f"(已有 {os.path.getsize(file_path)} 字节)，自动降级为 section_update"
+                        )
+                        mode = "section_update"
+                if mode == "modify":
+                    mode = "section_update"
+                return file_tools.writemd(filename=filename, content=content, mode=mode)
+
             tools = [
                 StructuredTool.from_function(
-                    func=file_tools.writemd,
+                    func=file_tools.get_paper_status,
+                    name="get_paper_status",
+                    description="获取paper.md的写作状态概览，包括章节结构、各章节字数和内容摘要、写作进度。在写作任何内容之前必须先调用此工具了解当前论文状态，避免重复写作或覆盖已有内容。"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools.readmd,
+                    name="readmd",
+                    description="读取Markdown文件内容。参数：filename（文件名，默认paper）。在写入或更新paper.md之前必须先调用此工具了解现有内容，避免覆盖或重复。"
+                ),
+                StructuredTool.from_function(
+                    func=safe_writemd,
                     name="writemd",
-                    description="写入Markdown文件到工作空间。支持多种模式：append(追加)、overwrite(覆盖)、modify(修改)、insert(插入)、section_update(章节更新)"
+                    description=(
+                        "写入Markdown文件到工作空间。参数：filename（文件名）、content（内容）、mode（写入模式）。\n"
+                        "⚠️ 写入前必须先调用readmd读取现有内容！\n"
+                        "支持的mode：\n"
+                        "- section_update（推荐、默认）：章节级更新，content必须以#标题开头，只替换该章节内容，不影响其他章节\n"
+                        "- append：在文件末尾追加内容，适合添加全新章节\n"
+                        "- insert：在文件开头插入内容\n"
+                        "⚠️ 禁止使用overwrite模式，会导致已有内容丢失"
+                    )
                 ),
                 StructuredTool.from_function(
                     func=file_tools.update_template,
@@ -223,7 +255,7 @@ class LangChainToolFactory:
             LangChain 格式的模板工具列表
         """
         try:
-            template_tools = TemplateAgentTools(workspace_dir)
+            template_tools = TemplateAgentTools(workspace_dir, stream_manager)
 
             tools = [
                 StructuredTool.from_function(
@@ -509,6 +541,20 @@ class LangChainToolFactory:
             file_tools_instance = FileTools(stream_manager)
 
             base_tools = [
+                StructuredTool.from_function(
+                    func=file_tools_instance.get_paper_status,
+                    name="get_paper_status",
+                    description="获取paper.md的写作状态概览，包括章节结构、各章节字数和内容摘要、写作进度。在委派任何写作任务前必须先调用此工具了解论文当前状态。"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools_instance.update_plan,
+                    name="update_plan",
+                    description=(
+                        "更新论文写作计划(plan.md)，用户可在前端实时看到计划进度。\n"
+                        "Phase 2制定计划后立即调用保存计划，Phase 3每完成一个章节后更新计划状态。\n"
+                        "计划内容使用Markdown表格格式，包含：序号、章节名、状态(✅已完成/⏳进行中/⬜待写)、说明。"
+                    )
+                ),
                 StructuredTool.from_function(
                     func=file_tools_instance.tree,
                     name="tree",

@@ -86,7 +86,7 @@ class TemplateAPI {
     if (category) formData.append('category', category)
     formData.append('is_public', String(isPublic))
 
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/templates/upload`, {
+    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/templates/upload`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
