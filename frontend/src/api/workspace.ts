@@ -260,7 +260,9 @@ export const workspaceFileAPI = {
 
   // 获取图片文件URL
   getImageUrl(token: string, workId: string, filePath: string): string {
-    return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId}/images/${encodeURIComponent(filePath)}`
+    let decoded = filePath
+    try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
+    return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId}/images/${encodeURIComponent(decoded)}`
   },
 
   // 写入文件

@@ -62,8 +62,13 @@ async function ensureImageSrc(img: HTMLImageElement) {
   // 没有 workId 或 token，无权转换，直接忽略
   if (!props.workId || !authStore.token) return
 
+  // markdown-it 可能已对 src 做过 percent-encoding，先解码还原为原始路径，
+  // 防止后续 encodeURIComponent 产生双重编码（%25）
+  let decodedSrc = rawSrc
+  try { decodedSrc = decodeURIComponent(rawSrc) } catch { /* 非法序列则保持原样 */ }
+
   // 处理相对路径（相对于 basePath）
-  const filePath = props.basePath ? normalizePath(props.basePath, rawSrc) : rawSrc
+  const filePath = props.basePath ? normalizePath(props.basePath, decodedSrc) : decodedSrc
   const cacheKey = `${props.workId}::${filePath}`
   if (imageBlobCache.has(cacheKey)) {
     img.src = imageBlobCache.get(cacheKey)!

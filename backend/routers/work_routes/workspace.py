@@ -6,6 +6,7 @@ from auth.auth import get_current_user
 from services import crud
 from services.file_services.workspace_files import workspace_file_service
 from typing import Optional
+from urllib.parse import unquote
 import os
 import tempfile
 
@@ -185,7 +186,7 @@ async def get_workspace_image(
         
         # 获取图片文件的完整路径
         workspace_path = workspace_file_service.get_workspace_path(work_id)
-        image_path = workspace_path / file_path
+        image_path = workspace_path / unquote(file_path)
         
         if not image_path.exists():
             raise HTTPException(
