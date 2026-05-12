@@ -1,0 +1,75 @@
+backend/ai_system/core_tools/code_executor.py
+  17f1058313e0970b 9,358,361-399 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a02f6bf0246dd8b98ab090d","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Single":9},{"Single":358},{"Range":[361,399]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "0f61b8ab66edab32e0ef79f2425a33a2acc97466",
+  "prompts": {
+    "17f1058313e0970b": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a02f5a70246dd8b98ab08c3",
+        "model": "c_o_new_thinking__dev"
+      },
+      "human_author": "songhahaha66 <songhahaha66@qq.com>",
+      "messages": [],
+      "total_additions": 42,
+      "total_deletions": 0,
+      "accepted_lines": 42,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "backend/ai_system/core_tools/code_executor.py": [
+      {
+        "hash": "17f1058313e0970b",
+        "line_ranges": [
+          {
+            "Single": 9
+          },
+          {
+            "Single": 358
+          },
+          {
+            "Range": [
+              361,
+              399
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a02f6bf0246dd8b98ab090d",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Single": 9
+              },
+              {
+                "Single": 358
+              },
+              {
+                "Range": [
+                  361,
+                  399
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "17f1058313e0970b": {
+      "tool": "trae",
+      "conversation_id": "6a02f5a70246dd8b98ab08c3",
+      "session_id": "6a02f5a70246dd8b98ab08c3",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
