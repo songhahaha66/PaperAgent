@@ -268,6 +268,27 @@ if not _cn_font_found:
     _cjk = [f.name for f in _fm.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'chinese', 'hei', 'song', 'fang', 'kai', 'ming', 'gothic', 'pingfang', 'yahei', 'noto sans sc'])]
     if _cjk:
         matplotlib.rcParams['font.sans-serif'] = [_cjk[0]] + matplotlib.rcParams.get('font.sans-serif', [])
+        _cn_font_found = True
+
+if not _cn_font_found:
+    import glob as _glob
+    from matplotlib.font_manager import FontProperties as _FP
+    _font_dirs = ['/usr/share/fonts', '/usr/local/share/fonts', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts')]
+    for _fd in _font_dirs:
+        _ttfs = _glob.glob(os.path.join(_fd, '**', '*.ttf'), recursive=True) + _glob.glob(os.path.join(_fd, '**', '*.otf'), recursive=True)
+        for _ttf in _ttfs:
+            try:
+                _fp = _FP(fname=_ttf)
+                if any(kw in _fp.get_name().lower() for kw in ['cjk', 'noto', 'hei', 'song', 'fang', 'gothic', 'ming']):
+                    _fm.addfont(_ttf)
+                    _registered = _FP(fname=_ttf).get_name()
+                    matplotlib.rcParams['font.sans-serif'] = [_registered] + matplotlib.rcParams.get('font.sans-serif', [])
+                    _cn_font_found = True
+                    break
+            except Exception:
+                pass
+        if _cn_font_found:
+            break
 
 matplotlib.rcParams['axes.unicode_minus'] = False
 
