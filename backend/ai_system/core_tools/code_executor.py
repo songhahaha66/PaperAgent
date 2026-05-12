@@ -6,6 +6,7 @@
 
 import logging
 import os
+import re
 import sys
 import tempfile
 import subprocess
@@ -354,7 +355,48 @@ if plot_files:
     print(f"\\n执行日志已保存到: {current_log_file}")
 '''
         
+        code = self._strip_user_font_config(code)
         return header + code + footer
+
+    @staticmethod
+    def _strip_user_font_config(code: str) -> str:
+        code = re.sub(
+            r"^[^\S\n]*matplotlib\.rcParams\s*\[\s*['\"]font\.sans-serif['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*matplotlib\.rcParams\s*\[\s*['\"]axes\.unicode_minus['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*plt\.rcParams\s*\[\s*['\"]font\.sans-serif['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*plt\.rcParams\s*\[\s*['\"]axes\.unicode_minus['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*rcParams\s*\[\s*['\"]font\.sans-serif['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        code = re.sub(
+            r"^[^\S\n]*rcParams\s*\[\s*['\"]axes\.unicode_minus['\"]\s*\].*$",
+            "",
+            code,
+            flags=re.MULTILINE,
+        )
+        return code
 
     async def _run_in_subprocess(self, temp_file: str) -> str:
         """在子进程中运行代码（异步版本，不阻塞事件循环）"""
