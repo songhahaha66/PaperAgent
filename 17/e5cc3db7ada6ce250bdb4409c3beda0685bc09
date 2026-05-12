@@ -1,0 +1,291 @@
+frontend/src/views/Work.vue
+  f2c0e3a17025bcc4 854-857,868,870-873 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[854,857]},{"Single":868},{"Range":[870,873]}]}]}
+backend/docker-entrypoint.sh
+  f2c0e3a17025bcc4 4-6 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[4,6]}]}]}
+backend/Dockerfile
+  f2c0e3a17025bcc4 12,16-19,33-35 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Single":12},{"Range":[16,19]},{"Range":[33,35]}]}]}
+backend/ai_system/core_tools/code_executor.py
+  f2c0e3a17025bcc4 272-292 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[272,292]}]}]}
+frontend/src/api/workspace.ts
+  f2c0e3a17025bcc4 266-268 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[266,268]}]}]}
+backend/routers/work_routes/workspace.py
+  f2c0e3a17025bcc4 9,189 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Single":9},{"Single":189}]}]}
+frontend/src/components/MarkdownRenderer.vue
+  f2c0e3a17025bcc4 65-69,71 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a033f910246dd8b98ab0f23","tool_type":"agent","tool_id":"Write","line_ranges":[{"Range":[65,69]},{"Single":71}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "17e5cc3db7ada6ce250bdb4409c3beda0685bc09",
+  "prompts": {
+    "f2c0e3a17025bcc4": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a033d0e0246dd8b98ab0e34",
+        "model": "c_o_new_thinking__dev"
+      },
+      "human_author": "songhahaha66 <songhahaha66@qq.com>",
+      "messages": [],
+      "total_additions": 189,
+      "total_deletions": 8,
+      "accepted_lines": 188,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "backend/Dockerfile": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Single": 12
+          },
+          {
+            "Range": [
+              16,
+              19
+            ]
+          },
+          {
+            "Range": [
+              33,
+              35
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Single": 12
+              },
+              {
+                "Range": [
+                  16,
+                  19
+                ]
+              },
+              {
+                "Range": [
+                  33,
+                  35
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_tools/code_executor.py": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Range": [
+              272,
+              292
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  272,
+                  292
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/docker-entrypoint.sh": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Range": [
+              4,
+              6
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  4,
+                  6
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/routers/work_routes/workspace.py": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Single": 9
+          },
+          {
+            "Single": 189
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Single": 9
+              },
+              {
+                "Single": 189
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "frontend/src/api/workspace.ts": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Range": [
+              266,
+              268
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  266,
+                  268
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "frontend/src/components/MarkdownRenderer.vue": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Range": [
+              65,
+              69
+            ]
+          },
+          {
+            "Single": 71
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  65,
+                  69
+                ]
+              },
+              {
+                "Single": 71
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "frontend/src/views/Work.vue": [
+      {
+        "hash": "f2c0e3a17025bcc4",
+        "line_ranges": [
+          {
+            "Range": [
+              854,
+              857
+            ]
+          },
+          {
+            "Single": 868
+          },
+          {
+            "Range": [
+              870,
+              873
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a033f910246dd8b98ab0f23",
+            "tool_type": "agent",
+            "tool_id": "Write",
+            "line_ranges": [
+              {
+                "Range": [
+                  854,
+                  857
+                ]
+              },
+              {
+                "Single": 868
+              },
+              {
+                "Range": [
+                  870,
+                  873
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "f2c0e3a17025bcc4": {
+      "tool": "trae",
+      "conversation_id": "6a033d0e0246dd8b98ab0e34",
+      "session_id": "6a033d0e0246dd8b98ab0e34",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
