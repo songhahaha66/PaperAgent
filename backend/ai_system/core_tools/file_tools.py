@@ -323,8 +323,24 @@ class FileTools:
                     import re
                     heading_match = re.match(r'^(#{1,6})\s+(.+)', content.strip())
                     if heading_match:
+                        heading_level = len(heading_match.group(1))
                         section_name = heading_match.group(2).strip()
-                        updated_content = self._update_section_content(original_content, section_name, content.strip())
+
+                        if heading_level == 1:
+                            doc_lines = original_content.split('\n')
+                            replaced = False
+                            for idx, doc_line in enumerate(doc_lines):
+                                if re.match(r'^#\s+', doc_line.strip()):
+                                    doc_lines[idx] = f'# {section_name}'
+                                    replaced = True
+                                    break
+                            if not replaced:
+                                doc_lines.insert(0, f'# {section_name}')
+                            updated_content = '\n'.join(doc_lines)
+                            logger.info(f"H1标题更新: 替换为 '# {section_name}'")
+                        else:
+                            updated_content = self._update_section_content(original_content, section_name, content.strip())
+
                         with open(file_path, 'w', encoding='utf-8') as f:
                             f.write(updated_content)
                         result = f"成功更新章节 '{section_name}' 到Markdown文件: {filename}"

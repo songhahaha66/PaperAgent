@@ -193,25 +193,9 @@ class WorkspaceStructureManager:
                     logger.warning(f"获取模板 {template_id} 内容失败，将使用默认内容: {e}")
                     content = None
             
-            # 如果没有模板内容，使用默认内容
             if content is None:
-                content = """# 论文标题
-
-## 摘要
-
-## 引言
-
-## 方法
-
-## 结果
-
-## 讨论
-
-## 结论
-
-## 参考文献
-"""
-                logger.info("使用默认内容创建 paper.md")
+                content = ""
+                logger.info("无模板内容，创建空 paper.md，由 Agent 生成骨架")
             
             # 写入文件
             with open(paper_md_path, 'w', encoding='utf-8') as f:
@@ -224,7 +208,7 @@ class WorkspaceStructureManager:
             logger.error(f"创建 paper.md 失败: {e}")
             try:
                 with open(paper_md_path, 'w', encoding='utf-8') as f:
-                    f.write("# 论文标题\n")
-                logger.info(f"创建了最小化的 paper.md: {paper_md_path}")
+                    f.write("")
+                logger.info(f"创建了空的 paper.md: {paper_md_path}")
             except Exception as e2:
                 logger.error(f"创建最小化 paper.md 也失败: {e2}")
