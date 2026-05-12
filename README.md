@@ -195,7 +195,7 @@ npm run build
 #### 后端环境变量 (.env)
 ```env
 # 数据库配置
-DATABASE_URL=postgresql://user:password@localhost:5432/paperagent
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/paperagent
 
 # JWT配置
 SECRET_KEY=your-secret-key
