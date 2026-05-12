@@ -14,7 +14,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 import matplotlib
-matplotlib.use('Agg')  # 非交互式后端
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
@@ -243,6 +243,32 @@ import sys
 import matplotlib
 matplotlib.use('Agg')  # 非交互式后端
 import matplotlib.pyplot as plt
+
+# 配置中文字体支持
+import platform
+_system = platform.system()
+_cn_font_found = False
+if _system == 'Darwin':
+    _cn_candidates = ['PingFang SC', 'Heiti SC', 'STHeiti', 'Songti SC', 'Arial Unicode MS']
+elif _system == 'Windows':
+    _cn_candidates = ['Microsoft YaHei', 'SimHei', 'SimSun', 'FangSong', 'KaiTi']
+else:
+    _cn_candidates = ['WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC', 'AR PL UMing CN', 'Droid Sans Fallback']
+
+from matplotlib.font_manager import fontManager as _fm
+_available = set(f.name for f in _fm.ttflist)
+for _font in _cn_candidates:
+    if _font in _available:
+        matplotlib.rcParams['font.sans-serif'] = [_font] + matplotlib.rcParams.get('font.sans-serif', [])
+        _cn_font_found = True
+        break
+
+if not _cn_font_found:
+    _cjk = [f.name for f in _fm.ttflist if any(kw in f.name.lower() for kw in ['cjk', 'chinese', 'hei', 'song', 'fang', 'kai', 'ming', 'gothic', 'pingfang', 'yahei', 'noto sans sc'])]
+    if _cjk:
+        matplotlib.rcParams['font.sans-serif'] = [_cjk[0]] + matplotlib.rcParams.get('font.sans-serif', [])
+
+matplotlib.rcParams['axes.unicode_minus'] = False
 
 # 设置工作空间目录
 os.chdir(r"{self.workspace_dir}")  # 改变当前工作目录
