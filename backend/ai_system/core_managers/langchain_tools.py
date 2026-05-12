@@ -41,9 +41,28 @@ class LangChainToolFactory:
 
             tools = [
                 StructuredTool.from_function(
+                    func=file_tools.get_paper_status,
+                    name="get_paper_status",
+                    description="获取paper.md的写作状态概览，包括章节结构、各章节字数和内容摘要、写作进度。在写作任何内容之前必须先调用此工具了解当前论文状态，避免重复写作或覆盖已有内容。"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools.readmd,
+                    name="readmd",
+                    description="读取Markdown文件内容。参数：filename（文件名，默认paper）。在写入或更新paper.md之前必须先调用此工具了解现有内容，避免覆盖或重复。"
+                ),
+                StructuredTool.from_function(
                     func=file_tools.writemd,
                     name="writemd",
-                    description="写入Markdown文件到工作空间。支持多种模式：append(追加)、overwrite(覆盖)、modify(修改)、insert(插入)、section_update(章节更新)"
+                    description=(
+                        "写入Markdown文件到工作空间。参数：filename（文件名）、content（内容）、mode（写入模式）。\n"
+                        "⚠️ 写入前必须先调用readmd读取现有内容！\n"
+                        "支持的mode：\n"
+                        "- section_update（推荐）：章节级更新，content必须以#标题开头，只替换该章节内容，不影响其他章节\n"
+                        "- append：在文件末尾追加内容，适合添加全新章节\n"
+                        "- overwrite：⚠️危险！完全覆盖原文件所有内容，仅在需要重建整个文件时使用\n"
+                        "- modify：替换文件中的特定内容\n"
+                        "- insert：在文件开头插入内容"
+                    )
                 ),
                 StructuredTool.from_function(
                     func=file_tools.update_template,
@@ -509,6 +528,20 @@ class LangChainToolFactory:
             file_tools_instance = FileTools(stream_manager)
 
             base_tools = [
+                StructuredTool.from_function(
+                    func=file_tools_instance.get_paper_status,
+                    name="get_paper_status",
+                    description="获取paper.md的写作状态概览，包括章节结构、各章节字数和内容摘要、写作进度。在委派任何写作任务前必须先调用此工具了解论文当前状态。"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools_instance.update_plan,
+                    name="update_plan",
+                    description=(
+                        "更新论文写作计划(plan.md)，用户可在前端实时看到计划进度。\n"
+                        "Phase 2制定计划后立即调用保存计划，Phase 3每完成一个章节后更新计划状态。\n"
+                        "计划内容使用Markdown表格格式，包含：序号、章节名、状态(✅已完成/⏳进行中/⬜待写)、说明。"
+                    )
+                ),
                 StructuredTool.from_function(
                     func=file_tools_instance.tree,
                     name="tree",

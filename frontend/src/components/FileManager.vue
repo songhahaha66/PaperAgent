@@ -1,18 +1,38 @@
 <template>
-  <div class="file-manager">
-    <t-collapse v-model="fileManagerExpanded" :border="false">
-      <t-collapse-panel value="files" header="文件管理器">
-        <template #header>
-          <div class="file-manager-header">
-            <span>文件管理器</span>
-            <t-button size="small" variant="text" @click.stop="handleRefresh" :loading="isLoading">
-              <template #icon>
-                <t-icon name="refresh" />
-              </template>
-            </t-button>
-          </div>
+  <div class="file-manager" :class="{ collapsed: isCollapsed }">
+    <div class="fm-header">
+      <t-button variant="text" shape="square" @click="isCollapsed = !isCollapsed" class="fm-btn">
+        <template #icon>
+          <t-icon :name="isCollapsed ? 'chevron-up' : 'chevron-down'" size="16px" />
         </template>
-        <!-- 文件树 -->
+      </t-button>
+      <t-tabs v-if="!isCollapsed" v-model="activeTab" size="medium" class="fm-tabs">
+        <t-tab-panel value="files">
+          <template #label>
+            <div class="tab-label">
+              <t-icon name="folder-open" />
+              <span>文件</span>
+            </div>
+          </template>
+        </t-tab-panel>
+        <t-tab-panel value="plan">
+          <template #label>
+            <div class="tab-label">
+              <t-icon name="task" />
+              <span>计划</span>
+            </div>
+          </template>
+        </t-tab-panel>
+      </t-tabs>
+      <span v-else class="fm-collapsed-title">文件管理器</span>
+      <t-button variant="text" shape="square" @click.stop="handleRefresh" :loading="isLoading" class="fm-btn">
+        <template #icon>
+          <t-icon name="refresh" size="16px" />
+        </template>
+      </t-button>
+    </div>
+    <div v-show="!isCollapsed" class="fm-body">
+      <div v-if="activeTab === 'files'" class="tab-content">
         <div class="file-tree">
           <div v-if="isLoading" class="loading-state">
             <t-loading size="small" text="加载文件中..." />
@@ -29,22 +49,28 @@
             @select="handleFileSelect"
           />
         </div>
-
-        <!-- 文件信息 -->
         <div class="file-manager-info">
-          <span v-if="selectedFile" class="selected-file-info"> 当前选中: {{ selectedFile }} </span>
-          <span v-else class="no-file-selected"> 请点击文件进行选择 </span>
+          <span v-if="selectedFile" class="selected-file-info">{{ selectedFile }}</span>
+          <span v-else class="no-file-selected">点击文件查看</span>
         </div>
-      </t-collapse-panel>
-    </t-collapse>
+      </div>
+      <div v-else-if="activeTab === 'plan'" class="tab-content plan-tab">
+        <div v-if="!planContent" class="empty-state">
+          <div class="empty-icon">📋</div>
+          <div class="empty-text">等待AI制定写作计划...</div>
+        </div>
+        <div v-else class="plan-content">
+          <MarkdownRenderer :content="planContent" />
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Tree, Collapse, CollapsePanel, Loading } from 'tdesign-vue-next'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 
-// 定义props
 interface Props {
   fileTreeData:
     | Array<{
@@ -69,9 +95,9 @@ interface Props {
       }>
   workId?: string
   loading?: boolean
+  planContent?: string
 }
 
-// 定义emits
 interface Emits {
   (e: 'file-select', fileKey: string): void
   (e: 'refresh'): void
@@ -80,8 +106,8 @@ interface Emits {
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
-// 文件管理器状态
-const fileManagerExpanded = ref(['files'])
+const activeTab = ref('files')
+const isCollapsed = ref(false)
 const selectedFile = ref<string | null>(null)
 
 // 计算加载状态：优先使用父组件传入的loading状态，否则使用内部状态
@@ -460,37 +486,72 @@ defineExpose({
 
 <style scoped>
 .file-manager {
-  border-top: 1px solid #eee;
-  background: white;
+  border-top: 1px solid #e7e7e7;
+  background: #fff;
 }
 
-.file-manager-header {
+.fm-header {
   display: flex;
-  justify-content: space-between;
+  align-items: stretch;
+  min-height: 40px;
+  padding: 0 4px;
+}
+
+.file-manager.collapsed .fm-header {
   align-items: center;
-  width: 100%;
+  border-bottom: none;
 }
 
-.file-manager .t-collapse {
-  border: none;
+.fm-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  align-self: center;
 }
 
-.file-manager .t-collapse-panel__header {
-  padding: 8px 16px;
-  font-size: 14px;
+.fm-tabs {
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-tabs :deep(.t-tabs__header) {
+  padding: 0;
+  border-bottom: 1px solid #e7e7e7;
+  height: 100%;
+}
+
+.fm-tabs :deep(.t-tabs__content) {
+  display: none;
+}
+
+.fm-collapsed-title {
+  flex: 1;
+  font-size: 13px;
   font-weight: 500;
-  color: #2c3e50;
+  color: #666;
+  padding-left: 4px;
 }
 
-.file-manager .t-collapse-panel__body {
-  padding: 0 16px 16px;
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.fm-body {
+  border-top: none;
+}
+
+.tab-content {
+  padding: 8px 12px 12px;
 }
 
 .loading-state {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100px;
+  height: 80px;
   color: #7f8c8d;
 }
 
@@ -499,17 +560,17 @@ defineExpose({
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  height: 100px;
+  height: 80px;
   color: #7f8c8d;
 }
 
 .empty-icon {
-  font-size: 24px;
-  margin-bottom: 8px;
+  font-size: 22px;
+  margin-bottom: 6px;
 }
 
 .empty-text {
-  font-size: 14px;
+  font-size: 13px;
   color: #999;
 }
 
@@ -527,27 +588,79 @@ defineExpose({
 }
 
 .file-tree .t-tree-node--leaf .t-tree-node__label:hover {
-  color: #0052d9;
+  color: #003cab;
   text-decoration: underline;
 }
 
 .file-manager-info {
-  margin-top: 12px;
-  padding: 8px 0;
-  border-top: 1px solid #eee;
+  margin-top: 8px;
+  padding: 6px 0;
+  border-top: 1px solid #f0f0f0;
   font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .selected-file-info {
   color: #0052d9;
   font-weight: 500;
-  padding: 4px 8px;
-  background-color: #e6f3ff;
-  border-radius: 4px;
+  padding: 2px 6px;
+  background-color: #e8f3ff;
+  border-radius: 3px;
+  font-size: 11px;
 }
 
 .no-file-selected {
-  color: #7f8c8d;
+  color: #b0b0b0;
   font-style: italic;
+}
+
+.plan-tab {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.plan-content {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.plan-content :deep(h1) {
+  font-size: 15px;
+  margin: 8px 0 6px;
+}
+
+.plan-content :deep(h2) {
+  font-size: 14px;
+  margin: 6px 0 4px;
+}
+
+.plan-content :deep(p) {
+  margin: 4px 0;
+}
+
+.plan-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.plan-content :deep(th),
+.plan-content :deep(td) {
+  border: 1px solid #dcdcdc;
+  padding: 5px 8px;
+  text-align: left;
+}
+
+.plan-content :deep(th) {
+  background-color: #f5f7fa;
+  font-weight: 600;
+  color: #333;
+}
+
+.plan-content :deep(tr:hover td) {
+  background-color: #f9fbff;
 }
 </style>

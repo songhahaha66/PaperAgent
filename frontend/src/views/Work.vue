@@ -67,6 +67,7 @@
                 :work-id="workId"
                 :loading="loading"
                 :file-tree-data="workspaceFiles"
+                :plan-content="planContent"
                 @file-select="handleWorkspaceFileSelect"
                 @refresh="handleFileRefresh"
                 @main-paper-click="handleMainPaperClick"
@@ -281,6 +282,8 @@ const imageUrls = ref<Record<string, string>>({})
 const mainPaperContent = ref<string>('')
 const showMainPaper = ref(false)
 
+const planContent = ref<string>('')
+
 // 导出状态
 const exportLoading = ref(false)
 
@@ -311,7 +314,8 @@ const loadWork = async () => {
     // 加载工作空间文件
     await loadWorkspaceFiles()
 
-    // 初始化聊天会话
+    // 加载写作计划
+    await loadPlanContent()
     await initializeChatSession()
 
     // 检查并自动发送第一句话
@@ -474,6 +478,8 @@ const handleStreamMessage = (data: any, messageId: string) => {
       
       if (block?.type === 'file_changed') {
         setTimeout(() => loadWorkspaceFiles(), 500)
+      } else if (block?.type === 'plan_updated') {
+        planContent.value = String(block.content || '')
       } else {
         chatMessages.value[messageIndex] = {
           ...currentMessage,
@@ -592,6 +598,16 @@ const handleMainPaperClick = async () => {
   } catch (error) {
     console.error('获取论文内容失败:', error)
     MessagePlugin.error('获取论文内容失败')
+  }
+}
+
+const loadPlanContent = async () => {
+  if (!workId.value || !authStore.token) return
+  try {
+    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.md')
+    planContent.value = response.content || ''
+  } catch {
+    planContent.value = ''
   }
 }
 

@@ -87,13 +87,13 @@ class WorkspaceStructureManager:
         
         # 根据输出模式创建相应的初始文件
         if output_mode == "markdown":
-            # Markdown 模式：创建 paper.md 文件
             cls._create_paper_md(workspace_path, template_id)
-            logger.info(f"Markdown 模式：已创建 paper.md")
+            cls._create_plan_md(workspace_path)
+            logger.info(f"Markdown 模式：已创建 paper.md 和 plan.md")
         elif output_mode == "word":
-            # Word 模式：创建空的 paper.docx 文件
             cls._create_paper_docx(workspace_path)
-            logger.info(f"Word 模式：已创建 paper.docx")
+            cls._create_plan_md(workspace_path)
+            logger.info(f"Word 模式：已创建 paper.docx 和 plan.md")
         elif output_mode == "latex":
             # LaTeX 模式：暂时回退到 Markdown
             cls._create_paper_md(workspace_path, template_id)
@@ -103,6 +103,23 @@ class WorkspaceStructureManager:
             logger.warning(f"未知的输出模式 '{output_mode}'，默认创建 paper.md")
             cls._create_paper_md(workspace_path, template_id)
     
+    @classmethod
+    def _create_plan_md(cls, workspace_path: Path) -> None:
+        """创建初始的 plan.md 写作计划文件"""
+        plan_md_path = workspace_path / "plan.md"
+        
+        if plan_md_path.exists():
+            logger.info(f"plan.md 已存在，跳过创建: {plan_md_path}")
+            return
+        
+        try:
+            content = "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+            with open(plan_md_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.info(f"成功创建 plan.md: {plan_md_path}")
+        except Exception as e:
+            logger.error(f"创建 plan.md 失败: {e}")
+
     @classmethod
     def _create_paper_docx(cls, workspace_path: Path) -> None:
         """创建初始的 paper.docx 文件
