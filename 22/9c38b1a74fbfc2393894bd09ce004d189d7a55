@@ -1,0 +1,335 @@
+backend/ai_system/core_tools/file_tools.py
+  145f74b8630d6c37 241-251,261-273,412-432,435-436,441,449,453-458,460-472,474,478,480-495,499,504-509,514,519 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0313500246dd8b98ab09f2","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[241,251]},{"Range":[261,273]},{"Range":[412,432]},{"Range":[435,436]},{"Single":441},{"Single":449},{"Range":[453,458]},{"Range":[460,472]},{"Single":474},{"Single":478},{"Range":[480,495]},{"Single":499},{"Range":[504,509]},{"Single":514},{"Single":519}]}]}
+backend/ai_system/core_managers/langchain_tools.py
+  145f74b8630d6c37 41-55,68,74,76-77 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0313500246dd8b98ab09f2","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[41,55]},{"Single":68},{"Single":74},{"Range":[76,77]}]}]}
+backend/ai_system/core_agents/main_agent.py
+  145f74b8630d6c37 59-86,223-227,229-234,237-255,267-285,289,327 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0313500246dd8b98ab09f2","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[59,86]},{"Range":[223,227]},{"Range":[229,234]},{"Range":[237,255]},{"Range":[267,285]},{"Single":289},{"Single":327}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "229c38b1a74fbfc2393894bd09ce004d189d7a55",
+  "prompts": {
+    "145f74b8630d6c37": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a030ef70246dd8b98ab0923",
+        "model": "c_o_new_thinking__dev"
+      },
+      "human_author": "songhahaha66 <songhahaha66@qq.com>",
+      "messages": [],
+      "total_additions": 195,
+      "total_deletions": 131,
+      "accepted_lines": 194,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "backend/ai_system/core_agents/main_agent.py": [
+      {
+        "hash": "145f74b8630d6c37",
+        "line_ranges": [
+          {
+            "Range": [
+              59,
+              86
+            ]
+          },
+          {
+            "Range": [
+              223,
+              227
+            ]
+          },
+          {
+            "Range": [
+              229,
+              234
+            ]
+          },
+          {
+            "Range": [
+              237,
+              255
+            ]
+          },
+          {
+            "Range": [
+              267,
+              285
+            ]
+          },
+          {
+            "Single": 289
+          },
+          {
+            "Single": 327
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0313500246dd8b98ab09f2",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  59,
+                  86
+                ]
+              },
+              {
+                "Range": [
+                  223,
+                  227
+                ]
+              },
+              {
+                "Range": [
+                  229,
+                  234
+                ]
+              },
+              {
+                "Range": [
+                  237,
+                  255
+                ]
+              },
+              {
+                "Range": [
+                  267,
+                  285
+                ]
+              },
+              {
+                "Single": 289
+              },
+              {
+                "Single": 327
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_managers/langchain_tools.py": [
+      {
+        "hash": "145f74b8630d6c37",
+        "line_ranges": [
+          {
+            "Range": [
+              41,
+              55
+            ]
+          },
+          {
+            "Single": 68
+          },
+          {
+            "Single": 74
+          },
+          {
+            "Range": [
+              76,
+              77
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0313500246dd8b98ab09f2",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  41,
+                  55
+                ]
+              },
+              {
+                "Single": 68
+              },
+              {
+                "Single": 74
+              },
+              {
+                "Range": [
+                  76,
+                  77
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_tools/file_tools.py": [
+      {
+        "hash": "145f74b8630d6c37",
+        "line_ranges": [
+          {
+            "Range": [
+              241,
+              251
+            ]
+          },
+          {
+            "Range": [
+              261,
+              273
+            ]
+          },
+          {
+            "Range": [
+              412,
+              432
+            ]
+          },
+          {
+            "Range": [
+              435,
+              436
+            ]
+          },
+          {
+            "Single": 441
+          },
+          {
+            "Single": 449
+          },
+          {
+            "Range": [
+              453,
+              458
+            ]
+          },
+          {
+            "Range": [
+              460,
+              472
+            ]
+          },
+          {
+            "Single": 474
+          },
+          {
+            "Single": 478
+          },
+          {
+            "Range": [
+              480,
+              495
+            ]
+          },
+          {
+            "Single": 499
+          },
+          {
+            "Range": [
+              504,
+              509
+            ]
+          },
+          {
+            "Single": 514
+          },
+          {
+            "Single": 519
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0313500246dd8b98ab09f2",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  241,
+                  251
+                ]
+              },
+              {
+                "Range": [
+                  261,
+                  273
+                ]
+              },
+              {
+                "Range": [
+                  412,
+                  432
+                ]
+              },
+              {
+                "Range": [
+                  435,
+                  436
+                ]
+              },
+              {
+                "Single": 441
+              },
+              {
+                "Single": 449
+              },
+              {
+                "Range": [
+                  453,
+                  458
+                ]
+              },
+              {
+                "Range": [
+                  460,
+                  472
+                ]
+              },
+              {
+                "Single": 474
+              },
+              {
+                "Single": 478
+              },
+              {
+                "Range": [
+                  480,
+                  495
+                ]
+              },
+              {
+                "Single": 499
+              },
+              {
+                "Range": [
+                  504,
+                  509
+                ]
+              },
+              {
+                "Single": 514
+              },
+              {
+                "Single": 519
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "145f74b8630d6c37": {
+      "tool": "trae",
+      "conversation_id": "6a030ef70246dd8b98ab0923",
+      "session_id": "6a030ef70246dd8b98ab0923",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
