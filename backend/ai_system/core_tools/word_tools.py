@@ -78,18 +78,26 @@ class WordTools:
         if not self.stream_manager:
             return
         
-        # Skip word_tool_result notifications
         if notification_type == "word_tool_result":
             return
         
         try:
-            # Send notification asynchronously
             asyncio.create_task(
                 self.stream_manager.send_json_block(notification_type, message)
             )
         except Exception as e:
             logger.warning(f"Failed to send notification: {e}")
-            # Don't fail the operation due to notification failure
+
+    def _notify_file_changed(self):
+        """Notify frontend that a document file has changed"""
+        if not self.stream_manager:
+            return
+        try:
+            asyncio.create_task(
+                self.stream_manager.send_json_block("file_changed", "paper.docx")
+            )
+        except Exception as e:
+            logger.warning(f"Failed to send file_changed notification: {e}")
     
     def _handle_error(self, operation: str, error: Exception) -> str:
         """
@@ -126,6 +134,7 @@ class WordTools:
             self._send_notification("word_tool_call", "Creating Word document")
             result = await document_tools.create_document(self.document_path, title, author, overwrite)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("create_document", e)
@@ -186,6 +195,7 @@ class WordTools:
             self._send_notification("word_tool_call", f"Copying document to {destination_filename}")
             result = await document_tools.copy_document(self.document_path, destination_filename)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("copy_document", e)
@@ -204,6 +214,7 @@ class WordTools:
                 self.document_path, text, level, font_name, font_size, bold, italic, border_bottom
             )
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("add_heading", e)
@@ -221,6 +232,7 @@ class WordTools:
                 self.document_path, text, style, font_name, font_size, bold, italic, color
             )
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("add_paragraph", e)
@@ -233,6 +245,7 @@ class WordTools:
             self._send_notification("word_tool_call", f"Adding table ({rows}x{cols})")
             result = await content_tools.add_table(self.document_path, rows, cols, data)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("add_table", e)
@@ -242,12 +255,12 @@ class WordTools:
         from word_document_server.tools import content_tools
         
         try:
-            # Resolve path relative to workspace
             resolved_path = self._resolve_path(image_path)
             
             self._send_notification("word_tool_call", f"Adding picture: {image_path}")
             result = await content_tools.add_picture(self.document_path, resolved_path, width)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except ValueError as e:
             # Path security violation
@@ -266,6 +279,7 @@ class WordTools:
             self._send_notification("word_tool_call", "Adding page break")
             result = await content_tools.add_page_break(self.document_path)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("add_page_break", e)
@@ -284,6 +298,7 @@ class WordTools:
                 self.document_path, target_text, header_title, position, header_style, target_paragraph_index
             )
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("insert_header_near_text", e)
@@ -300,6 +315,7 @@ class WordTools:
                 self.document_path, target_text, line_text, position, line_style, target_paragraph_index
             )
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("insert_line_or_paragraph_near_text", e)
@@ -316,6 +332,7 @@ class WordTools:
                 self.document_path, target_text, list_items, position, target_paragraph_index, bullet_type
             )
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("insert_numbered_list_near_text", e)
@@ -376,6 +393,7 @@ class WordTools:
             self._send_notification("word_tool_call", f"Searching and replacing: {find_text}")
             result = await content_tools.search_and_replace(self.document_path, find_text, replace_text)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("search_and_replace", e)
@@ -388,6 +406,7 @@ class WordTools:
             self._send_notification("word_tool_call", f"Deleting paragraph {paragraph_index}")
             result = await content_tools.delete_paragraph(self.document_path, paragraph_index)
             self._send_notification("word_tool_result", result)
+            self._notify_file_changed()
             return result
         except Exception as e:
             return self._handle_error("delete_paragraph", e)

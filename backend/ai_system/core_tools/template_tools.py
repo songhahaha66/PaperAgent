@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 class TemplateAgentTools:
     """AI Agent模板操作工具类，提供简单易用的接口"""
 
-    def __init__(self, workspace_dir: str = None):
+    def __init__(self, workspace_dir: str = None, stream_manager=None):
         self.workspace_dir = workspace_dir or os.getenv("WORKSPACE_DIR", ".")
+        self.stream_manager = stream_manager
 
     def _read_paper_md(self) -> str:
         """从当前工作目录读取paper.md文件内容"""
@@ -34,10 +35,37 @@ class TemplateAgentTools:
             paper_path = os.path.join(self.workspace_dir, "paper.md")
             with open(paper_path, 'w', encoding='utf-8') as f:
                 f.write(content)
+            self._notify_file_changed()
             return "✅ 保存成功"
         except Exception as e:
             logger.error(f"保存paper.md文件失败: {e}")
             return f"❌ 保存失败: {str(e)}"
+
+    def _notify_file_changed(self):
+        """通知前端文件已变更"""
+        if not self.stream_manager:
+            return
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.create_task(
+                        self.stream_manager.send_json_block("file_changed", "paper.md")
+                    )
+                else:
+                    loop.run_until_complete(
+                        self.stream_manager.send_json_block("file_changed", "paper.md")
+                    )
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(
+                    self.stream_manager.send_json_block("file_changed", "paper.md")
+                )
+                loop.close()
+        except Exception as e:
+            logger.warning(f"发送file_changed通知失败: {e}")
 
     async def analyze_template(self) -> str:
         """分析paper.md文件的模板结构，为AI提供模板概览"""

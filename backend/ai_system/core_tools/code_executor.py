@@ -59,9 +59,9 @@ class CodeExecutor:
             # 直接在子进程中执行代码
             result = await self._execute_code_directly(code_content)
             
-            # 发送执行结果
             if self.stream_manager:
                 await self.stream_manager.print_code_execution_result(result)
+                await self.stream_manager.send_json_block("file_changed", "code_execution")
             
             return result
             
@@ -221,10 +221,10 @@ class CodeExecutor:
             
             logger.info(f"代码已保存到文件: {file_path}")
             
-            # 通过stream_manager发送工具调用通知到前端
             if self.stream_manager:
                 try:
                     await self.stream_manager.print_code_execution_call(f"代码文件 {safe_filename} 保存成功")
+                    await self.stream_manager.send_json_block("file_changed", safe_filename)
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
@@ -491,14 +491,11 @@ if plot_files:
 
             logger.info(f"代码文件已修改: {file_path}")
 
-            # 通过stream_manager发送工具调用通知到前端
             if self.stream_manager:
                 try:
-                    # 发送工具调用开始通知
                     await self.stream_manager.send_json_block("code_agent_tool_call", f"CodeAgent正在执行工具调用: edit_code_file")
-
-                    # 发送工具调用结果通知
                     await self.stream_manager.send_json_block("code_agent_tool_result", f"代码文件 {safe_filename} 修改成功")
+                    await self.stream_manager.send_json_block("file_changed", safe_filename)
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
 

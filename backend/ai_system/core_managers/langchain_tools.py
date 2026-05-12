@@ -223,7 +223,7 @@ class LangChainToolFactory:
             LangChain 格式的模板工具列表
         """
         try:
-            template_tools = TemplateAgentTools(workspace_dir)
+            template_tools = TemplateAgentTools(workspace_dir, stream_manager)
 
             tools = [
                 StructuredTool.from_function(

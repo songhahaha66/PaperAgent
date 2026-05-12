@@ -143,6 +143,7 @@ class FileTools:
 
             if self.stream_manager:
                 self._send_json_block_sync("writemd_result", result)
+                self._send_json_block_sync("file_changed", filename)
 
             return result
 
@@ -192,6 +193,7 @@ class FileTools:
             
             if self.stream_manager:
                 self._send_json_block_sync("template_update_result", result)
+                self._send_json_block_sync("file_changed", template_name)
             
             return result
             

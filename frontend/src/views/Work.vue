@@ -294,8 +294,6 @@ const activeHistoryId = ref<number | null>(null)
 const currentChatSession = ref<ChatSessionResponse | null>(null)
 const isStreaming = ref(false)
 const webSocketHandler = ref<WebSocketChatHandler | null>(null)
-const fileRefreshTimer = ref<number | null>(null)
-const lastFileUpdateTime = ref<number>(0)
 const isFileRefreshing = ref(false) // 防止重复刷新文件列表
 
 // 加载工作信息
@@ -473,21 +471,15 @@ const handleStreamMessage = (data: any, messageId: string) => {
 
     case 'json_block':
       const block = data.block
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        json_blocks: [...(currentMessage.json_blocks || []), block],
-        message_type: 'json_card' as const,
-      }
       
-      // 检查是否是文件操作相关的JSON块
-      if (block?.type && (
-        block.type.includes('save_and_execute') ||
-        block.type.includes('edit_code_file') ||
-        block.type.includes('execute_file') ||
-        block.type.includes('code_agent')
-      )) {
-        // 延迟刷新文件列表
-        setTimeout(() => loadWorkspaceFiles(), 1000)
+      if (block?.type === 'file_changed') {
+        setTimeout(() => loadWorkspaceFiles(), 500)
+      } else {
+        chatMessages.value[messageIndex] = {
+          ...currentMessage,
+          json_blocks: [...(currentMessage.json_blocks || []), block],
+          message_type: 'json_card' as const,
+        }
       }
       break
 
@@ -561,21 +553,19 @@ const loadChatHistory = async () => {
 }
 
 // 加载工作空间文件（带防抖）
+let lastFileUpdateTime = 0
 const loadWorkspaceFiles = async () => {
   if (!workId.value || !authStore.token) return
   
-  // 防止重复刷新：如果正在刷新或距离上次刷新不足1秒，跳过
   const now = Date.now()
-  if (isFileRefreshing.value || (now - lastFileUpdateTime.value < 1000)) {
-    console.log('跳过文件刷新：正在刷新或间隔太短')
+  if (isFileRefreshing.value || (now - lastFileUpdateTime < 1000)) {
     return
   }
 
   try {
-    // 设置加载状态
     isFileRefreshing.value = true
     loading.value = true
-    lastFileUpdateTime.value = now
+    lastFileUpdateTime = now
 
     const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
     console.log('Loaded workspace files:', files)
@@ -585,7 +575,6 @@ const loadWorkspaceFiles = async () => {
     MessagePlugin.error('加载工作空间文件失败')
     workspaceFiles.value = []
   } finally {
-    // 确保加载状态被重置
     loading.value = false
     isFileRefreshing.value = false
   }
@@ -614,29 +603,7 @@ const handleFileRefresh = async () => {
 }
 
   
-// 启动文件刷新定时器
-const startFileRefreshTimer = () => {
-  // 清除之前的定时器
-  if (fileRefreshTimer.value) {
-    clearTimeout(fileRefreshTimer.value)
-  }
-
-  // 设置新的定时器，3秒后刷新文件列表
-  fileRefreshTimer.value = setTimeout(() => {
-    console.log('自动刷新文件列表')
-    fileRefreshTimer.value = null
-  }, 3000)
-}
-
-// 停止文件刷新定时器
-const stopFileRefreshTimer = () => {
-  if (fileRefreshTimer.value) {
-    clearTimeout(fileRefreshTimer.value)
-    fileRefreshTimer.value = null
-  }
-}
-
-
+  
 // 删除工作
 const deleteWork = async () => {
   if (!workId.value || !authStore.token || !currentWork.value) return
@@ -1126,9 +1093,6 @@ watch(
         webSocketHandler.value.disconnect()
         webSocketHandler.value = null
       }
-
-      // 停止文件刷新定时器
-      stopFileRefreshTimer()
 
       // 清理文件内容，避免不同work的文件内容混淆
       currentFileContent.value = ''
