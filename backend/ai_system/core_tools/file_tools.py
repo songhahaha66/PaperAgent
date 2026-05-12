@@ -238,25 +238,40 @@ class FileTools:
                 result = f"成功附加内容到Markdown文件: {filename}"
 
             elif mode == "overwrite":
-                # 重写覆盖模式：完全覆盖原文件内容
+                if os.path.exists(file_path):
+                    existing_size = os.path.getsize(file_path)
+                    if existing_size > 500:
+                        import shutil
+                        import time
+                        backup_path = file_path + f".bak.{int(time.time())}"
+                        shutil.copy2(file_path, backup_path)
+                        logger.warning(
+                            f"overwrite模式：已有文件 {filename} ({existing_size} 字节) 将被覆盖，"
+                            f"已自动备份到 {os.path.basename(backup_path)}"
+                        )
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
                 result = f"成功重写覆盖Markdown文件: {filename}"
 
             elif mode == "modify":
-                # 修改模式：替换文件中的特定内容
                 if os.path.exists(file_path):
-                    # 读取原文件内容
                     with open(file_path, 'r', encoding='utf-8') as f:
                         original_content = f.read()
 
-                    # 这里可以根据需要实现更复杂的修改逻辑
-                    # 目前简单地将新内容替换原内容
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    result = f"成功修改Markdown文件: {filename}"
+                    import re as _re
+                    heading_match = _re.match(r'^(#{1,6})\s+(.+)', content.strip())
+                    if heading_match:
+                        section_name = heading_match.group(2).strip()
+                        updated_content = self._update_section_content(
+                            original_content, section_name, content.strip())
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            f.write(updated_content)
+                        result = f"成功修改章节 '{section_name}' 到Markdown文件: {filename}"
+                    else:
+                        with open(file_path, 'a', encoding='utf-8') as f:
+                            f.write('\n\n' + content)
+                        result = f"modify模式：内容无章节标题，已追加到Markdown文件末尾: {filename}"
                 else:
-                    # 如果文件不存在，创建新文件
                     with open(file_path, 'w', encoding='utf-8') as f:
                         f.write(content)
                     result = f"文件不存在，创建并写入Markdown文件: {filename}"
@@ -394,15 +409,36 @@ class FileTools:
             
             return error_msg
 
+    @staticmethod
+    def _normalize_section_name(raw: str) -> str:
+        """去除章节名中的Markdown装饰（**加粗**等）并统一空白"""
+        import re
+        cleaned = re.sub(r'\*+', '', raw)
+        return cleaned.strip()
+
+    def _match_section_title(self, line_title: str, target_name: str) -> bool:
+        """
+        精确匹配章节标题：
+        1. 先做精确比较（去掉**装饰后）
+        2. 如果精确不匹配，再做包含匹配作为降级
+        """
+        norm_line = self._normalize_section_name(line_title)
+        norm_target = self._normalize_section_name(target_name)
+        if norm_line == norm_target:
+            return True
+        if norm_target in norm_line and len(norm_target) > 2:
+            return True
+        return False
+
     def _update_section_content(self, original_content: str, section_name: str, new_content: str) -> str:
         """
-        更新指定章节的内容
-        
+        更新指定章节的内容，保留其余所有章节不变。
+
         Args:
             original_content: 原始文件内容
             section_name: 章节名称
             new_content: 新的章节内容
-            
+
         Returns:
             更新后的完整文件内容
         """
@@ -410,69 +446,77 @@ class FileTools:
         updated_lines = []
         section_found = False
         i = 0
-        
+
         while i < len(lines):
             line = lines[i]
-            line_matched = False
-            
-            # 简化的匹配方式：检查是否包含章节名称且以#开头
             stripped_line = line.strip()
-            if (stripped_line.startswith('#') and 
-                section_name in stripped_line):
-                
-                # 找到目标章节
+
+            if (not section_found
+                    and stripped_line.startswith('#')
+                    and self._match_section_title(
+                        stripped_line.lstrip('#').strip(), section_name)):
+
                 section_found = True
-                line_matched = True
-                
-                logger.info(f"找到匹配章节: {stripped_line}")
-                
-                # 添加章节标题
+                section_level = len(stripped_line) - len(stripped_line.lstrip('#'))
+                logger.info(f"找到匹配章节: {stripped_line} (level={section_level})")
+
+                if section_level == 1:
+                    new_title_lines = [l for l in new_content.strip().split('\n') if l.strip().startswith('# ')]
+                    if new_title_lines:
+                        updated_lines.append(new_title_lines[0])
+                    else:
+                        updated_lines.append(line)
+                    i += 1
+                    logger.info("H1标题：仅替换标题行，保留子章节")
+                    continue
+
                 updated_lines.append(line)
-                
-                # 计算当前章节的级别
-                section_level = len(line) - len(line.lstrip('#'))
-                
-                # 跳过空行
+
                 i += 1
                 while i < len(lines) and lines[i].strip() == '':
-                    updated_lines.append(lines[i])
                     i += 1
-                
-                # 添加新内容
+
                 if new_content.strip():
-                    updated_lines.append('')
-                    updated_lines.append(new_content.strip())
-                    updated_lines.append('')
-                
-                # 跳过原有章节内容直到下一个同级或更高级标题
+                    content_to_write = new_content.strip()
+                    content_lines = content_to_write.split('\n')
+                    if content_lines and content_lines[0].strip().startswith('#'):
+                        first_heading = content_lines[0].strip().lstrip('#').strip()
+                        current_heading = stripped_line.lstrip('#').strip()
+                        if self._match_section_title(first_heading, self._normalize_section_name(current_heading)):
+                            content_lines = content_lines[1:]
+                            while content_lines and content_lines[0].strip() == '':
+                                content_lines.pop(0)
+                            content_to_write = '\n'.join(content_lines)
+
+                    if content_to_write.strip():
+                        updated_lines.append('')
+                        updated_lines.append(content_to_write.strip())
+                        updated_lines.append('')
+
                 while i < len(lines):
                     next_line = lines[i]
-                    # 检查是否是新的章节标题
                     if next_line.strip().startswith('#'):
-                        next_level = len(next_line) - len(next_line.lstrip('#'))
+                        next_level = len(next_line.strip()) - len(next_line.strip().lstrip('#'))
                         if next_level <= section_level:
-                            # 遇到同级或更高级标题，停止跳过
                             logger.info(f"遇到新章节，停止跳过: {next_line.strip()}")
                             break
                     i += 1
-                
-                break
-            
-            if not line_matched:
-                updated_lines.append(line)
-                i += 1
-        
-        # 如果没有找到章节，在文件末尾添加
+
+                continue
+
+            updated_lines.append(line)
+            i += 1
+
         if not section_found:
             logger.warning(f"没有找到匹配的章节: {section_name}，将在末尾添加")
             if original_content.strip():
                 updated_lines.append('')
-            updated_lines.append(f'# **{section_name}**')
+            updated_lines.append(f'## {section_name}')
             updated_lines.append('')
             if new_content.strip():
                 updated_lines.append(new_content.strip())
                 updated_lines.append('')
-        
+
         return '\n'.join(updated_lines)
 
     def tree(self, directory: Optional[str] = None) -> str:

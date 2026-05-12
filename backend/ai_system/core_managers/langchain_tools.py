@@ -35,9 +35,23 @@ class LangChainToolFactory:
             LangChain 格式的文件工具列表
         """
         try:
-            # 设置环境变量供 FileTools 使用
             os.environ["WORKSPACE_DIR"] = workspace_dir
             file_tools = FileTools(stream_manager)
+
+            _SAFE_MODES = {"section_update", "append", "insert", "smart_replace"}
+
+            def safe_writemd(filename: str, content: str, mode: str = "section_update") -> str:
+                if mode == "overwrite":
+                    file_path = os.path.join(workspace_dir, filename if filename.endswith('.md') else filename + '.md')
+                    if os.path.exists(file_path) and os.path.getsize(file_path) > 500:
+                        logger.warning(
+                            f"safe_writemd: 拦截了对 {filename} 的 overwrite 操作 "
+                            f"(已有 {os.path.getsize(file_path)} 字节)，自动降级为 section_update"
+                        )
+                        mode = "section_update"
+                if mode == "modify":
+                    mode = "section_update"
+                return file_tools.writemd(filename=filename, content=content, mode=mode)
 
             tools = [
                 StructuredTool.from_function(
@@ -51,17 +65,16 @@ class LangChainToolFactory:
                     description="读取Markdown文件内容。参数：filename（文件名，默认paper）。在写入或更新paper.md之前必须先调用此工具了解现有内容，避免覆盖或重复。"
                 ),
                 StructuredTool.from_function(
-                    func=file_tools.writemd,
+                    func=safe_writemd,
                     name="writemd",
                     description=(
                         "写入Markdown文件到工作空间。参数：filename（文件名）、content（内容）、mode（写入模式）。\n"
                         "⚠️ 写入前必须先调用readmd读取现有内容！\n"
                         "支持的mode：\n"
-                        "- section_update（推荐）：章节级更新，content必须以#标题开头，只替换该章节内容，不影响其他章节\n"
+                        "- section_update（推荐、默认）：章节级更新，content必须以#标题开头，只替换该章节内容，不影响其他章节\n"
                         "- append：在文件末尾追加内容，适合添加全新章节\n"
-                        "- overwrite：⚠️危险！完全覆盖原文件所有内容，仅在需要重建整个文件时使用\n"
-                        "- modify：替换文件中的特定内容\n"
-                        "- insert：在文件开头插入内容"
+                        "- insert：在文件开头插入内容\n"
+                        "⚠️ 禁止使用overwrite模式，会导致已有内容丢失"
                     )
                 ),
                 StructuredTool.from_function(

@@ -56,14 +56,35 @@ class MainAgent:
             # 设置环境变量，供工具使用
             os.environ["WORKSPACE_DIR"] = self.workspace_dir
 
-        # 加载基础工具（不包括文档写作工具，文档操作由WriterAgent处理）
-        # 基础工具包括：tree, list_attachments, web_search 等通用工具
-        self.tools = LangChainToolFactory.create_base_tools(
-            self.workspace_dir, stream_manager
-        )
-        logger.info("MainAgent加载基础工具（文档操作由WriterAgent处理）")
+        if self.output_mode == "markdown":
+            self.tools = LangChainToolFactory.create_file_tools(
+                self.workspace_dir, stream_manager
+            )
+            base_extras = LangChainToolFactory.create_base_tools(
+                self.workspace_dir, stream_manager
+            )
+            existing_names = {t.name for t in self.tools}
+            for t in base_extras:
+                if t.name not in existing_names:
+                    self.tools.append(t)
+            logger.info("Markdown模式：MainAgent直接使用文件工具，不使用WriterAgent")
+        else:
+            self.tools = LangChainToolFactory.create_base_tools(
+                self.workspace_dir, stream_manager
+            )
+            writer_agent_tool = LangChainToolFactory.create_writer_agent_tool(
+                workspace_dir=self.workspace_dir,
+                output_mode=self.output_mode,
+                stream_manager=stream_manager,
+                llm=self.llm,
+                writer_llm=writer_llm
+            )
+            if writer_agent_tool:
+                self.tools.append(writer_agent_tool)
+                logger.info("成功添加WriterAgent工具，output_mode: %s", self.output_mode)
+            else:
+                logger.warning("WriterAgent工具创建失败，文档写作能力可能受限")
 
-        # 添加代码执行工具（使用CodeAgent，默认复用主LLM，可指定codeagent_llm）
         code_llm = codeagent_llm or self.llm
         code_agent_tool = LangChainToolFactory.create_code_agent_tool(
             self.workspace_dir, stream_manager, code_llm
@@ -73,20 +94,6 @@ class MainAgent:
             logger.info("成功添加CodeAgent工具，使用langchain实现")
         else:
             logger.warning("CodeAgent工具创建失败，代码能力可能受限")
-
-        # 添加WriterAgent工具（用于文档写作任务）
-        writer_agent_tool = LangChainToolFactory.create_writer_agent_tool(
-            workspace_dir=self.workspace_dir,
-            output_mode=self.output_mode,
-            stream_manager=stream_manager,
-            llm=self.llm,
-            writer_llm=writer_llm
-        )
-        if writer_agent_tool:
-            self.tools.append(writer_agent_tool)
-            logger.info("成功添加WriterAgent工具，output_mode: %s", self.output_mode)
-        else:
-            logger.warning("WriterAgent工具创建失败，文档写作能力可能受限")
 
         # 创建 LangChain Agent
         self.system_prompt = self._create_system_prompt()
@@ -213,50 +220,43 @@ class MainAgent:
             )
         else:
             system_content += (
-                "4. **委派文档写作任务给WriterAgent**：你正在Markdown模式下工作，必须使用WriterAgent来处理所有文档操作\n\n"
-                "**🔴 核心原则：Plan-Driven 写作（先查状态，再写内容）**\n"
-                "- **每次写作前必须先调用 get_paper_status 获取论文当前状态**\n"
-                "- 根据状态决定哪些章节需要写、哪些已完成，避免重复写作\n"
-                "- 给WriterAgent的指令中必须说明该章节是「新增」还是「更新」\n"
-                "- WriterAgent是专业的写作助手，会根据你的目标自主扩充和创作内容\n"
-                "- 使用 writer_agent_execute 工具来委派文档操作\n\n"
+                "4. **Markdown模式 — 你直接操作文件工具撰写论文**\n\n"
+                "**🔴 核心原则：你亲自写作，不委派**\n"
+                "- 你直接调用 writemd / readmd / get_paper_status 等工具完成文档操作\n"
+                "- 不存在 WriterAgent，你自己就是写作者\n"
+                "- 每次只写一个章节，用 section_update 或 append 模式\n\n"
                 "**🔴 防止内容丢失的关键规则**：\n"
-                "- **绝对不要在一次WriterAgent调用中传入整篇论文内容**，每次只写一个章节\n"
-                "- **委派指令必须明确指定章节名和操作类型**（新增/更新/重写）\n"
-                "- 给WriterAgent的指令示例：「更新Introduction章节，当前为空，请撰写研究背景」\n"
-                "- 给WriterAgent的指令示例：「追加新章节Results，展示实验结果」\n\n"
+                "- 每次写作前必须先调用 get_paper_status 查看当前状态\n"
+                "- **绝对不要在 writemd 的 content 里包含多个章节的骨架**，每次只传一个章节\n"
+                "- 更新已有章节 → mode='section_update'，content 以该章节的 ## 标题开头\n"
+                "- 添加新章节 → mode='append'\n"
+                "- **禁止使用 overwrite 模式**\n"
+                "- **禁止对 # 一级标题做 section_update**（一级标题下面是整篇文档，会导致全文被替换）\n\n"
                 "**Markdown模式工作流程（立即执行，不要问用户）**：\n"
                 "1. **首先调用 get_paper_status** 查看论文当前结构和各章节写作进度\n"
-                "2. 根据状态制定写作计划，确定需要写作的章节顺序\n"
-                "3. **逐章节委派给WriterAgent**，每次只处理一个章节\n"
-                "4. 每个章节完成后，再次调用 get_paper_status 确认写入成功\n"
-                "5. 重复步骤3-4直到所有章节完成\n\n"
-                "**WriterAgent工具使用方法**：\n"
-                "- 工具名称：writer_agent_execute\n"
-                "- 输入：高层次的写作目标（需要包含章节名、操作类型、以及写作主题）\n"
-                "- WriterAgent会先读取文件、创作内容、选择正确的写入模式完成操作\n\n"
-                "**✅ 正确的指令示例**：\n"
-                "- \"查看paper.md的当前状态后，发现Introduction章节为空。请撰写Introduction章节，介绍研究背景和意义。使用section_update模式写入。\"\n"
-                "- \"paper.md已有Introduction和Methods章节，现在追加Results章节，展示实验结果。使用append模式。\"\n"
-                "- \"Abstract章节内容过于简短，请重写该章节，总结全文要点。使用section_update模式覆盖原有内容。\"\n\n"
-                "**❌ 错误的指令示例**：\n"
-                "- \"写整篇论文到paper.md\" ← 会覆盖已有内容\n"
-                "- \"将以下内容追加到paper.md：# Introduction...\" ← 不要写具体内容\n"
-                "- 不查看论文状态就直接开始写作 ← 可能重复写入\n\n"
-                "**任务分工原则（重要）**：\n"
-                "- **你（MainAgent）负责**：战略规划、进度跟踪、写作计划\n"
-                "  * 调用 get_paper_status 跟踪写作进度\n"
-                "  * 决定论文结构和章节主题\n"
-                "  * 给WriterAgent下达章节级别的写作目标\n"
-                "- **WriterAgent负责**：内容创作、文档操作\n"
-                "  * 先读取文件了解现有内容\n"
-                "  * 根据目标自主创作具体内容\n"
-                "  * 选择合适的写入模式（section_update/append）完成操作\n"
+                "2. 如果 paper.md 不存在或为空，用 writemd(mode='overwrite') 写入初始骨架（仅限首次）\n"
+                "3. 逐章节写作：\n"
+                "   a. 调用 readmd 读取当前文档内容\n"
+                "   b. 思考该章节要写什么具体内容\n"
+                "   c. 调用 writemd(mode='section_update', content='## 章节名\\n\\n具体内容...')\n"
+                "   d. 调用 get_paper_status 确认写入成功\n"
+                "4. 重复步骤 3 直到所有章节完成\n\n"
+                "**✅ 正确的 writemd 调用示例**：\n"
+                "```\n"
+                "writemd(filename='paper', mode='section_update', content='## 摘要\\n\\n本研究旨在...')\n"
+                "writemd(filename='paper', mode='section_update', content='## 引言\\n\\n研究背景...')\n"
+                "writemd(filename='paper', mode='append', content='## 参考文献\\n\\n[1] ...')\n"
+                "```\n\n"
+                "**❌ 错误的 writemd 调用**：\n"
+                "- content 里包含整篇文档骨架（会导致内容重复）\n"
+                "- 对 # 一级标题做 section_update（会替换整篇文档）\n"
+                "- 使用 overwrite 模式覆盖已有内容\n\n"
+                "**任务分工**：\n"
+                "- **你（MainAgent）负责**：规划 + 写作 + 文件操作\n"
                 "- **CodeAgent负责**：数据分析、图表生成\n"
                 "  * 使用 code_agent_execute 工具委派编程任务\n"
             )
 
-        # 通用工具
         system_content += (
             "\n**通用工具**：\n"
             "- get_paper_status: 🔴必用！获取paper.md的写作状态（章节结构、进度、内容摘要），写作前必须先调用\n"
@@ -264,25 +264,32 @@ class MainAgent:
             "- list_attachments: 列出所有附件文件\n"
             "- web_search: 搜索最新的学术资料和背景信息\n"
             "- tree: 显示工作空间目录结构\n\n"
-            "**WriterAgent工具（用于所有文档写作任务）**：\n"
-            "- writer_agent_execute: 委派给专用WriterAgent执行文档写作任务\n"
-            "  * ✅ 适用场景：创建文档、添加标题、添加段落、添加表格、插入图片、格式化文档等所有文档操作\n"
-            "  * 示例任务：\"添加一级标题Introduction\"、\"添加段落：This paper...\"、\"插入图片outputs/chart.png\"\n"
-            "  * **所有文档写作任务必须通过WriterAgent完成**\n"
-            "  * WriterAgent会根据output_mode自动使用Word或Markdown工具\n\n"
+        )
+
+        if self.output_mode == "markdown":
+            system_content += (
+                "**Markdown写作工具（你直接调用）**：\n"
+                "- readmd: 读取Markdown文件内容，写入前必须先读取\n"
+                "- writemd: 写入Markdown内容（mode: section_update/append/insert）\n"
+                "- update_template: 更新论文模板中的特定章节\n\n"
+            )
+        else:
+            system_content += (
+                "**WriterAgent工具（用于所有文档写作任务）**：\n"
+                "- writer_agent_execute: 委派给专用WriterAgent执行文档写作任务\n"
+                "  * ✅ 适用场景：创建文档、添加标题、添加段落、添加表格、插入图片、格式化文档等所有文档操作\n"
+                "  * **所有文档写作任务必须通过WriterAgent完成**\n"
+                "  * WriterAgent会根据output_mode自动使用Word工具\n\n"
+            )
+
+        system_content += (
             "**CodeAgent工具（仅用于编程任务）**：\n"
             "- code_agent_execute: 委派给专用CodeAgent执行编程任务\n"
             "  * ✅ 适用场景：数据分析、图表生成（matplotlib/seaborn）、统计计算、文件处理、Python脚本执行\n"
-            "  * 示例任务：\"读取data.csv并生成销售趋势图\"、\"计算数据的均值和标准差\"、\"处理Excel文件并提取关键信息\"\n"
-            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来创建、编辑、修改文档**\n"
-            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来添加文档内容、格式化文档**\n"
-            "  * 文档操作必须委派给WriterAgent\n\n"
+            "  * ❌ 禁止场景：**绝对不要使用CodeAgent来创建、编辑、修改文档**\n\n"
             "**🚫 严格禁止事项**：\n"
             "- **永远不要让CodeAgent操作文档（Word或Markdown）！**\n"
             "- **永远不要让CodeAgent使用python-docx库或直接写入.md文件！**\n"
-            "- **所有文档操作必须通过writer_agent_execute委派给WriterAgent！**\n"
-            "- **你（MainAgent）不应该直接调用Word工具或writemd工具**\n"
-            "- 如果需要编辑文档，使用writer_agent_execute委派给WriterAgent\n"
             "- CodeAgent只负责生成数据、图表等内容，不负责将内容写入文档\n"
         )
 
@@ -317,7 +324,7 @@ class MainAgent:
             "\n**🔴 关键要求：任务完成标准**\n"
             "- **你的任务只有在将最终结果输出到文件后才算真正完成！**\n"
             "- Word模式：必须使用Word工具将所有内容写入paper.docx文件\n"
-            "- Markdown模式：必须逐章节通过WriterAgent写入paper.md文件，绝不能一次性overwrite覆盖\n"
+            "- Markdown模式：必须逐章节通过 writemd 工具写入paper.md文件（使用 section_update 模式），绝不能一次性overwrite覆盖\n"
             "- **不要只是在对话中回复内容，必须调用相应的工具将内容保存到文件中**\n"
             "- 在完成文件输出后，向用户确认文件已生成并说明文件路径\n"
             "- 如果没有将内容写入docx或md文件，任务视为未完成\n"
