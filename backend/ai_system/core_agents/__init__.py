@@ -6,5 +6,6 @@ AI系统核心代理模块 - LangChain 重构版本
 from .main_agent import MainAgent
 from .code_agent import CodeAgent
 from .writer_agent import WriterAgent
+from .review_agent import ReviewAgent
 
-__all__ = ['MainAgent', 'CodeAgent', 'WriterAgent']
+__all__ = ['MainAgent', 'CodeAgent', 'WriterAgent', 'ReviewAgent']

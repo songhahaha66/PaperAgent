@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from .review_agent import ReviewAgent
 from config.paths import get_workspace_path
 
 logger = logging.getLogger(__name__)
@@ -124,6 +125,10 @@ class MainAgent:
             tools=self.tools,
             system_prompt=self.system_prompt,
             debug=True  # 启用调试模式
+        )
+
+        self.review_agent = ReviewAgent(
+            llm=llm, workspace_dir=self.workspace_dir, output_mode=self.output_mode
         )
 
         logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, output_mode: {output_mode}, 工具数量: {len(self.tools)}")
@@ -347,14 +352,29 @@ class MainAgent:
 
         return system_content
 
+    MAX_CONTINUATIONS = 3
+
+    @staticmethod
+    def _count_tool_calls(messages: list) -> int:
+        return sum(
+            len(msg.tool_calls)
+            for msg in messages
+            if hasattr(msg, 'tool_calls') and msg.tool_calls
+        )
+
+    @staticmethod
+    def _extract_output(messages: list) -> str:
+        for message in reversed(messages):
+            if hasattr(message, 'content') and message.content:
+                return message.content
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                return message.get("content", "")
+        return ""
+
     async def run(self, user_input: str) -> str:
-        """
-        执行主Agent逻辑，使用 LangChain Agent 处理
-        """
         logger.info(f"MainAgent开始执行任务: {user_input[:100]}...")
 
         try:
-            # 发送开始通知
             if self.stream_manager:
                 try:
                     await self.stream_manager.send_json_block(
@@ -364,51 +384,57 @@ class MainAgent:
                 except Exception as e:
                     logger.warning(f"发送开始通知失败: {e}")
 
-            # 使用 LangChain Agent 执行
             logger.info(f"调用 Agent，可用工具数量: {len(self.tools)}")
             logger.info(f"工具列表: {[tool.name for tool in self.tools]}")
-            
-            inputs = {"messages": [HumanMessage(content=user_input)]}
-            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 150})
 
-            # 提取最后的AI回复
-            messages = result.get("messages", [])
-            output = ""
-            
-            # 记录所有消息用于调试
-            logger.info(f"Agent返回了 {len(messages)} 条消息")
-            tool_calls_count = 0
-            for i, message in enumerate(messages):
-                msg_type = type(message).__name__
-                logger.info(f"消息 {i}: 类型={msg_type}")
-                
-                # 检查是否有工具调用
-                if hasattr(message, 'tool_calls') and message.tool_calls:
-                    tool_calls_count += len(message.tool_calls)
-                    logger.info(f"  包含 {len(message.tool_calls)} 个工具调用")
-                    for tc in message.tool_calls:
-                        logger.info(f"    工具: {tc.get('name', 'unknown')}")
-                
-                if hasattr(message, 'content') and message.content:
-                    content_preview = str(message.content)[:100]
-                    logger.info(f"  内容预览: {content_preview}")
-            
-            if tool_calls_count == 0:
-                logger.warning("⚠️ 没有检测到任何工具调用！")
-            else:
-                logger.info(f"✓ 总共执行了 {tool_calls_count} 个工具调用")
-            
-            for message in reversed(messages):
-                if hasattr(message, 'content') and message.content:
-                    output = message.content
-                    break
-                elif isinstance(message, dict) and message.get("role") == "assistant":
-                    output = message.get("content", "")
+            all_messages: list = [HumanMessage(content=user_input)]
+            result_messages: list = []
+
+            for attempt in range(self.MAX_CONTINUATIONS + 1):
+                result = await self.agent.ainvoke(
+                    {"messages": all_messages},
+                    config={"recursion_limit": 150},
+                )
+                result_messages = result.get("messages", [])
+
+                tool_calls_count = self._count_tool_calls(result_messages)
+                logger.info(
+                    f"[attempt {attempt}] Agent 返回 {len(result_messages)} 条消息, "
+                    f"{tool_calls_count} 次工具调用"
+                )
+
+                review = await self.review_agent.review(user_input)
+                logger.info(
+                    f"[attempt {attempt}] ReviewAgent 判定: complete={review.complete}, "
+                    f"reason={review.reason}"
+                )
+
+                if review.complete:
+                    logger.info(f"✓ ReviewAgent 确认任务完成 (attempt {attempt})")
                     break
 
+                if attempt < self.MAX_CONTINUATIONS:
+                    logger.warning(
+                        f"⚠️ ReviewAgent 判定未完成 (attempt {attempt}/{self.MAX_CONTINUATIONS})"
+                    )
+                    if self.stream_manager:
+                        try:
+                            await self.stream_manager.send_json_block(
+                                "continuation",
+                                f"ReviewAgent 检测到论文未完成，自动续写 "
+                                f"({attempt + 1}/{self.MAX_CONTINUATIONS}): {review.reason}"
+                            )
+                        except Exception:
+                            pass
+                    all_messages = result_messages + [
+                        HumanMessage(content=review.continuation_prompt)
+                    ]
+                else:
+                    logger.warning("⚠️ 达到最大续写次数，停止续写")
+
+            output = self._extract_output(result_messages)
             logger.info(f"MainAgent任务完成，结果长度: {len(output)}")
 
-            # 发送完成通知
             if self.stream_manager:
                 try:
                     await self.stream_manager.send_json_block(
@@ -424,7 +450,6 @@ class MainAgent:
             logger.error(f"MainAgent执行失败: {e}", exc_info=True)
             error_msg = f"任务执行失败: {str(e)}"
 
-            # 发送错误通知
             if self.stream_manager:
                 try:
                     await self.stream_manager.send_json_block("main_agent_error", error_msg)

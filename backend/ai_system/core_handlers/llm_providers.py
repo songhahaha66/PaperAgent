@@ -106,7 +106,7 @@ class OpenAIProvider(BaseLLMProvider):
             api_key=self.api_key,
             base_url=self.base_url if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 4000),
+            max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True)
         )
 
@@ -132,7 +132,7 @@ class AnthropicProvider(BaseLLMProvider):
             api_key=self.api_key,
             base_url=self.base_url if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 4000)
+            max_tokens=kwargs.get('max_tokens', 16000)
         )
 
     def validate_config(self) -> bool:
@@ -156,7 +156,7 @@ class GoogleProvider(BaseLLMProvider):
             model=self.model_id,
             google_api_key=self.api_key,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 4000)
+            max_tokens=kwargs.get('max_tokens', 16000)
         )
 
     def validate_config(self) -> bool:
@@ -182,7 +182,7 @@ class LocalProvider(BaseLLMProvider):
             api_key=self.api_key or "fake-key",  # 本地模型可能不需要真实API key
             base_url=self.base_url or "http://localhost:11434/v1",  # 默认Ollama地址
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 4000),
+            max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True)
         )
 
