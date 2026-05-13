@@ -1,0 +1,203 @@
+frontend/src/views/Work.vue
+  5c21cd5f791e03ed 1164,1166-1169 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0473010246dd8b98ab1aa0","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Single":1164},{"Range":[1166,1169]}]}]}
+backend/routers/chat_routes/chat.py
+  5c21cd5f791e03ed 52-58,67,71,74,77,82,85,628-657,671,682 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0473010246dd8b98ab1aa0","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[52,58]},{"Single":67},{"Single":71},{"Single":74},{"Single":77},{"Single":82},{"Single":85},{"Range":[628,657]},{"Single":671},{"Single":682}]}]}
+backend/services/chat_services/task_manager.py
+  5c21cd5f791e03ed 105-108,180-186 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0473010246dd8b98ab1aa0","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[105,108]},{"Range":[180,186]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "8fdf23b9447878ded23a870b94a00e312bed0396",
+  "prompts": {
+    "5c21cd5f791e03ed": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a046da20246dd8b98ab1954",
+        "model": "c_o_new_thinking__dev"
+      },
+      "human_author": "songhahaha66 <songhahaha66@qq.com>",
+      "messages": [],
+      "total_additions": 64,
+      "total_deletions": 51,
+      "accepted_lines": 61,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "backend/routers/chat_routes/chat.py": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Range": [
+              52,
+              58
+            ]
+          },
+          {
+            "Single": 67
+          },
+          {
+            "Single": 71
+          },
+          {
+            "Single": 74
+          },
+          {
+            "Single": 77
+          },
+          {
+            "Single": 82
+          },
+          {
+            "Single": 85
+          },
+          {
+            "Range": [
+              628,
+              657
+            ]
+          },
+          {
+            "Single": 671
+          },
+          {
+            "Single": 682
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0473010246dd8b98ab1aa0",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  52,
+                  58
+                ]
+              },
+              {
+                "Single": 67
+              },
+              {
+                "Single": 71
+              },
+              {
+                "Single": 74
+              },
+              {
+                "Single": 77
+              },
+              {
+                "Single": 82
+              },
+              {
+                "Single": 85
+              },
+              {
+                "Range": [
+                  628,
+                  657
+                ]
+              },
+              {
+                "Single": 671
+              },
+              {
+                "Single": 682
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/services/chat_services/task_manager.py": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Range": [
+              105,
+              108
+            ]
+          },
+          {
+            "Range": [
+              180,
+              186
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0473010246dd8b98ab1aa0",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  105,
+                  108
+                ]
+              },
+              {
+                "Range": [
+                  180,
+                  186
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "frontend/src/views/Work.vue": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Single": 1164
+          },
+          {
+            "Range": [
+              1166,
+              1169
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0473010246dd8b98ab1aa0",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Single": 1164
+              },
+              {
+                "Range": [
+                  1166,
+                  1169
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "5c21cd5f791e03ed": {
+      "tool": "trae",
+      "conversation_id": "6a046da20246dd8b98ab1954",
+      "session_id": "6a046da20246dd8b98ab1954",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
