@@ -8,6 +8,7 @@ import logging
 from typing import Optional, Union, Dict, Any, List
 from pathlib import Path
 from ..core_managers.stream_manager import StreamOutputManager
+from services.file_services.workspace_fs import WorkspaceFS
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +17,14 @@ class FileTools:
     """文件操作工具类"""
 
     def __init__(self, stream_manager: Optional[StreamOutputManager] = None):
-        # 获取工作空间目录
         workspace_dir = os.getenv("WORKSPACE_DIR")
         if not workspace_dir:
-            # 必须设置工作空间目录，不能使用默认路径
             raise ValueError("必须设置WORKSPACE_DIR环境变量，指定具体的工作空间目录（包含work_id）")
 
         self.workspace_dir = workspace_dir
         self.stream_manager = stream_manager
+        self.fs = WorkspaceFS(workspace_dir)
 
-        # 确保工作空间目录存在
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
@@ -537,42 +536,41 @@ class FileTools:
     def tree(self, directory: Optional[str] = None) -> str:
         """显示目录树结构，只允许访问workspace_dir内的目录"""
         try:
-            # 始终使用workspace_dir作为根目录
             base_dir = self.workspace_dir
             
             if directory is not None:
-                # 如果传入了directory，将其解析为相对于workspace_dir的路径
-                # 处理相对路径
                 if not os.path.isabs(directory):
                     target_dir = os.path.join(base_dir, directory)
                 else:
                     target_dir = directory
                 
-                # 解析为绝对路径并规范化
                 target_dir = os.path.realpath(target_dir)
                 base_dir_real = os.path.realpath(base_dir)
                 
-                # 安全检查：确保目标目录在workspace_dir内
                 if not target_dir.startswith(base_dir_real):
-                    return f"安全限制：只能访问workspace目录内的内容，不允许访问: {directory}"
+                    return f"安全限制：只能访问workspace目录内的内容"
                 
                 directory = target_dir
             else:
                 directory = base_dir
 
             if not os.path.exists(directory):
-                return f"目录不存在: {directory}"
+                return f"目录不存在"
+
+            skip_prefixes = (".system", "runs")
 
             def _tree_helper(path: str, prefix: str = "", is_last: bool = True) -> str:
                 result = []
-                items = os.listdir(path)
-                items.sort()
+                items = sorted(os.listdir(path))
 
                 for i, item in enumerate(items):
                     item_path = os.path.join(path, item)
                     is_last_item = i == len(items) - 1
 
                     if os.path.isdir(item_path):
+                        rel = os.path.relpath(item_path, self.workspace_dir)
+                        if any(rel == sp or rel.startswith(sp + os.sep) for sp in skip_prefixes):
+                            continue
                         result.append(
                             f"{prefix}{'└── ' if is_last_item else '├── '}{item}/")
                         new_prefix = prefix + \
@@ -585,8 +583,7 @@ class FileTools:
 
                 return '\n'.join(result)
 
-            tree_result = f"{os.path.basename(directory)}/\n" + \
-                _tree_helper(directory)
+            tree_result = f"workspace/\n" + _tree_helper(directory)
 
             if self.stream_manager:
                 self._send_json_block_sync("tree_result", tree_result)
@@ -601,6 +598,32 @@ class FileTools:
     def get_workspace_dir(self) -> str:
         """获取工作空间目录"""
         return self.workspace_dir
+
+    def promote_artifact(self, run_id: str, artifact_name: str, output_name: Optional[str] = None) -> str:
+        """
+        将运行产物晋升到 outputs/ 目录，使其成为正式产物
+
+        Args:
+            run_id: 运行记录ID（如 run_20260513_143000_a1b2c3）
+            artifact_name: 产物文件名（如 plot_1.png）
+            output_name: 晋升后的文件名，不填则保持原名
+
+        Returns:
+            晋升结果信息
+        """
+        try:
+            dest_rel = self.fs.promote_artifact(run_id, artifact_name, output_name)
+
+            if self.stream_manager:
+                self._send_json_block_sync("file_changed", dest_rel)
+
+            return f"产物已晋升为正式输出: {dest_rel}"
+        except FileNotFoundError as e:
+            return f"晋升失败: {str(e)}"
+        except Exception as e:
+            error_msg = f"晋升产物失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
     def file_exists(self, filename: str) -> bool:
         """检查文件是否存在"""

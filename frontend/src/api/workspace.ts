@@ -48,7 +48,7 @@ export interface FileInfo {
   path: string
   display_path?: string // 显示路径（相对于当前目录）
   depth?: number // 目录深度
-  category?: string // 文件分类：code, logs, outputs, papers, attachments
+  category?: string // 文件分类：code, outputs, papers, attachments
   category_path?: string // 分类内的相对路径
 }
 

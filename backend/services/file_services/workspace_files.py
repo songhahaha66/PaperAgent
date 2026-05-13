@@ -59,40 +59,36 @@ class WorkspaceFileService:
         return result
 
     def list_files_by_category(self, work_id: str) -> Dict[str, List[Dict[str, Any]]]:
-        """按分类列出工作空间中的文件
+        """按分类列出工作空间中的文件（排除 runs/ 和 .system/ 等内部目录）
 
         Args:
             work_id: 工作ID
 
         Returns:
-            包含五个分类的字典：{'code': [...], 'logs': [...], 'outputs': [...], 'papers': [...], 'attachments': [...]}
+            包含分类的字典：{'code': [...], 'outputs': [...], 'papers': [...], 'attachments': [...]}
         """
         try:
             workspace_path = self.ensure_workspace_exists(work_id)
 
-            # 确保三个分类文件夹存在（不包括papers）
             categories = {
                 'code': workspace_path / 'code',
-                'logs': workspace_path / 'logs',
-                'outputs': workspace_path / 'outputs'
+                'outputs': workspace_path / 'outputs',
             }
 
-            # 创建分类文件夹（如果不存在）
             for category_name, category_path in categories.items():
                 if not category_path.exists():
                     category_path.mkdir(parents=True, exist_ok=True)
 
             result = {}
 
-            # 处理三个分类文件夹
             for category_name, category_path in categories.items():
                 files = []
 
                 if category_path.exists():
-                    # 扫描分类文件夹
                     for item in category_path.rglob('*'):
                         if item.is_file():
-                            # 计算相对路径
+                            if item.name.startswith('autosave_'):
+                                continue
                             rel_path = str(item.relative_to(category_path))
                             full_path = str(item.relative_to(workspace_path))
 
@@ -107,8 +103,6 @@ class WorkspaceFileService:
                             }
                             files.append(file_info)
 
-
-                # 按名称排序
                 files.sort(key=lambda x: x["name"].lower())
                 result[category_name] = files
 

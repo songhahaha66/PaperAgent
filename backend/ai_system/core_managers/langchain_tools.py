@@ -91,6 +91,16 @@ class LangChainToolFactory:
                     func=file_tools.list_attachments,
                     name="list_attachments",
                     description="列出工作空间中所有附件文件，包括文件类型、大小等信息"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools.promote_artifact,
+                    name="promote_artifact",
+                    description=(
+                        "将代码执行产生的图表/文件从临时运行记录晋升为正式产物。\n"
+                        "参数：run_id（运行记录ID）、artifact_name（文件名，如 plot_1.png）、"
+                        "output_name（可选，晋升后的文件名）。\n"
+                        "晋升后文件出现在 outputs/ 目录，可被论文引用。"
+                    )
                 )
             ]
 
@@ -564,6 +574,16 @@ class LangChainToolFactory:
                     func=file_tools_instance.list_attachments,
                     name="list_attachments",
                     description="列出工作空间中所有附件文件，包括文件类型、大小等信息"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools_instance.promote_artifact,
+                    name="promote_artifact",
+                    description=(
+                        "将代码执行产生的图表/文件从临时运行记录晋升为正式产物。\n"
+                        "参数：run_id（运行记录ID）、artifact_name（文件名，如 plot_1.png）、"
+                        "output_name（可选，晋升后的文件名）。\n"
+                        "晋升后文件出现在 outputs/ 目录，可被论文引用。"
+                    )
                 )
             ]
 

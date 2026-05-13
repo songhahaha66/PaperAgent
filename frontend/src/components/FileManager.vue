@@ -140,11 +140,6 @@ const processedFileTreeData = computed(() => {
         children: [],
       },
       {
-        value: 'logs',
-        label: '日志文件 (0)',
-        children: [],
-      },
-      {
         value: 'outputs',
         label: '输出文件 (0)',
         children: [],
@@ -181,7 +176,6 @@ const processedFileTreeData = computed(() => {
     // 按照后端的五个分类组织文件
     const categorizedFiles = {
       code: [] as any[],
-      logs: [] as any[],
       outputs: [] as any[],
       papers: [] as any[],
       attachments: [] as any[]
@@ -221,11 +215,6 @@ const processedFileTreeData = computed(() => {
         value: 'code',
         label: `代码文件 (${categorizedFiles.code.length})`,
         children: categorizedFiles.code,
-      },
-      {
-        value: 'logs',
-        label: `日志文件 (${categorizedFiles.logs.length})`,
-        children: categorizedFiles.logs,
       },
       {
         value: 'outputs',
@@ -430,7 +419,7 @@ const checkIfLeaf = (key: string): boolean => {
 
 // 检查是否为分类节点
 const isCategoryNode = (key: string): boolean => {
-  return key === 'code' || key === 'logs' || key === 'outputs' || key === 'papers' || key === 'attachments'
+  return key === 'code' || key === 'outputs' || key === 'papers' || key === 'attachments'
 }
 
 // 处理文件点击
