@@ -40,7 +40,6 @@ def get_app_instance():
     return _app_instance
 
 
-# 简化的WebSocket连接管理器
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
@@ -50,43 +49,41 @@ class ConnectionManager:
         self.active_connections[work_id] = websocket
         logger.info(f"WebSocket连接建立: {work_id}")
 
-    def disconnect(self, work_id: str):
-        if work_id in self.active_connections:
-            del self.active_connections[work_id]
+    def disconnect(self, work_id: str, websocket: WebSocket | None = None):
+        if work_id not in self.active_connections:
+            return
+        if websocket is not None and self.active_connections[work_id] is not websocket:
+            logger.debug(f"[WS] disconnect 跳过: {work_id} 当前连接不是请求断开的连接（已被新连接取代）")
+            return
+        del self.active_connections[work_id]
         logger.info(f"WebSocket连接断开: {work_id}")
 
     async def send_message(self, work_id: str, message: str):
         if work_id in self.active_connections:
             try:
                 websocket = self.active_connections[work_id]
-                # 检查连接状态
                 state = websocket.client_state.value
                 logger.debug(f"[WS] 发送消息到 {work_id}, 连接状态: {state}")
-                if state == 1:  # 1表示连接已建立
+                if state == 1:
                     await websocket.send_text(message)
                 else:
                     logger.warning(f"WebSocket连接状态异常: {work_id}, 状态: {state}")
-                    self.disconnect(work_id)
+                    self.disconnect(work_id, websocket)
             except Exception as e:
                 logger.error(f"发送WebSocket消息失败: {e}")
-                self.disconnect(work_id)
+                self.disconnect(work_id, websocket)
         else:
             logger.warning(f"[WS] 没有找到活跃连接: {work_id}")
-    
+
     def is_connected(self, work_id: str) -> bool:
-        """检查指定work_id的连接是否有效"""
         if work_id not in self.active_connections:
             return False
-        
-        websocket = self.active_connections[work_id]
         try:
-            # 检查连接状态
-            return websocket.client_state.value == 1
+            return self.active_connections[work_id].client_state.value == 1
         except Exception:
             return False
-    
+
     def get_connection_count(self) -> int:
-        """获取当前活跃连接数"""
         return len(self.active_connections)
 
 
@@ -625,12 +622,39 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 pass
                         raise
 
-                # 创建异步任务
                 ai_task = asyncio.create_task(run_ai_task())
                 task_manager.set_async_task(work_id, ai_task)
 
-                # 等待AI任务完成，不设置超时
-                await ai_task
+                async def ws_recv_loop():
+                    while True:
+                        data = await websocket.receive_text()
+                        msg = json.loads(data)
+                        if msg.get('type') == 'ping':
+                            await websocket.send_text(json.dumps({'type': 'pong'}))
+
+                ws_watch = asyncio.create_task(ws_recv_loop())
+
+                done, pending = await asyncio.wait(
+                    [ai_task, ws_watch],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if ws_watch in pending:
+                    ws_watch.cancel()
+                    try:
+                        await ws_watch
+                    except (asyncio.CancelledError, WebSocketDisconnect):
+                        pass
+
+                if ws_watch in done:
+                    exc = ws_watch.exception() if not ws_watch.cancelled() else None
+                    if isinstance(exc, WebSocketDisconnect):
+                        logger.info(f"[WS] 用户在任务执行期间断开: {work_id}，AI任务继续后台运行")
+                    elif exc:
+                        logger.warning(f"[WS] ws_watch 异常退出: {exc}")
+
+                if ai_task in done and ai_task.exception():
+                    raise ai_task.exception()
 
             except Exception as e:
                 logger.error(f"AI任务执行失败: {e}")
@@ -644,11 +668,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket客户端断开连接: {work_id}")
-        manager.disconnect(work_id)
+        manager.disconnect(work_id, websocket)
     except Exception as e:
         logger.error(f"WebSocket处理失败: {e}")
         try:
-            # 检查连接状态再发送错误消息
             if websocket.client_state.value == 1:
                 await websocket.send_text(json.dumps({
                     'type': 'error',
@@ -656,7 +679,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 }))
         except Exception:
             pass
-        manager.disconnect(work_id)
+        manager.disconnect(work_id, websocket)
 
 
 @router.post("/work/{work_id}/generate-title")

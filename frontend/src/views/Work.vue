@@ -1159,38 +1159,20 @@ onMounted(() => {
 
 // 检查并自动发送第一句话
 const checkAndAutoSendFirstMessage = async () => {
-  // 检查是否有待发送的问题，且当前工作标题为空或空格
   const pendingQuestion = localStorage.getItem('pendingQuestion')
   if (pendingQuestion && currentWork.value?.title?.trim() === '') {
+    localStorage.removeItem('pendingQuestion')
     try {
-      // 并行执行：前端模拟发送消息 + 生成标题
-      // 不等待完成，让两个操作独立进行
-      simulateSendFirstMessage(pendingQuestion) // 立即开始，不等待
-
-      // 在后台异步生成标题，不阻塞主流程
-      ;(async () => {
-        try {
-          await generateWorkTitle(pendingQuestion)
-        } catch (error) {
-          console.error('后台生成标题失败:', error)
-        }
-      })()
-
-      // 清除localStorage
-      localStorage.removeItem('pendingQuestion')
+      generateWorkTitle(pendingQuestion).catch((err: Error) =>
+        console.error('后台生成标题失败:', err),
+      )
+      await sendMessage(pendingQuestion)
     } catch (error) {
       console.error('自动发送第一句话失败:', error)
     }
   }
 }
 
-// 真正发送第一句话给AI
-const simulateSendFirstMessage = (content: string) => {
-  // 直接调用 sendMessage，复用统一的消息发送逻辑
-  sendMessage(content)
-}
-
-// 生成工作标题并自动更新到数据库
 const generateWorkTitle = async (question: string) => {
   try {
     // 调用标题生成API，会自动更新数据库

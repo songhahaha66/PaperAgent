@@ -100,9 +100,12 @@ class TaskManager:
         return self._tasks.get(work_id)
     
     def get_running_task(self, work_id: str) -> Optional[AITask]:
-        """获取正在运行的任务"""
         task = self._tasks.get(work_id)
         if task and task.status == TaskStatus.RUNNING:
+            if task.started_at and (time.time() - task.started_at > self._task_timeout):
+                logger.warning(f"任务超时，自动标记失败: {task.task_id}")
+                self.fail_task(work_id, "任务超时")
+                return None
             return task
         return None
     
@@ -171,11 +174,16 @@ class TaskManager:
         return [o for o in task.outputs if o.timestamp > since_timestamp]
     
     def get_task_status(self, work_id: str) -> dict:
-        """获取任务状态信息"""
         task = self._tasks.get(work_id)
         if not task:
             return {"status": "none", "has_task": False}
-        
+
+        if (task.status == TaskStatus.RUNNING
+                and task.started_at
+                and time.time() - task.started_at > self._task_timeout):
+            logger.warning(f"任务超时，自动标记失败: {task.task_id}")
+            self.fail_task(work_id, "任务超时")
+
         return {
             "has_task": True,
             "task_id": task.task_id,
