@@ -1,0 +1,124 @@
+backend/ai_system/core_tools/code_executor.py
+  7e3026d28b5e9b00 148,183,186,189,232,576 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a04360b0246dd8b98ab1548","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Single":148},{"Single":183},{"Single":186},{"Single":189},{"Single":232},{"Single":576}]}]}
+backend/ai_system/core_tools/file_tools.py
+  7e3026d28b5e9b00 164,361,410 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a04360b0246dd8b98ab1548","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Single":164},{"Single":361},{"Single":410}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "a6f67aa8541568721740d2216872239a000a2a8f",
+  "prompts": {
+    "7e3026d28b5e9b00": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a04325d0246dd8b98ab1361",
+        "model": "c_o_new_thinking__dev"
+      },
+      "human_author": "songhahaha66 <songhahaha66@qq.com>",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 14,
+      "accepted_lines": 13,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "backend/ai_system/core_tools/code_executor.py": [
+      {
+        "hash": "7e3026d28b5e9b00",
+        "line_ranges": [
+          {
+            "Single": 148
+          },
+          {
+            "Single": 183
+          },
+          {
+            "Single": 186
+          },
+          {
+            "Single": 189
+          },
+          {
+            "Single": 232
+          },
+          {
+            "Single": 576
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a04360b0246dd8b98ab1548",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Single": 148
+              },
+              {
+                "Single": 183
+              },
+              {
+                "Single": 186
+              },
+              {
+                "Single": 189
+              },
+              {
+                "Single": 232
+              },
+              {
+                "Single": 576
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_tools/file_tools.py": [
+      {
+        "hash": "7e3026d28b5e9b00",
+        "line_ranges": [
+          {
+            "Single": 164
+          },
+          {
+            "Single": 361
+          },
+          {
+            "Single": 410
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a04360b0246dd8b98ab1548",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Single": 164
+              },
+              {
+                "Single": 361
+              },
+              {
+                "Single": 410
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "7e3026d28b5e9b00": {
+      "tool": "trae",
+      "conversation_id": "6a04325d0246dd8b98ab1361",
+      "session_id": "6a04325d0246dd8b98ab1361",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
