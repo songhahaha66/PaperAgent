@@ -1,0 +1,296 @@
+backend/pyproject.toml
+  5c21cd5f791e03ed 44 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0479bc0246dd8b98ab1c06","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Single":44}]}]}
+backend/ai_system/core_tools/docx_tools.py
+  5c21cd5f791e03ed 1-280 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0479bc0246dd8b98ab1c06","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[1,280]}]}]}
+backend/ai_system/core_managers/langchain_tools.py
+  5c21cd5f791e03ed 308,318-322,324-331,334-340,343-349,352-358,361-363 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0479bc0246dd8b98ab1c06","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Single":308},{"Range":[318,322]},{"Range":[324,331]},{"Range":[334,340]},{"Range":[343,349]},{"Range":[352,358]},{"Range":[361,363]}]}]}
+backend/ai_system/docx_skill/scripts/office/validate.py
+  5c21cd5f791e03ed 80-94 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0479bc0246dd8b98ab1c06","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[80,94]}]}]}
+backend/ai_system/core_agents/writer_agent.py
+  5c21cd5f791e03ed 164-219,221-226,231 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0479bc0246dd8b98ab1c06","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[164,219]},{"Range":[221,226]},{"Single":231}]}]}
+backend/Dockerfile
+  5c21cd5f791e03ed 21-26 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a0479bc0246dd8b98ab1c06","tool_type":"agent","tool_id":"SearchReplace","line_ranges":[{"Range":[21,26]}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.4",
+  "base_commit_sha": "601aed77bef69f90b9d0f7276ae4ab4f9f59f03e",
+  "prompts": {
+    "5c21cd5f791e03ed": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a046da20246dd8b98ab1954",
+        "model": "c_o_new_thinking__dev"
+      },
+      "human_author": "songhahaha66 <songhahaha66@qq.com>",
+      "messages": [],
+      "total_additions": 410,
+      "total_deletions": 243,
+      "accepted_lines": 410,
+      "overriden_lines": 0
+    }
+  },
+  "attestation_metadata": {
+    "backend/Dockerfile": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Range": [
+              21,
+              26
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0479bc0246dd8b98ab1c06",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  21,
+                  26
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_agents/writer_agent.py": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Range": [
+              164,
+              219
+            ]
+          },
+          {
+            "Range": [
+              221,
+              226
+            ]
+          },
+          {
+            "Single": 231
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0479bc0246dd8b98ab1c06",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  164,
+                  219
+                ]
+              },
+              {
+                "Range": [
+                  221,
+                  226
+                ]
+              },
+              {
+                "Single": 231
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_managers/langchain_tools.py": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Single": 308
+          },
+          {
+            "Range": [
+              318,
+              322
+            ]
+          },
+          {
+            "Range": [
+              324,
+              331
+            ]
+          },
+          {
+            "Range": [
+              334,
+              340
+            ]
+          },
+          {
+            "Range": [
+              343,
+              349
+            ]
+          },
+          {
+            "Range": [
+              352,
+              358
+            ]
+          },
+          {
+            "Range": [
+              361,
+              363
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0479bc0246dd8b98ab1c06",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Single": 308
+              },
+              {
+                "Range": [
+                  318,
+                  322
+                ]
+              },
+              {
+                "Range": [
+                  324,
+                  331
+                ]
+              },
+              {
+                "Range": [
+                  334,
+                  340
+                ]
+              },
+              {
+                "Range": [
+                  343,
+                  349
+                ]
+              },
+              {
+                "Range": [
+                  352,
+                  358
+                ]
+              },
+              {
+                "Range": [
+                  361,
+                  363
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/core_tools/docx_tools.py": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Range": [
+              1,
+              280
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0479bc0246dd8b98ab1c06",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  1,
+                  280
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/ai_system/docx_skill/scripts/office/validate.py": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Range": [
+              80,
+              94
+            ]
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0479bc0246dd8b98ab1c06",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Range": [
+                  80,
+                  94
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "backend/pyproject.toml": [
+      {
+        "hash": "5c21cd5f791e03ed",
+        "line_ranges": [
+          {
+            "Single": 44
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a0479bc0246dd8b98ab1c06",
+            "tool_type": "agent",
+            "tool_id": "SearchReplace",
+            "line_ranges": [
+              {
+                "Single": 44
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "5c21cd5f791e03ed": {
+      "tool": "trae",
+      "conversation_id": "6a046da20246dd8b98ab1954",
+      "session_id": "6a046da20246dd8b98ab1954",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
