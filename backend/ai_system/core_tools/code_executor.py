@@ -145,7 +145,7 @@ class CodeExecutor:
 
                 # 执行成功时补充提示保存位置
                 if autosave_path:
-                    result = f"{result}\n\n[自动保存] 原始代码已保存到: {autosave_path}"
+                    logger.info(f"[自动保存] 原始代码已保存到: {autosave_path}")
                 return result
                 
             finally:
@@ -180,13 +180,13 @@ class CodeExecutor:
             # 安全检查 - 确保文件在工作空间内
             workspace_abs = os.path.abspath(self.workspace_dir)
             if not full_path.startswith(workspace_abs):
-                return f"错误：文件路径 {file_path} 不在工作空间内\n工作空间: {workspace_abs}\n尝试路径: {full_path}"
+                return f"错误：文件路径 {file_path} 不在工作空间内"
             
             if not os.path.exists(full_path):
-                return f"错误：文件不存在 {full_path}\n请检查文件路径是否正确"
+                return f"错误：文件不存在 {file_path}\n请检查文件路径是否正确"
             
             if not full_path.endswith('.py'):
-                return f"错误：文件 {full_path} 不是Python文件"
+                return f"错误：文件 {file_path} 不是Python文件"
             
             logger.info(f"准备执行文件: {full_path}")
             
@@ -229,7 +229,7 @@ class CodeExecutor:
                 except Exception as e:
                     logger.warning(f"发送工具调用通知失败: {e}")
             
-            return f"代码已成功保存到文件: {safe_filename}\n文件路径: {file_path}\n代码长度: {len(code_content)} 字符"
+            return f"代码已成功保存到文件: code/{safe_filename}\n代码长度: {len(code_content)} 字符"
             
         except Exception as e:
             logger.error(f"保存代码失败: {e}")
@@ -573,7 +573,7 @@ if plot_files:
             # 返回相对路径，这样execute_file就能正确找到文件
             relative_path = os.path.join("code", safe_filename)
 
-            return f"代码文件 {safe_filename} 已成功修改\n文件路径: {file_path}\n相对路径: {relative_path}\n新代码长度: {len(new_code_content)} 字符\n原文件已备份到: {os.path.basename(backup_path)}"
+            return f"代码文件 {safe_filename} 已成功修改\n文件: {relative_path}\n新代码长度: {len(new_code_content)} 字符"
 
         except Exception as e:
             error_msg = f"修改代码文件失败: {str(e)}"

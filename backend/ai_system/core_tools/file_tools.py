@@ -161,7 +161,7 @@ class FileTools:
 
             result = f"成功更新写作计划: plan.md"
             file_size = os.path.getsize(file_path)
-            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+            result += f"\n文件大小: {file_size} 字节"
 
             if self.stream_manager:
                 self._send_json_block_sync("plan_updated", plan_content)
@@ -358,7 +358,7 @@ class FileTools:
 
             # 获取文件信息
             file_size = os.path.getsize(file_path)
-            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+            result += f"\n文件: {filename}\n文件大小: {file_size} 字节"
 
             if self.stream_manager:
                 self._send_json_block_sync("writemd_result", result)
@@ -406,9 +406,8 @@ class FileTools:
                 f.write(updated_content)
             result = f"成功更新论文文件 {template_name} 的章节 '{section}'"
             
-            # 获取文件信息
             file_size = os.path.getsize(file_path)
-            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+            result += f"\n文件大小: {file_size} 字节"
             
             if self.stream_manager:
                 self._send_json_block_sync("template_update_result", result)
