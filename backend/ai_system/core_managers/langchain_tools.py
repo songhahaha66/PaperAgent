@@ -327,7 +327,9 @@ class LangChainToolFactory:
                         "执行一段完整的 Node.js 脚本来创建 .docx 文件。\n"
                         "参数：js_code（完整的 JS 脚本，使用 require('docx') 构建文档，"
                         "用 process.env.OUTPUT_PATH 作为输出路径）、filename（默认 paper.docx）。\n"
-                        "脚本应包含完整的文档定义（styles + sections + children）并调用 Packer.toBuffer 写入文件。"
+                        "脚本应包含完整的文档定义（styles + sections + children）并调用 Packer.toBuffer 写入文件。\n"
+                        "如果工作区存在 outputs/ 下的图片或任务要求插图，必须在 JS 中使用 ImageRun 插入图片，"
+                        "不要只写图片说明文字。"
                     )
                 ),
                 StructuredTool.from_function(

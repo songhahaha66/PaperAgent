@@ -1,10 +1,12 @@
 import logging
 import asyncio
 import os
+import json
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,7 @@ class DocxTools:
                 return "Error: JS 脚本执行成功但未生成文件，请确保脚本写入了 process.env.OUTPUT_PATH"
 
             validate_result = await self._validate(output_path)
+            image_result = self._ensure_workspace_images_in_docx(output_path)
             self._notify_file_changed()
 
             size_kb = output_path.stat().st_size / 1024
@@ -88,6 +91,8 @@ class DocxTools:
                 result += f"\n{stdout.decode().strip()}"
             if validate_result:
                 result += f"\n{validate_result}"
+            if image_result:
+                result += f"\n{image_result}"
             return result
 
         except asyncio.TimeoutError:
@@ -95,6 +100,121 @@ class DocxTools:
         except Exception as e:
             logger.error(f"create_docx 失败: {e}", exc_info=True)
             return f"Error: {e}"
+
+    def _ensure_workspace_images_in_docx(self, docx_path: Path) -> str:
+        """
+        Add user-visible workspace images to the generated Word file when the
+        LLM-created docx forgot to include them.
+
+        This is a conservative fallback: if the docx already contains embedded
+        media, it does nothing. Images are discovered from outputs/ first, then
+        manifest-registered artifacts, then latest run artifacts.
+        """
+        try:
+            if self._docx_has_images(docx_path):
+                return ""
+
+            images = self._find_workspace_images()
+            if not images:
+                return ""
+
+            from docx import Document as PythonDocxDocument
+            from docx.shared import Inches, Pt
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from PIL import Image
+
+            doc = PythonDocxDocument(str(docx_path))
+            doc.add_page_break()
+            heading = doc.add_paragraph()
+            heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            heading_run = heading.add_run("附图")
+            heading_run.bold = True
+            heading_run.font.size = Pt(16)
+
+            for index, image_path in enumerate(images, start=1):
+                caption = doc.add_paragraph()
+                caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                caption.add_run(f"图{index}：{image_path.stem.replace('_', ' ')}").bold = True
+
+                max_width_inches = 6.0
+                width_inches = max_width_inches
+                try:
+                    with Image.open(image_path) as img:
+                        px_width, px_height = img.size
+                    if px_width and px_height:
+                        # Keep the rendered image within a normal document page.
+                        width_inches = min(max_width_inches, max(3.0, px_width / 700))
+                except Exception:
+                    width_inches = max_width_inches
+
+                para = doc.add_paragraph()
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = para.add_run()
+                run.add_picture(str(image_path), width=Inches(width_inches))
+
+            doc.save(str(docx_path))
+            return f"已自动插入 {len(images)} 张工作区图片到 {docx_path.name}"
+
+        except ImportError as e:
+            logger.warning("无法自动插入图片，缺少依赖: %s", e)
+            return "⚠️ 未能自动插入图片：缺少 python-docx 或 Pillow"
+        except Exception as e:
+            logger.warning("自动插入工作区图片失败: %s", e, exc_info=True)
+            return f"⚠️ 自动插入图片失败: {e}"
+
+    def _docx_has_images(self, docx_path: Path) -> bool:
+        try:
+            with zipfile.ZipFile(docx_path) as zf:
+                return any(name.startswith("word/media/") for name in zf.namelist())
+        except Exception:
+            return False
+
+    def _find_workspace_images(self) -> List[Path]:
+        image_exts = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+        candidates: List[Path] = []
+
+        def add(path: Path):
+            try:
+                resolved = path.resolve()
+                if (
+                    resolved.is_file()
+                    and resolved.suffix.lower() in image_exts
+                    and str(resolved).startswith(str(self.workspace_dir))
+                    and resolved not in candidates
+                ):
+                    candidates.append(resolved)
+            except Exception:
+                return
+
+        outputs_dir = self.workspace_dir / "outputs"
+        if outputs_dir.exists():
+            for path in sorted(outputs_dir.rglob("*")):
+                add(path)
+
+        manifest_path = self.workspace_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                files = manifest.get("files", {})
+                for rel_path, meta in files.items():
+                    if isinstance(meta, dict) and meta.get("visibility") == "user":
+                        add(self.workspace_dir / rel_path)
+            except Exception as e:
+                logger.debug("读取 manifest 图片失败: %s", e)
+
+        if not candidates:
+            runs_dir = self.workspace_dir / "runs"
+            if runs_dir.exists():
+                artifact_dirs = sorted(
+                    (p for p in runs_dir.glob("run_*/artifacts") if p.is_dir()),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for artifact_dir in artifact_dirs[:1]:
+                    for path in sorted(artifact_dir.rglob("*")):
+                        add(path)
+
+        return candidates
 
     async def read_docx(self, filename: str = "paper.docx") -> str:
         """
