@@ -107,6 +107,51 @@ export interface ChatMessage {
   timestamp: string
 }
 
+export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'blocked'
+
+export interface PlanPhase {
+  id: string
+  title: string
+  description?: string
+}
+
+export interface PlanItem {
+  id: string
+  order: number
+  title: string
+  status: PlanItemStatus
+  status_label?: string
+  description?: string
+  phase?: string
+  depends_on?: string[]
+  raw_status?: string
+}
+
+export interface PlanStats {
+  total: number
+  completed: number
+  in_progress: number
+  blocked: number
+  pending: number
+  progress_percent: number
+}
+
+export interface PlanData {
+  version: number
+  revision?: number
+  title: string
+  methodology?: string
+  planning_mode?: 'dynamic' | 'static' | string
+  phases?: PlanPhase[]
+  items: PlanItem[]
+  stats: PlanStats
+  current_focus?: PlanItem | null
+  next_actions?: Array<{ id: string; title: string; reason?: string }>
+  source?: string
+  source_markdown?: string
+  updated_at?: string
+}
+
 // 工作管理API
 export const workspaceAPI = {
   // 创建工作

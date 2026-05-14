@@ -418,9 +418,10 @@ class LangChainToolFactory:
                     func=file_tools_instance.update_plan,
                     name="update_plan",
                     description=(
-                        "更新论文写作计划(plan.md)，用户可在前端实时看到计划进度。\n"
+                        "更新论文动态写作计划。工具会同时写入兼容文件 plan.md 和前端固定展示用 plan.json。\n"
                         "Phase 2制定计划后立即调用保存计划，Phase 3每完成一个章节后更新计划状态。\n"
-                        "计划内容使用Markdown表格格式，包含：序号、章节名、状态(✅已完成/⏳进行中/⬜待写)、说明。"
+                        "计划内容使用Markdown表格格式，包含：序号、章节名、状态(✅已完成/⏳进行中/⬜待写/❌阻塞)、说明。\n"
+                        "计划必须随执行进展动态更新当前进行项、完成项、待做项，而不是只创建静态章节列表。"
                     )
                 ),
                 StructuredTool.from_function(

@@ -67,7 +67,7 @@
                 :work-id="workId"
                 :loading="loading"
                 :file-tree-data="workspaceFiles"
-                :plan-content="planContent"
+                :plan-data="planData"
                 @file-select="handleWorkspaceFileSelect"
                 @refresh="handleFileRefresh"
                 @main-paper-click="handleMainPaperClick"
@@ -226,7 +226,7 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 
 import { useAuthStore } from '@/stores/auth';
-import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo } from '@/api/workspace';
+import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import MobileWarning from '@/components/MobileWarning.vue';
@@ -282,7 +282,7 @@ const imageUrls = ref<Record<string, string>>({})
 const mainPaperContent = ref<string>('')
 const showMainPaper = ref(false)
 
-const planContent = ref<string>('')
+const planData = ref<PlanData | null>(null)
 
 // 导出状态
 const exportLoading = ref(false)
@@ -479,7 +479,11 @@ const handleStreamMessage = (data: any, messageId: string) => {
       if (block?.type === 'file_changed') {
         setTimeout(() => loadWorkspaceFiles(), 500)
       } else if (block?.type === 'plan_updated') {
-        planContent.value = String(block.content || '')
+        if (block.content && typeof block.content === 'object') {
+          planData.value = block.content as PlanData
+        } else {
+          planData.value = markdownPlanToData(String(block.content || ''))
+        }
       } else {
         chatMessages.value[messageIndex] = {
           ...currentMessage,
@@ -604,10 +608,79 @@ const handleMainPaperClick = async () => {
 const loadPlanContent = async () => {
   if (!workId.value || !authStore.token) return
   try {
-    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.md')
-    planContent.value = response.content || ''
+    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.json')
+    planData.value = response.content ? JSON.parse(response.content) : null
   } catch {
-    planContent.value = ''
+    try {
+      const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.md')
+      planData.value = markdownPlanToData(response.content || '')
+    } catch {
+      planData.value = null
+    }
+  }
+}
+
+const normalizePlanStatus = (rawStatus: string): PlanItemStatus => {
+  const text = rawStatus.toLowerCase()
+  if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
+  if (text.includes('⏳') || text.includes('进行') || text.includes('progress')) return 'in_progress'
+  if (text.includes('❌') || text.includes('阻塞') || text.includes('blocked') || text.includes('失败')) return 'blocked'
+  return 'pending'
+}
+
+const markdownPlanToData = (content: string): PlanData | null => {
+  if (!content.trim()) return null
+  const title = content.split('\n').find((line) => line.trim().startsWith('#'))?.replace(/^#+/, '').trim() || '写作计划'
+  const rows = content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && !line.includes('---'))
+    .map((line) => line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
+  const items = rows.slice(1).map((row, index) => {
+    const order = Number.parseInt(row[0] || `${index + 1}`, 10) || index + 1
+    const status = normalizePlanStatus(row[2] || '')
+    return {
+      id: `task-${order}`,
+      order,
+      title: row[1] || `任务 ${order}`,
+      status,
+      status_label: row[2]?.replace(/[✅⏳⬜❌]/g, '').trim() || undefined,
+      description: row[3] || '',
+      phase: 'write',
+      depends_on: order > 1 ? [`task-${order - 1}`] : [],
+      raw_status: row[2] || '',
+    }
+  })
+  const stats = {
+    total: items.length,
+    completed: items.filter((item) => item.status === 'completed').length,
+    in_progress: items.filter((item) => item.status === 'in_progress').length,
+    blocked: items.filter((item) => item.status === 'blocked').length,
+    pending: items.filter((item) => item.status === 'pending').length,
+    progress_percent: items.length
+      ? Math.round((items.filter((item) => item.status === 'completed').length / items.length) * 100)
+      : 0,
+  }
+  const current_focus = items.find((item) => item.status === 'in_progress') || items.find((item) => item.status === 'pending') || null
+  return {
+    version: 1,
+    revision: 0,
+    title,
+    methodology: 'spec-driven',
+    planning_mode: 'dynamic',
+    phases: [
+      { id: 'requirements', title: '需求澄清' },
+      { id: 'design', title: '方案设计' },
+      { id: 'tasks', title: '任务拆解' },
+      { id: 'implement', title: '执行生成' },
+      { id: 'verify', title: '验收检查' },
+    ],
+    items,
+    stats,
+    current_focus,
+    next_actions: items.filter((item) => item.status === 'pending' || item.status === 'blocked').slice(0, 3).map((item) => ({ id: item.id, title: item.title })),
+    source: 'frontend_markdown_fallback',
+    source_markdown: content,
   }
 }
 

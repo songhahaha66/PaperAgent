@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import HTTPException, status, UploadFile
 from typing import List, Dict, Any, Optional
 from .file_helper import FileHelper
+from .plan_reconciler import PlanReconciler
 from ..data_services.utils import handle_service_errors
 from config.paths import get_workspaces_path
 
@@ -181,6 +182,16 @@ class WorkspaceFileService:
         """读取工作空间中的文件内容"""
         workspace_path = self.ensure_workspace_exists(work_id)
         target_file = workspace_path / file_path
+
+        if Path(file_path).as_posix() == "plan.json":
+            structured_plan = PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
+            content = json.dumps(structured_plan, ensure_ascii=False, indent=2)
+            return {
+                "type": "text",
+                "content": content,
+                "filename": "plan.json",
+                "size": len(content.encode("utf-8"))
+            }
 
         if not target_file.exists() or not target_file.is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")

@@ -5,10 +5,11 @@
 
 import os
 import logging
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any
 from pathlib import Path
 from ..core_managers.stream_manager import StreamOutputManager
 from services.file_services.workspace_fs import WorkspaceFS
+from services.file_services.plan_reconciler import PlanReconciler
 
 logger = logging.getLogger(__name__)
 
@@ -157,14 +158,18 @@ class FileTools:
             file_path = os.path.join(self.workspace_dir, "plan.md")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(plan_content)
+            reconciler = PlanReconciler(Path(self.workspace_dir))
+            structured_plan = reconciler.build_from_markdown(plan_content)
+            reconciler.write_plan_json(structured_plan)
 
-            result = f"成功更新写作计划: plan.md"
+            result = f"成功更新写作计划: plan.md / plan.json"
             file_size = os.path.getsize(file_path)
             result += f"\n文件大小: {file_size} 字节"
 
             if self.stream_manager:
-                self._send_json_block_sync("plan_updated", plan_content)
+                self._send_json_block_sync("plan_updated", structured_plan)
                 self._send_json_block_sync("file_changed", "plan.md")
+                self._send_json_block_sync("file_changed", "plan.json")
 
             return result
 
