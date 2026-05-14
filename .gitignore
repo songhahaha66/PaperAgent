@@ -3,3 +3,4 @@ frontend/.env
 .claude
 .DS_Store
 .kiro
+.codex
