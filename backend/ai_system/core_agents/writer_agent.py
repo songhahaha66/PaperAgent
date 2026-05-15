@@ -174,8 +174,9 @@ class WriterAgent:
                     "1. **read_docx** — 读取文档纯文本内容\n"
                     "2. **get_template_structure** — 获取模板段落索引和结构（用于定位）\n"
                     "3. **write_to_template** — 在模板指定位置插入/替换内容（核心工具）\n"
-                    "4. **create_docx** — 仅用于创建paper.docx以外的附件文档\n"
-                    "5. **edit_docx / repack_docx** — 低级 XML 编辑（极少使用）\n\n"
+                    "4. **repair_template_structure** — 当标题骨架被写坏时，按模板恢复标题文本/样式\n"
+                    "5. **create_docx** — 仅用于创建paper.docx以外的附件文档\n"
+                    "6. **edit_docx / repack_docx** — 低级 XML 编辑（极少使用）\n\n"
 
                     "**⚠️ 核心工作流程（模板模式）**\n"
                     "1. 调用 `get_template_structure()` 了解模板的段落编号、标题层级和占位内容\n"
@@ -202,6 +203,10 @@ class WriterAgent:
                     "- 格式继承：模板中的字体、字号、行距由模板样式自动继承\n"
                     "- 代码块：用 ``` 包裹，自动使用 Courier New 10pt 等宽字体\n"
                     "- 如果 anchor 找不到，工具会返回可用段落列表，据此调整 anchor\n\n"
+
+                    "**模板结构修复规则**：\n"
+                    "- 如果审查提示“标题层级/顺序/文本与模板不一致”或标题里残留 Markdown 标记，先调用 `repair_template_structure()`\n"
+                    "- 不要手工替换标题段落；标题必须由模板骨架决定，正文只能插入到标题或占位说明前后\n\n"
 
                     "**内容创作要求**：\n"
                     "- 每次只填充当前指令要求的章节内容\n"

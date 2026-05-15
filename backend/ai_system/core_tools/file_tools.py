@@ -31,7 +31,7 @@ class FileTools:
 
     def get_paper_status(self, filename: str = "paper") -> str:
         """
-        分析paper.md的章节结构和写作进度，返回结构化的状态概览。
+        分析论文文件的章节结构和写作进度，返回结构化的状态概览。
         MainAgent在委派写作任务前必须调用此工具了解当前论文状态。
 
         Args:
@@ -41,6 +41,20 @@ class FileTools:
             论文结构和进度概览
         """
         try:
+            requested = filename
+            if not filename.endswith((".md", ".docx")):
+                if os.path.exists(os.path.join(self.workspace_dir, filename + ".md")):
+                    filename = filename + ".md"
+                elif os.path.exists(os.path.join(self.workspace_dir, filename + ".docx")):
+                    filename = filename + ".docx"
+                elif os.path.exists(os.path.join(self.workspace_dir, "paper.docx")):
+                    filename = "paper.docx"
+                else:
+                    filename = filename + ".md"
+
+            if filename.endswith(".docx"):
+                return self._get_word_paper_status(filename)
+
             if not filename.endswith('.md'):
                 filename = filename + '.md'
 
@@ -127,6 +141,59 @@ class FileTools:
             error_msg = f"获取论文状态失败: {str(e)}"
             logger.error(error_msg)
             return error_msg
+
+    def _get_word_paper_status(self, filename: str = "paper.docx") -> str:
+        file_path = Path(self.workspace_dir) / filename
+        if not file_path.exists():
+            return f"文件 {filename} 不存在，尚未开始写作。"
+
+        plan_path = Path(self.workspace_dir) / "plan.md"
+        if plan_path.exists():
+            plan_content = plan_path.read_text(encoding="utf-8", errors="ignore")
+        else:
+            plan_content = "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+
+        structured_plan = PlanReconciler(Path(self.workspace_dir)).build_from_markdown(
+            plan_content,
+            source="status_check",
+        )
+        stats = structured_plan.get("stats", {})
+        evidence = structured_plan.get("evidence", {})
+        current_focus = structured_plan.get("current_focus")
+
+        result = f"=== {filename} 写作状态 ===\n"
+        result += f"文件大小: {file_path.stat().st_size} 字节\n"
+        result += f"文档字符数: {evidence.get('document_char_count', 0)}\n"
+        result += f"图片数量: {evidence.get('docx_image_count', 0)}\n"
+        result += (
+            f"计划进度: {stats.get('completed', 0)}/{stats.get('total', 0)} 已完成, "
+            f"{stats.get('in_progress', 0)} 进行中, "
+            f"{stats.get('pending', 0)} 待写, "
+            f"{stats.get('blocked', 0)} 阻塞 "
+            f"({stats.get('progress_percent', 0)}%)\n"
+        )
+        if current_focus:
+            result += f"当前阶段: {current_focus.get('title')} ({current_focus.get('status_label')})\n"
+
+        issues = evidence.get("docx_template_issues") or []
+        if issues:
+            result += "\nWord模板结构验收问题:\n"
+            result += "\n".join(f"- {issue}" for issue in issues[:5])
+            result += "\n"
+
+        incomplete = [
+            item for item in structured_plan.get("items", [])
+            if item.get("status") != "completed"
+        ]
+        if incomplete:
+            result += "\n未完成/阻塞任务:\n"
+            for item in incomplete[:10]:
+                result += (
+                    f"- {item.get('status_label')}: {item.get('title')} "
+                    f"- {item.get('description', '')[:120]}\n"
+                )
+
+        return result
 
     def update_plan(self, plan_content: str) -> str:
         """

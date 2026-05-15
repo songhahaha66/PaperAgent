@@ -372,6 +372,16 @@ class LangChainToolFactory:
                     )
                 ),
                 StructuredTool.from_function(
+                    coroutine=docx.repair_template_structure,
+                    name="repair_template_structure",
+                    description=(
+                        "按上传的 Word 模板恢复 paper.docx 的标题骨架。\n"
+                        "参数：filename（默认 paper.docx）。\n"
+                        "仅修正与模板同序号的标题段落文本/样式，不删除正文、不重排段落、不覆盖内容。\n"
+                        "当 ReviewAgent 或计划验收提示“标题层级/顺序/文本与模板不一致”时优先调用。"
+                    )
+                ),
+                StructuredTool.from_function(
                     coroutine=docx.get_template_structure,
                     name="get_template_structure",
                     description=(

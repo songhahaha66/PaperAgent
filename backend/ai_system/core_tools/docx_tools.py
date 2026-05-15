@@ -444,17 +444,34 @@ class DocxTools:
 
             doc = PythonDocxDocument(str(file_path))
 
+            def _style_name(para) -> str:
+                return (para.style.name if para.style else "").strip().lower()
+
+            def _is_toc_para(para) -> bool:
+                style_name = _style_name(para)
+                return style_name.startswith("toc") or "目录" in style_name
+
+            def _matches(para, *, exact: bool) -> bool:
+                text = para.text.strip()
+                target = anchor_text.strip()
+                if not text or _is_toc_para(para):
+                    return False
+                return text == target if exact else target in text
+
             anchor_idx = None
-            for i, para in enumerate(doc.paragraphs):
-                if anchor_text in para.text:
-                    anchor_idx = i
+            for exact in (True, False):
+                for i, para in enumerate(doc.paragraphs):
+                    if _matches(para, exact=exact):
+                        anchor_idx = i
+                        break
+                if anchor_idx is not None:
                     break
 
             if anchor_idx is None:
                 available = [
                     f"[{i}] {p.text[:60]}"
                     for i, p in enumerate(doc.paragraphs)
-                    if p.text.strip()
+                    if p.text.strip() and not _is_toc_para(p)
                 ][:30]
                 return (
                     f"Error: 未找到包含 \"{anchor_text}\" 的段落。\n"
@@ -476,6 +493,12 @@ class DocxTools:
                 return "Error: content 为空"
 
             anchor_para = doc.paragraphs[anchor_idx]
+            anchor_style = _style_name(anchor_para)
+            if position == "replace" and anchor_style.startswith("heading"):
+                return (
+                    "Error: 禁止替换模板标题段落。"
+                    "请保留标题骨架，并使用 position='after' 在标题或占位说明后填充内容。"
+                )
 
             if position == "replace":
                 anchor_para.clear()
@@ -547,6 +570,69 @@ class DocxTools:
             return "Error: 缺少 python-docx 依赖，无法编辑模板"
         except Exception as e:
             logger.error(f"write_to_template 失败: {e}", exc_info=True)
+            return f"Error: {e}"
+
+    async def repair_template_structure(self, filename: str = "paper.docx") -> str:
+        """
+        按上传模板恢复 Word 文档的标题骨架。
+
+        这是一个受控修复工具，只修正与模板同序号的标题段落文本，
+        不删除正文、不重排段落、不修改表格和图片。
+        """
+        file_path = self.workspace_dir / filename
+        template_path = self.workspace_dir / ".system" / "_template_original.docx"
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+        if not template_path.exists():
+            return "Error: 当前工作空间没有模板文件，无法执行模板结构修复"
+
+        try:
+            from docx import Document as PythonDocxDocument
+
+            doc = PythonDocxDocument(str(file_path))
+            template = PythonDocxDocument(str(template_path))
+
+            def heading_paragraphs(document):
+                return [
+                    para for para in document.paragraphs
+                    if para.text.strip()
+                    and para.style
+                    and para.style.name.lower().startswith("heading")
+                ]
+
+            current_headings = heading_paragraphs(doc)
+            template_headings = heading_paragraphs(template)
+            if not template_headings:
+                return "Error: 模板中未检测到标题段落"
+            if len(current_headings) != len(template_headings):
+                return (
+                    "Error: 当前文档标题数量与模板不一致，无法安全自动修复。"
+                    f"模板 {len(template_headings)} 个，当前 {len(current_headings)} 个。"
+                )
+
+            changed = []
+            for index, (current, expected) in enumerate(zip(current_headings, template_headings), start=1):
+                expected_text = expected.text.strip()
+                current_text = current.text.strip()
+                current_style = current.style.name if current.style else ""
+                expected_style = expected.style.name if expected.style else ""
+                if current_style != expected_style or current_text != expected_text:
+                    current.clear()
+                    current.style = expected.style
+                    current.add_run(expected_text)
+                    changed.append(f"{index}: {current_text} -> {expected_text}")
+
+            if not changed:
+                return "✅ 标题骨架已与模板一致，无需修复"
+
+            doc.save(str(file_path))
+            self._notify_file_changed()
+            return "✅ 已按模板恢复标题骨架:\n" + "\n".join(changed[:20])
+
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖，无法修复模板结构"
+        except Exception as e:
+            logger.error(f"repair_template_structure 失败: {e}", exc_info=True)
             return f"Error: {e}"
 
     async def get_template_structure(self, filename: str = "paper.docx") -> str:

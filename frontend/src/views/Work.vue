@@ -622,9 +622,10 @@ const loadPlanContent = async () => {
 
 const normalizePlanStatus = (rawStatus: string): PlanItemStatus => {
   const text = rawStatus.toLowerCase()
-  if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
-  if (text.includes('⏳') || text.includes('进行') || text.includes('progress')) return 'in_progress'
   if (text.includes('❌') || text.includes('阻塞') || text.includes('blocked') || text.includes('失败')) return 'blocked'
+  if (text.includes('⬜') || text.includes('待写') || text.includes('pending') || text.includes('todo')) return 'pending'
+  if (text.includes('⏳') || text.includes('进行') || text.includes('progress')) return 'in_progress'
+  if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
   return 'pending'
 }
 
@@ -661,7 +662,7 @@ const markdownPlanToData = (content: string): PlanData | null => {
       ? Math.round((items.filter((item) => item.status === 'completed').length / items.length) * 100)
       : 0,
   }
-  const current_focus = items.find((item) => item.status === 'in_progress') || items.find((item) => item.status === 'pending') || null
+  const current_focus = items.find((item) => item.status === 'in_progress') || items.find((item) => item.status === 'pending') || items.find((item) => item.status === 'blocked') || null
   return {
     version: 1,
     revision: 0,

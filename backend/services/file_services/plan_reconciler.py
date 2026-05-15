@@ -38,6 +38,7 @@ class PlanEvidence:
     document_char_count: int
     document_has_headings: bool
     docx_image_count: int
+    docx_template_issues: List[str]
     output_images: List[str]
     generated_files: List[str]
 
@@ -55,6 +56,7 @@ class PlanEvidence:
             "document_char_count": self.document_char_count,
             "document_has_headings": self.document_has_headings,
             "docx_image_count": self.docx_image_count,
+            "docx_template_issues": self.docx_template_issues,
             "output_images": self.output_images,
             "generated_files": self.generated_files[:30],
         }
@@ -81,6 +83,7 @@ class PlanReconciler:
             revision=previous_revision if previous_plan else 1,
         )
         if previous_plan and self._stable_plan(previous_plan) == self._stable_plan(structured_plan):
+            self._sync_metadata(previous_plan)
             return previous_plan
 
         structured_plan["revision"] = previous_revision + 1 if previous_plan else 1
@@ -107,6 +110,7 @@ class PlanReconciler:
     def write_plan_json(self, structured_plan: Dict[str, Any]) -> None:
         plan_json_path = self.workspace_path / "plan.json"
         plan_json_path.write_text(json.dumps(structured_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._sync_metadata(structured_plan)
 
     def write_plan_markdown(self, structured_plan: Dict[str, Any]) -> None:
         lines = [f"# {structured_plan.get('title') or '写作计划'}", ""]
@@ -282,18 +286,50 @@ class PlanReconciler:
         reconciled = []
         for item in items:
             new_item = dict(item)
-            evidence_status = self._infer_item_status(item, evidence)
+            evidence_status = None if evidence.docx_template_issues else self._infer_item_status(item, evidence)
             if evidence_status:
                 new_item["status"] = evidence_status
                 new_item["status_label"] = self._plan_status_label(evidence_status)
                 new_item["status_source"] = "workspace_evidence"
             reconciled.append(new_item)
 
-        if evidence.has_document and evidence.document_char_count > 1500:
+        if evidence.has_document and evidence.document_char_count > 1500 and not evidence.docx_template_issues:
             for item in reconciled:
                 if item["status"] == "in_progress" and self._infer_item_status(item, evidence) == "completed":
                     item["status"] = "completed"
                     item["status_label"] = self._plan_status_label("completed")
+
+        if evidence.docx_template_issues:
+            verification_item = next((
+                item for item in reconciled
+                if self._has_any(item.get("title", ""), ["最终", "检查", "验收", "完善", "verify"])
+            ), None)
+            if verification_item:
+                verification_item["status"] = "blocked"
+                verification_item["status_label"] = self._plan_status_label("blocked")
+                verification_item["status_source"] = "template_validation"
+                verification_item["raw_status"] = "template_validation_failed"
+                verification_item["phase"] = "verify"
+                base_description = (verification_item.get("description") or "").split("；Word模板结构验收失败：", 1)[0]
+                verification_item["description"] = (
+                    base_description.rstrip()
+                    + "；Word模板结构验收失败："
+                    + "；".join(evidence.docx_template_issues[:3])
+                ).strip("；")
+            else:
+                order = max((int(item.get("order", 0)) for item in reconciled), default=0) + 1
+                reconciled.append({
+                    "id": f"task-{order}",
+                    "order": order,
+                    "title": "Word模板结构验收",
+                    "status": "blocked",
+                    "status_label": self._plan_status_label("blocked"),
+                    "description": "；".join(evidence.docx_template_issues[:3]),
+                    "phase": "verify",
+                    "depends_on": [f"task-{order - 1}"] if order > 1 else [],
+                    "raw_status": "template_validation_failed",
+                    "status_source": "template_validation",
+                })
 
         return sorted(reconciled, key=lambda item: item["order"])
 
@@ -351,6 +387,8 @@ class PlanReconciler:
         current_focus = next((item for item in items if item["status"] == "in_progress"), None)
         if current_focus is None:
             current_focus = next((item for item in items if item["status"] == "pending"), None)
+        if current_focus is None:
+            current_focus = next((item for item in items if item["status"] == "blocked"), None)
         next_actions = [
             {
                 "id": item["id"],
@@ -433,10 +471,65 @@ class PlanReconciler:
         stable.pop("updated_at", None)
         return stable
 
+    def _sync_metadata(self, structured_plan: Dict[str, Any]) -> None:
+        metadata_path = self.workspace_path / "metadata.json"
+        if not metadata_path.exists():
+            return
+
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            metadata = {}
+
+        stats = structured_plan.get("stats", {})
+        progress = int(stats.get("progress_percent") or 0)
+        has_started = any(
+            int(stats.get(key) or 0) > 0
+            for key in ("completed", "in_progress", "blocked")
+        )
+        is_complete = (
+            progress == 100
+            and int(stats.get("blocked") or 0) == 0
+            and int(stats.get("pending") or 0) == 0
+            and int(stats.get("in_progress") or 0) == 0
+        )
+        has_blocker = int(stats.get("blocked") or 0) > 0
+        evidence = structured_plan.get("evidence", {})
+        has_document = int(evidence.get("document_char_count") or 0) > 200
+
+        metadata["progress"] = progress
+        if is_complete and has_document:
+            metadata["status"] = "completed"
+            metadata["review_status"] = "passed"
+            metadata.pop("review_reason", None)
+        elif has_started:
+            metadata["status"] = "running"
+            metadata["review_status"] = "blocked" if has_blocker or is_complete else "in_progress"
+            if has_blocker:
+                blocker = next((
+                    item for item in structured_plan.get("items", [])
+                    if item.get("status") == "blocked"
+                ), None)
+                metadata["review_reason"] = (
+                    blocker.get("description") if blocker else "计划存在阻塞项"
+                )
+            elif is_complete and not has_document:
+                metadata["review_reason"] = "计划已完成但论文产物不存在或内容不足"
+            else:
+                metadata.pop("review_reason", None)
+        else:
+            metadata["status"] = metadata.get("status") or "created"
+            metadata["review_status"] = "pending"
+            metadata.pop("review_reason", None)
+
+        metadata["updated_at"] = structured_plan.get("updated_at") or datetime.now().isoformat()
+        metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def _collect_evidence(self) -> PlanEvidence:
         document_text_parts: List[str] = []
         document_paths: List[str] = []
         docx_image_count = 0
+        docx_template_issues: List[str] = []
 
         paper_md = self.workspace_path / "paper.md"
         if paper_md.exists():
@@ -450,6 +543,7 @@ class PlanReconciler:
             document_text_parts.append(text)
             document_paths.append("paper.docx")
             docx_image_count += image_count
+            docx_template_issues.extend(self._validate_docx_template(paper_docx))
 
         document_text = "\n".join(part for part in document_text_parts if part)
         output_image_roots = ["outputs", "artifacts", "runs"]
@@ -475,9 +569,74 @@ class PlanReconciler:
             document_char_count=len(document_text.strip()),
             document_has_headings=has_markdown_heading or has_numbered_heading,
             docx_image_count=docx_image_count,
+            docx_template_issues=docx_template_issues,
             output_images=sorted(output_images),
             generated_files=sorted(generated_files),
         )
+
+    def _validate_docx_template(self, paper_docx: Path) -> List[str]:
+        template_docx = self.workspace_path / ".system" / "_template_original.docx"
+        if not template_docx.exists():
+            return []
+        try:
+            paper_outline = self._docx_outline(paper_docx)
+            template_outline = self._docx_outline(template_docx)
+        except Exception as exc:
+            return [f"无法解析Word结构: {exc}"]
+
+        issues: List[str] = []
+        if paper_outline["table_count"] != template_outline["table_count"]:
+            issues.append(
+                f"表格数量不一致（模板{template_outline['table_count']}，当前{paper_outline['table_count']}）"
+            )
+        if paper_outline["headings"] != template_outline["headings"]:
+            issues.append("标题层级/顺序/文本与模板不一致")
+            for idx, (expected, actual) in enumerate(zip(template_outline["headings"], paper_outline["headings"]), 1):
+                if expected != actual:
+                    issues.append(f"第{idx}个标题应为{expected[1]}，当前为{actual[1]}")
+                    break
+            if len(paper_outline["headings"]) != len(template_outline["headings"]):
+                issues.append(
+                    f"标题数量不一致（模板{len(template_outline['headings'])}，当前{len(paper_outline['headings'])}）"
+                )
+        markdown_heading_leaks = [
+            text for _, text in paper_outline["headings"]
+            if re.search(r"(^[*#`]+|[*#`]+$)", text)
+        ]
+        if markdown_heading_leaks:
+            issues.append(f"标题中残留Markdown标记: {markdown_heading_leaks[:3]}")
+        return issues
+
+    def _docx_outline(self, docx_path: Path) -> Dict[str, Any]:
+        import xml.etree.ElementTree as ET
+
+        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        with zipfile.ZipFile(docx_path) as archive:
+            document_root = ET.fromstring(archive.read("word/document.xml"))
+            style_names: Dict[str, str] = {}
+            if "word/styles.xml" in archive.namelist():
+                styles_root = ET.fromstring(archive.read("word/styles.xml"))
+                for style in styles_root.findall(".//w:style", ns):
+                    style_id = style.attrib.get(f"{{{ns['w']}}}styleId", "")
+                    name_el = style.find("w:name", ns)
+                    style_names[style_id] = (
+                        name_el.attrib.get(f"{{{ns['w']}}}val", style_id)
+                        if name_el is not None else style_id
+                    )
+
+        headings = []
+        for para in document_root.findall(".//w:p", ns):
+            text = "".join(t.text or "" for t in para.findall(".//w:t", ns)).strip()
+            style_el = para.find("./w:pPr/w:pStyle", ns)
+            style_id = style_el.attrib.get(f"{{{ns['w']}}}val", "") if style_el is not None else ""
+            style_name = style_names.get(style_id, style_id)
+            if style_name.lower().startswith("heading") and text:
+                headings.append((style_name.lower(), text))
+
+        return {
+            "headings": headings,
+            "table_count": len(document_root.findall(".//w:tbl", ns)),
+        }
 
     def _read_docx(self, docx_path: Path) -> tuple[str, int]:
         try:
@@ -504,12 +663,14 @@ class PlanReconciler:
 
     def _normalize_plan_status(self, raw_status: str) -> str:
         text = (raw_status or "").strip().lower()
-        if any(token in text for token in ["✅", "完成", "done", "completed", "complete"]):
-            return "completed"
-        if any(token in text for token in ["⏳", "进行", "progress", "doing", "current"]):
-            return "in_progress"
         if any(token in text for token in ["❌", "失败", "blocked", "阻塞", "error", "failed"]):
             return "blocked"
+        if any(token in text for token in ["⬜", "待写", "pending", "todo"]):
+            return "pending"
+        if any(token in text for token in ["⏳", "进行", "progress", "doing", "current"]):
+            return "in_progress"
+        if any(token in text for token in ["✅", "完成", "done", "completed", "complete"]):
+            return "completed"
         return "pending"
 
     def _plan_status_label(self, status: str) -> str:
