@@ -359,6 +359,27 @@ class LangChainToolFactory:
                         "必须先调用 edit_docx 解包后才能使用。"
                     )
                 ),
+                StructuredTool.from_function(
+                    coroutine=docx.write_to_template,
+                    name="write_to_template",
+                    description=(
+                        "在模板文档的指定位置插入或替换内容，保留模板所有格式和样式。\n"
+                        "参数：anchor_text（定位文本，部分匹配段落即可）、"
+                        "content（要插入的内容，多段用\\n\\n分隔，代码用```包裹）、"
+                        "position（'after'在锚点后/'before'在锚点前/'replace'替换锚点）、"
+                        "style（可选样式名）、filename（默认 paper.docx）。\n"
+                        "模板模式下的核心工具，用于在已有模板基础上填充内容。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.get_template_structure,
+                    name="get_template_structure",
+                    description=(
+                        "获取文档的详细段落结构，包括段落索引、样式名和内容预览。\n"
+                        "参数：filename（默认 paper.docx）。\n"
+                        "用于在调用 write_to_template 前了解文档结构和定位 anchor_text。"
+                    )
+                ),
             ]
 
             logger.info(f"创建了 {len(tools)} 个 Word 工具 (docx-js)")

@@ -36,12 +36,17 @@ class DocxTools:
         except Exception as e:
             logger.warning(f"Failed to send file_changed notification: {e}")
 
+    def _has_template(self) -> bool:
+        return (self.workspace_dir / ".system" / "_template_original.docx").exists()
+
     async def create_docx(self, js_code: str, filename: str = "paper.docx") -> str:
         """
         用 docx-js 的 JavaScript 代码创建 .docx 文件。
 
         AI 应生成完整的 JS 脚本，使用 require('docx') 和 require('fs')
         来构建文档并写入文件。脚本会在工作空间目录下执行。
+
+        ⚠️ 当存在模板时，不允许覆盖 paper.docx，请使用 write_to_template 工具。
 
         Args:
             js_code: 完整的 Node.js 脚本，使用 docx-js 创建文档。
@@ -51,6 +56,12 @@ class DocxTools:
         Returns:
             执行结果，成功时包含文件路径，失败时包含错误信息
         """
+        if filename == "paper.docx" and self._has_template():
+            return (
+                "Error: 当前工作空间存在模板文件，禁止用 create_docx 覆盖 paper.docx。\n"
+                "请使用 write_to_template 工具在模板基础上填充内容。\n"
+                "如果需要创建其他文件，请指定不同的 filename 参数。"
+            )
         output_path = self.workspace_dir / filename
         js_file = self.workspace_dir / ".system" / "_docx_gen.js"
         js_file.parent.mkdir(parents=True, exist_ok=True)
@@ -398,3 +409,186 @@ class DocxTools:
             return ""
         except Exception:
             return ""
+
+    async def write_to_template(self, anchor_text: str, content: str,
+                                position: str = "after",
+                                style: str = "",
+                                filename: str = "paper.docx") -> str:
+        """
+        在模板文档中定位 anchor_text 所在段落，然后插入内容。
+        保留模板的所有原有格式和样式。
+
+        Args:
+            anchor_text: 用于定位的文本（匹配包含该文本的段落）
+            content: 要插入的内容。多段落用 \\n\\n 分隔。
+                     如果以 ``` 开头则视为代码块，自动应用等宽字体。
+            position: "after"=在锚点段后插入, "before"=在锚点段前插入,
+                      "replace"=替换锚点段落内容
+            style: 可选，段落样式名（如 "Normal", "List Paragraph"）。
+                   留空则继承模板默认样式。
+            filename: 目标文件名（默认 paper.docx）
+
+        Returns:
+            操作结果
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        try:
+            from docx import Document as PythonDocxDocument
+            from docx.shared import Pt, Cm
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+            import copy
+
+            doc = PythonDocxDocument(str(file_path))
+
+            anchor_idx = None
+            for i, para in enumerate(doc.paragraphs):
+                if anchor_text in para.text:
+                    anchor_idx = i
+                    break
+
+            if anchor_idx is None:
+                available = [
+                    f"[{i}] {p.text[:60]}"
+                    for i, p in enumerate(doc.paragraphs)
+                    if p.text.strip()
+                ][:30]
+                return (
+                    f"Error: 未找到包含 \"{anchor_text}\" 的段落。\n"
+                    f"可用段落（前30个非空）:\n" + "\n".join(available)
+                )
+
+            is_code = content.startswith("```")
+            if is_code:
+                lines = content.strip().split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                paragraphs_text = ["\n".join(lines)]
+            else:
+                paragraphs_text = [p.strip() for p in content.split("\n\n") if p.strip()]
+
+            if not paragraphs_text:
+                return "Error: content 为空"
+
+            anchor_para = doc.paragraphs[anchor_idx]
+
+            if position == "replace":
+                anchor_para.clear()
+                run = anchor_para.add_run(paragraphs_text[0])
+                if is_code:
+                    run.font.name = "Courier New"
+                    run.font.size = Pt(10)
+                for extra_text in paragraphs_text[1:]:
+                    new_para = OxmlElement("w:p")
+                    anchor_para._element.addnext(new_para)
+                    from docx.text.paragraph import Paragraph
+                    p = Paragraph(new_para, anchor_para._element.getparent())
+                    r = p.add_run(extra_text)
+                    if is_code:
+                        r.font.name = "Courier New"
+                        r.font.size = Pt(10)
+                result_msg = f"✅ 已替换段落 [{anchor_idx}] 的内容"
+            else:
+                insert_after_element = anchor_para._element
+                if position == "before":
+                    prev = anchor_para._element.getprevious()
+                    if prev is not None:
+                        insert_after_element = prev
+                    else:
+                        parent = anchor_para._element.getparent()
+                        new_para = OxmlElement("w:p")
+                        parent.insert(0, new_para)
+                        from docx.text.paragraph import Paragraph
+                        p = Paragraph(new_para, parent)
+                        r = p.add_run(paragraphs_text[0])
+                        if is_code:
+                            r.font.name = "Courier New"
+                            r.font.size = Pt(10)
+                        if style:
+                            try:
+                                p.style = doc.styles[style]
+                            except KeyError:
+                                pass
+                        insert_after_element = new_para
+                        paragraphs_text = paragraphs_text[1:]
+
+                for text in paragraphs_text:
+                    new_para = OxmlElement("w:p")
+                    insert_after_element.addnext(new_para)
+                    from docx.text.paragraph import Paragraph
+                    p = Paragraph(new_para, insert_after_element.getparent())
+                    if style:
+                        try:
+                            p.style = doc.styles[style]
+                        except KeyError:
+                            pass
+                    if is_code:
+                        r = p.add_run(text)
+                        r.font.name = "Courier New"
+                        r.font.size = Pt(10)
+                    else:
+                        r = p.add_run(text)
+                    insert_after_element = new_para
+
+                pos_word = "后" if position == "after" else "前"
+                result_msg = f"✅ 已在段落 [{anchor_idx}] \"{anchor_text[:30]}\" {pos_word}插入 {len(paragraphs_text)} 段内容"
+
+            doc.save(str(file_path))
+            self._notify_file_changed()
+            size_kb = file_path.stat().st_size / 1024
+            return f"{result_msg}\n文件大小: {size_kb:.1f} KB"
+
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖，无法编辑模板"
+        except Exception as e:
+            logger.error(f"write_to_template 失败: {e}", exc_info=True)
+            return f"Error: {e}"
+
+    async def get_template_structure(self, filename: str = "paper.docx") -> str:
+        """
+        获取模板文档的详细结构，包括段落索引、样式和内容预览。
+        用于帮助定位 write_to_template 的 anchor_text。
+
+        Args:
+            filename: 目标文件名（默认 paper.docx）
+
+        Returns:
+            文档结构描述
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        try:
+            from docx import Document as PythonDocxDocument
+            doc = PythonDocxDocument(str(file_path))
+
+            lines = [f"文档共 {len(doc.paragraphs)} 段, {len(doc.tables)} 个表格\n"]
+            lines.append("--- 段落结构 ---")
+            for i, para in enumerate(doc.paragraphs):
+                text = para.text.strip()
+                if not text:
+                    continue
+                style_name = para.style.name if para.style else "?"
+                preview = text[:80] + ("..." if len(text) > 80 else "")
+                lines.append(f"[{i}] [{style_name}] {preview}")
+
+            if doc.tables:
+                lines.append(f"\n--- 表格 ({len(doc.tables)}个) ---")
+                for t_idx, table in enumerate(doc.tables):
+                    rows = len(table.rows)
+                    cols = len(table.columns) if table.rows else 0
+                    first_cell = table.rows[0].cells[0].text[:40] if rows > 0 else ""
+                    lines.append(f"表格{t_idx}: {rows}行×{cols}列, 首格=\"{first_cell}\"")
+
+            return "\n".join(lines)
+
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖"
+        except Exception as e:
+            return f"Error: {e}"

@@ -70,9 +70,7 @@ class TaskManager:
         self._initialized = True
         # work_id -> AITask
         self._tasks: dict[str, AITask] = {}
-        # 任务超时时间（秒）
-        self._task_timeout = 600  # 10分钟
-        # 已完成任务保留时间（秒）
+        self._task_timeout = 1800  # 30分钟
         self._completed_retention = 60  # 1分钟
         logger.info("TaskManager 初始化完成")
     
@@ -141,12 +139,14 @@ class TaskManager:
             asyncio.create_task(self._cleanup_completed_task(work_id))
     
     def fail_task(self, work_id: str, error: str):
-        """标记任务失败"""
+        """标记任务失败并取消后台协程"""
         task = self._tasks.get(work_id)
         if task:
             task.status = TaskStatus.FAILED
             task.completed_at = time.time()
             task.error = error
+            if task._async_task and not task._async_task.done():
+                task._async_task.cancel()
             logger.error(f"任务失败: {task.task_id}, 错误: {error}")
             asyncio.create_task(self._cleanup_completed_task(work_id))
     

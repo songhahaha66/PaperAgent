@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional
 
 from .workspace_fs import WorkspaceFS, WORKSPACE_DIRECTORIES
+from .template_contract import initialize_template_contract
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,9 @@ class WorkspaceStructureManager:
         with open(chat_file, 'w', encoding='utf-8') as f:
             json.dump(chat_history, f, ensure_ascii=False, indent=2)
         
+        # 先初始化模板契约，并在可用时把模板骨架复制为初始论文文件。
+        initialize_template_contract(workspace_path, template_id, output_mode)
+
         # 根据输出模式创建相应的初始文件
         if output_mode == "markdown":
             cls._create_paper_md(workspace_path, template_id)
@@ -109,41 +113,18 @@ class WorkspaceStructureManager:
             return
         
         try:
-            content = "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+            from .plan_reconciler import PlanReconciler
+
+            reconciler = PlanReconciler(workspace_path)
+            content = reconciler.append_template_constraints(
+                "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+            )
             with open(plan_md_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             plan_json_path = workspace_path / "plan.json"
             if not plan_json_path.exists():
-                plan_json = {
-                    "version": 1,
-                    "revision": 0,
-                    "title": "写作计划",
-                    "methodology": "spec-driven",
-                    "planning_mode": "dynamic",
-                    "phases": [
-                        {"id": "requirements", "title": "需求澄清", "description": "明确用户目标、输出格式和约束"},
-                        {"id": "design", "title": "方案设计", "description": "确定章节结构、数据/实验和产物形式"},
-                        {"id": "tasks", "title": "任务拆解", "description": "形成可执行、可追踪的章节和产物任务"},
-                        {"id": "implement", "title": "执行生成", "description": "逐项生成内容、代码、图表和最终文档"},
-                        {"id": "verify", "title": "验收检查", "description": "核对计划、正文、附件和最终产物"},
-                    ],
-                    "items": [],
-                    "stats": {
-                        "total": 0,
-                        "completed": 0,
-                        "in_progress": 0,
-                        "blocked": 0,
-                        "pending": 0,
-                        "progress_percent": 0,
-                    },
-                    "current_focus": None,
-                    "next_actions": [],
-                    "source": "initial",
-                    "source_markdown": content,
-                    "updated_at": datetime.now().isoformat(),
-                }
-                with open(plan_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(plan_json, f, ensure_ascii=False, indent=2)
+                plan_json = reconciler.build_from_markdown(content, source="initial", revision=0)
+                reconciler.write_plan_json(plan_json)
             logger.info(f"成功创建 plan.md: {plan_md_path}")
         except Exception as e:
             logger.error(f"创建 plan.md 失败: {e}")

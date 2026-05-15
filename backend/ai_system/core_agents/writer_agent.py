@@ -4,6 +4,7 @@ Handles Word and Markdown document generation by directly calling appropriate to
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional, List
 
 from langchain.agents import create_agent
@@ -12,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from services.file_services.template_contract import read_template_contract
 
 logger = logging.getLogger(__name__)
 
@@ -160,18 +162,67 @@ class WriterAgent:
         )
         
         if self.output_mode == "word":
-            return base_prompt + (
-                "**输出模式：Word (.docx) — 基于 docx-js**\n\n"
-                "你拥有以下工具：\n"
+            has_template = (Path(self.workspace_dir) / ".system" / "_template_original.docx").exists()
+
+            if has_template:
+                prompt = base_prompt + (
+                    "**输出模式：Word (.docx) — 模板填充模式**\n\n"
+                    "⚠️ 当前工作空间存在用户上传的模板文件，你必须在模板基础上填充内容，\n"
+                    "**绝对禁止**从零创建新文档覆盖模板！\n\n"
+
+                    "你拥有以下工具：\n"
+                    "1. **read_docx** — 读取文档纯文本内容\n"
+                    "2. **get_template_structure** — 获取模板段落索引和结构（用于定位）\n"
+                    "3. **write_to_template** — 在模板指定位置插入/替换内容（核心工具）\n"
+                    "4. **create_docx** — 仅用于创建paper.docx以外的附件文档\n"
+                    "5. **edit_docx / repack_docx** — 低级 XML 编辑（极少使用）\n\n"
+
+                    "**⚠️ 核心工作流程（模板模式）**\n"
+                    "1. 调用 `get_template_structure()` 了解模板的段落编号、标题层级和占位内容\n"
+                    "2. 调用 `read_docx()` 查看完整文本，理解已有内容\n"
+                    "3. 确定要填充的位置（通过 anchor_text 精确匹配段落文本）\n"
+                    "4. 调用 `write_to_template(anchor_text=..., content=..., position='after')` 逐处填充\n\n"
+
+                    "**write_to_template 参数说明**：\n"
+                    "- `anchor_text`: 用于定位的段落文本（部分匹配即可）\n"
+                    "- `content`: 要插入的文字内容，多段用 \\n\\n 分隔；代码用 ``` 包裹\n"
+                    "- `position`: 'after'（锚点后）/ 'before'（锚点前）/ 'replace'（替换锚点）\n"
+                    "- `style`: 可选样式名如 'Normal', 'List Paragraph'\n\n"
+
+                    "**工作流程示例**：\n"
+                    "收到指令：\"完成第一章 DDL 的实验任务\"\n"
+                    "1. `get_template_structure()` → 看到 [48] [Heading 4] 1.2.1 创建数据表\n"
+                    "2. `read_docx()` → 看到 \"执行代码：\" 后面是空的\n"
+                    "3. `write_to_template(anchor_text='1.2.1 创建数据表', content='...解释...', position='after')`\n"
+                    "4. `write_to_template(anchor_text='执行代码：', content='```sql\\nCREATE TABLE...\\n```', position='after')`\n\n"
+
+                    "**关键规则**：\n"
+                    "- 只填充、不覆盖：保留模板所有已有标题、表格、占位栏目\n"
+                    "- 按位填充：通过 anchor_text 精确定位要填充的位置\n"
+                    "- 格式继承：模板中的字体、字号、行距由模板样式自动继承\n"
+                    "- 代码块：用 ``` 包裹，自动使用 Courier New 10pt 等宽字体\n"
+                    "- 如果 anchor 找不到，工具会返回可用段落列表，据此调整 anchor\n\n"
+
+                    "**内容创作要求**：\n"
+                    "- 每次只填充当前指令要求的章节内容\n"
+                    "- 不要重复模板已有的标题和固定文字\n"
+                    "- SQL 代码必须完整、可执行\n"
+                    "- 解释性文字要充实，符合学术规范\n\n"
+                )
+            else:
+                prompt = base_prompt + (
+                    "**输出模式：Word (.docx) — 基于 docx-js**\n\n"
+                    "你拥有以下工具：\n"
                 "1. **create_docx** — 执行一段完整的 Node.js 脚本（使用 `require('docx')`）来生成 .docx 文件\n"
                 "2. **read_docx** — 读取现有 .docx 文件的纯文本内容\n"
                 "3. **edit_docx** — 解包已有 .docx 为 XML 结构（用于后续手动编辑）\n"
                 "4. **repack_docx** — 将编辑后的 XML 重新打包为 .docx\n\n"
 
                 "**⚠️ 核心工作流程**\n"
-                "1. 如果文档已存在，先调用 `read_docx` 了解现有内容\n"
-                "2. 生成一段完整的 JS 脚本，调用 `create_docx` 一次性创建/重建整个文档\n"
-                "3. 脚本中使用 `process.env.OUTPUT_PATH` 作为输出路径\n\n"
+                "1. 如果文档已存在，先调用 `read_docx` 了解现有内容和模板骨架\n"
+                "2. 如果存在模板契约，必须完整保留模板章节顺序、表格/占位栏位和显式格式要求\n"
+                "3. 生成一段完整的 JS 脚本，调用 `create_docx` 一次性创建/重建整个文档\n"
+                "4. 脚本中使用 `process.env.OUTPUT_PATH` 作为输出路径\n\n"
 
                 "**JS 脚本模板**：\n"
                 "```javascript\n"
@@ -207,6 +258,8 @@ class WriterAgent:
                 "```\n\n"
 
                 "**关键规则**：\n"
+                "- 模板优先：如果模板要求宋体、小三、居中、行距、页边距等格式，必须在 `styles`、`Paragraph`、`TextRun`、section properties 中显式设置\n"
+                "- 骨架优先：模板中的章节、表格、固定栏目和占位提示必须完整保留并填充，不要改名、重排或省略\n"
                 "- 换行：使用多个 `new Paragraph(...)` 而非 `\\n`\n"
                 "- 列表：使用 `numbering.config` + `LevelFormat.BULLET`/`DECIMAL`，**禁止** unicode 符号\n"
                 "- 表格：必须同时设 `columnWidths`（数组）和每个 cell 的 `width`，两者要匹配；使用 `WidthType.DXA`\n"
@@ -235,7 +288,7 @@ class WriterAgent:
             )
             
         elif self.output_mode == "markdown":
-            return base_prompt + (
+            prompt = base_prompt + (
                 "**输出模式：Markdown (.md)**\n\n"
                 "你可以使用以下Markdown工具：\n"
                 "1. get_paper_status - 获取论文写作状态概览（章节结构、进度、摘要）\n"
@@ -276,6 +329,8 @@ class WriterAgent:
                 "- **禁止使用**：不要使用 LaTeX 原生的 \\[ \\] 或 \\( \\) 分隔符，系统不支持\n"
                 "- **特殊字符转义**：在公式中使用反斜杠时需要双反斜杠，如 \\\\sqrt, \\\\frac\n\n"
                 "**内容创作要求**：\n"
+                "- 如果 paper.md 来自模板，必须按模板已有标题层级、顺序、占位说明逐节填充，不要删除或重排骨架\n"
+                "- 模板中出现的字体、字号、对齐、行距等格式要求应保留为 Markdown/HTML/说明性标记，不能忽略\n"
                 "- 使用标准Markdown格式\n"
                 "- 段落要充实，逻辑清晰\n"
                 "- 适当使用标题层级（#, ##, ###）\n"
@@ -284,13 +339,27 @@ class WriterAgent:
             )
             
         elif self.output_mode == "latex":
-            return base_prompt + (
+            prompt = base_prompt + (
                 "**Output Mode: LaTeX**\n\n"
                 "LaTeX mode is not yet supported. Please inform the user to use 'word' or 'markdown' mode instead.\n"
             )
             
         else:
-            return base_prompt + "Unknown output mode. Please check configuration.\n"
+            prompt = base_prompt + "Unknown output mode. Please check configuration.\n"
+
+        return self._append_template_contract(prompt)
+
+    def _append_template_contract(self, prompt: str) -> str:
+        template_contract = read_template_contract(self.workspace_dir)
+        if not template_contract:
+            return prompt
+        return (
+            prompt
+            + "\n\n**📌 当前工作区模板契约（最高优先级写作约束）**\n"
+            + "以下内容来自用户上传的模板骨架和格式要求，必须逐条遵循：\n\n"
+            + template_contract
+            + "\n"
+        )
 
     async def run(self, instruction: str) -> str:
         """

@@ -155,10 +155,11 @@ class FileTools:
             操作结果信息
         """
         try:
+            reconciler = PlanReconciler(Path(self.workspace_dir))
+            plan_content = reconciler.append_template_constraints(plan_content)
             file_path = os.path.join(self.workspace_dir, "plan.md")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(plan_content)
-            reconciler = PlanReconciler(Path(self.workspace_dir))
             structured_plan = reconciler.build_from_markdown(plan_content)
             reconciler.write_plan_json(structured_plan)
 

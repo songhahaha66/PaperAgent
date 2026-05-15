@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 from ..core_managers.langchain_tools import LangChainToolFactory
 from .review_agent import ReviewAgent
 from config.paths import get_workspace_path
+from services.file_services.template_contract import read_template_contract
 
 logger = logging.getLogger(__name__)
 
@@ -325,10 +326,12 @@ class MainAgent:
         if self.template_id:
             system_content += (
                 f"\n\n**使用模板模式**（template_id: {self.template_id}）：\n"
-                f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
-                f"- 模板是一个大纲，你要填满大纲！\n"
+                f"- 模板骨架已经初始化到最终论文文件：Markdown 模式为 paper.md，Word 模式为 paper.docx\n"
+                f"- 模板是强制骨架，不是参考资料；你必须填满骨架，不得删除或重排模板章节/表格/占位栏位\n"
                 f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
-                f"- 优先使用update_template工具来更新特定章节\n"
+                f"- 模板中出现的格式要求（例如“宋体”“小三”“居中”“行距”等）必须遵循\n"
+                f"- Markdown 模式优先使用 update_template 或 section_update 更新特定章节\n"
+                f"- Word 模式必须让 WriterAgent 先读取现有 paper.docx，并基于该模板底稿生成，不能另起一套结构\n"
                 f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
             )
         else:
@@ -357,6 +360,14 @@ class MainAgent:
             "- 在完成文件输出后，向用户确认文件已生成并说明文件路径\n"
             "- 如果没有将内容写入docx或md文件，任务视为未完成\n"
         )
+
+        template_contract = read_template_contract(self.workspace_dir) if self.workspace_dir else ""
+        if template_contract:
+            system_content += (
+                "\n\n**📌 当前工作区模板契约（最高优先级写作约束）**\n"
+                "以下内容来自用户上传的模板骨架和格式要求，必须逐条遵循：\n\n"
+                f"{template_contract}\n"
+            )
 
         return system_content
 

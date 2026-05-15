@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .template_contract import CONTRACT_PATH
+
 
 PLAN_PHASES = [
     {"id": "requirements", "title": "需求澄清", "description": "明确用户目标、输出格式和约束"},
@@ -24,6 +26,9 @@ PLAN_PHASES = [
     {"id": "implement", "title": "执行生成", "description": "逐项生成内容、代码、图表和最终文档"},
     {"id": "verify", "title": "验收检查", "description": "核对计划、正文、附件和最终产物"},
 ]
+
+CONSTRAINTS_START = "<!-- template-constraints:start -->"
+CONSTRAINTS_END = "<!-- template-constraints:end -->"
 
 
 @dataclass
@@ -127,9 +132,21 @@ class PlanReconciler:
             lines.append("**当前阶段**: 已完成")
         lines.append("")
         lines.append(f"**计划进度**: {structured_plan.get('stats', {}).get('progress_percent', 0)}%")
+        template_contract = structured_plan.get("constraints", {}).get("template_contract") or self._read_template_contract()
+        if template_contract:
+            lines.extend(["", self._format_template_constraints(template_contract)])
         (self.workspace_path / "plan.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    def append_template_constraints(self, plan_content: str) -> str:
+        """Attach template hard constraints to plan.md content without duplication."""
+        clean_content = self._strip_template_constraints(plan_content).rstrip()
+        template_contract = self._read_template_contract()
+        if not template_contract:
+            return clean_content + "\n"
+        return clean_content + "\n\n" + self._format_template_constraints(template_contract) + "\n"
+
     def _parse_markdown_plan(self, plan_content: str) -> tuple[List[Dict[str, Any]], str]:
+        plan_content = self._strip_template_constraints(plan_content)
         title = "写作计划"
         for line in plan_content.splitlines():
             stripped = line.strip()
@@ -368,9 +385,38 @@ class PlanReconciler:
             "next_actions": next_actions,
             "source": source,
             "source_markdown": source_markdown,
+            "constraints": {
+                "template_contract": self._read_template_contract(),
+                "plan_markdown_synced": bool(self._read_template_contract()),
+            },
             "evidence": evidence.to_summary(),
             "updated_at": datetime.now().isoformat(),
         }
+
+    def _read_template_contract(self) -> str:
+        path = self.workspace_path / CONTRACT_PATH
+        if not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except Exception:
+            return ""
+
+    def _strip_template_constraints(self, plan_content: str) -> str:
+        pattern = re.compile(
+            rf"\n?\s*{re.escape(CONSTRAINTS_START)}.*?{re.escape(CONSTRAINTS_END)}\s*",
+            re.DOTALL,
+        )
+        return pattern.sub("\n", plan_content).strip() + "\n"
+
+    def _format_template_constraints(self, template_contract: str) -> str:
+        return (
+            f"{CONSTRAINTS_START}\n"
+            "## 模板强制约束\n\n"
+            "以下内容由用户上传的模板骨架自动生成，模型写作、续写和验收时必须遵循。\n\n"
+            f"{template_contract.strip()}\n"
+            f"{CONSTRAINTS_END}"
+        )
 
     def _read_existing_plan(self) -> Optional[Dict[str, Any]]:
         plan_json_path = self.workspace_path / "plan.json"
