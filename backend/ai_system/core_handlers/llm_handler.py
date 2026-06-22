@@ -44,7 +44,7 @@ class LLMHandler:
         self.stream_manager = stream_manager
         self.llm_kwargs = {
             'temperature': llm_kwargs.get('temperature', 0.7),
-            'max_tokens': llm_kwargs.get('max_tokens', 4000),
+            'max_tokens': llm_kwargs.get('max_tokens', 16000),
             'streaming': llm_kwargs.get('streaming', True)
         }
 

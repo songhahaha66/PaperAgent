@@ -8,19 +8,16 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from .workspace_fs import WorkspaceFS, WORKSPACE_DIRECTORIES
+from .template_contract import initialize_template_contract
+
 logger = logging.getLogger(__name__)
 
 
 class WorkspaceStructureManager:
     """工作空间目录结构统一管理"""
 
-    # 统一的目录结构定义
-    WORKSPACE_DIRECTORIES = [
-        "code",          # 所有代码文件
-        "outputs",       # 所有输出文件
-        "logs",          # 所有日志文件
-        "temp",          # 临时文件
-    ]
+    WORKSPACE_DIRECTORIES = WORKSPACE_DIRECTORIES
 
     @classmethod
     def create_workspace_structure(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None, output_mode: str = "markdown") -> None:
@@ -33,12 +30,12 @@ class WorkspaceStructureManager:
             output_mode: 输出模式，可选值：markdown, word, latex
         """
         try:
-            # 创建目录结构
-            for directory in cls.WORKSPACE_DIRECTORIES:
-                dir_path = workspace_path / directory
-                dir_path.mkdir(parents=True, exist_ok=True)
+            fs = WorkspaceFS(str(workspace_path))
+            fs.init_structure()
 
-            # 创建初始文件
+            for legacy in ("code", "outputs", "logs", "temp"):
+                (workspace_path / legacy).mkdir(parents=True, exist_ok=True)
+
             cls._create_workspace_files(workspace_path, work_id, template_id, output_mode)
 
             logger.info(f"工作空间目录结构和初始文件创建完成: {workspace_path}, 输出模式: {output_mode}")
@@ -85,6 +82,9 @@ class WorkspaceStructureManager:
         with open(chat_file, 'w', encoding='utf-8') as f:
             json.dump(chat_history, f, ensure_ascii=False, indent=2)
         
+        # 先初始化模板契约，并在可用时把模板骨架复制为初始论文文件。
+        initialize_template_contract(workspace_path, template_id, output_mode)
+
         # 根据输出模式创建相应的初始文件
         if output_mode == "markdown":
             cls._create_paper_md(workspace_path, template_id)
@@ -113,9 +113,18 @@ class WorkspaceStructureManager:
             return
         
         try:
-            content = "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+            from .plan_reconciler import PlanReconciler
+
+            reconciler = PlanReconciler(workspace_path)
+            content = reconciler.append_template_constraints(
+                "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+            )
             with open(plan_md_path, 'w', encoding='utf-8') as f:
                 f.write(content)
+            plan_json_path = workspace_path / "plan.json"
+            if not plan_json_path.exists():
+                plan_json = reconciler.build_from_markdown(content, source="initial", revision=0)
+                reconciler.write_plan_json(plan_json)
             logger.info(f"成功创建 plan.md: {plan_md_path}")
         except Exception as e:
             logger.error(f"创建 plan.md 失败: {e}")

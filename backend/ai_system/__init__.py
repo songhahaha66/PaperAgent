@@ -6,10 +6,11 @@ AI系统模块
 import sys
 import os
 
-# 添加项目根目录到Python路径，确保可以导入其他模块
-project_root = os.path.dirname(__file__)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+# 添加 backend 根目录到Python路径，确保可以导入 services/config 等顶层模块。
+# 不能插入 backend/ai_system，否则顶层 import config 会误命中 ai_system/config。
+backend_root = os.path.dirname(os.path.dirname(__file__))
+if backend_root not in sys.path:
+    sys.path.insert(0, backend_root)
 
 # 延迟导入避免循环依赖
 __version__ = "0.1.0"

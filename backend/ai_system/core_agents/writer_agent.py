@@ -4,6 +4,7 @@ Handles Word and Markdown document generation by directly calling appropriate to
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, Optional, List
 
 from langchain.agents import create_agent
@@ -12,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from services.file_services.template_contract import read_template_contract
 
 logger = logging.getLogger(__name__)
 
@@ -160,45 +162,138 @@ class WriterAgent:
         )
         
         if self.output_mode == "word":
-            return base_prompt + (
-                "**输出模式：Word (.docx)**\n\n"
-                "你可以使用以下Word工具：\n"
-                "1. word_get_document_text - 提取文档全文内容\n"
-                "2. word_add_heading - 添加标题（1-5级）\n"
-                "3. word_add_paragraph - 添加段落\n"
-                "4. word_add_table - 添加表格\n"
-                "5. word_add_picture - 插入图片（⚠️ width参数单位是英寸，典型值3-6，如width=5.0表示5英寸宽）\n"
-                "6. word_add_page_break - 插入分页符\n"
-                "7. 其他格式化工具\n\n"
-                "**⚠️ 重要：开始写作前必须先读取文档**\n"
-                "在进行任何写作操作之前，你必须首先调用 word_get_document_text 来提取并理解现有文档的内容和结构。\n\n"
+            has_template = (Path(self.workspace_dir) / ".system" / "_template_original.docx").exists()
+
+            if has_template:
+                prompt = base_prompt + (
+                    "**输出模式：Word (.docx) — 模板填充模式**\n\n"
+                    "⚠️ 当前工作空间存在用户上传的模板文件，你必须在模板基础上填充内容，\n"
+                    "**绝对禁止**从零创建新文档覆盖模板！\n\n"
+
+                    "你拥有以下工具：\n"
+                    "1. **read_docx** — 读取文档纯文本内容\n"
+                    "2. **get_template_structure** — 获取模板段落索引和结构（用于定位）\n"
+                    "3. **write_to_template** — 在模板指定位置插入/替换内容（核心工具）\n"
+                    "4. **repair_template_structure** — 当标题骨架被写坏时，按模板恢复标题文本/样式\n"
+                    "5. **create_docx** — 仅用于创建paper.docx以外的附件文档\n"
+                    "6. **edit_docx / repack_docx** — 低级 XML 编辑（极少使用）\n\n"
+
+                    "**⚠️ 核心工作流程（模板模式）**\n"
+                    "1. 调用 `get_template_structure()` 了解模板的段落编号、标题层级和占位内容\n"
+                    "2. 调用 `read_docx()` 查看完整文本，理解已有内容\n"
+                    "3. 确定要填充的位置（通过 anchor_text 精确匹配段落文本）\n"
+                    "4. 调用 `write_to_template(anchor_text=..., content=..., position='after')` 逐处填充\n\n"
+
+                    "**write_to_template 参数说明**：\n"
+                    "- `anchor_text`: 用于定位的段落文本（部分匹配即可）\n"
+                    "- `content`: 要插入的文字内容，多段用 \\n\\n 分隔；代码用 ``` 包裹\n"
+                    "- `position`: 'after'（锚点后）/ 'before'（锚点前）/ 'replace'（替换锚点）\n"
+                    "- `style`: 可选样式名如 'Normal', 'List Paragraph'\n\n"
+
+                    "**工作流程示例**：\n"
+                    "收到指令：\"完成第一章 DDL 的实验任务\"\n"
+                    "1. `get_template_structure()` → 看到 [48] [Heading 4] 1.2.1 创建数据表\n"
+                    "2. `read_docx()` → 看到 \"执行代码：\" 后面是空的\n"
+                    "3. `write_to_template(anchor_text='1.2.1 创建数据表', content='...解释...', position='after')`\n"
+                    "4. `write_to_template(anchor_text='执行代码：', content='```sql\\nCREATE TABLE...\\n```', position='after')`\n\n"
+
+                    "**关键规则**：\n"
+                    "- 只填充、不覆盖：保留模板所有已有标题、表格、占位栏目\n"
+                    "- 按位填充：通过 anchor_text 精确定位要填充的位置\n"
+                    "- 格式继承：模板中的字体、字号、行距由模板样式自动继承\n"
+                    "- 代码块：用 ``` 包裹，自动使用 Courier New 10pt 等宽字体\n"
+                    "- 如果 anchor 找不到，工具会返回可用段落列表，据此调整 anchor\n\n"
+
+                    "**模板结构修复规则**：\n"
+                    "- 如果审查提示“标题层级/顺序/文本与模板不一致”或标题里残留 Markdown 标记，先调用 `repair_template_structure()`\n"
+                    "- 不要手工替换标题段落；标题必须由模板骨架决定，正文只能插入到标题或占位说明前后\n\n"
+
+                    "**内容创作要求**：\n"
+                    "- 每次只填充当前指令要求的章节内容\n"
+                    "- 不要重复模板已有的标题和固定文字\n"
+                    "- SQL 代码必须完整、可执行\n"
+                    "- 解释性文字要充实，符合学术规范\n\n"
+                )
+            else:
+                prompt = base_prompt + (
+                    "**输出模式：Word (.docx) — 基于 docx-js**\n\n"
+                    "你拥有以下工具：\n"
+                "1. **create_docx** — 执行一段完整的 Node.js 脚本（使用 `require('docx')`）来生成 .docx 文件\n"
+                "2. **read_docx** — 读取现有 .docx 文件的纯文本内容\n"
+                "3. **edit_docx** — 解包已有 .docx 为 XML 结构（用于后续手动编辑）\n"
+                "4. **repack_docx** — 将编辑后的 XML 重新打包为 .docx\n\n"
+
+                "**⚠️ 核心工作流程**\n"
+                "1. 如果文档已存在，先调用 `read_docx` 了解现有内容和模板骨架\n"
+                "2. 如果存在模板契约，必须完整保留模板章节顺序、表格/占位栏位和显式格式要求\n"
+                "3. 生成一段完整的 JS 脚本，调用 `create_docx` 一次性创建/重建整个文档\n"
+                "4. 脚本中使用 `process.env.OUTPUT_PATH` 作为输出路径\n\n"
+
+                "**JS 脚本模板**：\n"
+                "```javascript\n"
+                "const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,\n"
+                "        ImageRun, Header, Footer, AlignmentType, HeadingLevel, LevelFormat,\n"
+                "        BorderStyle, WidthType, ShadingType, PageBreak, PageNumber,\n"
+                "        TableOfContents, ExternalHyperlink, FootnoteReferenceRun,\n"
+                "        TabStopType, TabStopPosition } = require('docx');\n"
+                "const fs = require('fs');\n\n"
+                "const doc = new Document({\n"
+                "  styles: {\n"
+                "    default: { document: { run: { font: 'Arial', size: 24 } } },\n"
+                "    paragraphStyles: [\n"
+                "      { id: 'Heading1', name: 'Heading 1', basedOn: 'Normal', next: 'Normal', quickFormat: true,\n"
+                "        run: { size: 32, bold: true, font: 'Arial' },\n"
+                "        paragraph: { spacing: { before: 240, after: 240 }, outlineLevel: 0 } },\n"
+                "      { id: 'Heading2', name: 'Heading 2', basedOn: 'Normal', next: 'Normal', quickFormat: true,\n"
+                "        run: { size: 28, bold: true, font: 'Arial' },\n"
+                "        paragraph: { spacing: { before: 180, after: 180 }, outlineLevel: 1 } },\n"
+                "    ]\n"
+                "  },\n"
+                "  sections: [{\n"
+                "    properties: {\n"
+                "      page: {\n"
+                "        size: { width: 12240, height: 15840 },\n"
+                "        margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 }\n"
+                "      }\n"
+                "    },\n"
+                "    children: [ /* 在此构建文档内容 */ ]\n"
+                "  }]\n"
+                "});\n"
+                "Packer.toBuffer(doc).then(buf => fs.writeFileSync(process.env.OUTPUT_PATH, buf));\n"
+                "```\n\n"
+
+                "**关键规则**：\n"
+                "- 模板优先：如果模板要求宋体、小三、居中、行距、页边距等格式，必须在 `styles`、`Paragraph`、`TextRun`、section properties 中显式设置\n"
+                "- 骨架优先：模板中的章节、表格、固定栏目和占位提示必须完整保留并填充，不要改名、重排或省略\n"
+                "- 换行：使用多个 `new Paragraph(...)` 而非 `\\n`\n"
+                "- 列表：使用 `numbering.config` + `LevelFormat.BULLET`/`DECIMAL`，**禁止** unicode 符号\n"
+                "- 表格：必须同时设 `columnWidths`（数组）和每个 cell 的 `width`，两者要匹配；使用 `WidthType.DXA`\n"
+                "- 表格底纹：`ShadingType.CLEAR`（不是 SOLID）\n"
+                "- 图片：如果工作区存在 `outputs/*.png`、`outputs/*.jpg` 或上游任务明确提供图片路径，必须在正文相关位置插入图片，不能只写“见图”或图片说明文字\n"
+                "- 图片写法：`new ImageRun({ type: 'png', data: fs.readFileSync('outputs/chart.png'), transformation: {width: 520, height: 330}, altText: { title: '图表标题', description: '图表说明', name: 'chart' } })`\n"
+                "- 图片路径：优先使用 MainAgent/CodeAgent 提供的正式输出路径，如 `outputs/pi_convergence.png`；如果只提供 run artifact 路径，也应使用该相对路径插入\n"
+                "- 图片版式：图片段落使用 `alignment: AlignmentType.CENTER`，图片后紧跟一段居中的图题（例如“图1 蒙特卡洛估计π值的收敛过程”）\n"
+                "- 分页：`new Paragraph({ children: [new PageBreak()] })`\n"
+                "- TOC：标题必须用 `HeadingLevel.HEADING_1` 等，且 style 定义中包含 `outlineLevel`\n"
+                "- 页眉/页脚：通过 `headers`/`footers` 属性在 section 中设置\n"
+                "- 单位：DXA (1440 = 1英寸)，US Letter = 12240×15840 DXA\n\n"
+
                 "**工作流程示例**：\n"
-                "收到指令：\"写一个Introduction章节，介绍圆周率的重要性\"\n"
-                "你应该：\n"
-                "1. **首先提取文档内容**：\n"
-                "   - 调用 word_get_document_text() 获取现有文档内容\n"
-                "   - 理解文档当前结构和已有内容\n"
-                "2. 思考：Introduction应该包含什么内容？\n"
-                "   - 圆周率的定义\n"
-                "   - 历史重要性\n"
-                "   - 现代应用价值\n"
-                "   - 本文研究意义\n"
-                "3. 创作具体内容：\n"
-                "   - 调用 word_add_heading(\"Introduction\", level=1)\n"
-                "   - 调用 word_add_paragraph(\"圆周率π是数学中最重要的常数之一...\")\n"
-                "   - 调用 word_add_paragraph(\"自古以来，人类对圆周率的研究...\")\n"
-                "   - 调用 word_add_paragraph(\"本文旨在探讨...\")\n"
-                "4. 确认完成并报告\n\n"
+                "收到指令：\"写一个 Introduction 章节\"\n"
+                "1. 调用 `read_docx()` 了解现有内容\n"
+                "2. 构思 Introduction 内容（定义、背景、意义、本文贡献）\n"
+                "3. 编写完整的 JS 脚本，包含所有已有内容 + 新增 Introduction\n"
+                "4. 调用 `create_docx(js_code=<完整脚本>)` 一次性生成\n\n"
+
                 "**内容创作要求**：\n"
                 "- 段落要充实，每段至少3-5句话\n"
                 "- 逻辑清晰，层次分明\n"
                 "- 语言专业，符合学术规范\n"
-                "- 适当使用过渡句连接段落\n"
-                "- 如果需要，可以添加多个段落来充分展开主题\n\n"
+                "- 每次生成的 JS 脚本应包含文档的完整内容（已有 + 新增）\n\n"
             )
             
         elif self.output_mode == "markdown":
-            return base_prompt + (
+            prompt = base_prompt + (
                 "**输出模式：Markdown (.md)**\n\n"
                 "你可以使用以下Markdown工具：\n"
                 "1. get_paper_status - 获取论文写作状态概览（章节结构、进度、摘要）\n"
@@ -239,6 +334,8 @@ class WriterAgent:
                 "- **禁止使用**：不要使用 LaTeX 原生的 \\[ \\] 或 \\( \\) 分隔符，系统不支持\n"
                 "- **特殊字符转义**：在公式中使用反斜杠时需要双反斜杠，如 \\\\sqrt, \\\\frac\n\n"
                 "**内容创作要求**：\n"
+                "- 如果 paper.md 来自模板，必须按模板已有标题层级、顺序、占位说明逐节填充，不要删除或重排骨架\n"
+                "- 模板中出现的字体、字号、对齐、行距等格式要求应保留为 Markdown/HTML/说明性标记，不能忽略\n"
                 "- 使用标准Markdown格式\n"
                 "- 段落要充实，逻辑清晰\n"
                 "- 适当使用标题层级（#, ##, ###）\n"
@@ -247,13 +344,27 @@ class WriterAgent:
             )
             
         elif self.output_mode == "latex":
-            return base_prompt + (
+            prompt = base_prompt + (
                 "**Output Mode: LaTeX**\n\n"
                 "LaTeX mode is not yet supported. Please inform the user to use 'word' or 'markdown' mode instead.\n"
             )
             
         else:
-            return base_prompt + "Unknown output mode. Please check configuration.\n"
+            prompt = base_prompt + "Unknown output mode. Please check configuration.\n"
+
+        return self._append_template_contract(prompt)
+
+    def _append_template_contract(self, prompt: str) -> str:
+        template_contract = read_template_contract(self.workspace_dir)
+        if not template_contract:
+            return prompt
+        return (
+            prompt
+            + "\n\n**📌 当前工作区模板契约（最高优先级写作约束）**\n"
+            + "以下内容来自用户上传的模板骨架和格式要求，必须逐条遵循：\n\n"
+            + template_contract
+            + "\n"
+        )
 
     async def run(self, instruction: str) -> str:
         """

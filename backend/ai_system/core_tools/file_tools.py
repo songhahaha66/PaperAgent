@@ -5,9 +5,11 @@
 
 import os
 import logging
-from typing import Optional, Union, Dict, Any, List
+from typing import Optional, Union, Dict, Any
 from pathlib import Path
 from ..core_managers.stream_manager import StreamOutputManager
+from services.file_services.workspace_fs import WorkspaceFS
+from services.file_services.plan_reconciler import PlanReconciler
 
 logger = logging.getLogger(__name__)
 
@@ -16,22 +18,20 @@ class FileTools:
     """文件操作工具类"""
 
     def __init__(self, stream_manager: Optional[StreamOutputManager] = None):
-        # 获取工作空间目录
         workspace_dir = os.getenv("WORKSPACE_DIR")
         if not workspace_dir:
-            # 必须设置工作空间目录，不能使用默认路径
             raise ValueError("必须设置WORKSPACE_DIR环境变量，指定具体的工作空间目录（包含work_id）")
 
         self.workspace_dir = workspace_dir
         self.stream_manager = stream_manager
+        self.fs = WorkspaceFS(workspace_dir)
 
-        # 确保工作空间目录存在
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"FileTools初始化完成，workspace目录: {self.workspace_dir}")
 
     def get_paper_status(self, filename: str = "paper") -> str:
         """
-        分析paper.md的章节结构和写作进度，返回结构化的状态概览。
+        分析论文文件的章节结构和写作进度，返回结构化的状态概览。
         MainAgent在委派写作任务前必须调用此工具了解当前论文状态。
 
         Args:
@@ -41,6 +41,20 @@ class FileTools:
             论文结构和进度概览
         """
         try:
+            requested = filename
+            if not filename.endswith((".md", ".docx")):
+                if os.path.exists(os.path.join(self.workspace_dir, filename + ".md")):
+                    filename = filename + ".md"
+                elif os.path.exists(os.path.join(self.workspace_dir, filename + ".docx")):
+                    filename = filename + ".docx"
+                elif os.path.exists(os.path.join(self.workspace_dir, "paper.docx")):
+                    filename = "paper.docx"
+                else:
+                    filename = filename + ".md"
+
+            if filename.endswith(".docx"):
+                return self._get_word_paper_status(filename)
+
             if not filename.endswith('.md'):
                 filename = filename + '.md'
 
@@ -128,6 +142,59 @@ class FileTools:
             logger.error(error_msg)
             return error_msg
 
+    def _get_word_paper_status(self, filename: str = "paper.docx") -> str:
+        file_path = Path(self.workspace_dir) / filename
+        if not file_path.exists():
+            return f"文件 {filename} 不存在，尚未开始写作。"
+
+        plan_path = Path(self.workspace_dir) / "plan.md"
+        if plan_path.exists():
+            plan_content = plan_path.read_text(encoding="utf-8", errors="ignore")
+        else:
+            plan_content = "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
+
+        structured_plan = PlanReconciler(Path(self.workspace_dir)).build_from_markdown(
+            plan_content,
+            source="status_check",
+        )
+        stats = structured_plan.get("stats", {})
+        evidence = structured_plan.get("evidence", {})
+        current_focus = structured_plan.get("current_focus")
+
+        result = f"=== {filename} 写作状态 ===\n"
+        result += f"文件大小: {file_path.stat().st_size} 字节\n"
+        result += f"文档字符数: {evidence.get('document_char_count', 0)}\n"
+        result += f"图片数量: {evidence.get('docx_image_count', 0)}\n"
+        result += (
+            f"计划进度: {stats.get('completed', 0)}/{stats.get('total', 0)} 已完成, "
+            f"{stats.get('in_progress', 0)} 进行中, "
+            f"{stats.get('pending', 0)} 待写, "
+            f"{stats.get('blocked', 0)} 阻塞 "
+            f"({stats.get('progress_percent', 0)}%)\n"
+        )
+        if current_focus:
+            result += f"当前阶段: {current_focus.get('title')} ({current_focus.get('status_label')})\n"
+
+        issues = evidence.get("docx_template_issues") or []
+        if issues:
+            result += "\nWord模板结构验收问题:\n"
+            result += "\n".join(f"- {issue}" for issue in issues[:5])
+            result += "\n"
+
+        incomplete = [
+            item for item in structured_plan.get("items", [])
+            if item.get("status") != "completed"
+        ]
+        if incomplete:
+            result += "\n未完成/阻塞任务:\n"
+            for item in incomplete[:10]:
+                result += (
+                    f"- {item.get('status_label')}: {item.get('title')} "
+                    f"- {item.get('description', '')[:120]}\n"
+                )
+
+        return result
+
     def update_plan(self, plan_content: str) -> str:
         """
         更新论文写作计划文件(plan.md)。
@@ -155,17 +222,22 @@ class FileTools:
             操作结果信息
         """
         try:
+            reconciler = PlanReconciler(Path(self.workspace_dir))
+            plan_content = reconciler.append_template_constraints(plan_content)
             file_path = os.path.join(self.workspace_dir, "plan.md")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(plan_content)
+            structured_plan = reconciler.build_from_markdown(plan_content)
+            reconciler.write_plan_json(structured_plan)
 
-            result = f"成功更新写作计划: plan.md"
+            result = f"成功更新写作计划: plan.md / plan.json"
             file_size = os.path.getsize(file_path)
-            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+            result += f"\n文件大小: {file_size} 字节"
 
             if self.stream_manager:
-                self._send_json_block_sync("plan_updated", plan_content)
+                self._send_json_block_sync("plan_updated", structured_plan)
                 self._send_json_block_sync("file_changed", "plan.md")
+                self._send_json_block_sync("file_changed", "plan.json")
 
             return result
 
@@ -358,7 +430,7 @@ class FileTools:
 
             # 获取文件信息
             file_size = os.path.getsize(file_path)
-            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+            result += f"\n文件: {filename}\n文件大小: {file_size} 字节"
 
             if self.stream_manager:
                 self._send_json_block_sync("writemd_result", result)
@@ -406,9 +478,8 @@ class FileTools:
                 f.write(updated_content)
             result = f"成功更新论文文件 {template_name} 的章节 '{section}'"
             
-            # 获取文件信息
             file_size = os.path.getsize(file_path)
-            result += f"\n文件路径: {file_path}\n文件大小: {file_size} 字节"
+            result += f"\n文件大小: {file_size} 字节"
             
             if self.stream_manager:
                 self._send_json_block_sync("template_update_result", result)
@@ -538,42 +609,41 @@ class FileTools:
     def tree(self, directory: Optional[str] = None) -> str:
         """显示目录树结构，只允许访问workspace_dir内的目录"""
         try:
-            # 始终使用workspace_dir作为根目录
             base_dir = self.workspace_dir
             
             if directory is not None:
-                # 如果传入了directory，将其解析为相对于workspace_dir的路径
-                # 处理相对路径
                 if not os.path.isabs(directory):
                     target_dir = os.path.join(base_dir, directory)
                 else:
                     target_dir = directory
                 
-                # 解析为绝对路径并规范化
                 target_dir = os.path.realpath(target_dir)
                 base_dir_real = os.path.realpath(base_dir)
                 
-                # 安全检查：确保目标目录在workspace_dir内
                 if not target_dir.startswith(base_dir_real):
-                    return f"安全限制：只能访问workspace目录内的内容，不允许访问: {directory}"
+                    return f"安全限制：只能访问workspace目录内的内容"
                 
                 directory = target_dir
             else:
                 directory = base_dir
 
             if not os.path.exists(directory):
-                return f"目录不存在: {directory}"
+                return f"目录不存在"
+
+            skip_prefixes = (".system", "runs")
 
             def _tree_helper(path: str, prefix: str = "", is_last: bool = True) -> str:
                 result = []
-                items = os.listdir(path)
-                items.sort()
+                items = sorted(os.listdir(path))
 
                 for i, item in enumerate(items):
                     item_path = os.path.join(path, item)
                     is_last_item = i == len(items) - 1
 
                     if os.path.isdir(item_path):
+                        rel = os.path.relpath(item_path, self.workspace_dir)
+                        if any(rel == sp or rel.startswith(sp + os.sep) for sp in skip_prefixes):
+                            continue
                         result.append(
                             f"{prefix}{'└── ' if is_last_item else '├── '}{item}/")
                         new_prefix = prefix + \
@@ -586,8 +656,7 @@ class FileTools:
 
                 return '\n'.join(result)
 
-            tree_result = f"{os.path.basename(directory)}/\n" + \
-                _tree_helper(directory)
+            tree_result = f"workspace/\n" + _tree_helper(directory)
 
             if self.stream_manager:
                 self._send_json_block_sync("tree_result", tree_result)
@@ -602,6 +671,32 @@ class FileTools:
     def get_workspace_dir(self) -> str:
         """获取工作空间目录"""
         return self.workspace_dir
+
+    def promote_artifact(self, run_id: str, artifact_name: str, output_name: Optional[str] = None) -> str:
+        """
+        将运行产物晋升到 outputs/ 目录，使其成为正式产物
+
+        Args:
+            run_id: 运行记录ID（如 run_20260513_143000_a1b2c3）
+            artifact_name: 产物文件名（如 plot_1.png）
+            output_name: 晋升后的文件名，不填则保持原名
+
+        Returns:
+            晋升结果信息
+        """
+        try:
+            dest_rel = self.fs.promote_artifact(run_id, artifact_name, output_name)
+
+            if self.stream_manager:
+                self._send_json_block_sync("file_changed", dest_rel)
+
+            return f"产物已晋升为正式输出: {dest_rel}"
+        except FileNotFoundError as e:
+            return f"晋升失败: {str(e)}"
+        except Exception as e:
+            error_msg = f"晋升产物失败: {str(e)}"
+            logger.error(error_msg)
+            return error_msg
 
     def file_exists(self, filename: str) -> bool:
         """检查文件是否存在"""

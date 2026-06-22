@@ -70,9 +70,7 @@ class TaskManager:
         self._initialized = True
         # work_id -> AITask
         self._tasks: dict[str, AITask] = {}
-        # 任务超时时间（秒）
-        self._task_timeout = 600  # 10分钟
-        # 已完成任务保留时间（秒）
+        self._task_timeout = 1800  # 30分钟
         self._completed_retention = 60  # 1分钟
         logger.info("TaskManager 初始化完成")
     
@@ -100,9 +98,12 @@ class TaskManager:
         return self._tasks.get(work_id)
     
     def get_running_task(self, work_id: str) -> Optional[AITask]:
-        """获取正在运行的任务"""
         task = self._tasks.get(work_id)
         if task and task.status == TaskStatus.RUNNING:
+            if task.started_at and (time.time() - task.started_at > self._task_timeout):
+                logger.warning(f"任务超时，自动标记失败: {task.task_id}")
+                self.fail_task(work_id, "任务超时")
+                return None
             return task
         return None
     
@@ -138,12 +139,14 @@ class TaskManager:
             asyncio.create_task(self._cleanup_completed_task(work_id))
     
     def fail_task(self, work_id: str, error: str):
-        """标记任务失败"""
+        """标记任务失败并取消后台协程"""
         task = self._tasks.get(work_id)
         if task:
             task.status = TaskStatus.FAILED
             task.completed_at = time.time()
             task.error = error
+            if task._async_task and not task._async_task.done():
+                task._async_task.cancel()
             logger.error(f"任务失败: {task.task_id}, 错误: {error}")
             asyncio.create_task(self._cleanup_completed_task(work_id))
     
@@ -171,11 +174,16 @@ class TaskManager:
         return [o for o in task.outputs if o.timestamp > since_timestamp]
     
     def get_task_status(self, work_id: str) -> dict:
-        """获取任务状态信息"""
         task = self._tasks.get(work_id)
         if not task:
             return {"status": "none", "has_task": False}
-        
+
+        if (task.status == TaskStatus.RUNNING
+                and task.started_at
+                and time.time() - task.started_at > self._task_timeout):
+            logger.warning(f"任务超时，自动标记失败: {task.task_id}")
+            self.fail_task(work_id, "任务超时")
+
         return {
             "has_task": True,
             "task_id": task.task_id,

@@ -55,12 +55,69 @@
         </div>
       </div>
       <div v-else-if="activeTab === 'plan'" class="tab-content plan-tab">
-        <div v-if="!planContent" class="empty-state">
+        <div v-if="!planData || planData.items.length === 0" class="empty-state">
           <div class="empty-icon">📋</div>
           <div class="empty-text">等待AI制定写作计划...</div>
         </div>
-        <div v-else class="plan-content">
-          <MarkdownRenderer :content="planContent" />
+        <div v-else class="plan-board">
+          <div class="plan-summary">
+            <div class="plan-heading">
+              <div class="plan-title">{{ planData.title || '写作计划' }}</div>
+              <div class="plan-meta">
+                {{ planData.planning_mode === 'dynamic' ? '动态计划' : planData.methodology === 'spec-driven' ? '规范计划' : '结构化计划' }}
+                <span v-if="planData.revision !== undefined"> · r{{ planData.revision }}</span>
+                <span v-if="planData.updated_at"> · {{ formatPlanTime(planData.updated_at) }}</span>
+              </div>
+            </div>
+            <div class="plan-percent">
+              <span>{{ planData.stats.progress_percent }}</span>
+              <small>%</small>
+            </div>
+          </div>
+          <div class="plan-progress">
+            <div class="plan-progress-bar" :style="{ width: `${planData.stats.progress_percent}%` }" />
+          </div>
+          <div class="plan-stats">
+            <span>完成 {{ planData.stats.completed }}/{{ planData.stats.total }}</span>
+            <span>进行中 {{ planData.stats.in_progress }}</span>
+            <span v-if="planData.stats.blocked > 0">阻塞 {{ planData.stats.blocked }}</span>
+          </div>
+
+          <div v-if="planData.current_focus || planData.next_actions?.length" class="plan-dynamic">
+            <div v-if="planData.current_focus" class="dynamic-row">
+              <span class="dynamic-label">当前</span>
+              <span class="dynamic-value">{{ planData.current_focus.title }}</span>
+            </div>
+            <div v-if="planData.next_actions?.length" class="dynamic-row">
+              <span class="dynamic-label">下一步</span>
+              <span class="dynamic-value">{{ planData.next_actions.map((item) => item.title).join('、') }}</span>
+            </div>
+          </div>
+
+          <div v-if="planData.phases?.length" class="plan-phases">
+            <div v-for="phase in planData.phases" :key="phase.id" class="plan-phase">
+              <span class="phase-dot" />
+              <span class="phase-title">{{ phase.title }}</span>
+            </div>
+          </div>
+
+          <div class="plan-items">
+            <div
+              v-for="item in planData.items"
+              :key="item.id"
+              class="plan-item"
+              :class="`status-${item.status}`"
+            >
+              <div class="plan-item-index">{{ item.order }}</div>
+              <div class="plan-item-body">
+                <div class="plan-item-head">
+                  <span class="plan-item-title">{{ item.title }}</span>
+                  <span class="plan-item-status">{{ statusLabel(item.status, item.status_label) }}</span>
+                </div>
+                <div v-if="item.description" class="plan-item-desc">{{ item.description }}</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -69,7 +126,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import type { PlanData, PlanItemStatus } from '@/api/workspace'
 
 interface Props {
   fileTreeData:
@@ -95,7 +152,7 @@ interface Props {
       }>
   workId?: string
   loading?: boolean
-  planContent?: string
+  planData?: PlanData | null
 }
 
 interface Emits {
@@ -109,6 +166,23 @@ const emit = defineEmits<Emits>()
 const activeTab = ref('files')
 const isCollapsed = ref(false)
 const selectedFile = ref<string | null>(null)
+
+const statusLabel = (status: PlanItemStatus, fallback?: string) => {
+  if (fallback) return fallback
+  const labels: Record<PlanItemStatus, string> = {
+    pending: '待写',
+    in_progress: '进行中',
+    completed: '已完成',
+    blocked: '阻塞',
+  }
+  return labels[status] || '待写'
+}
+
+const formatPlanTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
 
 // 计算加载状态：优先使用父组件传入的loading状态，否则使用内部状态
 const isLoading = computed(() => {
@@ -137,11 +211,6 @@ const processedFileTreeData = computed(() => {
       {
         value: 'code',
         label: '代码文件 (0)',
-        children: [],
-      },
-      {
-        value: 'logs',
-        label: '日志文件 (0)',
         children: [],
       },
       {
@@ -181,7 +250,6 @@ const processedFileTreeData = computed(() => {
     // 按照后端的五个分类组织文件
     const categorizedFiles = {
       code: [] as any[],
-      logs: [] as any[],
       outputs: [] as any[],
       papers: [] as any[],
       attachments: [] as any[]
@@ -221,11 +289,6 @@ const processedFileTreeData = computed(() => {
         value: 'code',
         label: `代码文件 (${categorizedFiles.code.length})`,
         children: categorizedFiles.code,
-      },
-      {
-        value: 'logs',
-        label: `日志文件 (${categorizedFiles.logs.length})`,
-        children: categorizedFiles.logs,
       },
       {
         value: 'outputs',
@@ -430,7 +493,7 @@ const checkIfLeaf = (key: string): boolean => {
 
 // 检查是否为分类节点
 const isCategoryNode = (key: string): boolean => {
-  return key === 'code' || key === 'logs' || key === 'outputs' || key === 'papers' || key === 'attachments'
+  return key === 'code' || key === 'outputs' || key === 'papers' || key === 'attachments'
 }
 
 // 处理文件点击
@@ -617,50 +680,246 @@ defineExpose({
 }
 
 .plan-tab {
-  max-height: 300px;
+  max-height: 320px;
   overflow-y: auto;
 }
 
-.plan-content {
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.plan-content :deep(h1) {
-  font-size: 15px;
-  margin: 8px 0 6px;
-}
-
-.plan-content :deep(h2) {
-  font-size: 14px;
-  margin: 6px 0 4px;
-}
-
-.plan-content :deep(p) {
-  margin: 4px 0;
-}
-
-.plan-content :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
+.plan-board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   font-size: 12px;
-  margin: 6px 0;
 }
 
-.plan-content :deep(th),
-.plan-content :deep(td) {
-  border: 1px solid #dcdcdc;
-  padding: 5px 8px;
-  text-align: left;
+.plan-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f0f0f0;
 }
 
-.plan-content :deep(th) {
-  background-color: #f5f7fa;
+.plan-heading {
+  min-width: 0;
+}
+
+.plan-title {
+  color: #2c3e50;
+  font-size: 13px;
   font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.plan-meta {
+  color: #999;
+  margin-top: 2px;
+  font-size: 11px;
+}
+
+.plan-percent {
+  flex: 0 0 auto;
+  color: #333;
+  font-weight: 600;
+  line-height: 1;
+  text-align: right;
+}
+
+.plan-percent span {
+  font-size: 18px;
+}
+
+.plan-percent small {
+  font-size: 11px;
+  color: #999;
+  margin-left: 1px;
+}
+
+.plan-progress {
+  height: 4px;
+  background: #f0f0f0;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.plan-progress-bar {
+  height: 100%;
+  background: #595959;
+  border-radius: 2px;
+  transition: width 0.2s ease;
+}
+
+.plan-stats {
+  display: flex;
+  gap: 8px;
+  color: #777;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.plan-stats span {
+  padding-right: 8px;
+  border-right: 1px solid #e7e7e7;
+}
+
+.plan-stats span:last-child {
+  border-right: none;
+}
+
+.plan-dynamic {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 8px;
+  background: #f8f8f8;
+  border: 1px solid #eeeeee;
+  border-radius: 4px;
+}
+
+.dynamic-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.dynamic-label {
+  color: #666;
+  font-weight: 500;
+}
+
+.dynamic-value {
+  color: #333;
+  overflow-wrap: anywhere;
+}
+
+.plan-phases {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  padding: 0;
+}
+
+.plan-phase {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #777;
+  font-size: 11px;
+}
+
+.phase-dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #c5c5c5;
+}
+
+.phase-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid #f0f0f0;
+}
+
+.plan-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+  background: transparent;
+}
+
+.plan-item.status-completed {
+  opacity: 0.82;
+}
+
+.plan-item.status-in_progress {
+  opacity: 1;
+}
+
+.plan-item.status-pending {
+  opacity: 0.9;
+}
+
+.plan-item.status-blocked {
+  opacity: 1;
+}
+
+.plan-item-index {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #f3f3f3;
+  color: #777;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.plan-item.status-completed .plan-item-index {
+  background: var(--td-success-color-light);
+  color: var(--td-success-color);
+}
+
+.plan-item.status-in_progress .plan-item-index {
+  background: #e7e7e7;
   color: #333;
 }
 
-.plan-content :deep(tr:hover td) {
-  background-color: #f9fbff;
+.plan-item.status-blocked .plan-item-index {
+  background: var(--td-error-color-light);
+  color: var(--td-error-color);
+}
+
+.plan-item-body {
+  min-width: 0;
+}
+
+.plan-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.plan-item-title {
+  color: #2c3e50;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.plan-item-status {
+  flex: 0 0 auto;
+  color: #777;
+  background: transparent;
+  padding: 0;
+  font-size: 11px;
+}
+
+.plan-item.status-completed .plan-item-status {
+  color: var(--td-success-color);
+}
+
+.plan-item.status-blocked .plan-item-status {
+  color: var(--td-error-color);
+}
+
+.plan-item-desc {
+  margin-top: 4px;
+  color: #999;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 </style>

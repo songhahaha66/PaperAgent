@@ -18,10 +18,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && fc-cache -fv
 
+# 安装 Node.js（docx-js 需要）
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g docx \
+    && rm -rf /var/lib/apt/lists/*
+
 # 复制依赖文件和工作区成员
 COPY pyproject.toml ./
-COPY office_word_mcp ./office_word_mcp
-
 # 安装 uv
 RUN pip install --no-cache-dir uv
 

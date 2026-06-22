@@ -13,7 +13,9 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from .review_agent import ReviewAgent
 from config.paths import get_workspace_path
+from services.file_services.template_contract import read_template_contract
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +128,10 @@ class MainAgent:
             debug=True  # 启用调试模式
         )
 
+        self.review_agent = ReviewAgent(
+            llm=llm, workspace_dir=self.workspace_dir, output_mode=self.output_mode
+        )
+
         logger.info(f"MainAgent初始化完成，work_id: {work_id}, template_id: {template_id}, output_mode: {output_mode}, 工具数量: {len(self.tools)}")
         logger.info(f"已注册工具: {[tool.name for tool in self.tools]}")
 
@@ -155,14 +161,15 @@ class MainAgent:
             "- 理解用户需求和论文目标\n\n"
             "**Phase 2: 制定写作计划并保存**\n"
             "- 根据用户需求和当前状态，列出完整的写作计划\n"
-            "- **必须调用 update_plan 工具保存计划到plan.md**（用户可在前端实时查看）\n"
-            "- 计划使用Markdown表格格式，包含序号、章节名、状态、说明\n"
+            "- **必须调用 update_plan 工具保存计划**（工具会同步生成 plan.md 与结构化 plan.json，用户前端固定展示 plan.json）\n"
+            "- 计划使用Markdown表格作为输入兼容格式，包含序号、章节名、状态、说明；系统会转换为动态结构化计划\n"
+            "- 计划必须是动态的：标出当前进行项、完成项、待做项；执行过程中根据真实进展更新状态，不要把计划当一次性静态清单\n"
             "- 已完成的章节标记为「✅ 已完成」，不要重复写作\n"
             "- 待写章节标记为「⬜ 待写」\n"
             "- 需要数据分析/图表的章节，先规划CodeAgent任务\n\n"
             "**Phase 3: 逐步执行并更新计划**\n"
             "- 按计划逐章节执行，每次只写一个章节\n"
-            "- **不要每个章节前后都调 update_plan，只在关键节点更新**：\n"
+            "- **不要每个章节前后都调 update_plan，只在关键节点更新动态计划**：\n"
             "  * 开始写作前更新一次（标记第一个章节为⏳）\n"
             "  * 每完成 2-3 个章节后批量更新一次状态\n"
             "  * 全部完成后最终更新一次\n"
@@ -170,7 +177,7 @@ class MainAgent:
             "- 每完成一个章节，调用 get_paper_status 确认写入成功\n\n"
             "**Phase 4: 验收检查**\n"
             "- 所有章节完成后，调用 get_paper_status 做最终确认\n"
-            "- 调用 update_plan 更新最终计划状态\n"
+            "- 调用 update_plan 更新最终计划状态，确保所有已完成任务标记为 ✅\n"
             "- 向用户报告完成情况\n\n"
         )
 
@@ -272,7 +279,7 @@ class MainAgent:
         system_content += (
             "\n**通用工具**：\n"
             "- get_paper_status: 🔴必用！获取paper.md的写作状态（章节结构、进度、内容摘要），写作前必须先调用\n"
-            "- update_plan: 🔴必用！保存/更新写作计划到plan.md，用户可在前端实时查看进度\n"
+            "- update_plan: 🔴必用！保存/更新动态写作计划，系统会写入 plan.md 和 plan.json，用户前端以固定结构查看进度\n"
             "- list_attachments: 列出所有附件文件\n"
             "- web_search: 搜索最新的学术资料和背景信息\n"
             "- tree: 显示工作空间目录结构\n\n"
@@ -301,6 +308,13 @@ class MainAgent:
             "  * ❌ 禁止场景：**绝对不要使用CodeAgent来创建、编辑、修改文档**\n"
             "  * ❌ 禁止场景：**不要用CodeAgent读取文本文件！** 读文件请直接用 readmd / list_attachments / tree\n"
             "  * ⚠️ CodeAgent每次调用会消耗大量执行步数，请谨慎使用，仅在真正需要执行代码时才调用\n\n"
+            "**📂 文件系统规则**：\n"
+            "- 所有路径使用 workspace 相对路径（如 paper.md、code/main.py、outputs/figure.png），不要使用绝对路径\n"
+            "- 代码中**不要手动 savefig/to_csv 到 outputs/**，图表和数据文件会自动保存到 runs/ 执行记录中\n"
+            "- 如需将图表作为论文正式引用，使用 promote_artifact(run_id, artifact_name, output_name) 将产物从 runs/ 晋升到 outputs/\n"
+            "- **不要通过代码（shutil.copy等）手动复制文件到 outputs/，必须使用 promote_artifact 工具**\n"
+            "- 正式源码通过 save_and_execute 保存到 code/；普通 execute_code 只产生执行记录\n"
+            "- runs/ 和 .system/ 是系统内部目录，不要读取或引用其中的文件路径\n\n"
             "**🚫 严格禁止事项**：\n"
             "- **永远不要让CodeAgent操作文档（Word或Markdown）！**\n"
             "- **永远不要让CodeAgent使用python-docx库或直接写入.md文件！**\n"
@@ -312,10 +326,12 @@ class MainAgent:
         if self.template_id:
             system_content += (
                 f"\n\n**使用模板模式**（template_id: {self.template_id}）：\n"
-                f"- 模板文件为 'paper.md'（这是最终论文文件）\n"
-                f"- 模板是一个大纲，你要填满大纲！\n"
+                f"- 模板骨架已经初始化到最终论文文件：Markdown 模式为 paper.md，Word 模式为 paper.docx\n"
+                f"- 模板是强制骨架，不是参考资料；你必须填满骨架，不得删除或重排模板章节/表格/占位栏位\n"
                 f"- 生成论文时必须严格遵循模板的格式、结构和风格\n"
-                f"- 优先使用update_template工具来更新特定章节\n"
+                f"- 模板中出现的格式要求（例如“宋体”“小三”“居中”“行距”等）必须遵循\n"
+                f"- Markdown 模式优先使用 update_template 或 section_update 更新特定章节\n"
+                f"- Word 模式必须让 WriterAgent 先读取现有 paper.docx，并基于该模板底稿生成，不能另起一套结构\n"
                 f"- 最终论文应该是一个完整的、格式规范的学术文档\n"
             )
         else:
@@ -345,16 +361,39 @@ class MainAgent:
             "- 如果没有将内容写入docx或md文件，任务视为未完成\n"
         )
 
+        template_contract = read_template_contract(self.workspace_dir) if self.workspace_dir else ""
+        if template_contract:
+            system_content += (
+                "\n\n**📌 当前工作区模板契约（最高优先级写作约束）**\n"
+                "以下内容来自用户上传的模板骨架和格式要求，必须逐条遵循：\n\n"
+                f"{template_contract}\n"
+            )
+
         return system_content
 
+    MAX_CONTINUATIONS = 3
+
+    @staticmethod
+    def _count_tool_calls(messages: list) -> int:
+        return sum(
+            len(msg.tool_calls)
+            for msg in messages
+            if hasattr(msg, 'tool_calls') and msg.tool_calls
+        )
+
+    @staticmethod
+    def _extract_output(messages: list) -> str:
+        for message in reversed(messages):
+            if hasattr(message, 'content') and message.content:
+                return message.content
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                return message.get("content", "")
+        return ""
+
     async def run(self, user_input: str) -> str:
-        """
-        执行主Agent逻辑，使用 LangChain Agent 处理
-        """
         logger.info(f"MainAgent开始执行任务: {user_input[:100]}...")
 
         try:
-            # 发送开始通知
             if self.stream_manager:
                 try:
                     await self.stream_manager.send_json_block(
@@ -364,51 +403,57 @@ class MainAgent:
                 except Exception as e:
                     logger.warning(f"发送开始通知失败: {e}")
 
-            # 使用 LangChain Agent 执行
             logger.info(f"调用 Agent，可用工具数量: {len(self.tools)}")
             logger.info(f"工具列表: {[tool.name for tool in self.tools]}")
-            
-            inputs = {"messages": [HumanMessage(content=user_input)]}
-            result = await self.agent.ainvoke(inputs, config={"recursion_limit": 150})
 
-            # 提取最后的AI回复
-            messages = result.get("messages", [])
-            output = ""
-            
-            # 记录所有消息用于调试
-            logger.info(f"Agent返回了 {len(messages)} 条消息")
-            tool_calls_count = 0
-            for i, message in enumerate(messages):
-                msg_type = type(message).__name__
-                logger.info(f"消息 {i}: 类型={msg_type}")
-                
-                # 检查是否有工具调用
-                if hasattr(message, 'tool_calls') and message.tool_calls:
-                    tool_calls_count += len(message.tool_calls)
-                    logger.info(f"  包含 {len(message.tool_calls)} 个工具调用")
-                    for tc in message.tool_calls:
-                        logger.info(f"    工具: {tc.get('name', 'unknown')}")
-                
-                if hasattr(message, 'content') and message.content:
-                    content_preview = str(message.content)[:100]
-                    logger.info(f"  内容预览: {content_preview}")
-            
-            if tool_calls_count == 0:
-                logger.warning("⚠️ 没有检测到任何工具调用！")
-            else:
-                logger.info(f"✓ 总共执行了 {tool_calls_count} 个工具调用")
-            
-            for message in reversed(messages):
-                if hasattr(message, 'content') and message.content:
-                    output = message.content
-                    break
-                elif isinstance(message, dict) and message.get("role") == "assistant":
-                    output = message.get("content", "")
+            all_messages: list = [HumanMessage(content=user_input)]
+            result_messages: list = []
+
+            for attempt in range(self.MAX_CONTINUATIONS + 1):
+                result = await self.agent.ainvoke(
+                    {"messages": all_messages},
+                    config={"recursion_limit": 150},
+                )
+                result_messages = result.get("messages", [])
+
+                tool_calls_count = self._count_tool_calls(result_messages)
+                logger.info(
+                    f"[attempt {attempt}] Agent 返回 {len(result_messages)} 条消息, "
+                    f"{tool_calls_count} 次工具调用"
+                )
+
+                review = await self.review_agent.review(user_input)
+                logger.info(
+                    f"[attempt {attempt}] ReviewAgent 判定: complete={review.complete}, "
+                    f"reason={review.reason}"
+                )
+
+                if review.complete:
+                    logger.info(f"✓ ReviewAgent 确认任务完成 (attempt {attempt})")
                     break
 
+                if attempt < self.MAX_CONTINUATIONS:
+                    logger.warning(
+                        f"⚠️ ReviewAgent 判定未完成 (attempt {attempt}/{self.MAX_CONTINUATIONS})"
+                    )
+                    if self.stream_manager:
+                        try:
+                            await self.stream_manager.send_json_block(
+                                "continuation",
+                                f"ReviewAgent 检测到论文未完成，自动续写 "
+                                f"({attempt + 1}/{self.MAX_CONTINUATIONS}): {review.reason}"
+                            )
+                        except Exception:
+                            pass
+                    all_messages = result_messages + [
+                        HumanMessage(content=review.continuation_prompt)
+                    ]
+                else:
+                    logger.warning("⚠️ 达到最大续写次数，停止续写")
+
+            output = self._extract_output(result_messages)
             logger.info(f"MainAgent任务完成，结果长度: {len(output)}")
 
-            # 发送完成通知
             if self.stream_manager:
                 try:
                     await self.stream_manager.send_json_block(
@@ -424,7 +469,6 @@ class MainAgent:
             logger.error(f"MainAgent执行失败: {e}", exc_info=True)
             error_msg = f"任务执行失败: {str(e)}"
 
-            # 发送错误通知
             if self.stream_manager:
                 try:
                     await self.stream_manager.send_json_block("main_agent_error", error_msg)

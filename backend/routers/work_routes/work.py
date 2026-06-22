@@ -8,6 +8,7 @@ from services import crud
 from typing import Optional
 from ..utils import route_guard
 from config.paths import get_workspace_path
+from services.file_services.plan_reconciler import PlanReconciler
 import os
 import uuid
 from pathlib import Path
@@ -15,6 +16,24 @@ import json
 from datetime import datetime
 
 router = APIRouter(prefix="/api/works", tags=["works"])
+
+
+def _sync_work_from_workspace_metadata(work):
+    if not work:
+        return work
+    try:
+        workspace_path = get_workspace_path(work.work_id)
+        PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
+        metadata_file = workspace_path / "metadata.json"
+        if metadata_file.exists():
+            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+            if metadata.get("status"):
+                work.status = metadata["status"]
+            if metadata.get("progress") is not None:
+                work.progress = max(0, min(100, int(metadata["progress"])))
+    except Exception:
+        pass
+    return work
 
 @router.post("", response_model=schemas.WorkResponse)
 @route_guard
@@ -37,7 +56,10 @@ async def get_works(
     current_user: int = Depends(get_current_user)
 ):
     """获取用户的工作列表"""
-    return crud.get_user_works(db, current_user, skip, limit, status, search)
+    response = crud.get_user_works(db, current_user, skip, limit, status, search)
+    if isinstance(response, dict) and isinstance(response.get("works"), list):
+        response["works"] = [_sync_work_from_workspace_metadata(work) for work in response["works"]]
+    return response
 
 @router.get("/{work_id}", response_model=schemas.WorkResponse)
 @route_guard
@@ -52,7 +74,7 @@ async def get_work(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    return work
+    return _sync_work_from_workspace_metadata(work)
 
 @router.put("/{work_id}", response_model=schemas.WorkResponse)
 @route_guard
@@ -103,7 +125,13 @@ async def get_work_metadata(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
     import json
     from pathlib import Path
-    metadata_file = get_workspace_path(work_id) / "metadata.json"
+    workspace_path = get_workspace_path(work_id)
+    try:
+        PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
+    except Exception:
+        # Metadata should remain readable even if plan reconciliation fails.
+        pass
+    metadata_file = workspace_path / "metadata.json"
     if not metadata_file.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work metadata not found")
     with open(metadata_file, 'r', encoding='utf-8') as f:
