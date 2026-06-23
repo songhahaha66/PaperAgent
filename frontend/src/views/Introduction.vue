@@ -87,7 +87,7 @@
 
     <!-- 底部 -->
     <div class="footer">
-      <p>&copy; 2025 PaperAgent. All rights reserved.</p>
+      <p>&copy; 2026 PaperAgent. All rights reserved.</p>
     </div>
   </div>
 </template>
