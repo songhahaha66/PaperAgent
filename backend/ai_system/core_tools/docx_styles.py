@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from xml.etree import ElementTree as ET
 import zipfile
 
@@ -34,6 +35,30 @@ PRIORITY_STYLES = (
     "Heading 4",
 )
 PT_TOLERANCE = 1.6
+
+# Template headings often include “成稿后删除此括号” instructions.
+# Finished papers are supposed to drop those parentheses; keep the core title.
+_DELETABLE_HEADING_PAREN = re.compile(
+    r"[（(][^（）()]{0,120}成稿后删除[^（）()]{0,120}[）)]\s*$"
+)
+
+
+def canonical_heading_text(text: str) -> str:
+    return _DELETABLE_HEADING_PAREN.sub("", (text or "").strip()).strip()
+
+
+def heading_outlines_equivalent(
+    expected: Sequence[Tuple[str, str]],
+    actual: Sequence[Tuple[str, str]],
+) -> bool:
+    if len(expected) != len(actual):
+        return False
+    for (expected_style, expected_text), (actual_style, actual_text) in zip(expected, actual):
+        if expected_style != actual_style:
+            return False
+        if canonical_heading_text(expected_text) != canonical_heading_text(actual_text):
+            return False
+    return True
 
 
 @dataclass

@@ -157,10 +157,14 @@ class ReviewAgent:
                     issues.append(
                         f"表格数量不一致：模板 {template['table_count']} 个，当前 {paper['table_count']} 个"
                     )
-                if paper["headings"] != template["headings"]:
+                from ai_system.core_tools.docx_styles import heading_outlines_equivalent
+
+                if not heading_outlines_equivalent(template["headings"], paper["headings"]):
                     issues.append("标题层级/顺序/文本与模板不一致")
+                    from ai_system.core_tools.docx_styles import canonical_heading_text
+
                     for idx, (expected, actual) in enumerate(zip(template["headings"], paper["headings"]), 1):
-                        if expected != actual:
+                        if expected[0] != actual[0] or canonical_heading_text(expected[1]) != canonical_heading_text(actual[1]):
                             issues.append(f"第 {idx} 个标题应为 {expected}，当前为 {actual}")
                             break
                     if len(paper["headings"]) != len(template["headings"]):

@@ -589,10 +589,14 @@ class PlanReconciler:
             issues.append(
                 f"表格数量不一致（模板{template_outline['table_count']}，当前{paper_outline['table_count']}）"
             )
-        if paper_outline["headings"] != template_outline["headings"]:
+        from ai_system.core_tools.docx_styles import heading_outlines_equivalent
+
+        if not heading_outlines_equivalent(template_outline["headings"], paper_outline["headings"]):
             issues.append("标题层级/顺序/文本与模板不一致")
+            from ai_system.core_tools.docx_styles import canonical_heading_text
+
             for idx, (expected, actual) in enumerate(zip(template_outline["headings"], paper_outline["headings"]), 1):
-                if expected != actual:
+                if expected[0] != actual[0] or canonical_heading_text(expected[1]) != canonical_heading_text(actual[1]):
                     issues.append(f"第{idx}个标题应为{expected[1]}，当前为{actual[1]}")
                     break
             if len(paper_outline["headings"]) != len(template_outline["headings"]):

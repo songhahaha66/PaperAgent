@@ -208,6 +208,51 @@ def test_review_agent_blocks_word_template_heading_drift(tmp_path: Path):
     assert "Word模板结构验收未通过" in result.reason
 
 
+def test_review_agent_allows_dropping_template_instruction_parentheses(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    system_dir = workspace / ".system"
+    system_dir.mkdir(parents=True)
+
+    template = Document()
+    template.add_paragraph(
+        "2 项目开发报告（以下内容可根据自己的内容，进行替换更改结构，成稿后删除此括号，包含括号内容）",
+        style="Heading 1",
+    )
+    template.add_paragraph(
+        "2.4.2 核心代码（没有代码，可写制作流程，成稿后删除此括号，包含括号内容）",
+        style="Heading 3",
+    )
+    template.save(str(system_dir / "_template_original.docx"))
+
+    paper = Document()
+    paper.add_paragraph("2 项目开发报告", style="Heading 1")
+    paper.add_paragraph("2.4.2 核心代码", style="Heading 3")
+    paper.save(str(workspace / "paper.docx"))
+
+    (workspace / "plan.md").write_text(
+        "| 序号 | 章节名 | 状态 | 说明 |\n"
+        "|---|---|---|---|\n"
+        "| 1 | 2 项目开发报告 | ✅ 已完成 | 已写 |\n",
+        encoding="utf-8",
+    )
+
+    tools = DocxTools(str(workspace))
+    repair = asyncio.run(tools.repair_template_structure())
+    assert "无需修复" in repair
+    assert [p.text for p in Document(str(workspace / "paper.docx")).paragraphs] == [
+        "2 项目开发报告",
+        "2.4.2 核心代码",
+    ]
+
+    ReviewAgent = _load_review_agent_class()
+    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
+    status = reviewer._read_word_status(workspace / "paper.docx", 1)
+    assert "Word结构验收问题" not in status
+
+    structured = PlanReconciler(workspace).build_from_markdown((workspace / "plan.md").read_text(encoding="utf-8"))
+    assert structured["evidence"]["docx_template_issues"] == []
+
+
 def test_review_agent_blocks_plan_blocked_status_without_llm(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

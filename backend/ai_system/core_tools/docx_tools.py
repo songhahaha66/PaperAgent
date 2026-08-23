@@ -249,6 +249,8 @@ class DocxTools:
         file_path = self.workspace_dir / filename
         if not file_path.exists():
             return f"Error: 文件不存在: {filename}"
+        if file_path.suffix.lower() not in {".docx", ".doc"}:
+            return f"Error: {filename} 不是 Word 文档，请改用 read_file 读取文本文件。"
 
         text = ""
         try:
@@ -272,6 +274,9 @@ class DocxTools:
                 paragraphs = [p.text for p in doc.paragraphs]
                 text = "\n".join(paragraphs)
             except ImportError:
+                text = ""
+            except Exception as e:
+                logger.warning(f"python-docx 读取失败: {e}")
                 text = ""
 
         if text:
@@ -728,12 +733,20 @@ class DocxTools:
                     f"模板 {len(template_headings)} 个，当前 {len(current_headings)} 个。"
                 )
 
+            from ai_system.core_tools.docx_styles import canonical_heading_text
+
             changed = []
             for index, (current, expected) in enumerate(zip(current_headings, template_headings), start=1):
                 expected_text = expected.text.strip()
                 current_text = current.text.strip()
                 current_style = current.style.name if current.style else ""
                 expected_style = expected.style.name if expected.style else ""
+                same_core_title = (
+                    canonical_heading_text(expected_text) == canonical_heading_text(current_text)
+                )
+                # Keep cleaned titles that only dropped “成稿后删除此括号”.
+                if same_core_title and current_style == expected_style:
+                    continue
                 if current_style != expected_style or current_text != expected_text:
                     current.clear()
                     current.style = expected.style

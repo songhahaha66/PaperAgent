@@ -17,7 +17,12 @@ from docx.shared import Pt
 
 from ai_system.config.api_settings import load_env_api_settings, normalize_openai_base_url
 from ai_system.core_tools.docx_images import extract_docx_images, inventory_docx_images
-from ai_system.core_tools.docx_styles import compare_style_fingerprints, extract_style_fingerprint
+from ai_system.core_tools.docx_styles import (
+    compare_style_fingerprints,
+    extract_style_fingerprint,
+    canonical_heading_text,
+    heading_outlines_equivalent,
+)
 from ai_system.core_tools.docx_tools import DocxTools
 from ai_system.core_tools.vision_tools import VisionTools
 
@@ -437,3 +442,27 @@ def test_analyze_docx_layout_includes_styles_without_images(tmp_path: Path, monk
     result = asyncio.run(VisionTools(str(workspace)).analyze_docx_layout())
     assert "样式档案" in result
     assert "没有嵌入图片" in result
+
+
+def test_read_docx_rejects_plain_text_files(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "outputs").mkdir()
+    (workspace / "outputs" / "_table_inspect.txt").write_text("not a word file", encoding="utf-8")
+    tools = DocxTools(str(workspace))
+    result = asyncio.run(tools.read_docx("outputs/_table_inspect.txt"))
+    assert "Error" in result
+    assert "不是 Word 文档" in result
+
+
+def test_canonical_heading_drops_deletable_parentheses():
+    original = "2 项目开发报告（以下内容可根据自己的内容，进行替换更改结构，成稿后删除此括号，包含括号内容）"
+    assert canonical_heading_text(original) == "2 项目开发报告"
+    assert heading_outlines_equivalent(
+        [("heading 1", original), ("heading 3", "2.4.2 核心代码（没有代码，可写制作流程，成稿后删除此括号，包含括号内容）")],
+        [("heading 1", "2 项目开发报告"), ("heading 3", "2.4.2 核心代码")],
+    )
+    assert not heading_outlines_equivalent(
+        [("heading 1", "2 项目开发报告")],
+        [("heading 1", "3 其他章节")],
+    )
