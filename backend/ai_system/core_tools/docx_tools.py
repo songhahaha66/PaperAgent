@@ -10,6 +10,7 @@ from typing import Optional, List
 
 from .docx_images import extract_docx_images, format_image_inventory, inventory_docx_images
 from .docx_styles import (
+    apply_body_paragraph_format,
     apply_body_run_format,
     compare_style_fingerprints,
     extract_style_fingerprint,
@@ -527,6 +528,8 @@ class DocxTools:
                     para.style = doc.styles[body_style]
                 except KeyError:
                     pass
+                if not is_code:
+                    apply_body_paragraph_format(doc, para, style_name=body_style)
                 run = para.add_run(text)
                 apply_body_run_format(doc, run, style_name=body_style, is_code=is_code)
                 if insert_first:

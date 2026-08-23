@@ -290,6 +290,51 @@ def test_write_to_template_inherits_normal_cjk_font(tmp_path: Path):
     assert east_asia.get(qn("w:eastAsia")) == "宋体"
 
 
+def test_write_to_template_inherits_body_sample_when_normal_has_no_font(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = Document()
+    doc.styles["Normal"].paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    heading = doc.add_paragraph("1.1.1 内容简介", style="Heading 3")
+    heading.runs[0].font.name = "黑体"
+    r_pr = heading.runs[0]._element.get_or_add_rPr()
+    r_fonts = r_pr.get_or_add_rFonts()
+    r_fonts.set(qn("w:eastAsia"), "黑体")
+    blank = doc.add_paragraph()
+    blank.paragraph_format.line_spacing = 1.25
+    sample = doc.add_paragraph("此部分为系统测试用例表，至少写5个以上测试用例。")
+    sample.paragraph_format.line_spacing = 1.25
+    run = sample.runs[0]
+    run.font.size = Pt(12)
+    run.font.name = "宋体"
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+    run._element.rPr.rFonts.set(qn("w:ascii"), "宋体")
+    doc.save(str(workspace / "paper.docx"))
+
+    tools = DocxTools(str(workspace))
+    result = asyncio.run(
+        tools.write_to_template(
+            anchor_text="1.1.1 内容简介",
+            content="本实践围绕课程模板要求补充正文。",
+            position="after",
+        )
+    )
+
+    assert "Error" not in result
+    updated = Document(str(workspace / "paper.docx"))
+    inserted = next(p for p in updated.paragraphs if "课程模板要求" in p.text)
+    assert inserted.paragraph_format.line_spacing == 1.25
+    east_asia = inserted.runs[0]._element.find(
+        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rFonts"
+    )
+    assert east_asia is not None
+    assert east_asia.get(qn("w:eastAsia")) == "宋体"
+    assert inserted.runs[0].font.size is not None
+    assert abs(inserted.runs[0].font.size.pt - 12) < 0.2
+
+
 def test_review_agent_blocks_finished_style_drift(tmp_path: Path):
     workspace = tmp_path / "workspace"
     system_dir = workspace / ".system"

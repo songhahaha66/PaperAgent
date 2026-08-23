@@ -231,6 +231,97 @@ def save_style_profile(workspace_path: Path, fingerprint: StyleFingerprint) -> P
     return path
 
 
+def infer_body_format(doc, style_name: str = "Normal") -> Dict[str, Any]:
+    """
+    Resolve the fonts/spacing that new body text should inherit.
+
+    Complex course templates often leave Normal empty and put 宋体/小四
+    on real paragraphs. Style definitions alone are not enough.
+    """
+    attrs: Dict[str, Any] = {}
+    try:
+        attrs.update(_style_definition(doc.styles[style_name]))
+    except KeyError:
+        pass
+
+    votes: Dict[str, List[Any]] = {
+        "eastAsia": [],
+        "ascii": [],
+        "size_pt": [],
+        "line_spacing": [],
+        "first_indent_pt": [],
+        "alignment": [],
+    }
+    for para in getattr(doc, "paragraphs", []):
+        style = (para.style.name if para.style else "") or ""
+        if style != style_name:
+            continue
+        text = para.text.strip()
+        if not text:
+            sample = _paragraph_effective(para)
+            if sample.get("line_spacing") not in (None, ""):
+                votes["line_spacing"].append(sample["line_spacing"])
+            continue
+        if text.startswith(("图", "表")):
+            continue
+        sample = _paragraph_effective(para)
+        size_pt = sample.get("size_pt")
+        if size_pt is not None:
+            try:
+                if float(size_pt) >= 15.5:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        if sample.get("bold") and size_pt:
+            try:
+                if float(size_pt) >= 15:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        for key in votes:
+            value = sample.get(key)
+            if value not in (None, "", "None"):
+                votes[key].append(value)
+
+    for key, values in votes.items():
+        if not values:
+            continue
+        chosen = _majority(values)
+        if attrs.get(key) in (None, "", "None"):
+            attrs[key] = chosen
+        elif key in {"eastAsia", "ascii", "size_pt"}:
+            attrs[key] = chosen
+    return attrs
+
+
+def apply_body_paragraph_format(doc, paragraph, *, style_name: str = "Normal") -> None:
+    """Copy inferred body spacing/alignment onto a newly inserted paragraph."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
+
+    attrs = infer_body_format(doc, style_name=style_name)
+    alignment = str(attrs.get("alignment") or "")
+    if alignment in {"JUSTIFY", "3"}:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    elif alignment in {"CENTER", "1"}:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    elif alignment in {"RIGHT", "2"}:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    elif alignment in {"LEFT", "0"}:
+        paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    if attrs.get("line_spacing") not in (None, ""):
+        try:
+            paragraph.paragraph_format.line_spacing = float(attrs["line_spacing"])
+        except (TypeError, ValueError):
+            pass
+    if attrs.get("first_indent_pt") not in (None, ""):
+        try:
+            paragraph.paragraph_format.first_line_indent = Pt(float(attrs["first_indent_pt"]))
+        except (TypeError, ValueError):
+            pass
+
+
 def apply_body_run_format(doc, run, *, style_name: str = "Normal", is_code: bool = False) -> None:
     """Copy template body fonts onto a newly inserted run."""
     from docx.oxml.ns import qn
@@ -245,12 +336,7 @@ def apply_body_run_format(doc, run, *, style_name: str = "Normal", is_code: bool
             pass
         return
 
-    try:
-        style = doc.styles[style_name]
-    except KeyError:
-        return
-
-    attrs = _style_definition(style)
+    attrs = infer_body_format(doc, style_name=style_name)
     if attrs.get("ascii"):
         run.font.name = attrs["ascii"]
     if attrs.get("size_pt"):
@@ -260,14 +346,15 @@ def apply_body_run_format(doc, run, *, style_name: str = "Normal", is_code: bool
             pass
     if attrs.get("bold") is True:
         run.font.bold = True
-    if attrs.get("eastAsia"):
+    east_asia = attrs.get("eastAsia") or attrs.get("ascii")
+    if east_asia:
         try:
             r_pr = run._element.get_or_add_rPr()
             r_fonts = r_pr.get_or_add_rFonts()
-            r_fonts.set(qn("w:eastAsia"), attrs["eastAsia"])
-            if attrs.get("ascii"):
-                r_fonts.set(qn("w:ascii"), attrs["ascii"])
-                r_fonts.set(qn("w:hAnsi"), attrs["ascii"])
+            r_fonts.set(qn("w:eastAsia"), east_asia)
+            ascii_name = attrs.get("ascii") or east_asia
+            r_fonts.set(qn("w:ascii"), ascii_name)
+            r_fonts.set(qn("w:hAnsi"), ascii_name)
         except Exception:
             logger.debug("写入 eastAsia 字体失败", exc_info=True)
 
@@ -402,6 +489,19 @@ def _format_attrs(attrs: Dict[str, Any]) -> str:
             suffix = "pt" if key.endswith("_pt") else ""
             parts.append(f"{label}={attrs[key]}{suffix}")
     return ", ".join(parts) or "（沿用主题默认值）"
+
+
+def _majority(values: List[Any]) -> Any:
+    counts: Dict[str, int] = {}
+    keyed: Dict[str, Any] = {}
+    for value in values:
+        if isinstance(value, float):
+            key = f"{round(value, 2)}"
+        else:
+            key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+        keyed.setdefault(key, value)
+    return keyed[max(counts, key=counts.get)]
 
 
 def _truncate(text: str, limit: int) -> str:
