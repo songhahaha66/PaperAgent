@@ -123,9 +123,13 @@ class VisionTools:
         if not settings:
             return "未配置视觉模型，仅提供文件元数据。请设置 PAPERAGENT_API_KEY/BASE 或在界面配置支持识图的模型。"
 
-        return await asyncio.to_thread(
-            self._describe_with_http, payload, mime, question, settings
-        )
+        try:
+            return await asyncio.to_thread(
+                self._describe_with_http, payload, mime, question, settings
+            )
+        except Exception as exc:
+            logger.warning("环境 API 视觉调用失败: %s", exc)
+            return f"视觉识别失败: {exc}"
 
     async def _describe_with_llm(self, payload: bytes, mime: str, question: str) -> str:
         from langchain_core.messages import HumanMessage
@@ -183,7 +187,9 @@ class VisionTools:
             json=body,
             timeout=90,
         )
-        response.raise_for_status()
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise ValueError(f"视觉接口 HTTP {response.status_code}: {detail}")
         data = response.json()
         content = (
             data.get("choices", [{}])[0]

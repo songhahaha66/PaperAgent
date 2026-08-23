@@ -1,9 +1,10 @@
 import asyncio
+import importlib.util
 import os
 import struct
+import sys
 import zlib
 from pathlib import Path
-import sys
 
 import pytest
 from docx import Document
@@ -15,10 +16,23 @@ from ai_system.config.api_settings import load_env_api_settings, normalize_opena
 from ai_system.core_tools.docx_images import extract_docx_images, inventory_docx_images
 from ai_system.core_tools.docx_tools import DocxTools
 from ai_system.core_tools.vision_tools import VisionTools
-from services.file_services.template_contract import _build_contract, _copy_template_to_workspace
 
 
-def _tiny_png(path: Path, color: bytes = b"\xff\x00\x00") -> Path:
+def _load_template_contract():
+    module_path = Path(__file__).resolve().parents[1] / "services/file_services/template_contract.py"
+    spec = importlib.util.spec_from_file_location("template_contract_for_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+_template_contract = _load_template_contract()
+_build_contract = _template_contract._build_contract
+_copy_template_to_workspace = _template_contract._copy_template_to_workspace
+
+
+def _tiny_png(path: Path, color: bytes = b"\xff\x00\x00", width: int = 96, height: int = 64) -> Path:
     def chunk(tag: bytes, data: bytes) -> bytes:
         return (
             struct.pack(">I", len(data))
@@ -27,7 +41,6 @@ def _tiny_png(path: Path, color: bytes = b"\xff\x00\x00") -> Path:
             + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
         )
 
-    width = height = 12
     raw = (b"\x00" + color * width) * height
     path.write_bytes(
         b"\x89PNG\r\n\x1a\n"
@@ -181,4 +194,5 @@ def test_live_vision_api_recognizes_color(tmp_path: Path):
     )
 
     assert "识别结果" in result
+    assert "视觉识别失败" not in result
     assert any(token in result for token in ["蓝", "青", "深蓝"])

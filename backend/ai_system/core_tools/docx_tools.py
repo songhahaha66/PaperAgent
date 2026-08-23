@@ -753,9 +753,7 @@ class DocxTools:
         try:
             from docx import Document as PythonDocxDocument
             from docx.enum.text import WD_ALIGN_PARAGRAPH
-            from docx.oxml import OxmlElement
             from docx.shared import Inches
-            from docx.text.paragraph import Paragraph
 
             doc = PythonDocxDocument(str(file_path))
             width = max(1.5, min(float(width_inches or 5.2), 6.3))
@@ -802,14 +800,14 @@ class DocxTools:
                 anchor_idx = len(doc.paragraphs) - 1
                 position = "after"
 
-            def _add_picture_paragraph(after_element):
-                new_para = OxmlElement("w:p")
-                after_element.addnext(new_para)
-                para = Paragraph(new_para, after_element.getparent())
+            def _new_centered_paragraph():
+                para = doc.add_paragraph()
                 para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                run = para.add_run()
-                run.add_picture(str(source), width=Inches(width))
-                return new_para, para
+                return para
+
+            def _place_after(after_element, para):
+                after_element.addnext(para._element)
+                return para._element
 
             if position == "replace":
                 anchor_para.clear()
@@ -817,30 +815,25 @@ class DocxTools:
                 run = anchor_para.add_run()
                 run.add_picture(str(source), width=Inches(width))
                 insert_after = anchor_para._element
-            elif position == "before":
-                prev = anchor_para._element.getprevious()
-                insert_after = prev if prev is not None else anchor_para._element
-                if prev is None:
-                    parent = anchor_para._element.getparent()
-                    new_para = OxmlElement("w:p")
-                    parent.insert(0, new_para)
-                    para = Paragraph(new_para, parent)
-                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    run = para.add_run()
-                    run.add_picture(str(source), width=Inches(width))
-                    insert_after = new_para
-                else:
-                    insert_after, _ = _add_picture_paragraph(insert_after)
             else:
-                insert_after, _ = _add_picture_paragraph(anchor_para._element)
+                picture_para = _new_centered_paragraph()
+                picture_para.add_run().add_picture(str(source), width=Inches(width))
+                if position == "before":
+                    prev = anchor_para._element.getprevious()
+                    if prev is None:
+                        parent = anchor_para._element.getparent()
+                        parent.insert(0, picture_para._element)
+                        insert_after = picture_para._element
+                    else:
+                        insert_after = _place_after(prev, picture_para)
+                else:
+                    insert_after = _place_after(anchor_para._element, picture_para)
 
             if caption.strip():
-                cap_xml = OxmlElement("w:p")
-                insert_after.addnext(cap_xml)
-                cap_para = Paragraph(cap_xml, insert_after.getparent())
-                cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cap_para = _new_centered_paragraph()
                 run = cap_para.add_run(caption.strip())
                 run.bold = True
+                insert_after.addnext(cap_para._element)
 
             doc.save(str(file_path))
             self._notify_file_changed()
