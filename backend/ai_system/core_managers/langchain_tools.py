@@ -303,7 +303,7 @@ class LangChainToolFactory:
             return []
 
     @staticmethod
-    def create_word_tools(workspace_dir: str, stream_manager=None) -> List[StructuredTool]:
+    def create_word_tools(workspace_dir: str, stream_manager=None, llm=None) -> List[StructuredTool]:
         """
         创建 Word 文档工具（基于 docx-js）
 
@@ -385,18 +385,79 @@ class LangChainToolFactory:
                     coroutine=docx.get_template_structure,
                     name="get_template_structure",
                     description=(
-                        "获取文档的详细段落结构，包括段落索引、样式名和内容预览。\n"
+                        "获取文档的详细段落结构，包括段落索引、样式名、表格和嵌入图片清单。\n"
                         "参数：filename（默认 paper.docx）。\n"
-                        "用于在调用 write_to_template 前了解文档结构和定位 anchor_text。"
+                        "用于在调用 write_to_template / insert_image_to_template 前了解结构和定位 anchor_text。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.extract_template_images,
+                    name="extract_template_images",
+                    description=(
+                        "提取 Word 中的嵌入图片到 .system/docx_images/<文件名>/，并返回附近文字。\n"
+                        "参数：filename（默认 paper.docx）。\n"
+                        "复杂模板排版前应先提取图片，再按需识别或原位保留。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.insert_image_to_template,
+                    name="insert_image_to_template",
+                    description=(
+                        "在模板指定段落附近插入图片并可选配图题，保留标题骨架。\n"
+                        "参数：image_path（工作区相对路径）、anchor_text（定位文本）、"
+                        "position（after/before/replace）、width_inches（默认5.2）、"
+                        "caption（图题）、filename（默认 paper.docx）。\n"
+                        "生成的图表必须插入到对应章节，不要只写“见图”，也不要覆盖标题。"
                     )
                 ),
             ]
+
+            try:
+                tools.extend(LangChainToolFactory.create_vision_tools(workspace_dir, stream_manager, llm))
+            except Exception as e:
+                logger.warning("附加视觉工具失败: %s", e)
 
             logger.info(f"创建了 {len(tools)} 个 Word 工具 (docx-js)")
             return tools
 
         except Exception as e:
             logger.error(f"创建 Word 工具失败: {e}", exc_info=True)
+            return []
+
+    @staticmethod
+    def create_vision_tools(workspace_dir: str, stream_manager=None, llm=None) -> List[StructuredTool]:
+        """
+        创建图片识别工具。用于看清 Word 模板里的封面、校徽、图表和用户上传图。
+        """
+        try:
+            from ..core_tools.vision_tools import VisionTools
+
+            vision = VisionTools(workspace_dir, llm=llm, stream_manager=stream_manager)
+            tools = [
+                StructuredTool.from_function(
+                    coroutine=vision.analyze_image,
+                    name="analyze_image",
+                    description=(
+                        "识别工作区中的一张图片，判断它是封面/校徽/页眉装饰、正文插图、"
+                        "表格截图还是签名章，并给出排版建议。\n"
+                        "参数：image_path（相对路径，如 outputs/chart.png）、"
+                        "question（可选，自定义识别问题）。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=vision.analyze_docx_layout,
+                    name="analyze_docx_layout",
+                    description=(
+                        "提取并识别 Word 模板中的全部嵌入图片，理解复杂模板的视觉排版。"
+                        "Word 模板模式下，开始填内容前应先调用一次。\n"
+                        "参数：filename（默认 paper.docx）、question（可选）。"
+                    )
+                ),
+            ]
+            logger.info("创建了 %d 个视觉识别工具", len(tools))
+            return tools
+        except Exception as e:
+            logger.error("创建视觉识别工具失败: %s", e, exc_info=True)
             return []
 
     @staticmethod
@@ -480,6 +541,11 @@ class LangChainToolFactory:
             # 添加标准工具（搜索）
             standard_tools = LangChainToolFactory.create_standard_tools()
             base_tools.extend(standard_tools)
+
+            try:
+                base_tools.extend(LangChainToolFactory.create_vision_tools(workspace_dir, stream_manager))
+            except Exception as e:
+                logger.warning("附加视觉工具失败: %s", e)
 
             logger.info(f"创建了 {len(base_tools)} 个基础工具（不含writemd）")
             return base_tools

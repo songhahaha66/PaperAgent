@@ -8,6 +8,8 @@ import zipfile
 from pathlib import Path
 from typing import Optional, List
 
+from .docx_images import extract_docx_images, format_image_inventory, inventory_docx_images
+
 logger = logging.getLogger(__name__)
 
 SKILL_DIR = Path(__file__).resolve().parent.parent / "docx_skill"
@@ -241,6 +243,7 @@ class DocxTools:
         if not file_path.exists():
             return f"Error: 文件不存在: {filename}"
 
+        text = ""
         try:
             pandoc = shutil.which("pandoc")
             if pandoc:
@@ -251,17 +254,24 @@ class DocxTools:
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
                 if proc.returncode == 0:
-                    return stdout.decode(errors="replace")
+                    text = stdout.decode(errors="replace")
         except Exception as e:
             logger.warning(f"pandoc 读取失败，回退到 python-docx: {e}")
 
-        try:
-            from docx import Document as PythonDocxDocument
-            doc = PythonDocxDocument(str(file_path))
-            paragraphs = [p.text for p in doc.paragraphs]
-            return "\n".join(paragraphs)
-        except ImportError:
-            pass
+        if not text:
+            try:
+                from docx import Document as PythonDocxDocument
+                doc = PythonDocxDocument(str(file_path))
+                paragraphs = [p.text for p in doc.paragraphs]
+                text = "\n".join(paragraphs)
+            except ImportError:
+                text = ""
+
+        if text:
+            images = inventory_docx_images(file_path)
+            if images:
+                text = text.rstrip() + "\n\n" + format_image_inventory(images, title="嵌入图片")
+            return text
 
         try:
             unpack_dir = self.workspace_dir / ".system" / "_docx_unpacked"
@@ -281,6 +291,9 @@ class DocxTools:
                 content = doc_xml.read_text(encoding="utf-8")
                 text = re.sub(r"<[^>]+>", "", content)
                 text = re.sub(r"\s+", " ", text).strip()
+                images = inventory_docx_images(file_path)
+                if images:
+                    text = text.rstrip() + "\n\n" + format_image_inventory(images, title="嵌入图片")
                 return text
         except Exception as e:
             logger.warning(f"unpack 读取失败: {e}")
@@ -672,9 +685,173 @@ class DocxTools:
                     first_cell = table.rows[0].cells[0].text[:40] if rows > 0 else ""
                     lines.append(f"表格{t_idx}: {rows}行×{cols}列, 首格=\"{first_cell}\"")
 
+            images = inventory_docx_images(file_path)
+            if images:
+                lines.append("")
+                lines.append(format_image_inventory(images, title="图片").rstrip())
+
             return "\n".join(lines)
 
         except ImportError:
             return "Error: 缺少 python-docx 依赖"
         except Exception as e:
+            return f"Error: {e}"
+
+    async def extract_template_images(self, filename: str = "paper.docx") -> str:
+        """
+        将 Word 中的嵌入图片提取到 .system/docx_images/<文件名>/，
+        并返回带附近文字的图片清单，方便后续识别和按位插图。
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        output_dir = self.workspace_dir / ".system" / "docx_images" / Path(filename).stem
+        images = extract_docx_images(file_path, output_dir)
+        if not images:
+            return f"{filename} 中没有嵌入图片"
+
+        lines = [
+            f"✅ 已提取 {len(images)} 张图片到 {output_dir.relative_to(self.workspace_dir)}",
+            format_image_inventory(images, title="提取结果").rstrip(),
+        ]
+        return "\n".join(lines)
+
+    async def insert_image_to_template(
+        self,
+        image_path: str,
+        anchor_text: str = "",
+        position: str = "after",
+        width_inches: float = 5.2,
+        caption: str = "",
+        filename: str = "paper.docx",
+    ) -> str:
+        """
+        在模板指定段落附近插入图片，保留原有标题骨架和样式。
+
+        Args:
+            image_path: 工作区内图片路径，如 outputs/chart.png 或 .system/docx_images/paper/image1.png
+            anchor_text: 定位段落文本；为空则追加到文档末尾
+            position: after / before / replace
+            width_inches: 图片显示宽度（英寸）
+            caption: 可选图题，插入在图片下方并居中
+            filename: 目标 Word 文件
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        source = Path(image_path)
+        if not source.is_absolute():
+            source = self.workspace_dir / image_path
+        source = source.resolve()
+        if not str(source).startswith(str(self.workspace_dir)):
+            return f"Error: 图片路径超出工作空间: {image_path}"
+        if not source.exists() or not source.is_file():
+            return f"Error: 图片不存在: {image_path}"
+
+        try:
+            from docx import Document as PythonDocxDocument
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.oxml import OxmlElement
+            from docx.shared import Inches
+            from docx.text.paragraph import Paragraph
+
+            doc = PythonDocxDocument(str(file_path))
+            width = max(1.5, min(float(width_inches or 5.2), 6.3))
+
+            def _style_name(para) -> str:
+                return (para.style.name if para.style else "").strip().lower()
+
+            def _is_toc_para(para) -> bool:
+                style_name = _style_name(para)
+                return style_name.startswith("toc") or "目录" in style_name
+
+            anchor_para = None
+            anchor_idx = None
+            if anchor_text.strip():
+                target = anchor_text.strip()
+                for exact in (True, False):
+                    for i, para in enumerate(doc.paragraphs):
+                        text = para.text.strip()
+                        if not text or _is_toc_para(para):
+                            continue
+                        if text == target if exact else target in text:
+                            anchor_para = para
+                            anchor_idx = i
+                            break
+                    if anchor_para is not None:
+                        break
+                if anchor_para is None:
+                    available = [
+                        f"[{i}] {p.text[:60]}"
+                        for i, p in enumerate(doc.paragraphs)
+                        if p.text.strip() and not _is_toc_para(p)
+                    ][:30]
+                    return (
+                        f"Error: 未找到包含 \"{anchor_text}\" 的段落。\n"
+                        f"可用段落（前30个非空）:\n" + "\n".join(available)
+                    )
+                if position == "replace" and _style_name(anchor_para).startswith("heading"):
+                    return (
+                        "Error: 禁止用图片替换模板标题段落。"
+                        "请使用 position='after' 把图片插到标题或占位说明后面。"
+                    )
+            else:
+                anchor_para = doc.paragraphs[-1] if doc.paragraphs else doc.add_paragraph()
+                anchor_idx = len(doc.paragraphs) - 1
+                position = "after"
+
+            def _add_picture_paragraph(after_element):
+                new_para = OxmlElement("w:p")
+                after_element.addnext(new_para)
+                para = Paragraph(new_para, after_element.getparent())
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = para.add_run()
+                run.add_picture(str(source), width=Inches(width))
+                return new_para, para
+
+            if position == "replace":
+                anchor_para.clear()
+                anchor_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = anchor_para.add_run()
+                run.add_picture(str(source), width=Inches(width))
+                insert_after = anchor_para._element
+            elif position == "before":
+                prev = anchor_para._element.getprevious()
+                insert_after = prev if prev is not None else anchor_para._element
+                if prev is None:
+                    parent = anchor_para._element.getparent()
+                    new_para = OxmlElement("w:p")
+                    parent.insert(0, new_para)
+                    para = Paragraph(new_para, parent)
+                    para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    run = para.add_run()
+                    run.add_picture(str(source), width=Inches(width))
+                    insert_after = new_para
+                else:
+                    insert_after, _ = _add_picture_paragraph(insert_after)
+            else:
+                insert_after, _ = _add_picture_paragraph(anchor_para._element)
+
+            if caption.strip():
+                cap_xml = OxmlElement("w:p")
+                insert_after.addnext(cap_xml)
+                cap_para = Paragraph(cap_xml, insert_after.getparent())
+                cap_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = cap_para.add_run(caption.strip())
+                run.bold = True
+
+            doc.save(str(file_path))
+            self._notify_file_changed()
+            size_kb = file_path.stat().st_size / 1024
+            loc = f"段落 [{anchor_idx}]" if anchor_text.strip() else "文档末尾"
+            return (
+                f"✅ 已插入图片 {source.name} 到 {loc} "
+                f"(宽 {width:.1f} 英寸)\n文件大小: {size_kb:.1f} KB"
+            )
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖，无法插入图片"
+        except Exception as e:
+            logger.error("insert_image_to_template 失败: %s", e, exc_info=True)
             return f"Error: {e}"

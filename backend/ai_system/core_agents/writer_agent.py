@@ -113,7 +113,8 @@ class WriterAgent:
             # Load Word tools
             word_tools = LangChainToolFactory.create_word_tools(
                 workspace_dir=self.workspace_dir,
-                stream_manager=self.stream_manager
+                stream_manager=self.stream_manager,
+                llm=self.llm,
             )
             if not word_tools:
                 raise ValueError("Failed to create Word tools")
@@ -171,18 +172,23 @@ class WriterAgent:
                     "**绝对禁止**从零创建新文档覆盖模板！\n\n"
 
                     "你拥有以下工具：\n"
-                    "1. **read_docx** — 读取文档纯文本内容\n"
-                    "2. **get_template_structure** — 获取模板段落索引和结构（用于定位）\n"
-                    "3. **write_to_template** — 在模板指定位置插入/替换内容（核心工具）\n"
-                    "4. **repair_template_structure** — 当标题骨架被写坏时，按模板恢复标题文本/样式\n"
-                    "5. **create_docx** — 仅用于创建paper.docx以外的附件文档\n"
-                    "6. **edit_docx / repack_docx** — 低级 XML 编辑（极少使用）\n\n"
+                    "1. **read_docx** — 读取文档纯文本内容和嵌入图片清单\n"
+                    "2. **get_template_structure** — 获取模板段落索引、表格和图片骨架（用于定位）\n"
+                    "3. **analyze_docx_layout** — 提取并识别模板中的封面/校徽/图表，看清复杂排版\n"
+                    "4. **analyze_image** — 识别单张工作区图片\n"
+                    "5. **write_to_template** — 在模板指定位置插入/替换文字（核心文字工具）\n"
+                    "6. **insert_image_to_template** — 在锚点处插入图片并配图题（核心插图工具）\n"
+                    "7. **extract_template_images** — 只提取图片到 .system/docx_images/\n"
+                    "8. **repair_template_structure** — 当标题骨架被写坏时，按模板恢复标题文本/样式\n"
+                    "9. **create_docx** — 仅用于创建paper.docx以外的附件文档\n"
+                    "10. **edit_docx / repack_docx** — 低级 XML 编辑（极少使用）\n\n"
 
                     "**⚠️ 核心工作流程（模板模式）**\n"
-                    "1. 调用 `get_template_structure()` 了解模板的段落编号、标题层级和占位内容\n"
-                    "2. 调用 `read_docx()` 查看完整文本，理解已有内容\n"
-                    "3. 确定要填充的位置（通过 anchor_text 精确匹配段落文本）\n"
-                    "4. 调用 `write_to_template(anchor_text=..., content=..., position='after')` 逐处填充\n\n"
+                    "1. 先调用 `analyze_docx_layout()` 或 `get_template_structure()`，看清标题、表格和图片角色\n"
+                    "2. 调用 `read_docx()` 查看完整文本和嵌入图片清单\n"
+                    "3. 文字用 `write_to_template(anchor_text=..., content=..., position='after')` 按位填充\n"
+                    "4. 图表用 `insert_image_to_template(image_path=..., anchor_text=..., caption='图1 ...')` 插到对应章节\n"
+                    "5. 模板里的校徽/页眉/封面图默认保留，不要删除或覆盖标题\n\n"
 
                     "**write_to_template 参数说明**：\n"
                     "- `anchor_text`: 用于定位的段落文本（部分匹配即可）\n"
@@ -202,6 +208,7 @@ class WriterAgent:
                     "- 按位填充：通过 anchor_text 精确定位要填充的位置\n"
                     "- 格式继承：模板中的字体、字号、行距由模板样式自动继承\n"
                     "- 代码块：用 ``` 包裹，自动使用 Courier New 10pt 等宽字体\n"
+                    "- 图片必须插到对应章节，禁止只写“见图”或把所有图堆到文末\n"
                     "- 如果 anchor 找不到，工具会返回可用段落列表，据此调整 anchor\n\n"
 
                     "**模板结构修复规则**：\n"
