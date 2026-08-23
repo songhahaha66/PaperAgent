@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Optional, List
 
 from .docx_images import extract_docx_images, format_image_inventory, inventory_docx_images
+from .docx_styles import (
+    apply_body_run_format,
+    compare_style_fingerprints,
+    extract_style_fingerprint,
+    format_style_comparison,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -513,63 +519,46 @@ class DocxTools:
                     "请保留标题骨架，并使用 position='after' 在标题或占位说明后填充内容。"
                 )
 
+            body_style = style or "Normal"
+
+            def _styled_paragraph(text: str, after_element=None, insert_first: bool = False):
+                para = doc.add_paragraph()
+                try:
+                    para.style = doc.styles[body_style]
+                except KeyError:
+                    pass
+                run = para.add_run(text)
+                apply_body_run_format(doc, run, style_name=body_style, is_code=is_code)
+                if insert_first:
+                    parent = after_element.getparent() if after_element is not None else para._element.getparent()
+                    parent.insert(0, para._element)
+                elif after_element is not None:
+                    after_element.addnext(para._element)
+                return para._element
+
             if position == "replace":
                 anchor_para.clear()
                 run = anchor_para.add_run(paragraphs_text[0])
-                if is_code:
-                    run.font.name = "Courier New"
-                    run.font.size = Pt(10)
+                apply_body_run_format(doc, run, style_name=body_style, is_code=is_code)
+                insert_after = anchor_para._element
                 for extra_text in paragraphs_text[1:]:
-                    new_para = OxmlElement("w:p")
-                    anchor_para._element.addnext(new_para)
-                    from docx.text.paragraph import Paragraph
-                    p = Paragraph(new_para, anchor_para._element.getparent())
-                    r = p.add_run(extra_text)
-                    if is_code:
-                        r.font.name = "Courier New"
-                        r.font.size = Pt(10)
+                    insert_after = _styled_paragraph(extra_text, insert_after)
                 result_msg = f"✅ 已替换段落 [{anchor_idx}] 的内容"
             else:
                 insert_after_element = anchor_para._element
+                remaining = paragraphs_text
                 if position == "before":
                     prev = anchor_para._element.getprevious()
                     if prev is not None:
                         insert_after_element = prev
                     else:
-                        parent = anchor_para._element.getparent()
-                        new_para = OxmlElement("w:p")
-                        parent.insert(0, new_para)
-                        from docx.text.paragraph import Paragraph
-                        p = Paragraph(new_para, parent)
-                        r = p.add_run(paragraphs_text[0])
-                        if is_code:
-                            r.font.name = "Courier New"
-                            r.font.size = Pt(10)
-                        if style:
-                            try:
-                                p.style = doc.styles[style]
-                            except KeyError:
-                                pass
-                        insert_after_element = new_para
-                        paragraphs_text = paragraphs_text[1:]
+                        insert_after_element = _styled_paragraph(
+                            remaining[0], anchor_para._element, insert_first=True
+                        )
+                        remaining = remaining[1:]
 
-                for text in paragraphs_text:
-                    new_para = OxmlElement("w:p")
-                    insert_after_element.addnext(new_para)
-                    from docx.text.paragraph import Paragraph
-                    p = Paragraph(new_para, insert_after_element.getparent())
-                    if style:
-                        try:
-                            p.style = doc.styles[style]
-                        except KeyError:
-                            pass
-                    if is_code:
-                        r = p.add_run(text)
-                        r.font.name = "Courier New"
-                        r.font.size = Pt(10)
-                    else:
-                        r = p.add_run(text)
-                    insert_after_element = new_para
+                for text in remaining:
+                    insert_after_element = _styled_paragraph(text, insert_after_element)
 
                 pos_word = "后" if position == "after" else "前"
                 result_msg = f"✅ 已在段落 [{anchor_idx}] \"{anchor_text[:30]}\" {pos_word}插入 {len(paragraphs_text)} 段内容"
@@ -690,12 +679,54 @@ class DocxTools:
                 lines.append("")
                 lines.append(format_image_inventory(images, title="图片").rstrip())
 
+            lines.append("")
+            lines.append(extract_style_fingerprint(file_path).format_report("当前文档样式").rstrip())
+
             return "\n".join(lines)
 
         except ImportError:
             return "Error: 缺少 python-docx 依赖"
         except Exception as e:
             return f"Error: {e}"
+
+    async def inspect_document_styles(self, filename: str = "paper.docx") -> str:
+        """
+        查看指定 Word 的页面、样式定义、标题/正文样例。
+        写模板前看模板，写完后看成品，用的是同一套档案。
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            template = self.workspace_dir / ".system" / "_template_original.docx"
+            if filename != "paper.docx" or not template.exists():
+                return f"Error: 文件不存在: {filename}"
+            file_path = template
+            filename = ".system/_template_original.docx"
+        fingerprint = extract_style_fingerprint(file_path)
+        return f"文档: {filename}\n" + fingerprint.format_report("样式档案")
+
+    async def compare_document_styles(
+        self,
+        expected_filename: str = ".system/_template_original.docx",
+        actual_filename: str = "paper.docx",
+    ) -> str:
+        """
+        对照模板与成品的页面、页眉页脚和关键样式定义。
+        写完后必须调用，确认成品没有把宋体/小四/边距写成另一套。
+        """
+        expected_path = self.workspace_dir / expected_filename
+        actual_path = self.workspace_dir / actual_filename
+        if not expected_path.exists():
+            return f"Error: 对照基准不存在: {expected_filename}"
+        if not actual_path.exists():
+            return f"Error: 成品不存在: {actual_filename}"
+
+        expected = extract_style_fingerprint(expected_path)
+        actual = extract_style_fingerprint(actual_path)
+        issues = compare_style_fingerprints(expected, actual)
+        report = format_style_comparison(expected, actual, issues)
+        if issues:
+            return f"⚠️ 成品样式与模板不一致（{len(issues)} 项）\n{report}"
+        return f"✅ 成品样式与模板一致\n{report}"
 
     async def extract_template_images(self, filename: str = "paper.docx") -> str:
         """

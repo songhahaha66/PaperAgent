@@ -605,7 +605,23 @@ class PlanReconciler:
         ]
         if markdown_heading_leaks:
             issues.append(f"标题中残留Markdown标记: {markdown_heading_leaks[:3]}")
+        issues.extend(self._validate_docx_styles(template_docx, paper_docx))
         return issues
+
+    @staticmethod
+    def _validate_docx_styles(template_docx: Path, paper_docx: Path) -> List[str]:
+        try:
+            from ai_system.core_tools.docx_styles import (
+                compare_style_fingerprints,
+                extract_style_fingerprint,
+            )
+
+            return compare_style_fingerprints(
+                extract_style_fingerprint(template_docx),
+                extract_style_fingerprint(paper_docx),
+            )
+        except Exception as exc:
+            return [f"无法对照Word样式: {exc}"]
 
     def _docx_outline(self, docx_path: Path) -> Dict[str, Any]:
         import xml.etree.ElementTree as ET

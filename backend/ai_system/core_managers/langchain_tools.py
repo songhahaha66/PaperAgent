@@ -410,6 +410,25 @@ class LangChainToolFactory:
                         "生成的图表必须插入到对应章节，不要只写“见图”，也不要覆盖标题。"
                     )
                 ),
+                StructuredTool.from_function(
+                    coroutine=docx.inspect_document_styles,
+                    name="inspect_document_styles",
+                    description=(
+                        "查看 Word 的页面尺寸、页边距、页眉页脚、标题/正文样式定义和实际段落样例。\n"
+                        "参数：filename（默认 paper.docx；写前可看 .system/_template_original.docx）。\n"
+                        "排版项目必须先看模板样式，写完再看成品样式，不能只看图片。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.compare_document_styles,
+                    name="compare_document_styles",
+                    description=(
+                        "对照模板与成品的页面、页边距、页眉页脚和关键样式定义。\n"
+                        "参数：expected_filename（默认 .system/_template_original.docx）、"
+                        "actual_filename（默认 paper.docx）。\n"
+                        "全部章节写完后必须调用；有字体/字号/边距漂移就不能验收通过。"
+                    )
+                ),
             ]
 
             try:
@@ -448,9 +467,18 @@ class LangChainToolFactory:
                     coroutine=vision.analyze_docx_layout,
                     name="analyze_docx_layout",
                     description=(
-                        "提取并识别 Word 模板中的全部嵌入图片，理解复杂模板的视觉排版。"
-                        "Word 模板模式下，开始填内容前应先调用一次。\n"
+                        "查看 Word 的样式档案，并提取识别嵌入图片。"
+                        "写前看模板，写后也可看成品；不只看图，也看页面和字体。\n"
                         "参数：filename（默认 paper.docx）、question（可选）。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=vision.review_document_appearance,
+                    name="review_document_appearance",
+                    description=(
+                        "写完后验收成品外观：对照模板样式，再识别成品中的图是否仍符合该模板排版。\n"
+                        "参数：filename（默认 paper.docx）、"
+                        "template_filename（默认 .system/_template_original.docx）。"
                     )
                 ),
             ]
@@ -541,6 +569,33 @@ class LangChainToolFactory:
             # 添加标准工具（搜索）
             standard_tools = LangChainToolFactory.create_standard_tools()
             base_tools.extend(standard_tools)
+
+            try:
+                from ..core_tools.docx_tools import DocxTools
+
+                docx = DocxTools(workspace_dir, stream_manager)
+                base_tools.extend(
+                    [
+                        StructuredTool.from_function(
+                            coroutine=docx.inspect_document_styles,
+                            name="inspect_document_styles",
+                            description=(
+                                "查看 Word 的页面、边距、页眉页脚和标题/正文样式。"
+                                "写前看模板，写后看成品。"
+                            ),
+                        ),
+                        StructuredTool.from_function(
+                            coroutine=docx.compare_document_styles,
+                            name="compare_document_styles",
+                            description=(
+                                "对照模板与成品样式。全部写完后必须调用，"
+                                "字体/字号/边距漂移则不能验收通过。"
+                            ),
+                        ),
+                    ]
+                )
+            except Exception as e:
+                logger.warning("附加样式对照工具失败: %s", e)
 
             try:
                 base_tools.extend(LangChainToolFactory.create_vision_tools(workspace_dir, stream_manager))

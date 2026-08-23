@@ -20,6 +20,10 @@ from ai_system.core_tools.docx_images import (
     format_image_inventory,
     inventory_docx_images,
 )
+from ai_system.core_tools.docx_styles import (
+    extract_style_fingerprint,
+    save_style_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +106,7 @@ def initialize_template_contract(
             _write_contract(workspace_path, contract)
             _copy_template_to_workspace(source_path, workspace_path, output_mode)
             _extract_template_images(source_path, workspace_path, output_mode)
+            _save_template_style_profile(source_path, workspace_path, output_mode)
             return contract
         finally:
             db.close()
@@ -132,6 +137,15 @@ def _extract_template_images(source_path: Path, workspace_path: Path, output_mod
         extract_docx_images(source_path, workspace_path / ".system" / "docx_images" / "template")
     except Exception as exc:
         logger.warning("提取模板图片失败: %s", exc)
+
+
+def _save_template_style_profile(source_path: Path, workspace_path: Path, output_mode: str) -> None:
+    if output_mode != "word" or source_path.suffix.lower() != ".docx":
+        return
+    try:
+        save_style_profile(workspace_path, extract_style_fingerprint(source_path))
+    except Exception as exc:
+        logger.warning("保存模板样式档案失败: %s", exc)
 
 
 def _write_contract(workspace_path: Path, contract: str) -> None:
@@ -237,6 +251,8 @@ def _docx_contract(source_path: Path) -> str:
 
         result.append("\n## 显式格式/写作要求")
         result.extend(_format_requirement_lines(requirements))
+        result.append("")
+        result.append(extract_style_fingerprint(source_path).format_report("模板样式档案").rstrip())
         result.append("")
         result.append(format_image_inventory(inventory_docx_images(source_path)).rstrip())
         return "\n".join(result) + "\n"

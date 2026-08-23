@@ -17,7 +17,12 @@ from typing import Optional
 import requests
 
 from ..config.api_settings import load_env_api_settings
-from .docx_images import extract_docx_images, format_image_inventory
+from .docx_images import extract_docx_images, format_image_inventory, inventory_docx_images
+from .docx_styles import (
+    compare_style_fingerprints,
+    extract_style_fingerprint,
+    format_style_comparison,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +83,21 @@ class VisionTools:
         if not file_path.exists():
             return f"Error: 文件不存在: {filename}"
 
+        style_report = extract_style_fingerprint(file_path).format_report(f"{filename} 样式档案")
         output_dir = self.workspace_dir / ".system" / "docx_images" / Path(filename).stem
         images = extract_docx_images(file_path, output_dir)
         if not images:
             return (
-                f"{filename} 中没有嵌入图片。\n"
+                style_report
+                + f"\n{filename} 中没有嵌入图片。\n"
                 "如果用户另外上传了图片，请用 analyze_image 识别 outputs/ 或 attachment/ 中的文件。"
             )
 
         lines = [
+            style_report.rstrip(),
+            "",
             f"✅ 已从 {filename} 提取 {len(images)} 张图片到 {output_dir.relative_to(self.workspace_dir)}",
-            format_image_inventory(images, title="模板图片清单").rstrip(),
+            format_image_inventory(images, title="图片清单").rstrip(),
             "",
             "## 视觉识别",
         ]
@@ -108,6 +117,55 @@ class VisionTools:
 
         if len(images) > MAX_VISION_IMAGES:
             lines.append(f"- 其余 {len(images) - MAX_VISION_IMAGES} 张图已提取，但未全部送识别以控制费用。")
+
+        return "\n".join(lines)
+
+    async def review_document_appearance(
+        self,
+        filename: str = "paper.docx",
+        template_filename: str = ".system/_template_original.docx",
+    ) -> str:
+        """
+        写完后看成品：先对照模板样式，再识别成品里的图是否还像这份模板的排版。
+        """
+        paper_path = self.workspace_dir / filename
+        if not paper_path.exists():
+            return f"Error: 成品不存在: {filename}"
+
+        template_path = self.workspace_dir / template_filename
+        lines = [f"# 成品外观验收: {filename}"]
+
+        if template_path.exists():
+            expected = extract_style_fingerprint(template_path)
+            actual = extract_style_fingerprint(paper_path)
+            issues = compare_style_fingerprints(expected, actual)
+            lines.append(format_style_comparison(expected, actual, issues).rstrip())
+            template_images = inventory_docx_images(template_path)
+            paper_images = inventory_docx_images(paper_path)
+            if template_images and len(paper_images) < len(template_images):
+                lines.append(
+                    f"\n⚠️ 成品嵌入图少于模板：模板 {len(template_images)} 张，当前 {len(paper_images)} 张。"
+                )
+        else:
+            lines.append(extract_style_fingerprint(paper_path).format_report("成品样式档案").rstrip())
+            lines.append("没有模板原件，只能检查成品自身样式。")
+
+        output_dir = self.workspace_dir / ".system" / "docx_images" / f"{Path(filename).stem}_review"
+        images = extract_docx_images(paper_path, output_dir)
+        if images:
+            lines.append("\n## 成品图片识别")
+            prompt = (
+                "你是排版验收员。请看这张成品文档中的图："
+                "它现在像正式论文里的封面/校徽/正文插图吗？"
+                "有没有明显错位、被裁切、变成装饰乱入？"
+                "用中文回答，不超过80字。"
+            )
+            for info in images[:MAX_VISION_IMAGES]:
+                extracted = Path(info.extracted_path) if info.extracted_path else None
+                if not extracted or not extracted.exists():
+                    continue
+                analysis = await self._describe_image(extracted, prompt)
+                lines.append(f"- [{info.index}] {extracted.name} | {info.part}: {analysis}")
 
         return "\n".join(lines)
 
