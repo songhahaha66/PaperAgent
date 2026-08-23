@@ -335,6 +335,60 @@ def test_write_to_template_inherits_body_sample_when_normal_has_no_font(tmp_path
     assert abs(inserted.runs[0].font.size.pt - 12) < 0.2
 
 
+def test_fill_template_table_overwrites_example_rows(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    doc = Document()
+    table = doc.add_table(rows=4, cols=3)
+    headers = ["用例编号", "测试项", "预期结果"]
+    examples = [
+        ["1", "开始游戏", "出现一条蛇"],
+        ["2", "蛇的移动", "蛇会移动"],
+        ["3", "……", "……"],
+    ]
+    for col, text in enumerate(headers):
+        cell = table.rows[0].cells[col]
+        run = cell.paragraphs[0].add_run(text)
+        run.font.size = Pt(10.5)
+        run.font.name = "宋体"
+        run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+    for r_idx, row_values in enumerate(examples, start=1):
+        for c_idx, text in enumerate(row_values):
+            cell = table.rows[r_idx].cells[c_idx]
+            cell.text = ""
+            run = cell.paragraphs[0].add_run(text)
+            run.font.size = Pt(10.5)
+            run.font.name = "宋体"
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+    doc.add_paragraph("表2.1 系统测试用例")
+    doc.save(str(workspace / "paper.docx"))
+
+    tools = DocxTools(str(workspace))
+    structure = asyncio.run(tools.get_template_structure())
+    assert "出现一条蛇" in structure
+
+    result = asyncio.run(
+        tools.fill_template_table(
+            table_index=0,
+            content_json='[["1","左移碰墙","方块停在左边界"],["2","消一行","分数增加"],["3","堆满顶部","游戏结束"],["4","旋转碰底","旋转被拒绝"],["5","空格硬降","方块立即锁定"]]',
+            start_row=1,
+            match_header="测试项",
+        )
+    )
+    assert "Error" not in result
+    updated = Document(str(workspace / "paper.docx"))
+    cells = [[c.text for c in row.cells] for row in updated.tables[0].rows]
+    assert cells[0] == headers
+    assert cells[1] == ["1", "左移碰墙", "方块停在左边界"]
+    assert cells[5][1] == "空格硬降"
+    assert all("蛇" not in cell for row in cells[1:] for cell in row)
+    east_asia = updated.tables[0].rows[1].cells[1].paragraphs[0].runs[0]._element.find(
+        ".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rFonts"
+    )
+    assert east_asia is not None
+    assert east_asia.get(qn("w:eastAsia")) == "宋体"
+
+
 def test_review_agent_blocks_finished_style_drift(tmp_path: Path):
     workspace = tmp_path / "workspace"
     system_dir = workspace / ".system"

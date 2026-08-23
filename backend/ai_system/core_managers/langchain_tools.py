@@ -368,7 +368,21 @@ class LangChainToolFactory:
                         "content（要插入的内容，多段用\\n\\n分隔，代码用```包裹）、"
                         "position（'after'在锚点后/'before'在锚点前/'replace'替换锚点）、"
                         "style（可选样式名）、filename（默认 paper.docx）。\n"
-                        "模板模式下的核心工具，用于在已有模板基础上填充内容。"
+                        "模板模式下的核心工具，用于在已有模板基础上填充段落内容。"
+                        "注意：这个工具改不了表格单元格。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.fill_template_table,
+                    name="fill_template_table",
+                    description=(
+                        "填写模板里已经存在的表格单元格，保留表线和单元格原字体。\n"
+                        "参数：table_index（与 get_template_structure 中的表格序号一致）、"
+                        "content_json（JSON二维数组，每行一个单元格列表）、"
+                        "start_row（默认1，跳过表头）、"
+                        "match_header（可选，表头需包含的文字，防止填错表）、"
+                        "filename（默认 paper.docx）。\n"
+                        "测试用例表、评分数据行必须用这个工具，不要用 write_to_template 另写一张表。"
                     )
                 ),
                 StructuredTool.from_function(
@@ -387,7 +401,7 @@ class LangChainToolFactory:
                     description=(
                         "获取文档的详细段落结构，包括段落索引、样式名、表格和嵌入图片清单。\n"
                         "参数：filename（默认 paper.docx）。\n"
-                        "用于在调用 write_to_template / insert_image_to_template 前了解结构和定位 anchor_text。"
+                        "用于在调用 write_to_template / fill_template_table / insert_image_to_template 前了解结构和定位。"
                     )
                 ),
                 StructuredTool.from_function(

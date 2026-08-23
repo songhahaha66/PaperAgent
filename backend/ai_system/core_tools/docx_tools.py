@@ -577,6 +577,119 @@ class DocxTools:
             logger.error(f"write_to_template 失败: {e}", exc_info=True)
             return f"Error: {e}"
 
+    async def fill_template_table(
+        self,
+        table_index: int,
+        content_json: str,
+        start_row: int = 1,
+        filename: str = "paper.docx",
+        match_header: str = "",
+    ) -> str:
+        """
+        按单元格填写模板里已有的表格，保留表格线和单元格原有字体。
+
+        write_to_template 只改段落，改不了表格。课程报告里的测试用例表、
+        评分表数据行必须走这个工具。
+
+        Args:
+            table_index: 表格序号，与 get_template_structure 中的「表格N」一致
+            content_json: JSON 二维数组，每一行对应表格的一行单元格文本
+            start_row: 从哪一行开始覆盖，默认 1（跳过表头）
+            filename: 目标文件
+            match_header: 可选，表头需包含的文字，用来核对没有填错表
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        try:
+            rows = json.loads(content_json)
+        except json.JSONDecodeError as exc:
+            return f"Error: content_json 不是合法 JSON: {exc}"
+        if not isinstance(rows, list) or not rows:
+            return "Error: content_json 必须是非空二维数组，例如 [[\"1\",\"开始游戏\",...]]"
+        if not all(isinstance(row, list) for row in rows):
+            return "Error: content_json 每一行都必须是数组"
+
+        try:
+            from copy import deepcopy
+
+            from docx import Document as PythonDocxDocument
+            from docx.table import _Cell
+
+            doc = PythonDocxDocument(str(file_path))
+            if table_index < 0 or table_index >= len(doc.tables):
+                return (
+                    f"Error: 表格序号 {table_index} 不存在。"
+                    f"当前文档共 {len(doc.tables)} 个表格。"
+                )
+
+            table = doc.tables[table_index]
+            header = " | ".join(cell.text.strip() for cell in table.rows[0].cells)
+            if match_header and match_header not in header:
+                headers = [
+                    f"表格{i}: {' | '.join(c.text.strip()[:20] for c in t.rows[0].cells)}"
+                    for i, t in enumerate(doc.tables) if t.rows
+                ]
+                return (
+                    f"Error: 表格{table_index} 表头不包含 \"{match_header}\"。\n"
+                    f"当前表头: {header}\n" + "\n".join(headers)
+                )
+
+            col_count = len(table.columns) if table.rows else 0
+
+            def _write_cell(cell: _Cell, text: str) -> None:
+                paragraph = cell.paragraphs[0]
+                r_pr = None
+                for existing_run in paragraph.runs:
+                    if existing_run._element.rPr is not None:
+                        r_pr = deepcopy(existing_run._element.rPr)
+                        break
+                for extra in cell.paragraphs[1:]:
+                    extra._element.getparent().remove(extra._element)
+                paragraph.clear()
+                run = paragraph.add_run(text)
+                if r_pr is not None:
+                    r_el = run._element
+                    existing = r_el.rPr
+                    if existing is not None:
+                        r_el.remove(existing)
+                    r_el.insert(0, r_pr)
+                else:
+                    apply_body_run_format(doc, run)
+
+            def _clone_row():
+                tbl = table._tbl
+                last_tr = table.rows[-1]._tr
+                new_tr = deepcopy(last_tr)
+                tbl.append(new_tr)
+
+            needed_rows = start_row + len(rows)
+            while len(table.rows) < needed_rows:
+                _clone_row()
+
+            filled = 0
+            for offset, row_values in enumerate(rows):
+                row_idx = start_row + offset
+                if row_idx >= len(table.rows):
+                    break
+                cells = table.rows[row_idx].cells
+                for col_idx, value in enumerate(row_values[:col_count]):
+                    _write_cell(cells[col_idx], "" if value is None else str(value))
+                    filled += 1
+
+            doc.save(str(file_path))
+            self._notify_file_changed()
+            return (
+                f"✅ 已填写表格{table_index}（表头: {header[:40]}）"
+                f"，从第 {start_row} 行起覆盖 {len(rows)} 行、共 {filled} 个单元格。"
+            )
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖，无法填写表格"
+        except Exception as e:
+            logger.error("fill_template_table 失败: %s", e, exc_info=True)
+            return f"Error: {e}"
+
     async def repair_template_structure(self, filename: str = "paper.docx") -> str:
         """
         按上传模板恢复 Word 文档的标题骨架。
@@ -676,6 +789,15 @@ class DocxTools:
                     cols = len(table.columns) if table.rows else 0
                     first_cell = table.rows[0].cells[0].text[:40] if rows > 0 else ""
                     lines.append(f"表格{t_idx}: {rows}行×{cols}列, 首格=\"{first_cell}\"")
+                    preview_rows = min(rows, 8)
+                    for r_idx in range(preview_rows):
+                        cells = [
+                            table.rows[r_idx].cells[c].text.replace("\n", " ")[:24]
+                            for c in range(cols)
+                        ]
+                        lines.append(f"  r{r_idx}: {cells}")
+                    if rows > preview_rows:
+                        lines.append(f"  ... 还有 {rows - preview_rows} 行")
 
             images = inventory_docx_images(file_path)
             if images:
