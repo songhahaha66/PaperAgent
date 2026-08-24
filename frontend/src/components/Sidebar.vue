@@ -324,6 +324,13 @@ const userOptions = [
     },
   },
   {
+    content: 'Passkey 管理',
+    value: 'passkey',
+    onClick: () => {
+      router.push('/passkey')
+    },
+  },
+  {
     content: '退出登录',
     value: 'logout',
     onClick: () => {

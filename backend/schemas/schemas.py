@@ -28,6 +28,43 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     email: Optional[str] = None
 
+
+class PasskeyLoginOptionsRequest(BaseModel):
+    email: Optional[EmailStr] = None
+
+
+class PasskeyOptionsResponse(BaseModel):
+    challenge_id: str
+    options: dict
+
+
+class PasskeyRegisterVerifyRequest(BaseModel):
+    challenge_id: str
+    credential: dict
+    name: Optional[str] = None
+
+
+class PasskeyLoginVerifyRequest(BaseModel):
+    challenge_id: str
+    credential: dict
+
+
+class PasskeyCredentialResponse(BaseModel):
+    id: int
+    name: str
+    device_type: Optional[str] = None
+    backed_up: bool = False
+    transports: Optional[List[str]] = None
+    created_at: datetime
+    last_used_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PasskeyUpdateRequest(BaseModel):
+    name: str
+
 class SystemConfigResponse(BaseModel):
     id: int
     is_allow_register: bool

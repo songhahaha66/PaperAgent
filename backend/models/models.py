@@ -123,3 +123,39 @@ class WorkFlowState(Base):
 
 # 更新User模型的反向关系
 User.chat_sessions = relationship("ChatSession", back_populates="creator")
+
+
+class WebAuthnCredential(Base):
+    """用户绑定的 Passkey / WebAuthn 凭证"""
+    __tablename__ = "webauthn_credentials"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    credential_id = Column(String(1024), unique=True, nullable=False, index=True)
+    public_key = Column(Text, nullable=False)
+    sign_count = Column(Integer, nullable=False, default=0)
+    device_type = Column(String(32), nullable=True)
+    backed_up = Column(Boolean, default=False)
+    transports = Column(JSON, nullable=True)
+    aaguid = Column(String(64), nullable=True)
+    name = Column(String(100), nullable=False, default="Passkey")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="webauthn_credentials")
+
+
+class WebAuthnChallenge(Base):
+    """一次性 WebAuthn challenge，注册/登录校验后作废"""
+    __tablename__ = "webauthn_challenges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    challenge_id = Column(String(64), unique=True, nullable=False, index=True)
+    challenge = Column(String(255), nullable=False)
+    challenge_type = Column(String(32), nullable=False)  # registration | authentication
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+User.webauthn_credentials = relationship("WebAuthnCredential", back_populates="user")

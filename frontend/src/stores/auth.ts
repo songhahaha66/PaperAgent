@@ -101,6 +101,27 @@ export const useAuthStore = defineStore(
       initialized.value = false
     }
 
+    async function loginWithToken(accessToken: string) {
+      try {
+        loading.value = true
+        token.value = accessToken
+        localStorage.setItem('auth_token', accessToken)
+        await loadCurrentUser()
+        if (!user.value) {
+          return { success: false, error: '登录失败' }
+        }
+        return { success: true }
+      } catch (error) {
+        logout()
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : '登录失败',
+        }
+      } finally {
+        loading.value = false
+      }
+    }
+
     return {
       // 状态
       user,
@@ -115,6 +136,7 @@ export const useAuthStore = defineStore(
       // 方法
       register,
       login,
+      loginWithToken,
       logout,
       loadCurrentUser,
       initializeAuth, // 新增：导出初始化方法

@@ -7,8 +7,10 @@ from auth import auth
 from database.database import get_db
 
 from ..utils import route_guard
+from .passkey import router as passkey_router
 
 router = APIRouter(prefix="/auth",tags=["认证"])
+router.include_router(passkey_router)
 
 @router.post("/register", response_model=schemas.UserResponse)
 @route_guard

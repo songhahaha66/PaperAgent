@@ -15,6 +15,7 @@
     "format": "prettier --write src/"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^13.3.0",
     "@tdesign-vue-next/chat": "^0.5.2",
     "docx-preview": "^0.3.7",
     "embla-carousel-vue": "^8.6.0",

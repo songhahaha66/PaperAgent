@@ -17,7 +17,13 @@
         class="login-form"
       >
         <t-form-item name="email">
-          <t-input v-model="formData.email" placeholder="邮箱地址" type="email" clearable>
+          <t-input
+            v-model="formData.email"
+            placeholder="邮箱地址"
+            type="email"
+            autocomplete="username webauthn"
+            clearable
+          >
             <template #prefix-icon>
               <MailIcon />
             </template>
@@ -55,6 +61,23 @@
         </t-form-item>
       </t-form>
 
+      <div v-if="isLogin && passkeySupported" class="passkey-section">
+        <div class="divider"><span>或</span></div>
+        <t-button
+          theme="default"
+          variant="outline"
+          size="large"
+          block
+          :loading="passkeyLoading"
+          @click="onPasskeyLogin"
+        >
+          <template #icon>
+            <SecuredIcon />
+          </template>
+          使用 Passkey 登录
+        </t-button>
+      </div>
+
       <div class="form-footer">
         <p v-if="isLogin">
           还没有账户？
@@ -64,23 +87,35 @@
           已有账户？
           <t-link theme="primary" @click="switchMode">立即登录</t-link>
         </p>
+        <p v-if="isLogin" class="passkey-hint">登录后可在账户设置中添加 Passkey</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { MailIcon, LockOnIcon, UserIcon } from 'tdesign-icons-vue-next'
+import { MailIcon, LockOnIcon, UserIcon, SecuredIcon } from 'tdesign-icons-vue-next'
 import { useAuthStore } from '@/stores/auth'
+import { authAPI } from '@/api/auth'
+import {
+  assertPasskey,
+  cancelPasskeyCeremony,
+  isPasskeyAutofillSupported,
+  isPasskeyCanceled,
+  isPasskeySupported,
+} from '@/utils/passkey'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
 const isLogin = ref(true)
+const passkeySupported = ref(false)
+const passkeyLoading = ref(false)
+let conditionalLoginActive = false
 
 // 检查URL参数，如果是注册模式则自动切换
 if (route.query.mode === 'register') {
@@ -120,12 +155,84 @@ const rules = {
 
 const switchMode = () => {
   isLogin.value = !isLogin.value
+  cancelPasskeyCeremony()
   // 清空表单数据
   formData.email = ''
   formData.username = ''
   formData.password = ''
   formData.confirmPassword = ''
+  if (isLogin.value) {
+    startConditionalLogin()
+  }
 }
+
+const finishPasskeyLogin = async (challengeId: string, credential: object) => {
+  const tokenResponse = await authAPI.verifyPasskeyLogin(challengeId, credential)
+  const result = await authStore.loginWithToken(tokenResponse.access_token)
+  if (result.success) {
+    MessagePlugin.success('登录成功')
+    router.push('/home')
+  } else {
+    MessagePlugin.error(result.error || '登录失败')
+  }
+}
+
+const startConditionalLogin = async () => {
+  if (!isLogin.value || !passkeySupported.value) {
+    return
+  }
+  if (!(await isPasskeyAutofillSupported())) {
+    return
+  }
+  if (conditionalLoginActive) return
+  conditionalLoginActive = true
+  try {
+    const { challenge_id, options } = await authAPI.getPasskeyLoginOptions()
+    const assertion = await assertPasskey(options as any, true)
+    await finishPasskeyLogin(challenge_id, assertion)
+  } catch (error) {
+    if (!isPasskeyCanceled(error)) {
+      console.warn('Passkey 自动填充登录未完成:', error)
+    }
+  } finally {
+    conditionalLoginActive = false
+  }
+}
+
+const onPasskeyLogin = async () => {
+  if (!passkeySupported.value) {
+    MessagePlugin.warning('当前浏览器不支持 Passkey')
+    return
+  }
+  passkeyLoading.value = true
+  try {
+    const email = formData.email.trim() || undefined
+    const { challenge_id, options } = await authAPI.getPasskeyLoginOptions(email)
+    const assertion = await assertPasskey(options as any)
+    await finishPasskeyLogin(challenge_id, assertion)
+  } catch (error) {
+    if (isPasskeyCanceled(error)) {
+      MessagePlugin.info('已取消 Passkey 登录')
+    } else {
+      console.error('Passkey 登录失败:', error)
+      MessagePlugin.error(error instanceof Error ? error.message : 'Passkey 登录失败')
+    }
+  } finally {
+    passkeyLoading.value = false
+    startConditionalLogin()
+  }
+}
+
+onMounted(() => {
+  passkeySupported.value = isPasskeySupported()
+  if (isLogin.value) {
+    startConditionalLogin()
+  }
+})
+
+onUnmounted(() => {
+  cancelPasskeyCeremony()
+})
 
 const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   if (validateResult === true) {
@@ -226,5 +333,35 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 .form-footer p {
   margin: 0;
   color: #7f8c8d;
+}
+
+.passkey-section {
+  margin: -10px 0 24px;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  color: #b0b8bf;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e8edf2;
+}
+
+.divider span {
+  padding: 0 12px;
+}
+
+.passkey-hint {
+  margin-top: 12px !important;
+  font-size: 12px;
+  color: #95a5a6;
 }
 </style>
