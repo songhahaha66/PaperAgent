@@ -38,6 +38,7 @@ dependencies = [
     "langchain-anthropic>=1.4.3",
     "langchain-google-genai>=4.2.2",
     "pygments>=2.20.0",
+    "webauthn>=3.0.0",
 ]
 
 [tool.uv.workspace]
