@@ -128,6 +128,13 @@
     </div>
   </div>
 
+  <!-- 手机端侧边栏遮罩 -->
+  <div
+    v-if="isMobile && !isSidebarCollapsed"
+    class="sidebar-backdrop"
+    @click="toggleSidebar"
+  />
+
   <!-- 手机端侧边栏收起时的浮动展开按钮 -->
   <div
     v-if="isSidebarCollapsed"
@@ -145,12 +152,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { BrowseIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { workspaceAPI } from '@/api/workspace'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 // 定义props
 interface Props {
@@ -170,6 +178,7 @@ const emit = defineEmits<Emits>()
 
 const router = useRouter()
 const authStore = useAuthStore()
+const { isMobile } = useBreakpoint()
 
 // 历史工作数据类型定义
 interface HistoryItem {
@@ -193,22 +202,26 @@ const toggleSidebar = () => {
   emit('toggle-sidebar')
 }
 
+const closeSidebarOnMobile = () => {
+  if (isMobile.value && !props.isSidebarCollapsed) {
+    emit('toggle-sidebar')
+  }
+}
+
 // 新建工作
 const createNewTask = () => {
-  // 跳转到home页面
+  closeSidebarOnMobile()
   router.push('/home')
 }
 
 // 选择历史工作
 const selectHistory = (item: any) => {
-  // 通知父组件选中状态变化
   emit('select-history', item.id)
+  closeSidebarOnMobile()
 
   if (item.work_id) {
-    // 跳转到对应的工作页面
     router.push(`/work/${item.work_id}`)
   } else {
-    // 如果没有work_id，使用id
     router.push(`/work/${item.id}`)
   }
 }
@@ -272,6 +285,22 @@ const getStatusText = (status?: string) => {
   }
   return texts[status] || status
 }
+
+watch(
+  [isMobile, isSidebarCollapsed],
+  ([mobile, collapsed]) => {
+    if (mobile && !collapsed) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+  },
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  document.body.style.overflow = ''
+})
 
 // 组件挂载时加载历史工作数据
 onMounted(() => {
@@ -588,12 +617,16 @@ const userOptions = [
 }
 
 
+.sidebar-backdrop {
+  display: none;
+}
+
 /* 手机端浮动展开按钮容器 */
 .mobile-expand-btn-container {
   position: fixed;
   bottom: 20px;
   left: 20px;
-  z-index: 1000;
+  z-index: 1080;
   display: none; /* 默认隐藏，只在手机端显示 */
 }
 
@@ -614,20 +647,29 @@ const userOptions = [
     top: 0;
     left: 0;
     height: 100vh;
-    width: 300px;
-    z-index: 1000;
+    height: 100dvh;
+    width: min(320px, 86vw);
+    z-index: 1100;
     transform: translateX(-100%);
     transition: transform 0.3s ease, width 0.3s ease;
   }
 
   .sidebar:not(.sidebar-collapsed) {
     transform: translateX(0);
-    width: 100vw;
+    width: min(320px, 86vw);
   }
 
   .sidebar-collapsed {
     width: 0;
     min-width: 0;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 1090;
   }
 
   /* 在手机端显示浮动展开按钮 */
