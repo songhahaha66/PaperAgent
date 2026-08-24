@@ -422,35 +422,28 @@ h6 {
   font-family: var(--td-font-family-heading);
 }
 
-/* TDesign spinner = SVG (1em) wrapping a 12x12 foreignObject.
-   Size the SVG, never the inner .t-loading__gradient-conic — 1em there
-   overflows the FO and clips into a triangle. */
+/* Safari: TDesign's spinner is an SVG + foreignObject. Rotating the SVG
+   leaves the conic off-center (spin + orbit). CSS border-radius on <svg>
+   is also ignored, so a square outline revolves. Hide the SVG and spin a
+   regular HTML ring around its own center. */
 .t-loading {
   line-height: 1;
   flex-shrink: 0;
 }
 
-.t-button .t-loading,
-svg.t-loading__gradient,
-.t-icon-loading {
-  width: 1em;
-  height: 1em;
-  max-width: 1em;
-  max-height: 1em;
-  flex-shrink: 0;
-  overflow: hidden;
+.t-loading > svg.t-loading__gradient {
+  display: none !important;
 }
 
-.t-loading__gradient-conic {
-  width: 100% !important;
-  height: 100% !important;
-  min-width: 0 !important;
-  min-height: 0 !important;
+.t-loading:has(> svg.t-loading__gradient)::before {
+  content: '';
   box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
   border-radius: 50%;
-  /* iOS Safari / CriOS: TDesign scales the conic from 0,0 by fontSize/12,
-     which clips a 100%-sized ring into a triangle. */
-  transform: none !important;
-  -webkit-transform: none !important;
-  transform-origin: center center !important;
+  transform-origin: 50% 50%;
+  animation: t-spin 0.8s linear infinite;
 }
