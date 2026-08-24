@@ -30,9 +30,11 @@ REVIEW_SYSTEM_PROMPT = """\
 ## 判断标准
 1. 读取 plan.md 中的章节列表，统计「✅ 已完成」vs「⬜ 待写」/「⏳ 进行中」/「❌ 阻塞」数量
 2. 检查论文文件（paper.md / paper.docx）是否存在且有实质内容
-3. 如果 plan.md 中所有章节都标记为 ✅ 且论文文件有内容、没有阻塞项 → complete=true
-4. Word 模板模式还要看成品样式：页边距、标题/正文样式、页眉页脚必须与模板一致
-5. 否则 complete=false，在 continuation_prompt 中列出具体缺失的章节和下一步操作
+3. 不要轻信 plan.md 里的 ✅：标题还在但相对模板没有新增段落，视为未写
+4. 模板自带的图片不算图表已完成，必须有 outputs/ 新图或比模板更多的插图
+5. 如果 plan.md 中所有章节都标记为 ✅ 且论文相对模板确有新增正文、没有阻塞项 → complete=true
+6. Word 模板模式还要看成品样式：页边距、标题/正文样式、页眉页脚必须与模板一致
+7. 否则 complete=false，在 continuation_prompt 中列出具体缺失的章节和下一步操作
 
 ## continuation_prompt 要求（当 complete=false 时）
 - 必须具体指出哪些章节还未完成
@@ -208,6 +210,14 @@ class ReviewAgent:
             blockers.append(paper_status.split("\n", 1)[0])
         if self.output_mode == "word" and "Word结构验收问题:" in paper_status:
             blockers.append("Word模板结构验收未通过")
+        if self.output_mode == "word":
+            template_path = Path(self.workspace_dir) / ".system" / "_template_original.docx"
+            paper_path = Path(self.workspace_dir) / "paper.docx"
+            try:
+                if template_path.exists() and paper_path.exists() and template_path.read_bytes() == paper_path.read_bytes():
+                    blockers.append("paper.docx 仍是未填写的模板骨架")
+            except OSError:
+                pass
 
         statuses = self._extract_plan_statuses(plan_content)
         if not statuses and plan_content not in {"plan.md 不存在", "plan.md 为空"}:

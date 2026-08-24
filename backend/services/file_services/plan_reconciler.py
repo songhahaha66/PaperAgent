@@ -31,6 +31,14 @@ CONSTRAINTS_START = "<!-- template-constraints:start -->"
 CONSTRAINTS_END = "<!-- template-constraints:end -->"
 
 
+PLACEHOLDER_RE = re.compile(
+    r"(成稿后删除[^。\n]*|填写后删除[^。\n]*|不少于\d+字[^。\n]*|"
+    r"此部分为[^。\n]*|例如[:：][^。\n]*|待填写[^。\n]*|请填写[^。\n]*)"
+)
+
+MIN_NEW_SECTION_CHARS = 40
+
+
 @dataclass
 class PlanEvidence:
     document_text: str
@@ -41,14 +49,20 @@ class PlanEvidence:
     docx_template_issues: List[str]
     output_images: List[str]
     generated_files: List[str]
+    template_text: str = ""
+    template_image_count: int = 0
+    paper_blocks: Optional[List[tuple[str, str]]] = None
+    template_blocks: Optional[List[tuple[str, str]]] = None
+    new_content_char_count: int = 0
+    new_image_count: int = 0
 
     @property
     def has_document(self) -> bool:
-        return self.document_char_count > 200
+        return self.new_content_char_count >= MIN_NEW_SECTION_CHARS
 
     @property
     def has_output_image(self) -> bool:
-        return bool(self.output_images) or self.docx_image_count > 0
+        return self.new_image_count > 0
 
     def to_summary(self) -> Dict[str, Any]:
         return {
@@ -59,6 +73,9 @@ class PlanEvidence:
             "docx_template_issues": self.docx_template_issues,
             "output_images": self.output_images,
             "generated_files": self.generated_files[:30],
+            "template_image_count": self.template_image_count,
+            "new_content_char_count": self.new_content_char_count,
+            "new_image_count": self.new_image_count,
         }
 
 
@@ -106,6 +123,36 @@ class PlanReconciler:
         items = self._reconcile_items(items, evidence)
         structured_plan = self._assemble_plan(title, items, plan_content, source, evidence, revision=revision)
         return structured_plan
+
+    def describe_progress_for_agent(self) -> str:
+        """Facts for the model: template delta, empty headings, new images. No status guesses."""
+        evidence = self._collect_evidence()
+        lines = [
+            "=== 相对模板的产物对照（只读，请据此判断哪些任务未完成） ===",
+            f"文档字符数: {evidence.document_char_count}",
+            f"相对模板新增正文(去掉占位句后): {evidence.new_content_char_count} 字",
+            f"模板内嵌图: {evidence.template_image_count}，当前文档图: {evidence.docx_image_count}，outputs 新图: {len(evidence.output_images)}",
+        ]
+        if evidence.output_images:
+            lines.append("outputs 文件: " + ", ".join(evidence.output_images[:20]))
+        if evidence.template_text and evidence.new_content_char_count == 0:
+            lines.append("注意: 当前正文相对模板没有新增内容，仍是未填写骨架。")
+        headings = [text for kind, text in (evidence.paper_blocks or []) if kind == "heading"]
+        if headings:
+            lines.append("各标题下相对模板的正文:")
+            for heading in headings:
+                paper_body = self._section_body(evidence.paper_blocks or [], heading)
+                template_body = self._section_body(evidence.template_blocks or [], heading)
+                paper_n = len(self._meaningful_text(paper_body))
+                template_n = len(self._meaningful_text(template_body))
+                extra = paper_n - template_n
+                mark = "有新增" if extra >= MIN_NEW_SECTION_CHARS else "空/仍是模板"
+                lines.append(f"- {heading}: {mark}（当前{paper_n}字 / 模板{template_n}字）")
+        issues = evidence.docx_template_issues or []
+        if issues:
+            lines.append("Word 结构差异:")
+            lines.extend(f"- {issue}" for issue in issues[:5])
+        return "\n".join(lines)
 
     def write_plan_json(self, structured_plan: Dict[str, Any]) -> None:
         plan_json_path = self.workspace_path / "plan.json"
@@ -235,8 +282,6 @@ class PlanReconciler:
         heading_titles = self._extract_document_headings(evidence.document_text)
         titles = ["论文结构"]
         titles.extend(heading_titles[:10])
-        if evidence.has_output_image and not any(self._has_any(title.lower(), ["图", "figure", "chart"]) for title in titles):
-            titles.append("图表与图片产物")
 
         items: List[Dict[str, Any]] = []
         for order, title in enumerate(titles, start=1):
@@ -244,9 +289,9 @@ class PlanReconciler:
                 "id": f"task-{order}",
                 "order": order,
                 "title": title,
-                "status": "completed",
-                "status_label": self._plan_status_label("completed"),
-                "description": "由工作空间实际文档和产物自动识别",
+                "status": "pending",
+                "status_label": self._plan_status_label("pending"),
+                "description": "由工作空间文档标题自动识别，需有相对模板的新增正文后才算完成",
                 "phase": "write",
                 "depends_on": [f"task-{order - 1}"] if order > 1 else [],
                 "raw_status": "workspace_evidence",
@@ -265,10 +310,6 @@ class PlanReconciler:
                 title = re.sub(r"\s+", " ", match.group(1)).strip()
                 if title and title not in headings:
                     headings.append(title)
-        if not headings:
-            for keyword in ["摘要", "引言", "方法", "实验结果", "讨论", "结论", "参考文献"]:
-                if keyword in document_text and keyword not in headings:
-                    headings.append(keyword)
         return headings
 
     def _repair_status_description(self, raw_status: str, raw_description: str) -> tuple[str, str]:
@@ -286,84 +327,54 @@ class PlanReconciler:
         reconciled = []
         for item in items:
             new_item = dict(item)
-            evidence_status = None if evidence.docx_template_issues else self._infer_item_status(item, evidence)
+            evidence_status = self._infer_item_status(new_item, evidence)
             if evidence_status:
                 new_item["status"] = evidence_status
                 new_item["status_label"] = self._plan_status_label(evidence_status)
                 new_item["status_source"] = "workspace_evidence"
             reconciled.append(new_item)
 
-        if evidence.has_document and evidence.document_char_count > 1500 and not evidence.docx_template_issues:
-            for item in reconciled:
-                if item["status"] == "in_progress" and self._infer_item_status(item, evidence) == "completed":
-                    item["status"] = "completed"
-                    item["status_label"] = self._plan_status_label("completed")
-
         if evidence.docx_template_issues:
-            verification_item = next((
-                item for item in reconciled
-                if self._has_any(item.get("title", ""), ["最终", "检查", "验收", "完善", "verify"])
-            ), None)
-            if verification_item:
-                verification_item["status"] = "blocked"
-                verification_item["status_label"] = self._plan_status_label("blocked")
-                verification_item["status_source"] = "template_validation"
-                verification_item["raw_status"] = "template_validation_failed"
-                verification_item["phase"] = "verify"
-                base_description = (verification_item.get("description") or "").split("；Word模板结构验收失败：", 1)[0]
-                verification_item["description"] = (
-                    base_description.rstrip()
-                    + "；Word模板结构验收失败："
-                    + "；".join(evidence.docx_template_issues[:3])
-                ).strip("；")
+            order = max((int(item.get("order", 0)) for item in reconciled), default=0) + 1
+            existing = next((item for item in reconciled if item.get("id") == "task-template-structure"), None)
+            payload = {
+                "id": "task-template-structure",
+                "order": existing.get("order", order) if existing else order,
+                "title": "Word模板结构验收",
+                "status": "blocked",
+                "status_label": self._plan_status_label("blocked"),
+                "description": "；".join(evidence.docx_template_issues[:3]),
+                "phase": "verify",
+                "depends_on": [f"task-{order - 1}"] if order > 1 else [],
+                "raw_status": "template_validation_failed",
+                "status_source": "template_validation",
+            }
+            if existing:
+                existing.update(payload)
             else:
-                order = max((int(item.get("order", 0)) for item in reconciled), default=0) + 1
-                reconciled.append({
-                    "id": f"task-{order}",
-                    "order": order,
-                    "title": "Word模板结构验收",
-                    "status": "blocked",
-                    "status_label": self._plan_status_label("blocked"),
-                    "description": "；".join(evidence.docx_template_issues[:3]),
-                    "phase": "verify",
-                    "depends_on": [f"task-{order - 1}"] if order > 1 else [],
-                    "raw_status": "template_validation_failed",
-                    "status_source": "template_validation",
-                })
+                reconciled.append(payload)
 
         return sorted(reconciled, key=lambda item: item["order"])
 
     def _infer_item_status(self, item: Dict[str, Any], evidence: PlanEvidence) -> Optional[str]:
-        text = f"{item.get('title', '')} {item.get('description', '')}".lower()
-        doc = evidence.document_text.lower()
+        """Judge only by incremental products, never by keyword lists.
 
-        if self._has_any(text, ["图", "图片", "曲线", "收敛过程图", "figure", "chart", "plot"]):
-            return "completed" if evidence.has_output_image else None
-
-        if self._has_any(text, ["结构", "大纲", "目录", "outline"]):
-            return "completed" if evidence.has_document and evidence.document_has_headings else None
-
-        section_rules = [
-            (["abstract", "摘要"], ["摘要", "abstract"]),
-            (["introduction", "引言", "背景"], ["引言", "introduction"]),
-            (["method", "方法", "原理", "算法"], ["方法", "原理", "algorithm", "method", "蒙特卡洛方法原理"]),
-            (["圆周率", "π", "pi", "估计"], ["圆周率", "π", "pi", "估计"]),
-            (["收敛", "convergence"], ["收敛", "convergence"]),
-            (["实验", "结果", "讨论", "results", "discussion"], ["实验", "结果", "讨论", "results", "discussion"]),
-            (["结论", "conclusion"], ["结论", "conclusion"]),
-            (["参考文献", "references"], ["参考文献", "references"]),
-        ]
-        for item_keywords, doc_keywords in section_rules:
-            if self._has_any(text, item_keywords):
-                if self._has_any(doc, doc_keywords):
-                    return "completed"
-                return None
-
-        normalized_title = self._normalize_text(item.get("title", ""))
-        normalized_doc = self._normalize_text(evidence.document_text)
-        if len(normalized_title) >= 4 and normalized_title in normalized_doc:
-            return "completed"
-
+        If the task title maps to a document heading, require new body under
+        that heading. If it does not map, only downgrade a completed mark when
+        the whole paper still has no new text and no new images versus the
+        template. The agent uses tools to inspect fields, figures, and covers.
+        """
+        if item.get("id") == "task-template-structure":
+            return None
+        current = item.get("status")
+        if self._title_maps_to_heading(item, evidence):
+            if self._section_has_new_body(item, evidence):
+                return "completed"
+            if current == "completed":
+                return "pending"
+            return None
+        if current == "completed" and evidence.new_content_char_count == 0 and evidence.new_image_count == 0:
+            return "pending"
         return None
 
     def _assemble_plan(
@@ -528,6 +539,7 @@ class PlanReconciler:
     def _collect_evidence(self) -> PlanEvidence:
         document_text_parts: List[str] = []
         document_paths: List[str] = []
+        paper_blocks: List[tuple[str, str]] = []
         docx_image_count = 0
         docx_template_issues: List[str] = []
 
@@ -536,6 +548,7 @@ class PlanReconciler:
             text = paper_md.read_text(encoding="utf-8", errors="ignore")
             document_text_parts.append(text)
             document_paths.append("paper.md")
+            paper_blocks.extend(self._parse_text_blocks(text))
 
         paper_docx = self.workspace_path / "paper.docx"
         if paper_docx.exists():
@@ -543,16 +556,28 @@ class PlanReconciler:
             document_text_parts.append(text)
             document_paths.append("paper.docx")
             docx_image_count += image_count
+            paper_blocks.extend(self._read_docx_blocks(paper_docx))
             docx_template_issues.extend(self._validate_docx_template(paper_docx))
 
         document_text = "\n".join(part for part in document_text_parts if part)
-        output_image_roots = ["outputs", "artifacts", "runs"]
+
+        template_text = ""
+        template_blocks: List[tuple[str, str]] = []
+        template_image_count = 0
+        template_docx = self.workspace_path / ".system" / "_template_original.docx"
+        if template_docx.exists():
+            template_text, template_image_count = self._read_docx(template_docx)
+            template_blocks = self._read_docx_blocks(template_docx)
+
+        outputs_dir = self.workspace_path / "outputs"
         output_images = [
             str(path.relative_to(self.workspace_path))
-            for root in output_image_roots
-            for path in (self.workspace_path / root).rglob("*")
+            for path in outputs_dir.rglob("*")
             if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
-        ] if self.workspace_path.exists() else []
+        ] if outputs_dir.exists() else []
+
+        extra_docx_images = max(0, docx_image_count - template_image_count)
+        new_image_count = len(output_images) + extra_docx_images
 
         generated_files = [
             str(path.relative_to(self.workspace_path))
@@ -563,6 +588,15 @@ class PlanReconciler:
 
         has_markdown_heading = bool(re.search(r"(?m)^#{1,6}\s+\S+", document_text))
         has_numbered_heading = bool(re.search(r"(?m)^\s*\d+(?:\.\d+)*[\.、]\s*\S+", document_text))
+        new_content = self._meaningful_text(document_text)
+        template_meaningful = self._meaningful_text(template_text)
+        if template_meaningful and template_meaningful in new_content:
+            incremental = new_content.replace(template_meaningful, "", 1)
+        elif template_meaningful:
+            incremental = new_content if new_content != template_meaningful else ""
+        else:
+            incremental = new_content
+
         return PlanEvidence(
             document_text=document_text,
             document_paths=document_paths,
@@ -572,6 +606,12 @@ class PlanReconciler:
             docx_template_issues=docx_template_issues,
             output_images=sorted(output_images),
             generated_files=sorted(generated_files),
+            template_text=template_text,
+            template_image_count=template_image_count,
+            paper_blocks=paper_blocks or None,
+            template_blocks=template_blocks or None,
+            new_content_char_count=len(incremental),
+            new_image_count=new_image_count,
         )
 
     def _validate_docx_template(self, paper_docx: Path) -> List[str]:
@@ -697,3 +737,100 @@ class PlanReconciler:
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r"\s+", "", text).lower()
+
+    def _meaningful_text(self, text: str) -> str:
+        cleaned = PLACEHOLDER_RE.sub("", text or "")
+        return re.sub(r"\s+", "", cleaned)
+
+    def _heading_key(self, title: str) -> str:
+        text = title or ""
+        text = re.sub(r"（[^）]*）", "", text)
+        text = re.sub(r"\([^)]*\)", "", text)
+        text = re.sub(r"^[\d\.、\s]+", "", text)
+        return self._normalize_text(text)
+
+    def _title_maps_to_heading(self, item: Dict[str, Any], evidence: PlanEvidence) -> bool:
+        key = self._heading_key(item.get("title") or "")
+        if len(key) < 2:
+            return False
+        blocks = evidence.paper_blocks or self._parse_text_blocks(evidence.document_text)
+        for kind, text in blocks:
+            if kind != "heading":
+                continue
+            heading_key = self._heading_key(text)
+            if heading_key == key or (len(key) >= 4 and (key in heading_key or heading_key in key)):
+                return True
+        return False
+
+    def _section_has_new_body(self, item: Dict[str, Any], evidence: PlanEvidence) -> bool:
+        paper_body = self._section_body(
+            evidence.paper_blocks or self._parse_text_blocks(evidence.document_text),
+            item.get("title") or "",
+        )
+        template_body = self._section_body(
+            evidence.template_blocks or self._parse_text_blocks(evidence.template_text),
+            item.get("title") or "",
+        )
+        paper_m = self._meaningful_text(paper_body)
+        template_m = self._meaningful_text(template_body)
+        if len(paper_m) < MIN_NEW_SECTION_CHARS:
+            return False
+        if not template_m:
+            return True
+        if template_m in paper_m:
+            extra = paper_m.replace(template_m, "", 1)
+            return len(extra) >= MIN_NEW_SECTION_CHARS
+        return paper_m != template_m and len(paper_m) >= MIN_NEW_SECTION_CHARS
+
+    def _section_body(self, blocks: List[tuple[str, str]], title: str) -> str:
+        key = self._heading_key(title)
+        if len(key) < 2:
+            return ""
+        capturing = False
+        body: List[str] = []
+        for kind, text in blocks:
+            if kind == "heading":
+                heading_key = self._heading_key(text)
+                matched = heading_key == key or (
+                    len(key) >= 4 and (key in heading_key or heading_key in key)
+                )
+                if capturing:
+                    break
+                if matched:
+                    capturing = True
+                continue
+            if capturing:
+                body.append(text)
+        return "\n".join(body)
+
+    def _parse_text_blocks(self, text: str) -> List[tuple[str, str]]:
+        blocks: List[tuple[str, str]] = []
+        for line in (text or "").splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                blocks.append(("heading", stripped.lstrip("#").strip()))
+            elif re.match(r"^\d+(?:\.\d+)*[\.、\s]+\S+", stripped):
+                blocks.append(("heading", stripped))
+            else:
+                blocks.append(("body", stripped))
+        return blocks
+
+    def _read_docx_blocks(self, docx_path: Path) -> List[tuple[str, str]]:
+        try:
+            from docx import Document
+
+            document = Document(str(docx_path))
+            blocks: List[tuple[str, str]] = []
+            for paragraph in document.paragraphs:
+                text = (paragraph.text or "").strip()
+                if not text:
+                    continue
+                style = (paragraph.style.name or "").lower() if paragraph.style else ""
+                kind = "heading" if style.startswith("heading") or "标题" in style else "body"
+                blocks.append((kind, text))
+            return blocks
+        except Exception:
+            text, _ = self._read_docx_zip_fallback(docx_path)
+            return self._parse_text_blocks(text)

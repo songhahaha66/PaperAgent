@@ -135,12 +135,17 @@ class FileTools:
                 empty_sections = [s['title'] for s in sections if not s['has_content']]
                 result += f"\n待写章节: {', '.join(empty_sections)}"
 
+            result += "\n\n" + PlanReconciler(Path(self.workspace_dir)).describe_progress_for_agent()
             return result
 
         except Exception as e:
             error_msg = f"获取论文状态失败: {str(e)}"
             logger.error(error_msg)
             return error_msg
+
+    def compare_paper_to_template(self) -> str:
+        """对照当前 paper 与模板原件：新增正文、各标题是否仍空、outputs 新图。只读。"""
+        return PlanReconciler(Path(self.workspace_dir)).describe_progress_for_agent()
 
     def _get_word_paper_status(self, filename: str = "paper.docx") -> str:
         file_path = Path(self.workspace_dir) / filename
@@ -193,6 +198,7 @@ class FileTools:
                     f"- {item.get('description', '')[:120]}\n"
                 )
 
+        result += "\n" + PlanReconciler(Path(self.workspace_dir)).describe_progress_for_agent()
         return result
 
     def update_plan(self, plan_content: str) -> str:

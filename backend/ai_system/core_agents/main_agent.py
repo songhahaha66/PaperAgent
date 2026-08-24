@@ -157,7 +157,7 @@ class MainAgent:
             "**🎯 Plan-Driven 全流程规划（核心工作模式）**：\n"
             "你必须遵循以下全流程规划模式，类似spec coding的plan-driven方式：\n\n"
             "**Phase 1: 状态感知**\n"
-            "- 调用 get_paper_status 了解paper当前状态（已有章节、写作进度、内容摘要）\n"
+            "- 调用 get_paper_status / compare_paper_to_template 看各标题是否仍是模板骨架、有没有新增正文和 outputs 新图\n"
             "- Word 模板模式写前阅读已注入的模板契约；inspect_document_styles / analyze_docx_layout 用于核对当前 paper.docx，不要把阅读原始模板当成写作步骤\n"
             "- 理解用户需求和论文目标\n\n"
             "**Phase 2: 制定写作计划并保存**\n"

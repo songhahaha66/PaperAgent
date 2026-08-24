@@ -456,11 +456,14 @@ def test_plan_reconciler_blocks_completion_when_word_template_drifts(tmp_path: P
     assert structured["stats"]["blocked"] == 1
     assert structured["stats"]["progress_percent"] < 100
     assert structured["evidence"]["docx_template_issues"]
-    final_item = next(item for item in structured["items"] if item["title"] == "最终检查与完善")
-    assert final_item["status"] == "blocked"
-    assert structured["current_focus"]["title"] == "最终检查与完善"
-    assert final_item["raw_status"] == "template_validation_failed"
-    assert final_item["phase"] == "verify"
+    chapter = next(item for item in structured["items"] if item["title"] == "第一章 DDL")
+    assert chapter["status"] == "pending"
+    structure_item = next(item for item in structured["items"] if item["id"] == "task-template-structure")
+    assert structure_item["status"] == "blocked"
+    assert structure_item["title"] == "Word模板结构验收"
+    assert structured["current_focus"]["title"] == "第一章 DDL"
+    assert structure_item["raw_status"] == "template_validation_failed"
+    assert structure_item["phase"] == "verify"
 
 
 def test_plan_reconciler_syncs_metadata_progress_and_review_status(tmp_path: Path):
@@ -471,6 +474,10 @@ def test_plan_reconciler_syncs_metadata_progress_and_review_status(tmp_path: Pat
         encoding="utf-8",
     )
 
+    (workspace / "paper.md").write_text(
+        "# 第一章\n\n" + "这一章已经写好了足够长的正文内容。" * 8 + "\n\n# 第二章\n\n",
+        encoding="utf-8",
+    )
     plan_md = (
         "| 序号 | 章节名 | 状态 | 说明 |\n"
         "|---|---|---|---|\n"
@@ -545,13 +552,13 @@ def test_plan_reconciler_does_not_complete_metadata_without_document(tmp_path: P
         encoding="utf-8",
     )
 
-    PlanReconciler(workspace).ensure_plan_json(sync_markdown=True)
+    structured = PlanReconciler(workspace).ensure_plan_json(sync_markdown=True)
     metadata = __import__("json").loads((workspace / "metadata.json").read_text(encoding="utf-8"))
 
-    assert metadata["progress"] == 100
-    assert metadata["status"] == "running"
-    assert metadata["review_status"] == "blocked"
-    assert "论文产物不存在或内容不足" in metadata["review_reason"]
+    assert structured["items"][0]["status"] == "pending"
+    assert metadata["progress"] == 0
+    assert metadata["status"] == "created"
+    assert metadata["review_status"] == "pending"
 
 
 def test_get_paper_status_reports_word_template_issues(tmp_path: Path, monkeypatch):
@@ -696,3 +703,141 @@ def test_get_works_list_syncs_status_from_workspace_metadata(tmp_path: Path, mon
 
     assert result["works"][0].status == "completed"
     assert result["works"][0].progress == 100
+
+
+def _homework_template_doc():
+    doc = Document()
+    doc.add_paragraph("信息技术实践与拓展实践报告")
+    doc.add_paragraph("主    题")
+    doc.add_paragraph("组    号            第     组")
+    doc.add_paragraph("组长姓名")
+    doc.add_paragraph("1 技术调研报告", style="Heading 1")
+    doc.add_paragraph("1.1.1 内容简介", style="Heading 3")
+    doc.add_paragraph("1.1.2 难点和解决办法", style="Heading 3")
+    doc.add_paragraph("2.1 项目简介", style="Heading 2")
+    doc.add_paragraph("图2.3 系统流程图")
+    doc.add_paragraph("2.6 项目总结", style="Heading 2")
+    doc.add_paragraph("总结项目总体完成情况、技术难点、解决方法以及不足等，不少于500字，填写后删除此项。")
+    return doc
+
+
+def test_plan_reconciler_does_not_complete_blank_word_template(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    system_dir = workspace / ".system"
+    system_dir.mkdir(parents=True)
+
+    template = _homework_template_doc()
+    template.save(str(system_dir / "_template_original.docx"))
+    _homework_template_doc().save(str(workspace / "paper.docx"))
+
+    plan_md = (
+        "| 序号 | 章节/任务 | 状态 | 说明 |\n"
+        "|---|---|---|---|\n"
+        "| 0 | 封面信息与提示清理 | ⏳ 进行中 | 填写主题、组号 |\n"
+        "| 1 | 图表生成（CodeAgent） | ✅ 已完成 | 生成图2.1 |\n"
+        "| 2 | 1 内容简介 | ✅ 已完成 | 学习总结 |\n"
+        "| 3 | 2 难点和解决办法 | ✅ 已完成 | 旋转碰撞 |\n"
+        "| 4 | 1 项目简介 | ⬜ 待写 | 项目背景 |\n"
+    )
+    structured = PlanReconciler(workspace).build_from_markdown(plan_md)
+    by_title = {item["title"]: item for item in structured["items"]}
+
+    def item_named(part: str):
+        return next(item for item in structured["items"] if part in item["title"])
+
+    assert by_title["封面信息与提示清理"]["status"] == "in_progress"
+    assert by_title["图表生成（CodeAgent）"]["status"] == "pending"
+    assert item_named("内容简介")["status"] == "pending"
+    assert item_named("难点和解决办法")["status"] == "pending"
+    assert item_named("项目简介")["status"] == "pending"
+    assert structured["evidence"]["new_content_char_count"] == 0
+    assert structured["evidence"]["new_image_count"] == 0
+    assert structured["stats"]["completed"] == 0
+
+
+def test_plan_reconciler_completes_section_after_new_body(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    system_dir = workspace / ".system"
+    system_dir.mkdir(parents=True)
+    _homework_template_doc().save(str(system_dir / "_template_original.docx"))
+
+    paper = _homework_template_doc()
+    paragraphs = list(paper.paragraphs)
+    intro = next(p for p in paragraphs if "内容简介" in p.text)
+    intro.add_run()
+    intro._element.addnext(
+        paper.add_paragraph("本节介绍 Java Swing 俄罗斯方块的游戏循环、方块旋转与消行规则，作为后续实现基础。" * 2)._element
+    )
+    paper.save(str(workspace / "paper.docx"))
+
+    plan_md = (
+        "| 序号 | 章节/任务 | 状态 | 说明 |\n"
+        "|---|---|---|---|\n"
+        "| 1 | 1 内容简介 | ⬜ 待写 | 学习总结 |\n"
+        "| 2 | 2 难点和解决办法 | ✅ 已完成 | 尚未真正写 |\n"
+    )
+    structured = PlanReconciler(workspace).build_from_markdown(plan_md)
+    def item_named(part: str):
+        return next(item for item in structured["items"] if part in item["title"])
+
+    assert item_named("内容简介")["status"] == "completed"
+    assert item_named("难点和解决办法")["status"] == "pending"
+
+
+def test_plan_reconciler_counts_only_new_output_images(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    system_dir = workspace / ".system"
+    system_dir.mkdir(parents=True)
+    _homework_template_doc().save(str(system_dir / "_template_original.docx"))
+    _homework_template_doc().save(str(workspace / "paper.docx"))
+    (workspace / "runs" / "run1").mkdir(parents=True)
+    (workspace / "runs" / "run1" / "plot_1.png").write_bytes(b"not-a-real-png")
+
+    plan_md = (
+        "| 序号 | 章节/任务 | 状态 | 说明 |\n"
+        "|---|---|---|---|\n"
+        "| 1 | 图表生成（CodeAgent） | ✅ 已完成 | 生成图2.1 |\n"
+    )
+    structured = PlanReconciler(workspace).build_from_markdown(plan_md)
+    assert structured["items"][0]["status"] == "pending"
+
+    outputs = workspace / "outputs"
+    outputs.mkdir()
+    (outputs / "function_modules.png").write_bytes(b"not-a-real-png")
+    structured = PlanReconciler(workspace).build_from_markdown(plan_md)
+    assert structured["items"][0]["status"] == "completed"
+
+
+def test_review_agent_blocks_unfilled_template_copy(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    system_dir = workspace / ".system"
+    system_dir.mkdir(parents=True)
+    _homework_template_doc().save(str(system_dir / "_template_original.docx"))
+    _homework_template_doc().save(str(workspace / "paper.docx"))
+    (workspace / "plan.md").write_text(
+        "| 序号 | 章节名 | 状态 | 说明 |\n"
+        "|---|---|---|---|\n"
+        "| 1 | 内容简介 | ✅ 已完成 | 已写 |\n",
+        encoding="utf-8",
+    )
+
+    ReviewAgent = _load_review_agent_class()
+    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
+    result = asyncio.run(reviewer.review("完成这个作业"))
+    assert result.complete is False
+    assert "未填写的模板骨架" in result.reason
+
+
+def test_compare_paper_to_template_lists_empty_headings(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    system_dir = workspace / ".system"
+    system_dir.mkdir(parents=True)
+    _homework_template_doc().save(str(system_dir / "_template_original.docx"))
+    _homework_template_doc().save(str(workspace / "paper.docx"))
+    monkeypatch.setenv("WORKSPACE_DIR", str(workspace))
+
+    report = FileTools().compare_paper_to_template()
+    assert "仍是未填写骨架" in report
+    assert "内容简介" in report
+    assert "空/仍是模板" in report
+    assert "outputs 新图: 0" in report

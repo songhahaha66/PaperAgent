@@ -57,7 +57,12 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     func=file_tools.get_paper_status,
                     name="get_paper_status",
-                    description="获取paper.md的写作状态概览，包括章节结构、各章节字数和内容摘要、写作进度。在写作任何内容之前必须先调用此工具了解当前论文状态，避免重复写作或覆盖已有内容。"
+                    description="获取paper的写作状态概览：章节结构、各标题下字数、相对模板的新增正文、outputs 新图。写作前必须先调用，用它判断哪些章节仍是空骨架，不要只看计划里的勾。"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools.compare_paper_to_template,
+                    name="compare_paper_to_template",
+                    description="只读对照当前 paper 与模板原件：各标题下是否有相对模板的新增正文、文档图数量、outputs 新图。哪些任务写完由你根据对照结果判断，不要猜。"
                 ),
                 StructuredTool.from_function(
                     func=file_tools.readmd,
@@ -546,7 +551,12 @@ class LangChainToolFactory:
                 StructuredTool.from_function(
                     func=file_tools_instance.get_paper_status,
                     name="get_paper_status",
-                    description="获取paper.md的写作状态概览，包括章节结构、各章节字数和内容摘要、写作进度。在委派任何写作任务前必须先调用此工具了解论文当前状态。"
+                    description="获取paper的写作状态概览：章节结构、相对模板的新增正文、outputs 新图。委派写作前必须先调用，用它判断哪些部分仍是模板骨架。"
+                ),
+                StructuredTool.from_function(
+                    func=file_tools_instance.compare_paper_to_template,
+                    name="compare_paper_to_template",
+                    description="只读对照当前 paper 与模板原件：各标题下新增正文、文档图数量、outputs 新图。哪些任务写完由你根据对照结果判断。"
                 ),
                 StructuredTool.from_function(
                     func=file_tools_instance.update_plan,
