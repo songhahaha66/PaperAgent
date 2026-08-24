@@ -174,5 +174,5 @@ The project is designed for deployment with:
 ## Important Notes
 
 - The project does not use HTTPS for the frontend due to backend hosting constraints in China
-- Mobile responsiveness is limited due to the complex nature of the paper generation interface
-- The system is optimized for desktop use where users can benefit from the full three-panel interface (AI chat, file manager, live preview)
+- Desktop keeps the side-by-side chat + preview workspace; phones (≤768px) use a single-panel layout with bottom tabs for chat, files, and preview
+- Shared breakpoint logic lives in `frontend/src/composables/useBreakpoint.ts` and tracks viewport changes via `matchMedia`

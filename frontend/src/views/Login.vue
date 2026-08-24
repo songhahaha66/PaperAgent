@@ -12,6 +12,7 @@
       <t-form
         :data="formData"
         :rules="rules"
+        :label-width="0"
         @submit="onSubmit"
         :required-mark="false"
         class="login-form"
@@ -220,7 +221,21 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 
 .login-form {
   margin: 30px 0;
-  margin-left: -90px;
+  text-align: left;
+}
+
+.login-form :deep(.t-form__item) {
+  width: 100%;
+}
+
+.login-form :deep(.t-form__controls) {
+  margin-left: 0;
+}
+
+@media (max-width: 768px) {
+  .login-container {
+    padding: 32px 20px;
+  }
 }
 
 .form-footer p {

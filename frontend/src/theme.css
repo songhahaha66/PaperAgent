@@ -421,3 +421,36 @@ h6 {
 .no-template-state h4 {
   font-family: var(--td-font-family-heading);
 }
+
+/* TDesign spinner = SVG (1em) wrapping a 12x12 foreignObject.
+   Size the SVG, never the inner .t-loading__gradient-conic — 1em there
+   overflows the FO and clips into a triangle. */
+.t-loading {
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.t-button .t-loading,
+svg.t-loading__gradient,
+.t-icon-loading {
+  width: 1em;
+  height: 1em;
+  max-width: 1em;
+  max-height: 1em;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.t-loading__gradient-conic {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  box-sizing: border-box;
+  border-radius: 50%;
+  /* iOS Safari / CriOS: TDesign scales the conic from 0,0 by fontSize/12,
+     which clips a 100%-sized ring into a triangle. */
+  transform: none !important;
+  -webkit-transform: none !important;
+  transform-origin: center center !important;
+}

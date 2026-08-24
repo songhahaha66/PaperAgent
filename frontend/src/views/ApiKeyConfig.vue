@@ -84,12 +84,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import type { FormInstanceFunctions } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
 import { modelConfigAPI } from '@/api/modelConfig'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 // 配置数据结构
 interface ModelConfigForm {
@@ -100,9 +101,16 @@ interface ModelConfigForm {
 }
 
 const router = useRouter()
+const { isMobile } = useBreakpoint()
 
 // 侧边栏状态 - 手机端默认收起
-const isSidebarCollapsed = ref(window.innerWidth <= 768)
+const isSidebarCollapsed = ref(isMobile.value)
+
+watch(isMobile, (mobile) => {
+  if (mobile) {
+    isSidebarCollapsed.value = true
+  }
+})
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null)
@@ -317,6 +325,7 @@ onMounted(async () => {
 .api-key-page {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: #ffffff;
   overflow: hidden;
@@ -377,16 +386,41 @@ onMounted(async () => {
 
 @media (max-width: 768px) {
   .api-key-container {
-    padding: 20px 16px;
+    padding: 16px 12px;
+  }
+
+  .page-header {
+    margin-bottom: 20px;
+    text-align: left;
   }
 
   .page-header h1 {
-    font-size: 2rem;
+    font-size: 1.5rem;
+    margin-bottom: 8px;
+  }
+
+  .page-header p {
+    font-size: 0.9rem;
   }
 
   .config-grid {
-    grid-template-columns: 1fr;
     gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .config-card {
+    min-height: 0;
+  }
+
+  .button-container,
+  .global-actions {
+    flex-wrap: wrap;
+    justify-content: stretch;
+  }
+
+  .button-container .t-button,
+  .global-actions .t-button {
+    flex: 1;
   }
 }
 </style>
