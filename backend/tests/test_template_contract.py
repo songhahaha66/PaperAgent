@@ -5,6 +5,7 @@ import importlib.util
 import importlib
 import subprocess
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -162,7 +163,7 @@ def test_ensure_template_analysis_backfills_old_template(tmp_path: Path, monkeyp
     )
     source = tmp_path / "old.md"
     source.write_text("# 题目\n\n要求：宋体小三居中。\n", encoding="utf-8")
-    template = Mock(id=21, file_path="old.md", name="旧模板", output_format="markdown")
+    template = SimpleNamespace(id=21, file_path="old.md", name="旧模板", output_format="markdown")
 
     analysis = ensure_template_analysis(template)
 
