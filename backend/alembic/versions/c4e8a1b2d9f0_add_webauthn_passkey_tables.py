@@ -1,7 +1,7 @@
 """add webauthn passkey tables
 
 Revision ID: c4e8a1b2d9f0
-Revises: 906ca23fbfe1
+Revises: 736361c89d6a
 Create Date: 2026-08-24 07:10:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "c4e8a1b2d9f0"
-down_revision: Union[str, Sequence[str], None] = "906ca23fbfe1"
+down_revision: Union[str, Sequence[str], None] = "736361c89d6a"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
