@@ -51,14 +51,29 @@ def heading_outlines_equivalent(
     expected: Sequence[Tuple[str, str]],
     actual: Sequence[Tuple[str, str]],
 ) -> bool:
+    return not heading_outline_issues(expected, actual)
+
+
+def heading_outline_issues(
+    expected: Sequence[Tuple[str, str]],
+    actual: Sequence[Tuple[str, str]],
+) -> List[str]:
+    issues: List[str] = []
+    for idx, ((expected_style, expected_text), (actual_style, actual_text)) in enumerate(
+        zip(expected, actual),
+        start=1,
+    ):
+        if expected_style != actual_style or canonical_heading_text(expected_text) != canonical_heading_text(
+            actual_text
+        ):
+            issues.append("标题层级/顺序/文本与模板不一致")
+            issues.append(f"第 {idx} 个标题应为 {expected_text}，当前为 {actual_text}")
+            break
     if len(expected) != len(actual):
-        return False
-    for (expected_style, expected_text), (actual_style, actual_text) in zip(expected, actual):
-        if expected_style != actual_style:
-            return False
-        if canonical_heading_text(expected_text) != canonical_heading_text(actual_text):
-            return False
-    return True
+        if not issues:
+            issues.append("标题层级/顺序/文本与模板不一致")
+        issues.append(f"标题数量不一致：模板 {len(expected)} 个，当前 {len(actual)} 个")
+    return issues
 
 
 @dataclass
@@ -223,6 +238,13 @@ def compare_style_fingerprints(
                 issues.append(f"样式 {name} 的{label}不一致：模板 {exp}，当前 {act}")
 
     return issues
+
+
+def compare_docx_styles(expected_path: Path, actual_path: Path) -> List[str]:
+    return compare_style_fingerprints(
+        extract_style_fingerprint(expected_path),
+        extract_style_fingerprint(actual_path),
+    )
 
 
 def format_style_comparison(

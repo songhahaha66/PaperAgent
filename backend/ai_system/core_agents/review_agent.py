@@ -157,20 +157,9 @@ class ReviewAgent:
                     issues.append(
                         f"表格数量不一致：模板 {template['table_count']} 个，当前 {paper['table_count']} 个"
                     )
-                from ai_system.core_tools.docx_styles import heading_outlines_equivalent
+                from ai_system.core_tools.docx_styles import heading_outline_issues
 
-                if not heading_outlines_equivalent(template["headings"], paper["headings"]):
-                    issues.append("标题层级/顺序/文本与模板不一致")
-                    from ai_system.core_tools.docx_styles import canonical_heading_text
-
-                    for idx, (expected, actual) in enumerate(zip(template["headings"], paper["headings"]), 1):
-                        if expected[0] != actual[0] or canonical_heading_text(expected[1]) != canonical_heading_text(actual[1]):
-                            issues.append(f"第 {idx} 个标题应为 {expected}，当前为 {actual}")
-                            break
-                    if len(paper["headings"]) != len(template["headings"]):
-                        issues.append(
-                            f"标题数量不一致：模板 {len(template['headings'])} 个，当前 {len(paper['headings'])} 个"
-                        )
+                issues.extend(heading_outline_issues(template["headings"], paper["headings"]))
             except Exception as exc:
                 issues.append(f"无法解析模板结构: {exc}")
 
@@ -190,16 +179,9 @@ class ReviewAgent:
 
         if template_path.exists():
             try:
-                from ai_system.core_tools.docx_styles import (
-                    compare_style_fingerprints,
-                    extract_style_fingerprint,
-                )
+                from ai_system.core_tools.docx_styles import compare_docx_styles
 
-                style_issues = compare_style_fingerprints(
-                    extract_style_fingerprint(template_path),
-                    extract_style_fingerprint(paper_path),
-                )
-                issues.extend(style_issues)
+                issues.extend(compare_docx_styles(template_path, paper_path))
             except Exception as exc:
                 issues.append(f"无法对照成品样式: {exc}")
 

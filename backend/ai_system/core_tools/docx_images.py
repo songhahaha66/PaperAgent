@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 import logging
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
 from xml.etree import ElementTree as ET
@@ -46,9 +46,6 @@ class DocxImageInfo:
     height: Optional[int]
     nearby_text: str
     extracted_path: str = ""
-
-    def to_dict(self) -> dict:
-        return asdict(self)
 
     def summary_line(self) -> str:
         size = f"{self.size_bytes / 1024:.1f}KB"

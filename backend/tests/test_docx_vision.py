@@ -73,9 +73,10 @@ def _docx_with_image(tmp_path: Path) -> Path:
 
 
 def test_normalize_openai_base_url_appends_v1():
-    assert normalize_openai_base_url("http://104.249.156.203:30080") == "http://104.249.156.203:30080/v1"
-    assert normalize_openai_base_url("http://104.249.156.203:30080/v1") == "http://104.249.156.203:30080/v1"
+    assert normalize_openai_base_url("http://example.com:8080") == "http://example.com:8080/v1"
+    assert normalize_openai_base_url("http://example.com:8080/v1") == "http://example.com:8080/v1"
     assert normalize_openai_base_url("https://api.openai.com/v1") == "https://api.openai.com/v1"
+
 
 
 def test_inventory_and_extract_docx_images(tmp_path: Path):

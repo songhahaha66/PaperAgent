@@ -41,12 +41,12 @@
             <t-form-item label="Base URL" name="baseUrl" :rules="formRules.baseUrl">
               <t-input
                 v-model="config.data.baseUrl"
-                placeholder="例如: https://api.openai.com/v1 或 http://host:30080/v1"
+                placeholder="例如: https://api.openai.com/v1"
                 clearable
               />
             </t-form-item>
             <t-form-item label="Model ID" name="modelId" :rules="formRules.modelId">
-              <t-input v-model="config.data.modelId" placeholder="例如: gpt-4 / grok-4.6" clearable />
+              <t-input v-model="config.data.modelId" placeholder="例如: gpt-4" clearable />
             </t-form-item>
             <t-form-item>
               <div class="button-container">

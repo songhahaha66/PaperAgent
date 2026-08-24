@@ -105,8 +105,7 @@ def initialize_template_contract(
             contract = _build_contract(source_path, template.name, output_mode)
             _write_contract(workspace_path, contract)
             _copy_template_to_workspace(source_path, workspace_path, output_mode)
-            _extract_template_images(source_path, workspace_path, output_mode)
-            _save_template_style_profile(source_path, workspace_path, output_mode)
+            _capture_template_assets(source_path, workspace_path, output_mode)
             return contract
         finally:
             db.close()
@@ -130,18 +129,13 @@ def _copy_template_to_workspace(source_path: Path, workspace_path: Path, output_
             shutil.copyfile(source_path, backup)
 
 
-def _extract_template_images(source_path: Path, workspace_path: Path, output_mode: str) -> None:
+def _capture_template_assets(source_path: Path, workspace_path: Path, output_mode: str) -> None:
     if output_mode != "word" or source_path.suffix.lower() != ".docx":
         return
     try:
         extract_docx_images(source_path, workspace_path / ".system" / "docx_images" / "template")
     except Exception as exc:
         logger.warning("提取模板图片失败: %s", exc)
-
-
-def _save_template_style_profile(source_path: Path, workspace_path: Path, output_mode: str) -> None:
-    if output_mode != "word" or source_path.suffix.lower() != ".docx":
-        return
     try:
         save_style_profile(workspace_path, extract_style_fingerprint(source_path))
     except Exception as exc:
