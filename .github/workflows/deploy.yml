@@ -1,8 +1,12 @@
-name: Build and Deploy
+name: Build and Deploy Backend
 
 on:
   push:
     branches: [ master ]
+    paths:
+      - "backend/**"
+      - "docker-compose.yml"
+      - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
 jobs:
