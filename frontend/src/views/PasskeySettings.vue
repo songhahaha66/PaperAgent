@@ -19,7 +19,7 @@
           <template #actions>
             <t-button
               theme="primary"
-              :disabled="!passkeySupported"
+              :disabled="!passkeySupported || !!originHint"
               :loading="registering"
               @click="showAddDialog = true"
             >
@@ -28,6 +28,7 @@
           </template>
 
           <t-alert v-if="!passkeySupported" theme="warning" message="当前浏览器不支持 Passkey，请使用最新版 Chrome、Edge、Safari 或 Firefox。" />
+          <t-alert v-else-if="originHint" theme="warning" :message="originHint" />
 
           <t-table
             :data="passkeys"
@@ -89,12 +90,13 @@ import { useRouter } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
 import { authAPI, type PasskeyCredential } from '@/api/auth'
-import { createPasskey, isPasskeyCanceled, isPasskeySupported } from '@/utils/passkey'
+import { createPasskey, isPasskeyCanceled, isPasskeySupported, passkeyOriginHint } from '@/utils/passkey'
 
 const router = useRouter()
 const isSidebarCollapsed = ref(window.innerWidth <= 768)
 const activeHistoryId = ref<number | null>(null)
 const passkeySupported = ref(false)
+const originHint = ref<string | null>(null)
 const loading = ref(false)
 const registering = ref(false)
 const renaming = ref(false)
@@ -152,17 +154,18 @@ const registerPasskey = async () => {
     MessagePlugin.warning('当前浏览器不支持 Passkey')
     return
   }
+  if (originHint.value) {
+    MessagePlugin.warning(originHint.value)
+    return
+  }
+  const name = newPasskeyName.value.trim()
+  showAddDialog.value = false
   registering.value = true
   try {
     const { challenge_id, options } = await authAPI.getPasskeyRegisterOptions()
     const credential = await createPasskey(options as any)
-    await authAPI.verifyPasskeyRegister(
-      challenge_id,
-      credential,
-      newPasskeyName.value.trim() || undefined,
-    )
+    await authAPI.verifyPasskeyRegister(challenge_id, credential, name || undefined)
     MessagePlugin.success('Passkey 添加成功')
-    showAddDialog.value = false
     newPasskeyName.value = '我的设备'
     await loadPasskeys()
   } catch (error) {
@@ -223,6 +226,7 @@ const confirmDelete = (row: PasskeyCredential) => {
 
 onMounted(async () => {
   passkeySupported.value = isPasskeySupported()
+  originHint.value = passkeyOriginHint()
   await loadPasskeys()
 })
 </script>

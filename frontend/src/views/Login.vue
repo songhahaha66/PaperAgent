@@ -61,7 +61,7 @@
         </t-form-item>
       </t-form>
 
-      <div v-if="isLogin && passkeySupported" class="passkey-section">
+      <div v-if="isLogin && passkeySupported && passkeyOriginOk" class="passkey-section">
         <div class="divider"><span>或</span></div>
         <t-button
           theme="default"
@@ -88,6 +88,7 @@
           <t-link theme="primary" @click="switchMode">立即登录</t-link>
         </p>
         <p v-if="isLogin" class="passkey-hint">登录后可在账户设置中添加 Passkey</p>
+        <p v-if="isLogin && originHint" class="passkey-hint">{{ originHint }}</p>
       </div>
     </div>
   </div>
@@ -105,7 +106,9 @@ import {
   cancelPasskeyCeremony,
   isPasskeyAutofillSupported,
   isPasskeyCanceled,
+  isPasskeyOriginSupported,
   isPasskeySupported,
+  passkeyOriginHint,
 } from '@/utils/passkey'
 
 const router = useRouter()
@@ -114,6 +117,8 @@ const authStore = useAuthStore()
 
 const isLogin = ref(true)
 const passkeySupported = ref(false)
+const passkeyOriginOk = ref(true)
+const originHint = ref<string | null>(null)
 const passkeyLoading = ref(false)
 let conditionalLoginActive = false
 
@@ -178,7 +183,7 @@ const finishPasskeyLogin = async (challengeId: string, credential: object) => {
 }
 
 const startConditionalLogin = async () => {
-  if (!isLogin.value || !passkeySupported.value) {
+  if (!isLogin.value || !passkeySupported.value || !passkeyOriginOk.value) {
     return
   }
   if (!(await isPasskeyAutofillSupported())) {
@@ -225,6 +230,8 @@ const onPasskeyLogin = async () => {
 
 onMounted(() => {
   passkeySupported.value = isPasskeySupported()
+  passkeyOriginOk.value = isPasskeyOriginSupported()
+  originHint.value = passkeyOriginHint()
   if (isLogin.value) {
     startConditionalLogin()
   }
