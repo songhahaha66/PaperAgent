@@ -30,6 +30,13 @@ class TaskOutput:
     timestamp: float = field(default_factory=time.time)
 
 
+_TERMINAL_STATUSES = (
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+)
+
+
 @dataclass
 class AITask:
     """AI任务"""
@@ -49,6 +56,7 @@ class AITask:
     json_blocks: list = field(default_factory=list)
     # asyncio任务引用
     _async_task: Optional[asyncio.Task] = None
+    _timeout_task: Optional[asyncio.Task] = None
 
 
 class TaskManager:
@@ -70,7 +78,7 @@ class TaskManager:
         self._initialized = True
         # work_id -> AITask
         self._tasks: dict[str, AITask] = {}
-        self._task_timeout = 1800  # 30分钟
+        self._task_timeout = 7200  # 2小时；到期由 watchdog 主动取消，不依赖前端查状态
         self._completed_retention = 60  # 1分钟
         logger.info("TaskManager 初始化完成")
     
@@ -100,19 +108,53 @@ class TaskManager:
     def get_running_task(self, work_id: str) -> Optional[AITask]:
         task = self._tasks.get(work_id)
         if task and task.status == TaskStatus.RUNNING:
-            if task.started_at and (time.time() - task.started_at > self._task_timeout):
-                logger.warning(f"任务超时，自动标记失败: {task.task_id}")
-                self.fail_task(work_id, "任务超时")
-                return None
             return task
         return None
+
+    def _cancel_timeout_watch(self, task: Optional[AITask]) -> None:
+        if not task or not task._timeout_task:
+            return
+        if not task._timeout_task.done():
+            task._timeout_task.cancel()
+        task._timeout_task = None
+
+    def _arm_timeout_watch(self, work_id: str, task: AITask) -> None:
+        """任务一开始就挂定时器，到期主动 cancel，不靠前端轮询。"""
+        self._cancel_timeout_watch(task)
+        try:
+            task._timeout_task = asyncio.create_task(
+                self._timeout_watch(work_id, task.task_id)
+            )
+        except RuntimeError:
+            logger.warning(
+                "当前无线程事件循环，无法挂超时 watchdog: %s",
+                task.task_id,
+            )
+
+    async def _timeout_watch(self, work_id: str, task_id: str) -> None:
+        try:
+            await asyncio.sleep(self._task_timeout)
+        except asyncio.CancelledError:
+            return
+        task = self._tasks.get(work_id)
+        if not task or task.task_id != task_id:
+            return
+        if task.status != TaskStatus.RUNNING:
+            return
+        logger.warning(
+            "任务超时（%.0fs），主动取消后台任务: %s",
+            self._task_timeout,
+            task.task_id,
+        )
+        self.fail_task(work_id, "任务超时")
     
     def start_task(self, work_id: str):
-        """标记任务开始"""
+        """标记任务开始，并启动超时 watchdog。"""
         task = self._tasks.get(work_id)
         if task:
             task.status = TaskStatus.RUNNING
             task.started_at = time.time()
+            self._arm_timeout_watch(work_id, task)
             logger.info(f"任务开始: {task.task_id}")
     
     def add_output(self, work_id: str, output_type: str, data: Any):
@@ -132,6 +174,9 @@ class TaskManager:
         """标记任务完成"""
         task = self._tasks.get(work_id)
         if task:
+            if task.status in _TERMINAL_STATUSES:
+                return
+            self._cancel_timeout_watch(task)
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.time()
             logger.info(f"任务完成: {task.task_id}")
@@ -142,6 +187,9 @@ class TaskManager:
         """标记任务失败并取消后台协程"""
         task = self._tasks.get(work_id)
         if task:
+            if task.status in _TERMINAL_STATUSES:
+                return
+            self._cancel_timeout_watch(task)
             task.status = TaskStatus.FAILED
             task.completed_at = time.time()
             task.error = error
@@ -151,9 +199,12 @@ class TaskManager:
             asyncio.create_task(self._cleanup_completed_task(work_id))
     
     def cancel_task(self, work_id: str):
-        """取消任务"""
+        """取消任务。超时 fail 之后协程的 CancelledError 也会走到这里，不能覆盖 FAILED。"""
         task = self._tasks.get(work_id)
         if task:
+            if task.status in _TERMINAL_STATUSES:
+                return
+            self._cancel_timeout_watch(task)
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
             if task._async_task and not task._async_task.done():
@@ -165,6 +216,8 @@ class TaskManager:
         task = self._tasks.get(work_id)
         if task:
             task._async_task = async_task
+            if task.status in (TaskStatus.FAILED, TaskStatus.CANCELLED) and not async_task.done():
+                async_task.cancel()
     
     def get_outputs_since(self, work_id: str, since_timestamp: float = 0) -> list[TaskOutput]:
         """获取指定时间戳之后的所有输出"""
@@ -177,12 +230,6 @@ class TaskManager:
         task = self._tasks.get(work_id)
         if not task:
             return {"status": "none", "has_task": False}
-
-        if (task.status == TaskStatus.RUNNING
-                and task.started_at
-                and time.time() - task.started_at > self._task_timeout):
-            logger.warning(f"任务超时，自动标记失败: {task.task_id}")
-            self.fail_task(work_id, "任务超时")
 
         return {
             "has_task": True,

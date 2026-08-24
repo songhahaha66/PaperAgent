@@ -536,7 +536,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         logger.info(f"[PERSISTENCE] AI处理完成，最终消息已保存到持久化存储")
                         
                     except asyncio.CancelledError:
-                        logger.info(f"AI任务被取消: {work_id}")
+                        existing = task_manager.get_task(work_id)
+                        timed_out = bool(existing and existing.error == "任务超时")
+                        logger.info(
+                            f"AI任务被{'超时' if timed_out else ''}取消: {work_id}"
+                        )
                         
                         # 取消时也保存已生成的内容
                         partial_content = ws_callback.content.strip()
@@ -549,7 +553,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 save_db = next(get_db())
                                 try:
                                     save_chat_service = ChatService(save_db)
-                                    cancel_notice = "\n\n---\n⚠️ *任务已取消，以上为部分生成内容*"
+                                    cancel_notice = (
+                                        "\n\n---\n⚠️ *任务超时，以上为部分生成内容*"
+                                        if timed_out
+                                        else "\n\n---\n⚠️ *任务已取消，以上为部分生成内容*"
+                                    )
                                     final_content = partial_content + cancel_notice
                                     
                                     if partial_json_blocks:
