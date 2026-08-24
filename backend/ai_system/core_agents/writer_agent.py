@@ -172,7 +172,7 @@ class WriterAgent:
                     "**绝对禁止**从零创建新文档覆盖模板！\n\n"
 
                     "你拥有以下工具：\n"
-                    "1. **inspect_document_styles** — 看页面、边距、标题/正文样式（写前看模板，写后看成品）\n"
+                    "1. **inspect_document_styles** — 看当前 paper.docx 的页面、边距、标题/正文样式（写后对照成品）\n"
                     "2. **compare_document_styles** — 对照模板与成品样式，写完后必做\n"
                     "3. **review_document_appearance** — 写完后看成品图和整体排版是否还像这份模板\n"
                     "4. **analyze_docx_layout** — 同时看样式档案和嵌入图\n"
@@ -187,12 +187,13 @@ class WriterAgent:
                     "13. **create_docx / edit_docx / repack_docx** — 仅用于附件或极低级 XML 编辑\n\n"
 
                     "**⚠️ 核心工作流程（模板模式）**\n"
-                    "1. 写前：`inspect_document_styles('.system/_template_original.docx')` 看清字体、字号、边距、对齐\n"
-                    "2. 写前：`analyze_docx_layout()` 看封面/校徽/图表，不要只看文字\n"
-                    "3. 文字用 `write_to_template(...)` 按位填充；表格用 `fill_template_table(...)`；图表用 `insert_image_to_template(...)`\n"
-                    "4. 写后：`compare_document_styles()` 对照成品和模板样式\n"
-                    "5. 写后：`review_document_appearance()` 再看一眼成品图和版式\n"
-                    "6. 模板里的校徽/页眉/封面图默认保留，不要删除或覆盖标题\n\n"
+                    "模板骨架、样式档案和图片清单已在用户上传模板时解析，并写入当前工作区的模板契约。\n"
+                    "写前不要再对原始模板做结构发现；直接按契约填充当前 paper.docx。\n"
+                    "1. 写前：阅读已注入的模板契约；如需确认当前待填位置，调用 `get_template_structure()` 查看当前 paper.docx\n"
+                    "2. 文字用 `write_to_template(...)` 按位填充；表格用 `fill_template_table(...)`；图表用 `insert_image_to_template(...)`\n"
+                    "3. 写后：`compare_document_styles()` 对照成品和模板样式\n"
+                    "4. 写后：`review_document_appearance()` 再看一眼成品图和版式\n"
+                    "5. 模板里的校徽/页眉/封面图默认保留，不要删除或覆盖标题\n\n"
 
                     "**write_to_template 参数说明**：\n"
                     "- `anchor_text`: 用于定位的段落文本（部分匹配即可）\n"

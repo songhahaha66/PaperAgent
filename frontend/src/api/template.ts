@@ -14,6 +14,16 @@ export interface PaperTemplate {
   created_by: number
 }
 
+export interface TemplateAnalysis {
+  template_id: number
+  status: string
+  contract: string
+  image_count: number
+  has_style_profile: boolean
+  analyzed_at?: string | null
+  error?: string | null
+}
+
 export interface PaperTemplateUpdate {
   name?: string
   description?: string
@@ -162,6 +172,14 @@ class TemplateAPI {
       download_url?: string
       message?: string
     }>(`/templates/${templateId}/preview`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+  }
+
+  async getTemplateAnalysis(token: string, templateId: number): Promise<TemplateAnalysis> {
+    return this.request<TemplateAnalysis>(`/templates/${templateId}/analysis`, {
       headers: {
         Authorization: `Bearer ${token}`,
       },

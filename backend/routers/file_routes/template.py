@@ -167,6 +167,29 @@ async def force_delete_template(
     """强制删除模板（同时删除引用该模板的工作）"""
     return crud.force_delete_paper_template(db, template_id, current_user)
 
+@router.get("/{template_id}/analysis", response_model=schemas.TemplateAnalysisResponse)
+@route_guard
+async def get_template_analysis(
+    template_id: int,
+    current_user: int = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """返回上传时解析的模板契约；旧模板会在首次查看时补全。"""
+    template = crud.get_paper_template(db, template_id)
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template not found"
+        )
+    if not template.is_public and template.created_by != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this template"
+        )
+    from services.file_services.template_contract import ensure_template_analysis
+    return ensure_template_analysis(template)
+
+
 @router.get("/{template_id}/preview")
 @route_guard
 async def get_template_preview(
