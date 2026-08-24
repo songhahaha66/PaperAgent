@@ -8,6 +8,15 @@ import zipfile
 from pathlib import Path
 from typing import Optional, List
 
+from .docx_images import extract_docx_images, format_image_inventory, inventory_docx_images
+from .docx_styles import (
+    apply_body_paragraph_format,
+    apply_body_run_format,
+    compare_style_fingerprints,
+    extract_style_fingerprint,
+    format_style_comparison,
+)
+
 logger = logging.getLogger(__name__)
 
 SKILL_DIR = Path(__file__).resolve().parent.parent / "docx_skill"
@@ -240,7 +249,10 @@ class DocxTools:
         file_path = self.workspace_dir / filename
         if not file_path.exists():
             return f"Error: 文件不存在: {filename}"
+        if file_path.suffix.lower() not in {".docx", ".doc"}:
+            return f"Error: {filename} 不是 Word 文档，请改用 read_file 读取文本文件。"
 
+        text = ""
         try:
             pandoc = shutil.which("pandoc")
             if pandoc:
@@ -251,17 +263,27 @@ class DocxTools:
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
                 if proc.returncode == 0:
-                    return stdout.decode(errors="replace")
+                    text = stdout.decode(errors="replace")
         except Exception as e:
             logger.warning(f"pandoc 读取失败，回退到 python-docx: {e}")
 
-        try:
-            from docx import Document as PythonDocxDocument
-            doc = PythonDocxDocument(str(file_path))
-            paragraphs = [p.text for p in doc.paragraphs]
-            return "\n".join(paragraphs)
-        except ImportError:
-            pass
+        if not text:
+            try:
+                from docx import Document as PythonDocxDocument
+                doc = PythonDocxDocument(str(file_path))
+                paragraphs = [p.text for p in doc.paragraphs]
+                text = "\n".join(paragraphs)
+            except ImportError:
+                text = ""
+            except Exception as e:
+                logger.warning(f"python-docx 读取失败: {e}")
+                text = ""
+
+        if text:
+            images = inventory_docx_images(file_path)
+            if images:
+                text = text.rstrip() + "\n\n" + format_image_inventory(images, title="嵌入图片")
+            return text
 
         try:
             unpack_dir = self.workspace_dir / ".system" / "_docx_unpacked"
@@ -281,6 +303,9 @@ class DocxTools:
                 content = doc_xml.read_text(encoding="utf-8")
                 text = re.sub(r"<[^>]+>", "", content)
                 text = re.sub(r"\s+", " ", text).strip()
+                images = inventory_docx_images(file_path)
+                if images:
+                    text = text.rstrip() + "\n\n" + format_image_inventory(images, title="嵌入图片")
                 return text
         except Exception as e:
             logger.warning(f"unpack 读取失败: {e}")
@@ -500,63 +525,48 @@ class DocxTools:
                     "请保留标题骨架，并使用 position='after' 在标题或占位说明后填充内容。"
                 )
 
+            body_style = style or "Normal"
+
+            def _styled_paragraph(text: str, after_element=None, insert_first: bool = False):
+                para = doc.add_paragraph()
+                try:
+                    para.style = doc.styles[body_style]
+                except KeyError:
+                    pass
+                if not is_code:
+                    apply_body_paragraph_format(doc, para, style_name=body_style)
+                run = para.add_run(text)
+                apply_body_run_format(doc, run, style_name=body_style, is_code=is_code)
+                if insert_first:
+                    parent = after_element.getparent() if after_element is not None else para._element.getparent()
+                    parent.insert(0, para._element)
+                elif after_element is not None:
+                    after_element.addnext(para._element)
+                return para._element
+
             if position == "replace":
                 anchor_para.clear()
                 run = anchor_para.add_run(paragraphs_text[0])
-                if is_code:
-                    run.font.name = "Courier New"
-                    run.font.size = Pt(10)
+                apply_body_run_format(doc, run, style_name=body_style, is_code=is_code)
+                insert_after = anchor_para._element
                 for extra_text in paragraphs_text[1:]:
-                    new_para = OxmlElement("w:p")
-                    anchor_para._element.addnext(new_para)
-                    from docx.text.paragraph import Paragraph
-                    p = Paragraph(new_para, anchor_para._element.getparent())
-                    r = p.add_run(extra_text)
-                    if is_code:
-                        r.font.name = "Courier New"
-                        r.font.size = Pt(10)
+                    insert_after = _styled_paragraph(extra_text, insert_after)
                 result_msg = f"✅ 已替换段落 [{anchor_idx}] 的内容"
             else:
                 insert_after_element = anchor_para._element
+                remaining = paragraphs_text
                 if position == "before":
                     prev = anchor_para._element.getprevious()
                     if prev is not None:
                         insert_after_element = prev
                     else:
-                        parent = anchor_para._element.getparent()
-                        new_para = OxmlElement("w:p")
-                        parent.insert(0, new_para)
-                        from docx.text.paragraph import Paragraph
-                        p = Paragraph(new_para, parent)
-                        r = p.add_run(paragraphs_text[0])
-                        if is_code:
-                            r.font.name = "Courier New"
-                            r.font.size = Pt(10)
-                        if style:
-                            try:
-                                p.style = doc.styles[style]
-                            except KeyError:
-                                pass
-                        insert_after_element = new_para
-                        paragraphs_text = paragraphs_text[1:]
+                        insert_after_element = _styled_paragraph(
+                            remaining[0], anchor_para._element, insert_first=True
+                        )
+                        remaining = remaining[1:]
 
-                for text in paragraphs_text:
-                    new_para = OxmlElement("w:p")
-                    insert_after_element.addnext(new_para)
-                    from docx.text.paragraph import Paragraph
-                    p = Paragraph(new_para, insert_after_element.getparent())
-                    if style:
-                        try:
-                            p.style = doc.styles[style]
-                        except KeyError:
-                            pass
-                    if is_code:
-                        r = p.add_run(text)
-                        r.font.name = "Courier New"
-                        r.font.size = Pt(10)
-                    else:
-                        r = p.add_run(text)
-                    insert_after_element = new_para
+                for text in remaining:
+                    insert_after_element = _styled_paragraph(text, insert_after_element)
 
                 pos_word = "后" if position == "after" else "前"
                 result_msg = f"✅ 已在段落 [{anchor_idx}] \"{anchor_text[:30]}\" {pos_word}插入 {len(paragraphs_text)} 段内容"
@@ -570,6 +580,119 @@ class DocxTools:
             return "Error: 缺少 python-docx 依赖，无法编辑模板"
         except Exception as e:
             logger.error(f"write_to_template 失败: {e}", exc_info=True)
+            return f"Error: {e}"
+
+    async def fill_template_table(
+        self,
+        table_index: int,
+        content_json: str,
+        start_row: int = 1,
+        filename: str = "paper.docx",
+        match_header: str = "",
+    ) -> str:
+        """
+        按单元格填写模板里已有的表格，保留表格线和单元格原有字体。
+
+        write_to_template 只改段落，改不了表格。课程报告里的测试用例表、
+        评分表数据行必须走这个工具。
+
+        Args:
+            table_index: 表格序号，与 get_template_structure 中的「表格N」一致
+            content_json: JSON 二维数组，每一行对应表格的一行单元格文本
+            start_row: 从哪一行开始覆盖，默认 1（跳过表头）
+            filename: 目标文件
+            match_header: 可选，表头需包含的文字，用来核对没有填错表
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        try:
+            rows = json.loads(content_json)
+        except json.JSONDecodeError as exc:
+            return f"Error: content_json 不是合法 JSON: {exc}"
+        if not isinstance(rows, list) or not rows:
+            return "Error: content_json 必须是非空二维数组，例如 [[\"1\",\"开始游戏\",...]]"
+        if not all(isinstance(row, list) for row in rows):
+            return "Error: content_json 每一行都必须是数组"
+
+        try:
+            from copy import deepcopy
+
+            from docx import Document as PythonDocxDocument
+            from docx.table import _Cell
+
+            doc = PythonDocxDocument(str(file_path))
+            if table_index < 0 or table_index >= len(doc.tables):
+                return (
+                    f"Error: 表格序号 {table_index} 不存在。"
+                    f"当前文档共 {len(doc.tables)} 个表格。"
+                )
+
+            table = doc.tables[table_index]
+            header = " | ".join(cell.text.strip() for cell in table.rows[0].cells)
+            if match_header and match_header not in header:
+                headers = [
+                    f"表格{i}: {' | '.join(c.text.strip()[:20] for c in t.rows[0].cells)}"
+                    for i, t in enumerate(doc.tables) if t.rows
+                ]
+                return (
+                    f"Error: 表格{table_index} 表头不包含 \"{match_header}\"。\n"
+                    f"当前表头: {header}\n" + "\n".join(headers)
+                )
+
+            col_count = len(table.columns) if table.rows else 0
+
+            def _write_cell(cell: _Cell, text: str) -> None:
+                paragraph = cell.paragraphs[0]
+                r_pr = None
+                for existing_run in paragraph.runs:
+                    if existing_run._element.rPr is not None:
+                        r_pr = deepcopy(existing_run._element.rPr)
+                        break
+                for extra in cell.paragraphs[1:]:
+                    extra._element.getparent().remove(extra._element)
+                paragraph.clear()
+                run = paragraph.add_run(text)
+                if r_pr is not None:
+                    r_el = run._element
+                    existing = r_el.rPr
+                    if existing is not None:
+                        r_el.remove(existing)
+                    r_el.insert(0, r_pr)
+                else:
+                    apply_body_run_format(doc, run)
+
+            def _clone_row():
+                tbl = table._tbl
+                last_tr = table.rows[-1]._tr
+                new_tr = deepcopy(last_tr)
+                tbl.append(new_tr)
+
+            needed_rows = start_row + len(rows)
+            while len(table.rows) < needed_rows:
+                _clone_row()
+
+            filled = 0
+            for offset, row_values in enumerate(rows):
+                row_idx = start_row + offset
+                if row_idx >= len(table.rows):
+                    break
+                cells = table.rows[row_idx].cells
+                for col_idx, value in enumerate(row_values[:col_count]):
+                    _write_cell(cells[col_idx], "" if value is None else str(value))
+                    filled += 1
+
+            doc.save(str(file_path))
+            self._notify_file_changed()
+            return (
+                f"✅ 已填写表格{table_index}（表头: {header[:40]}）"
+                f"，从第 {start_row} 行起覆盖 {len(rows)} 行、共 {filled} 个单元格。"
+            )
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖，无法填写表格"
+        except Exception as e:
+            logger.error("fill_template_table 失败: %s", e, exc_info=True)
             return f"Error: {e}"
 
     async def repair_template_structure(self, filename: str = "paper.docx") -> str:
@@ -610,12 +733,20 @@ class DocxTools:
                     f"模板 {len(template_headings)} 个，当前 {len(current_headings)} 个。"
                 )
 
+            from ai_system.core_tools.docx_styles import canonical_heading_text
+
             changed = []
             for index, (current, expected) in enumerate(zip(current_headings, template_headings), start=1):
                 expected_text = expected.text.strip()
                 current_text = current.text.strip()
                 current_style = current.style.name if current.style else ""
                 expected_style = expected.style.name if expected.style else ""
+                same_core_title = (
+                    canonical_heading_text(expected_text) == canonical_heading_text(current_text)
+                )
+                # Keep cleaned titles that only dropped “成稿后删除此括号”.
+                if same_core_title and current_style == expected_style:
+                    continue
                 if current_style != expected_style or current_text != expected_text:
                     current.clear()
                     current.style = expected.style
@@ -671,10 +802,218 @@ class DocxTools:
                     cols = len(table.columns) if table.rows else 0
                     first_cell = table.rows[0].cells[0].text[:40] if rows > 0 else ""
                     lines.append(f"表格{t_idx}: {rows}行×{cols}列, 首格=\"{first_cell}\"")
+                    preview_rows = min(rows, 8)
+                    for r_idx in range(preview_rows):
+                        cells = [
+                            table.rows[r_idx].cells[c].text.replace("\n", " ")[:24]
+                            for c in range(cols)
+                        ]
+                        lines.append(f"  r{r_idx}: {cells}")
+                    if rows > preview_rows:
+                        lines.append(f"  ... 还有 {rows - preview_rows} 行")
+
+            images = inventory_docx_images(file_path)
+            if images:
+                lines.append("")
+                lines.append(format_image_inventory(images, title="图片").rstrip())
+
+            lines.append("")
+            lines.append(extract_style_fingerprint(file_path).format_report("当前文档样式").rstrip())
 
             return "\n".join(lines)
 
         except ImportError:
             return "Error: 缺少 python-docx 依赖"
         except Exception as e:
+            return f"Error: {e}"
+
+    async def inspect_document_styles(self, filename: str = "paper.docx") -> str:
+        """
+        查看指定 Word 的页面、样式定义、标题/正文样例。
+        写模板前看模板，写完后看成品，用的是同一套档案。
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            template = self.workspace_dir / ".system" / "_template_original.docx"
+            if filename != "paper.docx" or not template.exists():
+                return f"Error: 文件不存在: {filename}"
+            file_path = template
+            filename = ".system/_template_original.docx"
+        fingerprint = extract_style_fingerprint(file_path)
+        return f"文档: {filename}\n" + fingerprint.format_report("样式档案")
+
+    async def compare_document_styles(
+        self,
+        expected_filename: str = ".system/_template_original.docx",
+        actual_filename: str = "paper.docx",
+    ) -> str:
+        """
+        对照模板与成品的页面、页眉页脚和关键样式定义。
+        写完后必须调用，确认成品没有把宋体/小四/边距写成另一套。
+        """
+        expected_path = self.workspace_dir / expected_filename
+        actual_path = self.workspace_dir / actual_filename
+        if not expected_path.exists():
+            return f"Error: 对照基准不存在: {expected_filename}"
+        if not actual_path.exists():
+            return f"Error: 成品不存在: {actual_filename}"
+
+        expected = extract_style_fingerprint(expected_path)
+        actual = extract_style_fingerprint(actual_path)
+        issues = compare_style_fingerprints(expected, actual)
+        report = format_style_comparison(expected, actual, issues)
+        if issues:
+            return f"⚠️ 成品样式与模板不一致（{len(issues)} 项）\n{report}"
+        return f"✅ 成品样式与模板一致\n{report}"
+
+    async def extract_template_images(self, filename: str = "paper.docx") -> str:
+        """
+        将 Word 中的嵌入图片提取到 .system/docx_images/<文件名>/，
+        并返回带附近文字的图片清单，方便后续识别和按位插图。
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        output_dir = self.workspace_dir / ".system" / "docx_images" / Path(filename).stem
+        images = extract_docx_images(file_path, output_dir)
+        if not images:
+            return f"{filename} 中没有嵌入图片"
+
+        lines = [
+            f"✅ 已提取 {len(images)} 张图片到 {output_dir.relative_to(self.workspace_dir)}",
+            format_image_inventory(images, title="提取结果").rstrip(),
+        ]
+        return "\n".join(lines)
+
+    async def insert_image_to_template(
+        self,
+        image_path: str,
+        anchor_text: str = "",
+        position: str = "after",
+        width_inches: float = 5.2,
+        caption: str = "",
+        filename: str = "paper.docx",
+    ) -> str:
+        """
+        在模板指定段落附近插入图片，保留原有标题骨架和样式。
+
+        Args:
+            image_path: 工作区内图片路径，如 outputs/chart.png 或 .system/docx_images/paper/image1.png
+            anchor_text: 定位段落文本；为空则追加到文档末尾
+            position: after / before / replace
+            width_inches: 图片显示宽度（英寸）
+            caption: 可选图题，插入在图片下方并居中
+            filename: 目标 Word 文件
+        """
+        file_path = self.workspace_dir / filename
+        if not file_path.exists():
+            return f"Error: 文件不存在: {filename}"
+
+        source = Path(image_path)
+        if not source.is_absolute():
+            source = self.workspace_dir / image_path
+        source = source.resolve()
+        if not str(source).startswith(str(self.workspace_dir)):
+            return f"Error: 图片路径超出工作空间: {image_path}"
+        if not source.exists() or not source.is_file():
+            return f"Error: 图片不存在: {image_path}"
+
+        try:
+            from docx import Document as PythonDocxDocument
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import Inches
+
+            doc = PythonDocxDocument(str(file_path))
+            width = max(1.5, min(float(width_inches or 5.2), 6.3))
+
+            def _style_name(para) -> str:
+                return (para.style.name if para.style else "").strip().lower()
+
+            def _is_toc_para(para) -> bool:
+                style_name = _style_name(para)
+                return style_name.startswith("toc") or "目录" in style_name
+
+            anchor_para = None
+            anchor_idx = None
+            if anchor_text.strip():
+                target = anchor_text.strip()
+                for exact in (True, False):
+                    for i, para in enumerate(doc.paragraphs):
+                        text = para.text.strip()
+                        if not text or _is_toc_para(para):
+                            continue
+                        if text == target if exact else target in text:
+                            anchor_para = para
+                            anchor_idx = i
+                            break
+                    if anchor_para is not None:
+                        break
+                if anchor_para is None:
+                    available = [
+                        f"[{i}] {p.text[:60]}"
+                        for i, p in enumerate(doc.paragraphs)
+                        if p.text.strip() and not _is_toc_para(p)
+                    ][:30]
+                    return (
+                        f"Error: 未找到包含 \"{anchor_text}\" 的段落。\n"
+                        f"可用段落（前30个非空）:\n" + "\n".join(available)
+                    )
+                if position == "replace" and _style_name(anchor_para).startswith("heading"):
+                    return (
+                        "Error: 禁止用图片替换模板标题段落。"
+                        "请使用 position='after' 把图片插到标题或占位说明后面。"
+                    )
+            else:
+                anchor_para = doc.paragraphs[-1] if doc.paragraphs else doc.add_paragraph()
+                anchor_idx = len(doc.paragraphs) - 1
+                position = "after"
+
+            def _new_centered_paragraph():
+                para = doc.add_paragraph()
+                para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                return para
+
+            def _place_after(after_element, para):
+                after_element.addnext(para._element)
+                return para._element
+
+            if position == "replace":
+                anchor_para.clear()
+                anchor_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = anchor_para.add_run()
+                run.add_picture(str(source), width=Inches(width))
+                insert_after = anchor_para._element
+            else:
+                picture_para = _new_centered_paragraph()
+                picture_para.add_run().add_picture(str(source), width=Inches(width))
+                if position == "before":
+                    prev = anchor_para._element.getprevious()
+                    if prev is None:
+                        parent = anchor_para._element.getparent()
+                        parent.insert(0, picture_para._element)
+                        insert_after = picture_para._element
+                    else:
+                        insert_after = _place_after(prev, picture_para)
+                else:
+                    insert_after = _place_after(anchor_para._element, picture_para)
+
+            if caption.strip():
+                cap_para = _new_centered_paragraph()
+                run = cap_para.add_run(caption.strip())
+                run.bold = True
+                insert_after.addnext(cap_para._element)
+
+            doc.save(str(file_path))
+            self._notify_file_changed()
+            size_kb = file_path.stat().st_size / 1024
+            loc = f"段落 [{anchor_idx}]" if anchor_text.strip() else "文档末尾"
+            return (
+                f"✅ 已插入图片 {source.name} 到 {loc} "
+                f"(宽 {width:.1f} 英寸)\n文件大小: {size_kb:.1f} KB"
+            )
+        except ImportError:
+            return "Error: 缺少 python-docx 依赖，无法插入图片"
+        except Exception as e:
+            logger.error("insert_image_to_template 失败: %s", e, exc_info=True)
             return f"Error: {e}"

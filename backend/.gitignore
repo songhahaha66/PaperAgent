@@ -29,6 +29,7 @@ installed.cfg
 MANIFEST
 
 # Virtual environments
+.venv/
 env
 venv
 env/
@@ -36,6 +37,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+*.db
 
 # IDEs and editors
 idea/

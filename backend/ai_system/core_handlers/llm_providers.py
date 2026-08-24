@@ -11,6 +11,8 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from ..config.api_settings import normalize_openai_base_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,7 +106,7 @@ class OpenAIProvider(BaseLLMProvider):
         return ChatOpenAI(
             model=self.model_id,
             api_key=self.api_key,
-            base_url=self.base_url if self.base_url else None,
+            base_url=normalize_openai_base_url(self.base_url) if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True)
@@ -180,7 +182,7 @@ class LocalProvider(BaseLLMProvider):
         return ChatOpenAI(
             model=self.model_id,
             api_key=self.api_key or "fake-key",  # 本地模型可能不需要真实API key
-            base_url=self.base_url or "http://localhost:11434/v1",  # 默认Ollama地址
+            base_url=normalize_openai_base_url(self.base_url) if self.base_url else "http://localhost:11434/v1",
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True)

@@ -303,7 +303,7 @@ class LangChainToolFactory:
             return []
 
     @staticmethod
-    def create_word_tools(workspace_dir: str, stream_manager=None) -> List[StructuredTool]:
+    def create_word_tools(workspace_dir: str, stream_manager=None, llm=None) -> List[StructuredTool]:
         """
         创建 Word 文档工具（基于 docx-js）
 
@@ -368,7 +368,21 @@ class LangChainToolFactory:
                         "content（要插入的内容，多段用\\n\\n分隔，代码用```包裹）、"
                         "position（'after'在锚点后/'before'在锚点前/'replace'替换锚点）、"
                         "style（可选样式名）、filename（默认 paper.docx）。\n"
-                        "模板模式下的核心工具，用于在已有模板基础上填充内容。"
+                        "模板模式下的核心工具，用于在已有模板基础上填充段落内容。"
+                        "注意：这个工具改不了表格单元格。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.fill_template_table,
+                    name="fill_template_table",
+                    description=(
+                        "填写模板里已经存在的表格单元格，保留表线和单元格原字体。\n"
+                        "参数：table_index（与 get_template_structure 中的表格序号一致）、"
+                        "content_json（JSON二维数组，每行一个单元格列表）、"
+                        "start_row（默认1，跳过表头）、"
+                        "match_header（可选，表头需包含的文字，防止填错表）、"
+                        "filename（默认 paper.docx）。\n"
+                        "测试用例表、评分数据行必须用这个工具，不要用 write_to_template 另写一张表。"
                     )
                 ),
                 StructuredTool.from_function(
@@ -385,18 +399,107 @@ class LangChainToolFactory:
                     coroutine=docx.get_template_structure,
                     name="get_template_structure",
                     description=(
-                        "获取文档的详细段落结构，包括段落索引、样式名和内容预览。\n"
+                        "获取文档的详细段落结构，包括段落索引、样式名、表格和嵌入图片清单。\n"
                         "参数：filename（默认 paper.docx）。\n"
-                        "用于在调用 write_to_template 前了解文档结构和定位 anchor_text。"
+                        "用于在调用 write_to_template / fill_template_table / insert_image_to_template 前了解结构和定位。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.extract_template_images,
+                    name="extract_template_images",
+                    description=(
+                        "提取 Word 中的嵌入图片到 .system/docx_images/<文件名>/，并返回附近文字。\n"
+                        "参数：filename（默认 paper.docx）。\n"
+                        "复杂模板排版前应先提取图片，再按需识别或原位保留。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.insert_image_to_template,
+                    name="insert_image_to_template",
+                    description=(
+                        "在模板指定段落附近插入图片并可选配图题，保留标题骨架。\n"
+                        "参数：image_path（工作区相对路径）、anchor_text（定位文本）、"
+                        "position（after/before/replace）、width_inches（默认5.2）、"
+                        "caption（图题）、filename（默认 paper.docx）。\n"
+                        "生成的图表必须插入到对应章节，不要只写“见图”，也不要覆盖标题。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.inspect_document_styles,
+                    name="inspect_document_styles",
+                    description=(
+                        "查看 Word 的页面尺寸、页边距、页眉页脚、标题/正文样式定义和实际段落样例。\n"
+                        "参数：filename（默认 paper.docx；写前可看 .system/_template_original.docx）。\n"
+                        "排版项目必须先看模板样式，写完再看成品样式，不能只看图片。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=docx.compare_document_styles,
+                    name="compare_document_styles",
+                    description=(
+                        "对照模板与成品的页面、页边距、页眉页脚和关键样式定义。\n"
+                        "参数：expected_filename（默认 .system/_template_original.docx）、"
+                        "actual_filename（默认 paper.docx）。\n"
+                        "全部章节写完后必须调用；有字体/字号/边距漂移就不能验收通过。"
                     )
                 ),
             ]
+
+            try:
+                tools.extend(LangChainToolFactory.create_vision_tools(workspace_dir, stream_manager, llm))
+            except Exception as e:
+                logger.warning("附加视觉工具失败: %s", e)
 
             logger.info(f"创建了 {len(tools)} 个 Word 工具 (docx-js)")
             return tools
 
         except Exception as e:
             logger.error(f"创建 Word 工具失败: {e}", exc_info=True)
+            return []
+
+    @staticmethod
+    def create_vision_tools(workspace_dir: str, stream_manager=None, llm=None) -> List[StructuredTool]:
+        """
+        创建图片识别工具。用于看清 Word 模板里的封面、校徽、图表和用户上传图。
+        """
+        try:
+            from ..core_tools.vision_tools import VisionTools
+
+            vision = VisionTools(workspace_dir, llm=llm, stream_manager=stream_manager)
+            tools = [
+                StructuredTool.from_function(
+                    coroutine=vision.analyze_image,
+                    name="analyze_image",
+                    description=(
+                        "识别工作区中的一张图片，判断它是封面/校徽/页眉装饰、正文插图、"
+                        "表格截图还是签名章，并给出排版建议。\n"
+                        "参数：image_path（相对路径，如 outputs/chart.png）、"
+                        "question（可选，自定义识别问题）。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=vision.analyze_docx_layout,
+                    name="analyze_docx_layout",
+                    description=(
+                        "查看 Word 的样式档案，并提取识别嵌入图片。"
+                        "写前看模板，写后也可看成品；不只看图，也看页面和字体。\n"
+                        "参数：filename（默认 paper.docx）、question（可选）。"
+                    )
+                ),
+                StructuredTool.from_function(
+                    coroutine=vision.review_document_appearance,
+                    name="review_document_appearance",
+                    description=(
+                        "写完后验收成品外观：对照模板样式，再识别成品中的图是否仍符合该模板排版。\n"
+                        "参数：filename（默认 paper.docx）、"
+                        "template_filename（默认 .system/_template_original.docx）。"
+                    )
+                ),
+            ]
+            logger.info("创建了 %d 个视觉识别工具", len(tools))
+            return tools
+        except Exception as e:
+            logger.error("创建视觉识别工具失败: %s", e, exc_info=True)
             return []
 
     @staticmethod
@@ -480,6 +583,38 @@ class LangChainToolFactory:
             # 添加标准工具（搜索）
             standard_tools = LangChainToolFactory.create_standard_tools()
             base_tools.extend(standard_tools)
+
+            try:
+                from ..core_tools.docx_tools import DocxTools
+
+                docx = DocxTools(workspace_dir, stream_manager)
+                base_tools.extend(
+                    [
+                        StructuredTool.from_function(
+                            coroutine=docx.inspect_document_styles,
+                            name="inspect_document_styles",
+                            description=(
+                                "查看 Word 的页面、边距、页眉页脚和标题/正文样式。"
+                                "写前看模板，写后看成品。"
+                            ),
+                        ),
+                        StructuredTool.from_function(
+                            coroutine=docx.compare_document_styles,
+                            name="compare_document_styles",
+                            description=(
+                                "对照模板与成品样式。全部写完后必须调用，"
+                                "字体/字号/边距漂移则不能验收通过。"
+                            ),
+                        ),
+                    ]
+                )
+            except Exception as e:
+                logger.warning("附加样式对照工具失败: %s", e)
+
+            try:
+                base_tools.extend(LangChainToolFactory.create_vision_tools(workspace_dir, stream_manager))
+            except Exception as e:
+                logger.warning("附加视觉工具失败: %s", e)
 
             logger.info(f"创建了 {len(base_tools)} 个基础工具（不含writemd）")
             return base_tools

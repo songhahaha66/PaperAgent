@@ -15,6 +15,15 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from config.paths import get_templates_path
+from ai_system.core_tools.docx_images import (
+    extract_docx_images,
+    format_image_inventory,
+    inventory_docx_images,
+)
+from ai_system.core_tools.docx_styles import (
+    extract_style_fingerprint,
+    save_style_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +105,7 @@ def initialize_template_contract(
             contract = _build_contract(source_path, template.name, output_mode)
             _write_contract(workspace_path, contract)
             _copy_template_to_workspace(source_path, workspace_path, output_mode)
+            _capture_template_assets(source_path, workspace_path, output_mode)
             return contract
         finally:
             db.close()
@@ -117,6 +127,19 @@ def _copy_template_to_workspace(source_path: Path, workspace_path: Path, output_
         backup.parent.mkdir(parents=True, exist_ok=True)
         if not backup.exists():
             shutil.copyfile(source_path, backup)
+
+
+def _capture_template_assets(source_path: Path, workspace_path: Path, output_mode: str) -> None:
+    if output_mode != "word" or source_path.suffix.lower() != ".docx":
+        return
+    try:
+        extract_docx_images(source_path, workspace_path / ".system" / "docx_images" / "template")
+    except Exception as exc:
+        logger.warning("提取模板图片失败: %s", exc)
+    try:
+        save_style_profile(workspace_path, extract_style_fingerprint(source_path))
+    except Exception as exc:
+        logger.warning("保存模板样式档案失败: %s", exc)
 
 
 def _write_contract(workspace_path: Path, contract: str) -> None:
@@ -222,6 +245,10 @@ def _docx_contract(source_path: Path) -> str:
 
         result.append("\n## 显式格式/写作要求")
         result.extend(_format_requirement_lines(requirements))
+        result.append("")
+        result.append(extract_style_fingerprint(source_path).format_report("模板样式档案").rstrip())
+        result.append("")
+        result.append(format_image_inventory(inventory_docx_images(source_path)).rstrip())
         return "\n".join(result) + "\n"
     except Exception as exc:
         logger.warning("抽取 Word 模板契约失败: %s", exc)

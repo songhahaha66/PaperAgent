@@ -589,23 +589,26 @@ class PlanReconciler:
             issues.append(
                 f"表格数量不一致（模板{template_outline['table_count']}，当前{paper_outline['table_count']}）"
             )
-        if paper_outline["headings"] != template_outline["headings"]:
-            issues.append("标题层级/顺序/文本与模板不一致")
-            for idx, (expected, actual) in enumerate(zip(template_outline["headings"], paper_outline["headings"]), 1):
-                if expected != actual:
-                    issues.append(f"第{idx}个标题应为{expected[1]}，当前为{actual[1]}")
-                    break
-            if len(paper_outline["headings"]) != len(template_outline["headings"]):
-                issues.append(
-                    f"标题数量不一致（模板{len(template_outline['headings'])}，当前{len(paper_outline['headings'])}）"
-                )
+        from ai_system.core_tools.docx_styles import heading_outline_issues
+
+        issues.extend(heading_outline_issues(template_outline["headings"], paper_outline["headings"]))
         markdown_heading_leaks = [
             text for _, text in paper_outline["headings"]
             if re.search(r"(^[*#`]+|[*#`]+$)", text)
         ]
         if markdown_heading_leaks:
             issues.append(f"标题中残留Markdown标记: {markdown_heading_leaks[:3]}")
+        issues.extend(self._validate_docx_styles(template_docx, paper_docx))
         return issues
+
+    @staticmethod
+    def _validate_docx_styles(template_docx: Path, paper_docx: Path) -> List[str]:
+        try:
+            from ai_system.core_tools.docx_styles import compare_docx_styles
+
+            return compare_docx_styles(template_docx, paper_docx)
+        except Exception as exc:
+            return [f"无法对照Word样式: {exc}"]
 
     def _docx_outline(self, docx_path: Path) -> Dict[str, Any]:
         import xml.etree.ElementTree as ET

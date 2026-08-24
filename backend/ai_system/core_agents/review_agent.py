@@ -31,7 +31,8 @@ REVIEW_SYSTEM_PROMPT = """\
 1. 读取 plan.md 中的章节列表，统计「✅ 已完成」vs「⬜ 待写」/「⏳ 进行中」/「❌ 阻塞」数量
 2. 检查论文文件（paper.md / paper.docx）是否存在且有实质内容
 3. 如果 plan.md 中所有章节都标记为 ✅ 且论文文件有内容、没有阻塞项 → complete=true
-4. 否则 complete=false，在 continuation_prompt 中列出具体缺失的章节和下一步操作
+4. Word 模板模式还要看成品样式：页边距、标题/正文样式、页眉页脚必须与模板一致
+5. 否则 complete=false，在 continuation_prompt 中列出具体缺失的章节和下一步操作
 
 ## continuation_prompt 要求（当 complete=false 时）
 - 必须具体指出哪些章节还未完成
@@ -156,16 +157,9 @@ class ReviewAgent:
                     issues.append(
                         f"表格数量不一致：模板 {template['table_count']} 个，当前 {paper['table_count']} 个"
                     )
-                if paper["headings"] != template["headings"]:
-                    issues.append("标题层级/顺序/文本与模板不一致")
-                    for idx, (expected, actual) in enumerate(zip(template["headings"], paper["headings"]), 1):
-                        if expected != actual:
-                            issues.append(f"第 {idx} 个标题应为 {expected}，当前为 {actual}")
-                            break
-                    if len(paper["headings"]) != len(template["headings"]):
-                        issues.append(
-                            f"标题数量不一致：模板 {len(template['headings'])} 个，当前 {len(paper['headings'])} 个"
-                        )
+                from ai_system.core_tools.docx_styles import heading_outline_issues
+
+                issues.extend(heading_outline_issues(template["headings"], paper["headings"]))
             except Exception as exc:
                 issues.append(f"无法解析模板结构: {exc}")
 
@@ -182,6 +176,14 @@ class ReviewAgent:
         )
         if placeholder_count:
             issues.append(f"仍存在 {placeholder_count} 个未完成占位标记")
+
+        if template_path.exists():
+            try:
+                from ai_system.core_tools.docx_styles import compare_docx_styles
+
+                issues.extend(compare_docx_styles(template_path, paper_path))
+            except Exception as exc:
+                issues.append(f"无法对照成品样式: {exc}")
 
         summary = (
             f"paper.docx: {file_size} 字节, "
@@ -261,9 +263,10 @@ class ReviewAgent:
                 continuation_prompt=(
                     "当前任务未通过自动验收。请先修复以下问题："
                     + "；".join(blockers)
-                    + "。Word模板模式下必须保留模板标题层级、章节顺序、表格数量和占位栏位；"
+                    + "。Word模板模式下必须保留模板标题层级、章节顺序、表格数量、页边距和样式定义；"
                     "如果提示标题层级/顺序/文本与模板不一致，先调用 repair_template_structure()；"
-                    "然后继续补齐内容并重新验收。不要回复文字说明，直接调用工具。"
+                    "如果提示字体/字号/边距不一致，调用 inspect_document_styles 和 compare_document_styles，"
+                    "按模板样式修回成品后再验收。不要回复文字说明，直接调用工具。"
                 ),
             )
 

@@ -58,6 +58,18 @@ class DatabaseConfigManager:
         config = query_configs(user_id_filter=user_id)
 
         if not config:
+            from .api_settings import EnvModelConfig, load_env_api_settings
+
+            settings = load_env_api_settings()
+            if settings:
+                logger.info(
+                    "用户 %s 未配置 %s，回退到 PAPERAGENT_API_* 环境变量 (%s)",
+                    user_id,
+                    system_type,
+                    settings.model_id,
+                )
+                return EnvModelConfig(settings, system_type=system_type)
+
             logger.error(f"用户 {user_id} 未配置 {system_type}" +
                         (f"，提供商: {provider}" if provider else ""))
             raise ValueError(f"用户 {user_id} 未配置 {system_type}" +
