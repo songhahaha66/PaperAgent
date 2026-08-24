@@ -220,7 +220,11 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 
 .login-form {
   margin: 30px 0;
-  margin-left: -90px;
+  text-align: left;
+}
+
+.login-form :deep(.t-form__item) {
+  width: 100%;
 }
 
 .form-footer p {

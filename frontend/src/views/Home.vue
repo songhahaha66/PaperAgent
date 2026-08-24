@@ -269,7 +269,7 @@
     <t-dialog
       v-model:visible="showPreviewDialog"
       :header="`模板预览 - ${previewTemplateData?.name}`"
-      width="900px"
+      :width="isMobile ? '92vw' : '900px'"
       @confirm="closePreviewDialog"
       @cancel="closePreviewDialog"
     >
@@ -361,7 +361,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { MessagePlugin } from 'tdesign-vue-next'
@@ -371,12 +371,20 @@ import { attachmentAPI } from '@/api/workspace'
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import DocxViewer from '@/components/DocxViewer.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const { isMobile } = useBreakpoint()
 
 // 侧边栏折叠状态 - 手机端默认收起
-const isSidebarCollapsed = ref(window.innerWidth <= 768)
+const isSidebarCollapsed = ref(isMobile.value)
+
+watch(isMobile, (mobile) => {
+  if (mobile) {
+    isSidebarCollapsed.value = true
+  }
+})
 
 // 任务创建步骤（现在有3步：1.输入问题 2.选择模板 3.选择输出格式）
 const currentStep = ref(1)
@@ -678,6 +686,7 @@ const selectHistory = (id: number) => {
 .home-page {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: #ffffff;
   overflow: hidden;
@@ -1059,25 +1068,27 @@ const selectHistory = (id: number) => {
 @media (max-width: 768px) {
   .home-container {
     padding: 20px 16px;
+    justify-content: flex-start;
+    max-width: 100%;
   }
 
   .welcome-header h1 {
-    font-size: 2rem;
+    font-size: 1.6rem;
   }
 
   .input-container {
-    padding: 24px;
+    padding: 16px;
   }
 
   .step-actions {
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
   }
 
   .prev-btn,
   .start-btn {
     width: 100%;
-    max-width: 300px;
+    max-width: none;
   }
 }
 </style>

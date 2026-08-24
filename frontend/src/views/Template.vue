@@ -21,6 +21,7 @@
           </template>
 
           <t-table
+            v-if="!isMobile"
             :data="templateList"
             :columns="columns"
             row-key="id"
@@ -55,6 +56,46 @@
               </t-space>
             </template>
           </t-table>
+
+          <div v-else class="template-card-list">
+            <t-loading v-if="loading" size="small" text="加载中..." />
+            <div v-else-if="templateList.length === 0" class="template-empty">暂无模板</div>
+            <t-card v-for="row in templateList" :key="row.id" class="template-mobile-card">
+              <div class="template-card-title">
+                <h3>{{ row.name }}</h3>
+                <t-tag :theme="getOutputFormatTheme(row.output_format)" variant="light" size="small">
+                  {{ getOutputFormatLabel(row.output_format) }}
+                </t-tag>
+              </div>
+              <p class="template-card-desc">{{ row.description || '暂无描述' }}</p>
+              <div class="template-card-meta">
+                <span>{{ row.category || '未分类' }}</span>
+                <span>{{ formatDate(row.created_at) }}</span>
+                <t-tag :theme="row.is_public ? 'success' : 'warning'" variant="light" size="small">
+                  {{ row.is_public ? '公开' : '私有' }}
+                </t-tag>
+              </div>
+              <div class="template-card-actions">
+                <t-button theme="primary" variant="outline" size="small" @click="editTemplate(row)">
+                  编辑
+                </t-button>
+                <t-button theme="default" variant="outline" size="small" @click="viewTemplateContent(row)">
+                  查看内容
+                </t-button>
+                <t-button theme="danger" variant="outline" size="small" @click="deleteTemplate(row)">
+                  删除
+                </t-button>
+              </div>
+            </t-card>
+            <t-pagination
+              v-if="pagination.total > 0"
+              :current="pagination.defaultCurrent"
+              :page-size="pagination.defaultPageSize"
+              :total="pagination.total"
+              :show-page-size="false"
+              @change="(pageInfo: { current: number; pageSize: number }) => onPageChange(pageInfo.current, pageInfo)"
+            />
+          </div>
         </t-card>
       </div>
     </div>
@@ -65,7 +106,7 @@
       :header="editingTemplate ? '编辑模板' : '新建模板'"
       @confirm="saveTemplate"
       @cancel="cancelTemplate"
-      width="800px"
+      :width="isMobile ? '92vw' : '800px'"
     >
       <t-form :data="templateForm" label-align="top">
         <t-form-item label="模板名称" name="name">
@@ -109,7 +150,7 @@
     <t-dialog
       v-model:visible="showContentDialog"
       :header="`模板内容 - ${selectedTemplate?.name}`"
-      width="900px"
+      :width="isMobile ? '92vw' : '900px'"
       @confirm="closeContentDialog"
       @cancel="closeContentDialog"
     >
@@ -185,7 +226,7 @@
     <t-dialog
       v-model:visible="showDeleteConfirmDialog"
       header="确认删除模板"
-      width="500px"
+      :width="isMobile ? '92vw' : '500px'"
       @confirm="confirmForceDelete"
       @cancel="cancelForceDelete"
     >
@@ -204,7 +245,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
@@ -216,9 +257,18 @@ import {
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import DocxViewer from '@/components/DocxViewer.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
+
+const { isMobile } = useBreakpoint()
 
 // 侧边栏折叠状态 - 手机端默认收起
-const isSidebarCollapsed = ref(window.innerWidth <= 768)
+const isSidebarCollapsed = ref(isMobile.value)
+
+watch(isMobile, (mobile) => {
+  if (mobile) {
+    isSidebarCollapsed.value = true
+  }
+})
 
 // 切换侧边栏折叠状态
 const toggleSidebar = () => {
@@ -637,6 +687,7 @@ onMounted(() => {
 .template-page {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: #f5f7fa;
   overflow: hidden;
@@ -760,5 +811,68 @@ onMounted(() => {
 .warning-text {
   color: #e74c3c;
   font-weight: bold;
+}
+
+.template-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.template-empty {
+  text-align: center;
+  color: #7f8c8d;
+  padding: 32px 0;
+}
+
+.template-mobile-card {
+  border-radius: 8px;
+}
+
+.template-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.template-card-title h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #2c3e50;
+}
+
+.template-card-desc {
+  margin: 0 0 10px 0;
+  color: #666;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.template-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: #7f8c8d;
+  margin-bottom: 12px;
+}
+
+.template-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .workspace-header {
+    padding: 12px 16px;
+  }
+
+  .template-content {
+    padding: 12px 16px;
+  }
 }
 </style>
