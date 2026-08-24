@@ -421,3 +421,26 @@ h6 {
 .no-template-state h4 {
   font-family: var(--td-font-family-heading);
 }
+
+/* TDesign loading is an SVG (t-spin) wrapping a foreignObject whose inner
+   div is width/height 100%. In a full-width button that percentage resolves
+   against the button, so the ring becomes an oval and no longer reads as a
+   circling spinner. Size the SVG to 1em² and stroke a real circle; t-spin
+   already rotates it. */
+.t-loading__gradient.t-icon-loading {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  vertical-align: middle;
+  overflow: hidden;
+  background: transparent;
+  border: 2px solid color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+}
+
+.t-loading__gradient-conic {
+  display: none;
+}
