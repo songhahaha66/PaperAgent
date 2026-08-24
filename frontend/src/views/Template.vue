@@ -161,60 +161,96 @@
             <t-loading size="large" text="加载中..." />
           </div>
           
-          <!-- 文本文件预览 -->
-          <div v-else-if="templatePreviewData?.type === 'text'" class="text-preview">
-            <MarkdownRenderer
-              v-if="selectedTemplate?.file_path?.endsWith('.md')"
-              :content="templatePreviewData.content || ''"
-              :base-path="''"
-            />
-            <t-textarea
-              v-else
-              :model-value="templatePreviewData.content || ''"
-              readonly
-              :autosize="{ minRows: 15, maxRows: 25 }"
-            />
-          </div>
-          
-          <!-- 图片文件预览 -->
-          <div v-else-if="templatePreviewData?.type === 'image'" class="image-preview">
-            <img
-              :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
-              :alt="templatePreviewData.filename"
-              style="max-width: 100%; height: auto;"
-            />
-          </div>
-          
-          <!-- 二进制文件预览 -->
-          <div v-else-if="templatePreviewData?.type === 'binary'" class="binary-preview">
-            <!-- DOCX文件使用DocxViewer预览 -->
-            <DocxViewer
-              v-if="templatePreviewData.filename?.toLowerCase().endsWith('.docx')"
-              :file-info="{
-                filename: templatePreviewData.filename,
-                size: templatePreviewData.size,
-                mime_type: templatePreviewData.mime_type || '',
-                download_url: templatePreviewData.download_url || '',
-                message: templatePreviewData.message || ''
-              }"
-              :work-id="''"
-              :token="authStore.token || ''"
-            />
-            <!-- 其他二进制文件显示下载信息 -->
-            <div v-else class="file-info-display">
-              <t-icon name="file" size="48px" />
-              <p><strong>文件名：</strong>{{ templatePreviewData.filename }}</p>
-              <p><strong>文件大小：</strong>{{ formatFileSize(templatePreviewData.size) }}</p>
-              <p><strong>文件类型：</strong>{{ templatePreviewData.mime_type }}</p>
-            </div>
-          </div>
-          
           <!-- 预览失败 -->
           <div v-else-if="templatePreviewError" class="error-preview">
             <t-icon name="error-circle" size="48px" />
             <p>模板预览加载失败</p>
             <p>{{ templatePreviewError }}</p>
           </div>
+          
+          <t-tabs v-else-if="templatePreviewData" v-model="contentTab" class="content-tabs">
+            <t-tab-panel value="original" label="原文">
+              <!-- 文本文件预览 -->
+              <div v-if="templatePreviewData.type === 'text'" class="text-preview">
+                <MarkdownRenderer
+                  v-if="selectedTemplate?.file_path?.endsWith('.md')"
+                  :content="templatePreviewData.content || ''"
+                  :base-path="''"
+                />
+                <t-textarea
+                  v-else
+                  :model-value="templatePreviewData.content || ''"
+                  readonly
+                  :autosize="{ minRows: 15, maxRows: 25 }"
+                />
+              </div>
+              
+              <!-- 图片文件预览 -->
+              <div v-else-if="templatePreviewData.type === 'image'" class="image-preview">
+                <img
+                  :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
+                  :alt="templatePreviewData.filename"
+                  style="max-width: 100%; height: auto;"
+                />
+              </div>
+              
+              <!-- 二进制文件预览 -->
+              <div v-else-if="templatePreviewData.type === 'binary'" class="binary-preview">
+                <!-- DOCX文件使用DocxViewer预览 -->
+                <DocxViewer
+                  v-if="templatePreviewData.filename?.toLowerCase().endsWith('.docx')"
+                  :file-info="{
+                    filename: templatePreviewData.filename,
+                    size: templatePreviewData.size,
+                    mime_type: templatePreviewData.mime_type || '',
+                    download_url: templatePreviewData.download_url || '',
+                    message: templatePreviewData.message || ''
+                  }"
+                  :work-id="''"
+                  :token="authStore.token || ''"
+                />
+                <!-- 其他二进制文件显示下载信息 -->
+                <div v-else class="file-info-display">
+                  <t-icon name="file" size="48px" />
+                  <p><strong>文件名：</strong>{{ templatePreviewData.filename }}</p>
+                  <p><strong>文件大小：</strong>{{ formatFileSize(templatePreviewData.size) }}</p>
+                  <p><strong>文件类型：</strong>{{ templatePreviewData.mime_type }}</p>
+                </div>
+              </div>
+            </t-tab-panel>
+            <t-tab-panel value="analysis" label="系统解读">
+              <div v-if="templateAnalysisLoading" class="loading-container">
+                <t-loading size="medium" text="正在读取上传阶段解析结果..." />
+              </div>
+              <div v-else-if="templateAnalysisError && !templateAnalysis?.contract" class="error-preview">
+                <t-icon name="error-circle" size="48px" />
+                <p>模板解读加载失败</p>
+                <p>{{ templateAnalysisError }}</p>
+              </div>
+              <div v-else-if="templateAnalysis" class="analysis-preview">
+                <p class="analysis-hint">
+                  上传时已完成静态解析。写作阶段只读取当前 paper.docx 的实时状态，不再重复扫描原始模板。
+                </p>
+                <div class="analysis-meta">
+                  <t-space>
+                    <span>状态: {{ templateAnalysis.status }}</span>
+                    <span>图片: {{ templateAnalysis.image_count }}</span>
+                    <span>样式指纹: {{ templateAnalysis.has_style_profile ? '已保存' : '无' }}</span>
+                    <span v-if="templateAnalysis.analyzed_at">解析时间: {{ templateAnalysis.analyzed_at }}</span>
+                  </t-space>
+                </div>
+                <div v-if="templateAnalysisError" class="analysis-error">
+                  {{ templateAnalysisError }}
+                </div>
+                <div class="text-preview">
+                  <MarkdownRenderer
+                    :content="templateAnalysis.contract || '暂无模板骨架解读'"
+                    :base-path="''"
+                  />
+                </div>
+              </div>
+            </t-tab-panel>
+          </t-tabs>
         </div>
       </div>
       <template #footer>
@@ -253,6 +289,7 @@ import {
   templateAPI,
   type PaperTemplate,
   type PaperTemplateUpdate,
+  type TemplateAnalysis,
 } from '@/api/template'
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -547,7 +584,7 @@ const saveTemplate = async () => {
         )
 
         console.log('模板创建成功:', newTemplate)
-        MessagePlugin.success('模板创建成功')
+        MessagePlugin.success('模板创建成功，系统已解析模板骨架')
       } catch (error: any) {
         console.error('模板创建失败:', error)
         const errorMessage = error?.message || '模板创建失败'
@@ -606,23 +643,44 @@ const templatePreviewData = ref<{
   message?: string
 } | null>(null)
 const templatePreviewError = ref('')
+const contentTab = ref('original')
+const templateAnalysis = ref<TemplateAnalysis | null>(null)
+const templateAnalysisLoading = ref(false)
+const templateAnalysisError = ref('')
 
 const viewTemplateContent = async (template: PaperTemplate) => {
   if (!authStore.token) return
 
   selectedTemplate.value = template
   showContentDialog.value = true
+  contentTab.value = 'original'
   templatePreviewLoading.value = true
   templatePreviewError.value = ''
   templatePreviewData.value = null
+  templateAnalysis.value = null
+  templateAnalysisError.value = ''
+  templateAnalysisLoading.value = true
 
   try {
-    const result = await templateAPI.getTemplatePreview(authStore.token, template.id)
+    const [result, analysis] = await Promise.all([
+      templateAPI.getTemplatePreview(authStore.token, template.id),
+      templateAPI.getTemplateAnalysis(authStore.token, template.id).catch((error: any) => {
+        templateAnalysisError.value =
+          error?.response?.data?.detail || error?.message || '读取模板解读失败'
+        return null
+      }),
+    ])
     templatePreviewData.value = result
     
     // 为了向后兼容，如果是文本类型，也设置templateContent
     if (result.type === 'text') {
       templateContent.value = result.content || ''
+    }
+    if (analysis) {
+      templateAnalysis.value = analysis
+      if (analysis.status !== 'ready') {
+        templateAnalysisError.value = analysis.error || '模板解读失败'
+      }
     }
   } catch (error: any) {
     const errorMessage = error?.response?.data?.detail || error?.message || '加载模板预览失败'
@@ -631,6 +689,7 @@ const viewTemplateContent = async (template: PaperTemplate) => {
     console.error('加载模板预览失败:', error)
   } finally {
     templatePreviewLoading.value = false
+    templateAnalysisLoading.value = false
   }
 }
 
@@ -641,6 +700,10 @@ const closeContentDialog = () => {
   templatePreviewData.value = null
   templatePreviewError.value = ''
   templatePreviewLoading.value = false
+  contentTab.value = 'original'
+  templateAnalysis.value = null
+  templateAnalysisError.value = ''
+  templateAnalysisLoading.value = false
 }
 
 // 格式化文件大小
@@ -748,6 +811,29 @@ onMounted(() => {
 .content-display .t-textarea {
   min-height: 100%;
   box-sizing: border-box;
+}
+
+.content-tabs {
+  min-height: 400px;
+}
+
+.analysis-hint {
+  margin: 0 0 12px;
+  color: #7f8c8d;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.analysis-meta {
+  margin-bottom: 12px;
+  color: #7f8c8d;
+  font-size: 12px;
+}
+
+.analysis-error {
+  margin-bottom: 12px;
+  color: #dc3545;
+  font-size: 13px;
 }
 
 /* 预览内容样式 */

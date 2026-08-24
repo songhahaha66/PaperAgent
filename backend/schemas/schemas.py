@@ -89,6 +89,16 @@ class PaperTemplateResponse(PaperTemplateBase):
     class Config:
         from_attributes = True
 
+
+class TemplateAnalysisResponse(BaseModel):
+    template_id: int
+    status: str
+    contract: str = ""
+    image_count: int = 0
+    has_style_profile: bool = False
+    analyzed_at: Optional[str] = None
+    error: Optional[str] = None
+
 # Work相关schemas
 class WorkBase(BaseModel):
     title: str

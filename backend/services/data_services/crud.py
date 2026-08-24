@@ -14,6 +14,9 @@ import os
 from pathlib import Path
 from datetime import datetime
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 def get_user_by_email(db: Session, email: str):
     return db.query(models.User).filter(models.User.email == email).first()
@@ -248,6 +251,17 @@ def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, us
             db_template.file_path = saved_filename
             db.commit()
             db.refresh(db_template)
+            try:
+                from ..file_services.template_contract import analyze_and_store_template
+                from config.paths import get_templates_path
+                analyze_and_store_template(
+                    get_templates_path() / saved_filename,
+                    db_template.id,
+                    db_template.name,
+                    db_template.output_format,
+                )
+            except Exception:
+                logger.warning("模板上传后解析失败: template_id=%s", db_template.id, exc_info=True)
         
         return db_template
     except Exception as e:
@@ -328,6 +342,8 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
     # 删除关联的模板文件
     if db_template.file_path:
         template_file_service.delete_file(db_template.file_path)
+    from ..file_services.template_contract import delete_template_analysis
+    delete_template_analysis(template_id)
     
     # 删除数据库记录
     db.delete(db_template)
@@ -357,6 +373,8 @@ def force_delete_paper_template(db: Session, template_id: int, user_id: int):
     # 删除关联的模板文件
     if db_template.file_path:
         template_file_service.delete_file(db_template.file_path)
+    from ..file_services.template_contract import delete_template_analysis
+    delete_template_analysis(template_id)
     
     # 删除数据库记录
     db.delete(db_template)
