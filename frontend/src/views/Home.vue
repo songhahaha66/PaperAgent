@@ -62,7 +62,7 @@
                     class="next-btn"
                   >
                     下一步
-                    <template #icon>
+                    <template #suffix>
                       <t-icon name="arrow-right" />
                     </template>
                   </t-button>
@@ -145,7 +145,7 @@
                 class="next-btn"
               >
                 下一步
-                <template #icon>
+                <template #suffix>
                   <t-icon name="arrow-right" />
                 </template>
               </t-button>
@@ -745,7 +745,7 @@ const selectHistory = (id: number) => {
 /* 按钮容器 */
 .button-container {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   margin-top: 16px;
   width: 100%;
@@ -784,7 +784,6 @@ const selectHistory = (id: number) => {
 .next-btn-wrapper {
   display: flex;
   justify-content: flex-end;
-  float: right;
 }
 
 .next-btn {
@@ -1082,13 +1081,12 @@ const selectHistory = (id: number) => {
 
   .step-actions {
     flex-direction: column;
-    align-items: stretch;
   }
 
   .prev-btn,
+  .next-btn,
   .start-btn {
     width: 100%;
-    max-width: none;
   }
 }
 </style>
