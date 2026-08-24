@@ -422,26 +422,35 @@ h6 {
   font-family: var(--td-font-family-heading);
 }
 
-/* TDesign loading SVG uses display:inline-flex + an inner 100% conic. In a
-   full-width button that 100% resolves against the button, stretching the
-   ring into an oval. Hide the conic and stroke a 1em circle; t-spin rotates it. */
-.t-loading .t-loading__gradient.t-icon-loading {
-  display: block;
-  width: 1em;
-  height: 1em;
-  min-width: 1em;
-  min-height: 1em;
-  max-width: 1em;
-  max-height: 1em;
-  flex: 0 0 1em;
-  box-sizing: border-box;
-  overflow: hidden;
-  background: transparent;
-  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-top-color: currentColor;
-  border-radius: 50%;
+/* TDesign spinner = SVG (1em) wrapping a 12x12 foreignObject.
+   Size the SVG, never the inner .t-loading__gradient-conic — 1em there
+   overflows the FO and clips into a triangle. */
+.t-loading {
+  line-height: 1;
+  flex-shrink: 0;
 }
 
-.t-loading .t-loading__gradient-conic {
-  display: none;
+.t-button .t-loading,
+svg.t-loading__gradient,
+.t-icon-loading {
+  width: 1em;
+  height: 1em;
+  max-width: 1em;
+  max-height: 1em;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.t-loading__gradient-conic {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  box-sizing: border-box;
+  border-radius: 50%;
+  /* iOS Safari / CriOS: TDesign scales the conic from 0,0 by fontSize/12,
+     which clips a 100%-sized ring into a triangle. */
+  transform: none !important;
+  -webkit-transform: none !important;
+  transform-origin: center center !important;
 }
