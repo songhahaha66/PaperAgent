@@ -55,7 +55,7 @@
         </t-form-item>
 
         <t-form-item>
-          <t-button type="submit" theme="primary" size="large" block :loading="authStore.loading">
+          <t-button type="submit" theme="primary" size="large" block :loading="passwordLoading">
             {{ isLogin ? '登录' : '注册' }}
           </t-button>
         </t-form-item>
@@ -120,6 +120,7 @@ const passkeySupported = ref(false)
 const passkeyOriginOk = ref(true)
 const originHint = ref<string | null>(null)
 const passkeyLoading = ref(false)
+const passwordLoading = ref(false)
 let conditionalLoginActive = false
 
 // 检查URL参数，如果是注册模式则自动切换
@@ -243,6 +244,8 @@ onUnmounted(() => {
 
 const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   if (validateResult === true) {
+    cancelPasskeyCeremony()
+    passwordLoading.value = true
     try {
       if (isLogin.value) {
         // 登录逻辑
@@ -281,6 +284,8 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
     } catch (error) {
       console.error('操作失败:', error)
       MessagePlugin.error('操作失败，请重试')
+    } finally {
+      passwordLoading.value = false
     }
   }
 }
