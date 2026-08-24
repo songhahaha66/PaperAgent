@@ -1,9 +1,5 @@
 <template>
-  <!-- 手机端提示界面 -->
-  <MobileWarning v-if="isMobile" />
-
-  <!-- 正常工作界面 -->
-  <div v-else class="work-page">
+  <div class="work-page" :class="{ 'is-mobile': isMobile }">
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
@@ -25,11 +21,11 @@
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
-            <p>生成过程中请耐心等待！</p>
+            <p v-if="!isMobile">生成过程中请耐心等待！</p>
           </div>
-          <p>创建于 {{ formatDate(currentWork.created_at) }}</p>
+          <p v-if="!isMobile">创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
-        <div class="work-actions">
+        <div v-if="!isMobile" class="work-actions">
           <t-button
             theme="primary"
             variant="outline"
@@ -49,6 +45,11 @@
             删除
           </t-button>
         </div>
+        <t-dropdown v-else :options="mobileWorkActionOptions" trigger="click">
+          <t-button theme="default" variant="text" shape="square">
+            <t-icon name="more" />
+          </t-button>
+        </t-dropdown>
       </div>
 
       <div class="workspace-header" v-else>
@@ -56,14 +57,15 @@
         <p>正在加载工作信息...</p>
       </div>
 
-      <div class="workspace-content">
-        <div class="chat-section">
+      <div class="workspace-content" :class="{ 'is-mobile': isMobile }">
+        <div class="chat-section" v-show="!isMobile || activeMobilePanel === 'chat'">
           <div class="chat-container">
             <div class="chat-messages-container">
               <JsonChatRenderer :messages="chatMessages" />
             </div>
             <div class="chat-bottom-section">
               <FileManager
+                v-if="!isMobile"
                 :work-id="workId"
                 :loading="loading"
                 :file-tree-data="workspaceFiles"
@@ -89,7 +91,24 @@
           </div>
         </div>
 
-        <div class="preview-section">
+        <div
+          v-if="isMobile"
+          class="files-section"
+          v-show="activeMobilePanel === 'files'"
+        >
+          <FileManager
+            fill-height
+            :work-id="workId"
+            :loading="loading"
+            :file-tree-data="workspaceFiles"
+            :plan-data="planData"
+            @file-select="handleWorkspaceFileSelect"
+            @refresh="handleFileRefresh"
+            @main-paper-click="handleMainPaperClick"
+          />
+        </div>
+
+        <div class="preview-section" v-show="!isMobile || activeMobilePanel === 'preview'">
           <!-- 主要论文显示 -->
           <div v-if="showMainPaper && mainPaperContent">
             <t-card title="主要论文">
@@ -209,12 +228,42 @@
             <t-card title="论文展示区">
               <div class="pdf-info">
                 <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
-                <p>在左侧文件管理器中点击文件可查看具体内容。</p>
+                <p>{{ isMobile ? '在文件页中点击文件可查看具体内容。' : '在左侧文件管理器中点击文件可查看具体内容。' }}</p>
               </div>
             </t-card>
           </div>
         </div>
       </div>
+
+      <nav v-if="isMobile" class="mobile-tab-bar" aria-label="工作区导航">
+        <button
+          type="button"
+          class="mobile-tab"
+          :class="{ active: activeMobilePanel === 'chat' }"
+          @click="activeMobilePanel = 'chat'"
+        >
+          <t-icon name="chat" />
+          <span>对话</span>
+        </button>
+        <button
+          type="button"
+          class="mobile-tab"
+          :class="{ active: activeMobilePanel === 'files' }"
+          @click="activeMobilePanel = 'files'"
+        >
+          <t-icon name="folder-open" />
+          <span>文件</span>
+        </button>
+        <button
+          type="button"
+          class="mobile-tab"
+          :class="{ active: activeMobilePanel === 'preview' }"
+          @click="activeMobilePanel = 'preview'"
+        >
+          <t-icon name="browse" />
+          <span>预览</span>
+        </button>
+      </nav>
     </div>
   </div>
 </template>
@@ -229,8 +278,8 @@ import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
-import MobileWarning from '@/components/MobileWarning.vue';
 import FileManager from '@/components/FileManager.vue';
+import { useBreakpoint } from '@/composables/useBreakpoint';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 import CodeHighlight from '@/components/CodeHighlight.vue';
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
@@ -242,11 +291,33 @@ const router = useRouter();
 const authStore = useAuthStore();
 const workId = computed(() => route.params.work_id as string);
 
-// 侧边栏折叠状态 - 手机端默认收起
-const isSidebarCollapsed = ref(window.innerWidth <= 768)
+const { isMobile } = useBreakpoint()
 
-// 检测是否为手机端
-const isMobile = ref(window.innerWidth <= 768)
+// 侧边栏折叠状态 - 手机端默认收起
+const isSidebarCollapsed = ref(isMobile.value)
+
+type MobilePanel = 'chat' | 'files' | 'preview'
+const activeMobilePanel = ref<MobilePanel>('chat')
+
+watch(isMobile, (mobile) => {
+  if (mobile) {
+    isSidebarCollapsed.value = true
+  }
+})
+
+const mobileWorkActionOptions = [
+  {
+    content: '导出文件',
+    value: 'export',
+    onClick: () => exportWorkspace(),
+  },
+  {
+    content: '删除',
+    value: 'delete',
+    theme: 'error',
+    onClick: () => deleteWork(),
+  },
+]
 
 // 当前工作信息
 const currentWork = ref<Work | null>(null)
@@ -599,6 +670,9 @@ const handleMainPaperClick = async () => {
     mainPaperContent.value = response.content || ''
     showMainPaper.value = true
     selectedFile.value = 'paper.md'
+    if (isMobile.value) {
+      activeMobilePanel.value = 'preview'
+    }
   } catch (error) {
     console.error('获取论文内容失败:', error)
     MessagePlugin.error('获取论文内容失败')
@@ -801,6 +875,10 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
   console.log('文件被选中:', filePath)
   currentFileName.value = filePath
   selectedFile.value = filePath // 设置选中的文件
+  showMainPaper.value = false
+  if (isMobile.value) {
+    activeMobilePanel.value = 'preview'
+  }
 
   // 每次都从服务器重新获取文件内容，避免缓存问题
   try {
@@ -1287,6 +1365,7 @@ body {
 
 #app {
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 </style>
@@ -1295,6 +1374,7 @@ body {
 .work-page {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   background: #f5f7fa;
   overflow: hidden;
@@ -1603,5 +1683,91 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.files-section {
+  display: none;
+}
+
+.mobile-tab-bar {
+  display: none;
+}
+
+.work-page.is-mobile {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.work-page.is-mobile :deep(.mobile-expand-btn-container) {
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+}
+
+.workspace-content.is-mobile {
+  flex-direction: column;
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.workspace-content.is-mobile .chat-section,
+.workspace-content.is-mobile .preview-section,
+.workspace-content.is-mobile .files-section {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: auto;
+  padding: 8px;
+  border-right: none;
+}
+
+.workspace-content.is-mobile .files-section {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+
+.workspace-content.is-mobile .file-preview {
+  max-height: none;
+}
+
+.work-page.is-mobile .workspace-header {
+  padding: 10px 12px;
+}
+
+.work-page.is-mobile .work-info h1 {
+  font-size: 1.05em;
+  margin: 0;
+}
+
+.work-page.is-mobile .mobile-tab-bar {
+  display: flex;
+  flex-shrink: 0;
+  border-top: 1px solid #eee;
+  background: #fff;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.mobile-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 0;
+  border: none;
+  background: none;
+  color: #666;
+  font-size: 12px;
+}
+
+.mobile-tab.active {
+  color: #0052d9;
+}
+
+.mobile-tab .t-icon {
+  font-size: 20px;
 }
 </style>

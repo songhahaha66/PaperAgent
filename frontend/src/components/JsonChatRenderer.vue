@@ -49,13 +49,18 @@
         </ChatItem>
 
         <!-- 对话分割线 -->
-        <div v-if="index < messages.length - 1" class="message-divider">
+        <div
+          v-if="index < messages.length - 1"
+          class="message-divider"
+          @click="isMobile ? toggleDivider(index) : undefined"
+        >
           <div class="divider-line"></div>
           <div
             class="divider-icon"
             :class="{ show: hoveredDivider === index }"
-            @mouseenter="showDivider(index)"
-            @mouseleave="hideDivider"
+            @mouseenter="!isMobile && showDivider(index)"
+            @mouseleave="!isMobile && hideDivider()"
+            @click.stop="isMobile && toggleDivider(index)"
           >
             <t-icon name="arrow-up" />
           </div>
@@ -70,6 +75,7 @@ import { ref, computed } from 'vue'
 import { ChatItem } from '@tdesign-vue-next/chat'
 import { MessagePlugin } from 'tdesign-vue-next'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
 
 // 定义消息类型
 interface ChatMessage {
@@ -89,6 +95,7 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const { isMobile } = useBreakpoint()
 
 // 分割线悬停状态
 const hoveredDivider = ref<number | null>(null)
@@ -104,6 +111,10 @@ const showDivider = (index: number) => {
 // 隐藏分割线
 const hideDivider = () => {
   hoveredDivider.value = null
+}
+
+const toggleDivider = (index: number) => {
+  hoveredDivider.value = hoveredDivider.value === index ? null : index
 }
 
 // 切换JSON块的折叠状态
@@ -596,6 +607,10 @@ const copyMessage = (content: string) => {
 @media (max-width: 768px) {
   .chat-messages {
     padding: 8px;
+  }
+
+  .divider-icon {
+    opacity: 0.45;
   }
 }
 </style>

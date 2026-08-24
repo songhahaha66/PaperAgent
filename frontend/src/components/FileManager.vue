@@ -1,7 +1,13 @@
 <template>
-  <div class="file-manager" :class="{ collapsed: isCollapsed }">
+  <div class="file-manager" :class="{ collapsed: isCollapsed, 'fill-height': fillHeight }">
     <div class="fm-header">
-      <t-button variant="text" shape="square" @click="isCollapsed = !isCollapsed" class="fm-btn">
+      <t-button
+        v-if="!fillHeight"
+        variant="text"
+        shape="square"
+        @click="isCollapsed = !isCollapsed"
+        class="fm-btn"
+      >
         <template #icon>
           <t-icon :name="isCollapsed ? 'chevron-up' : 'chevron-down'" size="16px" />
         </template>
@@ -153,6 +159,7 @@ interface Props {
   workId?: string
   loading?: boolean
   planData?: PlanData | null
+  fillHeight?: boolean
 }
 
 interface Emits {
@@ -551,6 +558,19 @@ defineExpose({
 .file-manager {
   border-top: 1px solid #e7e7e7;
   background: #fff;
+}
+
+.file-manager.fill-height {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-top: none;
+}
+
+.file-manager.fill-height .fm-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .fm-header {
