@@ -3,7 +3,7 @@
 [![wakatime](https://wakatime.com/badge/user/ef685785-b2de-4416-b5c6-df540c453238/project/e2409803-47c5-4f66-835f-714caf1d3d9e.svg)](https://wakatime.com/badge/user/ef685785-b2de-4416-b5c6-df540c453238/project/e2409803-47c5-4f66-835f-714caf1d3d9e)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/songhahaha66/PaperAgent)
 <p align="center">
-    <img src="./image/logo.png" height="250px">
+    <img src="./image/PaperAgent.png" height="96px">
 </p>
 
 PaperAgent 是一个基于人工智能技术的学术论文写作助手，旨在显著提升研究人员、学生和学术写作者的论文撰写效率和质量。通过集成先进的AI模型和智能工具，PaperAgent 能够协助用户完成从研究、数据分析到论文写作的全流程工作。
