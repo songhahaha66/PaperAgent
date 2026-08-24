@@ -224,11 +224,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   text-align: left;
 }
 
-.login-form :deep(.t-form__item),
-.login-form :deep(.t-form__controls),
-.login-form :deep(.t-form__controls-content),
-.login-form :deep(.t-input),
-.login-form :deep(.t-button) {
+.login-form :deep(.t-form__item) {
   width: 100%;
 }
 

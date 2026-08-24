@@ -592,6 +592,13 @@ defineExpose({
   align-self: center;
 }
 
+.fm-btn :deep(.t-loading),
+.fm-btn :deep(.t-loading__gradient) {
+  width: 16px !important;
+  height: 16px !important;
+  font-size: 16px;
+}
+
 .fm-tabs {
   flex: 1;
   min-width: 0;

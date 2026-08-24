@@ -421,3 +421,39 @@ h6 {
 .no-template-state h4 {
   font-family: var(--td-font-family-heading);
 }
+
+/* Keep TDesign loading spinners circular inside full-width mobile buttons */
+.t-loading {
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.t-loading__gradient,
+.t-icon-loading {
+  width: 1em !important;
+  height: 1em !important;
+  max-width: 1em;
+  max-height: 1em;
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.t-loading__gradient-conic {
+  width: 1em !important;
+  height: 1em !important;
+  min-width: 1em;
+  min-height: 1em;
+  aspect-ratio: 1 / 1;
+  transform-origin: center center !important;
+  box-sizing: border-box;
+}
+
+.t-button .t-loading,
+.t-button .t-icon {
+  flex: none;
+  width: auto;
+}
+
+.t-button.t-is-loading {
+  overflow: visible;
+}
