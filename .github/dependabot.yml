@@ -1,7 +1,8 @@
 version: 2
 updates:
-  # Backend Python dependencies (uv)
-  - package-ecosystem: "pip"
+  # Backend Python (uv). Dependabot cannot mix version and security updates
+  # in one group, so each class is batched into a single PR.
+  - package-ecosystem: "uv"
     directory: "/backend"
     schedule:
       interval: "weekly"
@@ -13,11 +14,17 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      python-all:
+      backend-python:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      backend-python-security:
+        applies-to: security-updates
         patterns:
           - "*"
 
-  # Frontend npm dependencies
+  # Frontend npm. One weekly version PR and one batched security PR
+  # instead of one PR per package (or a major/minor split).
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
@@ -30,17 +37,14 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      npm-minor-patch:
+      frontend-npm:
+        applies-to: version-updates
         patterns:
           - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      npm-major:
+      frontend-npm-security:
+        applies-to: security-updates
         patterns:
           - "*"
-        update-types:
-          - "major"
     ignore:
       - dependency-name: "vue"
         update-types: ["version-update:semver-major"]
