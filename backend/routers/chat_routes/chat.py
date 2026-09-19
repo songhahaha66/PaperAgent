@@ -187,6 +187,25 @@ async def get_task_status(
     return task_manager.get_task_status(work_id)
 
 
+@router.get("/work/{work_id}/events")
+@route_guard
+async def get_run_events(
+    work_id: str,
+    offset: int = 0,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from services.data_services.crud import get_work
+    from ai_system.runtime.events import EventEmitter
+
+    work = get_work(db, work_id)
+    if not work or work.created_by != current_user_id:
+        raise HTTPException(status_code=403, detail="无权限访问")
+    emitter = EventEmitter(workspace_dir=str(get_workspace_path(work_id)))
+    events = [event.model_dump() for event in emitter.load()]
+    return {"work_id": work_id, "offset": offset, "events": events[max(offset, 0):]}
+
+
 @router.websocket("/ws/{work_id}")
 async def websocket_chat(websocket: WebSocket, work_id: str):
     """WebSocket聊天接口，支持断线重连恢复"""
@@ -279,6 +298,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         await websocket.send_text(json.dumps({
                             'type': 'json_block',
                             'block': output.data
+                        }))
+                    elif output.type == 'event':
+                        await websocket.send_text(json.dumps({
+                            'type': 'event',
+                            'event': output.data
                         }))
                 except Exception as e:
                     logger.error(f"[RECONNECT] 恢复输出失败: {e}")
@@ -375,6 +399,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 async def on_message_complete(self, role: str, content: str):
                     """消息完成回调"""
                     logger.debug(f"消息完成，角色: {role}, 长度: {len(content)}, JSON块数: {len(self.json_blocks)}")
+
+                async def on_event(self, event: dict):
+                    task_manager.add_output(self.work_id, "event", event)
+                    try:
+                        await manager.send_message(self.work_id, json.dumps({
+                            "type": "event",
+                            "event": event,
+                        }))
+                    except Exception as e:
+                        logger.error(f"发送AG-UI事件失败: {e}")
 
                 async def on_json_block(self, block: dict):
                     """处理JSON格式的数据块"""

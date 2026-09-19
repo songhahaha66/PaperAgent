@@ -1,4 +1,5 @@
 from .draft import Draft, Judgement
+from .intent import EditIntent
 from .events import RunEventPayload
 from .paper_ir import Artifact, PaperIR, Provenance, Reference, SectionContent
 from .plan import Plan, Task, TaskNeeds, derive_plan, project_plan_json
@@ -20,6 +21,7 @@ __all__ = [
     "Block",
     "BlockType",
     "Draft",
+    "EditIntent",
     "FontHint",
     "FormatRule",
     "Furniture",

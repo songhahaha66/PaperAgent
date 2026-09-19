@@ -177,13 +177,13 @@ def test_event_emitter_dual_writes_json_block_and_file(tmp_path: Path):
     assert manager.event_emitter.events[0].payload["type"] == "plan_updated"
 
 
-def test_pipeline_flag_defaults_to_legacy(monkeypatch):
+def test_pipeline_flag_defaults_to_v2(monkeypatch):
     monkeypatch.delenv("AI_PIPELINE", raising=False)
-    assert pipeline_version() == "legacy"
-    monkeypatch.setenv("AI_PIPELINE", "v2")
     assert pipeline_version() == "v2"
-    monkeypatch.setenv("AI_PIPELINE", "unknown")
+    monkeypatch.setenv("AI_PIPELINE", "legacy")
     assert pipeline_version() == "legacy"
+    monkeypatch.setenv("AI_PIPELINE", "unknown")
+    assert pipeline_version() == "v2"
 
 
 def test_sandbox_runs_in_workdir(tmp_path: Path):

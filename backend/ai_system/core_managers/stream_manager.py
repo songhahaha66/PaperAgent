@@ -96,7 +96,8 @@ class StreamOutputManager:
             "content": content
         }
 
-        logger.debug(f"发送JSON块: {block_type} - {repr(content[:50])}...")
+        preview = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        logger.debug(f"发送JSON块: {block_type} - {repr(preview[:50])}...")
 
         if self.stream_callback:
             try:
@@ -110,6 +111,20 @@ class StreamOutputManager:
         else:
             # 直接打印JSON格式
             print(json.dumps(block, ensure_ascii=False), flush=True)
+
+    async def send_agui_event(self, event) -> None:
+        """Push an AG-UI event to subscribers without replacing json_block."""
+        callback = self.stream_callback
+        if callback is None:
+            return
+        handler = getattr(callback, "on_event", None)
+        if handler is None:
+            return
+        try:
+            payload = event.model_dump() if hasattr(event, "model_dump") else event
+            await handler(payload)
+        except Exception as exc:
+            logger.debug("发送 AG-UI 事件失败: %s", exc)
 
     async def print_main_content(self, content: str):
         """打印主要内容"""

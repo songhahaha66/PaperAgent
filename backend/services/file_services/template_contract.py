@@ -227,6 +227,16 @@ def read_template_analysis(template_id: int) -> dict[str, Any]:
         ),
         "has_spec": bool(meta.get("has_spec") or spec_file.exists()),
         "slot_count": len(spec_data.get("slots") or []),
+        "slots": [
+            {
+                "id": slot.get("id", ""),
+                "role": slot.get("role", "other"),
+                "title": slot.get("title") or "",
+                "confidence": float(slot.get("confidence") or 0),
+                "source": slot.get("source") or "ooxml",
+            }
+            for slot in (spec_data.get("slots") or [])
+        ],
         "analyzed_at": meta.get("analyzed_at"),
         "error": meta.get("error"),
     }
