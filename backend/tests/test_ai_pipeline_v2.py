@@ -15,7 +15,6 @@ from ai_system.judge.heuristic import HeuristicJudge, infer_role
 from ai_system.render.docx_renderer import normalize_docx_bytes, render_docx
 from ai_system.render.markdown_renderer import render_markdown
 from ai_system.runtime.events import EventEmitter
-from ai_system.runtime.pipeline import pipeline_version
 from ai_system.sandbox.runner import run_sandbox
 from ai_system.schemas.paper_ir import PaperIR, Paragraph, SectionContent, TableRows
 from ai_system.schemas.plan import derive_plan, project_plan_json
@@ -175,15 +174,6 @@ def test_event_emitter_dual_writes_json_block_and_file(tmp_path: Path):
     asyncio.run(manager.send_json_block("plan_updated", '{"items": []}'))
     assert manager.event_emitter.events[0].event_type == "STATE_DELTA"
     assert manager.event_emitter.events[0].payload["type"] == "plan_updated"
-
-
-def test_pipeline_flag_defaults_to_v2(monkeypatch):
-    monkeypatch.delenv("AI_PIPELINE", raising=False)
-    assert pipeline_version() == "v2"
-    monkeypatch.setenv("AI_PIPELINE", "legacy")
-    assert pipeline_version() == "legacy"
-    monkeypatch.setenv("AI_PIPELINE", "unknown")
-    assert pipeline_version() == "v2"
 
 
 def test_sandbox_runs_in_workdir(tmp_path: Path):

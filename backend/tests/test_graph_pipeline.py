@@ -11,6 +11,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt
 
+from ai_system.core_agents.main_agent import MainAgent
 from ai_system.eval.harness import EvalCase, run_eval_case, summarize
 from ai_system.graph.checkpoint import load_checkpoint
 from ai_system.graph.context import bind_emitter
@@ -19,7 +20,6 @@ from ai_system.graph.nodes.gather import gather_batch, needed_gather_slots
 from ai_system.graph.runner import run_pipeline
 from ai_system.graph.state import PaperState
 from ai_system.judge.base import Answer
-from ai_system.runtime.pipeline import pipeline_version
 from ai_system.schemas.paper_ir import PaperIR
 from ai_system.schemas.template_spec import Block, Slot, TemplateSpec
 from ai_system.template.ooxml_parser import parse_docx
@@ -56,11 +56,11 @@ def _course_template(path: Path) -> Path:
     return path
 
 
-def test_pipeline_defaults_to_v2(monkeypatch):
-    monkeypatch.delenv("AI_PIPELINE", raising=False)
-    assert pipeline_version() == "v2"
-    monkeypatch.setenv("AI_PIPELINE", "legacy")
-    assert pipeline_version() == "legacy"
+def test_main_agent_is_graph_facade_only(tmp_path: Path):
+    agent = MainAgent(llm=object(), workspace_dir=str(tmp_path), work_id="facade-1")
+    assert not hasattr(agent, "review_agent")
+    assert not hasattr(agent, "agent")
+    assert not hasattr(agent, "tools")
 
 
 def test_graph_markdown_end_to_end(tmp_path: Path):

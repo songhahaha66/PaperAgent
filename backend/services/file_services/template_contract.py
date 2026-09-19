@@ -3,7 +3,7 @@ Template contract extraction for paper generation.
 
 The contract is a compact, model-readable summary of the uploaded template
 bone structure and explicit formatting requirements. It is stored in the
-workspace so both MainAgent and WriterAgent can enforce it.
+workspace so the v2 graph can enforce it.
 """
 
 from __future__ import annotations

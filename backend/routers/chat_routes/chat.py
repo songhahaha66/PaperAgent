@@ -476,12 +476,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     writer_llm = create_llm_from_model_config(writer_model_config)
-                    logger.info(f"使用LangChain模型作为WriterAgent: {writer_llm}")
+                    logger.info(f"使用 writing 配置作为草稿模型: {writer_llm}")
                 except Exception as e:
-                    logger.error(f"创建WriterAgent专用LangChain模型失败: {e}")
+                    logger.error(f"创建草稿模型失败: {e}")
                     writer_llm = None
             else:
-                logger.info("未提供writer配置，WriterAgent将使用主LLM")
+                logger.info("未提供 writing 配置，草稿节点将使用主 LLM")
                 writer_llm = None
 
             # 获取工作的模板ID和输出模式

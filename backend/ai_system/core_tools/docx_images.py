@@ -2,7 +2,7 @@
 Word image inventory, extraction, and insertion helpers.
 
 These functions stay independent of the LLM so template initialization and
-WriterAgent tools can share the same layout-aware image map.
+the docx renderer can share the same layout-aware image map.
 """
 
 from __future__ import annotations
