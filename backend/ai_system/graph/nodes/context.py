@@ -10,6 +10,7 @@ from ..state import PaperState
 
 IR_PATH = Path(".system") / "paper_ir.json"
 SPEC_PATH = Path(".system") / "template_spec.json"
+HISTORY_LIMIT = 12
 
 
 def load_context(state: PaperState) -> PaperState:
@@ -46,4 +47,22 @@ def load_context(state: PaperState) -> PaperState:
             state.spec = None
     if state.spec is None and state.template_id:
         state.spec = load_template_spec(state.template_id)
+    state.history = load_chat_history(workspace)
     return state
+
+
+def load_chat_history(workspace: Path, limit: int = HISTORY_LIMIT) -> list[dict[str, str]]:
+    path = Path(workspace) / "chat_history.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows: list[dict[str, str]] = []
+    for item in data.get("messages", []):
+        role = str(item.get("role") or "")
+        content = str(item.get("content") or "").strip()
+        if role in {"user", "assistant"} and content:
+            rows.append({"role": role, "content": content[:500]})
+    return rows[-limit:]

@@ -42,6 +42,7 @@ class StreamOutputManager:
         event_emitter: Optional[EventEmitter] = None,
         run_id: str = "",
         thread_id: str = "",
+        workspace_dir: str = "",
     ):
         self.stream_callback = stream_callback
         self.output_count = 0
@@ -50,7 +51,11 @@ class StreamOutputManager:
         self.current_block_type = "main"
         self.run_id = run_id
         self.thread_id = thread_id
-        self.event_emitter = event_emitter or EventEmitter(run_id=run_id, thread_id=thread_id)
+        self.event_emitter = event_emitter or EventEmitter(
+            workspace_dir=workspace_dir or None,
+            run_id=run_id,
+            thread_id=thread_id,
+        )
         # 添加异步锁，防止并发输出问题
         self._output_lock = asyncio.Lock()
         logger.info("StreamOutputManager初始化完成")
@@ -187,8 +192,14 @@ class PersistentStreamManager(StreamOutputManager):
     """支持持久化的流式输出管理器"""
 
     def __init__(self, stream_callback: Optional[StreamCallback] = None,
-                 chat_service=None, session_id: str = None):
-        super().__init__(stream_callback)
+                 chat_service=None, session_id: str = None,
+                 workspace_dir: str = "", run_id: str = "", thread_id: str = ""):
+        super().__init__(
+            stream_callback,
+            workspace_dir=workspace_dir,
+            run_id=run_id,
+            thread_id=thread_id,
+        )
         self.chat_service = chat_service
         self.session_id = session_id
         self.message_buffer = []

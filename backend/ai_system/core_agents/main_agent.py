@@ -384,6 +384,7 @@ class MainAgent:
                 writer_llm=self.writer_llm,
                 stream_manager=self.stream_manager,
                 judge=get_judge(self.llm),
+                coder_llm=self.codeagent_llm,
             )
 
         try:

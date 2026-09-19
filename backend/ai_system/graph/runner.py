@@ -4,9 +4,8 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from ..runtime.events import EventEmitter
 from .checkpoint import save_checkpoint
-from .context import RunContext, emit, emit_json
+from .context import RunContext, bind_emitter, emit, emit_json
 from .nodes.answer import answer
 from .nodes.commit import commit_drafts
 from .nodes.context import load_context
@@ -37,14 +36,11 @@ async def run_pipeline(
     writer=None,
     gather_fn=None,
     judge=None,
+    coder_llm=None,
     max_repair_rounds: int = 2,
 ) -> str:
     run_id = run_id or uuid.uuid4().hex[:12]
-    emitter = getattr(stream_manager, "event_emitter", None) or EventEmitter(
-        workspace_dir=workspace_dir,
-        run_id=run_id,
-        thread_id=work_id,
-    )
+    emitter = bind_emitter(stream_manager, workspace_dir, run_id, work_id)
     ctx = RunContext(
         llm=llm,
         writer_llm=writer_llm,
@@ -53,6 +49,7 @@ async def run_pipeline(
         writer=writer,
         gather_fn=gather_fn,
         judge=judge,
+        coder_llm=coder_llm,
     )
     state = PaperState(
         work_id=work_id,
@@ -105,13 +102,20 @@ async def _run_graph(state: PaperState, ctx: RunContext) -> PaperState:
 
         for batch in state.plan.batches if state.plan else []:
             await emit(ctx, "STEP_STARTED", {"node": "gather", "slots": batch}, run_id=state.run_id, thread_id=state.work_id)
-            state = await gather_batch(state, batch, gather_fn=ctx.gather_fn)
+            state = await gather_batch(
+                state,
+                batch,
+                gather_fn=ctx.gather_fn,
+                coder_llm=ctx.coder_llm,
+                stream=ctx.stream,
+            )
             slot_map = {slot.id: slot for slot in (state.spec.slots if state.spec else [])}
             drafted = await asyncio.gather(
                 *[_draft_and_judge(slot_map[slot_id], state, ctx) for slot_id in batch if slot_id in slot_map]
             )
-            passed = [draft for draft, judgement in drafted if judgement.passed] or [draft for draft, _ in drafted]
-            state = commit_drafts(state, passed)
+            passed = [draft for draft, judgement in drafted if judgement.passed]
+            if passed:
+                state = commit_drafts(state, passed)
             save_checkpoint(state)
 
         await emit(ctx, "STEP_STARTED", {"node": "render"}, run_id=state.run_id, thread_id=state.work_id)

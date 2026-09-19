@@ -62,6 +62,7 @@ async def _llm_draft(slot: Slot, state: PaperState, llm) -> Draft:
         section=" / ".join(slot.section_path),
         user_message=state.user_message,
         neighbors=_neighbor_summary(state, slot.id),
+        history=_history_text(state),
     )
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     text = getattr(response, "content", "") or ""
@@ -71,6 +72,14 @@ async def _llm_draft(slot: Slot, state: PaperState, llm) -> Draft:
     if not draft.blocks:
         return heuristic_draft(slot, state)
     return draft
+
+
+def _history_text(state: PaperState) -> str:
+    if not state.history:
+        return "无"
+    return "\n".join(
+        f"{turn.get('role')}: {_clip(turn.get('content') or '', 160)}" for turn in state.history[-8:]
+    )
 
 
 def _neighbor_summary(state: PaperState, slot_id: str) -> str:

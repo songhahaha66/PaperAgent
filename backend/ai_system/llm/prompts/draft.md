@@ -13,6 +13,9 @@
 邻近已写内容：
 {neighbors}
 
+对话历史：
+{history}
+
 JSON 形状：
 {{
   "slot_id": "{slot_id}",

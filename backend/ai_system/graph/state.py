@@ -28,6 +28,7 @@ class PaperState(BaseModel):
     max_repair_rounds: int = 2
     slot_repairs: dict[str, int] = Field(default_factory=dict)
     messages: list[str] = Field(default_factory=list)
+    history: list[dict[str, str]] = Field(default_factory=list)
     awaiting_confirmation: bool = False
     finished: bool = False
     summary: str = ""

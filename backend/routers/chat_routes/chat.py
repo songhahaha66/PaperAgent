@@ -442,7 +442,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             stream_manager = PersistentStreamManager(
                 stream_callback=ws_callback,
                 chat_service=chat_service,  # 传入chat_service实例以支持消息持久化
-                session_id=str(session.session_id)
+                session_id=str(session.session_id),
+                workspace_dir=workspace_dir,
+                thread_id=work_id,
             )
             
             # 创建任务记录

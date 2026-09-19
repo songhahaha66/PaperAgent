@@ -13,8 +13,15 @@ from docx.shared import Pt
 
 from ai_system.eval.harness import EvalCase, run_eval_case, summarize
 from ai_system.graph.checkpoint import load_checkpoint
+from ai_system.graph.context import bind_emitter
+from ai_system.graph.nodes.context import load_context
+from ai_system.graph.nodes.gather import gather_batch, needed_gather_slots
 from ai_system.graph.runner import run_pipeline
+from ai_system.graph.state import PaperState
+from ai_system.judge.base import Answer
 from ai_system.runtime.pipeline import pipeline_version
+from ai_system.schemas.paper_ir import PaperIR
+from ai_system.schemas.template_spec import Block, Slot, TemplateSpec
 from ai_system.template.ooxml_parser import parse_docx
 from ai_system.template.spec_builder import build_template_spec
 from ai_system.validate.runner import validate_document
@@ -78,6 +85,8 @@ def test_graph_markdown_end_to_end(tmp_path: Path):
     assert plan["source"] == "template_spec"
     assert plan["stats"]["completed"] >= 1
     assert "完成" in summary or "写入" in summary
+    assert not (workspace / "outputs" / "note.txt").exists()
+    assert (workspace / ".system" / "run_events.jsonl").exists()
 
 
 def test_graph_word_end_to_end_validates(tmp_path: Path):
@@ -139,6 +148,125 @@ def test_graph_edit_rewrites_only_nth_section(tmp_path: Path):
     assert set(second["sections"]) == first_ids
     bumped = [key for key, section in second["sections"].items() if section["revision"] > first_rev[key]]
     assert len(bumped) == 1
+
+
+def test_load_context_reads_chat_history(tmp_path: Path):
+    (tmp_path / "chat_history.json").write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {"role": "user", "content": "先写数据库实验的摘要"},
+                    {"role": "assistant", "content": "已写摘要"},
+                    {"role": "user", "content": "现在写到哪一步了？"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = load_context(
+        PaperState(work_id="hist-1", workspace_dir=str(tmp_path), user_message="现在写到哪一步了？")
+    )
+    assert any("数据库实验" in turn["content"] for turn in state.history)
+
+
+def test_graph_question_uses_chat_history(tmp_path: Path):
+    workspace = tmp_path / "ask-hist"
+    workspace.mkdir()
+    (workspace / "chat_history.json").write_text(
+        json.dumps(
+            {
+                "messages": [
+                    {"role": "user", "content": "先写数据库实验的摘要"},
+                    {"role": "assistant", "content": "已写摘要"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = asyncio.run(
+        run_pipeline(
+            work_id="ask-hist",
+            workspace_dir=str(workspace),
+            user_message="现在写到哪一步了？",
+            output_mode="markdown",
+        )
+    )
+    assert "数据库实验" in summary
+    assert not (workspace / "paper.md").exists()
+
+
+class _RejectJudge:
+    def ask(self, state, questions):
+        return {"substantive": Answer(value=False, confidence=0.99)}
+
+
+def test_failed_drafts_are_not_committed(tmp_path: Path):
+    workspace = tmp_path / "reject-work"
+    workspace.mkdir()
+    asyncio.run(
+        run_pipeline(
+            work_id="reject-1",
+            workspace_dir=str(workspace),
+            user_message="写实验报告",
+            output_mode="markdown",
+            judge=_RejectJudge(),
+            max_repair_rounds=0,
+        )
+    )
+    ir_path = workspace / ".system" / "paper_ir.json"
+    if ir_path.exists():
+        ir = json.loads(ir_path.read_text(encoding="utf-8"))
+        assert ir.get("sections") == {}
+    else:
+        assert not ir_path.exists()
+
+
+def test_gather_only_targets_figure_slots(tmp_path: Path):
+    spec = TemplateSpec(
+        template_id=1,
+        version=1,
+        blocks=[
+            Block(id="P001", kind="paragraph", text="请填写"),
+            Block(id="G001", kind="figure", text="图1"),
+        ],
+        slots=[
+            Slot(
+                id="slot.body",
+                role="placeholder_fill",
+                anchor_block="P001",
+                expects=["paragraph", "code"],
+                title="正文",
+            ),
+            Slot(id="slot.fig", role="figure_slot", anchor_block="G001", title="图1"),
+        ],
+    )
+    state = PaperState(
+        work_id="g1",
+        workspace_dir=str(tmp_path),
+        spec=spec,
+        ir=PaperIR(work_id="g1"),
+    )
+    assert [slot.id for slot in needed_gather_slots(state, ["slot.body", "slot.fig"])] == ["slot.fig"]
+    seen: dict[str, list[str]] = {}
+
+    def gather_fn(_state, needed):
+        seen["ids"] = [slot.id for slot in needed]
+
+    asyncio.run(gather_batch(state, ["slot.body", "slot.fig"], gather_fn=gather_fn))
+    assert seen["ids"] == ["slot.fig"]
+    asyncio.run(gather_batch(state, ["slot.body"], gather_fn=gather_fn))
+    assert seen["ids"] == ["slot.fig"]
+
+
+def test_bind_emitter_attaches_workspace(tmp_path: Path):
+    class Stream:
+        event_emitter = None
+
+    stream = Stream()
+    emitter = bind_emitter(stream, str(tmp_path), "run-1", "work-1")
+    emitter.emit("RUN_STARTED", {"ok": True})
+    assert (tmp_path / ".system" / "run_events.jsonl").exists()
+    assert stream.event_emitter is emitter
 
 
 def test_graph_question_does_not_write_paper(tmp_path: Path):

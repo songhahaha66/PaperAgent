@@ -3,6 +3,9 @@
 当前计划：
 {plan_summary}
 
+对话历史：
+{history}
+
 用户：
 {user_message}
 
