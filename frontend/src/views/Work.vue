@@ -544,6 +544,10 @@ const handleStreamMessage = (data: any, messageId: string) => {
       }
       break
 
+    case 'event':
+      handleAguiEvent(data.event, messageId)
+      break
+
     case 'json_block':
       const block = data.block
       
@@ -588,6 +592,44 @@ const handleStreamMessage = (data: any, messageId: string) => {
 
   // 自动滚动
   scrollToBottom()
+}
+
+const handleAguiEvent = (event: any, messageId: string) => {
+  if (!event) return
+  const type = event.event_type
+  const payload = event.payload || {}
+  if (type === 'STATE_DELTA' && payload.type === 'plan_updated' && payload.content) {
+    planData.value = payload.content
+    return
+  }
+  if (type === 'CUSTOM' && payload.type === 'render_done') {
+    setTimeout(() => loadWorkspaceFiles(), 300)
+    return
+  }
+  if (type === 'TEXT_MESSAGE_CONTENT' && payload.delta) {
+    const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
+    if (messageIndex !== -1) {
+      const currentMessage = chatMessages.value[messageIndex]
+      chatMessages.value[messageIndex] = {
+        ...currentMessage,
+        content: currentMessage.content + payload.delta,
+      }
+    }
+    return
+  }
+  if (type === 'STEP_STARTED' && payload.node) {
+    const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
+    if (messageIndex !== -1) {
+      const currentMessage = chatMessages.value[messageIndex]
+      const note = `\n[${payload.node}${payload.slot_id ? ':' + payload.slot_id : ''}]`
+      if (!currentMessage.content.includes(note.trim())) {
+        chatMessages.value[messageIndex] = {
+          ...currentMessage,
+          content: currentMessage.content + note,
+        }
+      }
+    }
+  }
 }
 
 // 重构后不再需要显式创建聊天会话，MainAgent会自动处理

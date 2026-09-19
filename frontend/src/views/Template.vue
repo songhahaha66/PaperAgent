@@ -236,11 +236,20 @@
                     <span>状态: {{ templateAnalysis.status }}</span>
                     <span>图片: {{ templateAnalysis.image_count }}</span>
                     <span>样式指纹: {{ templateAnalysis.has_style_profile ? '已保存' : '无' }}</span>
+                    <span>槽位: {{ templateAnalysis.slot_count || 0 }}</span>
                     <span v-if="templateAnalysis.analyzed_at">解析时间: {{ templateAnalysis.analyzed_at }}</span>
                   </t-space>
                 </div>
                 <div v-if="templateAnalysisError" class="analysis-error">
                   {{ templateAnalysisError }}
+                </div>
+                <div v-if="lowConfidenceSlots.length" class="slot-confirm">
+                  <p>以下槽位置信度较低，写作前请确认角色是否正确：</p>
+                  <ul>
+                    <li v-for="slot in lowConfidenceSlots" :key="slot.id">
+                      {{ slot.title || slot.id }} · {{ slot.role }} · {{ slot.confidence.toFixed(2) }}
+                    </li>
+                  </ul>
                 </div>
                 <div class="text-preview">
                   <MarkdownRenderer
@@ -281,7 +290,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
@@ -647,6 +656,9 @@ const contentTab = ref('original')
 const templateAnalysis = ref<TemplateAnalysis | null>(null)
 const templateAnalysisLoading = ref(false)
 const templateAnalysisError = ref('')
+const lowConfidenceSlots = computed(() =>
+  (templateAnalysis.value?.slots || []).filter((slot) => slot.confidence < 0.55),
+)
 
 const viewTemplateContent = async (template: PaperTemplate) => {
   if (!authStore.token) return
@@ -822,6 +834,15 @@ onMounted(() => {
   color: #7f8c8d;
   font-size: 13px;
   line-height: 1.6;
+}
+
+.slot-confirm {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #fff7e6;
+  border: 1px solid #ffe58f;
+  border-radius: 4px;
+  font-size: 13px;
 }
 
 .analysis-meta {

@@ -14,12 +14,23 @@ export interface PaperTemplate {
   created_by: number
 }
 
+export interface TemplateSlotPreview {
+  id: string
+  role: string
+  title: string
+  confidence: number
+  source: string
+}
+
 export interface TemplateAnalysis {
   template_id: number
   status: string
   contract: string
   image_count: number
   has_style_profile: boolean
+  has_spec?: boolean
+  slot_count?: number
+  slots?: TemplateSlotPreview[]
   analyzed_at?: string | null
   error?: string | null
 }

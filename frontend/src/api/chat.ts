@@ -198,6 +198,16 @@ export const chatAPI = {
     })
     return response
   },
+
+  async getRunEvents(
+    token: string,
+    workId: string,
+    offset: number = 0,
+  ): Promise<{ work_id: string; offset: number; events: any[] }> {
+    return apiClient.request(`/api/chat/work/${workId}/events?offset=${offset}`, {
+      method: 'GET',
+    })
+  },
 }
 
 // WebSocket聊天处理器
