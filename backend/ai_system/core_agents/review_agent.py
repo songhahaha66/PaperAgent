@@ -11,7 +11,11 @@ from xml.etree import ElementTree as ET
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from config.paths import get_workspaces_path
+
 logger = logging.getLogger(__name__)
+
+PLAN_JSON_NAME = "plan.json"
 
 REVIEW_SYSTEM_PROMPT = """\
 你是一个论文写作任务审查员（ReviewAgent）。你的职责是根据结构化计划（优先 plan.json，
@@ -65,9 +69,24 @@ class ReviewAgent:
         with open(plan_path, "r", encoding="utf-8") as f:
             return f.read().strip() or "plan.md 为空"
 
+    def _confined_workspace_file(self, filename: str) -> Optional[Path]:
+        if Path(filename).name != filename:
+            return None
+        try:
+            allowed_root = get_workspaces_path().resolve()
+            workspace_root = Path(self.workspace_dir).expanduser().resolve()
+            if not workspace_root.is_relative_to(allowed_root):
+                return None
+            path = (workspace_root / filename).resolve()
+            if not path.is_relative_to(workspace_root):
+                return None
+            return path
+        except (OSError, RuntimeError, ValueError):
+            return None
+
     def _load_structured_plan(self) -> Optional[dict]:
-        plan_json_path = Path(self.workspace_dir) / "plan.json"
-        if not plan_json_path.exists():
+        plan_json_path = self._confined_workspace_file(PLAN_JSON_NAME)
+        if plan_json_path is None or not plan_json_path.exists():
             return None
         try:
             data = json.loads(plan_json_path.read_text(encoding="utf-8"))

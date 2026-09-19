@@ -28,6 +28,13 @@ def _write_paper(workspace: Path, text: str = "正文内容") -> None:
     (workspace / "paper.md").write_text("# 圆周率估计\n\n" + text * 40, encoding="utf-8")
 
 
+def _allow_workspace(monkeypatch, workspace: Path) -> None:
+    monkeypatch.setattr(
+        "ai_system.core_agents.review_agent.get_workspaces_path",
+        lambda: workspace.parent,
+    )
+
+
 def test_plan_json_contract_from_markdown_table(tmp_path: Path):
     workspace = tmp_path / "workspace"
     _write_paper(workspace)
@@ -145,9 +152,10 @@ def test_workspace_read_file_prefers_reconciled_plan_json(tmp_path: Path, monkey
     assert (workspace / "plan.json").exists()
 
 
-def test_review_agent_prefers_plan_json_over_stale_markdown(tmp_path: Path):
+def test_review_agent_prefers_plan_json_over_stale_markdown(tmp_path: Path, monkeypatch):
     workspace = tmp_path / "workspace"
     _write_paper(workspace)
+    _allow_workspace(monkeypatch, workspace)
     (workspace / "plan.md").write_text(
         "| 序号 | 章节 | 状态 | 说明 |\n"
         "|---|---|---|---|\n"
@@ -193,9 +201,10 @@ def test_review_agent_prefers_plan_json_over_stale_markdown(tmp_path: Path):
     assert blockers == []
 
 
-def test_review_agent_uses_plan_json_when_markdown_is_missing(tmp_path: Path):
+def test_review_agent_uses_plan_json_when_markdown_is_missing(tmp_path: Path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _allow_workspace(monkeypatch, workspace)
     (workspace / "paper.md").write_text("# 标题\n\n" + "正文" * 40, encoding="utf-8")
     (workspace / "plan.json").write_text(
         json.dumps(
@@ -216,9 +225,10 @@ def test_review_agent_uses_plan_json_when_markdown_is_missing(tmp_path: Path):
     assert "待写或进行中" in result.reason
 
 
-def test_review_agent_falls_back_to_plan_md_for_old_workspaces(tmp_path: Path):
+def test_review_agent_falls_back_to_plan_md_for_old_workspaces(tmp_path: Path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _allow_workspace(monkeypatch, workspace)
     (workspace / "paper.md").write_text("# 标题\n\n" + "正文" * 40, encoding="utf-8")
     (workspace / "plan.md").write_text(
         "| 序号 | 章节 | 状态 | 说明 |\n"
@@ -233,6 +243,23 @@ def test_review_agent_falls_back_to_plan_md_for_old_workspaces(tmp_path: Path):
     assert result.complete is False
     assert reviewer._load_structured_plan() is None
     assert "阻塞条目" in result.reason
+
+
+def test_load_structured_plan_rejects_workspace_outside_allow_root(tmp_path: Path, monkeypatch):
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    (outside / "plan.json").write_text(
+        json.dumps({"items": [{"id": "task-1", "title": "引言", "status": "pending"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "ai_system.core_agents.review_agent.get_workspaces_path",
+        lambda: allowed,
+    )
+    reviewer = ReviewAgent(llm=None, workspace_dir=str(outside), output_mode="markdown")
+    assert reviewer._load_structured_plan() is None
 
 
 def test_markdown_paper_status_includes_structured_plan(tmp_path: Path, monkeypatch):
