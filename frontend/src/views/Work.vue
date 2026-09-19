@@ -116,6 +116,7 @@
         </div>
 
         <WorkPreviewPanel
+          class="preview-section"
           v-show="!isMobile || activeMobilePanel === 'preview'"
           :is-mobile="isMobile"
           :show-main-paper="showMainPaper"
@@ -1484,7 +1485,7 @@ body {
 }
 
 .workspace-content.is-mobile .chat-section,
-.workspace-content.is-mobile .preview-section,
+.workspace-content.is-mobile :deep(.preview-section),
 .workspace-content.is-mobile .files-section {
   flex: 1;
   min-width: 0;

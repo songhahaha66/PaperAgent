@@ -1,5 +1,5 @@
 <template>
-  <div class="preview-section">
+  <div class="preview-panel">
     <div v-if="showMainPaper && mainPaperContent">
       <t-card title="主要论文">
         <template #actions>
@@ -180,12 +180,8 @@ const outputModeTheme = computed(() => {
 </script>
 
 <style scoped>
-.preview-section {
-  flex: 1;
-  padding: 20px;
-  overflow-y: auto;
-  background: #f9f9f9;
-  height: 100%;
+.preview-panel {
+  min-height: 0;
 }
 
 .file-preview {
