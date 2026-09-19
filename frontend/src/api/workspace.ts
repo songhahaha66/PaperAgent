@@ -113,6 +113,9 @@ export interface PlanPhase {
   id: string
   title: string
   description?: string
+  status?: PlanItemStatus
+  item_count?: number
+  completed_count?: number
 }
 
 export interface PlanItem {
@@ -143,6 +146,7 @@ export interface PlanData {
   methodology?: string
   planning_mode?: 'dynamic' | 'static' | string
   phases?: PlanPhase[]
+  active_phase?: string
   items: PlanItem[]
   stats: PlanStats
   current_focus?: PlanItem | null

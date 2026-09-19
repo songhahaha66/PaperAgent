@@ -27,6 +27,15 @@ PLAN_PHASES = [
     {"id": "verify", "title": "验收检查", "description": "核对计划、正文、附件和最终产物"},
 ]
 
+PLAN_PHASE_IDS = {phase["id"] for phase in PLAN_PHASES}
+
+PHASE_KEYWORDS = {
+    "requirements": ["需求", "澄清", "约束", "目标", "requirement", "goal", "constraint"],
+    "design": ["结构", "大纲", "方案", "设计", "目录", "outline", "design", "architecture"],
+    "tasks": ["拆解", "任务规划", "任务列表", "task breakdown", "拆分"],
+    "verify": ["检查", "验收", "完善", "最终", "verify", "review", "validation"],
+}
+
 CONSTRAINTS_START = "<!-- template-constraints:start -->"
 CONSTRAINTS_END = "<!-- template-constraints:end -->"
 
@@ -194,14 +203,16 @@ class PlanReconciler:
             order_match = re.search(r"\d+", raw_order)
             order = int(order_match.group()) if order_match else index
             status = self._normalize_plan_status(raw_status)
+            item_title = re.sub(r"^\s*\d+[\.\、]\s*", "", raw_title).strip() or f"任务 {order}"
+            description = raw_description.strip()
             items.append({
                 "id": f"task-{order}",
                 "order": order,
-                "title": re.sub(r"^\s*\d+[\.\、]\s*", "", raw_title).strip() or f"任务 {order}",
+                "title": item_title,
                 "status": status,
                 "status_label": self._plan_status_label(status),
-                "description": raw_description.strip(),
-                "phase": "write",
+                "description": description,
+                "phase": self._infer_item_phase({"title": item_title, "description": description}),
                 "depends_on": [f"task-{order - 1}"] if order > 1 else [],
                 "raw_status": raw_status.strip(),
             })
@@ -216,7 +227,7 @@ class PlanReconciler:
                     "status": "pending",
                     "status_label": self._plan_status_label("pending"),
                     "description": summary[:300],
-                    "phase": "plan",
+                    "phase": "requirements",
                     "depends_on": [],
                     "raw_status": "",
                 })
@@ -247,7 +258,7 @@ class PlanReconciler:
                 "status": "completed",
                 "status_label": self._plan_status_label("completed"),
                 "description": "由工作空间实际文档和产物自动识别",
-                "phase": "write",
+                "phase": self._infer_item_phase({"title": title, "description": "由工作空间实际文档和产物自动识别"}),
                 "depends_on": [f"task-{order - 1}"] if order > 1 else [],
                 "raw_status": "workspace_evidence",
                 "status_source": "workspace_evidence",
@@ -384,6 +395,9 @@ class PlanReconciler:
         }
         stats["progress_percent"] = round((stats["completed"] / stats["total"]) * 100) if stats["total"] else 0
 
+        for item in items:
+            item["phase"] = self._infer_item_phase(item)
+
         current_focus = next((item for item in items if item["status"] == "in_progress"), None)
         if current_focus is None:
             current_focus = next((item for item in items if item["status"] == "pending"), None)
@@ -398,6 +412,7 @@ class PlanReconciler:
             for item in items
             if item["status"] in {"pending", "blocked"}
         ][:3]
+        phases, active_phase = self._enrich_phases(items, current_focus)
 
         previous_revision = 0
         plan_json_path = self.workspace_path / "plan.json"
@@ -416,7 +431,8 @@ class PlanReconciler:
             "title": title,
             "methodology": "spec-driven",
             "planning_mode": "dynamic",
-            "phases": PLAN_PHASES,
+            "phases": phases,
+            "active_phase": active_phase,
             "items": items,
             "stats": stats,
             "current_focus": current_focus,
@@ -469,6 +485,8 @@ class PlanReconciler:
         stable = deepcopy(plan)
         stable.pop("revision", None)
         stable.pop("updated_at", None)
+        stable.pop("source_markdown", None)
+        stable.pop("evidence", None)
         return stable
 
     def _sync_metadata(self, structured_plan: Dict[str, Any]) -> None:
@@ -663,6 +681,75 @@ class PlanReconciler:
                 return text, len(media)
         except Exception:
             return "", 0
+
+    def _infer_item_phase(self, item: Dict[str, Any]) -> str:
+        existing = item.get("phase")
+        if existing in PLAN_PHASE_IDS:
+            return existing
+        title = (item.get("title") or "").lower()
+        description = (item.get("description") or "").lower()
+        for text in (title, description):
+            for phase_id, keywords in PHASE_KEYWORDS.items():
+                if self._has_any(text, keywords):
+                    return phase_id
+        return "implement"
+
+    def _enrich_phases(
+        self,
+        items: List[Dict[str, Any]],
+        current_focus: Optional[Dict[str, Any]],
+    ) -> tuple[List[Dict[str, Any]], str]:
+        phase_items: Dict[str, List[Dict[str, Any]]] = {phase["id"]: [] for phase in PLAN_PHASES}
+        for item in items:
+            phase_id = item.get("phase") if item.get("phase") in PLAN_PHASE_IDS else "implement"
+            phase_items[phase_id].append(item)
+
+        if current_focus and current_focus.get("phase") in PLAN_PHASE_IDS:
+            active_phase = current_focus["phase"]
+        else:
+            active_phase = next(
+                (
+                    phase["id"]
+                    for phase in PLAN_PHASES
+                    if any(
+                        item["status"] in {"in_progress", "pending", "blocked"}
+                        for item in phase_items[phase["id"]]
+                    )
+                ),
+                "verify" if items and all(item["status"] == "completed" for item in items) else "requirements",
+            )
+
+        active_index = next(
+            (index for index, phase in enumerate(PLAN_PHASES) if phase["id"] == active_phase),
+            0,
+        )
+        enriched: List[Dict[str, Any]] = []
+        for index, phase in enumerate(PLAN_PHASES):
+            grouped = phase_items[phase["id"]]
+            blocked = any(item["status"] == "blocked" for item in grouped)
+            in_progress = any(item["status"] == "in_progress" for item in grouped)
+            pending = any(item["status"] == "pending" for item in grouped)
+            if blocked:
+                status = "blocked"
+            elif in_progress:
+                status = "in_progress"
+            elif grouped and all(item["status"] == "completed" for item in grouped):
+                status = "completed"
+            elif pending:
+                status = "pending"
+            elif index < active_index:
+                status = "completed"
+            elif index == active_index:
+                status = "in_progress"
+            else:
+                status = "pending"
+            enriched.append({
+                **phase,
+                "status": status,
+                "item_count": len(grouped),
+                "completed_count": sum(1 for item in grouped if item["status"] == "completed"),
+            })
+        return enriched, active_phase
 
     def _normalize_plan_status(self, raw_status: str) -> str:
         text = (raw_status or "").strip().lower()
