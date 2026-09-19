@@ -485,6 +485,8 @@ class PlanReconciler:
         stable = deepcopy(plan)
         stable.pop("revision", None)
         stable.pop("updated_at", None)
+        stable.pop("source_markdown", None)
+        stable.pop("evidence", None)
         return stable
 
     def _sync_metadata(self, structured_plan: Dict[str, Any]) -> None:
@@ -684,10 +686,12 @@ class PlanReconciler:
         existing = item.get("phase")
         if existing in PLAN_PHASE_IDS:
             return existing
-        text = f"{item.get('title', '')} {item.get('description', '')}".lower()
-        for phase_id, keywords in PHASE_KEYWORDS.items():
-            if self._has_any(text, keywords):
-                return phase_id
+        title = (item.get("title") or "").lower()
+        description = (item.get("description") or "").lower()
+        for text in (title, description):
+            for phase_id, keywords in PHASE_KEYWORDS.items():
+                if self._has_any(text, keywords):
+                    return phase_id
         return "implement"
 
     def _enrich_phases(
