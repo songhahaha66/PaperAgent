@@ -19,12 +19,21 @@ def load_context(state: PaperState) -> PaperState:
     if previous and previous.work_id == state.work_id:
         previous.user_message = state.user_message
         previous.run_id = state.run_id or previous.run_id
+        # The caller knows the current work settings; the checkpoint only carries progress.
+        previous.output_mode = state.output_mode or previous.output_mode
+        previous.template_id = state.template_id or previous.template_id
+        previous.max_repair_rounds = state.max_repair_rounds
+        previous.repair_round = 0
+        previous.slot_repairs = {}
+        previous.failed_slots = {}
         pending = previous.awaiting_confirmation
         previous.finished = False
+        previous.streamed_answer = False
         previous.awaiting_confirmation = False
         previous.issues = []
         previous.messages = []
         previous.summary = ""
+        previous.intent = state.intent
         state = previous
         state.pending_confirmation = pending
 

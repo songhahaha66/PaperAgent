@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
+import uuid
+
 from langchain_core.messages import HumanMessage
 
 from ...llm import load_prompt
 from ..state import PaperState
 
+logger = logging.getLogger(__name__)
 
-async def answer(state: PaperState, llm=None) -> PaperState:
+
+async def answer(state: PaperState, llm=None, ctx=None) -> PaperState:
     if llm is not None:
         try:
             prompt = load_prompt("answer.md").format(
@@ -14,17 +19,56 @@ async def answer(state: PaperState, llm=None) -> PaperState:
                 plan_summary=_plan_summary(state),
                 history=_history_text(state),
             )
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
-            text = getattr(response, "content", "") or ""
+            text, streamed = await _generate(prompt, llm, state, ctx)
             if text.strip():
                 state.messages.append(text.strip())
                 state.summary = text.strip()
+                state.streamed_answer = streamed
                 return state
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("answer 节点模型调用失败，使用回退回答: %s", exc)
     state.summary = _fallback_answer(state)
     state.messages.append(state.summary)
     return state
+
+
+async def _generate(prompt: str, llm, state: PaperState, ctx) -> tuple[str, bool]:
+    """Stream the reply token by token when the model and stream support it.
+
+    Returns (text, streamed). Streamed text already reached the chat through the
+    content channel, so callers should not echo it again as a completion card.
+    """
+    from ..context import emit
+
+    stream = getattr(ctx, "stream", None) if ctx is not None else None
+    can_stream = hasattr(llm, "astream") and stream is not None and hasattr(stream, "print_stream")
+    if not can_stream:
+        response = await llm.ainvoke([HumanMessage(content=prompt)])
+        return _message_text(getattr(response, "content", response)), False
+
+    message_id = uuid.uuid4().hex[:12]
+    await emit(ctx, "TEXT_MESSAGE_START", {"message_id": message_id, "role": "assistant"}, run_id=state.run_id, thread_id=state.work_id)
+    parts: list[str] = []
+    async for chunk in llm.astream([HumanMessage(content=prompt)]):
+        delta = _message_text(getattr(chunk, "content", chunk))
+        if not delta:
+            continue
+        parts.append(delta)
+        await stream.print_stream(delta)
+    await emit(
+        ctx,
+        "TEXT_MESSAGE_END",
+        {"message_id": message_id, "text": "".join(parts)},
+        run_id=state.run_id,
+        thread_id=state.work_id,
+    )
+    return "".join(parts), True
+
+
+def _message_text(content) -> str:
+    if isinstance(content, list):
+        return "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+    return str(content or "")
 
 
 def _fallback_answer(state: PaperState) -> str:

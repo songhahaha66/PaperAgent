@@ -27,11 +27,13 @@ class PaperState(BaseModel):
     repair_round: int = 0
     max_repair_rounds: int = 2
     slot_repairs: dict[str, int] = Field(default_factory=dict)
+    failed_slots: dict[str, str] = Field(default_factory=dict)
     messages: list[str] = Field(default_factory=list)
     history: list[dict[str, str]] = Field(default_factory=list)
     awaiting_confirmation: bool = False
     pending_confirmation: bool = False
     finished: bool = False
+    streamed_answer: bool = False
     summary: str = ""
     rendered_path: str = ""
 

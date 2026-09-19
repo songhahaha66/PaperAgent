@@ -44,10 +44,14 @@ def classify_intent(state: PaperState, judge=None) -> PaperState:
 def _target_slots(message: str, writable: list[str], state: PaperState) -> list[str]:
     match = SECTION_RE.search(message)
     if match and writable:
+        # "第N节" counts prose sections; tables/figures inside them are not sections.
+        bodies = [
+            slot.id for slot in (state.spec.slots if state.spec else []) if slot.role == "placeholder_fill"
+        ] or writable
         raw = match.group(1)
         index = CN_NUM.get(raw) or (int(raw) if raw.isdigit() else 0)
-        if 1 <= index <= len(writable):
-            return [writable[index - 1]]
+        if 1 <= index <= len(bodies):
+            return [bodies[index - 1]]
     if state.spec:
         hits = [
             slot.id
