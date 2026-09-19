@@ -172,7 +172,7 @@ def test_event_emitter_dual_writes_json_block_and_file(tmp_path: Path):
     assert (tmp_path / ".system" / "run_events.jsonl").exists()
 
     manager = StreamOutputManager(run_id="run-2", thread_id="work-2")
-    asyncio.run(manager.send_json_block("plan_updated", {"items": []}))
+    asyncio.run(manager.send_json_block("plan_updated", '{"items": []}'))
     assert manager.event_emitter.events[0].event_type == "STATE_DELTA"
     assert manager.event_emitter.events[0].payload["type"] == "plan_updated"
 
