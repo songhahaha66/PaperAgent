@@ -421,6 +421,7 @@ const initializeChatSession = async () => {
       total_messages: chatMessages.value.length,
     }
 
+    await replayPersistedEvents()
     // 检查是否有正在进行的AI任务（断线重连场景）
     await checkAndResumeRunningTask()
   } catch (error) {
@@ -443,6 +444,18 @@ const initializeChatSession = async () => {
 
 // 当前恢复任务的消息ID
 const reconnectMessageId = ref<string | null>(null)
+
+const replayPersistedEvents = async () => {
+  if (!authStore.token || !workId.value) return
+  try {
+    const result = await chatAPI.getRunEvents(authStore.token, workId.value, 0)
+    for (const event of result.events || []) {
+      handleAguiEvent(event, '')
+    }
+  } catch (error) {
+    console.debug('回放运行事件失败', error)
+  }
+}
 
 // 检查并恢复正在进行的AI任务
 const checkAndResumeRunningTask = async () => {
