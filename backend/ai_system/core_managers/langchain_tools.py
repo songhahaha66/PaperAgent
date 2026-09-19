@@ -35,8 +35,7 @@ class LangChainToolFactory:
             LangChain 格式的文件工具列表
         """
         try:
-            os.environ["WORKSPACE_DIR"] = workspace_dir
-            file_tools = FileTools(stream_manager)
+            file_tools = FileTools(stream_manager, workspace_dir=workspace_dir)
 
             _SAFE_MODES = {"section_update", "append", "insert", "smart_replace"}
 
@@ -539,8 +538,7 @@ class LangChainToolFactory:
             基础工具列表
         """
         try:
-            os.environ["WORKSPACE_DIR"] = workspace_dir
-            file_tools_instance = FileTools(stream_manager)
+            file_tools_instance = FileTools(stream_manager, workspace_dir=workspace_dir)
 
             base_tools = [
                 StructuredTool.from_function(

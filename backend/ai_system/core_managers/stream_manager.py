@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 import json
 import asyncio
 
+from ..runtime.events import EventEmitter
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,12 +36,21 @@ class StreamCallback(ABC):
 class StreamOutputManager:
     """管理全程流式输出，使用JSON格式"""
 
-    def __init__(self, stream_callback: Optional[StreamCallback] = None):
+    def __init__(
+        self,
+        stream_callback: Optional[StreamCallback] = None,
+        event_emitter: Optional[EventEmitter] = None,
+        run_id: str = "",
+        thread_id: str = "",
+    ):
         self.stream_callback = stream_callback
         self.output_count = 0
         self.current_message_buffer = ""
         self.current_role = "assistant"
         self.current_block_type = "main"
+        self.run_id = run_id
+        self.thread_id = thread_id
+        self.event_emitter = event_emitter or EventEmitter(run_id=run_id, thread_id=thread_id)
         # 添加异步锁，防止并发输出问题
         self._output_lock = asyncio.Lock()
         logger.info("StreamOutputManager初始化完成")
@@ -69,7 +80,17 @@ class StreamOutputManager:
                 print(content, end="", flush=True)
 
     async def send_json_block(self, block_type: str, content: str):
-        """发送JSON格式的数据块"""
+        """发送JSON格式的数据块，并双写 AG-UI 风格事件。"""
+        try:
+            self.event_emitter.emit_from_json_block(
+                block_type,
+                content,
+                run_id=self.run_id,
+                thread_id=self.thread_id,
+            )
+        except Exception as exc:
+            logger.debug("事件双写失败: %s", exc)
+
         block = {
             "type": block_type,
             "content": content

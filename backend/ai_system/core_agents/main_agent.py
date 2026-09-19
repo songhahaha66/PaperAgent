@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from ..llm import load_prompt
 from .review_agent import ReviewAgent
 from config.paths import get_workspace_path
 from services.file_services.template_contract import read_template_contract
@@ -51,12 +52,8 @@ class MainAgent:
         self.workspace_dir = workspace_dir
         self.output_mode = output_mode
 
-        # 如果没有提供workspace_dir但有work_id，构建路径
         if not workspace_dir and work_id:
-            # 使用统一的路径配置
             self.workspace_dir = str(get_workspace_path(work_id))
-            # 设置环境变量，供工具使用
-            os.environ["WORKSPACE_DIR"] = self.workspace_dir
 
         if self.output_mode == "markdown":
             self.tools = LangChainToolFactory.create_file_tools(
@@ -125,7 +122,6 @@ class MainAgent:
             model=llm,
             tools=self.tools,
             system_prompt=self.system_prompt,
-            debug=True  # 启用调试模式
         )
 
         self.review_agent = ReviewAgent(
@@ -138,50 +134,7 @@ class MainAgent:
     def _create_system_prompt(self) -> str:
         """创建 MainAgent 的系统提示词"""
         # 基础系统提示
-        system_content = (
-            "你是基于 LangChain Agent 的学术论文写作助手（MainAgent），负责协调整个论文生成过程。**你使用的语言需要跟模板语言一致**\n\n"
-            "**🔴 核心行为准则**：\n"
-            "1. **主动执行，不要问用户要写什么内容！**\n"
-            "2. **根据用户的需求描述，自己思考并生成完整的论文内容**\n"
-            "3. **立即使用工具开始写作，不要只是回复文本说明！**\n"
-            "4. **如果用户说\"写论文\"、\"生成论文\"，你要立即开始调用工具写入内容，而不是问用户要写什么**\n\n"
-            "**重要：你必须使用提供的工具来完成任务，不要只是回复文本！**\n\n"
-            "请你记住：论文尽可能使用图表等清晰表示！涉及图表等务必使用代码执行得到！\n"
-            "请你记住：如果最后发现没找到代码或者图片就重新执行数据分析！\n\n"
-            "**你的身份和职责**：\n"
-            "- 你是MainAgent，负责论文写作的整体协调和文档生成\n"
-            "- 你有一个助手CodeAgent，专门负责编程任务（数据分析、图表生成等）\n"
-            "- 你有一个助手WriterAgent，专门负责文档写作（章节创作、内容写入）\n"
-            "- 你需要明确区分哪些任务由谁完成\n"
-            "- **你要主动思考论文内容，不要总是问用户要写什么**\n\n"
-            "**🎯 Plan-Driven 全流程规划（核心工作模式）**：\n"
-            "你必须遵循以下全流程规划模式，类似spec coding的plan-driven方式：\n\n"
-            "**Phase 1: 状态感知**\n"
-            "- 调用 get_paper_status 了解paper当前状态（已有章节、写作进度、内容摘要）\n"
-            "- Word 模板模式写前阅读已注入的模板契约；inspect_document_styles / analyze_docx_layout 用于核对当前 paper.docx，不要把阅读原始模板当成写作步骤\n"
-            "- 理解用户需求和论文目标\n\n"
-            "**Phase 2: 制定写作计划并保存**\n"
-            "- 根据用户需求和当前状态，列出完整的写作计划\n"
-            "- **必须调用 update_plan 工具保存计划**（工具会同步生成 plan.md 与结构化 plan.json，用户前端固定展示 plan.json）\n"
-            "- 计划使用Markdown表格作为输入兼容格式，包含序号、章节名、状态、说明；系统会转换为动态结构化计划\n"
-            "- 计划必须是动态的：标出当前进行项、完成项、待做项；执行过程中根据真实进展更新状态，不要把计划当一次性静态清单\n"
-            "- 已完成的章节标记为「✅ 已完成」，不要重复写作\n"
-            "- 待写章节标记为「⬜ 待写」\n"
-            "- 需要数据分析/图表的章节，先规划CodeAgent任务\n\n"
-            "**Phase 3: 逐步执行并更新计划**\n"
-            "- 按计划逐章节执行，每次只写一个章节\n"
-            "- **不要每个章节前后都调 update_plan，只在关键节点更新动态计划**：\n"
-            "  * 开始写作前更新一次（标记第一个章节为⏳）\n"
-            "  * 每完成 2-3 个章节后批量更新一次状态\n"
-            "  * 全部完成后最终更新一次\n"
-            "- 需要图表的章节，先让CodeAgent生成数据/图表，再写入\n"
-            "- 每完成一个章节，调用 get_paper_status 确认写入成功\n\n"
-            "**Phase 4: 验收检查**\n"
-            "- 所有章节完成后，调用 get_paper_status 做最终确认\n"
-            "- Word 模板模式必须再看成品：compare_document_styles 对照页面/字体/边距，review_document_appearance 看成品图和版式\n"
-            "- 调用 update_plan 更新最终计划状态，确保所有已完成任务标记为 ✅\n"
-            "- 向用户报告完成情况\n\n"
-        )
+        system_content = load_prompt("main_agent.md") + "\n\n"
 
         # 根据输出模式添加文档生成指令
         if self.output_mode == "word":
@@ -196,15 +149,14 @@ class MainAgent:
                 "- 输入：高层次的写作目标（不是具体内容）\n"
                 "- WriterAgent会理解目标，自主创作内容，并选择合适的Word工具完成\n\n"
                 "**✅ 正确的指令示例（高层次目标）**：\n"
-                "- \"写一个Introduction章节，介绍圆周率的重要性和研究意义\"\n"
-                "- \"写一个History章节，讲述圆周率的历史发展\"\n"
-                "- \"写一个Applications章节，说明圆周率在各领域的应用\"\n"
+                "- \"写一个Introduction章节，介绍研究背景和意义\"\n"
+                "- \"写一个Methods章节，说明实验步骤\"\n"
                 "- \"识别模板封面和校徽，然后按原版式填写实验内容\"\n"
                 "- \"把 outputs/chart.png 插入到实验结果节并配图题\"\n"
                 "- \"创建一个表格展示实验结果数据\"\n\n"
                 "**❌ 错误的指令示例（过于具体）**：\n"
                 "- \"添加一级标题Introduction\" ← 太具体，WriterAgent无法发挥\n"
-                "- \"添加段落内容：圆周率π是...\" ← 不要写具体内容，让WriterAgent自己写\n"
+                "- \"添加段落内容：具体研究背景是...\" ← 不要写具体内容，让WriterAgent自己写\n"
                 "- \"添加3行4列的表格\" ← 不要指定格式细节\n\n"
                 "**Word模式工作流程（立即执行，不要问用户）**：\n"
                 "1. 分析用户需求，确定论文需要哪些章节和内容主题\n"

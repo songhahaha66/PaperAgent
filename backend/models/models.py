@@ -159,3 +159,17 @@ class WebAuthnChallenge(Base):
 
 
 User.webauthn_credentials = relationship("WebAuthnCredential", back_populates="user")
+
+
+class RunEvent(Base):
+    """AG-UI style run event log. Dual-written alongside json_block in Phase 0."""
+
+    __tablename__ = "run_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(String(100), nullable=False, index=True, default="")
+    thread_id = Column(String(100), nullable=False, index=True, default="")
+    offset = Column(Integer, nullable=False, default=0)
+    event_type = Column(String(50), nullable=False)
+    payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -2,14 +2,14 @@ import json
 import logging
 import os
 import re
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
-from xml.etree import ElementTree as ET
 
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage, SystemMessage
+
+from ai_system.template.ooxml_parser import docx_outline
 
 logger = logging.getLogger(__name__)
 
@@ -105,42 +105,7 @@ class ReviewAgent:
 
     @staticmethod
     def _docx_outline(docx_path: Path) -> dict:
-        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-
-        with zipfile.ZipFile(docx_path) as archive:
-            document_root = ET.fromstring(archive.read("word/document.xml"))
-            style_names = {}
-            if "word/styles.xml" in archive.namelist():
-                styles_root = ET.fromstring(archive.read("word/styles.xml"))
-                for style in styles_root.findall(".//w:style", ns):
-                    style_id = style.attrib.get(f"{{{ns['w']}}}styleId", "")
-                    name_el = style.find("w:name", ns)
-                    style_names[style_id] = (
-                        name_el.attrib.get(f"{{{ns['w']}}}val", style_id)
-                        if name_el is not None else style_id
-                    )
-            media_count = sum(1 for name in archive.namelist() if name.startswith("word/media/"))
-
-        paragraphs = []
-        headings = []
-        for para in document_root.findall(".//w:p", ns):
-            text = "".join(t.text or "" for t in para.findall(".//w:t", ns)).strip()
-            style_el = para.find("./w:pPr/w:pStyle", ns)
-            style_id = style_el.attrib.get(f"{{{ns['w']}}}val", "") if style_el is not None else ""
-            style_name = style_names.get(style_id, style_id)
-            paragraphs.append({"text": text, "style": style_name})
-            if style_name.lower().startswith("heading") and text:
-                headings.append((style_name.lower(), text))
-
-        text = "\n".join(p["text"] for p in paragraphs if p["text"])
-        table_count = len(document_root.findall(".//w:tbl", ns))
-        return {
-            "paragraphs": paragraphs,
-            "headings": headings,
-            "text": text,
-            "table_count": table_count,
-            "media_count": media_count,
-        }
+        return docx_outline(docx_path)
 
     def _read_word_status(self, paper_path: Path, file_size: int) -> str:
         try:

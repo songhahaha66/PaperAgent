@@ -136,9 +136,14 @@ def test_prepare_workspace_reuses_word_style_profile(tmp_path: Path, monkeypatch
 
     assert applied is True
     assert (tmp_path / ".analysis" / "12" / STYLE_PROFILE_FILENAME).exists()
+    assert (tmp_path / ".analysis" / "12" / "spec.json").exists()
     assert (workspace / CONTRACT_PATH).exists()
+    assert (workspace / ".system" / "template_spec.json").exists()
     assert "宋体" in (workspace / CONTRACT_PATH).read_text(encoding="utf-8")
     assert (workspace / "paper.docx").exists()
+    analysis = read_template_analysis(12)
+    assert analysis["has_spec"] is True
+    assert analysis["slot_count"] >= 1
 
 
 def test_delete_template_analysis_removes_sidecar_dir(tmp_path: Path, monkeypatch):

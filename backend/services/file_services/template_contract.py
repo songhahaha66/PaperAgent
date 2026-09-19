@@ -27,6 +27,11 @@ from ai_system.core_tools.docx_styles import (
     extract_style_fingerprint,
     save_style_profile,
 )
+from ai_system.template.spec_builder import (
+    SPEC_FILENAME,
+    build_template_spec,
+    persist_template_spec,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +109,7 @@ def analyze_and_store_template(
     contract = ""
     image_count = 0
     has_style_profile = False
+    has_spec = False
 
     try:
         contract = _build_contract(source_path, template_name, output_mode)
@@ -129,6 +135,13 @@ def analyze_and_store_template(
         except Exception as exc:
             logger.warning("上传阶段保存模板样式档案失败: %s", exc)
             error = error or str(exc)
+        try:
+            spec = build_template_spec(source_path, template_id)
+            persist_template_spec(spec, analysis_dir)
+            has_spec = True
+        except Exception as exc:
+            logger.warning("上传阶段保存 TemplateSpec 失败: %s", exc)
+            error = error or str(exc)
 
     meta = {
         "template_id": template_id,
@@ -137,6 +150,7 @@ def analyze_and_store_template(
         "status": "ready" if contract else "failed",
         "image_count": image_count,
         "has_style_profile": has_style_profile,
+        "has_spec": has_spec,
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
         "error": error,
         "source_name": source_path.name,
@@ -174,6 +188,12 @@ def apply_stored_template_analysis(
         if dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(images_src, dest)
+
+    spec_src = analysis_dir / SPEC_FILENAME
+    if spec_src.exists():
+        dest = Path(workspace_path) / ".system" / "template_spec.json"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(spec_src, dest)
     return True
 
 
@@ -188,6 +208,13 @@ def read_template_analysis(template_id: int) -> dict[str, Any]:
         except Exception:
             meta = {}
     contract = contract_file.read_text(encoding="utf-8") if contract_file.exists() else ""
+    spec_file = analysis_dir / SPEC_FILENAME
+    spec_data: dict[str, Any] = {}
+    if spec_file.exists():
+        try:
+            spec_data = json.loads(spec_file.read_text(encoding="utf-8"))
+        except Exception:
+            spec_data = {}
     status = meta.get("status") or ("ready" if contract else "missing")
     return {
         "template_id": template_id,
@@ -198,6 +225,8 @@ def read_template_analysis(template_id: int) -> dict[str, Any]:
             meta.get("has_style_profile")
             or (analysis_dir / STYLE_PROFILE_FILENAME).exists()
         ),
+        "has_spec": bool(meta.get("has_spec") or spec_file.exists()),
+        "slot_count": len(spec_data.get("slots") or []),
         "analyzed_at": meta.get("analyzed_at"),
         "error": meta.get("error"),
     }

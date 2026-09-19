@@ -13,6 +13,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
 from ..core_managers.langchain_tools import LangChainToolFactory
+from ..llm import load_prompt
 from services.file_services.template_contract import read_template_contract
 
 logger = logging.getLogger(__name__)
@@ -148,19 +149,7 @@ class WriterAgent:
         Returns:
             System prompt string tailored to the output mode
         """
-        base_prompt = (
-            "你是一个专业的学术写作助手（WriterAgent），负责根据高层次的写作目标自主创作内容。\n"
-            "**你使用的语言需要跟模板语言一致**\n\n"
-            "**🎯 核心职责**：\n"
-            "1. **理解写作目标**：MainAgent会给你高层次的写作目标（例如：\"写Introduction章节\"）\n"
-            "2. **自主创作内容**：你需要根据目标自己思考并创作具体的文字内容\n"
-            "3. **选择合适工具**：根据内容类型选择合适的文档工具完成操作\n"
-            "4. **确保质量**：内容要专业、准确、符合学术规范\n\n"
-            "**🚫 重要提醒**：\n"
-            "- MainAgent只会告诉你\"写什么主题\"，不会告诉你\"写什么内容\"\n"
-            "- 你需要自己扩充和发挥，创作具体的段落文字\n"
-            "- 不要只是简单执行指令，要展现你的写作能力\n\n"
-        )
+        base_prompt = load_prompt("writer_agent.md") + "\n\n"
         
         if self.output_mode == "word":
             has_template = (Path(self.workspace_dir) / ".system" / "_template_original.docx").exists()
@@ -285,8 +274,8 @@ class WriterAgent:
                 "- 表格底纹：`ShadingType.CLEAR`（不是 SOLID）\n"
                 "- 图片：如果工作区存在 `outputs/*.png`、`outputs/*.jpg` 或上游任务明确提供图片路径，必须在正文相关位置插入图片，不能只写“见图”或图片说明文字\n"
                 "- 图片写法：`new ImageRun({ type: 'png', data: fs.readFileSync('outputs/chart.png'), transformation: {width: 520, height: 330}, altText: { title: '图表标题', description: '图表说明', name: 'chart' } })`\n"
-                "- 图片路径：优先使用 MainAgent/CodeAgent 提供的正式输出路径，如 `outputs/pi_convergence.png`；如果只提供 run artifact 路径，也应使用该相对路径插入\n"
-                "- 图片版式：图片段落使用 `alignment: AlignmentType.CENTER`，图片后紧跟一段居中的图题（例如“图1 蒙特卡洛估计π值的收敛过程”）\n"
+                "- 图片路径：优先使用 MainAgent/CodeAgent 提供的正式输出路径，如 `outputs/chart.png`；如果只提供 run artifact 路径，也应使用该相对路径插入\n"
+                "- 图片版式：图片段落使用 `alignment: AlignmentType.CENTER`，图片后紧跟一段居中的图题（例如“图1 实验结果趋势图”）\n"
                 "- 分页：`new Paragraph({ children: [new PageBreak()] })`\n"
                 "- TOC：标题必须用 `HeadingLevel.HEADING_1` 等，且 style 定义中包含 `outlineLevel`\n"
                 "- 页眉/页脚：通过 `headers`/`footers` 属性在 section 中设置\n"
