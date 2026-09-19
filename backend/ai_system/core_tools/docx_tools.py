@@ -55,16 +55,20 @@ class DocxTools:
         AI 应生成完整的 JS 脚本，使用 require('docx') 和 require('fs')
         来构建文档并写入文件。脚本会在工作空间目录下执行。
 
-        ⚠️ 当存在模板时，不允许覆盖 paper.docx，请使用 write_to_template 工具。
+        ⚠️ 当存在模板时，不允许用 JS 覆盖 paper.docx。
+        若 js_code 是 IR JSON（含 sections/spec），则走渲染器。
 
         Args:
-            js_code: 完整的 Node.js 脚本，使用 docx-js 创建文档。
+            js_code: 完整的 Node.js 脚本，或 IR JSON。
                      脚本中应使用 process.env.OUTPUT_PATH 获取输出路径。
             filename: 输出文件名（默认 paper.docx）
 
         Returns:
             执行结果，成功时包含文件路径，失败时包含错误信息
         """
+        ir_result = self._try_render_ir_payload(js_code, filename)
+        if ir_result is not None:
+            return ir_result
         if filename == "paper.docx" and self._has_template():
             return (
                 "Error: 当前工作空间存在模板文件，禁止用 create_docx 覆盖 paper.docx。\n"
@@ -120,6 +124,32 @@ class DocxTools:
         except Exception as e:
             logger.error(f"create_docx 失败: {e}", exc_info=True)
             return f"Error: {e}"
+
+    def render_from_ir(self, spec, ir, filename: str = "paper.docx") -> str:
+        from ai_system.render.docx_renderer import render_docx
+
+        template = self.workspace_dir / ".system" / "_template_original.docx"
+        output = self.workspace_dir / filename
+        render_docx(spec, ir, template if template.exists() else None, output)
+        self._notify_file_changed()
+        size_kb = output.stat().st_size / 1024 if output.exists() else 0
+        return f"✅ {filename} 已按 IR 渲染 ({size_kb:.1f} KB)"
+
+    def _try_render_ir_payload(self, js_code: str, filename: str) -> str | None:
+        stripped = (js_code or "").strip()
+        if not stripped.startswith("{") or ("sections" not in stripped and '"ir"' not in stripped):
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        from ai_system.schemas.paper_ir import PaperIR
+        from ai_system.schemas.template_spec import TemplateSpec
+
+        ir = PaperIR.model_validate(payload.get("ir") or payload)
+        spec_data = payload.get("spec")
+        spec = TemplateSpec.model_validate(spec_data) if spec_data else TemplateSpec(template_id=0)
+        return self.render_from_ir(spec, ir, filename)
 
     def _ensure_workspace_images_in_docx(self, docx_path: Path) -> str:
         """

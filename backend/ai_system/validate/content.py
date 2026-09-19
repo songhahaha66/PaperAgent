@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from ..schemas.paper_ir import Citation, PaperIR
+from ..schemas.template_spec import TemplateSpec
+from ..template.ooxml_parser import parse_docx
+from .issues import ValidationIssue
+
+
+def content_issues(spec: TemplateSpec, ir: PaperIR, paper_path: Path) -> list[ValidationIssue]:
+    paper_path = Path(paper_path)
+    table_count = 0
+    paragraph_texts: set[str] = set()
+    if paper_path.suffix.lower() == ".docx":
+        parsed = parse_docx(paper_path)
+        paper_text = parsed.text
+        table_count = parsed.table_count
+        paragraph_texts = {item["text"] for item in parsed.paragraphs}
+    else:
+        paper_text = paper_path.read_text(encoding="utf-8") if paper_path.exists() else ""
+    issues: list[ValidationIssue] = []
+    block_text = {block.id: block.text.strip() for block in spec.blocks}
+
+    for slot in spec.slots:
+        if slot.role == "placeholder_fill":
+            body = ir.text_for_slot(slot.id)
+            if len(body.strip()) < slot.constraints.min_chars:
+                issues.append(
+                    ValidationIssue(
+                        code="placeholder_too_short",
+                        slot_id=slot.id,
+                        detail=f"{slot.id} 正文不足 {slot.constraints.min_chars} 字",
+                    )
+                )
+            prompt_text = block_text.get(slot.anchor_block, "")
+            # Once a slot has content, the template's "fill here" prompt must be gone.
+            if body.strip() and prompt_text and prompt_text in paragraph_texts and prompt_text not in body:
+                issues.append(
+                    ValidationIssue(
+                        code="placeholder_left",
+                        slot_id=slot.id,
+                        detail=f"占位提示仍在文档中: {prompt_text[:40]}",
+                    )
+                )
+        if slot.role == "example_delete":
+            for example in slot.examples:
+                if example and example in paper_text:
+                    issues.append(
+                        ValidationIssue(
+                            code="example_left",
+                            slot_id=slot.id,
+                            detail=f"示例残留: {example[:40]}",
+                        )
+                    )
+        if slot.role == "instruction_delete" and slot.title and slot.title in paper_text:
+            issues.append(
+                ValidationIssue(
+                    code="instruction_left",
+                    slot_id=slot.id,
+                    detail=f"写作说明残留: {slot.title[:40]}",
+                )
+            )
+        if slot.role == "table":
+            if table_count == 0 and paper_path.suffix.lower() == ".docx":
+                issues.append(ValidationIssue(code="table_missing", slot_id=slot.id, detail="表格缺失"))
+        if slot.role == "figure_slot":
+            section = ir.sections.get(slot.id)
+            if section:
+                for block in section.blocks:
+                    artifact_id = getattr(block, "artifact_id", None)
+                    if artifact_id and artifact_id not in ir.artifacts:
+                        issues.append(
+                            ValidationIssue(
+                                code="figure_missing",
+                                slot_id=slot.id,
+                                detail=f"图片产物不存在: {artifact_id}",
+                            )
+                        )
+        section = ir.sections.get(slot.id)
+        if section:
+            for block in section.blocks:
+                if isinstance(block, Citation) and block.ref_id not in ir.references:
+                    issues.append(
+                        ValidationIssue(
+                            code="citation_unresolved",
+                            slot_id=slot.id,
+                            detail=f"引用未登记: {block.ref_id}",
+                        )
+                    )
+    return issues

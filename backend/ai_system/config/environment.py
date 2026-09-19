@@ -132,13 +132,9 @@ class AIEnvironmentManager:
             # 使用统一的路径配置
             self.workspace_dir = str(get_workspaces_path())
 
-        # 确保工作空间目录存在
+        # 确保工作空间目录存在。工作区路径只保存在实例上，避免并发任务互相覆盖全局环境变量。
         os.makedirs(self.workspace_dir, exist_ok=True)
         logger.info(f"工作空间目录设置完成: {self.workspace_dir}")
-
-        # 不需要重复创建目录结构，workspace_files.py中已经处理了
-        # 设置为环境变量，供其他组件使用
-        os.environ["WORKSPACE_DIR"] = self.workspace_dir
 
     def initialize_system(self, system_type: str, user_id: int = None):
         """初始化指定系统类型"""

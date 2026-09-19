@@ -9,6 +9,8 @@ from abc import ABC, abstractmethod
 import json
 import asyncio
 
+from ..runtime.events import EventEmitter
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,12 +36,26 @@ class StreamCallback(ABC):
 class StreamOutputManager:
     """管理全程流式输出，使用JSON格式"""
 
-    def __init__(self, stream_callback: Optional[StreamCallback] = None):
+    def __init__(
+        self,
+        stream_callback: Optional[StreamCallback] = None,
+        event_emitter: Optional[EventEmitter] = None,
+        run_id: str = "",
+        thread_id: str = "",
+        workspace_dir: str = "",
+    ):
         self.stream_callback = stream_callback
         self.output_count = 0
         self.current_message_buffer = ""
         self.current_role = "assistant"
         self.current_block_type = "main"
+        self.run_id = run_id
+        self.thread_id = thread_id
+        self.event_emitter = event_emitter or EventEmitter(
+            workspace_dir=workspace_dir or None,
+            run_id=run_id,
+            thread_id=thread_id,
+        )
         # 添加异步锁，防止并发输出问题
         self._output_lock = asyncio.Lock()
         logger.info("StreamOutputManager初始化完成")
@@ -69,13 +85,24 @@ class StreamOutputManager:
                 print(content, end="", flush=True)
 
     async def send_json_block(self, block_type: str, content: str):
-        """发送JSON格式的数据块"""
+        """发送JSON格式的数据块，并双写 AG-UI 风格事件。"""
+        try:
+            self.event_emitter.emit_from_json_block(
+                block_type,
+                content,
+                run_id=self.run_id,
+                thread_id=self.thread_id,
+            )
+        except Exception as exc:
+            logger.debug("事件双写失败: %s", exc)
+
         block = {
             "type": block_type,
             "content": content
         }
 
-        logger.debug(f"发送JSON块: {block_type} - {repr(content[:50])}...")
+        preview = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        logger.debug(f"发送JSON块: {block_type} - {repr(preview[:50])}...")
 
         if self.stream_callback:
             try:
@@ -89,6 +116,20 @@ class StreamOutputManager:
         else:
             # 直接打印JSON格式
             print(json.dumps(block, ensure_ascii=False), flush=True)
+
+    async def send_agui_event(self, event) -> None:
+        """Push an AG-UI event to subscribers without replacing json_block."""
+        callback = self.stream_callback
+        if callback is None:
+            return
+        handler = getattr(callback, "on_event", None)
+        if handler is None:
+            return
+        try:
+            payload = event.model_dump() if hasattr(event, "model_dump") else event
+            await handler(payload)
+        except Exception as exc:
+            logger.debug("发送 AG-UI 事件失败: %s", exc)
 
     async def print_main_content(self, content: str):
         """打印主要内容"""
@@ -151,8 +192,14 @@ class PersistentStreamManager(StreamOutputManager):
     """支持持久化的流式输出管理器"""
 
     def __init__(self, stream_callback: Optional[StreamCallback] = None,
-                 chat_service=None, session_id: str = None):
-        super().__init__(stream_callback)
+                 chat_service=None, session_id: str = None,
+                 workspace_dir: str = "", run_id: str = "", thread_id: str = ""):
+        super().__init__(
+            stream_callback,
+            workspace_dir=workspace_dir,
+            run_id=run_id,
+            thread_id=thread_id,
+        )
         self.chat_service = chat_service
         self.session_id = session_id
         self.message_buffer = []

@@ -17,10 +17,14 @@ logger = logging.getLogger(__name__)
 class FileTools:
     """文件操作工具类"""
 
-    def __init__(self, stream_manager: Optional[StreamOutputManager] = None):
-        workspace_dir = os.getenv("WORKSPACE_DIR")
+    def __init__(
+        self,
+        stream_manager: Optional[StreamOutputManager] = None,
+        workspace_dir: Optional[str] = None,
+    ):
+        workspace_dir = workspace_dir or os.getenv("WORKSPACE_DIR")
         if not workspace_dir:
-            raise ValueError("必须设置WORKSPACE_DIR环境变量，指定具体的工作空间目录（包含work_id）")
+            raise ValueError("必须提供 workspace_dir 或设置 WORKSPACE_DIR 环境变量，指定具体的工作空间目录（包含work_id）")
 
         self.workspace_dir = workspace_dir
         self.stream_manager = stream_manager
