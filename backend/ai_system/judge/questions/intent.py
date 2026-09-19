@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from ..base import Choice, Question
+from ..base import Choice, Noul, Question
+
+
+def needs_figure_question() -> dict[str, Question]:
+    return {
+        "needs_figure": Noul(
+            instructions="用户需求是否要求运行代码、做数值计算/仿真、处理数据或绘制图表，使论文需要一张由程序生成的图？",
+        )
+    }
 
 
 def intent_questions() -> dict[str, Question]:

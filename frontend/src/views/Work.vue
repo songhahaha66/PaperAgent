@@ -149,7 +149,7 @@ import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionRespon
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import { useBreakpoint } from '@/composables/useBreakpoint';
-import { CONFIRM_DRAFT_MESSAGE, useAguiEvents } from '@/composables/useAguiEvents';
+import { CONFIRM_DRAFT_MESSAGE, latestRunEvents, useAguiEvents } from '@/composables/useAguiEvents';
 import { markdownPlanToData } from '@/composables/useWorkPlan';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
 import WorkConfirmBar from '@/components/WorkConfirmBar.vue';
@@ -321,7 +321,8 @@ const replayPersistedEvents = async () => {
   if (!authStore.token || !workId.value) return
   try {
     const result = await chatAPI.getRunEvents(authStore.token, workId.value, 0)
-    for (const event of result.events || []) {
+    // Only the last run decides whether we are still waiting for a confirmation.
+    for (const event of latestRunEvents(result.events || [])) {
       handleAguiEvent(event, '')
     }
   } catch (error) {

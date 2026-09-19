@@ -1,7 +1,14 @@
+"""Single docx rendering engine: pristine template copy + PaperIR → document.
+
+Every IR block maps to a deterministic OOXML operation so that rendering the same
+IR against the same template yields the same file (see `normalize_docx_bytes`).
+"""
+
 from __future__ import annotations
 
 import shutil
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -23,11 +30,16 @@ from ..schemas.paper_ir import (
     Paragraph,
     TableRows,
 )
-from ..schemas.template_spec import TemplateSpec
+from ..schemas.template_spec import Slot, TemplateSpec
 
 VOLATILE_PARTS = {"docProps/core.xml", "docProps/app.xml"}
 RSID_LOCAL_NAMES = {"rsidR", "rsidRDefault", "rsidP", "rsidRPr", "rsidTr", "rsidSect", "docId"}
 MATH_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+WP_INLINE = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}inline"
+REMOVE_ROLES = {"instruction_delete", "example_delete"}
+REPLACE_ROLES = {"placeholder_fill", "caption"}
+APPEND_ROLES = {"figure_slot"}
+CODE_FONT = "Consolas"
 try:
     if "m" not in nsmap:
         nsmap["m"] = MATH_NS
@@ -43,10 +55,12 @@ def render_docx(
 ) -> Path:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if template_path and Path(template_path).exists():
-        shutil.copyfile(template_path, output_path)
+    template = Path(template_path) if template_path else None
+    if template and template.exists():
+        if template.resolve() != output_path.resolve():
+            shutil.copyfile(template, output_path)
         document = Document(str(output_path))
-        _fill_from_template(document, spec, ir, Path(template_path).parent)
+        _fill_from_template(document, spec, ir, template.parent)
     else:
         document = Document()
         _fill_blank_document(document, spec, ir, output_path.parent)
@@ -66,45 +80,99 @@ def normalize_docx_bytes(path: Path | str) -> list[tuple[str, bytes]]:
         return [(name, _strip_volatile_xml(name, archive.read(name))) for name in names]
 
 
+# ---------------------------------------------------------------------------
+# Template filling
+# ---------------------------------------------------------------------------
+
+
+def index_body_blocks(document: Document) -> dict[str, object]:
+    """Map parser block ids (P###/G###/T###) to body elements, mirroring `parse_docx`."""
+    mapping: dict[str, object] = {}
+    paragraph_index = table_index = figure_index = 0
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:tbl"):
+            mapping[f"T{table_index:03d}"] = child
+            table_index += 1
+            continue
+        if child.tag != qn("w:p"):
+            continue
+        text = "".join(node.text or "" for node in child.iter(qn("w:t"))).strip()
+        has_image = any(True for _ in child.iter(WP_INLINE))
+        if has_image and not text:
+            mapping[f"G{figure_index:03d}"] = child
+            figure_index += 1
+        else:
+            mapping[f"P{paragraph_index:03d}"] = child
+            paragraph_index += 1
+    return mapping
+
+
 def _fill_from_template(document: Document, spec: TemplateSpec, ir: PaperIR, workspace: Path) -> None:
-    block_text = {block.id: block.text.strip() for block in spec.blocks if block.text.strip()}
-    operations: list[tuple] = []
-    for paragraph in document.paragraphs:
-        text = paragraph.text.strip()
-        if not text:
-            continue
-        matching = [slot for slot in spec.slots if block_text.get(slot.anchor_block, "") == text]
-        if not matching:
-            continue
-        slot = matching[0]
-        if slot.role in {"instruction_delete", "example_delete"}:
-            operations.append(("remove", paragraph._element))
-            continue
-        section = ir.sections.get(slot.id)
-        if slot.role in {"placeholder_fill", "caption", "figure_slot"} and section:
-            operations.append(("insert", paragraph._element, section.blocks, workspace, ir))
+    block_text = {block.id: block.text.strip() for block in spec.blocks}
+    by_id = index_body_blocks(document)
+    claimed: set[int] = set()
 
-    _fill_tables(document, spec, ir)
+    def resolve(slot: Slot):
+        element = by_id.get(slot.anchor_block)
+        expected = block_text.get(slot.anchor_block)
+        if element is not None and element.tag == qn("w:p") and expected:
+            actual = "".join(node.text or "" for node in element.iter(qn("w:t"))).strip()
+            if actual != expected:
+                element = None
+        if element is None and expected:
+            # Spec built from a different revision of the template: fall back to text.
+            for paragraph in document.paragraphs:
+                if id(paragraph._element) in claimed or paragraph.text.strip() != expected:
+                    continue
+                element = paragraph._element
+                break
+        if element is not None:
+            claimed.add(id(element))
+        return element
 
-    for item in reversed(operations):
-        if item[0] == "remove":
-            parent = item[1].getparent()
-            if parent is not None:
-                parent.remove(item[1])
-        elif item[0] == "insert":
-            _, element, blocks, workspace, paper = item
-            anchor = DocxParagraph(element, document._body)
-            for block in reversed(blocks):
-                _insert_block_after(anchor, block, paper, workspace)
+    removals = []
+    fills: list[tuple[object, Slot]] = []
+    for slot in spec.slots:
+        if slot.role in REMOVE_ROLES:
+            element = resolve(slot)
+            if element is not None and element.tag == qn("w:p"):
+                removals.append(element)
+        elif slot.role in REPLACE_ROLES | APPEND_ROLES:
+            section = ir.sections.get(slot.id)
+            if not section or not section.blocks:
+                continue
+            element = resolve(slot)
+            if element is not None and element.tag == qn("w:p"):
+                fills.append((element, slot))
+
+    _fill_tables(document, spec, ir, by_id)
+
+    for element, slot in fills:
+        anchor = DocxParagraph(element, document._body)
+        blocks = ir.sections[slot.id].blocks
+        if slot.role in REPLACE_ROLES:
+            _clear_paragraph(anchor)
+            cursor = _write_block(anchor, blocks[0], ir, workspace, primary=True)
+            rest = blocks[1:]
+        else:
+            cursor = anchor
+            rest = blocks
+        for block in rest:
+            cursor = _write_block(_insert_after(cursor, template=anchor), block, ir, workspace, primary=True)
+
+    for element in removals:
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
 
 
 def _fill_blank_document(document: Document, spec: TemplateSpec, ir: PaperIR, workspace: Path) -> None:
     for slot in spec.slots:
-        if slot.role in {"instruction_delete", "example_delete"}:
+        if slot.role in REMOVE_ROLES:
             continue
         if slot.role == "heading":
             title = slot.title or (slot.section_path[-1] if slot.section_path else slot.id)
-            document.add_heading(title, level=min(len(slot.section_path) or 1, 3))
+            _add_heading(document, title, level=min(len(slot.section_path) or 1, 3))
             continue
         if slot.role == "fixed_text" and slot.title:
             document.add_paragraph(slot.title)
@@ -113,7 +181,7 @@ def _fill_blank_document(document: Document, spec: TemplateSpec, ir: PaperIR, wo
         if not section:
             continue
         for block in section.blocks:
-            _append_block(document, block, ir, workspace)
+            _write_block(document.add_paragraph(), block, ir, workspace, primary=True)
 
 
 def _append_references(document: Document, ir: PaperIR) -> None:
@@ -122,84 +190,135 @@ def _append_references(document: Document, ir: PaperIR) -> None:
     existing = "\n".join(paragraph.text for paragraph in document.paragraphs)
     if "参考文献" in existing:
         return
-    document.add_heading("参考文献", level=1)
+    _add_heading(document, "参考文献", level=1)
     for index, reference in enumerate(ir.references.values(), start=1):
         document.add_paragraph(f"[{index}] {reference.text}")
 
 
-def _fill_tables(document: Document, spec: TemplateSpec, ir: PaperIR) -> None:
-    table_slots = [slot for slot in spec.slots if slot.role == "table"]
-    for table, slot in zip(document.tables, table_slots):
+def _add_heading(document: Document, text: str, level: int) -> None:
+    try:
+        document.add_heading(text, level=level)
+    except KeyError:
+        # Templates without built-in "Heading N" styles: fall back to a bold paragraph.
+        paragraph = document.add_paragraph()
+        paragraph.add_run(text).bold = True
+
+
+# ---------------------------------------------------------------------------
+# Tables
+# ---------------------------------------------------------------------------
+
+
+def _fill_tables(document: Document, spec: TemplateSpec, ir: PaperIR, by_id: dict[str, object]) -> None:
+    tables_by_element = {id(table._tbl): table for table in document.tables}
+    fallback = iter(document.tables)
+    for slot in (slot for slot in spec.slots if slot.role == "table"):
         section = ir.sections.get(slot.id)
         if not section:
             continue
         table_block = next((block for block in section.blocks if isinstance(block, TableRows)), None)
         if table_block is None:
             continue
+        element = by_id.get(slot.anchor_block)
+        table = tables_by_element.get(id(element)) if element is not None else None
+        if table is None:
+            table = next(fallback, None)
+        if table is None:
+            continue
         _write_table(table, table_block)
 
 
 def _write_table(table: Table, table_block: TableRows) -> None:
-    for row_index, row_values in enumerate(table_block.rows):
-        if row_index >= len(table.rows):
-            break
-        for col_index, value in enumerate(row_values):
-            if col_index >= len(table.rows[row_index].cells):
-                break
-            table.rows[row_index].cells[col_index].text = value
+    rows = table_block.rows
+    if not rows or not table.rows:
+        return
+    while len(table.rows) < len(rows):
+        table._tbl.append(deepcopy(table.rows[-1]._tr))
+    # Drop leftover template rows (typically example rows) but always keep the header.
+    for surplus in list(table.rows)[max(len(rows), 1):]:
+        table._tbl.remove(surplus._tr)
+    for row_index, values in enumerate(rows):
+        cells = table.rows[row_index].cells
+        for col_index, value in enumerate(values[: len(cells)]):
+            _set_cell_text(cells[col_index], "" if value is None else str(value))
 
 
-def _insert_block_after(anchor: DocxParagraph, block, ir: PaperIR, workspace: Path) -> DocxParagraph:
-    added = _insert_after(anchor, "")
-    _write_block_into(added, block, ir, workspace)
-    return added
+def _set_cell_text(cell, text: str) -> None:
+    paragraph = cell.paragraphs[0]
+    r_pr = next((deepcopy(run._element.rPr) for run in paragraph.runs if run._element.rPr is not None), None)
+    for extra in cell.paragraphs[1:]:
+        extra._element.getparent().remove(extra._element)
+    _clear_paragraph(paragraph)
+    run = paragraph.add_run(text)
+    if r_pr is not None:
+        run._element.insert(0, r_pr)
 
 
-def _append_block(document: Document, block, ir: PaperIR, workspace: Path) -> None:
-    paragraph = document.add_paragraph()
-    _write_block_into(paragraph, block, ir, workspace)
+# ---------------------------------------------------------------------------
+# Blocks
+# ---------------------------------------------------------------------------
 
 
-def _write_block_into(paragraph: DocxParagraph, block, ir: PaperIR, workspace: Path) -> None:
+def _write_block(paragraph: DocxParagraph, block, ir: PaperIR, workspace: Path, primary: bool) -> DocxParagraph:
+    """Write one IR block starting at `paragraph`; return the last paragraph written."""
     if isinstance(block, Paragraph):
-        paragraph.text = block.text
-    elif isinstance(block, Code):
-        run = paragraph.add_run(block.text)
-        run.font.name = "Consolas"
+        _set_text(paragraph, block.text)
+        return paragraph
+    if isinstance(block, Code):
+        run = _set_text(paragraph, block.text)
+        run.font.name = CODE_FONT
         run.font.size = Pt(10)
-    elif isinstance(block, ListBlock):
-        paragraph.text = ("1. " if block.ordered else "• ") + "；".join(block.items)
-    elif isinstance(block, FigureRef):
-        _write_figure(paragraph, block, ir, workspace)
-    elif isinstance(block, Equation):
+        try:
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), CODE_FONT)
+        except Exception:
+            pass
+        return paragraph
+    if isinstance(block, ListBlock):
+        cursor = paragraph
+        for index, item in enumerate(block.items):
+            if index:
+                cursor = _insert_after(cursor, template=paragraph)
+            prefix = f"{index + 1}. " if block.ordered else "• "
+            _set_text(cursor, prefix + item)
+        return cursor
+    if isinstance(block, FigureRef):
+        return _write_figure(paragraph, block, ir, workspace)
+    if isinstance(block, Equation):
         _write_equation(paragraph, block.latex)
-    elif isinstance(block, Citation):
+        return paragraph
+    if isinstance(block, Citation):
         reference = ir.references.get(block.ref_id)
-        paragraph.text = reference.text if reference else f"[{block.ref_id}]"
-    elif isinstance(block, TableRows):
-        paragraph.text = "\n".join("\t".join(row) for row in block.rows)
+        _set_text(paragraph, reference.text if reference else f"[{block.ref_id}]")
+        return paragraph
+    if isinstance(block, TableRows):
+        _set_text(paragraph, "\n".join("\t".join(row) for row in block.rows))
+        return paragraph
+    return paragraph
 
 
-def _write_figure(paragraph: DocxParagraph, block: FigureRef, ir: PaperIR, workspace: Path) -> None:
+def _write_figure(paragraph: DocxParagraph, block: FigureRef, ir: PaperIR, workspace: Path) -> DocxParagraph:
     artifact = ir.artifacts.get(block.artifact_id)
     path = Path(artifact.path) if artifact else None
     if path and not path.is_absolute():
-        path = workspace / path
-        if not path.exists():
-            path = workspace.parent / artifact.path if artifact else path
+        candidates = [workspace / path, workspace.parent / path]
+        path = next((candidate for candidate in candidates if candidate.exists()), candidates[0])
     if path and path.exists():
+        _clear_paragraph(paragraph)
         run = paragraph.add_run()
         try:
             run.add_picture(str(path), width=Inches(4.8))
         except Exception:
-            paragraph.text = block.caption or block.artifact_id
-            return
+            _set_text(paragraph, block.caption or block.artifact_id)
+            return paragraph
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         if block.caption:
-            caption = _insert_after(paragraph, block.caption)
+            caption = _insert_after(paragraph, template=paragraph)
+            _set_text(caption, block.caption)
             caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    else:
-        paragraph.text = block.caption or f"[图:{block.artifact_id}]"
+            return caption
+        return paragraph
+    _set_text(paragraph, block.caption or f"[图:{block.artifact_id}]")
+    return paragraph
 
 
 def _write_equation(paragraph: DocxParagraph, latex: str) -> None:
@@ -213,14 +332,40 @@ def _write_equation(paragraph: DocxParagraph, latex: str) -> None:
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
-def _insert_after(paragraph: DocxParagraph, text: str) -> DocxParagraph:
+# ---------------------------------------------------------------------------
+# Paragraph helpers
+# ---------------------------------------------------------------------------
+
+
+def _clear_paragraph(paragraph: DocxParagraph) -> None:
+    """Remove runs/hyperlinks but keep the paragraph properties (style, spacing)."""
+    for child in list(paragraph._element):
+        if child.tag != qn("w:pPr"):
+            paragraph._element.remove(child)
+
+
+def _set_text(paragraph: DocxParagraph, text: str):
+    """Replace paragraph text with a single run that inherits the first run's rPr."""
+    r_pr = next((deepcopy(run._element.rPr) for run in paragraph.runs if run._element.rPr is not None), None)
+    _clear_paragraph(paragraph)
+    run = paragraph.add_run(text)
+    if r_pr is not None:
+        run._element.insert(0, r_pr)
+    return run
+
+
+def _insert_after(paragraph: DocxParagraph, template: DocxParagraph | None = None) -> DocxParagraph:
+    """Insert an empty paragraph after `paragraph`, cloning `template`'s pPr and first rPr."""
+    template = template or paragraph
     new_p = paragraph._element.makeelement(qn("w:p"), {})
+    p_pr = template._element.find(qn("w:pPr"))
+    if p_pr is not None:
+        new_p.append(deepcopy(p_pr))
     paragraph._element.addnext(new_p)
     added = DocxParagraph(new_p, paragraph._parent)
-    if paragraph.style is not None:
-        added.style = paragraph.style
-    if text:
-        added.add_run(text)
+    r_pr = next((deepcopy(run._element.rPr) for run in template.runs if run._element.rPr is not None), None)
+    if r_pr is not None:
+        added.add_run("")._element.insert(0, r_pr)
     return added
 
 

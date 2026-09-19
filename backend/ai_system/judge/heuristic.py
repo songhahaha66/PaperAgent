@@ -13,6 +13,11 @@ WRITE_RE = re.compile(r"(写|生成|完成|起草|补充|继续)")
 EDIT_RE = re.compile(r"(修改|改一下|重写|更新|调整)")
 QUESTION_RE = re.compile(r"(什么|为什么|怎么|如何|吗|？|\?)")
 CONFIRM_RE = re.compile(r"(确认采用|确认当前|按现状|停止修复|跳过校验|采用当前稿)")
+FIGURE_RE = re.compile(
+    r"(画图|绘图|绘制|作图|画出|图表|曲线|折线|柱状|散点|可视化|仿真|模拟|蒙特卡洛|数值计算|数据分析|"
+    r"运行代码|跑代码|跑一下|实验数据|plot|chart|figure|simulat|visualiz)",
+    re.I,
+)
 
 
 def infer_role(kind: str, text: str, is_heading: bool = False) -> str:
@@ -73,6 +78,11 @@ class HeuristicJudge(Judge):
                 )
             elif key == "kind" and isinstance(question, Choice):
                 answers[key] = Answer(value=infer_intent_kind(str(state.get("message") or "")), confidence=0.7)
+            elif key == "needs_figure" and isinstance(question, Noul):
+                answers[key] = Answer(
+                    value=bool(FIGURE_RE.search(str(state.get("message") or ""))),
+                    confidence=0.6,
+                )
             elif key == "substantive" and isinstance(question, Noul):
                 body = draft.strip()
                 answers[key] = Answer(

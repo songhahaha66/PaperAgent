@@ -17,18 +17,15 @@ from ..schemas.template_spec import TemplateSpec
 
 def render_markdown(spec: TemplateSpec, ir: PaperIR, output_path: Path | str | None = None) -> str:
     lines: list[str] = []
-    title = spec.slots[0].title if spec.slots else ir.work_id
-    if title:
-        lines.append(f"# {title}")
-        lines.append("")
 
     for slot in spec.slots:
         if slot.role in {"instruction_delete", "example_delete"}:
             continue
         if slot.role == "heading":
-            level = min(len(slot.section_path) + 1, 6) if slot.section_path else 2
+            # Heading depth follows the template outline; the first-level section is "#".
+            level = min(max(len(slot.section_path), 1), 6)
             heading = slot.title or (slot.section_path[-1] if slot.section_path else slot.id)
-            if heading and lines[:1] != [f"# {heading}"]:
+            if heading:
                 lines.append(f"{'#' * level} {heading}")
                 lines.append("")
             continue

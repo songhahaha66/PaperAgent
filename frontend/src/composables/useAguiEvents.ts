@@ -23,6 +23,32 @@ export interface AguiEventOptions {
 
 export const CONFIRM_DRAFT_MESSAGE = '确认采用当前稿'
 
+const STEP_LABELS: Record<string, string> = {
+  load_context: '读取上下文',
+  classify_intent: '识别意图',
+  ensure_template_spec: '解析模板',
+  gather: '准备图表数据',
+  draft: '起草',
+  revise: '按反馈修订',
+  render: '渲染文档',
+  validate: '校验文档',
+}
+
+/** Human-readable progress note for a STEP_STARTED event; empty for silent steps. */
+export const describeStep = (payload: any): string => {
+  const label = STEP_LABELS[payload?.node]
+  if (!label) return ''
+  const target = payload?.slot_title || payload?.slot_id
+  return target ? `${label}：${target}` : label
+}
+
+/** Keep only the events of the most recent run so reloads don't replay stale runs. */
+export const latestRunEvents = <T extends { run_id?: string }>(events: T[]): T[] => {
+  const last = events.length ? events[events.length - 1]?.run_id : undefined
+  if (!last) return events
+  return events.filter((event) => event.run_id === last)
+}
+
 export function useAguiEvents(options: AguiEventOptions) {
   const handleAguiEvent = (event: any, messageId: string) => {
     if (!event) return
@@ -30,6 +56,11 @@ export function useAguiEvents(options: AguiEventOptions) {
     const payload = event.payload || {}
     if (type === 'RUN_STARTED') {
       options.awaitingConfirmation.value = false
+      return
+    }
+    if (type === 'CUSTOM' && payload.type === 'confirmation_resolved') {
+      options.awaitingConfirmation.value = false
+      options.confirmationIssues.value = []
       return
     }
     if (type === 'STATE_DELTA' && payload.type === 'plan_updated' && payload.content) {
@@ -63,9 +94,11 @@ export function useAguiEvents(options: AguiEventOptions) {
     }
     if (type === 'STEP_STARTED' && payload.node) {
       const messageIndex = options.chatMessages.value.findIndex((m) => m.id === messageId)
-      if (messageIndex !== -1) {
+      const label = describeStep(payload)
+      if (messageIndex !== -1 && label) {
         const currentMessage = options.chatMessages.value[messageIndex]
-        const note = `\n[${payload.node}${payload.slot_id ? ':' + payload.slot_id : ''}]`
+        // Blank line after the quote so streamed answer text is not swallowed into it.
+        const note = `\n> ${label}\n\n`
         if (!currentMessage.content.includes(note.trim())) {
           options.chatMessages.value[messageIndex] = {
             ...currentMessage,

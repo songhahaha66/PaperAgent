@@ -11,13 +11,16 @@ from .issues import ValidationIssue
 def content_issues(spec: TemplateSpec, ir: PaperIR, paper_path: Path) -> list[ValidationIssue]:
     paper_path = Path(paper_path)
     table_count = 0
+    paragraph_texts: set[str] = set()
     if paper_path.suffix.lower() == ".docx":
         parsed = parse_docx(paper_path)
         paper_text = parsed.text
         table_count = parsed.table_count
+        paragraph_texts = {item["text"] for item in parsed.paragraphs}
     else:
         paper_text = paper_path.read_text(encoding="utf-8") if paper_path.exists() else ""
     issues: list[ValidationIssue] = []
+    block_text = {block.id: block.text.strip() for block in spec.blocks}
 
     for slot in spec.slots:
         if slot.role == "placeholder_fill":
@@ -28,6 +31,16 @@ def content_issues(spec: TemplateSpec, ir: PaperIR, paper_path: Path) -> list[Va
                         code="placeholder_too_short",
                         slot_id=slot.id,
                         detail=f"{slot.id} 正文不足 {slot.constraints.min_chars} 字",
+                    )
+                )
+            prompt_text = block_text.get(slot.anchor_block, "")
+            # Once a slot has content, the template's "fill here" prompt must be gone.
+            if body.strip() and prompt_text and prompt_text in paragraph_texts and prompt_text not in body:
+                issues.append(
+                    ValidationIssue(
+                        code="placeholder_left",
+                        slot_id=slot.id,
+                        detail=f"占位提示仍在文档中: {prompt_text[:40]}",
                     )
                 )
         if slot.role == "example_delete":

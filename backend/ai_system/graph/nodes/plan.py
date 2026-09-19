@@ -7,7 +7,16 @@ from ...schemas.plan import WRITABLE_ROLES, derive_plan, project_plan_json
 from ..state import PaperState
 
 
+BATCH_SIZE = 3
+
+
 def plan_node(state: PaperState) -> PaperState:
+    """Derive the plan from spec + IR; the intent only decides which slots run now.
+
+    Statuses always come from the IR so plan.json never claims a section is done
+    when nothing was written. An edit intent forces its targets back to pending and
+    limits the batches to those targets; untouched slots keep their real status.
+    """
     if state.spec is None:
         return state
     plan = derive_plan(state.spec, state.ir)
@@ -16,14 +25,12 @@ def plan_node(state: PaperState) -> PaperState:
         for task in plan.tasks:
             if task.slot_id in allowed:
                 task.status = "pending"
-            elif task.status != "blocked":
-                task.status = "committed"
+        runnable = [task.slot_id for task in plan.tasks if task.slot_id in allowed]
     elif state.intent.kind in {"question", "chat"}:
-        for task in plan.tasks:
-            if task.status == "pending":
-                task.status = "blocked"
-    pending = [task.slot_id for task in plan.tasks if task.status == "pending"]
-    plan.batches = [pending[index:index + 3] for index in range(0, len(pending), 3)]
+        runnable = []
+    else:
+        runnable = [task.slot_id for task in plan.tasks if task.status == "pending"]
+    plan.batches = [runnable[index:index + BATCH_SIZE] for index in range(0, len(runnable), BATCH_SIZE)]
     state.plan = plan
     state.current_batch = plan.batches[0] if plan.batches else []
     return state
