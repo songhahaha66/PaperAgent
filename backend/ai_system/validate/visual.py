@@ -34,6 +34,7 @@ def visual_issues(
                 )
 
     if ir:
+        needed = 0
         for slot_id, section in ir.sections.items():
             for block in section.blocks:
                 if not isinstance(block, FigureRef):
@@ -59,17 +60,16 @@ def visual_issues(
                             detail=f"图片文件不存在: {artifact.path}",
                         )
                     )
-                elif artifact_path.name not in filenames and not any(
-                    artifact_path.stem in name for name in filenames
-                ):
-                    issues.append(
-                        ValidationIssue(
-                            code="figure_not_embedded",
-                            slot_id=slot_id,
-                            detail=f"图片未嵌入文档: {artifact.path}",
-                            severity="warning",
-                        )
-                    )
+                    continue
+                needed += 1
+        if needed and len(images) < needed:
+            issues.append(
+                ValidationIssue(
+                    code="figure_not_embedded",
+                    detail=f"文档嵌入图片 {len(images)} 张，少于 IR 中的 {needed} 张",
+                    severity="warning",
+                )
+            )
 
     issues.extend(_pdf_page_issues(paper_path))
     return issues
