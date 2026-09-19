@@ -16,6 +16,7 @@ from config.paths import get_workspaces_path
 logger = logging.getLogger(__name__)
 
 PLAN_JSON_NAME = "plan.json"
+_WORK_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 REVIEW_SYSTEM_PROMPT = """\
 你是一个论文写作任务审查员（ReviewAgent）。你的职责是根据结构化计划（优先 plan.json，
@@ -70,15 +71,16 @@ class ReviewAgent:
             return f.read().strip() or "plan.md 为空"
 
     def _confined_workspace_file(self, filename: str) -> Optional[Path]:
-        if Path(filename).name != filename:
+        """Join a basename onto the trusted workspaces root. Never resolve user paths."""
+        if not _WORK_KEY_RE.fullmatch(filename):
+            return None
+        work_key = os.path.basename(str(self.workspace_dir or "").rstrip("/\\"))
+        if not _WORK_KEY_RE.fullmatch(work_key):
             return None
         try:
             allowed_root = get_workspaces_path().resolve()
-            workspace_root = Path(self.workspace_dir).expanduser().resolve()
-            if not workspace_root.is_relative_to(allowed_root):
-                return None
-            path = (workspace_root / filename).resolve()
-            if not path.is_relative_to(workspace_root):
+            path = (allowed_root / work_key / filename).resolve()
+            if not path.is_relative_to(allowed_root):
                 return None
             return path
         except (OSError, RuntimeError, ValueError):

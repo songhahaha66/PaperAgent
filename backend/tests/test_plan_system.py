@@ -260,6 +260,8 @@ def test_load_structured_plan_rejects_workspace_outside_allow_root(tmp_path: Pat
     )
     reviewer = ReviewAgent(llm=None, workspace_dir=str(outside), output_mode="markdown")
     assert reviewer._load_structured_plan() is None
+    traversal = ReviewAgent(llm=None, workspace_dir="../outside", output_mode="markdown")
+    assert traversal._load_structured_plan() is None
 
 
 def test_markdown_paper_status_includes_structured_plan(tmp_path: Path, monkeypatch):
