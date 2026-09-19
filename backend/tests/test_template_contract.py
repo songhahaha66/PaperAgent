@@ -24,6 +24,7 @@ from services.file_services.template_contract import (
     delete_template_analysis,
     ensure_template_analysis,
     read_template_analysis,
+    update_template_slots,
 )
 from services.file_services.plan_reconciler import PlanReconciler
 from ai_system.core_tools.file_tools import FileTools
@@ -134,6 +135,29 @@ def test_prepare_workspace_reuses_word_style_profile(tmp_path: Path, monkeypatch
     analysis = read_template_analysis(12)
     assert analysis["has_spec"] is True
     assert analysis["slot_count"] >= 1
+
+
+def test_update_template_slots_marks_human_source(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "services.file_services.template_contract.get_templates_path",
+        lambda: tmp_path,
+    )
+    source = tmp_path / "slots.docx"
+    doc = Document()
+    doc.add_paragraph("请在此处填写实验步骤")
+    doc.save(str(source))
+    analyze_and_store_template(source, 33, "槽位模板", "word")
+    analysis = read_template_analysis(33)
+    assert analysis["slots"]
+    target = analysis["slots"][0]
+    updated = update_template_slots(
+        33,
+        [{"id": target["id"], "role": "placeholder_fill", "title": target["title"]}],
+    )
+    confirmed = next(slot for slot in updated["slots"] if slot["id"] == target["id"])
+    assert confirmed["source"] == "human"
+    assert confirmed["confidence"] == 1.0
+    assert confirmed["role"] == "placeholder_fill"
 
 
 def test_delete_template_analysis_removes_sidecar_dir(tmp_path: Path, monkeypatch):

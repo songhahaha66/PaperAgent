@@ -82,6 +82,19 @@ async def _run_graph(state: PaperState, ctx: RunContext) -> PaperState:
     if state.intent.kind in {"question", "chat"}:
         state = await answer(state, llm=ctx.llm)
         return finalize(state)
+    if state.intent.kind == "confirm":
+        state.awaiting_confirmation = False
+        state.pending_confirmation = False
+        state.summary = "已确认采用当前稿，停止自动修复。"
+        if state.rendered_path:
+            await emit(
+                ctx,
+                "CUSTOM",
+                {"type": "render_done", "format": state.output_mode, "path": state.rendered_path, "revision": state.ir.revision if state.ir else 0},
+                run_id=state.run_id,
+                thread_id=state.work_id,
+            )
+        return finalize(state)
 
     await emit(ctx, "STEP_STARTED", {"node": "ensure_template_spec"}, run_id=state.run_id, thread_id=state.work_id)
     state = ensure_template_spec(state)

@@ -18,6 +18,17 @@ SlotRole = Literal[
     "figure_slot",
     "other",
 ]
+SLOT_ROLE_VALUES = {
+    "heading",
+    "fixed_text",
+    "placeholder_fill",
+    "example_delete",
+    "instruction_delete",
+    "caption",
+    "table",
+    "figure_slot",
+    "other",
+}
 
 
 class FontHint(BaseModel):

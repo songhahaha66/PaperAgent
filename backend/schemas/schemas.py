@@ -147,6 +147,16 @@ class TemplateAnalysisResponse(BaseModel):
     analyzed_at: Optional[str] = None
     error: Optional[str] = None
 
+
+class TemplateSlotUpdate(BaseModel):
+    id: str
+    role: str
+    title: Optional[str] = None
+
+
+class TemplateSlotsUpdateRequest(BaseModel):
+    slots: list[TemplateSlotUpdate]
+
 # Work相关schemas
 class WorkBase(BaseModel):
     title: str

@@ -16,9 +16,8 @@ def render_node(state: PaperState) -> PaperState:
         if not template.exists():
             template = workspace / "paper.docx"
         output = workspace / "paper.docx"
-        if template.exists():
-            render_docx(state.spec, state.ir, template, output)
-            state.rendered_path = str(output)
+        render_docx(state.spec, state.ir, template if template.exists() else None, output)
+        state.rendered_path = str(output)
         return state
     output = workspace / "paper.md"
     render_markdown(state.spec, state.ir, output)

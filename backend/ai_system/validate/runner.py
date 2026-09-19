@@ -23,6 +23,6 @@ def validate_document(
         issues.extend(skeleton_issues(spec, paper_path))
         if template_path:
             issues.extend(fingerprint_issues(Path(template_path), paper_path))
-        issues.extend(visual_issues(paper_path))
+        issues.extend(visual_issues(paper_path, spec, ir))
     issues.extend(content_issues(spec, ir, paper_path))
     return issues

@@ -197,6 +197,20 @@ class TemplateAPI {
     })
   }
 
+  async updateTemplateSlots(
+    token: string,
+    templateId: number,
+    slots: Array<Pick<TemplateSlotPreview, 'id' | 'role' | 'title'>>,
+  ): Promise<TemplateAnalysis> {
+    return this.request<TemplateAnalysis>(`/templates/${templateId}/analysis/slots`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ slots }),
+    })
+  }
+
 }
 
 export const templateAPI = new TemplateAPI()

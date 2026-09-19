@@ -19,12 +19,14 @@ def load_context(state: PaperState) -> PaperState:
     if previous and previous.work_id == state.work_id:
         previous.user_message = state.user_message
         previous.run_id = state.run_id or previous.run_id
+        pending = previous.awaiting_confirmation
         previous.finished = False
         previous.awaiting_confirmation = False
         previous.issues = []
         previous.messages = []
         previous.summary = ""
         state = previous
+        state.pending_confirmation = pending
 
     ir_file = workspace / IR_PATH
     if state.ir is None and ir_file.exists():

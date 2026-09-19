@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import re
 
-from ...judge.heuristic import HeuristicJudge
+from ...judge.heuristic import CONFIRM_RE, HeuristicJudge, infer_intent_kind
+from ...judge.questions.intent import intent_questions
 from ...schemas.intent import EditIntent
 from ...schemas.plan import WRITABLE_ROLES
 from ..state import PaperState
 
-WRITE_RE = re.compile(r"(写|生成|完成|起草|补充|继续)")
-EDIT_RE = re.compile(r"(修改|改一下|重写|更新|调整)")
-QUESTION_RE = re.compile(r"(什么|为什么|怎么|如何|吗|？|\?)")
 SECTION_RE = re.compile(r"第\s*([一二三四五六七八九十\d]+)\s*[章节部分]")
 CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
@@ -24,25 +22,20 @@ def classify_intent(state: PaperState, judge=None) -> PaperState:
     if not writable and state.plan:
         writable = [task.slot_id for task in state.plan.tasks]
 
-    kind = "write"
-    if EDIT_RE.search(message):
-        kind = "edit"
-    elif QUESTION_RE.search(message) and (
-        message.endswith("？") or message.endswith("?") or (len(message) < 40 and not WRITE_RE.search(message))
-    ):
-        kind = "question" if len(message) < 80 else "chat"
-
+    kind = infer_intent_kind(message)
+    if state.pending_confirmation and CONFIRM_RE.search(message):
+        kind = "confirm"
     targets = _target_slots(message, writable, state)
     if kind == "write":
         targets = []
     state.intent = EditIntent(kind=kind, target_slots=targets, reason="heuristic")
-    if judge and not isinstance(judge, HeuristicJudge):
+    if judge is not None:
         try:
-            answers = judge.ask({"message": message, "slots": writable}, {})
+            answers = judge.ask({"message": message, "slots": writable}, intent_questions())
             value = getattr(answers.get("kind"), "value", None)
-            if value in {"write", "edit", "question", "chat"}:
+            if value in {"write", "edit", "question", "chat", "confirm"}:
                 state.intent.kind = value
-                state.intent.reason = "judge"
+                state.intent.reason = "judge" if not isinstance(judge, HeuristicJudge) else "heuristic"
         except Exception:
             pass
     return state

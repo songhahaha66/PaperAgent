@@ -30,6 +30,7 @@ class PaperState(BaseModel):
     messages: list[str] = Field(default_factory=list)
     history: list[dict[str, str]] = Field(default_factory=list)
     awaiting_confirmation: bool = False
+    pending_confirmation: bool = False
     finished: bool = False
     summary: str = ""
     rendered_path: str = ""

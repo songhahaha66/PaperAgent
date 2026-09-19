@@ -27,9 +27,12 @@ from ai_system.core_tools.docx_styles import (
     extract_style_fingerprint,
     save_style_profile,
 )
+from ai_system.schemas.template_spec import SLOT_ROLE_VALUES, TemplateSpec
 from ai_system.template.spec_builder import (
+    ROLE_EXPECTS,
     SPEC_FILENAME,
     build_template_spec,
+    load_template_spec,
     persist_template_spec,
 )
 
@@ -261,6 +264,55 @@ def delete_template_analysis(template_id: int) -> None:
     analysis_dir = get_template_analysis_dir(template_id)
     if analysis_dir.exists():
         shutil.rmtree(analysis_dir)
+
+
+def update_template_slots(template_id: int, updates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Write back human-confirmed slot roles into the persisted TemplateSpec."""
+    analysis_dir = get_template_analysis_dir(template_id)
+    spec = load_template_spec(template_id, analysis_dir)
+    if spec is None:
+        raise FileNotFoundError(f"TemplateSpec not found for template {template_id}")
+    by_id = {slot.id: slot for slot in spec.slots}
+    changed = False
+    for item in updates:
+        slot = by_id.get(str(item.get("id") or ""))
+        if slot is None:
+            continue
+        role = str(item.get("role") or "")
+        if role not in SLOT_ROLE_VALUES:
+            raise ValueError(f"不支持的槽位角色: {role}")
+        slot.role = role  # type: ignore[assignment]
+        slot.source = "human"
+        slot.confidence = 1.0
+        slot.expects = list(ROLE_EXPECTS.get(role, ["paragraph"]))  # type: ignore[arg-type]
+        title = item.get("title")
+        if title:
+            slot.title = str(title)
+        if role == "example_delete" and slot.title and slot.title not in slot.examples:
+            slot.examples = [slot.title]
+        changed = True
+    if changed:
+        spec.version += 1
+        persist_template_spec(spec, analysis_dir)
+        _touch_analysis_meta(template_id, spec)
+    return read_template_analysis(template_id)
+
+
+def _touch_analysis_meta(template_id: int, spec: TemplateSpec) -> None:
+    analysis_dir = get_template_analysis_dir(template_id)
+    meta_file = analysis_dir / META_FILENAME
+    meta: dict[str, Any] = {}
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    meta["has_spec"] = True
+    meta["slot_count"] = len(spec.slots)
+    meta["spec_version"] = spec.version
+    meta["slots_confirmed_at"] = datetime.now(timezone.utc).isoformat()
+    meta_file.parent.mkdir(parents=True, exist_ok=True)
+    meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _prepare_template_workspace(

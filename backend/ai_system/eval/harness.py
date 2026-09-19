@@ -31,7 +31,7 @@ class EvalResult:
 
 
 def run_eval_case(case: EvalCase, workdir: Path) -> EvalResult:
-    if case.output_mode == "word" and case.template_path:
+    if case.output_mode == "word":
         paper = workdir / f"{case.name}.docx"
         render_docx(case.spec, case.ir, case.template_path, paper)
         issues = validate_document(case.spec, case.ir, paper, case.template_path)

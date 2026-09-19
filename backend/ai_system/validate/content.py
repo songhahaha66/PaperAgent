@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..schemas.paper_ir import PaperIR
+from ..schemas.paper_ir import Citation, PaperIR
 from ..schemas.template_spec import TemplateSpec
 from ..template.ooxml_parser import parse_docx
 from .issues import ValidationIssue
@@ -64,4 +64,15 @@ def content_issues(spec: TemplateSpec, ir: PaperIR, paper_path: Path) -> list[Va
                                 detail=f"图片产物不存在: {artifact_id}",
                             )
                         )
+        section = ir.sections.get(slot.id)
+        if section:
+            for block in section.blocks:
+                if isinstance(block, Citation) and block.ref_id not in ir.references:
+                    issues.append(
+                        ValidationIssue(
+                            code="citation_unresolved",
+                            slot_id=slot.id,
+                            detail=f"引用未登记: {block.ref_id}",
+                        )
+                    )
     return issues

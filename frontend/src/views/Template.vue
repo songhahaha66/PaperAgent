@@ -243,13 +243,30 @@
                 <div v-if="templateAnalysisError" class="analysis-error">
                   {{ templateAnalysisError }}
                 </div>
-                <div v-if="lowConfidenceSlots.length" class="slot-confirm">
-                  <p>以下槽位置信度较低，写作前请确认角色是否正确：</p>
-                  <ul>
-                    <li v-for="slot in lowConfidenceSlots" :key="slot.id">
-                      {{ slot.title || slot.id }} · {{ slot.role }} · {{ slot.confidence.toFixed(2) }}
-                    </li>
-                  </ul>
+                <div v-if="slotDrafts.length" class="slot-confirm">
+                  <p>
+                    写作前请确认槽位角色。低置信度项已标黄；保存后会写回 TemplateSpec，source=human。
+                  </p>
+                  <div class="slot-table">
+                    <div v-for="slot in slotDrafts" :key="slot.id" class="slot-row" :class="{ low: slot.confidence < 0.55 }">
+                      <div class="slot-title">
+                        <strong>{{ slot.title || slot.id }}</strong>
+                        <span>{{ slot.confidence.toFixed(2) }} · {{ slot.source }}</span>
+                      </div>
+                      <t-select v-model="slot.role" size="small">
+                        <t-option v-for="role in slotRoleOptions" :key="role" :value="role" :label="role" />
+                      </t-select>
+                    </div>
+                  </div>
+                  <t-button
+                    theme="primary"
+                    size="small"
+                    :loading="slotSaving"
+                    :disabled="!selectedTemplate"
+                    @click="saveSlotRoles"
+                  >
+                    确认并保存槽位
+                  </t-button>
                 </div>
                 <div class="text-preview">
                   <MarkdownRenderer
@@ -290,7 +307,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, computed } from 'vue'
+import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
@@ -299,6 +316,7 @@ import {
   type PaperTemplate,
   type PaperTemplateUpdate,
   type TemplateAnalysis,
+  type TemplateSlotPreview,
 } from '@/api/template'
 import Sidebar from '@/components/Sidebar.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -656,9 +674,19 @@ const contentTab = ref('original')
 const templateAnalysis = ref<TemplateAnalysis | null>(null)
 const templateAnalysisLoading = ref(false)
 const templateAnalysisError = ref('')
-const lowConfidenceSlots = computed(() =>
-  (templateAnalysis.value?.slots || []).filter((slot) => slot.confidence < 0.55),
-)
+const slotDrafts = ref<TemplateSlotPreview[]>([])
+const slotSaving = ref(false)
+const slotRoleOptions = [
+  'heading',
+  'fixed_text',
+  'placeholder_fill',
+  'example_delete',
+  'instruction_delete',
+  'caption',
+  'table',
+  'figure_slot',
+  'other',
+]
 
 const viewTemplateContent = async (template: PaperTemplate) => {
   if (!authStore.token) return
@@ -690,6 +718,7 @@ const viewTemplateContent = async (template: PaperTemplate) => {
     }
     if (analysis) {
       templateAnalysis.value = analysis
+      slotDrafts.value = (analysis.slots || []).map((slot) => ({ ...slot }))
       if (analysis.status !== 'ready') {
         templateAnalysisError.value = analysis.error || '模板解读失败'
       }
@@ -716,6 +745,30 @@ const closeContentDialog = () => {
   templateAnalysis.value = null
   templateAnalysisError.value = ''
   templateAnalysisLoading.value = false
+  slotDrafts.value = []
+}
+
+const saveSlotRoles = async () => {
+  if (!authStore.token || !selectedTemplate.value) return
+  slotSaving.value = true
+  try {
+    const analysis = await templateAPI.updateTemplateSlots(
+      authStore.token,
+      selectedTemplate.value.id,
+      slotDrafts.value.map((slot) => ({
+        id: slot.id,
+        role: slot.role,
+        title: slot.title,
+      })),
+    )
+    templateAnalysis.value = analysis
+    slotDrafts.value = (analysis.slots || []).map((slot) => ({ ...slot }))
+    MessagePlugin.success('槽位角色已确认并写回模板')
+  } catch (error: any) {
+    MessagePlugin.error(error?.response?.data?.detail || error?.message || '保存槽位失败')
+  } finally {
+    slotSaving.value = false
+  }
 }
 
 // 格式化文件大小
@@ -843,6 +896,51 @@ onMounted(() => {
   border: 1px solid #ffe58f;
   border-radius: 4px;
   font-size: 13px;
+}
+
+.slot-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.slot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #f0e6c8;
+  border-radius: 4px;
+}
+
+.slot-row.low {
+  border-color: #faad14;
+  background: #fffbe6;
+}
+
+.slot-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.slot-title strong {
+  font-size: 13px;
+  color: #2c3e50;
+}
+
+.slot-title span {
+  font-size: 12px;
+  color: #8c8c8c;
+}
+
+.slot-row :deep(.t-select) {
+  width: 200px;
+  flex-shrink: 0;
 }
 
 .analysis-meta {

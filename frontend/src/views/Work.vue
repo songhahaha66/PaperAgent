@@ -74,6 +74,13 @@
                 @refresh="handleFileRefresh"
                 @main-paper-click="handleMainPaperClick"
               />
+              <WorkConfirmBar
+                :visible="awaitingConfirmation"
+                :issues="confirmationIssues"
+                :disabled="isStreaming"
+                @confirm="confirmCurrentDraft"
+                @dismiss="awaitingConfirmation = false"
+              />
               <div class="chat-input">
                 <ChatSender
                   v-model="inputValue"
@@ -108,162 +115,23 @@
           />
         </div>
 
-        <div class="preview-section" v-show="!isMobile || activeMobilePanel === 'preview'">
-          <!-- 主要论文显示 -->
-          <div v-if="showMainPaper && mainPaperContent">
-            <t-card title="主要论文">
-              <template #actions>
-                <t-button size="small" variant="text" @click="showMainPaper = false">
-                  <template #icon>
-                    <t-icon name="close" />
-                  </template>
-                </t-button>
-              </template>
-              <div class="paper-preview">
-                <MarkdownRenderer
-                  :content="mainPaperContent"
-                  :work-id="workId"
-                  :base-path="'papers'"
-                />
-              </div>
-            </t-card>
-          </div>
-          <!-- 普通文件预览 -->
-          <div v-else-if="selectedFile">
-            <t-card :title="`文件预览: ${selectedFile}`">
-              <div class="file-preview">
-                <!-- 加载状态 -->
-                <div v-if="!currentFileData" class="loading-container">
-                </div>
-                <!-- 文本文件预览 -->
-                <div v-else-if="currentFileData.type === 'text'" class="text-preview">
-                  <CodeHighlight v-if="selectedFile.endsWith('.py')" :code="currentFileContent" language="python" />
-                  <MarkdownRenderer
-                    v-else-if="selectedFile.endsWith('.md')"
-                    :content="currentFileContent"
-                    :work-id="workId"
-                    :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
-                  />
-                  <pre v-else>{{ currentFileContent }}</pre>
-                </div>
-                <!-- 图片文件预览 -->
-                <div v-else-if="currentFileData.type === 'image'" class="image-preview">
-                  <img
-                    v-if="imageUrls[selectedFile]"
-                    :src="imageUrls[selectedFile]"
-                    :alt="selectedFile"
-                    style="max-width: 100%; height: auto"
-                  />
-                  <div v-else class="loading-image">正在加载图片...</div>
-                </div>
-                <!-- 二进制文件信息 -->
-                <div v-else-if="currentFileData.type === 'binary'" class="binary-preview">
-                  <!-- DOCX文件使用DocxViewer预览 -->
-                  <DocxViewer
-                    v-if="isDocxFile(selectedFile)"
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                  <!-- 其他二进制文件使用BinaryFileViewer -->
-                  <BinaryFileViewer
-                    v-else
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                </div>
-                <!-- 未知文件类型 - 使用 BinaryFileViewer 统一处理 -->
-                <div v-else-if="currentFileData" class="binary-preview">
-                  <!-- DOCX文件使用DocxViewer预览 -->
-                  <DocxViewer
-                    v-if="isDocxFile(selectedFile)"
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                  <!-- 其他文件使用BinaryFileViewer -->
-                  <BinaryFileViewer
-                    v-else
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                </div>
-                <div v-else class="no-preview">
-                  <t-icon name="file" size="48px" />
-                  <p>文件信息加载中...</p>
-                </div>
-              </div>
-            </t-card>
-          </div>
-
-          <div v-else-if="currentWork">
-            <t-card title="工作信息">
-              <div class="work-details">
-                <p><strong>标题：</strong>{{ currentWork.title }}</p>
-                <p><strong>描述：</strong>{{ currentWork.description || '暂无描述' }}</p>
-                <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
-                <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
-                <p>
-                  <strong>输出格式：</strong>
-                  <t-tag :theme="getOutputModeTheme(currentWork.output_mode)" variant="light" size="small">
-                    <template #icon>
-                      <t-icon :name="getOutputModeIcon(currentWork.output_mode)" />
-                    </template>
-                    {{ getOutputModeText(currentWork.output_mode) }}
-                  </t-tag>
-                </p>
-                <p>
-                  <strong>模板：</strong
-                  >{{
-                    currentWork.template_id ? `模板ID: ${currentWork.template_id}` : '未选择模板'
-                  }}
-                </p>
-              </div>
-            </t-card>
-          </div>
-
-          <div v-else>
-            <t-card title="论文展示区">
-              <div class="pdf-info">
-                <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
-                <p>{{ isMobile ? '在文件页中点击文件可查看具体内容。' : '在左侧文件管理器中点击文件可查看具体内容。' }}</p>
-              </div>
-            </t-card>
-          </div>
-        </div>
+        <WorkPreviewPanel
+          v-show="!isMobile || activeMobilePanel === 'preview'"
+          :is-mobile="isMobile"
+          :show-main-paper="showMainPaper"
+          :main-paper-content="mainPaperContent"
+          :selected-file="selectedFile"
+          :current-file-data="currentFileData"
+          :current-file-content="currentFileContent"
+          :image-urls="imageUrls"
+          :current-work="currentWork"
+          :work-id="workId"
+          :token="authStore.token || ''"
+          @close-main-paper="showMainPaper = false"
+        />
       </div>
 
-      <nav v-if="isMobile" class="mobile-tab-bar" aria-label="工作区导航">
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'chat' }"
-          @click="activeMobilePanel = 'chat'"
-        >
-          <t-icon name="chat" />
-          <span>对话</span>
-        </button>
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'files' }"
-          @click="activeMobilePanel = 'files'"
-        >
-          <t-icon name="folder-open" />
-          <span>文件</span>
-        </button>
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'preview' }"
-          @click="activeMobilePanel = 'preview'"
-        >
-          <t-icon name="browse" />
-          <span>预览</span>
-        </button>
-      </nav>
+      <WorkMobileTabs v-if="isMobile" v-model="activeMobilePanel" />
     </div>
   </div>
 </template>
@@ -275,16 +143,17 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 
 import { useAuthStore } from '@/stores/auth';
-import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
+import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData } from '@/api/workspace';
 import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import { useBreakpoint } from '@/composables/useBreakpoint';
+import { CONFIRM_DRAFT_MESSAGE, useAguiEvents } from '@/composables/useAguiEvents';
+import { markdownPlanToData } from '@/composables/useWorkPlan';
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
-import CodeHighlight from '@/components/CodeHighlight.vue';
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
-import BinaryFileViewer from '@/components/BinaryFileViewer.vue';
-import DocxViewer from '@/components/DocxViewer.vue';
+import WorkConfirmBar from '@/components/WorkConfirmBar.vue';
+import WorkMobileTabs from '@/components/WorkMobileTabs.vue';
+import WorkPreviewPanel from '@/components/WorkPreviewPanel.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -354,6 +223,8 @@ const mainPaperContent = ref<string>('')
 const showMainPaper = ref(false)
 
 const planData = ref<PlanData | null>(null)
+const awaitingConfirmation = ref(false)
+const confirmationIssues = ref<import('@/composables/useAguiEvents').ValidationIssuePreview[]>([])
 
 // 导出状态
 const exportLoading = ref(false)
@@ -541,108 +412,22 @@ const setupWebSocketForReconnect = async () => {
   }
 }
 
-// 统一的流式消息处理函数
-const handleStreamMessage = (data: any, messageId: string) => {
-  const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-  if (messageIndex === -1) return
-  
-  const currentMessage = chatMessages.value[messageIndex]
-  if (!currentMessage) return
+const { handleAguiEvent, handleStreamMessage } = useAguiEvents({
+  chatMessages,
+  planData,
+  loadWorkspaceFiles: () => {
+    void loadWorkspaceFiles()
+  },
+  awaitingConfirmation,
+  confirmationIssues,
+  isStreaming,
+  reconnectMessageId,
+  scrollToBottom: () => scrollToBottom(),
+})
 
-  switch (data.type) {
-    case 'content':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content + data.content,
-      }
-      break
-
-    case 'event':
-      handleAguiEvent(data.event, messageId)
-      break
-
-    case 'json_block':
-      const block = data.block
-      
-      if (block?.type === 'file_changed') {
-        setTimeout(() => loadWorkspaceFiles(), 500)
-      } else if (block?.type === 'plan_updated') {
-        if (block.content && typeof block.content === 'object') {
-          planData.value = block.content as PlanData
-        } else {
-          planData.value = markdownPlanToData(String(block.content || ''))
-        }
-      } else {
-        chatMessages.value[messageIndex] = {
-          ...currentMessage,
-          json_blocks: [...(currentMessage.json_blocks || []), block],
-          message_type: 'json_card' as const,
-        }
-      }
-      break
-
-    case 'complete':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        isStreaming: false,
-      }
-      isStreaming.value = false
-      reconnectMessageId.value = null
-      // 刷新文件列表
-      loadWorkspaceFiles()
-      break
-
-    case 'error':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content || `错误: ${data.message}`,
-        isStreaming: false,
-      }
-      isStreaming.value = false
-      reconnectMessageId.value = null
-      break
-  }
-
-  // 自动滚动
-  scrollToBottom()
-}
-
-const handleAguiEvent = (event: any, messageId: string) => {
-  if (!event) return
-  const type = event.event_type
-  const payload = event.payload || {}
-  if (type === 'STATE_DELTA' && payload.type === 'plan_updated' && payload.content) {
-    planData.value = payload.content
-    return
-  }
-  if (type === 'CUSTOM' && payload.type === 'render_done') {
-    setTimeout(() => loadWorkspaceFiles(), 300)
-    return
-  }
-  if (type === 'TEXT_MESSAGE_CONTENT' && payload.delta) {
-    const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-    if (messageIndex !== -1) {
-      const currentMessage = chatMessages.value[messageIndex]
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content + payload.delta,
-      }
-    }
-    return
-  }
-  if (type === 'STEP_STARTED' && payload.node) {
-    const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-    if (messageIndex !== -1) {
-      const currentMessage = chatMessages.value[messageIndex]
-      const note = `\n[${payload.node}${payload.slot_id ? ':' + payload.slot_id : ''}]`
-      if (!currentMessage.content.includes(note.trim())) {
-        chatMessages.value[messageIndex] = {
-          ...currentMessage,
-          content: currentMessage.content + note,
-        }
-      }
-    }
-  }
+const confirmCurrentDraft = () => {
+  awaitingConfirmation.value = false
+  void sendMessage(CONFIRM_DRAFT_MESSAGE)
 }
 
 // 重构后不再需要显式创建聊天会话，MainAgent会自动处理
@@ -748,72 +533,6 @@ const loadPlanContent = async () => {
     }
   }
 }
-
-const normalizePlanStatus = (rawStatus: string): PlanItemStatus => {
-  const text = rawStatus.toLowerCase()
-  if (text.includes('❌') || text.includes('阻塞') || text.includes('blocked') || text.includes('失败')) return 'blocked'
-  if (text.includes('⬜') || text.includes('待写') || text.includes('pending') || text.includes('todo')) return 'pending'
-  if (text.includes('⏳') || text.includes('进行') || text.includes('progress')) return 'in_progress'
-  if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
-  return 'pending'
-}
-
-const markdownPlanToData = (content: string): PlanData | null => {
-  if (!content.trim()) return null
-  const title = content.split('\n').find((line) => line.trim().startsWith('#'))?.replace(/^#+/, '').trim() || '写作计划'
-  const rows = content
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('|') && !line.includes('---'))
-    .map((line) => line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
-  const items = rows.slice(1).map((row, index) => {
-    const order = Number.parseInt(row[0] || `${index + 1}`, 10) || index + 1
-    const status = normalizePlanStatus(row[2] || '')
-    return {
-      id: `task-${order}`,
-      order,
-      title: row[1] || `任务 ${order}`,
-      status,
-      status_label: row[2]?.replace(/[✅⏳⬜❌]/g, '').trim() || undefined,
-      description: row[3] || '',
-      phase: 'write',
-      depends_on: order > 1 ? [`task-${order - 1}`] : [],
-      raw_status: row[2] || '',
-    }
-  })
-  const stats = {
-    total: items.length,
-    completed: items.filter((item) => item.status === 'completed').length,
-    in_progress: items.filter((item) => item.status === 'in_progress').length,
-    blocked: items.filter((item) => item.status === 'blocked').length,
-    pending: items.filter((item) => item.status === 'pending').length,
-    progress_percent: items.length
-      ? Math.round((items.filter((item) => item.status === 'completed').length / items.length) * 100)
-      : 0,
-  }
-  const current_focus = items.find((item) => item.status === 'in_progress') || items.find((item) => item.status === 'pending') || items.find((item) => item.status === 'blocked') || null
-  return {
-    version: 1,
-    revision: 0,
-    title,
-    methodology: 'spec-driven',
-    planning_mode: 'dynamic',
-    phases: [
-      { id: 'requirements', title: '需求澄清' },
-      { id: 'design', title: '方案设计' },
-      { id: 'tasks', title: '任务拆解' },
-      { id: 'implement', title: '执行生成' },
-      { id: 'verify', title: '验收检查' },
-    ],
-    items,
-    stats,
-    current_focus,
-    next_actions: items.filter((item) => item.status === 'pending' || item.status === 'blocked').slice(0, 3).map((item) => ({ id: item.id, title: item.title })),
-    source: 'frontend_markdown_fallback',
-    source_markdown: content,
-  }
-}
-
 
 // 处理文件刷新
 const handleFileRefresh = async () => {
