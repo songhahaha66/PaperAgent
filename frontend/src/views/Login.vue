@@ -1,15 +1,17 @@
 <template>
   <div class="login-page">
     <div class="login-container">
+      <div class="language-control"><LanguageSwitcher /></div>
       <div class="login-header">
         <div class="title-with-logo">
           <img src="/logo.png" alt="PaperAgent Logo" class="logo" />
           <h1>PaperAgent</h1>
         </div>
-        <p>{{ isLogin ? '登录到您的账户' : '创建新账户' }}</p>
+        <p>{{ isLogin ? t('login.signInTitle') : t('login.signUpTitle') }}</p>
       </div>
 
       <t-form
+        ref="formRef"
         :data="formData"
         :rules="rules"
         :label-width="0"
@@ -20,7 +22,7 @@
         <t-form-item name="email">
           <t-input
             v-model="formData.email"
-            placeholder="邮箱地址"
+            :placeholder="t('login.email')"
             type="email"
             autocomplete="username webauthn"
             clearable
@@ -32,7 +34,7 @@
         </t-form-item>
 
         <t-form-item v-if="!isLogin" name="username">
-          <t-input v-model="formData.username" placeholder="用户名" clearable>
+          <t-input v-model="formData.username" :placeholder="t('login.username')" clearable>
             <template #prefix-icon>
               <UserIcon />
             </template>
@@ -40,7 +42,7 @@
         </t-form-item>
 
         <t-form-item name="password">
-          <t-input v-model="formData.password" placeholder="密码" type="password">
+          <t-input v-model="formData.password" :placeholder="t('login.password')" type="password">
             <template #prefix-icon>
               <LockOnIcon />
             </template>
@@ -48,7 +50,11 @@
         </t-form-item>
 
         <t-form-item v-if="!isLogin" name="confirmPassword">
-          <t-input v-model="formData.confirmPassword" placeholder="确认密码" type="password">
+          <t-input
+            v-model="formData.confirmPassword"
+            :placeholder="t('login.confirmPassword')"
+            type="password"
+          >
             <template #prefix-icon>
               <LockOnIcon />
             </template>
@@ -57,13 +63,15 @@
 
         <t-form-item>
           <t-button type="submit" theme="primary" size="large" block :loading="passwordLoading">
-            {{ isLogin ? '登录' : '注册' }}
+            {{ isLogin ? t('login.signIn') : t('login.signUp') }}
           </t-button>
         </t-form-item>
       </t-form>
 
       <div v-if="isLogin && passkeySupported && passkeyOriginOk" class="passkey-section">
-        <div class="divider"><span>或</span></div>
+        <div class="divider">
+          <span>{{ t('login.or') }}</span>
+        </div>
         <t-button
           theme="default"
           variant="outline"
@@ -75,20 +83,20 @@
           <template #icon>
             <SecuredIcon />
           </template>
-          使用 Passkey 登录
+          {{ t('login.passkeySignIn') }}
         </t-button>
       </div>
 
       <div class="form-footer">
         <p v-if="isLogin">
-          还没有账户？
-          <t-link theme="primary" @click="switchMode">立即注册</t-link>
+          {{ t('login.noAccount') }}
+          <t-link theme="primary" @click="switchMode">{{ t('login.signUpNow') }}</t-link>
         </p>
         <p v-else>
-          已有账户？
-          <t-link theme="primary" @click="switchMode">立即登录</t-link>
+          {{ t('login.hasAccount') }}
+          <t-link theme="primary" @click="switchMode">{{ t('login.signInNow') }}</t-link>
         </p>
-        <p v-if="isLogin" class="passkey-hint">登录后可在账户设置中添加 Passkey</p>
+        <p v-if="isLogin" class="passkey-hint">{{ t('login.passkeyHint') }}</p>
         <p v-if="isLogin && originHint" class="passkey-hint">{{ originHint }}</p>
       </div>
     </div>
@@ -96,9 +104,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { MessagePlugin, type FormInstanceFunctions } from 'tdesign-vue-next'
 import { MailIcon, LockOnIcon, UserIcon, SecuredIcon } from 'tdesign-icons-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { authAPI } from '@/api/auth'
@@ -109,9 +119,11 @@ import {
   isPasskeyCanceled,
   isPasskeyOriginSupported,
   isPasskeySupported,
-  passkeyOriginHint,
 } from '@/utils/passkey'
 
+const { t, locale } = useI18n()
+const formRef = ref<FormInstanceFunctions>()
+watch(locale, () => formRef.value?.clearValidate())
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
@@ -119,7 +131,14 @@ const authStore = useAuthStore()
 const isLogin = ref(true)
 const passkeySupported = ref(false)
 const passkeyOriginOk = ref(true)
-const originHint = ref<string | null>(null)
+const originHint = computed(() => {
+  if (passkeyOriginOk.value) return null
+  return t(
+    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(window.location.hostname)
+      ? 'login.passkeyIpHint'
+      : 'login.passkeySecureHint',
+  )
+})
 const passkeyLoading = ref(false)
 const passwordLoading = ref(false)
 let conditionalLoginActive = false
@@ -136,29 +155,29 @@ const formData = reactive({
   confirmPassword: '',
 })
 
-const rules = {
+const rules = computed(() => ({
   email: [
-    { required: true, message: '邮箱地址必填', type: 'error' },
-    { email: true, message: '请输入正确的邮箱地址', type: 'error' },
+    { required: true, message: t('login.emailRequired'), type: 'error' },
+    { email: true, message: t('login.emailInvalid'), type: 'error' },
   ],
   username: [
-    { required: true, message: '用户名必填', type: 'error' },
-    { min: 2, message: '用户名至少2位', type: 'error' },
-    { max: 50, message: '用户名最多50位', type: 'error' },
+    { required: true, message: t('login.usernameRequired'), type: 'error' },
+    { min: 2, message: t('login.usernameMin'), type: 'error' },
+    { max: 50, message: t('login.usernameMax'), type: 'error' },
   ],
   password: [
-    { required: true, message: '密码必填', type: 'error' },
-    { min: 6, message: '密码至少6位', type: 'error' },
+    { required: true, message: t('login.passwordRequired'), type: 'error' },
+    { min: 6, message: t('login.passwordMin'), type: 'error' },
   ],
   confirmPassword: [
-    { required: true, message: '请确认密码', type: 'error' },
+    { required: true, message: t('login.confirmRequired'), type: 'error' },
     {
       validator: (val: string) => val === formData.password,
-      message: '两次输入的密码不一致',
+      message: t('login.passwordMismatch'),
       type: 'error',
     },
   ],
-}
+}))
 
 const switchMode = () => {
   isLogin.value = !isLogin.value
@@ -177,10 +196,10 @@ const finishPasskeyLogin = async (challengeId: string, credential: object) => {
   const tokenResponse = await authAPI.verifyPasskeyLogin(challengeId, credential)
   const result = await authStore.loginWithToken(tokenResponse.access_token)
   if (result.success) {
-    MessagePlugin.success('登录成功')
+    MessagePlugin.success(t('login.success'))
     router.push('/home')
   } else {
-    MessagePlugin.error(result.error || '登录失败')
+    MessagePlugin.error(result.error || t('login.failed'))
   }
 }
 
@@ -208,7 +227,7 @@ const startConditionalLogin = async () => {
 
 const onPasskeyLogin = async () => {
   if (!passkeySupported.value) {
-    MessagePlugin.warning('当前浏览器不支持 Passkey')
+    MessagePlugin.warning(t('login.passkeyUnsupported'))
     return
   }
   passkeyLoading.value = true
@@ -219,10 +238,10 @@ const onPasskeyLogin = async () => {
     await finishPasskeyLogin(challenge_id, assertion)
   } catch (error) {
     if (isPasskeyCanceled(error)) {
-      MessagePlugin.info('已取消 Passkey 登录')
+      MessagePlugin.info(t('login.passkeyCanceled'))
     } else {
       console.error('Passkey 登录失败:', error)
-      MessagePlugin.error(error instanceof Error ? error.message : 'Passkey 登录失败')
+      MessagePlugin.error(error instanceof Error ? error.message : t('login.passkeyFailed'))
     }
   } finally {
     passkeyLoading.value = false
@@ -233,7 +252,6 @@ const onPasskeyLogin = async () => {
 onMounted(() => {
   passkeySupported.value = isPasskeySupported()
   passkeyOriginOk.value = isPasskeyOriginSupported()
-  originHint.value = passkeyOriginHint()
   if (isLogin.value) {
     startConditionalLogin()
   }
@@ -256,10 +274,10 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
         })
 
         if (result.success) {
-          MessagePlugin.success('登录成功')
+          MessagePlugin.success(t('login.success'))
           router.push('/home')
         } else {
-          MessagePlugin.error(result.error || '登录失败')
+          MessagePlugin.error(result.error || t('login.failed'))
         }
       } else {
         // 注册逻辑
@@ -270,7 +288,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
         })
 
         if (result.success) {
-          MessagePlugin.success('注册成功，请登录')
+          MessagePlugin.success(t('login.registerSuccess'))
           // 切换到登录模式
           isLogin.value = true
           // 清空表单
@@ -279,12 +297,12 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
           formData.password = ''
           formData.confirmPassword = ''
         } else {
-          MessagePlugin.error(result.error || '注册失败')
+          MessagePlugin.error(result.error || t('login.registerFailed'))
         }
       }
     } catch (error) {
       console.error('操作失败:', error)
-      MessagePlugin.error('操作失败，请重试')
+      MessagePlugin.error(t('login.operationFailed'))
     } finally {
       passwordLoading.value = false
     }
@@ -293,6 +311,12 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 </script>
 
 <style scoped>
+.language-control {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 20px;
+}
+
 .login-page {
   min-height: 100vh;
   display: flex;

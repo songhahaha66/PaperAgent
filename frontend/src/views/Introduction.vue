@@ -6,6 +6,7 @@
         <h1 class="header-title">PaperAgent</h1>
       </div>
       <div class="header-right">
+        <LanguageSwitcher />
         <t-button
           theme="default"
           variant="outline"
@@ -27,12 +28,12 @@
       <!-- 左侧文字区域 -->
       <div class="left-section">
         <div class="hero-content">
-          <h1 class="main-title">新一代写作助手</h1>
+          <h1 class="main-title">{{ t('introduction.title') }}</h1>
           <p class="main-subtitle">
-            全流程智能全自动写作助手
+            {{ t('introduction.subtitle') }}
           </p>
           <p class="main-subtitle">
-            为你自动
+            {{ t('introduction.automate') }}
             <span class="rotating-text-wrapper">
               <span
                 v-for="(text, index) in rotatingTexts"
@@ -41,8 +42,8 @@
                   'rotating-text',
                   {
                     active: currentTextIndex === index,
-                    leaving: previousTextIndex === index
-                  }
+                    leaving: previousTextIndex === index,
+                  },
                 ]"
               >
                 {{ text }}
@@ -51,9 +52,11 @@
           </p>
 
           <div class="cta-buttons">
-            <t-button theme="primary" size="large" @click="goToLogin"> 立即登陆 </t-button>
+            <t-button theme="primary" size="large" @click="goToLogin">
+              {{ t('introduction.signIn') }}
+            </t-button>
             <t-button theme="default" variant="outline" size="large" @click="goToRegister">
-              注册账号
+              {{ t('introduction.signUp') }}
             </t-button>
           </div>
         </div>
@@ -63,23 +66,23 @@
       <div class="right-section">
         <div class="features-grid">
           <div class="feature-card card-blue">
-            <h3>一键生成完整论文</h3>
-            <p>从选题到成稿，AI全程辅助</p>
+            <h3>{{ t('introduction.paperTitle') }}</h3>
+            <p>{{ t('introduction.paperDescription') }}</p>
           </div>
 
           <div class="feature-card card-purple">
-            <h3>支持多种大模型</h3>
-            <p>兼容主流AI模型，自由选择</p>
+            <h3>{{ t('introduction.modelsTitle') }}</h3>
+            <p>{{ t('introduction.modelsDescription') }}</p>
           </div>
 
           <div class="feature-card card-green">
-            <h3>自定义论文模板</h3>
-            <p>上传模板，按格式生成</p>
+            <h3>{{ t('introduction.templatesTitle') }}</h3>
+            <p>{{ t('introduction.templatesDescription') }}</p>
           </div>
 
           <div class="feature-card card-orange">
-            <h3>真实数据可视化</h3>
-            <p>AI自动生成图表和数据</p>
+            <h3>{{ t('introduction.dataTitle') }}</h3>
+            <p>{{ t('introduction.dataDescription') }}</p>
           </div>
         </div>
       </div>
@@ -87,21 +90,29 @@
 
     <!-- 底部 -->
     <div class="footer">
-      <p>&copy; 2026 PaperAgent. All rights reserved.</p>
+      <p>{{ t('introduction.copyright') }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { onMounted, ref, onUnmounted } from 'vue'
+import { onMounted, ref, onUnmounted, computed } from 'vue'
 
+const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 
 // 副标题轮播文字
-const rotatingTexts = ['排版', '生成图表','执行代码','编辑Word']
+const rotatingTexts = computed(() => [
+  t('introduction.typesetting'),
+  t('introduction.charts'),
+  t('introduction.code'),
+  t('introduction.word'),
+])
 const currentTextIndex = ref(0)
 const previousTextIndex = ref(-1)
 let textRotateInterval: number | null = null
@@ -115,7 +126,7 @@ onMounted(() => {
   // 副标题文字轮播 - 每2秒切换
   textRotateInterval = window.setInterval(() => {
     previousTextIndex.value = currentTextIndex.value
-    currentTextIndex.value = (currentTextIndex.value + 1) % rotatingTexts.length
+    currentTextIndex.value = (currentTextIndex.value + 1) % rotatingTexts.value.length
   }, 2000)
 })
 
@@ -135,6 +146,12 @@ const goToRegister = () => {
 </script>
 
 <style scoped>
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .introduction-page {
   height: 100vh;
   overflow-y: auto;
@@ -215,7 +232,7 @@ const goToRegister = () => {
   position: relative;
   display: inline-block;
   height: 1.6em;
-  width: 120px;
+  width: 160px;
   overflow: hidden;
   vertical-align: bottom;
 }

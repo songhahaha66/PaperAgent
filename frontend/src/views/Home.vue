@@ -9,10 +9,11 @@
     />
 
     <div class="home-container">
+      <div class="language-control"><LanguageSwitcher /></div>
       <!-- 欢迎标题 -->
       <div class="welcome-header">
-        <h1>你好，{{ userName }}</h1>
-        <p>智能论文生成助手，让学术写作更高效</p>
+        <h1>{{ t('home.greeting', { name: userName }) }}</h1>
+        <p>{{ t('home.subtitle') }}</p>
       </div>
 
       <!-- 主要任务创建区域 -->
@@ -23,7 +24,7 @@
             <div class="input-wrapper">
               <t-textarea
                 v-model="researchQuestion"
-                placeholder="请详细描述您要研究的学术问题"
+                :placeholder="t('home.questionPlaceholder')"
                 :autosize="{ minRows: 5, maxRows: 8 }"
                 class="question-input"
               />
@@ -46,10 +47,12 @@
                       <template #icon>
                         <t-icon name="attach" />
                       </template>
-                      附件
+                      {{ t('home.attachments') }}
                     </t-button>
                   </t-upload>
-                  <span class="file-count" v-if="uploadedFiles.length > 0">{{ uploadedFiles.length }}</span>
+                  <span class="file-count" v-if="uploadedFiles.length > 0">{{
+                    uploadedFiles.length
+                  }}</span>
                 </div>
 
                 <!-- 下一步按钮 - 右下角 -->
@@ -61,7 +64,7 @@
                     :disabled="!researchQuestion.trim()"
                     class="next-btn"
                   >
-                    下一步
+                    {{ t('common.next') }}
                     <template #suffix>
                       <t-icon name="arrow-right" />
                     </template>
@@ -73,7 +76,7 @@
 
           <!-- 第二阶段：选择输出格式 -->
           <div v-if="currentStep === 2" class="step-content">
-            <h3>选择输出格式</h3>
+            <h3>{{ t('home.outputFormat') }}</h3>
 
             <!-- 输出模式选择 -->
             <div class="output-mode-selector">
@@ -87,7 +90,7 @@
                   <t-icon name="file-1" size="24px" />
                   <div class="output-mode-text">
                     <h4>Markdown</h4>
-                    <p>轻量级标记语言（默认）</p>
+                    <p>{{ t('home.markdownDescription') }}</p>
                   </div>
                   <div v-if="selectedOutputMode === 'markdown'" class="selection-indicator">
                     <t-icon name="check-circle-filled" theme="success" />
@@ -105,7 +108,7 @@
                   <t-icon name="file-word" size="24px" />
                   <div class="output-mode-text">
                     <h4>Word (.docx)</h4>
-                    <p>Microsoft Word 格式</p>
+                    <p>{{ t('home.wordDescription') }}</p>
                   </div>
                   <div v-if="selectedOutputMode === 'word'" class="selection-indicator">
                     <t-icon name="check-circle-filled" theme="success" />
@@ -124,7 +127,7 @@
                   <t-icon name="file-pdf" size="24px" />
                   <div class="output-mode-text">
                     <h4>LaTeX</h4>
-                    <p>专业排版系统（即将推出）</p>
+                    <p>{{ t('home.latexDescription') }}</p>
                   </div>
                   <div v-if="selectedOutputMode === 'latex'" class="selection-indicator">
                     <t-icon name="check-circle-filled" theme="success" />
@@ -135,16 +138,11 @@
 
             <div class="step-actions">
               <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
-                上一步
+                {{ t('common.previous') }}
               </t-button>
 
-              <t-button
-                theme="primary"
-                size="middle"
-                @click="nextStep"
-                class="next-btn"
-              >
-                下一步
+              <t-button theme="primary" size="middle" @click="nextStep" class="next-btn">
+                {{ t('common.next') }}
                 <template #suffix>
                   <t-icon name="arrow-right" />
                 </template>
@@ -154,7 +152,7 @@
 
           <!-- 第三阶段：选择模板 -->
           <div v-if="currentStep === 3" class="step-content">
-            <h3>选择{{ getOutputModeLabel() }}模板</h3>
+            <h3>{{ t('home.chooseTemplate', { format: getOutputModeLabel() }) }}</h3>
 
             <!-- 不使用模板选项 -->
             <div class="no-template-option">
@@ -166,8 +164,8 @@
                 <div class="no-template-content">
                   <t-icon name="file-add" theme="default" size="32px" />
                   <div class="no-template-text">
-                    <h4>不使用模板</h4>
-                    <p>从头开始创建论文，完全自定义内容结构</p>
+                    <h4>{{ t('home.noTemplate') }}</h4>
+                    <p>{{ t('home.noTemplateDescription') }}</p>
                   </div>
                   <div v-if="selectedTemplateId === null" class="selection-indicator">
                     <t-icon name="check-circle-filled" theme="success" />
@@ -178,13 +176,13 @@
 
             <!-- 或者分割线 -->
             <div class="template-divider">
-              <span>或者选择现有{{ getOutputModeLabel() }}模板</span>
+              <span>{{ t('home.existingTemplates', { format: getOutputModeLabel() }) }}</span>
             </div>
 
             <!-- 加载状态 -->
             <div v-if="loading" class="loading-state">
               <t-loading size="large" />
-              <p>正在加载{{ getOutputModeLabel() }}模板...</p>
+              <p>{{ t('home.loadingTemplates', { format: getOutputModeLabel() }) }}</p>
             </div>
 
             <!-- 模板列表 -->
@@ -198,7 +196,7 @@
                 >
                   <t-list-item-meta
                     :title="template.name"
-                    :description="template.description || '暂无描述'"
+                    :description="template.description || t('common.noDescription')"
                   >
                   </t-list-item-meta>
 
@@ -210,7 +208,7 @@
                         size="small"
                         @click.stop="previewTemplate(template)"
                       >
-                        预览
+                        {{ t('common.preview') }}
                       </t-button>
                       <div v-if="selectedTemplateId === template.id">
                         <t-icon name="check-circle-filled" theme="success" />
@@ -222,7 +220,7 @@
                         size="small"
                         @click.stop="selectTemplate(template.id)"
                       >
-                        选择
+                        {{ t('common.select') }}
                       </t-button>
                     </t-space>
                   </template>
@@ -235,16 +233,16 @@
               <div class="no-template-icon">
                 <t-icon name="file" theme="default" size="48px" />
               </div>
-              <h4>暂无{{ getOutputModeLabel() }}模板</h4>
-              <p>您还没有创建任何{{ getOutputModeLabel() }}模板</p>
+              <h4>{{ t('home.noTemplates', { format: getOutputModeLabel() }) }}</h4>
+              <p>{{ t('home.noTemplatesDescription', { format: getOutputModeLabel() }) }}</p>
               <t-button theme="primary" variant="outline" @click="goToTemplatePage">
-                去创建模板
+                {{ t('home.createTemplate') }}
               </t-button>
             </div>
 
             <div class="step-actions">
               <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
-                上一步
+                {{ t('common.previous') }}
               </t-button>
 
               <t-button
@@ -257,7 +255,7 @@
                 <template #icon>
                   <t-icon name="play" />
                 </template>
-                {{ creatingWork ? '创建中...' : '开始工作' }}
+                {{ creatingWork ? t('home.creating') : t('home.start') }}
               </t-button>
             </div>
           </div>
@@ -268,25 +266,34 @@
     <!-- 模板预览对话框 -->
     <t-dialog
       v-model:visible="showPreviewDialog"
-      :header="`模板预览 - ${previewTemplateData?.name}`"
+      :header="t('home.previewTitle', { name: previewTemplateData?.name || '' })"
       :width="isMobile ? '92vw' : '900px'"
       @confirm="closePreviewDialog"
       @cancel="closePreviewDialog"
     >
       <div class="template-preview">
         <div class="template-info">
-          <p><strong>模板名称：</strong>{{ previewTemplateData?.name }}</p>
-          <p><strong>模板描述：</strong>{{ previewTemplateData?.description || '暂无描述' }}</p>
-          <p><strong>模板分类：</strong>{{ previewTemplateData?.category || '未分类' }}</p>
+          <p>
+            <strong>{{ t('home.templateName') }}</strong
+            >{{ previewTemplateData?.name }}
+          </p>
+          <p>
+            <strong>{{ t('home.templateDescription') }}</strong
+            >{{ previewTemplateData?.description || t('common.noDescription') }}
+          </p>
+          <p>
+            <strong>{{ t('home.templateCategory') }}</strong
+            >{{ previewTemplateData?.category || t('common.uncategorized') }}
+          </p>
         </div>
         <div class="template-content">
-          <h4>模板内容：</h4>
+          <h4>{{ t('home.templateContent') }}</h4>
           <div class="content-display">
             <!-- 加载状态 -->
             <div v-if="templatePreviewLoading" class="loading-container">
-              <t-loading size="large" text="加载中..." />
+              <t-loading size="large" :text="t('common.loading')" />
             </div>
-            
+
             <!-- 文本文件预览 -->
             <div v-else-if="templatePreviewData?.type === 'text'" class="text-preview">
               <MarkdownRenderer
@@ -299,19 +306,19 @@
                 :model-value="templatePreviewData.content || ''"
                 readonly
                 :autosize="{ minRows: 15, maxRows: 25 }"
-                placeholder="模板内容加载中..."
+                :placeholder="t('home.contentLoading')"
               />
             </div>
-            
+
             <!-- 图片文件预览 -->
             <div v-else-if="templatePreviewData?.type === 'image'" class="image-preview">
               <img
                 :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
                 :alt="templatePreviewData.filename"
-                style="max-width: 100%; height: auto;"
+                style="max-width: 100%; height: auto"
               />
             </div>
-            
+
             <!-- 二进制文件预览 -->
             <div v-else-if="templatePreviewData?.type === 'binary'" class="binary-preview">
               <!-- DOCX文件使用DocxViewer预览 -->
@@ -322,7 +329,7 @@
                   size: templatePreviewData.size,
                   mime_type: templatePreviewData.mime_type || '',
                   download_url: templatePreviewData.download_url || '',
-                  message: templatePreviewData.message || ''
+                  message: templatePreviewData.message || '',
                 }"
                 :work-id="''"
                 :token="authStore.token || ''"
@@ -330,37 +337,44 @@
               <!-- 其他二进制文件显示下载信息 -->
               <div v-else class="file-info">
                 <t-icon name="file" size="48px" />
-                <p><strong>文件名：</strong>{{ templatePreviewData.filename }}</p>
-                <p><strong>文件大小：</strong>{{ formatFileSize(templatePreviewData.size) }}</p>
-                <p><strong>文件类型：</strong>{{ templatePreviewData.mime_type }}</p>
+                <p>
+                  <strong>{{ t('home.filename') }}</strong
+                  >{{ templatePreviewData.filename }}
+                </p>
+                <p>
+                  <strong>{{ t('home.fileSize') }}</strong
+                  >{{ formatFileSize(templatePreviewData.size) }}
+                </p>
+                <p>
+                  <strong>{{ t('home.fileType') }}</strong
+                  >{{ templatePreviewData.mime_type }}
+                </p>
                 <p>{{ templatePreviewData.message }}</p>
-                <t-button 
-                  theme="primary" 
-                  @click="downloadTemplateFile"
-                  style="margin-top: 16px;"
-                >
-                  下载文件
+                <t-button theme="primary" @click="downloadTemplateFile" style="margin-top: 16px">
+                  {{ t('common.download') }}
                 </t-button>
               </div>
             </div>
-            
+
             <!-- 预览失败 -->
             <div v-else-if="templatePreviewError" class="error-preview">
               <t-icon name="error-circle" size="48px" />
-              <p>模板预览加载失败</p>
-              <p>{{ templatePreviewError }}</p>
+              <p>{{ t('home.previewFailed') }}</p>
+              <p>{{ t(templatePreviewError) }}</p>
             </div>
           </div>
         </div>
       </div>
       <template #footer>
-        <t-button theme="primary" @click="closePreviewDialog">关闭</t-button>
+        <t-button theme="primary" @click="closePreviewDialog">{{ t('common.close') }}</t-button>
       </template>
     </t-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -373,6 +387,7 @@ import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import DocxViewer from '@/components/DocxViewer.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
+const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 const { isMobile } = useBreakpoint()
@@ -411,7 +426,7 @@ const loading = ref(false)
 const creatingWork = ref(false)
 
 // 用户名
-const userName = computed(() => authStore.currentUser?.username || '用户')
+const userName = computed(() => authStore.currentUser?.username || t('common.user'))
 
 // 当前选中的历史工作ID
 const activeHistoryId = ref<number | null>(null)
@@ -441,11 +456,16 @@ const loadUserTemplates = async () => {
 
   loading.value = true
   try {
-    const templates = await templateAPI.getUserTemplates(authStore.token, 0, 100, selectedOutputMode.value)
+    const templates = await templateAPI.getUserTemplates(
+      authStore.token,
+      0,
+      100,
+      selectedOutputMode.value,
+    )
     availableTemplates.value = templates
   } catch (error) {
     console.error('加载模板失败:', error)
-    MessagePlugin.error('加载模板失败')
+    MessagePlugin.error(t('home.loadTemplatesFailed'))
   } finally {
     loading.value = false
   }
@@ -462,7 +482,6 @@ const nextStep = () => {
     currentStep.value++
   }
 }
-
 
 // 选择输出格式
 const selectOutputMode = (mode: 'markdown' | 'word' | 'latex') => {
@@ -501,14 +520,14 @@ const previewTemplate = async (template: PaperTemplate) => {
   try {
     const result = await templateAPI.getTemplatePreview(authStore.token, template.id)
     templatePreviewData.value = result
-    
+
     // 为了向后兼容，如果是文本类型，也设置templateContent
     if (result.type === 'text') {
       templateContent.value = result.content || ''
     }
   } catch (error) {
-    templatePreviewError.value = '加载模板预览失败'
-    MessagePlugin.error('加载模板预览失败')
+    templatePreviewError.value = 'home.previewFailed'
+    MessagePlugin.error(t('home.previewFailed'))
     console.error('加载模板预览失败:', error)
   } finally {
     templatePreviewLoading.value = false
@@ -548,12 +567,12 @@ const goToTemplatePage = () => {
 
 // 上传成功回调
 const onUploadSuccess = (response: any, file: any) => {
-  MessagePlugin.success(`文件 ${file.name} 上传成功`)
+  MessagePlugin.success(t('home.fileUploaded', { name: file.name }))
 }
 
 // 上传失败回调
 const onUploadFail = (error: any, file: any) => {
-  MessagePlugin.error(`文件 ${file.name} 上传失败`)
+  MessagePlugin.error(t('home.fileUploadFailed', { name: file.name }))
 }
 
 // 格式化上传响应
@@ -577,7 +596,13 @@ const startWork = async () => {
     // 创建工作数据，标题用空格作为初始值
     const workData: WorkCreate = {
       title: ' ', // 用空格作为初始标题，后续由AI生成
-      description: `研究问题：${researchQuestion.value}\n${selectedTemplateId.value ? `使用模板：${getSelectedTemplateName()}` : '不使用模板，从头开始创建'}\n输出格式：${getOutputModeLabel()}\n`,
+      description: t('home.workDescription', {
+        question: researchQuestion.value,
+        template: selectedTemplateId.value
+          ? t('home.usingTemplate', { name: getSelectedTemplateName() })
+          : t('home.startFromScratch'),
+        format: getOutputModeLabel(),
+      }),
       tags: '研究,论文,AI生成',
       template_id: selectedTemplateId.value || undefined, // 如果为null则传undefined
       output_mode: selectedOutputMode.value, // 添加输出模式
@@ -595,13 +620,13 @@ const startWork = async () => {
       await uploadAttachments(newWork.work_id)
     }
 
-    MessagePlugin.success('工作创建成功！')
+    MessagePlugin.success(t('home.workCreated'))
 
     // 跳转到工作页面
     router.push(`/work/${newWork.work_id}`)
   } catch (error) {
     console.error('创建工作失败:', error)
-    MessagePlugin.error('创建工作失败，请重试')
+    MessagePlugin.error(t('home.createWorkFailed'))
   } finally {
     creatingWork.value = false
     tempWorkId.value = null
@@ -617,7 +642,7 @@ const uploadAttachments = async (workId: string) => {
       const result = await attachmentAPI.uploadAttachment(
         authStore.token!,
         workId,
-        file.raw || file
+        file.raw || file,
       )
       console.log('附件上传成功:', result)
       return result
@@ -629,25 +654,30 @@ const uploadAttachments = async (workId: string) => {
 
   try {
     const results = await Promise.allSettled(uploadPromises)
-    const failed = results.filter(result => result.status === 'rejected')
+    const failed = results.filter((result) => result.status === 'rejected')
 
     if (failed.length > 0) {
-      MessagePlugin.warning(`${failed.length} 个文件上传失败，${results.length - failed.length} 个文件上传成功`)
+      MessagePlugin.warning(
+        t('home.partialUpload', {
+          failed: failed.length,
+          succeeded: results.length - failed.length,
+        }),
+      )
     } else {
-      MessagePlugin.success(`所有 ${results.length} 个附件上传成功`)
+      MessagePlugin.success(t('home.attachmentsUploaded', { count: results.length }))
     }
   } catch (error) {
-    MessagePlugin.error('附件上传过程中出现错误')
+    MessagePlugin.error(t('home.uploadError'))
   }
 }
 
 // 获取选中的模板名称
 const getSelectedTemplateName = () => {
   if (selectedTemplateId.value === null) {
-    return '不使用模板'
+    return t('home.noTemplate')
   }
   const template = availableTemplates.value.find((t) => t.id === selectedTemplateId.value)
-  return template ? template.name : '未选择'
+  return template ? template.name : t('home.notSelected')
 }
 
 // 获取输出模式标签
@@ -655,7 +685,7 @@ const getOutputModeLabel = () => {
   const labels = {
     markdown: 'Markdown',
     word: 'Word (.docx)',
-    latex: 'LaTeX'
+    latex: 'LaTeX',
   }
   return labels[selectedOutputMode.value]
 }
@@ -683,6 +713,11 @@ const selectHistory = (id: number) => {
 </script>
 
 <style scoped>
+.language-control {
+  align-self: flex-end;
+  margin-bottom: 20px;
+}
+
 .home-page {
   display: flex;
   height: 100vh;
