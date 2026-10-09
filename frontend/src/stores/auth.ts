@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authAPI, type UserResponse, type UserRegisterData, type UserLoginData } from '@/api/auth'
+import i18n from '@/lang'
 
 export const useAuthStore = defineStore(
   'auth',
@@ -62,7 +63,7 @@ export const useAuthStore = defineStore(
       } catch (error) {
         return {
           success: false,
-          error: error instanceof Error ? error.message : '注册失败',
+          error: error instanceof Error ? error.message : i18n.global.t('login.registerFailed'),
         }
       } finally {
         loading.value = false
@@ -86,7 +87,7 @@ export const useAuthStore = defineStore(
       } catch (error) {
         return {
           success: false,
-          error: error instanceof Error ? error.message : '登录失败',
+          error: error instanceof Error ? error.message : i18n.global.t('login.failed'),
         }
       } finally {
         loading.value = false
@@ -108,14 +109,14 @@ export const useAuthStore = defineStore(
         localStorage.setItem('auth_token', accessToken)
         await loadCurrentUser()
         if (!user.value) {
-          return { success: false, error: '登录失败' }
+          return { success: false, error: i18n.global.t('login.failed') }
         }
         return { success: true }
       } catch (error) {
         logout()
         return {
           success: false,
-          error: error instanceof Error ? error.message : '登录失败',
+          error: error instanceof Error ? error.message : i18n.global.t('login.failed'),
         }
       } finally {
         loading.value = false

@@ -18,7 +18,7 @@
           variant="text"
           @click="toggleSidebar"
           class="sidebar-toggle-btn"
-          title="展开/收起侧边栏"
+          :title="t('sidebar.toggle')"
         >
           <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
         </t-button>
@@ -28,19 +28,19 @@
     <!-- 展开状态的内容 -->
     <div class="sidebar-content" v-if="!isSidebarCollapsed">
       <div class="menu-section">
-        <t-button theme="primary" block @click="createNewTask"> 新建工作 </t-button>
+        <t-button theme="primary" block @click="createNewTask">{{ t('sidebar.newWork') }}</t-button>
       </div>
 
       <div class="menu-section">
         <div class="menu-title">
           <browse-icon />
-          <span>历史工作</span>
+          <span>{{ t('sidebar.history') }}</span>
         </div>
         <div class="history-list">
           <!-- 加载状态 -->
           <div v-if="loadingHistory" class="loading-state">
             <t-loading size="small" />
-            <p>加载中...</p>
+            <p>{{ t('common.loading') }}</p>
           </div>
 
           <!-- 历史工作列表 -->
@@ -56,7 +56,7 @@
                 <div class="history-header">
                   <h4>
                     <span v-if="item.title && item.title.trim()">{{ item.title }}</span>
-                    <t-loading v-else size="small" text="生成中" />
+                    <t-loading v-else size="small" :text="t('sidebar.generating')" />
                   </h4>
                   <t-tag
                     v-if="item.status"
@@ -67,8 +67,8 @@
                     {{ getStatusText(item.status) }}
                   </t-tag>
                 </div>
-                <p class="history-date">{{ item.date }}</p>
-                <p class="history-content">{{ item.content }}</p>
+                <p class="history-date">{{ new Date(item.date).toLocaleString(locale) }}</p>
+                <p class="history-content">{{ item.content || t('common.noDescription') }}</p>
               </div>
             </t-card>
           </template>
@@ -77,8 +77,8 @@
           <template v-else>
             <div class="empty-history">
               <t-icon name="browse" class="empty-icon" />
-              <p class="empty-text">暂无历史工作</p>
-              <p class="empty-hint">点击"新建工作"开始您的第一个项目</p>
+              <p class="empty-text">{{ t('sidebar.noHistory') }}</p>
+              <p class="empty-hint">{{ t('sidebar.emptyHint') }}</p>
             </div>
           </template>
         </div>
@@ -108,7 +108,7 @@
         shape="square"
         @click="createNewTask"
         class="sidebar-create-btn"
-        title="新建工作"
+        :title="t('sidebar.newWork')"
       >
         <t-icon name="add" />
       </t-button>
@@ -129,29 +129,18 @@
   </div>
 
   <!-- 手机端侧边栏遮罩 -->
-  <div
-    v-if="isMobile && !isSidebarCollapsed"
-    class="sidebar-backdrop"
-    @click="toggleSidebar"
-  />
+  <div v-if="isMobile && !isSidebarCollapsed" class="sidebar-backdrop" @click="toggleSidebar" />
 
   <!-- 手机端侧边栏收起时的浮动展开按钮 -->
-  <div
-    v-if="isSidebarCollapsed"
-    class="mobile-expand-btn-container"
-  >
-    <t-button
-      theme="primary"
-      shape="round"
-      @click="toggleSidebar"
-      class="mobile-expand-btn"
-    >
+  <div v-if="isSidebarCollapsed" class="mobile-expand-btn-container">
+    <t-button theme="primary" shape="round" @click="toggleSidebar" class="mobile-expand-btn">
       <t-icon name="chevron-right" />
     </t-button>
   </div>
 </template>
 
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { BrowseIcon } from 'tdesign-icons-vue-next'
@@ -176,6 +165,7 @@ interface Emits {
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
+const { t, locale } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 const { isMobile } = useBreakpoint()
@@ -227,7 +217,7 @@ const selectHistory = (item: any) => {
 }
 
 // 用户信息
-const userName = computed(() => authStore.currentUser?.username || '用户')
+const userName = computed(() => authStore.currentUser?.username || t('common.user'))
 const userEmail = computed(() => authStore.currentUser?.email || '')
 const userAvatar = ref('') // 默认头像，如果为空则使用默认头像
 
@@ -244,8 +234,8 @@ const loadUserWorks = async () => {
       id: work.id,
       work_id: work.work_id,
       title: work.title,
-      date: new Date(work.created_at).toLocaleString(),
-      content: work.description || '暂无描述',
+      date: work.created_at,
+      content: work.description || '',
       status: work.status,
     }))
   } catch (error) {
@@ -277,11 +267,11 @@ const getStatusTheme = (status?: string) => {
 const getStatusText = (status?: string) => {
   if (!status) return ''
   const texts: Record<string, string> = {
-    created: '已创建',
-    in_progress: '进行中',
-    completed: '已完成',
-    paused: '已暂停',
-    cancelled: '已取消',
+    created: t('sidebar.created'),
+    in_progress: t('sidebar.inProgress'),
+    completed: t('sidebar.completed'),
+    paused: t('sidebar.paused'),
+    cancelled: t('sidebar.cancelled'),
   }
   return texts[status] || status
 }
@@ -337,38 +327,38 @@ onMounted(() => {
 })
 
 // 用户菜单选项
-const userOptions = [
+const userOptions = computed(() => [
   {
-    content: '我的模板',
+    content: t('sidebar.templates'),
     value: 'template',
     onClick: () => {
       router.push('/template')
     },
   },
   {
-    content: 'API Key 配置',
+    content: t('sidebar.apiKey'),
     value: 'api-key',
     onClick: () => {
       router.push('/api-config')
     },
   },
   {
-    content: 'Passkey 管理',
+    content: t('sidebar.passkeys'),
     value: 'passkey',
     onClick: () => {
       router.push('/passkey')
     },
   },
   {
-    content: '退出登录',
+    content: t('sidebar.logout'),
     value: 'logout',
     onClick: () => {
       authStore.logout()
-      MessagePlugin.success('已退出登录')
+      MessagePlugin.success(t('sidebar.loggedOut'))
       router.push('/login')
     },
   },
-]
+])
 </script>
 
 <style scoped>
@@ -428,7 +418,6 @@ const userOptions = [
   overflow-y: auto;
   min-height: 0;
 }
-
 
 .menu-section {
   margin-bottom: 25px;
@@ -623,7 +612,6 @@ const userOptions = [
   padding: 12px;
 }
 
-
 .sidebar-backdrop {
   display: none;
 }
@@ -658,7 +646,9 @@ const userOptions = [
     width: min(320px, 86vw);
     z-index: 1100;
     transform: translateX(-100%);
-    transition: transform 0.3s ease, width 0.3s ease;
+    transition:
+      transform 0.3s ease,
+      width 0.3s ease;
   }
 
   .sidebar:not(.sidebar-collapsed) {
