@@ -395,41 +395,6 @@ def test_fill_template_table_overwrites_example_rows(tmp_path: Path):
     assert east_asia.get(qn("w:eastAsia")) == "宋体"
 
 
-def test_review_agent_blocks_finished_style_drift(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    system_dir = workspace / ".system"
-    system_dir.mkdir(parents=True)
-
-    template = Document()
-    _set_east_asia_style(template, "Heading 1", "黑体", 16)
-    template.add_paragraph("第一章 DDL", style="Heading 1")
-    template.save(str(system_dir / "_template_original.docx"))
-
-    paper = Document()
-    _set_east_asia_style(paper, "Heading 1", "楷体", 22)
-    paper.add_paragraph("第一章 DDL", style="Heading 1")
-    paper.add_paragraph("已经写了很多正文内容")
-    paper.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 第一章 DDL | ✅ 已完成 | 已写 |\n",
-        encoding="utf-8",
-    )
-
-    module_path = Path(__file__).resolve().parents[1] / "ai_system/core_agents/review_agent.py"
-    spec = importlib.util.spec_from_file_location("review_agent_style_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-
-    reviewer = module.ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "Word模板结构验收未通过" in result.reason
-
-
 def test_analyze_docx_layout_includes_styles_without_images(tmp_path: Path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()

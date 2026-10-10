@@ -187,6 +187,25 @@ async def get_task_status(
     return task_manager.get_task_status(work_id)
 
 
+@router.get("/work/{work_id}/events")
+@route_guard
+async def get_run_events(
+    work_id: str,
+    offset: int = 0,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from services.data_services.crud import get_work
+    from ai_system.runtime.events import EventEmitter
+
+    work = get_work(db, work_id)
+    if not work or work.created_by != current_user_id:
+        raise HTTPException(status_code=403, detail="无权限访问")
+    emitter = EventEmitter(workspace_dir=str(get_workspace_path(work_id)))
+    events = [event.model_dump() for event in emitter.load()]
+    return {"work_id": work_id, "offset": offset, "events": events[max(offset, 0):]}
+
+
 @router.websocket("/ws/{work_id}")
 async def websocket_chat(websocket: WebSocket, work_id: str):
     """WebSocket聊天接口，支持断线重连恢复"""
@@ -279,6 +298,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         await websocket.send_text(json.dumps({
                             'type': 'json_block',
                             'block': output.data
+                        }))
+                    elif output.type == 'event':
+                        await websocket.send_text(json.dumps({
+                            'type': 'event',
+                            'event': output.data
                         }))
                 except Exception as e:
                     logger.error(f"[RECONNECT] 恢复输出失败: {e}")
@@ -376,6 +400,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     """消息完成回调"""
                     logger.debug(f"消息完成，角色: {role}, 长度: {len(content)}, JSON块数: {len(self.json_blocks)}")
 
+                async def on_event(self, event: dict):
+                    task_manager.add_output(self.work_id, "event", event)
+                    try:
+                        await manager.send_message(self.work_id, json.dumps({
+                            "type": "event",
+                            "event": event,
+                        }))
+                    except Exception as e:
+                        logger.error(f"发送AG-UI事件失败: {e}")
+
                 async def on_json_block(self, block: dict):
                     """处理JSON格式的数据块"""
                     self.json_blocks.append(block)
@@ -408,7 +442,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             stream_manager = PersistentStreamManager(
                 stream_callback=ws_callback,
                 chat_service=chat_service,  # 传入chat_service实例以支持消息持久化
-                session_id=str(session.session_id)
+                session_id=str(session.session_id),
+                workspace_dir=workspace_dir,
+                thread_id=work_id,
             )
             
             # 创建任务记录
@@ -440,12 +476,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     writer_llm = create_llm_from_model_config(writer_model_config)
-                    logger.info(f"使用LangChain模型作为WriterAgent: {writer_llm}")
+                    logger.info(f"使用 writing 配置作为草稿模型: {writer_llm}")
                 except Exception as e:
-                    logger.error(f"创建WriterAgent专用LangChain模型失败: {e}")
+                    logger.error(f"创建草稿模型失败: {e}")
                     writer_llm = None
             else:
-                logger.info("未提供writer配置，WriterAgent将使用主LLM")
+                logger.info("未提供 writing 配置，草稿节点将使用主 LLM")
                 writer_llm = None
 
             # 获取工作的模板ID和输出模式

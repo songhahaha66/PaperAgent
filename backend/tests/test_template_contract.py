@@ -1,7 +1,6 @@
 from pathlib import Path
 import sys
 import asyncio
-import importlib.util
 import importlib
 import subprocess
 from unittest.mock import Mock
@@ -25,19 +24,11 @@ from services.file_services.template_contract import (
     delete_template_analysis,
     ensure_template_analysis,
     read_template_analysis,
+    update_template_slots,
 )
 from services.file_services.plan_reconciler import PlanReconciler
 from ai_system.core_tools.file_tools import FileTools
 from ai_system.core_tools.docx_tools import DocxTools
-
-
-def _load_review_agent_class():
-    module_path = Path(__file__).resolve().parents[1] / "ai_system/core_agents/review_agent.py"
-    spec = importlib.util.spec_from_file_location("review_agent_for_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module.ReviewAgent
 
 
 def _load_work_routes_module():
@@ -136,9 +127,37 @@ def test_prepare_workspace_reuses_word_style_profile(tmp_path: Path, monkeypatch
 
     assert applied is True
     assert (tmp_path / ".analysis" / "12" / STYLE_PROFILE_FILENAME).exists()
+    assert (tmp_path / ".analysis" / "12" / "spec.json").exists()
     assert (workspace / CONTRACT_PATH).exists()
+    assert (workspace / ".system" / "template_spec.json").exists()
     assert "宋体" in (workspace / CONTRACT_PATH).read_text(encoding="utf-8")
     assert (workspace / "paper.docx").exists()
+    analysis = read_template_analysis(12)
+    assert analysis["has_spec"] is True
+    assert analysis["slot_count"] >= 1
+
+
+def test_update_template_slots_marks_human_source(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "services.file_services.template_contract.get_templates_path",
+        lambda: tmp_path,
+    )
+    source = tmp_path / "slots.docx"
+    doc = Document()
+    doc.add_paragraph("请在此处填写实验步骤")
+    doc.save(str(source))
+    analyze_and_store_template(source, 33, "槽位模板", "word")
+    analysis = read_template_analysis(33)
+    assert analysis["slots"]
+    target = analysis["slots"][0]
+    updated = update_template_slots(
+        33,
+        [{"id": target["id"], "role": "placeholder_fill", "title": target["title"]}],
+    )
+    confirmed = next(slot for slot in updated["slots"] if slot["id"] == target["id"])
+    assert confirmed["source"] == "human"
+    assert confirmed["confidence"] == 1.0
+    assert confirmed["role"] == "placeholder_fill"
 
 
 def test_delete_template_analysis_removes_sidecar_dir(tmp_path: Path, monkeypatch):
@@ -276,39 +295,7 @@ def test_repair_template_structure_restores_heading_text(tmp_path: Path):
     assert structured["evidence"]["docx_template_issues"] == []
 
 
-def test_review_agent_blocks_word_template_heading_drift(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    system_dir = workspace / ".system"
-    system_dir.mkdir(parents=True)
-
-    template = Document()
-    template.add_paragraph("第一章 DDL", style="Heading 1")
-    template.add_paragraph("1.2.1 创建数据表", style="Heading 4")
-    template.add_paragraph("执行代码：")
-    template.save(str(system_dir / "_template_original.docx"))
-
-    paper = Document()
-    paper.add_paragraph("第一章 DDL", style="Heading 1")
-    paper.add_paragraph("**写在前面**：错误替换了标题", style="Heading 4")
-    paper.add_paragraph("执行代码：")
-    paper.save(str(workspace / "paper.docx"))
-
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 第一章 DDL | ✅ 已完成 | 已写 |\n",
-        encoding="utf-8",
-    )
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "Word模板结构验收未通过" in result.reason
-
-
-def test_review_agent_allows_dropping_template_instruction_parentheses(tmp_path: Path):
+def test_docx_tools_keeps_canonical_headings_without_instruction_parentheses(tmp_path: Path):
     workspace = tmp_path / "workspace"
     system_dir = workspace / ".system"
     system_dir.mkdir(parents=True)
@@ -344,89 +331,8 @@ def test_review_agent_allows_dropping_template_instruction_parentheses(tmp_path:
         "2.4.2 核心代码",
     ]
 
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    status = reviewer._read_word_status(workspace / "paper.docx", 1)
-    assert "Word结构验收问题" not in status
-
     structured = PlanReconciler(workspace).build_from_markdown((workspace / "plan.md").read_text(encoding="utf-8"))
     assert structured["evidence"]["docx_template_issues"] == []
-
-
-def test_review_agent_blocks_plan_blocked_status_without_llm(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("完整文档正文")
-    doc.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 最终检查与完善 | ❌ 阻塞 | 等待修复 |\n",
-        encoding="utf-8",
-    )
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "阻塞条目" in result.reason
-
-
-def test_review_agent_ignores_status_words_in_template_constraints(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("完整文档正文")
-    doc.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 最终检查与完善 | ✅ 已完成 | 已验收 |\n\n"
-        "<!-- template-constraints:start -->\n"
-        "模板说明：这里可能出现 待写、进行中、阻塞 等普通文字。\n"
-        "<!-- template-constraints:end -->\n",
-        encoding="utf-8",
-    )
-
-    ReviewAgent = _load_review_agent_class()
-    statuses = ReviewAgent._extract_plan_statuses((workspace / "plan.md").read_text(encoding="utf-8"))
-
-    assert statuses == ["completed"]
-    assert not ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")._deterministic_blockers(
-        (workspace / "plan.md").read_text(encoding="utf-8"),
-        "paper.docx: 1000 字节\nWord结构验收: 未发现模板结构问题",
-    )
-
-
-def test_review_agent_blocks_missing_plan_or_paper_without_llm(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "plan.md 不存在" in result.reason
-    assert "paper.docx 不存在" in result.reason
-
-
-def test_review_agent_blocks_unparseable_plan_without_llm(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("完整文档正文")
-    doc.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text("# 写作计划\n\n等待AI分析需求并制定写作计划...\n", encoding="utf-8")
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "未包含可解析的计划状态表" in result.reason
 
 
 def test_plan_reconciler_blocks_completion_when_word_template_drifts(tmp_path: Path):

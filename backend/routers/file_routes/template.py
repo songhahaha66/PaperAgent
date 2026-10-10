@@ -190,6 +190,44 @@ async def get_template_analysis(
     return ensure_template_analysis(template)
 
 
+@router.patch("/{template_id}/analysis/slots", response_model=schemas.TemplateAnalysisResponse)
+@route_guard
+async def update_template_analysis_slots(
+    template_id: int,
+    payload: schemas.TemplateSlotsUpdateRequest,
+    current_user: int = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Write back human-confirmed slot roles for a template spec."""
+    template = crud.get_paper_template(db, template_id)
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template not found"
+        )
+    if template.created_by != current_user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this template"
+        )
+    from services.file_services.template_contract import update_template_slots
+    try:
+        return update_template_slots(
+            template_id,
+            [item.model_dump() for item in payload.slots],
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Template spec not found"
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc)
+        )
+
+
 @router.get("/{template_id}/preview")
 @route_guard
 async def get_template_preview(

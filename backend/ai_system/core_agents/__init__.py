@@ -1,11 +1,6 @@
-"""
-AI系统核心代理模块 - LangChain 重构版本
-包含MainAgent、CodeAgent、WriterAgent等核心代理类
-"""
+"""AI system agents. Writing is owned by the v2 graph; CodeAgent is used by gather."""
 
 from .main_agent import MainAgent
 from .code_agent import CodeAgent
-from .writer_agent import WriterAgent
-from .review_agent import ReviewAgent
 
-__all__ = ['MainAgent', 'CodeAgent', 'WriterAgent', 'ReviewAgent']
+__all__ = ["MainAgent", "CodeAgent"]

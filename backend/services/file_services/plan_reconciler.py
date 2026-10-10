@@ -337,7 +337,7 @@ class PlanReconciler:
         text = f"{item.get('title', '')} {item.get('description', '')}".lower()
         doc = evidence.document_text.lower()
 
-        if self._has_any(text, ["图", "图片", "曲线", "收敛过程图", "figure", "chart", "plot"]):
+        if self._has_any(text, ["图", "图片", "曲线", "figure", "chart", "plot"]):
             return "completed" if evidence.has_output_image else None
 
         if self._has_any(text, ["结构", "大纲", "目录", "outline"]):
@@ -346,9 +346,7 @@ class PlanReconciler:
         section_rules = [
             (["abstract", "摘要"], ["摘要", "abstract"]),
             (["introduction", "引言", "背景"], ["引言", "introduction"]),
-            (["method", "方法", "原理", "算法"], ["方法", "原理", "algorithm", "method", "蒙特卡洛方法原理"]),
-            (["圆周率", "π", "pi", "估计"], ["圆周率", "π", "pi", "估计"]),
-            (["收敛", "convergence"], ["收敛", "convergence"]),
+            (["method", "方法", "原理", "算法"], ["方法", "原理", "algorithm", "method"]),
             (["实验", "结果", "讨论", "results", "discussion"], ["实验", "结果", "讨论", "results", "discussion"]),
             (["结论", "conclusion"], ["结论", "conclusion"]),
             (["参考文献", "references"], ["参考文献", "references"]),
@@ -611,35 +609,9 @@ class PlanReconciler:
             return [f"无法对照Word样式: {exc}"]
 
     def _docx_outline(self, docx_path: Path) -> Dict[str, Any]:
-        import xml.etree.ElementTree as ET
+        from ai_system.template.ooxml_parser import docx_outline
 
-        ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-        with zipfile.ZipFile(docx_path) as archive:
-            document_root = ET.fromstring(archive.read("word/document.xml"))
-            style_names: Dict[str, str] = {}
-            if "word/styles.xml" in archive.namelist():
-                styles_root = ET.fromstring(archive.read("word/styles.xml"))
-                for style in styles_root.findall(".//w:style", ns):
-                    style_id = style.attrib.get(f"{{{ns['w']}}}styleId", "")
-                    name_el = style.find("w:name", ns)
-                    style_names[style_id] = (
-                        name_el.attrib.get(f"{{{ns['w']}}}val", style_id)
-                        if name_el is not None else style_id
-                    )
-
-        headings = []
-        for para in document_root.findall(".//w:p", ns):
-            text = "".join(t.text or "" for t in para.findall(".//w:t", ns)).strip()
-            style_el = para.find("./w:pPr/w:pStyle", ns)
-            style_id = style_el.attrib.get(f"{{{ns['w']}}}val", "") if style_el is not None else ""
-            style_name = style_names.get(style_id, style_id)
-            if style_name.lower().startswith("heading") and text:
-                headings.append((style_name.lower(), text))
-
-        return {
-            "headings": headings,
-            "table_count": len(document_root.findall(".//w:tbl", ns)),
-        }
+        return docx_outline(docx_path)
 
     def _read_docx(self, docx_path: Path) -> tuple[str, int]:
         try:

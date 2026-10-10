@@ -127,14 +127,35 @@ class PaperTemplateResponse(PaperTemplateBase):
         from_attributes = True
 
 
+class TemplateSlotPreview(BaseModel):
+    id: str
+    role: str
+    title: str = ""
+    confidence: float = 0
+    source: str = "ooxml"
+
+
 class TemplateAnalysisResponse(BaseModel):
     template_id: int
     status: str
     contract: str = ""
     image_count: int = 0
     has_style_profile: bool = False
+    has_spec: bool = False
+    slot_count: int = 0
+    slots: list[TemplateSlotPreview] = []
     analyzed_at: Optional[str] = None
     error: Optional[str] = None
+
+
+class TemplateSlotUpdate(BaseModel):
+    id: str
+    role: str
+    title: Optional[str] = None
+
+
+class TemplateSlotsUpdateRequest(BaseModel):
+    slots: list[TemplateSlotUpdate]
 
 # Work相关schemas
 class WorkBase(BaseModel):

@@ -227,6 +227,18 @@ export function useChat() {
               },
             })
             break
+          case 'event':
+            if (data.event?.event_type === 'TEXT_MESSAGE_CONTENT' && data.event.payload?.delta) {
+              fullContent += data.event.payload.delta
+              chatStateManager.dispatch({
+                type: 'UPDATE_MESSAGE',
+                payload: {
+                  id: aiMessageId,
+                  updates: { content: fullContent, isStreaming: true },
+                },
+              })
+            }
+            break
           case 'json_block':
             // JSON块消息
             const currentMessage = messages.value.find((m) => m.id === aiMessageId)

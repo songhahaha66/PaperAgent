@@ -14,12 +14,23 @@ export interface PaperTemplate {
   created_by: number
 }
 
+export interface TemplateSlotPreview {
+  id: string
+  role: string
+  title: string
+  confidence: number
+  source: string
+}
+
 export interface TemplateAnalysis {
   template_id: number
   status: string
   contract: string
   image_count: number
   has_style_profile: boolean
+  has_spec?: boolean
+  slot_count?: number
+  slots?: TemplateSlotPreview[]
   analyzed_at?: string | null
   error?: string | null
 }
@@ -183,6 +194,20 @@ class TemplateAPI {
       headers: {
         Authorization: `Bearer ${token}`,
       },
+    })
+  }
+
+  async updateTemplateSlots(
+    token: string,
+    templateId: number,
+    slots: Array<Pick<TemplateSlotPreview, 'id' | 'role' | 'title'>>,
+  ): Promise<TemplateAnalysis> {
+    return this.request<TemplateAnalysis>(`/templates/${templateId}/analysis/slots`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ slots }),
     })
   }
 
