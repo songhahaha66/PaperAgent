@@ -4,6 +4,7 @@
 """
 
 import os
+import json
 import logging
 from typing import Optional, Union, Dict, Any
 from pathlib import Path
@@ -135,6 +136,10 @@ class FileTools:
                 empty_sections = [s['title'] for s in sections if not s['has_content']]
                 result += f"\n待写章节: {', '.join(empty_sections)}"
 
+            plan_summary = self._format_plan_status_summary()
+            if plan_summary:
+                result += "\n\n" + plan_summary
+
             return result
 
         except Exception as e:
@@ -157,23 +162,13 @@ class FileTools:
             plan_content,
             source="status_check",
         )
-        stats = structured_plan.get("stats", {})
         evidence = structured_plan.get("evidence", {})
-        current_focus = structured_plan.get("current_focus")
 
         result = f"=== {filename} 写作状态 ===\n"
         result += f"文件大小: {file_path.stat().st_size} 字节\n"
         result += f"文档字符数: {evidence.get('document_char_count', 0)}\n"
         result += f"图片数量: {evidence.get('docx_image_count', 0)}\n"
-        result += (
-            f"计划进度: {stats.get('completed', 0)}/{stats.get('total', 0)} 已完成, "
-            f"{stats.get('in_progress', 0)} 进行中, "
-            f"{stats.get('pending', 0)} 待写, "
-            f"{stats.get('blocked', 0)} 阻塞 "
-            f"({stats.get('progress_percent', 0)}%)\n"
-        )
-        if current_focus:
-            result += f"当前阶段: {current_focus.get('title')} ({current_focus.get('status_label')})\n"
+        result += self._render_plan_summary(structured_plan)
 
         issues = evidence.get("docx_template_issues") or []
         if issues:
@@ -194,6 +189,46 @@ class FileTools:
                 )
 
         return result
+
+    def _format_plan_status_summary(self) -> str:
+        try:
+            reconciler = PlanReconciler(Path(self.workspace_dir))
+            plan_md = Path(self.workspace_dir) / "plan.md"
+            if plan_md.exists():
+                structured_plan = reconciler.build_from_markdown(
+                    plan_md.read_text(encoding="utf-8", errors="ignore"),
+                    source="status_check",
+                )
+                return self._render_plan_summary(structured_plan)
+
+            plan_json = Path(self.workspace_dir) / "plan.json"
+            if plan_json.exists():
+                structured_plan = json.loads(plan_json.read_text(encoding="utf-8"))
+                return self._render_plan_summary(structured_plan)
+        except Exception as exc:
+            logger.warning(f"读取结构化计划失败: {exc}")
+        return ""
+
+    @staticmethod
+    def _render_plan_summary(structured_plan: Dict[str, Any]) -> str:
+        stats = structured_plan.get("stats", {})
+        current_focus = structured_plan.get("current_focus")
+        lines = [
+            (
+                f"计划进度: {stats.get('completed', 0)}/{stats.get('total', 0)} 已完成, "
+                f"{stats.get('in_progress', 0)} 进行中, "
+                f"{stats.get('pending', 0)} 待写, "
+                f"{stats.get('blocked', 0)} 阻塞 "
+                f"({stats.get('progress_percent', 0)}%)"
+            )
+        ]
+        if current_focus:
+            lines.append(
+                f"当前阶段: {current_focus.get('title')} ({current_focus.get('status_label')})"
+            )
+        if structured_plan.get("active_phase"):
+            lines.append(f"流程阶段: {structured_plan.get('active_phase')}")
+        return "\n".join(lines) + "\n"
 
     def update_plan(self, plan_content: str) -> str:
         """

@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "format": "prettier --write src/"
+    "format": "prettier --write src/",
+    "test:plan": "node --experimental-strip-types src/utils/plan.contract.test.mjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

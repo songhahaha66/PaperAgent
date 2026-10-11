@@ -101,7 +101,12 @@
           </div>
 
           <div v-if="planData.phases?.length" class="plan-phases">
-            <div v-for="phase in planData.phases" :key="phase.id" class="plan-phase">
+            <div
+              v-for="phase in planData.phases"
+              :key="phase.id"
+              class="plan-phase"
+              :class="phaseClass(phase)"
+            >
               <span class="phase-dot" />
               <span class="phase-title">{{ phase.title }}</span>
             </div>
@@ -132,7 +137,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { PlanData, PlanItemStatus } from '@/api/workspace'
+import type { PlanData, PlanItemStatus, PlanPhase } from '@/api/workspace'
 
 interface Props {
   fileTreeData:
@@ -173,6 +178,18 @@ const emit = defineEmits<Emits>()
 const activeTab = ref('files')
 const isCollapsed = ref(false)
 const selectedFile = ref<string | null>(null)
+
+const phaseClass = (phase: PlanPhase) => {
+  const active =
+    props.planData?.active_phase === phase.id ||
+    phase.status === 'in_progress' ||
+    props.planData?.current_focus?.phase === phase.id
+  return {
+    'is-active': active,
+    'is-complete': phase.status === 'completed' && !active,
+    'is-blocked': phase.status === 'blocked',
+  }
+}
 
 const statusLabel = (status: PlanItemStatus, fallback?: string) => {
   if (fallback) return fallback
@@ -834,6 +851,31 @@ defineExpose({
   min-width: 0;
   color: #777;
   font-size: 11px;
+}
+
+.plan-phase.is-complete {
+  color: #8c8c8c;
+}
+
+.plan-phase.is-complete .phase-dot {
+  background: #8c8c8c;
+}
+
+.plan-phase.is-active {
+  color: #1f1f1f;
+  font-weight: 600;
+}
+
+.plan-phase.is-active .phase-dot {
+  background: #1677ff;
+}
+
+.plan-phase.is-blocked {
+  color: #cf1322;
+}
+
+.plan-phase.is-blocked .phase-dot {
+  background: #cf1322;
 }
 
 .phase-dot {

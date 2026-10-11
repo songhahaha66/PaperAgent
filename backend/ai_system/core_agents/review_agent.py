@@ -11,11 +11,17 @@ from xml.etree import ElementTree as ET
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from config.paths import get_workspaces_path
+
 logger = logging.getLogger(__name__)
 
+PLAN_JSON_NAME = "plan.json"
+_WORK_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
 REVIEW_SYSTEM_PROMPT = """\
-你是一个论文写作任务审查员（ReviewAgent）。你的职责是根据 plan.md 和论文产物的当前状态，
-判断 MainAgent 的写作任务是否已完成，并在未完成时给出精确的续写指令。
+你是一个论文写作任务审查员（ReviewAgent）。你的职责是根据结构化计划（优先 plan.json，
+旧工作区回退 plan.md）和论文产物的当前状态，判断 MainAgent 的写作任务是否已完成，
+并在未完成时给出精确的续写指令。
 
 ## 输出格式（严格 JSON）
 你必须输出一个合法的 JSON 对象，不要输出任何其他内容：
@@ -28,9 +34,9 @@ REVIEW_SYSTEM_PROMPT = """\
 ```
 
 ## 判断标准
-1. 读取 plan.md 中的章节列表，统计「✅ 已完成」vs「⬜ 待写」/「⏳ 进行中」/「❌ 阻塞」数量
+1. 读取计划任务列表，统计 completed / pending / in_progress / blocked 数量
 2. 检查论文文件（paper.md / paper.docx）是否存在且有实质内容
-3. 如果 plan.md 中所有章节都标记为 ✅ 且论文文件有内容、没有阻塞项 → complete=true
+3. 如果全部任务 completed 且论文文件有内容、没有阻塞项 → complete=true
 4. Word 模板模式还要看成品样式：页边距、标题/正文样式、页眉页脚必须与模板一致
 5. 否则 complete=false，在 continuation_prompt 中列出具体缺失的章节和下一步操作
 
@@ -63,6 +69,69 @@ class ReviewAgent:
             return "plan.md 不存在"
         with open(plan_path, "r", encoding="utf-8") as f:
             return f.read().strip() or "plan.md 为空"
+
+    def _confined_workspace_file(self, filename: str) -> Optional[Path]:
+        """Join a basename onto the trusted workspaces root. Never resolve user paths."""
+        if not _WORK_KEY_RE.fullmatch(filename):
+            return None
+        work_key = os.path.basename(str(self.workspace_dir or "").rstrip("/\\"))
+        if not _WORK_KEY_RE.fullmatch(work_key):
+            return None
+        try:
+            allowed_root = get_workspaces_path().resolve()
+            path = (allowed_root / work_key / filename).resolve()
+            if not path.is_relative_to(allowed_root):
+                return None
+            return path
+        except (OSError, RuntimeError, ValueError):
+            return None
+
+    def _load_structured_plan(self) -> Optional[dict]:
+        plan_json_path = self._confined_workspace_file(PLAN_JSON_NAME)
+        if plan_json_path is None or not plan_json_path.exists():
+            return None
+        try:
+            data = json.loads(plan_json_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"plan.json 解析失败，回退到 plan.md: {exc}")
+            return None
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            return data
+        return None
+
+    @staticmethod
+    def _is_placeholder_structured(structured_plan: dict) -> bool:
+        items = structured_plan.get("items") or []
+        if not items:
+            return True
+        source_text = f"{structured_plan.get('source_markdown', '')} {items[0].get('title', '')}"
+        return len(items) == 1 and any(
+            token in source_text for token in ["等待AI", "等待 AI", "等待制定计划", "尚未制定"]
+        )
+
+    def _format_structured_plan(self, structured_plan: dict) -> str:
+        stats = structured_plan.get("stats") or {}
+        current = structured_plan.get("current_focus") or {}
+        lines = [
+            f"title: {structured_plan.get('title', '写作计划')}",
+            f"revision: {structured_plan.get('revision', 0)}",
+            f"active_phase: {structured_plan.get('active_phase')}",
+            (
+                f"stats: {stats.get('completed', 0)}/{stats.get('total', 0)} completed, "
+                f"{stats.get('in_progress', 0)} in_progress, "
+                f"{stats.get('pending', 0)} pending, "
+                f"{stats.get('blocked', 0)} blocked "
+                f"({stats.get('progress_percent', 0)}%)"
+            ),
+        ]
+        if current:
+            lines.append(f"current_focus: {current.get('title')} ({current.get('status')})")
+        for item in structured_plan.get("items") or []:
+            lines.append(
+                f"- [{item.get('status')}] {item.get('id')} {item.get('title')} "
+                f"(phase={item.get('phase')})"
+            )
+        return "\n".join(lines)
 
     def _read_paper_status(self) -> str:
         target = "paper.docx" if self.output_mode == "word" else "paper.md"
@@ -200,14 +269,32 @@ class ReviewAgent:
             summary += "\nWord结构验收: 未发现模板结构问题"
         return summary
 
-    def _deterministic_blockers(self, plan_content: str, paper_status: str) -> list[str]:
+    def _deterministic_blockers(
+        self,
+        plan_content: str,
+        paper_status: str,
+        structured_plan: Optional[dict] = None,
+    ) -> list[str]:
         blockers = []
-        if plan_content in {"plan.md 不存在", "plan.md 为空"}:
+        using_json = bool(structured_plan and isinstance(structured_plan.get("items"), list))
+        if not using_json and plan_content in {"plan.md 不存在", "plan.md 为空"}:
             blockers.append(plan_content)
         if "不存在" in paper_status or "存在但为空" in paper_status:
             blockers.append(paper_status.split("\n", 1)[0])
         if self.output_mode == "word" and "Word结构验收问题:" in paper_status:
             blockers.append("Word模板结构验收未通过")
+
+        if using_json:
+            items = structured_plan.get("items") or []
+            if not items or self._is_placeholder_structured(structured_plan):
+                blockers.append("plan.md 未包含可解析的计划状态表")
+            else:
+                statuses = [item.get("status") for item in items]
+                if any(status in {"pending", "in_progress"} for status in statuses):
+                    blockers.append("计划仍包含待写或进行中条目")
+                if "blocked" in statuses:
+                    blockers.append("计划仍包含阻塞条目")
+            return blockers
 
         statuses = self._extract_plan_statuses(plan_content)
         if not statuses and plan_content not in {"plan.md 不存在", "plan.md 为空"}:
@@ -254,8 +341,9 @@ class ReviewAgent:
 
     async def review(self, user_input: str) -> ReviewResult:
         plan_content = self._read_plan()
+        structured_plan = self._load_structured_plan()
         paper_status = self._read_paper_status()
-        blockers = self._deterministic_blockers(plan_content, paper_status)
+        blockers = self._deterministic_blockers(plan_content, paper_status, structured_plan)
         if blockers:
             return ReviewResult(
                 complete=False,
@@ -270,9 +358,14 @@ class ReviewAgent:
                 ),
             )
 
+        plan_section = (
+            f"## plan.json 结构化计划\n{self._format_structured_plan(structured_plan)}\n\n"
+            if structured_plan else
+            f"## plan.md 内容\n{plan_content}\n\n"
+        )
         user_msg = (
             f"## 用户原始需求\n{user_input}\n\n"
-            f"## plan.md 内容\n{plan_content}\n\n"
+            f"{plan_section}"
             f"## 论文产物状态\n{paper_status}\n\n"
             "请根据以上信息判断任务是否完成，输出 JSON。"
         )
