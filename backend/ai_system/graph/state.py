@@ -101,6 +101,9 @@ class NegativeControl(BaseModel):
     shuffled_run_id: str = Field(description="打印 shuffled_value 的那次执行的 run_id")
     chance: str = Field(description="无信息时的水平，如 AUC 0.5、多数类准确率、常数预测的 LogLoss 或 RMSE")
     higher_is_better: bool = Field(description="指标是否越大越好")
+    baseline_name: str = Field(default="", description="最简单的有信息基线，只用显而易见的结构，如“只用发球方先验胜率”“只用上一期值”")
+    baseline_value: str = Field(default="", description="该基线在同一划分上的同一指标值，必须是 baseline_run_id 那次执行 print 出的数")
+    baseline_run_id: str = Field(default="", description="打印 baseline_value 的那次执行的 run_id")
 
 
 class SolveReport(BaseModel):

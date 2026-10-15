@@ -721,7 +721,7 @@ def test_report_issues_requires_registered_results(tmp_path):
 def test_label_shuffle_control_flags_leakage(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.review import control_issues
+    from ai_system.graph.nodes.review import baseline_gaps, control_issues
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -737,9 +737,14 @@ def test_label_shuffle_control_flags_leakage(tmp_path):
     # 卡尔曼滤波吸收了当期结果：打乱标签后 LogLoss 仍远低于基线，判为泄漏
     leaky = control_issues(ctx, report(value="0.4934", shuffled_value="0.5010", chance="0.6778"))
     assert len(leaky) == 1 and "泄漏" in leaky[0]
-    # 打乱后回到无信息水平：通过
-    clean = control_issues(ctx, report(metric="AUC", value="0.71", shuffled_value="0.502", chance="0.5", higher_is_better=True))
-    assert clean == []
+    # 打乱后回到无信息水平、且优于简单基线：通过
+    auc = dict(metric="AUC", value="0.71", shuffled_value="0.502", chance="0.5", higher_is_better=True, baseline_run_id=run_id)
+    assert control_issues(ctx, report(**auc, baseline_value="0.502")) == []
+    # 没给简单基线：要补
+    assert "最简单的有信息基线" in control_issues(ctx, report(**{**auc, "baseline_run_id": ""}))[0]
+    # 没超过简单基线（Q1 的滤波势头只是复现了发球方先验）：不是返工能消掉的问题，记为基线差距
+    flat = report(**auc, baseline_value="0.71")
+    assert control_issues(ctx, flat) == [] and "没有优于基线" in baseline_gaps(ctx, flat)[0]
     # 打乱后的值不在输出里：不能通过
     assert "无法核对" in control_issues(ctx, report(value="0.4934", shuffled_value="0.6801", chance="0.6778"))[0]
     # 报告了 AUC 却没做对照

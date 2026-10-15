@@ -27,7 +27,7 @@ from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from .explore import explore, promotion_message
-from .review import control_issues, feedback_message, report_issues, review_solution
+from .review import baseline_gaps, control_issues, feedback_message, report_issues, review_solution
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,8 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
 - 报告预测效果（AUC、准确率、LogLoss、RMSE 等）时必须做标签置换对照：把原始结果列（如每一分的胜者）在构造任何特征和标签之前随机打乱，
   其余流程完全不变，重新算一遍同一指标；只打乱训练集标签不算，print 并登记真实值和打乱后的值，填进报告的 controls。打乱后指标仍明显好于无信息水平，说明存在泄漏。
+  同一划分上还要算一个最简单的有信息基线（如只用发球方先验胜率、只用上一期值），一并登记填进 controls；
+  模型没有超过这个基线时，结论只能说预测信息来自基线已有的结构。
   假设检验（自相关、游程、卡方等）不需要这种对照：检验的零分布本身就是对照，controls 留空。
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 
@@ -277,22 +279,31 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     try:
         result = await run_agent(agent, messages, limit)
         structured = result.get("structured_response")
-        # 审查结果，必须修正的问题交回同一个循环（内核变量还在）
-        for _ in range(ctx.max_review_rounds):
+        # 审查结果，必须修正的问题交回同一个循环（内核变量还在）。
+        # 模型审查之后再多一轮只看确定性检查（登记、引用、置换对照）：返工时模型常常补了计算却忘了改报告
+        rounds = ctx.max_review_rounds + 1 if ctx.max_review_rounds else 0
+        for round_index in range(rounds):
             if structured is None:
                 break
-            # 标签置换对照、结论数字可追溯是确定性检查，模型审查失败时也照样生效
-            leaks = report_issues(ctx, structured.model_dump(), subproblem_id)
-            try:
-                review = await review_solution(ctx, branch, structured.model_dump(), run_log)
-            except Exception as exc:  # 审查失败不能丢掉已经交上来的报告
-                logger.warning("审查 %s 失败，跳过审查: %s", subproblem_id, exc)
-                if not leaks:
+            current = structured.model_dump()
+            fixes = report_issues(ctx, current, subproblem_id)
+            if round_index == ctx.max_review_rounds:
+                if not fixes:
                     break
-                review = ResultReview(sound=False)
-            if leaks:
-                review.must_fix = leaks + review.must_fix
-                review.sound = False
+                review = ResultReview(sound=False, must_fix=fixes)
+            else:
+                gaps = [f"{gap}请把相应结论改写为“相对基线没有额外提升”并标为不显著，或者改进模型后重新评估。"
+                        for gap in baseline_gaps(ctx, current)] if round_index == 0 else []
+                try:
+                    review = await review_solution(ctx, branch, current, run_log)
+                except Exception as exc:  # 审查失败不能丢掉已经交上来的报告
+                    logger.warning("审查 %s 失败，跳过审查: %s", subproblem_id, exc)
+                    if not fixes and not gaps:
+                        break
+                    review = ResultReview(sound=False)
+                if fixes or gaps:
+                    review.must_fix = fixes + gaps + review.must_fix
+                    review.sound = False
             reviews.append(review.model_dump())
             if not review.must_fix:
                 break
@@ -303,12 +314,11 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             status = "incomplete"
         else:
             report = structured.model_dump()
-            # 返工轮数用完仍未通过置换对照的，写进局限，写作时不能当作有效的预测结论
+            # 返工轮数用完仍未通过置换对照的、没有超过简单基线的，写进局限，写作时不能当作有效的预测结论
             leaks = control_issues(ctx, report)
-            if leaks:
-                report["limitations"] = list(report.get("limitations") or []) + [
-                    f"预测效果未通过标签置换对照，可能存在数据泄漏，不能作为有效结论：{issue}" for issue in leaks
-                ]
+            report["limitations"] = list(report.get("limitations") or []) + [
+                f"预测效果没有通过对照检查，不能作为有效结论：{issue}" for issue in leaks
+            ] + baseline_gaps(ctx, report)
     except GraphRecursionError:
         status, error = "incomplete", f"超过 {ctx.max_solver_steps} 步仍未完成"
     except Exception as exc:
