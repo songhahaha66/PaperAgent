@@ -3,6 +3,8 @@
 """
 
 import json
+import re
+from typing import Dict, List
 
 from langgraph.runtime import Runtime
 
@@ -76,6 +78,30 @@ async def profile_data(ctx: GraphContext) -> str:
     return clip(text.strip(), MAX_PROFILE_CHARS)
 
 
+# 文书类交付物的标题特征；模型有时在整体思路里说了"写作类"，字段却仍填 compute
+WRITING_TITLE = re.compile(r"备忘录|建议信|公开信|致.{0,12}的?信|信函|memo|letter", re.IGNORECASE)
+
+
+def normalize_plan(subproblems: List[Dict]) -> List[Dict]:
+    """用确定性规则补齐模型漏填的子问题类型和依赖，避免文书类子问题在没有结论时就开写、
+    或后一问在前一问结果出来之前就开跑。只补不删：模型给出的合法依赖全部保留。"""
+    ids = [sp["id"] for sp in subproblems]
+    fixed = []
+    for index, sp in enumerate(subproblems):
+        sp = dict(sp)
+        earlier = ids[:index]
+        if sp.get("kind") != "writing" and WRITING_TITLE.search(sp.get("title", "")):
+            sp["kind"] = "writing"
+        deps = [d for d in sp.get("depends_on") or [] if d in ids and d != sp["id"]]
+        # 问题描述里提到的前序子问题（如"用 Q1 建立的指标"）就是依赖
+        mentioned = [i for i in earlier if re.search(rf"(?<![A-Za-z0-9]){re.escape(i)}(?!\d)", sp.get("question", ""))]
+        if sp["kind"] == "writing" and not deps and not mentioned:
+            mentioned = [s["id"] for s in fixed if s.get("kind") != "writing"]
+        sp["depends_on"] = deps + [d for d in mentioned if d not in deps]
+        fixed.append(sp)
+    return fixed
+
+
 async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("analyze", "in_progress")
@@ -91,6 +117,8 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     if not analysis.subproblems:
         raise RuntimeError("题目分析没有得到任何子问题")
 
+    plan = analysis.model_dump()
+    plan["subproblems"] = normalize_plan(plan["subproblems"])
     ids = [sp.id for sp in analysis.subproblems]
     await ctx.set_stage("analyze", "completed", f"{len(ids)} 个子问题：{'、'.join(ids)}")
     await ctx.events.emit(
@@ -99,7 +127,7 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     )
     return {
         "data_profile": data_profile,
-        "analysis": analysis.model_dump(),
+        "analysis": plan,
         "design_round": 0,
         "repair_round": 0,
         "log": [f"analyze: {len(ids)} subproblems"],

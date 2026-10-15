@@ -49,11 +49,12 @@ class MethodPick(BaseModel):
 
 
 class ModelCandidate(BaseModel):
-    name: str = Field(description="方案名称")
+    # 名称、思路、步骤不能为空：模型偶尔返回全空的占位方案，空字符串也能通过类型校验
+    name: str = Field(min_length=1, description="方案名称")
     method_keys: List[str] = Field(description="使用的方法库 key，可组合多个")
-    idea: str = Field(description="核心思路，2~4 句")
+    idea: str = Field(min_length=1, description="核心思路，2~4 句")
     formulation: str = Field(description="模型的数学表述要点：变量、目标/方程、约束，可用 LaTeX")
-    steps: List[str] = Field(description="求解步骤，每步能用代码实现")
+    steps: List[str] = Field(min_length=1, description="求解步骤，每步能用代码实现")
     assumptions: List[str] = Field(default_factory=list, description="本方案额外需要的假设")
     validation: str = Field(description="如何检验结果和做灵敏度分析")
 
