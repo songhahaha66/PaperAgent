@@ -17,7 +17,6 @@ from services.chat_services.chat_service import ChatService
 from services.chat_services.task_manager import task_manager, TaskStatus
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
-from ai_system.core_agents.main_agent import MainAgent
 from ai_system.graph import PaperGraphAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
@@ -421,15 +420,15 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 stream_manager=stream_manager
             )
 
-            # 获取codeagent的LLM实例（仅使用LangChain模型，禁止SmolAgents）
+            # 求解阶段的模型（"code" 配置）
             codeagent_llm = None
             if codeagent_model_config:
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     codeagent_llm = create_llm_from_model_config(codeagent_model_config)
-                    logger.info(f"使用LangChain模型作为CodeAgent: {codeagent_llm}")
+                    logger.info(f"求解阶段使用 code 配置的模型: {codeagent_llm}")
                 except Exception as e:
-                    logger.error(f"创建CodeAgent专用LangChain模型失败: {e}")
+                    logger.error(f"创建 code 配置模型失败: {e}")
                     codeagent_llm = llm_handler.get_llm_instance()
             else:
                 logger.info("未提供codeagent配置，使用主LLM")
@@ -441,12 +440,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     writer_llm = create_llm_from_model_config(writer_model_config)
-                    logger.info(f"使用LangChain模型作为WriterAgent: {writer_llm}")
+                    logger.info(f"写作阶段使用 writing 配置的模型: {writer_llm}")
                 except Exception as e:
-                    logger.error(f"创建WriterAgent专用LangChain模型失败: {e}")
+                    logger.error(f"创建 writing 配置模型失败: {e}")
                     writer_llm = None
             else:
-                logger.info("未提供writer配置，WriterAgent将使用主LLM")
+                logger.info("未提供 writing 配置，写作使用主模型")
                 writer_llm = None
 
             # 获取工作的模板ID和输出模式
@@ -465,12 +464,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             except Exception as e:
                 logger.warning(f"获取工作配置失败: {e}")
 
-            # 默认走状态图流水线（markdown / word / latex，有无模板都支持）；
-            # AI_PIPELINE=legacy 时退回旧 MainAgent（只留作评测基线，不支持 latex）
-            use_graph = os.getenv("AI_PIPELINE", "v2").lower() != "legacy" or output_mode == "latex"
-            agent_cls = PaperGraphAgent if use_graph else MainAgent
-            logger.info(f"工作 {work_id} 使用 {agent_cls.__name__}")
-            main_agent = agent_cls(
+            logger.info(f"工作 {work_id} 使用状态图流水线，输出 {output_mode}")
+            main_agent = PaperGraphAgent(
                 llm_handler.get_llm_instance(), 
                 stream_manager, 
                 workspace_dir, 

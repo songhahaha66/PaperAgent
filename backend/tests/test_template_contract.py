@@ -1,16 +1,13 @@
 from pathlib import Path
 import sys
-import asyncio
 import importlib.util
 import importlib
-import subprocess
 from unittest.mock import Mock
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from docx import Document
-from docx.enum.style import WD_STYLE_TYPE
 
 from services.file_services.template_contract import (
     CONTRACT_PATH,
@@ -27,17 +24,6 @@ from services.file_services.template_contract import (
     read_template_analysis,
 )
 from services.file_services.plan_reconciler import PlanReconciler
-from ai_system.core_tools.file_tools import FileTools
-from ai_system.core_tools.docx_tools import DocxTools
-
-
-def _load_review_agent_class():
-    module_path = Path(__file__).resolve().parents[1] / "ai_system/core_agents/review_agent.py"
-    spec = importlib.util.spec_from_file_location("review_agent_for_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module.ReviewAgent
 
 
 def _load_work_routes_module():
@@ -188,247 +174,6 @@ def test_plan_system_loads_template_contract_into_plan_md_and_json(tmp_path: Pat
     assert structured["constraints"]["plan_markdown_synced"] is True
 
 
-def test_write_to_template_skips_toc_and_preserves_heading(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.styles.add_style("TOC 1", WD_STYLE_TYPE.PARAGRAPH)
-    doc.add_paragraph("1.2.1 创建数据表", style="TOC 1")
-    doc.add_paragraph("1.2.1 创建数据表", style="Heading 4")
-    doc.add_paragraph("执行代码：")
-    doc.save(str(workspace / "paper.docx"))
-
-    tools = DocxTools(str(workspace))
-    result = asyncio.run(
-        tools.write_to_template(
-            anchor_text="1.2.1 创建数据表",
-            content="这里是实验说明。",
-            position="after",
-        )
-    )
-
-    assert "Error" not in result
-    updated = Document(str(workspace / "paper.docx"))
-    paragraphs = [p.text for p in updated.paragraphs]
-    assert paragraphs[:4] == [
-        "1.2.1 创建数据表",
-        "1.2.1 创建数据表",
-        "这里是实验说明。",
-        "执行代码：",
-    ]
-
-
-def test_write_to_template_rejects_heading_replacement(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("1.2.1 创建数据表", style="Heading 4")
-    doc.save(str(workspace / "paper.docx"))
-
-    tools = DocxTools(str(workspace))
-    result = asyncio.run(
-        tools.write_to_template(
-            anchor_text="1.2.1 创建数据表",
-            content="错误替换标题",
-            position="replace",
-        )
-    )
-
-    assert "禁止替换模板标题段落" in result
-    updated = Document(str(workspace / "paper.docx"))
-    assert updated.paragraphs[0].text == "1.2.1 创建数据表"
-
-
-def test_repair_template_structure_restores_heading_text(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    system_dir = workspace / ".system"
-    system_dir.mkdir(parents=True)
-
-    template = Document()
-    template.add_paragraph("第一章 DDL", style="Heading 1")
-    template.add_paragraph("1.2.1 创建数据表", style="Heading 4")
-    template.add_paragraph("执行代码：")
-    template.save(str(system_dir / "_template_original.docx"))
-
-    paper = Document()
-    paper.add_paragraph("第一章 DDL", style="Heading 1")
-    paper.add_paragraph("**写在前面**：错误替换了标题", style="Heading 4")
-    paper.add_paragraph("正文内容应保留")
-    paper.save(str(workspace / "paper.docx"))
-
-    tools = DocxTools(str(workspace))
-    result = asyncio.run(tools.repair_template_structure())
-
-    assert "已按模板恢复标题骨架" in result
-    updated = Document(str(workspace / "paper.docx"))
-    assert [p.text for p in updated.paragraphs] == [
-        "第一章 DDL",
-        "1.2.1 创建数据表",
-        "正文内容应保留",
-    ]
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 最终检查与完善 | ✅ 已完成 | 已验收 |\n",
-        encoding="utf-8",
-    )
-    structured = PlanReconciler(workspace).build_from_markdown((workspace / "plan.md").read_text(encoding="utf-8"))
-    assert structured["evidence"]["docx_template_issues"] == []
-
-
-def test_review_agent_blocks_word_template_heading_drift(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    system_dir = workspace / ".system"
-    system_dir.mkdir(parents=True)
-
-    template = Document()
-    template.add_paragraph("第一章 DDL", style="Heading 1")
-    template.add_paragraph("1.2.1 创建数据表", style="Heading 4")
-    template.add_paragraph("执行代码：")
-    template.save(str(system_dir / "_template_original.docx"))
-
-    paper = Document()
-    paper.add_paragraph("第一章 DDL", style="Heading 1")
-    paper.add_paragraph("**写在前面**：错误替换了标题", style="Heading 4")
-    paper.add_paragraph("执行代码：")
-    paper.save(str(workspace / "paper.docx"))
-
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 第一章 DDL | ✅ 已完成 | 已写 |\n",
-        encoding="utf-8",
-    )
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "Word模板结构验收未通过" in result.reason
-
-
-def test_review_agent_allows_dropping_template_instruction_parentheses(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    system_dir = workspace / ".system"
-    system_dir.mkdir(parents=True)
-
-    template = Document()
-    template.add_paragraph(
-        "2 项目开发报告（以下内容可根据自己的内容，进行替换更改结构，成稿后删除此括号，包含括号内容）",
-        style="Heading 1",
-    )
-    template.add_paragraph(
-        "2.4.2 核心代码（没有代码，可写制作流程，成稿后删除此括号，包含括号内容）",
-        style="Heading 3",
-    )
-    template.save(str(system_dir / "_template_original.docx"))
-
-    paper = Document()
-    paper.add_paragraph("2 项目开发报告", style="Heading 1")
-    paper.add_paragraph("2.4.2 核心代码", style="Heading 3")
-    paper.save(str(workspace / "paper.docx"))
-
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 2 项目开发报告 | ✅ 已完成 | 已写 |\n",
-        encoding="utf-8",
-    )
-
-    tools = DocxTools(str(workspace))
-    repair = asyncio.run(tools.repair_template_structure())
-    assert "无需修复" in repair
-    assert [p.text for p in Document(str(workspace / "paper.docx")).paragraphs] == [
-        "2 项目开发报告",
-        "2.4.2 核心代码",
-    ]
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    status = reviewer._read_word_status(workspace / "paper.docx", 1)
-    assert "Word结构验收问题" not in status
-
-    structured = PlanReconciler(workspace).build_from_markdown((workspace / "plan.md").read_text(encoding="utf-8"))
-    assert structured["evidence"]["docx_template_issues"] == []
-
-
-def test_review_agent_blocks_plan_blocked_status_without_llm(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("完整文档正文")
-    doc.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 最终检查与完善 | ❌ 阻塞 | 等待修复 |\n",
-        encoding="utf-8",
-    )
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "阻塞条目" in result.reason
-
-
-def test_review_agent_ignores_status_words_in_template_constraints(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("完整文档正文")
-    doc.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 最终检查与完善 | ✅ 已完成 | 已验收 |\n\n"
-        "<!-- template-constraints:start -->\n"
-        "模板说明：这里可能出现 待写、进行中、阻塞 等普通文字。\n"
-        "<!-- template-constraints:end -->\n",
-        encoding="utf-8",
-    )
-
-    ReviewAgent = _load_review_agent_class()
-    statuses = ReviewAgent._extract_plan_statuses((workspace / "plan.md").read_text(encoding="utf-8"))
-
-    assert statuses == ["completed"]
-    assert not ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")._deterministic_blockers(
-        (workspace / "plan.md").read_text(encoding="utf-8"),
-        "paper.docx: 1000 字节\nWord结构验收: 未发现模板结构问题",
-    )
-
-
-def test_review_agent_blocks_missing_plan_or_paper_without_llm(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "plan.md 不存在" in result.reason
-    assert "paper.docx 不存在" in result.reason
-
-
-def test_review_agent_blocks_unparseable_plan_without_llm(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    doc = Document()
-    doc.add_paragraph("完整文档正文")
-    doc.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text("# 写作计划\n\n等待AI分析需求并制定写作计划...\n", encoding="utf-8")
-
-    ReviewAgent = _load_review_agent_class()
-    reviewer = ReviewAgent(llm=None, workspace_dir=str(workspace), output_mode="word")
-    result = asyncio.run(reviewer.review("完成这个实验报告"))
-
-    assert result.complete is False
-    assert "未包含可解析的计划状态表" in result.reason
-
-
 def test_plan_reconciler_blocks_completion_when_word_template_drifts(tmp_path: Path):
     workspace = tmp_path / "workspace"
     system_dir = workspace / ".system"
@@ -552,60 +297,6 @@ def test_plan_reconciler_does_not_complete_metadata_without_document(tmp_path: P
     assert metadata["status"] == "running"
     assert metadata["review_status"] == "blocked"
     assert "论文产物不存在或内容不足" in metadata["review_reason"]
-
-
-def test_get_paper_status_reports_word_template_issues(tmp_path: Path, monkeypatch):
-    workspace = tmp_path / "workspace"
-    system_dir = workspace / ".system"
-    system_dir.mkdir(parents=True)
-
-    template = Document()
-    template.add_paragraph("第一章 DDL", style="Heading 1")
-    template.add_paragraph("1.2.1 创建数据表", style="Heading 4")
-    template.save(str(system_dir / "_template_original.docx"))
-    (system_dir / "template_contract.md").write_text("# 模板契约\n", encoding="utf-8")
-
-    paper = Document()
-    paper.add_paragraph("第一章 DDL", style="Heading 1")
-    paper.add_paragraph("**写在前面**：错误替换了标题", style="Heading 4")
-    paper.save(str(workspace / "paper.docx"))
-    (workspace / "plan.md").write_text(
-        "| 序号 | 章节名 | 状态 | 说明 |\n"
-        "|---|---|---|---|\n"
-        "| 1 | 最终检查与完善 | ❌ 阻塞 | 等待修复 |\n",
-        encoding="utf-8",
-    )
-
-    monkeypatch.setenv("WORKSPACE_DIR", str(workspace))
-    status = FileTools().get_paper_status()
-
-    assert "paper.docx 写作状态" in status
-    assert "Word模板结构验收问题" in status
-    assert "未完成/阻塞任务" in status
-
-
-def test_ai_system_direct_import_uses_backend_config(tmp_path: Path):
-    repo_backend = Path(__file__).resolve().parents[1]
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import os; "
-                f"os.environ['WORKSPACE_DIR'] = {str(tmp_path)!r}; "
-                "from ai_system.core_tools.file_tools import FileTools; "
-                "from config.paths import get_templates_path; "
-                "print(FileTools.__name__, callable(get_templates_path))"
-            ),
-        ],
-        cwd=str(repo_backend),
-        text=True,
-        capture_output=True,
-        timeout=10,
-    )
-
-    assert proc.returncode == 0, proc.stderr
-    assert "FileTools True" in proc.stdout
 
 
 def test_get_work_metadata_reconciles_plan_before_reading(tmp_path: Path, monkeypatch):

@@ -90,42 +90,6 @@ class StreamOutputManager:
             # 直接打印JSON格式
             print(json.dumps(block, ensure_ascii=False), flush=True)
 
-    async def print_main_content(self, content: str):
-        """打印主要内容"""
-        await self.send_json_block("main", content)
-
-    async def print_code_agent_call(self, content: str):
-        """打印代码代理调用"""
-        await self.send_json_block("call_code_agent", content)
-
-    async def print_code_agent_response(self, content: str):
-        """打印代码代理响应"""
-        await self.send_json_block("code_agent", content)
-
-    async def print_code_execution_call(self, content: str):
-        """打印代码执行调用"""
-        await self.send_json_block("call_exec_py", content)
-
-    async def print_code_execution_result(self, content: str):
-        """打印代码执行结果"""
-        await self.send_json_block("exec_py", content)
-
-    async def print_writing_agent_call(self, content: str):
-        """打印写作代理调用"""
-        await self.send_json_block("call_writing_agent", content)
-
-    async def print_writing_agent_response(self, content: str):
-        """打印写作代理响应"""
-        await self.send_json_block("writing_agent", content)
-
-    async def print_content(self, content: str):
-        """打印内容（兼容旧接口）"""
-        await self.print_main_content(content)
-
-    async def print_stream(self, content: str):
-        """流式打印内容（不换行）"""
-        await self._output(content)
-
     async def finalize_message(self):
         """完成当前消息，触发完成回调"""
         if self.stream_callback and self.current_message_buffer.strip():
@@ -277,63 +241,3 @@ class SimpleStreamCallback(StreamCallback):
                 await self.output_queue.put(json.dumps(block, ensure_ascii=False))
             except Exception as e:
                 logger.error(f"JSON块队列写入失败: {e}")
-
-
-class CodeAgentStreamManager(StreamOutputManager):
-    """CodeAgent专用的StreamManager，将输出转发到MainAgent但保持消息隔离"""
-
-    def __init__(self, main_stream_manager: StreamOutputManager, agent_name: str):
-        super().__init__()
-        self.main_stream_manager = main_stream_manager
-        self.agent_name = agent_name
-        self.output_buffer = []
-        self.is_forwarding = True
-
-        logger.info(f"CodeAgentStreamManager初始化完成，代理名称: {agent_name}")
-
-    async def _output(self, content: str):
-        """重写输出方法，转发到MainAgent的StreamManager"""
-        # 缓冲内容
-        self.output_buffer.append(content)
-
-        # 转发到MainAgent的StreamManager
-        if self.main_stream_manager and self.is_forwarding:
-            try:
-                # 使用JSON格式转发CodeAgent的输出
-                await self.main_stream_manager.print_code_agent_response(f"[{self.agent_name}] {content}")
-            except Exception as e:
-                logger.error(f"转发CodeAgent输出失败: {e}")
-
-    async def send_json_block(self, block_type: str, content: str):
-        """转发JSON块"""
-        if self.main_stream_manager and self.is_forwarding:
-            try:
-                # 添加CodeAgent标识
-                await self.main_stream_manager.send_json_block(f"code_agent_{block_type}", f"[{self.agent_name}] {content}")
-            except Exception as e:
-                logger.error(f"转发CodeAgent JSON块失败: {e}")
-
-    async def print_content(self, content: str):
-        """转发内容"""
-        await self._output(content)
-
-    async def print_stream(self, content: str):
-        """流式打印内容（不换行）"""
-        await self._output(content)
-
-    def set_forwarding(self, enabled: bool):
-        """设置是否启用转发"""
-        self.is_forwarding = enabled
-        logger.debug(f"CodeAgent转发状态设置为: {enabled}")
-
-    async def finalize_message(self):
-        """完成消息，清理缓冲区"""
-        self.output_buffer.clear()
-        await super().finalize_message()
-
-        # 发送CodeAgent完成标识
-        if self.main_stream_manager and self.is_forwarding:
-            try:
-                await self.main_stream_manager.send_json_block("code_agent_complete", f"[{self.agent_name}] 任务执行完成")
-            except Exception as e:
-                logger.error(f"发送CodeAgent完成标识失败: {e}")

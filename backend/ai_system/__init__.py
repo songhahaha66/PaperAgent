@@ -1,6 +1,6 @@
 """
 AI系统模块
-包含AI对话、论文生成、代码执行等核心功能
+论文流水线（graph/）、导出（export/）、代码沙箱（sandbox/）、评分（judge/）
 """
 
 import sys
@@ -12,47 +12,4 @@ backend_root = os.path.dirname(os.path.dirname(__file__))
 if backend_root not in sys.path:
     sys.path.insert(0, backend_root)
 
-# 延迟导入避免循环依赖
 __version__ = "0.1.0"
-
-# 定义可导出的类名，但不立即导入
-__all__ = [
-    'MainAgent',
-    'CodeAgent',
-    'LLMHandler',
-    'StreamOutputManager',
-    'CodeExecutor',
-    'FileTools',
-    'TemplateAgentTools'
-    # 'ToolManager'  # 已移除
-]
-
-def _import_core_components():
-    """延迟导入核心组件"""
-    from .core_agents import MainAgent, CodeAgent
-    from .core_handlers.llm_handler import LLMHandler
-    from .core_managers.stream_manager import StreamOutputManager
-    # ToolManager 已移除，不再导入
-    from .core_tools.code_executor import CodeExecutor
-    from .core_tools.file_tools import FileTools
-    from .core_tools.template_tools import TemplateAgentTools
-
-    return {
-        'MainAgent': MainAgent,
-        'CodeAgent': CodeAgent,
-        'LLMHandler': LLMHandler,
-        'StreamOutputManager': StreamOutputManager,
-        # 'ToolManager': ToolManager,  # 已移除
-        'CodeExecutor': CodeExecutor,
-        'FileTools': FileTools,
-        'TemplateAgentTools': TemplateAgentTools
-    }
-
-# 创建模块级别的属性访问器
-def __getattr__(name):
-    """延迟导入属性"""
-    if name in __all__:
-        components = _import_core_components()
-        if name in components:
-            return components[name]
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

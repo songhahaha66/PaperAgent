@@ -1,7 +1,7 @@
 # 数模论文状态图流水线（v2）
 
 `backend/ai_system/graph/` 用 LangGraph 状态图替换原来的单个 ReAct 主循环（MainAgent + ReviewAgent 续写）。
-聊天接口默认走这条流水线，Markdown / Word / LaTeX 输出、有无模板都支持。`AI_PIPELINE=legacy` 时退回旧 MainAgent（代码只留作评测基线，`python -m evals --pipeline legacy`），LaTeX 输出仍走流水线。
+聊天接口只走这条流水线，Markdown / Word / LaTeX 输出、有无模板都支持。旧的 MainAgent / CodeAgent / WriterAgent / ReviewAgent 及其工具已删除；需要复现旧版评测基线时，检出 `12a9041`（删除前最后一个提交）跑 `python -m evals --pipeline legacy`。
 
 ## 流程
 
@@ -165,7 +165,7 @@ analyze → Q1（设计、探索、求解、审查返工）→ Q2（依赖 Q1）
 
 ## 前端事件
 
-流水线通过 `stream_manager.send_json_block` 推送事件，前端 `JsonChatRenderer` 发现消息里有 `paper_*` 事件时改用 `PaperPipelineCard` 汇总显示（`frontend/src/utils/paperPipeline.ts`），旧 MainAgent 的消息仍逐块显示。
+流水线通过 `stream_manager.send_json_block` 推送事件，前端 `JsonChatRenderer` 发现消息里有 `paper_*` 事件时改用 `PaperPipelineCard` 汇总显示（`frontend/src/utils/paperPipeline.ts`），历史会话里的旧消息仍逐块显示。
 
 | 事件 | 内容 | 前端 |
 |---|---|---|
@@ -181,7 +181,6 @@ analyze → Q1（设计、探索、求解、审查返工）→ Q2（依赖 Q1）
 
 | 环境变量 | 作用 |
 |---|---|
-| `AI_PIPELINE=legacy` | 聊天接口退回旧 MainAgent（默认 v2，即本流水线） |
 | `AI_CONFIRM_MODELS=1` | 建模方案需要用户确认 |
 | `AI_DESIGN_AHEAD=1` | 依赖前序的子问题和前序求解同时提前设计（默认关） |
 | `AI_EXPLORE_TOPK` | 求解前试跑几个候选方案（默认 2，设为 1 关闭探索） |
