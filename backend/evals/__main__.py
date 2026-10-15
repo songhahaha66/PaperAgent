@@ -8,7 +8,7 @@
     uv run python -m evals all   --pipeline v2 --bench ... --out eval_runs/v2   # 状态图版本
     uv run python -m evals all   --pipeline v2-no-explore ...                   # 消融：关掉方案探索（另有 v2-no-review / v2-no-consistency）
 
-生成模型：EVAL_MODEL / EVAL_API_KEY / EVAL_PROVIDER(默认 openai) / EVAL_BASE_URL
+生成模型：EVAL_MODEL / EVAL_API_KEY / EVAL_PROVIDER(默认 openai) / EVAL_BASE_URL / EVAL_EXTRA_BODY（JSON，如 {"thinking": {"type": "disabled"}}）
 判分：--judge jev（需要 TYPESAFE_API_KEY，--jev-model 固定版本）
       --judge llm（EVAL_JUDGE_MODEL / EVAL_JUDGE_API_KEY / ...，应与生成模型不同）
       --judge auto（默认：有 Jev key 用 Jev，否则用 LLM 判分）
