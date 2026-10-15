@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 RETRIES = 2
+RETRY_DELAY = 1.5  # 秒，第 n 次失败后等 n 倍
 
 
 def structured_model(llm: Any, schema: Type[T]):
@@ -44,7 +45,9 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
     last_error: Exception | None = None
     for attempt in range(RETRIES + 1):
         try:
-            result = await model.ainvoke(messages)
+            # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
+            # 重试改走纯文本 JSON
+            result = await model.ainvoke(messages) if attempt == 0 else None
             if result is None:
                 # step-5-preview 等模型偶尔无视强制工具调用、直接写文字，改要纯文本 JSON 再解析
                 result = await _ask_json(llm, schema, messages)
@@ -54,7 +57,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
         except Exception as exc:  # 网关偶发错误或模型输出不合 schema
             last_error = exc
             logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, exc)
-            await asyncio.sleep(1.5 * (attempt + 1))
+            await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"结构化输出 {schema.__name__} 失败: {last_error}") from last_error
 
 
@@ -76,7 +79,7 @@ async def call_text(llm: Any, messages: List[BaseMessage]) -> str:
         except Exception as exc:
             last_error = exc
             logger.warning("文本生成第 %d 次失败: %s", attempt + 1, exc)
-            await asyncio.sleep(1.5 * (attempt + 1))
+            await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"文本生成失败: {last_error}") from last_error
 
 

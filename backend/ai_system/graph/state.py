@@ -59,7 +59,8 @@ class ModelCandidate(BaseModel):
 
 
 class CandidateSet(BaseModel):
-    candidates: List[ModelCandidate]
+    # 空列表也能通过校验，模型偶尔这样敷衍；要求至少一个，校验失败会进入重试
+    candidates: List[ModelCandidate] = Field(min_length=1)
 
 
 STRENGTHS = ("显著", "倾向", "不显著")

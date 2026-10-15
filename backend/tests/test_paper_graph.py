@@ -77,6 +77,9 @@ class _Structured:
         if self.schema is MethodPick:
             return MethodPick(method_keys=["arima", "not_a_method", "regression"], reason="r")
         if self.schema is CandidateSet:
+            if any(f"子问题\n{sid} " in messages[-1].content for sid in NO_CANDIDATES):
+                # 真实解析器对不合 schema 的输出会抛校验错误
+                return CandidateSet.model_validate({"candidates": []})
             return CandidateSet(candidates=[_candidate("方案甲"), _candidate("方案乙")])
         if self.schema is ValidationProtocol:
             return ValidationProtocol(applicable=True, metric="留出集 AUC", procedure="按年份留出", baseline="常数预测")
@@ -108,6 +111,8 @@ class _Structured:
 
 # 模拟网关故障：这些子问题在登记第一个结果后失败一次
 FAIL_ONCE: set = set()
+# 这些子问题的候选方案总是空的
+NO_CANDIDATES: set = set()
 
 
 class FakeModel(BaseChatModel):
@@ -129,6 +134,9 @@ class FakeModel(BaseChatModel):
 
     def _respond(self, messages: List[BaseMessage]) -> AIMessage:
         first = next(m for m in messages if isinstance(m, HumanMessage)).content
+        if "JSON Schema" in messages[-1].content:
+            # 结构化调用失败后的纯文本 JSON 重试：假模型同样给不出合格结果
+            return AIMessage(content="无法给出")
         if "开始求解" in first:
             return self._solver_step(first, messages)
         if "开始探索" in first:
@@ -599,3 +607,20 @@ def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path):
         ("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")
     ]
     assert "8.5%" in (ws / "paper.md").read_text(encoding="utf-8")
+
+
+def test_design_falls_back_when_candidates_keep_failing(tmp_path, monkeypatch):
+    from ai_system.graph import llm_utils
+
+    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
+    _Structured.reviewed_q1 = True
+    ws = _make_workspace(tmp_path)
+    NO_CANDIDATES.add("Q2")
+    try:
+        agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge())
+        message = asyncio.run(agent.run(TASK))
+    finally:
+        NO_CANDIDATES.clear()
+    # 一个子问题设计失败不应中止整篇，改由求解者自行设计
+    assert "Q2 政策评估：完成" in message
+    assert (ws / "paper.md").exists()

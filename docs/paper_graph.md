@@ -44,6 +44,9 @@ analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意�
 | `.system/validation.json` | 最近一轮校验问题 |
 | `plan.md` / `plan.json` | 各阶段进度，前端固定展示 |
 
+结构化输出第一次用工具调用；参数不合 schema（如候选方案给了空列表）或模型没调用工具时，重试改为要纯文本 JSON 再校验。
+某个子问题的候选方案多次生成失败时，不中止整篇，改用"求解时自行设计"的方案交给求解循环，失败原因记在 `designs[Qn].design_error`。
+
 外部原因（网关故障、账号受限）让子问题求解失败时，`PaperGraphAgent.resume_failed()` 回到这些子问题开始求解之前的 checkpoint 重放，
 先清掉它们失败时登记的结果；已完成的子问题不重跑。评测里对应 `python -m evals run --pipeline v2 --resume`。
 
