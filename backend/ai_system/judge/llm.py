@@ -7,6 +7,7 @@ LLM 回退判断器：没有 Jev key 时用任意 LangChain 聊天模型回答�
 
 import asyncio
 import json
+import re
 from typing import Any, Literal, Mapping, Optional
 
 from pydantic import BaseModel, Field, create_model
@@ -67,6 +68,29 @@ def _render_question(question: Question) -> str:
 
 
 MAX_ATTEMPTS = 3
+JSON_PATTERN = re.compile(r"\{.*\}", re.S)
+
+
+def _json_instruction(schema: type[BaseModel]) -> str:
+    fields = ", ".join(f'"{name}": ...' for name in schema.model_fields)
+    return (
+        "\n\n## 输出格式\n不要写评审正文，只输出一个 JSON 对象，形如 {" + fields + "}，"
+        "字段含义：" + json.dumps(
+            {name: f.description for name, f in schema.model_fields.items()}, ensure_ascii=False
+        )
+    )
+
+
+def parse_verdict(text: str, schema: type[BaseModel]) -> Optional[BaseModel]:
+    """从纯文本回答里取出最后一个能通过校验的 JSON 对象"""
+    for match in reversed(JSON_PATTERN.findall(text or "")):
+        candidates = [match] + [match[i:] for i in range(1, len(match)) if match[i] == "{"]
+        for candidate in candidates:
+            try:
+                return schema.model_validate(json.loads(candidate))
+            except (ValueError, TypeError):
+                continue
+    return None
 
 
 class LLMJudge:
@@ -94,7 +118,13 @@ class LLMJudge:
                 verdict = await structured.ainvoke(prompt)
                 if verdict is not None:
                     return verdict
-                # 模型偶尔用文字作答而不调用工具，结构化结果为 None
+                # 长材料下模型常无视强制工具调用、直接写评审文字（step-5-preview 读 7 万字论文时必现），
+                # 改为要求纯文本 JSON 再自行解析
+                reply = await self.llm.ainvoke(prompt + _json_instruction(schema))
+                content = reply.content if isinstance(reply.content, str) else str(reply.content)
+                verdict = parse_verdict(content, schema)
+                if verdict is not None:
+                    return verdict
                 last_error = ValueError("模型没有返回结构化结果")
             except Exception as exc:
                 last_error = exc

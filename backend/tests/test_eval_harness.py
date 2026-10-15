@@ -328,3 +328,27 @@ def test_llm_judge_retries_when_model_skips_tool_call(monkeypatch):
 
     answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {"q": Score(instructions="?", criteria=["0", "1", "2"])}))
     assert answers.scores["q"].score == 2.0 and FlakyStructured.calls == 2
+
+
+def test_llm_judge_falls_back_to_plain_json_when_tool_call_ignored():
+    from types import SimpleNamespace
+
+    class IgnoringStructured:
+        async def ainvoke(self, prompt):
+            return None
+
+    class FakeLLM:
+        model_name = "fake"
+        prompts = []
+
+        def with_structured_output(self, schema, **kwargs):
+            return IgnoringStructured()
+
+        async def ainvoke(self, prompt):
+            FakeLLM.prompts.append(prompt)
+            return SimpleNamespace(content='评审意见：整体不错 {"x": 1}\n```json\n{"reason": "结构完整", "level": 3}\n```')
+
+    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {"q": Score(instructions="?", criteria=["0", "1", "2", "3"])}))
+    assert answers.scores["q"].score == 3.0
+    assert answers.scores["q"].reason == "结构完整"
+    assert "只输出一个 JSON 对象" in FakeLLM.prompts[0]
