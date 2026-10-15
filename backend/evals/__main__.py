@@ -67,6 +67,9 @@ async def main(args) -> None:
     if args.command in ("score", "all"):
         judge = build_judge(args.judge, args.jev_model)
         for problem in problems:
+            if not (out_dir / problem.id / "run.json").exists():
+                logging.warning("跳过 %s：还没有运行记录", problem.id)
+                continue
             logging.info("评分 %s", problem.id)
             await score_problem(problem, out_dir, judge)
 
