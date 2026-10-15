@@ -3,8 +3,8 @@
 
     analyze ─┬─(需要人工确认)─Send×N──▶ design ──▶ confirm ─┬─(有修改意见)─Send×N─▶ design
              │                                             └─(通过)─▶ 按依赖分批 Send ─▶ solve ─▶ solve_join ─┐
-             └─(不确认：按需设计，solve 内先设计再求解)──────────────────────▲
-                                                       ▲                                     │
+             └─(不确认：按需设计，solve 内先设计再求解)──────────────────────▲                       │
+                还在等前序结论的子问题同一批 Send 到 predesign 提前设计 ─────────┼──▶ solve_join      │
                                                        └──────────── 还有未求解的子问题 ◀──────┘
     solve_join ──(全部求解)──▶ reconcile（结论一致性）─▶ write ─▶ validate ─┬─(有问题且未超轮数)─▶ repair ─▶ validate
                                                   └─▶ render ─▶ END
@@ -20,7 +20,7 @@ from .context import GraphContext
 from .nodes.analyze import analyze
 from .nodes.confirm import confirm
 from .nodes.consistency import reconcile
-from .nodes.design import design
+from .nodes.design import design, predesign
 from .nodes.solve import ready_subproblems, solve
 from .nodes.validate import render, repair, route_after_validate, validate
 from .nodes.write import write
@@ -52,7 +52,26 @@ def send_solves(state: PaperState) -> Union[List[Send], str]:
             "design": (state.get("designs") or {}).get(sp["id"]),
             "dependencies": {dep: solutions[dep] for dep in sp.get("depends_on") or [] if dep in solutions},
         }))
+    if not state.get("plan_ahead"):
+        sends += send_predesigns(state, {s.arg["subproblem"]["id"] for s in sends})
     return sends
+
+
+def send_predesigns(state: PaperState, starting: set) -> List[Send]:
+    """还在等前序结论、尚未设计的计算类子问题，和这一批求解同时设计"""
+    solutions = state.get("solutions") or {}
+    designs = state.get("designs") or {}
+    return [
+        Send("predesign", {
+            "subproblem": sp,
+            "analysis": state["analysis"],
+            "data_profile": state.get("data_profile", ""),
+            "feedback": state.get("feedback", ""),
+        })
+        for sp in state["analysis"]["subproblems"]
+        if sp["id"] not in solutions and sp["id"] not in designs and sp["id"] not in starting
+        and sp.get("kind") != "writing"
+    ]
 
 
 def route_after_analyze(state: PaperState) -> Union[List[Send], str]:
@@ -79,6 +98,7 @@ def build_graph():
     graph.add_node("design", design)
     graph.add_node("confirm", confirm)
     graph.add_node("solve", solve)
+    graph.add_node("predesign", predesign)
     graph.add_node("solve_join", solve_join)
     graph.add_node("reconcile", reconcile)
     graph.add_node("write", write)
@@ -87,11 +107,12 @@ def build_graph():
     graph.add_node("render", render)
 
     graph.add_edge(START, "analyze")
-    graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "reconcile"])
+    graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "predesign", "reconcile"])
     graph.add_edge("design", "confirm")
-    graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "reconcile"])
+    graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "predesign", "reconcile"])
     graph.add_edge("solve", "solve_join")
-    graph.add_conditional_edges("solve_join", send_solves, ["solve", "reconcile"])
+    graph.add_edge("predesign", "solve_join")
+    graph.add_conditional_edges("solve_join", send_solves, ["solve", "predesign", "reconcile"])
     graph.add_edge("reconcile", "write")
     graph.add_edge("write", "validate")
     graph.add_conditional_edges("validate", route_after_validate, ["repair", "render"])

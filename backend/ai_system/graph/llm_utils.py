@@ -36,6 +36,17 @@ async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage]) -> T
     return parse_verdict(message_text(reply), schema)
 
 
+def cap_output(llm: Any, max_tokens: int) -> Any:
+    """限制单次输出长度：模型偶尔重复输出停不下来，16000 token 按网关约 35 token/秒要等七八分钟"""
+    fields = getattr(type(llm), "model_fields", {})
+    if "max_tokens" not in fields:
+        return llm
+    current = getattr(llm, "max_tokens", None)
+    if current is not None and current <= max_tokens:
+        return llm
+    return llm.model_copy(update={"max_tokens": max_tokens})
+
+
 def as_messages(system: str, user: str) -> List[BaseMessage]:
     return [SystemMessage(content=system), HumanMessage(content=user)]
 

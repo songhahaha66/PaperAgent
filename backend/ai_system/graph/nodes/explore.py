@@ -25,7 +25,7 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
 from ...judge import Score
-from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware
+from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware, TruncationGuardMiddleware
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured
 from ..registry import GroundingError, _parse_number
@@ -232,7 +232,8 @@ async def run_probe(ctx: GraphContext, branch: BranchInput, probe: Probe, protoc
         tools=build_tools(ctx, subproblem_id, probe.run_log, kernel_key=probe.kernel_key, record=False),
         system_prompt=PROBE_SYSTEM.format(steps=ctx.explore_steps),
         response_format=ToolStrategy(ProbeReport),
-        middleware=[CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.explore_steps, 3, PROBE_NUDGE)],
+        middleware=[CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.explore_steps, 3, PROBE_NUDGE),
+                    TruncationGuardMiddleware()],
     )
     task = build_task(branch, ctx, candidate=probe.candidate, extra=protocol_text(protocol), ending="开始探索。")
     try:

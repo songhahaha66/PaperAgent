@@ -19,6 +19,7 @@ from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured
 from ..methods import METHOD_INDEX, describe, methods_catalog
 from ..state import BranchInput, CandidateSet, MethodPick
+from ..tracing import labelled
 
 CRITERIA = {
     "fit": Score(
@@ -161,6 +162,11 @@ SELF_DESIGN = {
 
 async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str]:
     """为一个子问题产出方案记录，返回 (记录, 日志)"""
+    with labelled(f"{branch['subproblem']['id']}:design"):
+        return await _make_design(ctx, branch)
+
+
+async def _make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str]:
     subproblem = branch["subproblem"]
     if subproblem.get("kind") == "writing":
         # 写作类子问题（备忘录、建议信等）不需要建模方案
@@ -206,6 +212,16 @@ async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str
         "critic_error": critic_error,
     }
     return record, f"design {subproblem['id']}: {json.dumps(totals)} -> {chosen_index}"
+
+
+async def predesign(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
+    """按需设计时，还在等前序结论的子问题和前序求解并行设计，不占关键路径
+
+    2024_C 的 Q2 依赖 Q1，原先要等 Q1 求解完（二十多分钟）才开始设计，设计本身又要三分钟。
+    提前设计看不到前序的登记结果（只有题目和整体分析），求解时仍会拿到前序结论和中间数据。
+    """
+    record, log = await make_design(runtime.context, branch)
+    return {"designs": {branch["subproblem"]["id"]: record}, "log": [f"{log} (ahead)"]}
 
 
 async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:

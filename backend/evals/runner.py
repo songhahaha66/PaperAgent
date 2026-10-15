@@ -135,6 +135,10 @@ async def run_problem(
     record["usage"] = _sum_usage(usage_cb.usage_metadata)
     record["usage_by_model"] = usage_cb.usage_metadata
     record["paper_exists"] = (workspace / PAPER_FILENAME).exists()
+    calls_path = workspace / ".system" / "llm_calls.json"
+    if calls_path.exists():
+        # 逐次模型调用的耗时汇总（v2 才有）：慢调用、截断、出错次数和各节点耗时
+        record["llm_calls"] = json.loads(calls_path.read_text(encoding="utf-8")).get("summary")
 
     previous_path = out_dir / problem.id / "run.json"
     if resume:

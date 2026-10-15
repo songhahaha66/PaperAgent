@@ -15,6 +15,7 @@ from services.file_services.plan_reconciler import PlanReconciler
 from services.file_services.workspace_fs import WorkspaceFS
 
 from ..sandbox import PythonKernel
+from .llm_utils import cap_output
 from .registry import ResultRegistry
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,8 @@ STAGES = [
     ("validate", "校验引用与数字，修复问题章节"),
     ("render", "生成 paper.md"),
 ]
+# 编码循环每步只写一段代码，4096 token 足够；不设上限时一次重复输出能把请求拖到网关 300 秒超时
+CODER_MAX_TOKENS = 4096
 STATUS_LABEL = {"pending": "⬜ 待写", "in_progress": "⏳ 进行中", "completed": "✅ 已完成", "blocked": "❌ 阻塞"}
 
 
@@ -127,7 +130,7 @@ class GraphContext:
             kernels=KernelPool(workspace, fs, timeout=options.pop("kernel_timeout", 180.0)),
             events=EventSink(stream_manager),
             planner_llm=planner_llm,
-            coder_llm=coder_llm or planner_llm,
+            coder_llm=cap_output(coder_llm or planner_llm, CODER_MAX_TOKENS),
             writer_llm=writer_llm or planner_llm,
             judge=judge,
             **options,
