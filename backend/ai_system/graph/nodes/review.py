@@ -49,6 +49,20 @@ def _as_float(text: str) -> Optional[float]:
         return None
 
 
+# 常见指标的方向是确定的，不靠模型填：2024_C 里模型把"LogLoss，越小越好"的 higher_is_better 填成了 true，
+# 两个方案都跑通时就会选出更差的那个
+LOWER_IS_BETTER = re.compile(r"loss|损失|误差|error|rmse|mse|mae|mape|brier|aic|bic|困惑度|perplexity|偏差|负对数似然|nll", re.IGNORECASE)
+HIGHER_IS_BETTER = re.compile(r"auc|准确率|accuracy|精确率|precision|召回率|recall|f1|r²|r\^2|r2|决定系数|似然|likelihood|命中率", re.IGNORECASE)
+
+
+def metric_direction(metric: str) -> Optional[bool]:
+    """按指标名判断是否越大越好；认不出时返回 None，沿用模型填写的方向"""
+    lower, higher = bool(LOWER_IS_BETTER.search(metric)), bool(HIGHER_IS_BETTER.search(metric))
+    if lower != higher:
+        return higher
+    return None
+
+
 def leaked(real: float, shuffled: float, chance: float, higher_is_better: bool) -> bool:
     """真实标签相对无信息水平有提升，且打乱标签后仍保留一半以上，判定为泄漏"""
     sign = 1 if higher_is_better else -1
@@ -79,7 +93,8 @@ def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
         if None in (real, shuffled, chance):
             issues.append(f"{c['metric']} 的置换对照里有不是数值的字段，请填写数值")
             continue
-        if leaked(real, shuffled, chance, c.get("higher_is_better", True)):
+        direction = metric_direction(c.get("metric", ""))
+        if leaked(real, shuffled, chance, c.get("higher_is_better", True) if direction is None else direction):
             issues.append(
                 f"{c['metric']} 打乱标签后仍为 {c['shuffled_value']}（无信息水平 {c['chance']}，真实标签下 {c['value']}），"
                 "说明特征构造或评估用到了标签本身的信息（数据泄漏，例如滤波/平滑/滚动统计包含了当期结果）。"
