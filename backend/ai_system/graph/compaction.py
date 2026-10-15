@@ -75,7 +75,7 @@ class StepBudgetMiddleware(AgentMiddleware):
     """步数快用完时提醒模型交报告
 
     超过 recursion_limit 时 LangGraph 直接抛异常，已经做的工作和对话全部丢失（2024_C 试跑中一个探索分支跑了 10 次代码后因此作废）。
-    这里在剩余步数不多时，在请求末尾追加一条提醒；只追加在末尾，不影响前缀缓存。
+    这里在剩余步数不多时，在请求末尾追加一条提醒；只追加在末尾，不影响前缀缓存。最后一步只给报告工具，强制收尾。
     """
 
     def __init__(self, budget: int, reserve: int, message: str):
@@ -90,6 +90,11 @@ class StepBudgetMiddleware(AgentMiddleware):
         # recursion_limit 按单次调用计：只数最后一条用户消息（任务、晋升、返工意见）之后的步数
         last_human = max((i for i, m in enumerate(request.messages) if isinstance(m, HumanMessage)), default=-1)
         steps = sum(1 for m in request.messages[last_human + 1:] if isinstance(m, AIMessage) and m.tool_calls)
+        if steps >= self.budget - 1:
+            # 最后一步只留报告工具（ToolStrategy 下 tool_choice=any，模型只能交报告），不会撞 recursion_limit。
+            # 官方 API 的 deepseek-flash 一步只要几秒、步子很碎，v2l 的 Q1 三分钟用完 40 步没交报告，对话和报告全丢
+            note = HumanMessage(content=f"[系统提醒] 步数已用完，不能再执行代码。{self.message}")
+            return await handler(request.override(messages=[*request.messages, note], tools=[]))
         if steps >= self.budget - self.reserve:
             left = max(self.budget - steps, 0)
             note = HumanMessage(content=f"[系统提醒] 还剩约 {left} 步。{self.message}")
