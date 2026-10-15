@@ -58,8 +58,17 @@ LOWER_IS_BETTER = re.compile(r"loss|损失|误差|error|rmse|mse|mae|mape|brier|
 HIGHER_IS_BETTER = re.compile(r"auc|准确率|accuracy|精确率|precision|召回率|recall|f1|r²|r\^2|r2|决定系数|似然|likelihood|命中率", re.IGNORECASE)
 
 
+# 取了负号的损失（"-LogLoss"、"负对数损失"）越大越好；v2l 的 Q1 用 -LogLoss，按"loss"会被判成越小越好
+NEGATED_LOSS = re.compile(r"(?:^|[^\w])(?:-|−|负|neg_?)\s*(?:log\s*-?loss|loss|对数损失|nll)", re.IGNORECASE)
+# p 值不是预测指标，没有"泄漏"一说：v2l 的 Q2 把点顺序置换后的 p 值填进了 controls，
+# 被按泄漏规则判定，检验结论末尾都被加上了"可能存在数据泄漏"
+P_VALUE_METRIC = re.compile(r"p\s*值|p-?value|显著性", re.IGNORECASE)
+
+
 def metric_direction(metric: str) -> Optional[bool]:
     """按指标名判断是否越大越好；认不出时返回 None，沿用模型填写的方向"""
+    if NEGATED_LOSS.search(metric):
+        return True
     lower, higher = bool(LOWER_IS_BETTER.search(metric)), bool(HIGHER_IS_BETTER.search(metric))
     if lower != higher:
         return higher
@@ -85,17 +94,26 @@ def downgrade_findings(ctx: GraphContext, report: Dict) -> None:
     结论里却还写着"提升主要来自有效信号而非泄漏"，写作时两者互相矛盾。
     """
     leaky = set()
-    for c in report.get("controls") or []:
+    for c in predictive_controls(report):
         real, shuffled, chance = (_as_float(c.get(k, "")) for k in ("value", "shuffled_value", "chance"))
         direction = metric_direction(c.get("metric", ""))
         higher = c.get("higher_is_better", True) if direction is None else direction
         if None not in (real, shuffled, chance) and leaked(real, shuffled, chance, higher):
-            leaky.add(str(c["value"]).strip())
-    leaky_refs = {r.id for r in ctx.registry.results.values() if r.kind != "figure" and r.value.strip() in leaky}
+            leaky.add((str(c["value"]).strip(), c.get("run_id", "")))
+    # 按数值和来源运行一起匹配：只按数值匹配，别的结果碰巧同值也会被降级
+    leaky_refs = {
+        r.id for r in ctx.registry.results.values()
+        if r.kind != "figure" and (r.value.strip(), r.run_id) in leaky
+    }
     for finding in report.get("key_findings") or []:
         if set(find_refs(finding.get("statement", ""))) & leaky_refs:
             finding["strength"] = "不显著"
             finding["statement"] = finding["statement"].rstrip("。") + "（该指标未通过标签置换对照，可能存在数据泄漏）"
+
+
+def predictive_controls(report: Dict) -> List[Dict]:
+    """controls 里真正的预测指标（去掉 p 值这类检验结果）"""
+    return [c for c in report.get("controls") or [] if not P_VALUE_METRIC.search(c.get("metric", ""))]
 
 
 def baseline_gaps(ctx: GraphContext, report: Dict) -> List[str]:
@@ -109,7 +127,7 @@ def control_findings(ctx: GraphContext, report: Dict, hypothesis: bool = False) 
     hypothesis=True（假设检验类子问题）时不要求置换对照：检验的零分布本身就是对照。
     v2h 的 Q2 报告里出现了"检验功效""95%"等字样，被当成预测效果要求做置换对照，与求解提示矛盾。
     """
-    controls = report.get("controls") or []
+    controls = predictive_controls(report)
     text = " ".join([report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])])
     if not controls:
         if not hypothesis and PREDICTIVE.search(ctx.registry.render(text)):
@@ -234,6 +252,39 @@ def foreign_refs(ctx: GraphContext, report: Dict, subproblem_id: str, dependenci
     ]
 
 
+# 这些量只能落在 [0, 1]（或 0-100%）里；紧挨在引用前面出现时，用来发现引错编号的结论
+UNIT_INTERVAL_METRIC = re.compile(
+    r"(?:(?<![A-Za-z])p|AUC|C-?index|Brier|准确率|召回率|精确率|概率)\s*(?:值)?\s*(?:[=＝≈<>≤≥]|为|是|约为?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def implausible_refs(ctx: GraphContext, report: Dict) -> List[str]:
+    """结论里 "p = {{R:Rn}}"、"AUC 为 {{R:Rn}}" 引用的值不在 [0, 1] 内：多半是引错了编号
+
+    v2l 的结论写出了 "p=9.6546"、"AUC=426 个"、"C-index -0.0789"：数值本身都是登记过的，
+    只是引用指向了统计量、事件数这些别的结果。登记表只保证数字算过，保证不了引用对得上，审查到写作阶段才发现，已经改不了了。
+    """
+    texts = [report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])]
+    bad: List[str] = []
+    for text in texts:
+        for match in REF_PATTERN.finditer(text):
+            metric = UNIT_INTERVAL_METRIC.search(text[max(0, match.start() - 12):match.start()])
+            result = ctx.registry.get(match.group(2))
+            if not metric or result is None or result.kind == "figure":
+                continue
+            value = _as_float(result.value)
+            if value is not None and not 0 <= value <= 1:
+                bad.append(f"{metric.group(0).strip()} {match.group(0)}（登记值 {result.value}，名称「{result.name}」）")
+    if not bad:
+        return []
+    return [
+        "这些引用前写的是只能在 0 到 1 之间的量，但引用的登记值不在这个范围，多半引错了编号："
+        + "；".join(dict.fromkeys(bad))
+        + "。请对照登记表改成正确的结果编号；需要的量还没登记的，print 出来登记后再引用。"
+    ]
+
+
 MIN_SUMMARY_CHARS = 8
 
 
@@ -271,6 +322,7 @@ def report_issues(
         foreign_refs(ctx, report, subproblem_id, dependencies or [])
         + control_issues(ctx, report, hypothesis)
         + ungrounded_findings(report)
+        + implausible_refs(ctx, report)
     )
     if figure_required and not any(r.kind == "figure" for r in ctx.registry.for_subproblem(subproblem_id)):
         # v2h 的 Q1 要求"可视化比赛流向"却一张图都没登记，写作时编了一个不存在的 {{F:F1}}
