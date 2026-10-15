@@ -51,6 +51,7 @@ def _analysis() -> ProblemAnalysis:
         subproblems=[
             Subproblem(id="Q1", title="用电量预测", question="预测 2025 年用电量", deliverables=["预测值"]),
             Subproblem(id="Q2", title="政策评估", question="评估节能政策", depends_on=["Q1"]),
+            Subproblem(id="Q3", title="致市长的建议信", question="给市长写一封建议信", kind="writing", depends_on=["Q1", "Q2"]),
         ],
         assumptions=["数据真实可靠"],
     )
@@ -141,7 +142,8 @@ class FakeModel(BaseChatModel):
         sid = re.search(r"# 子问题 (Q\d)", task).group(1)
         tool_results = [m for m in messages if isinstance(m, ToolMessage)]
         last = tool_results[-1].content if tool_results else ""
-        run_id = re.search(r"\[run_id: (\S+)\]", last).group(1) if "run_id" in last else ""
+        found = re.search(r"\[run_id: (\S+)\]", last)
+        run_id = found.group(1) if found else ""
         step = len(tool_results)
         if step == 2 and sid in FAIL_ONCE:
             FAIL_ONCE.discard(sid)
@@ -149,8 +151,10 @@ class FakeModel(BaseChatModel):
         value = "1234.57" if sid == "Q1" else "8.5%"
         script = [
             ("run_python", {"code": "forecast = 1234.5678\nprint('forecast', forecast)\nprint('saving', 0.085)"}),
-            ("record_result", {"name": "预测值" if sid == "Q1" else "节电比例", "value": value, "run_id": run_id, "unit": "万千瓦时" if sid == "Q1" else ""}),
-            ("record_result", {"name": "编造值", "value": "99.99", "run_id": run_id}),
+            ("record_results", {"items": [
+                {"name": "预测值" if sid == "Q1" else "节电比例", "value": value, "run_id": run_id, "unit": "万千瓦时" if sid == "Q1" else ""},
+                {"name": "编造值", "value": "99.99", "run_id": run_id},
+            ]}),
             ("run_python", {"code": "import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])"}),
             ("record_figure", {"run_id": run_id, "figure": "figure_1.png", "caption": f"{sid} 结果图"}),
             ("SolveReport", {
@@ -223,7 +227,8 @@ def test_graph_end_to_end_offline(tmp_path):
     FakeModel.text_calls = []
     ws = _make_workspace(tmp_path)
     model = FakeModel()
-    ctx = _context(ws, model)
+    # 评审分差 8 分，默认会跳过试跑；放宽阈值以覆盖探索流程
+    ctx = _context(ws, model, explore_margin=100)
 
     async def go():
         graph = compile_graph(InMemorySaver())
@@ -254,7 +259,12 @@ def test_graph_end_to_end_offline(tmp_path):
     assert result["solutions"]["Q2"]["reviews"] == [] and result["solutions"]["Q2"]["summary"] == "完成，预测为 {{R:R1}}"
 
     # 两个子问题都求解完成；编造值登记被拒绝，只登记了真实结果和图
-    assert {k: v["status"] for k, v in result["solutions"].items()} == {"Q1": "completed", "Q2": "completed"}
+    assert {k: v["status"] for k, v in result["solutions"].items()} == {"Q1": "completed", "Q2": "completed", "Q3": "completed"}
+    # 写作类子问题不设计方案、不跑编码循环，写作时依据前序结论和登记结果
+    assert result["designs"]["Q3"]["chosen"]["name"] == "基于前序结论撰写"
+    assert result["solutions"]["Q3"]["approach"] == "基于前序结论撰写"
+    q3_request = next(r for r in model.text_calls if "Q3 致市长的建议信（文书类交付物）" in r and "撰写「Q3" in r)
+    assert "{{R:R1}}" in q3_request
     registry = ResultRegistry.load(WorkspaceFS(str(ws)))
     kinds = sorted((r.subproblem, r.kind) for r in registry.results.values())
     assert kinds == [("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")]

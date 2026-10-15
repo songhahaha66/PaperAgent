@@ -278,8 +278,15 @@ async def explore(ctx: GraphContext, branch: BranchInput) -> Optional[Exploratio
 
     candidates = design["candidates"]
     scores = design.get("scores") or [{} for _ in candidates]
-    await ctx.events.stage(f"{subproblem_id}：{len(picks)} 个候选方案先在数据上试跑")
+    priors = [scores[i].get("total") for i in picks]
+    # 评审已经明显分出高下时，试跑带来的信息不值它的成本
+    if None not in priors[:2] and priors[0] - priors[1] > ctx.explore_margin:
+        return None
     protocol = await make_protocol(ctx, branch, [candidates[i] for i in picks])
+    # 没有统一指标时各分支无法直接比较，只能再请 critic 读执行证据，收益小于成本，直接按评审选择求解
+    if not protocol.get("applicable"):
+        return None
+    await ctx.events.stage(f"{subproblem_id}：{len(picks)} 个候选方案先在数据上试跑")
     probes = [
         Probe(candidate_index=i, candidate=candidates[i], kernel_key=f"{subproblem_id}~c{i}", prior=scores[i].get("total"))
         for i in picks
@@ -303,6 +310,6 @@ def promotion_message(exploration: Exploration) -> str:
     return (
         f"你的方案「{exploration.winner.candidate['name']}」在探索阶段胜出（{exploration.reason}）。"
         "现在进入正式求解：内核中的变量都还在，在此基础上完成完整求解，补齐全部交付物、检验和灵敏度分析，"
-        "用 record_result / record_figure 登记论文要用的结果和图（探索阶段算出的数字也要重新 print 并登记），"
+        "用 record_results / record_figure 登记论文要用的结果和图（探索阶段算出的数字也要重新 print 并登记），"
         "最后提交 SolveReport，报告里的数字一律写成登记返回的引用。"
     )

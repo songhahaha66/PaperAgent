@@ -131,10 +131,30 @@ async def critique(ctx: GraphContext, branch: BranchInput, candidates: List[Dict
     return scores
 
 
+WRITING_DESIGN = {
+    "name": "基于前序结论撰写",
+    "method_keys": [],
+    "idea": "本问是文书类交付物，不需要新的计算，直接依据前面各问的登记结果和结论撰写。",
+    "formulation": "",
+    "steps": [],
+    "assumptions": [],
+    "validation": "与前序结论保持一致",
+}
+
+
 async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     subproblem = branch["subproblem"]
     await ctx.set_stage("design", "in_progress")
+    if subproblem.get("kind") == "writing":
+        # 写作类子问题（备忘录、建议信等）不需要建模方案
+        return {
+            "designs": {subproblem["id"]: {
+                "methods": [], "candidates": [WRITING_DESIGN], "scores": [{"total": None}],
+                "chosen": WRITING_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
+            }},
+            "log": [f"design {subproblem['id']}: writing"],
+        }
     await ctx.events.stage(f"{subproblem['id']}：检索方法并设计候选方案")
 
     method_keys = await pick_methods(ctx, branch)
