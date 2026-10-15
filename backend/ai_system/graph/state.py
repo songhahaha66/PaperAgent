@@ -82,12 +82,25 @@ class Finding(BaseModel):
     )
 
 
+class NegativeControl(BaseModel):
+    metric: str = Field(description="预测效果指标名，如 测试集 AUC、LogLoss、RMSE")
+    value: str = Field(description="真实标签下的指标值，必须是 run_id 那次执行 print 出的数")
+    run_id: str = Field(description="打印 value 的那次执行的 run_id")
+    shuffled_value: str = Field(description="在构造特征之前把目标列随机打乱、其余流程完全不变时同一指标的值")
+    shuffled_run_id: str = Field(description="打印 shuffled_value 的那次执行的 run_id")
+    chance: str = Field(description="无信息时的水平，如 AUC 0.5、多数类准确率、常数预测的 LogLoss 或 RMSE")
+    higher_is_better: bool = Field(description="指标是否越大越好")
+
+
 class SolveReport(BaseModel):
     summary: str = Field(description="求解过程和结论的概要，结论中的数值用 {{R:Rn}} 引用")
     approach: str = Field(description="实际采用的模型与算法，与计划不同时说明原因")
     key_findings: List[Finding] = Field(description="主要结论，每条写明依据的登记结果和证据强度")
     sensitivity: str = Field(default="", description="灵敏度分析或检验的做法与结论")
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
+    controls: List[NegativeControl] = Field(
+        default_factory=list, description="标签置换对照：报告了预测效果（AUC、准确率、LogLoss、RMSE 等）时每个指标一条"
+    )
 
 
 class ValidationProtocol(BaseModel):
@@ -103,6 +116,9 @@ class ProbeReport(BaseModel):
     metric_value: str = Field(default="", description="按验证协议算出的指标值，必须是某次执行 print 出的数")
     metric_run_id: str = Field(default="", description="打印该指标的那次执行的 run_id")
     baseline_value: str = Field(default="", description="基线在同一协议下的指标值")
+    shuffled_value: str = Field(
+        default="", description="标签置换对照：构造特征之前把目标列随机打乱、其余完全不变时同一指标的值，与 metric_value 在同一次执行里 print"
+    )
     summary: str = Field(description="做了什么、结果如何，2~4 句")
     problems: List[str] = Field(default_factory=list, description="遇到的问题或方案本身的缺陷")
 

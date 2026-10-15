@@ -157,8 +157,14 @@ class ResultRegistry:
         value = str(value).strip()
         self.verify(value, run_id)
         kind = "number" if _parse_number(value) is not None else "text"
+        # 同一子问题同名结果只保留一条：重复登记直接复用，返工后的新值原地更新，
+        # 编号不变，已写好的引用和结论证据自动指向新值
+        same = next(
+            (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip()),
+            None,
+        )
         result = Result(
-            id=self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
+            id=same.id if same else self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
             value=value, run_id=run_id, unit=unit.strip(), description=description.strip(),
         )
         self.results[result.id] = result

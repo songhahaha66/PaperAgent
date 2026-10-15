@@ -180,12 +180,12 @@ class FakeModel(BaseChatModel):
         tool_results = [m for m in messages if isinstance(m, ToolMessage)]
         if not tool_results:
             auc = "0.71" if name == "方案甲" else "0.65"
-            code = f"model = '{name}'\nprint('AUC', {auc})\nprint('baseline', 0.5)"
+            code = f"model = '{name}'\nprint('AUC', {auc})\nprint('baseline', 0.5)\nprint('shuffled', 0.51)"
             return AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": code}, "id": f"probe_{sid}_{name}_0"}])
         run_id = re.search(r"\[run_id: (\S+)\]", tool_results[-1].content).group(1)
         report = {
             "works": True, "metric_value": "0.71" if name == "方案甲" else "0.99", "metric_run_id": run_id,
-            "baseline_value": "0.5", "summary": f"{name} 跑通", "problems": [],
+            "baseline_value": "0.5", "shuffled_value": "0.51", "summary": f"{name} 跑通", "problems": [],
         }
         return AIMessage(content="", tool_calls=[{"name": "ProbeReport", "args": report, "id": f"probe_{sid}_{name}_1"}])
 
@@ -390,6 +390,23 @@ def test_registry_rejects_failed_or_unknown_runs(tmp_path):
         registry.record_value("Q1", "x", "1.5", run_id)
     with pytest.raises(GroundingError):
         registry.record_value("Q1", "x", "1.5", "run_missing")
+
+
+def test_registry_reuses_id_for_same_name(tmp_path):
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    first, second = fs.create_run(), fs.create_run()
+    fs.save_run_stdout(first, "auc 0.71")
+    fs.finish_run(first, "success")
+    fs.save_run_stdout(second, "auc 0.66")
+    fs.finish_run(second, "success")
+    registry = ResultRegistry.load(fs)
+    a = registry.record_value("Q1", "AUC", "0.71", first)
+    b = registry.record_value("Q1", "AUC", "0.71", first)
+    c = registry.record_value("Q1", "AUC", "0.66", second)
+    other = registry.record_value("Q2", "AUC", "0.66", second)
+    assert a.id == b.id == c.id == "R1" and other.id == "R2"
+    assert registry.get("R1").value == "0.66" and len(registry.results) == 2
 
 
 def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
@@ -645,3 +662,51 @@ def test_model_candidate_rejects_empty_placeholder():
 
     with pytest.raises(pydantic.ValidationError):
         ModelCandidate(name="", method_keys=[], idea="", formulation="", steps=[], validation="")
+
+
+def test_label_shuffle_control_flags_leakage(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.review import control_issues
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "LogLoss 0.4934 shuffled 0.5010 baseline 0.6778\nAUC 0.71 shuffled_auc 0.502")
+    fs.finish_run(run_id, "success")
+    ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
+
+    def report(**control):
+        base = {"metric": "LogLoss", "run_id": run_id, "shuffled_run_id": run_id, "higher_is_better": False}
+        return {"summary": "LogLoss 优于基线", "key_findings": [], "controls": [{**base, **control}]}
+
+    # 卡尔曼滤波吸收了当期结果：打乱标签后 LogLoss 仍远低于基线，判为泄漏
+    leaky = control_issues(ctx, report(value="0.4934", shuffled_value="0.5010", chance="0.6778"))
+    assert len(leaky) == 1 and "泄漏" in leaky[0]
+    # 打乱后回到无信息水平：通过
+    clean = control_issues(ctx, report(metric="AUC", value="0.71", shuffled_value="0.502", chance="0.5", higher_is_better=True))
+    assert clean == []
+    # 打乱后的值不在输出里：不能通过
+    assert "无法核对" in control_issues(ctx, report(value="0.4934", shuffled_value="0.6801", chance="0.6778"))[0]
+    # 报告了 AUC 却没做对照
+    missing = control_issues(ctx, {"summary": "测试集 AUC 0.71", "key_findings": [], "controls": []})
+    assert "没有做标签置换对照" in missing[0]
+    assert control_issues(ctx, {"summary": "检验 p 值 0.03", "key_findings": [], "controls": []}) == []
+
+
+def test_probe_metric_rejected_when_shuffled_labels_keep_the_gain(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.explore import shuffle_check
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "logloss 0.4674 baseline 0.6778 shuffled 0.48 clean 0.675")
+    fs.finish_run(run_id, "success")
+    ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
+    report = {"metric_value": "0.4674", "metric_run_id": run_id, "baseline_value": "0.6778"}
+    protocol = {"higher_is_better": False}
+    assert "泄漏" in shuffle_check(ctx, {**report, "shuffled_value": "0.48"}, protocol)
+    assert shuffle_check(ctx, {**report, "shuffled_value": "0.675"}, protocol) == ""
+    assert shuffle_check(ctx, report, protocol) == "没有做标签置换对照"

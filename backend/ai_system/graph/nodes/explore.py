@@ -29,6 +29,7 @@ from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured
 from ..registry import GroundingError, _parse_number
 from ..state import BranchInput, ProbeReport, ValidationProtocol
+from .review import leaked
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,8 @@ PROBE_SYSTEM = """你是数学建模竞赛的编程手，现在处于方案探�
 - 只实现方案的核心模型，不做灵敏度分析，不画论文用图，步数有限（约 {steps} 步）。
 - 严格按验证协议计算指标和基线，并把它们 print 出来；协议无法套用时如实说明。
 - 不要为了指标好看而泄漏数据或只挑一部分数据。
+- 同一次执行里再做一次标签置换对照：构造特征之前把目标列随机打乱、其余完全不变，算出同一指标并 print；
+  打乱后仍明显好于基线的指标会被判为泄漏，不参与比较。
 - 数据文件路径相对于工作目录，例如 data/xxx.csv。
 
 完成后提交 ProbeReport：指标值必须是某次执行 print 出的数，metric_run_id 填那次执行的 run_id。"""
@@ -236,9 +239,27 @@ async def run_probe(ctx: GraphContext, branch: BranchInput, probe: Probe, protoc
         try:
             ctx.registry.verify(value, run_id)
             probe.metric = _parse_number(value)
+            probe.grounding_error = shuffle_check(ctx, probe.report, protocol)
+            if probe.grounding_error:
+                probe.metric = None
         except GroundingError as exc:
             probe.grounding_error = str(exc)
     return probe
+
+
+def shuffle_check(ctx: GraphContext, report: Dict[str, Any], protocol: Dict[str, Any]) -> str:
+    """探索指标的标签置换对照；不通过时返回原因，指标不参与比较"""
+    shuffled, baseline = report.get("shuffled_value", ""), report.get("baseline_value", "")
+    if not shuffled:
+        return "没有做标签置换对照"
+    try:
+        ctx.registry.verify(shuffled, report["metric_run_id"])
+    except GroundingError as exc:
+        return f"置换对照数值无法核对：{exc}"
+    real, shuffled_num, chance = _parse_number(report["metric_value"]), _parse_number(shuffled), _parse_number(baseline)
+    if None not in (real, shuffled_num, chance) and leaked(real, shuffled_num, chance, protocol.get("higher_is_better", True)):
+        return f"打乱标签后指标仍为 {shuffled}（基线 {baseline}），判为数据泄漏"
+    return ""
 
 
 async def score_evidence(ctx: GraphContext, branch: BranchInput, probes: List[Probe]) -> None:
@@ -255,17 +276,19 @@ async def score_evidence(ctx: GraphContext, branch: BranchInput, probes: List[Pr
             for i, p in enumerate(runnable)
         },
     }
-    questions = {
-        f"p{i}": Score(instructions=f"只评价「方案{i + 1}」。{EVIDENCE.instructions}", criteria=EVIDENCE.criteria)
-        for i in range(len(runnable))
-    }
+    # 每个分支单独一次请求，所有分支放进一次请求时模型容易给出相同分数
+    async def judge_one(i: int) -> float:
+        question = Score(instructions=f"只评价「方案{i + 1}」。{EVIDENCE.instructions}", criteria=EVIDENCE.criteria)
+        answers = await ctx.judge.ask(state, {"evidence": question})
+        return answers.scores["evidence"].score
+
     try:
-        answers = await ctx.judge.ask(state, questions)
+        scores = await asyncio.gather(*(judge_one(i) for i in range(len(runnable))))
     except Exception as exc:  # 打分失败就退回 design 评分
         logger.warning("执行证据评分失败: %s", exc)
         return
-    for i, probe in enumerate(runnable):
-        probe.evidence = answers.scores[f"p{i}"].score
+    for probe, score in zip(runnable, scores):
+        probe.evidence = score
 
 
 async def explore(ctx: GraphContext, branch: BranchInput) -> Optional[Exploration]:
