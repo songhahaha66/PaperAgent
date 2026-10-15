@@ -3,6 +3,7 @@ LLM 调用小工具：结构化输出与纯文本输出，带有限次重试
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, List, Type, TypeVar
 
@@ -23,6 +24,17 @@ def structured_model(llm: Any, schema: Type[T]):
         return llm.with_structured_output(schema)
 
 
+async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage]) -> T | None:
+    from ..judge.llm import parse_verdict
+
+    instruction = (
+        "不要调用工具，也不要写其他内容，只输出一个符合下面 JSON Schema 的 JSON 对象：\n"
+        + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    )
+    reply = await llm.ainvoke(list(messages) + [HumanMessage(content=instruction)])
+    return parse_verdict(message_text(reply), schema)
+
+
 def as_messages(system: str, user: str) -> List[BaseMessage]:
     return [SystemMessage(content=system), HumanMessage(content=user)]
 
@@ -33,6 +45,9 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
     for attempt in range(RETRIES + 1):
         try:
             result = await model.ainvoke(messages)
+            if result is None:
+                # step-5-preview 等模型偶尔无视强制工具调用、直接写文字，改要纯文本 JSON 再解析
+                result = await _ask_json(llm, schema, messages)
             if result is None:
                 raise ValueError("模型没有返回结构化结果")
             return result if isinstance(result, schema) else schema.model_validate(result)

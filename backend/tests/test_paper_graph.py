@@ -510,3 +510,24 @@ def test_claims_replace_per_subproblem_and_render(tmp_path):
     assert valid_conflicts([{"claims": ["C2", "C9"], "resolution": "r"}, {"claims": ["C9"], "resolution": "r"}], set(reloaded.claims)) == [
         {"claims": ["C2"], "resolution": "r"}
     ]
+
+
+def test_call_structured_falls_back_to_plain_json():
+    from types import SimpleNamespace
+
+    from ai_system.graph.llm_utils import call_structured
+
+    class Ignoring:
+        async def ainvoke(self, messages):
+            return None
+
+    class LLM:
+        def with_structured_output(self, schema, **kwargs):
+            return Ignoring()
+
+        async def ainvoke(self, messages):
+            assert "JSON Schema" in messages[-1].content
+            return SimpleNamespace(content='好的：\n```json\n{"method_keys": ["arima"], "reason": "时间序列"}\n```')
+
+    pick = asyncio.run(call_structured(LLM(), MethodPick, [HumanMessage(content="挑方法")]))
+    assert pick.method_keys == ["arima"]
