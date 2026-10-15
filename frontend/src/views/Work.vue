@@ -21,7 +21,7 @@
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
-            <p v-if="!isMobile">生成过程中请耐心等待！</p>
+            <p v-if="!isMobile && (isStreaming || currentWork.status === 'in_progress')">生成过程中请耐心等待！</p>
           </div>
           <p v-if="!isMobile">创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>

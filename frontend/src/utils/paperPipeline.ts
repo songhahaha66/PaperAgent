@@ -63,7 +63,8 @@ const SUBPROBLEM_TYPES = new Set([
   'paper_stage',
 ])
 
-const SUBPROBLEM_PREFIX = /^(Q\d+)\s*[：:·\s]\s*/
+// 子问题编号可以带字母后缀（Q1a、Q1b）
+const SUBPROBLEM_PREFIX = /^(Q\d+[a-z]?)\s*[：:·\s]\s*/
 
 export const isPaperEvent = (block: PipelineBlock | undefined): boolean =>
   !!block && typeof block.type === 'string' && block.type.startsWith('paper_')
@@ -169,5 +170,5 @@ export const deriveSubproblems = (blocks: PipelineBlock[]): SubproblemProgress[]
       item.status = 'in_progress'
     }
   }
-  return [...byId.values()].sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)))
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
 }

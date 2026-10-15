@@ -198,3 +198,16 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     texts = [p.text for p in Document(str(ws / "paper.docx")).paragraphs]
     assert "4 结论与建议" in texts
     assert "Word" in (ws / "plan.md").read_text(encoding="utf-8")
+
+
+def test_file_panel_lists_exported_paper_files(tmp_path):
+    """导出的 paper.pdf / paper.tex / paper.docx 要出现在"论文文档"里，用户才能点开"""
+    from services.file_services.workspace_files import WorkspaceFileService
+    service = WorkspaceFileService()
+    service.base_path = tmp_path
+    (tmp_path / "w1").mkdir()
+    for name in ("paper.md", "paper.tex", "paper.pdf"):
+        (tmp_path / "w1" / name).write_bytes(b"x")
+    papers = service.list_files_by_category("w1")["papers"]
+    assert [f["name"] for f in papers] == ["paper.md", "paper.tex", "paper.pdf"]
+    assert all(f["category"] == "papers" and f["path"] == f["name"] for f in papers)
