@@ -181,6 +181,8 @@ class PaperState(TypedDict, total=False):
     design_round: int
     # 子问题编号 -> SolveReport dict + status
     solutions: Annotated[Dict[str, Dict[str, Any]], merge_dict]
+    # 用户模板的最上层章节 [{"key", "title"}]，没有模板时为空（用默认数模结构）
+    outline: List[Dict[str, str]]
     # 章节 key -> 带引用的 markdown 正文
     sections: Annotated[Dict[str, str], merge_dict]
     # 跨子问题的结论冲突及统一口径

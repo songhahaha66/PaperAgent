@@ -34,11 +34,11 @@ const PHASES: Array<{ key: string; label: string }> = [
   { key: 'write', label: '论文撰写' },
   { key: 'validate', label: '校验修复' },
   { key: 'render', label: '生成论文' },
-  { key: 'typeset', label: 'LaTeX 排版' },
+  { key: 'export', label: '排版导出' },
 ]
 
-// 只在 latex 输出模式出现的阶段，没有收到它的事件时不显示
-const OPTIONAL_PHASES = new Set(['typeset'])
+// 只在 latex / word 输出模式出现的阶段，没有收到它的事件时不显示
+const OPTIONAL_PHASES = new Set(['export'])
 
 // 没有 paper_phase 事件的旧记录，按事件类型推断阶段
 const TYPE_TO_PHASE: Record<string, string> = {
@@ -51,7 +51,7 @@ const TYPE_TO_PHASE: Record<string, string> = {
   paper_solved: 'solve',
   paper_consistency: 'write',
   paper_validation: 'validate',
-  paper_typeset: 'typeset',
+  paper_export: 'export',
 }
 
 const SUBPROBLEM_TYPES = new Set([

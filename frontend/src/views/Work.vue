@@ -665,14 +665,16 @@ const loadWorkspaceFiles = async () => {
 const handleMainPaperClick = async () => {
   if (!workId.value || !authStore.token) return
 
-  // LaTeX 输出的工作优先预览编译好的 paper.pdf，还没生成时退回 paper.md
-  if (currentWork.value?.output_mode === 'latex') {
+  // LaTeX / Word 输出的工作优先预览导出的 paper.pdf / paper.docx，还没生成时退回 paper.md
+  const exported: Record<string, string> = { latex: 'paper.pdf', word: 'paper.docx' }
+  const exportedFile = exported[currentWork.value?.output_mode || '']
+  if (exportedFile) {
     try {
-      await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.pdf')
-      await handleWorkspaceFileSelect('paper.pdf')
+      await workspaceFileAPI.readFile(authStore.token, workId.value, exportedFile)
+      await handleWorkspaceFileSelect(exportedFile)
       return
     } catch {
-      // paper.pdf 不存在
+      // 还没导出
     }
   }
 

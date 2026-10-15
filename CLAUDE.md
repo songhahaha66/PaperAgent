@@ -73,7 +73,7 @@ uv run python -m evals all --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs
 ```
 
 ### State-graph pipeline (v2)
-`backend/ai_system/graph/` is the LangGraph version of the 数模 pipeline (see docs/paper_graph.md). It runs when `AI_PIPELINE=v2` for markdown works without a template; everything else still uses MainAgent. Numbers in the paper must come from the result registry (`{{R:Rn}}` / `{{F:Fn}}` references), which only accepts values that appear in a successful kernel run's output.
+`backend/ai_system/graph/` is the LangGraph version of the 数模 pipeline (see docs/paper_graph.md). The chat API uses it by default for markdown / word / latex output, with or without a user template (rendered `paper.md` is exported by `ai_system/export/` to `paper.docx` or `paper.tex`/`paper.pdf`). `AI_PIPELINE=legacy` falls back to the old MainAgent, which is kept only as the eval baseline. Numbers in the paper must come from the result registry (`{{R:Rn}}` / `{{F:Fn}}` references), which only accepts values that appear in a successful kernel run's output.
 
 ### Frontend Development
 ```bash
