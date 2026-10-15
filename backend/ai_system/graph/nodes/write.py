@@ -88,6 +88,16 @@ def writing_sources(state: PaperState, subproblem: Dict) -> List[Dict]:
             and (not deps or sp["id"] in deps)]
 
 
+# 评委每次都扣"实用性"（2024_C 三次 5.5-8.5）：结论诚实地说"转折不可预测"，但没有告诉读者能做什么。
+# 建议要可执行，又不能夸大：显著的结论支撑"应当做什么"，不显著的结论支撑"不要据此做什么"，并给出替代做法
+ACTIONABLE_ADVICE = (
+    "建议写成读者可以直接照做的条目：在什么情境下、做什么、依据哪条结论（写明证据强度）。"
+    "只有显著的结论可以支撑\"应当……\"；不显著或倾向性的结论用来说明\"不要因为……而……\"，"
+    "同时给出不依赖该结论的替代做法（例如围绕已被证实的结构性因素安排策略、用描述性指标做赛中复盘）。"
+    "不要把没有被证据支持的效应写成建议的依据。"
+)
+
+
 def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> str:
     sid = subproblem["id"]
     if subproblem.get("kind") == "writing":
@@ -95,7 +105,7 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
         return (
             f"## {sid} {subproblem['title']}（文书类交付物）\n问题：{subproblem['question']}\n"
             f"交付物：{'；'.join(subproblem.get('deliverables') or [])}\n"
-            f"依据以下各问的结论和登记结果撰写，数字同样只能写引用：\n\n{sources}"
+            f"依据以下各问的结论和登记结果撰写，数字同样只能写引用。\n{ACTIONABLE_ADVICE}\n\n{sources}"
         )
     design = (state.get("designs") or {}).get(sid)
     report = (state.get("solutions") or {}).get(sid) or {}
@@ -160,7 +170,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         )
     if key == "evaluation":
         return (
-            "撰写「模型的评价与推广」，分优点、缺点、改进与推广三部分，结合各子问题的局限。\n\n"
+            "撰写「模型的评价与推广」，分优点、缺点、改进与推广三部分，结合各子问题的局限。"
+            "推广部分写清模型在实际中怎么用：谁在什么场景下用哪个输出做什么决定，哪些输出因证据不足不能用于决策。\n\n"
             + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )
     if key == "abstract":
