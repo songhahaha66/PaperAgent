@@ -50,7 +50,11 @@ def consistency_text(ctx: GraphContext, conflicts: List[Dict]) -> str:
     """给写作模型的统一口径"""
     if not ctx.registry.claims:
         return ""
-    parts = ["# 全文结论表（各章节的结论必须与此一致，证据强度不能被改写）", ctx.registry.claims_table()]
+    parts = [
+        "# 全文结论表（各章节的结论必须与此一致，证据强度不能被改写）\n"
+        "陈述里\"数值⟨Rn⟩\"表示这个数值对应引用 {{R:Rn}}；正文写引用，不要照抄数值，也不要把编号和数值错配。",
+        ctx.registry.claims_table(),
+    ]
     if conflicts:
         parts.append("# 统一口径（审查发现的矛盾及写法，必须遵守）")
         parts.extend(f"- {'、'.join(c['claims'])}：{c['issue']} → {c['resolution']}" for c in conflicts)

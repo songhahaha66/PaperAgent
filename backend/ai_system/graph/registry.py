@@ -213,12 +213,19 @@ class ResultRegistry:
         return added
 
     def claims_table(self) -> str:
-        """结论表：陈述里的引用替换为真实数值，供一致性审查和写作使用"""
+        """结论表：陈述里的引用替换为"真实数值⟨编号⟩"，供一致性审查和写作使用
+
+        只给数值时，写作模型要从"依据"列的一串编号里猜哪个值对应哪个编号；v2n 的问题分析把区间、z、p
+        对应的引用整段写错位（"95% 区间 135……Z 为 172……p 为 1.519"）。每个值后面紧跟编号就不用猜。
+        """
         if not self.claims:
             return "（没有登记的结论）"
         lines = ["| 结论 | 子问题 | 证据强度 | 陈述 | 依据 |", "|---|---|---|---|---|"]
         for c in self.claims.values():
-            statement = self.render(c.statement).replace("\n", " ").replace("|", "/")
+            marked = REF_PATTERN.sub(
+                lambda m: f"{m.group(0)}⟨{m.group(2)}⟩" if m.group(2) in self.results else m.group(0), c.statement
+            )
+            statement = self.render(marked).replace("\n", " ").replace("|", "/")
             lines.append(f"| {c.id} | {c.subproblem} | {c.strength} | {statement} | {', '.join(c.evidence) or '无'} |")
         return "\n".join(lines)
 
