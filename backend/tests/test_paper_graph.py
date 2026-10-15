@@ -627,6 +627,37 @@ def test_claims_replace_per_subproblem_and_render(tmp_path):
     ]
 
 
+def test_claims_ground_literal_numbers(tmp_path):
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "r2 0.883 coef -0.0079 p 1.04e-164 cost 3.50 dup 0.5 0.5 n 15082")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    r2 = registry.record_value("Q1", "R2", "0.883", run_id)
+    coef = registry.record_value("Q1", "系数", "-0.0079", run_id)
+    p = registry.record_value("Q1", "p值", "1.04e-164", run_id)
+    cost = registry.record_value("Q1", "成本", "3.50", run_id, unit="元")
+    registry.record_value("Q1", "甲", "0.5", run_id)
+    registry.record_value("Q1", "乙", "0.5", run_id)
+    registry.record_value("Q1", "样本量", "15082", run_id)
+    other = registry.record_value("Q2", "别的", "0.883", run_id)
+
+    statement = registry.ground_statement(
+        "Q1", "R²=0.883，系数 -0.0079（p=1.04e-164），成本 3.50 元，两组都是 0.5，样本 15082，$x=0.883$，0.8830，已有 {{R:%s}}" % other.id
+    )
+    assert statement == (
+        f"R²={{{{R:{r2.id}}}}}，系数 {{{{R:{coef.id}}}}}（p={{{{R:{p.id}}}}}），成本 {{{{R:{cost.id}}}}}，"
+        f"两组都是 0.5，样本 15082，$x=0.883$，0.8830，已有 {{{{R:{other.id}}}}}"
+    )
+    # "数（引用）"合并成一个引用；已引用过的结果不再重复替换
+    assert registry.ground_statement("Q1", f"r=0.883（{{{{R:{r2.id}}}}}），再写 -0.0079 ({{{{R:{coef.id}}}}})，-0.0079") == (
+        f"r={{{{R:{r2.id}}}}}，再写 {{{{R:{coef.id}}}}}，-0.0079"
+    )
+    claims = registry.set_claims("Q1", [{"statement": "R²=0.883", "strength": "显著"}])
+    assert claims[0].evidence == [r2.id]
+
+
 def test_call_structured_falls_back_to_plain_json():
     from types import SimpleNamespace
 

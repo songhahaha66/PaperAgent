@@ -356,6 +356,9 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             key_findings=[Finding(statement=f"{r.name}：{{{{{r.id[0]}:{r.id}}}}}", strength="倾向") for r in recorded],
         ).model_dump()
     else:
+        # 写作看的报告和结论表用同一份陈述：手写的数换成引用
+        for finding in report.get("key_findings") or []:
+            finding["statement"] = ctx.registry.ground_statement(subproblem_id, str(finding.get("statement", "")))
         ctx.registry.set_claims(subproblem_id, report.get("key_findings") or [])
 
     count = len(ctx.registry.for_subproblem(subproblem_id))
