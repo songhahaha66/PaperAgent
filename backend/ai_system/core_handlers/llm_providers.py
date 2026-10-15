@@ -112,9 +112,9 @@ class OpenAIProvider(BaseLLMProvider):
             streaming=kwargs.get('streaming', True),
             # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
             max_retries=kwargs.get('max_retries', 6),
-            # 默认 600 秒；DLUT 网关卡住的请求要等满 300 秒才回 524，2024_C 一轮白等了 6 次。
-            # 非流式时这是等整个响应的上限，流式时是两个分块之间的上限
-            timeout=kwargs.get('timeout', 180),
+            # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
+            # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
+            timeout=kwargs.get('timeout', 600),
         )
 
     def validate_config(self) -> bool:
@@ -193,9 +193,9 @@ class LocalProvider(BaseLLMProvider):
             streaming=kwargs.get('streaming', True),
             # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
             max_retries=kwargs.get('max_retries', 6),
-            # 默认 600 秒；DLUT 网关卡住的请求要等满 300 秒才回 524，2024_C 一轮白等了 6 次。
-            # 非流式时这是等整个响应的上限，流式时是两个分块之间的上限
-            timeout=kwargs.get('timeout', 180),
+            # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
+            # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
+            timeout=kwargs.get('timeout', 600),
         )
 
     def validate_config(self) -> bool:
