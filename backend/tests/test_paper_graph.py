@@ -452,7 +452,7 @@ def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
     ref = f"{{{{F:{second.id}}}}}"
     rendered = registry.render(f"摘要见 {ref}。\n\n{{{{F:{fig.id}}}}}\n\n{ref}\n\n{ref}")
     assert "摘要见 图2。" in rendered and "*图2 敏感性*" in rendered and "图2 图3" not in rendered
-    assert rendered.count("![图2") == 1 and rendered.endswith("（见图2）")
+    assert rendered.count("![图2") == 1 and rendered.rstrip().endswith("*图2 敏感性*")
     # 重新加载后编号连续
     assert ResultRegistry.load(fs).get("R1").value == "50%"
 
