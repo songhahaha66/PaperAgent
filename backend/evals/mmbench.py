@@ -11,7 +11,7 @@ import json
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, List
 
 # 默认子集：7 道带数据的题（C/D）+ 3 道纯建模题，覆盖 2020–2025
 # 不含 2021_C：数据约 700MB 图片，且题目 JSON 里的 PDF 文件名与实际文件不一致
@@ -35,8 +35,9 @@ class Problem:
     background: str
     requirement: str
     dataset_files: List[Path] = field(default_factory=list)
-    dataset_description: Dict[str, str] = field(default_factory=dict)
-    variable_description: Dict[str, str] = field(default_factory=dict)
+    # 原始 JSON 中这两个字段可能是 dict、str，或按数据文件分组的 list
+    dataset_description: Any = field(default_factory=dict)
+    variable_description: Any = field(default_factory=dict)
     addendum: str = ""
 
 
@@ -73,6 +74,15 @@ def stage_datasets(problem: Problem, workspace: Path) -> List[str]:
     return staged
 
 
+def _describe(value: Any) -> List[str]:
+    """把 dict / str / 嵌套 list 形式的说明展开成 "- 键: 值" 行"""
+    if isinstance(value, dict):
+        return [f"- {k}: {v}" for k, v in value.items()]
+    if isinstance(value, list):
+        return [line for item in value for line in _describe(item)]
+    return [f"- {value}"] if value else []
+
+
 def build_task_prompt(problem: Problem, staged_files: List[str]) -> str:
     """把题目拼成发给 agent 的单条用户消息，模拟真实用户的一次提问"""
     parts = [
@@ -89,8 +99,8 @@ def build_task_prompt(problem: Problem, staged_files: List[str]) -> str:
         parts.extend(f"- {path}" for path in staged_files)
         if problem.dataset_description:
             parts.append("\n数据集说明：")
-            parts.extend(f"- {k}: {v}" for k, v in problem.dataset_description.items())
+            parts.extend(_describe(problem.dataset_description))
         if problem.variable_description:
             parts.append("\n字段说明：")
-            parts.extend(f"- {k}: {v}" for k, v in problem.variable_description.items())
+            parts.extend(_describe(problem.variable_description))
     return "\n".join(parts)
