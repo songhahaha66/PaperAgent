@@ -7,7 +7,7 @@
 """
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
@@ -16,11 +16,13 @@ from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
 from langgraph.runtime import Runtime
 
+from ..compaction import CompactHistoryMiddleware
 from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, SolveReport
+from .review import feedback_message, review_solution
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,9 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 数据文件路径相对于工作目录，例如 data/xxx.csv。
 - 画图用 matplotlib，画完不需要 savefig，系统会自动保存本次执行打开的图并告诉你文件名。
 - 需要传给后续子问题的中间数据，保存到 outputs/intermediate/ 下（csv），并在报告里说明文件名。
+- 默认使用题目给出的全部相关数据（例如全部比赛、全部年份），只用子集时要在报告里说明理由。
+- 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
+- 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 
 结果登记（非常重要）：
 - 论文里会用到的每个关键数字（参数估计、预测值、指标、最优解等），先 print 出来，再用 record_result 登记，run_id 填打印它的那次执行。
@@ -40,6 +45,9 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 至少完成方案中的检验或灵敏度分析，并登记相应结果。
 
 完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。"""
+
+
+REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
 
 
 def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
@@ -52,12 +60,14 @@ def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
     return "\n\n".join(parts)
 
 
-def build_tools(ctx: GraphContext, subproblem_id: str) -> List[StructuredTool]:
+def build_tools(ctx: GraphContext, subproblem_id: str, run_log: Optional[List[Dict]] = None) -> List[StructuredTool]:
     kernel = ctx.kernels.get(subproblem_id)
+    run_log = run_log if run_log is not None else []
 
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
         result = await kernel.execute(code)
+        run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
         await ctx.events.emit(
             "paper_code",
             f"{subproblem_id} · {result.run_id} · {'成功' if result.ok else '失败'}",
@@ -65,7 +75,9 @@ def build_tools(ctx: GraphContext, subproblem_id: str) -> List[StructuredTool]:
         return clip(result.to_observation(), 12000)
 
     async def record_result(name: str, value: str, run_id: str, unit: str = "", description: str = "") -> str:
-        """登记一个论文会用到的结果。value 必须出现在 run_id 那次执行的输出里。返回可在报告和论文中使用的引用"""
+        """登记一个论文会用到的结果。value 必须出现在 run_id 那次执行的输出里。
+        unit 只填物理或计数单位（如 点、秒、米、万元、%），p 值、AUC、系数、比例这类无量纲量留空。
+        返回可在报告和论文中使用的引用"""
         try:
             result = ctx.registry.record_value(subproblem_id, name, value, run_id, unit, description)
         except GroundingError as exc:
@@ -104,26 +116,49 @@ def build_task(branch: BranchInput, ctx: GraphContext) -> str:
     ]))
 
 
+async def _run_agent(agent, messages: List, recursion_limit: int):
+    """跑一轮求解循环；模型用文字收尾、没交报告时提醒一次"""
+    result = await agent.ainvoke({"messages": messages}, config={"recursion_limit": recursion_limit})
+    if result.get("structured_response") is None:
+        result = await agent.ainvoke(
+            {"messages": result["messages"] + [HumanMessage(content=REPORT_NUDGE)]},
+            config={"recursion_limit": 11},
+        )
+    return result
+
+
 async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     subproblem_id = branch["subproblem"]["id"]
     await ctx.set_stage("solve", "in_progress")
     await ctx.events.stage(f"{subproblem_id}：开始编码求解")
 
+    run_log: List[Dict] = []
     agent = create_agent(
         model=ctx.coder_llm,
-        tools=build_tools(ctx, subproblem_id),
+        tools=build_tools(ctx, subproblem_id, run_log),
         system_prompt=SYSTEM,
         response_format=ToolStrategy(SolveReport),
+        middleware=[CompactHistoryMiddleware()],
     )
+    limit = ctx.max_solver_steps * 2 + 1
     status, error = "completed", None
     report: Dict = {}
+    reviews: List[Dict] = []
     try:
-        result = await agent.ainvoke(
-            {"messages": [HumanMessage(content=build_task(branch, ctx))]},
-            config={"recursion_limit": ctx.max_solver_steps * 2 + 1},
-        )
+        result = await _run_agent(agent, [HumanMessage(content=build_task(branch, ctx))], limit)
         structured = result.get("structured_response")
+        # 审查结果，必须修正的问题交回同一个循环（内核变量还在）
+        for _ in range(ctx.max_review_rounds):
+            if structured is None:
+                break
+            review = await review_solution(ctx, branch, structured.model_dump(), run_log)
+            reviews.append(review.model_dump())
+            if not review.must_fix:
+                break
+            await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.must_fix)} 个必须修正的问题，返工中")
+            result = await _run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit)
+            structured = result.get("structured_response") or structured
         if structured is None:
             status = "incomplete"
         else:
@@ -148,8 +183,8 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     count = len(ctx.registry.for_subproblem(subproblem_id))
     await ctx.events.emit("paper_solved", f"{subproblem_id} 求解{'完成' if status == 'completed' else '未完成'}，登记 {count} 项结果")
     return {
-        "solutions": {subproblem_id: {**report, "status": status, "error": error}},
-        "log": [f"solve {subproblem_id}: {status}, {count} results"],
+        "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
+        "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],
     }
 
 

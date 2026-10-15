@@ -68,10 +68,11 @@ class ModelSpec:
 
 
 def _sum_usage(usage_by_model: Dict[str, Dict]) -> Dict[str, int]:
-    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cache_read_tokens": 0}
     for usage in usage_by_model.values():
-        for key in totals:
+        for key in ("input_tokens", "output_tokens", "total_tokens"):
             totals[key] += int(usage.get(key) or 0)
+        totals["cache_read_tokens"] += int((usage.get("input_token_details") or {}).get("cache_read") or 0)
     return totals
 
 

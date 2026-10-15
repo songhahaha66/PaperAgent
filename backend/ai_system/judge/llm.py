@@ -66,6 +66,9 @@ def _render_question(question: Question) -> str:
     return "\n".join(lines)
 
 
+MAX_ATTEMPTS = 3
+
+
 class LLMJudge:
     name = "llm"
 
@@ -85,7 +88,18 @@ class LLMJudge:
             "你是一名严格、客观的评审。只依据下面给出的材料回答，不要臆测材料之外的内容。\n\n"
             f"## 材料\n{state_text}\n\n## 问题\n{_render_question(question)}"
         )
-        return await structured.ainvoke(prompt)
+        last_error: Exception | None = None
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                verdict = await structured.ainvoke(prompt)
+                if verdict is not None:
+                    return verdict
+                # 模型偶尔用文字作答而不调用工具，结构化结果为 None
+                last_error = ValueError("模型没有返回结构化结果")
+            except Exception as exc:
+                last_error = exc
+            await asyncio.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"判分失败（重试 {MAX_ATTEMPTS} 次）: {last_error}") from last_error
 
     async def ask(self, state: Any, questions: Mapping[str, Question]) -> Answers:
         state_text = _render_state(state)

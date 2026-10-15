@@ -66,6 +66,12 @@ class SolveReport(BaseModel):
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
 
 
+class ResultReview(BaseModel):
+    sound: bool = Field(description="结果是否可以直接用于写作")
+    issues: List[str] = Field(default_factory=list, description="发现的问题，每条写清依据")
+    must_fix: List[str] = Field(default_factory=list, description="必须回去重做或补充的事项，每条可直接执行；没有则为空")
+
+
 # ----------------------------------------------------------------------
 # 图状态
 # ----------------------------------------------------------------------

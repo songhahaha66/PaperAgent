@@ -132,6 +132,20 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     }
 
 
+HEADING_PATTERN = re.compile(r"^(#{1,6})(\s+\S.*)$", re.MULTILINE)
+
+
+def demote_headings(text: str, level: int) -> str:
+    """章节正文里的小标题统一放到本章标题之下一级，避免与章节标题同级"""
+    levels = [len(m.group(1)) for m in HEADING_PATTERN.finditer(text)]
+    if not levels:
+        return text
+    shift = level + 1 - min(levels)
+    if shift <= 0:
+        return text
+    return HEADING_PATTERN.sub(lambda m: "#" * min(len(m.group(1)) + shift, 6) + m.group(2), text)
+
+
 def assemble(state: PaperState) -> str:
     sections = state.get("sections") or {}
     lines = [f"# {state['analysis']['title']}", ""]
@@ -139,7 +153,7 @@ def assemble(state: PaperState) -> str:
         lines.append(f"{'#' * level} {title}")
         lines.append("")
         if key != "solve_heading":
-            lines.append(sections.get(key, "").strip())
+            lines.append(demote_headings(sections.get(key, "").strip(), level))
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

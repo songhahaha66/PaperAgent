@@ -40,6 +40,16 @@ CRITERIA = {
             "可实现且每一步都对应到具体数据列",
         ],
     ),
+    "data_use": Score(
+        instructions="方案是否充分利用了题目给出的全部相关数据（例如全部比赛、全部年份），而不是只用其中一小部分？",
+        criteria=[
+            "基本不用题目数据",
+            "只用了很小一部分数据且没有理由",
+            "用了部分数据，理由一般",
+            "用了大部分相关数据",
+            "充分利用全部相关数据，并说明各部分数据的用途",
+        ],
+    ),
     "rigor": Score(
         instructions="方案的数学表述是否严谨，是否包含结果检验和灵敏度分析？",
         criteria=[
@@ -142,7 +152,7 @@ async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
 
     summary = f"{subproblem['id']} 选用「{chosen['name']}」"
     if scores[chosen_index]["total"] is not None:
-        summary += f"（评审 {scores[chosen_index]['total']:.1f}/12，候选 {len(candidates)} 个）"
+        summary += f"（评审 {scores[chosen_index]['total']:.1f}/{4 * len(CRITERIA)}，候选 {len(candidates)} 个）"
     await ctx.events.emit("paper_design", summary)
 
     return {

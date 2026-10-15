@@ -89,8 +89,10 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
         sid = key.split(":", 1)[1]
         subproblem = next(sp for sp in subproblems if sp["id"] == sid)
         return (
-            f"撰写「{title}」的建模与求解小节，依次包含：模型的建立（变量、公式推导）、求解过程与算法、"
-            f"结果与图表、结果检验。\n\n{subproblem_brief(state, ctx, subproblem)}"
+            f"撰写「{title}」的建模与求解小节，一般依次包含：模型的建立（变量、公式推导）、求解过程与算法、"
+            f"结果与图表、结果检验。如果这一问的交付物是备忘录、信件、建议书等文体，"
+            f"就按交付物要求的文体和篇幅直接写成正文，不要套用上面的结构。"
+            f"\n\n{subproblem_brief(state, ctx, subproblem)}"
         )
 
     "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in subproblems)

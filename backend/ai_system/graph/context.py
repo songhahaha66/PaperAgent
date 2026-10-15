@@ -93,6 +93,7 @@ class GraphContext:
     confirm_models: bool = False
     max_solver_steps: int = 40
     max_repair_rounds: int = 2
+    max_review_rounds: int = 1
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)
