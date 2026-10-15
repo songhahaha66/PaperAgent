@@ -987,3 +987,39 @@ def test_malformed_tool_call_is_retried_and_never_left_in_history():
     # 重试仍然坏掉时，坏调用不留在历史里（否则下一次请求被接口以"工具调用没有结果"拒绝）
     assert result.invalid_tool_calls == []
     assert drop_invalid_calls(AIMessage(content="x")).content == "x"
+
+
+def test_run_agent_asks_for_report_when_steps_run_out():
+    from langgraph.errors import GraphRecursionError
+
+    from ai_system.graph.compaction import HistoryRecorder
+    from ai_system.graph.nodes.solve import FINAL_NUDGE, ReportFallback, run_agent
+
+    class Agent:
+        async def ainvoke(self, payload, config=None):
+            raise GraphRecursionError("limit")
+
+    seen = []
+
+    class Reporter:
+        def with_structured_output(self, schema, **kwargs):
+            outer = self
+
+            class Bound:
+                async def ainvoke(self, messages):
+                    seen.append(messages)
+                    return schema(summary="已完成", approach="a", key_findings=[])
+
+            return Bound()
+
+    recorder = HistoryRecorder()
+    recorder.messages = [HumanMessage(content="任务"), AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "1"}, "id": "a"}]),
+                         ToolMessage(content="1", tool_call_id="a")]
+    from ai_system.graph.state import SolveReport
+
+    result = asyncio.run(run_agent(Agent(), [], 5, fallback=ReportFallback(Reporter(), SolveReport, "系统", recorder)))
+    assert result["structured_response"].summary == "已完成"
+    assert seen[0][0].content == "系统" and seen[0][-1].content == FINAL_NUDGE and len(seen[0]) == 5
+    # 没有对话记录时照常抛出
+    with pytest.raises(GraphRecursionError):
+        asyncio.run(run_agent(Agent(), [], 5, fallback=ReportFallback(Reporter(), SolveReport, "系统", HistoryRecorder())))

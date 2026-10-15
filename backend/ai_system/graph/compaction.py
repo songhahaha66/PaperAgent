@@ -114,6 +114,23 @@ class CompactHistoryMiddleware(AgentMiddleware):
         return await handler(request.override(messages=compact_messages(request.messages, self.keep_recent, self.block)))
 
 
+class HistoryRecorder(AgentMiddleware):
+    """记下最近一次发给模型的完整对话（放在中间件最外层，看到的是压缩前的原文）
+
+    超过 recursion_limit 时 LangGraph 直接抛异常、拿不到对话；有了这份记录，可以接着要一份报告，而不是整段作废。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.messages: List[BaseMessage] = []
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
+    ) -> Any:
+        self.messages = list(request.messages)
+        return await handler(request)
+
+
 TRUNCATED_NOTE = "[系统提醒] 你上一次输出太长，在中途被截断，没有执行。请把代码拆成更短的一段，只写这一步需要的部分。"
 MALFORMED_NOTE = "[系统提醒] 你上一次工具调用的参数不是合法 JSON，没有执行。请重新调用，代码里的引号和换行要正确转义。"
 
