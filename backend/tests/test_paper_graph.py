@@ -722,10 +722,13 @@ def test_report_issues_requires_registered_results(tmp_path):
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
     ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
-    issues = report_issues(ctx, {"summary": "读入了数据", "key_findings": []}, "Q1")
+    stub = {"summary": "读入了全部比赛数据并完成了特征构造", "key_findings": [{"statement": "数据读入完成", "strength": "倾向"}]}
+    issues = report_issues(ctx, stub, "Q1")
     assert len(issues) == 1 and "还没有登记任何结果" in issues[0]
+    # 删掉结论来回避检查
+    assert any("概要或主要结论为空" in i for i in report_issues(ctx, {"summary": "test", "key_findings": []}, "Q1"))
     # 要求可视化却没登记图
-    issues = report_issues(ctx, {"summary": "读入了数据", "key_findings": []}, "Q1", figure_required=True)
+    issues = report_issues(ctx, stub, "Q1", figure_required=True)
     assert any("还没有登记任何图" in i for i in issues)
 
     # Q3 没登记结果，却引用了 Q1 登记的 R1 冒充自己的指标
@@ -798,6 +801,31 @@ def test_label_shuffle_control_flags_leakage(tmp_path):
     assert control_issues(ctx, {"summary": "检验功效 AUC 0.71", "key_findings": [], "controls": []}, hypothesis=True) == []
     # 打乱后的值恰好等于无信息水平：像是填的理论值
     assert "恰好等于无信息水平" in control_issues(ctx, report(**{**auc, "shuffled_value": "0.6", "chance": "0.6"}, baseline_value="0.71"))[0]
+
+
+def test_leaky_metric_downgrades_findings(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.review import downgrade_findings
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "auc 0.7768 shuffled 0.6440 weight 0.3416")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    registry.record_value("Q1", "AUC", "0.7768", run_id)
+    registry.record_value("Q1", "权重", "0.3416", run_id)
+    report = {
+        "controls": [{"metric": "AUC", "value": "0.7768", "shuffled_value": "0.6440", "chance": "0.5", "higher_is_better": True}],
+        "key_findings": [
+            {"statement": "综合动量 AUC 为 {{R:R1}}，提升来自有效信号", "strength": "显著"},
+            {"statement": "得分率权重 {{R:R2}} 最高", "strength": "显著"},
+        ],
+    }
+    downgrade_findings(SimpleNamespace(registry=registry), report)
+    assert [f["strength"] for f in report["key_findings"]] == ["不显著", "显著"]
+    assert "未通过标签置换对照" in report["key_findings"][0]["statement"]
 
 
 def test_probe_metric_rejected_when_shuffled_labels_keep_the_gain(tmp_path):
