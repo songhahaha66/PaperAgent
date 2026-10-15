@@ -1,5 +1,5 @@
 """
-状态图版本的数模论文流水线（AI_PIPELINE=v2）
+状态图版本的数模论文流水线（聊天接口默认使用；AI_PIPELINE=legacy 时退回旧 MainAgent）
 
 analyze → design(候选 + 评审) → confirm → solve(按依赖并行) → write → validate/repair → render
 """

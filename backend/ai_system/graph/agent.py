@@ -59,8 +59,8 @@ class PaperGraphAgent:
             from config.paths import get_workspace_path
 
             workspace_dir = str(get_workspace_path(work_id))
-        if output_mode not in ("markdown", "latex"):
-            logger.warning("PaperGraphAgent 只支持 markdown / latex 输出，按 markdown 处理 output_mode=%s", output_mode)
+        if output_mode not in ("markdown", "latex", "word"):
+            logger.warning("PaperGraphAgent 只支持 markdown / latex / word 输出，按 markdown 处理 output_mode=%s", output_mode)
             output_mode = "markdown"
 
         self.llm = llm
@@ -216,8 +216,10 @@ class PaperGraphAgent:
         analysis = result.get("analysis") or {}
         solutions = result.get("solutions") or {}
         issues = result.get("issues") or []
-        written = "paper.md" + ("、paper.tex 和 paper.pdf" if (ctx.workspace / "paper.pdf").exists() and ctx.output_mode == "latex" else "")
-        lines = [f"论文《{analysis.get('title', '')}》已写入 {written}。", ""]
+        lines = [f"论文《{analysis.get('title', '')}》已写入 paper.md。", ""]
+        exported = [line for line in result.get("log") or [] if line.startswith("export:")]
+        if exported:
+            lines[0] += f"导出：{exported[-1].split(':', 1)[1].strip()}。"
         for sp in analysis.get("subproblems") or []:
             status = (solutions.get(sp["id"]) or {}).get("status", "未求解")
             count = len(ctx.registry.for_subproblem(sp["id"]))

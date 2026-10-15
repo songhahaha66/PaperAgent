@@ -123,7 +123,7 @@ const running = computed(
 const phases = computed(() => derivePhases(props.blocks, { done: !!result.value }))
 const subproblems = computed(() => deriveSubproblems(props.blocks))
 
-const MILESTONE_TYPES = new Set(['paper_consistency', 'paper_validation', 'paper_typeset'])
+const MILESTONE_TYPES = new Set(['paper_consistency', 'paper_validation', 'paper_export'])
 const milestones = computed(() =>
   props.blocks.filter((b) => MILESTONE_TYPES.has(b.type)).map((b) => asText(b.content)),
 )

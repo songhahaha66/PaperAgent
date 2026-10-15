@@ -2,6 +2,7 @@
 阶段 5：按登记结果写作
 
 先并行写每个子问题的"模型建立与求解"，再并行写重述、分析、假设、符号、灵敏度、评价和摘要。
+用户上传了模板时，章节标题和顺序按模板（outline.py），模板里对不上的章节按模板标题单独撰写。
 写作模型只看得到登记表，数字和图只能用 {{R:Rn}} / {{F:Fn}} 引用，杜绝编造数值。
 """
 
@@ -11,6 +12,7 @@ from typing import Dict, List, Tuple
 from langgraph.runtime import Runtime
 
 from ..context import GraphContext
+from ..outline import template_outline
 from .consistency import consistency_text
 from ..llm_utils import as_messages, call_text, clip
 from ..state import PaperState
@@ -45,12 +47,16 @@ def solve_key(subproblem_id: str) -> str:
 
 
 def section_plan(state: PaperState) -> List[Tuple[str, str, int]]:
-    """全文章节顺序：(key, 标题, 标题级别)"""
-    plan = [("abstract", "摘要", 2)] + [(k, t, 2) for k, t in FRAME_SECTIONS]
-    plan.append(("solve_heading", SOLVE_HEADING, 2))
-    for sp in state["analysis"]["subproblems"]:
-        plan.append((solve_key(sp["id"]), f"{sp['id']} {sp['title']}", 3))
-    plan += [(k, t, 2) for k, t in TAIL_SECTIONS]
+    """全文章节顺序：(key, 标题, 标题级别)；有模板时用模板的章节标题和顺序"""
+    top = [(item["key"], item["title"]) for item in state.get("outline") or []]
+    if not top:
+        top = [("abstract", "摘要")] + FRAME_SECTIONS + [("solve_heading", SOLVE_HEADING)] + TAIL_SECTIONS
+    plan: List[Tuple[str, str, int]] = []
+    for key, title in top:
+        plan.append((key, title, 2))
+        if key == "solve_heading":
+            for sp in state["analysis"]["subproblems"]:
+                plan.append((solve_key(sp["id"]), f"{sp['id']} {sp['title']}", 3))
     return plan
 
 
@@ -104,7 +110,14 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     """每一节都带上全文结论表和统一口径，各节结论口径一致"""
     request = _section_body(key, title, state, ctx)
     shared = consistency_text(ctx, state.get("consistency") or [])
-    return f"{request}\n\n{shared}" if shared else request
+    if shared:
+        request = f"{request}\n\n{shared}"
+    if ctx.template_requirements:
+        request += (
+            "\n\n# 用户模板的要求（章节标题和顺序已按模板安排，本节只写正文；措辞、格式、篇幅以模板为准）\n"
+            f"{ctx.template_requirements}"
+        )
+    return request
 
 
 def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
@@ -156,6 +169,13 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             "最后一行写「**关键词**：」并列出 4~6 个关键词。\n\n"
             f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )
+    if key.startswith("custom:"):
+        guard = "只列出题目和数据来源，不要编造文献。" if any(w in title for w in ("参考文献", "文献", "引用")) else ""
+        return (
+            f"撰写用户模板要求的「{title}」一节，内容依据题目和各子问题的结论，必须引用登记结果。{guard}\n\n"
+            f"题目：\n{clip(state['task'], 3000)}\n\n"
+            + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
+        )
     raise KeyError(key)
 
 
@@ -176,13 +196,18 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await ctx.set_stage("write", "in_progress", "撰写求解章节")
     await ctx.events.stage("开始撰写论文")
 
-    subproblems = state["analysis"]["subproblems"]
+    outline = template_outline(ctx.template_requirements) if ctx.template_requirements else []
+    state = {**state, "outline": outline}
+    plan = section_plan(state)
+    solve_items = [(key, title) for key, title, _ in plan if key.startswith("solve:")]
     sections: Dict[str, str] = {}
-    sections.update(await write_many(ctx, state, [(solve_key(sp["id"]), f"{sp['id']} {sp['title']}") for sp in subproblems]))
+    sections.update(await write_many(ctx, state, solve_items))
 
     # 摘要只依据各问的求解报告和登记结果，不读其他章节，和其余章节一起并行写，少一轮串行等待
     await ctx.set_stage("write", "in_progress", "撰写其余章节和摘要")
     with_solved = {**state, "sections": sections}
-    sections.update(await write_many(ctx, with_solved, FRAME_SECTIONS + TAIL_SECTIONS + [("abstract", "摘要")]))
+    rest = [(key, title) for key, title, _ in plan if key != "solve_heading" and not key.startswith("solve:")]
+    sections.update(await write_many(ctx, with_solved, rest))
     await ctx.set_stage("write", "completed", f"{len(sections)} 个章节")
-    return {"sections": sections, "log": [f"write: {len(sections)} sections"]}
+    log = f"write: {len(sections)} sections" + (f" (template outline: {len(outline)})" if outline else "")
+    return {"sections": sections, "outline": outline, "log": [log]}

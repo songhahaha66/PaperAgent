@@ -465,11 +465,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             except Exception as e:
                 logger.warning(f"获取工作配置失败: {e}")
 
-            # 无模板的任务：latex 输出只有状态图流水线支持；markdown 在 AI_PIPELINE=v2 时走流水线。其余仍用 MainAgent
-            use_graph = not template_id and (
-                output_mode == "latex"
-                or (output_mode == "markdown" and os.getenv("AI_PIPELINE", "legacy").lower() == "v2")
-            )
+            # 默认走状态图流水线（markdown / word / latex，有无模板都支持）；
+            # AI_PIPELINE=legacy 时退回旧 MainAgent（只留作评测基线，不支持 latex）
+            use_graph = os.getenv("AI_PIPELINE", "v2").lower() != "legacy" or output_mode == "latex"
             agent_cls = PaperGraphAgent if use_graph else MainAgent
             logger.info(f"工作 {work_id} 使用 {agent_cls.__name__}")
             main_agent = agent_cls(
