@@ -158,6 +158,7 @@ class PaperState(TypedDict, total=False):
     data_profile: str
     analysis: Dict[str, Any]
     # 子问题编号 -> {"methods", "candidates", "scores", "chosen", "critic"}
+    plan_ahead: bool  # True：全部子问题先设计再统一确认；False：每个子问题轮到求解时才设计
     designs: Annotated[Dict[str, Dict[str, Any]], merge_dict]
     feedback: str
     approved: bool

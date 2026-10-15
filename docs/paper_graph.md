@@ -6,10 +6,17 @@
 ## 流程
 
 ```
-analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意见)──▶ design
-                                        └─(通过)──▶ solve（按依赖分批并行：explore → 正式求解 → 审查）──▶ reconcile ──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
-                                                                                                 └─▶ render
+analyze ─┬─(AI_CONFIRM_MODELS=1)─Send×N──▶ design ──▶ confirm ─┬─(有修改意见)──▶ design
+         │                                                     └─(通过)──▶ solve
+         └─(默认，按需设计)──────────────────────────────────────────────▶ solve（设计 → explore → 正式求解 → 审查）
+
+solve（按依赖分批并行）──▶ reconcile ──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
+                                                            └─▶ render
 ```
+
+不需要人工确认方案时，设计放进各子问题的求解分支里按需进行：Q1 设计完立即开始求解，不用等其他子问题的设计；
+Q2 轮到时 Q1 已经求解完，候选方案的生成请求里带着 Q1 的实际结论和登记结果（滚动规划）。
+需要人工确认时仍然先并行设计全部子问题，再一次性交给用户确认。
 
 | 阶段 | 做什么 | 关键设计 |
 |---|---|---|

@@ -175,13 +175,28 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             approach=WRITING_APPROACH,
             key_findings=[],
         ).model_dump()
-        return {
+        update = {
             "solutions": {subproblem_id: {**report, "status": "completed", "error": None, "reviews": []}},
             "log": [f"solve {subproblem_id}: writing"],
         }
+        if branch.get("design") is None:
+            from .design import WRITING_DESIGN
+
+            update["designs"] = {subproblem_id: {
+                "methods": [], "candidates": [WRITING_DESIGN], "scores": [{"total": None}],
+                "chosen": WRITING_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
+            }}
+        return update
 
     run_log: List[Dict] = []
     exploration = None
+    designed_here = branch.get("design") is None
+    if designed_here:
+        # 按需设计：轮到这个子问题时才设计，候选方案能参考已经求解完的前序结论
+        from .design import make_design  # 避免循环导入
+
+        record, _ = await make_design(ctx, branch)
+        branch = {**branch, "design": record}
     design = branch["design"]
     messages = None
     try:
@@ -223,9 +238,10 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
         "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],
     }
-    if exploration is not None:
+    if exploration is not None or designed_here:
         # 写作阶段按实际求解的方案描述模型
         update["designs"] = {subproblem_id: design}
+    if exploration is not None:
         update["log"].append(f"explore {subproblem_id}: -> {exploration.chosen_index} ({exploration.reason})")
     return update
 
