@@ -69,8 +69,11 @@ uv run main.py
 uv run pytest
 
 # End-to-end eval on MM-Bench (see docs/evaluation.md)
-uv run python -m evals all --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/<name>
+uv run python -m evals all --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/<name> [--pipeline v2]
 ```
+
+### State-graph pipeline (v2)
+`backend/ai_system/graph/` is the LangGraph version of the 数模 pipeline (see docs/paper_graph.md). It runs when `AI_PIPELINE=v2` for markdown works without a template; everything else still uses MainAgent. Numbers in the paper must come from the result registry (`{{R:Rn}}` / `{{F:Fn}}` references), which only accepts values that appear in a successful kernel run's output.
 
 ### Frontend Development
 ```bash

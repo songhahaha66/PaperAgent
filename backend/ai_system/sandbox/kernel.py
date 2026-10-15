@@ -1,0 +1,152 @@
+"""
+持久 Python 内核：每个求解任务一个独立子进程，变量在多次执行间保留
+
+与旧 CodeExecutor 的区别：
+- 旧实现每次调用都起新进程，数据要反复加载，上一步算出的变量下一步拿不到；
+- 这里一个内核进程服务整个子问题的求解，像 Jupyter 一样逐格执行；
+- 每次执行仍记录为一条 run（runs/<run_id>/input.py、stdout.log、artifacts/），
+  前端文件视图和评测里的"代码成功率"不受影响。
+"""
+
+import asyncio
+import json
+import logging
+import os
+import sys
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional
+
+from services.file_services.workspace_fs import WorkspaceFS
+
+logger = logging.getLogger(__name__)
+
+WORKER = Path(__file__).with_name("kernel_worker.py")
+DEFAULT_TIMEOUT = 180.0
+STREAM_LIMIT = 32 * 1024 * 1024
+
+
+@dataclass
+class CellResult:
+    ok: bool
+    stdout: str
+    error: Optional[str]
+    run_id: str
+    # 相对工作空间的图片路径
+    figures: List[str] = field(default_factory=list)
+    timed_out: bool = False
+
+    def to_observation(self) -> str:
+        """给模型看的执行结果"""
+        parts = [f"[run_id: {self.run_id}]"]
+        if self.stdout.strip():
+            parts.append(self.stdout.rstrip())
+        if self.figures:
+            parts.append("已保存图片: " + ", ".join(self.figures))
+        if self.error:
+            parts.append(self.error.rstrip())
+        if self.timed_out:
+            parts.append("执行超时，内核已重启，之前定义的变量都已丢失，需要重新加载数据。")
+        if len(parts) == 1:
+            parts.append("（执行成功，无输出）")
+        return "\n".join(parts)
+
+
+class PythonKernel:
+    def __init__(
+        self,
+        workspace_dir: str,
+        timeout: float = DEFAULT_TIMEOUT,
+        fs: Optional[WorkspaceFS] = None,
+    ):
+        self.workspace_dir = Path(workspace_dir).resolve()
+        self.timeout = timeout
+        # 同一工作空间的多个内核必须共用一个 WorkspaceFS，否则各自的 manifest 副本会互相覆盖
+        self.fs = fs or WorkspaceFS(str(self.workspace_dir))
+        self.fs.init_structure()
+        self._proc: Optional[asyncio.subprocess.Process] = None
+        self._lock = asyncio.Lock()
+
+    async def _ensure_started(self) -> asyncio.subprocess.Process:
+        if self._proc is not None and self._proc.returncode is None:
+            return self._proc
+        env = os.environ.copy()
+        env.update({
+            "PYTHONIOENCODING": "utf-8",
+            "MPLBACKEND": "Agg",
+            # 限制数值库线程数，避免多个内核并行时互相抢 CPU
+            "OMP_NUM_THREADS": env.get("OMP_NUM_THREADS", "2"),
+            "OPENBLAS_NUM_THREADS": env.get("OPENBLAS_NUM_THREADS", "2"),
+            "PYTHONPATH": str(self.workspace_dir / "code"),
+        })
+        self._proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-u", str(WORKER),
+            cwd=str(self.workspace_dir),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+            limit=STREAM_LIMIT,
+        )
+        return self._proc
+
+    async def execute(self, code: str) -> CellResult:
+        async with self._lock:
+            run_id = self.fs.create_run()
+            self.fs.save_run_input(run_id, code)
+            artifacts_dir = f"runs/{run_id}/artifacts"
+            proc = await self._ensure_started()
+
+            request = {"id": uuid.uuid4().hex, "code": code, "artifacts_dir": artifacts_dir}
+            proc.stdin.write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
+            await proc.stdin.drain()
+
+            try:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=self.timeout)
+                if not line:
+                    raise RuntimeError("内核进程意外退出")
+                response = json.loads(line)
+                result = CellResult(
+                    ok=response["ok"],
+                    stdout=response.get("stdout") or "",
+                    error=response.get("error"),
+                    run_id=run_id,
+                    figures=response.get("figures") or [],
+                )
+            except asyncio.TimeoutError:
+                await self._kill()
+                result = CellResult(
+                    ok=False, stdout="", error=f"执行超过 {self.timeout:.0f} 秒", run_id=run_id, timed_out=True
+                )
+            except Exception as exc:
+                await self._kill()
+                result = CellResult(ok=False, stdout="", error=f"内核异常: {exc}", run_id=run_id)
+
+            log = result.stdout + (f"\n{result.error}" if result.error else "")
+            self.fs.save_run_stdout(run_id, log)
+            for figure in result.figures:
+                self.fs.register_run_artifact(run_id, Path(figure).name)
+            self.fs.finish_run(run_id, "success" if result.ok else "error")
+            return result
+
+    async def _kill(self):
+        if self._proc is not None and self._proc.returncode is None:
+            self._proc.kill()
+            await self._proc.wait()
+        self._proc = None
+
+    async def close(self):
+        if self._proc is not None and self._proc.returncode is None:
+            self._proc.stdin.close()
+            try:
+                await asyncio.wait_for(self._proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                await self._kill()
+        self._proc = None
+
+    async def __aenter__(self) -> "PythonKernel":
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.close()

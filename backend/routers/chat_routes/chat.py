@@ -18,6 +18,7 @@ from services.chat_services.task_manager import task_manager, TaskStatus
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
 from ai_system.core_agents.main_agent import MainAgent
+from ai_system.graph import PaperGraphAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
 from config.paths import get_workspace_path
@@ -464,8 +465,15 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             except Exception as e:
                 logger.warning(f"获取工作配置失败: {e}")
 
-            # 创建MainAgent，传入workspace_dir、work_id、template_id、codeagent_llm、output_mode、writer_llm
-            main_agent = MainAgent(
+            # AI_PIPELINE=v2 时，无模板的 markdown 任务走状态图流水线；其余仍用 MainAgent
+            use_graph = (
+                os.getenv("AI_PIPELINE", "legacy").lower() == "v2"
+                and output_mode == "markdown"
+                and not template_id
+            )
+            agent_cls = PaperGraphAgent if use_graph else MainAgent
+            logger.info(f"工作 {work_id} 使用 {agent_cls.__name__}")
+            main_agent = agent_cls(
                 llm_handler.get_llm_instance(), 
                 stream_manager, 
                 workspace_dir, 
