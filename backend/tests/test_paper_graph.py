@@ -636,15 +636,16 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     seen = []
 
     async def handler(request):
-        seen.append(request.messages)
+        seen.append((request.messages, request.tools))
         return None
 
     middleware = StepBudgetMiddleware(budget=12, reserve=3, message="请交报告")
-    for msgs in (history(20, 8), history(0, 9)):
-        asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=msgs), handler))
-    # 返工前的 20 步不计入；第二次已到 9 步，追加提醒
-    assert seen[0][-1].content == "ok"
-    assert "还剩约 3 步。请交报告" in seen[1][-1].content
+    for msgs in (history(20, 8), history(0, 9), history(0, 11)):
+        asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=msgs, tools=["run_python"]), handler))
+    # 返工前的 20 步不计入；第二次已到 9 步，追加提醒；最后一步只留报告工具
+    assert seen[0][0][-1].content == "ok" and seen[0][1] == ["run_python"]
+    assert "还剩约 3 步。请交报告" in seen[1][0][-1].content and seen[1][1] == ["run_python"]
+    assert "步数已用完" in seen[2][0][-1].content and seen[2][1] == []
 
 
 def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path):
