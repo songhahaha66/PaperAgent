@@ -1122,3 +1122,27 @@ def test_writing_brief_asks_for_actionable_advice():
     memo = {"id": "Q4", "kind": "writing", "title": "给教练的备忘录", "question": "给出建议", "deliverables": ["一页备忘录"]}
     brief = subproblem_brief({"analysis": {"subproblems": [memo]}}, None, memo)
     assert ACTIONABLE_ADVICE in brief
+
+
+def test_dependency_handoff_includes_solution_code(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.solve import _dependency_text, export_solution_code, solution_code_path
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    ctx = SimpleNamespace(fs=fs, workspace=tmp_path, registry=ResultRegistry.load(fs))
+    export_solution_code(ctx, "Q2", [
+        {"run_id": "r1", "code": "def backtest(p):\n    return p", "ok": True},
+        {"run_id": "r2", "code": "raise ValueError", "ok": False},
+        {"run_id": "r3", "code": "print('ok')", "ok": True},
+    ])
+    code = (tmp_path / solution_code_path("Q2")).read_text(encoding="utf-8")
+    assert "def backtest" in code and "ValueError" not in code and "print('ok')" not in code
+    (tmp_path / "outputs" / "intermediate").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "outputs" / "intermediate" / "aligned.csv").write_text("a\n1\n")
+    text = _dependency_text({"Q2": {"summary": "策略回测"}}, ctx)
+    assert solution_code_path("Q2") in text and "outputs/intermediate/aligned.csv" in text
+    # 没有成功执行过的代码时不写文件
+    export_solution_code(ctx, "Q3", [{"run_id": "r4", "code": "x", "ok": False}])
+    assert not (tmp_path / solution_code_path("Q3")).exists()

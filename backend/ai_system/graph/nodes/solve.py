@@ -103,13 +103,50 @@ def strip_template_tokens(code: str) -> str:
     return code[: match.start()].rstrip() if match else code
 
 
+def solution_code_path(subproblem_id: str) -> str:
+    return f"code/{subproblem_id}_solution.py"
+
+
+def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Dict]) -> None:
+    """把本问成功执行过的代码按顺序存成一个文件，供依赖它的子问题复用
+
+    每个子问题有自己的内核，后一问看不到前一问的函数和变量。2022_C 的 Q3 要"运行 Q2 选定的策略"，
+    只拿到 Q2 的结论和数值，只好从读数据开始重写回测，日期解析又踩了一遍坑，171 条对话后交了空报告。
+    """
+    runs = [r for r in run_log if r.get("ok") and not PLACEHOLDER_CODE.match(r.get("code") or "")]
+    if not runs:
+        return
+    body = "\n\n".join(f"# ---- {r['run_id']} ----\n{r['code'].rstrip()}" for r in runs)
+    header = f"# {subproblem_id} 成功执行过的代码（按执行顺序，含探索过程）。复用时复制需要的函数和处理步骤，不必整体运行。\n\n"
+    try:
+        ctx.fs.write_text(solution_code_path(subproblem_id), header + body)
+    except Exception as exc:  # 只是给后续子问题的参考，失败不影响本问
+        logger.warning("保存 %s 的代码失败: %s", subproblem_id, exc)
+
+
+def _intermediate_files(ctx: GraphContext) -> List[str]:
+    folder = ctx.workspace / "outputs" / "intermediate"
+    if not folder.exists():
+        return []
+    return sorted(str(p.relative_to(ctx.workspace)) for p in folder.rglob("*") if p.is_file())
+
+
 def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
     if not dependencies:
         return ""
-    parts = ["# 前序子问题的结论（可直接使用其登记结果和中间数据）"]
+    parts = [
+        "# 前序子问题的结论（可直接使用其登记结果、中间数据和代码）\n"
+        "前序子问题在各自的内核里运行，它们的变量和函数在你的内核里不存在。需要沿用前序的数据处理或模型时，"
+        "先读它的代码文件、复制需要的部分，或读取它保存的中间数据，不要从头重写。"
+    ]
     for dep_id, report in dependencies.items():
         parts.append(f"## {dep_id}\n{report.get('summary', '')}")
+        if ctx.fs.exists(solution_code_path(dep_id)):
+            parts.append(f"代码：{solution_code_path(dep_id)}")
         parts.append(ctx.registry.to_prompt_table(dep_id))
+    files = _intermediate_files(ctx)
+    if files:
+        parts.append("中间数据文件：\n" + "\n".join(f"- {f}" for f in files))
     return "\n\n".join(parts)
 
 
@@ -308,6 +345,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         )
     finally:
         await ctx.kernels.release(subproblem_id)
+        export_solution_code(ctx, subproblem_id, run_log)
 
     if not report:
         # 没交报告也保留已登记的结果，写作阶段仍可使用
