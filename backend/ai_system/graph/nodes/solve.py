@@ -2,7 +2,7 @@
 阶段 4：求解（每个子问题一个分支，按依赖关系分批并行）
 
 每个分支是一个小的 CodeAct 循环：模型写代码 → 持久内核执行 → 看输出 → 继续，
-关键数字和图通过 record_result / record_figure 登记，登记时校验数值确实来自某次执行的输出。
+关键数字和图通过 record_results / record_figure 登记，登记时校验数值确实来自某次执行的输出。
 最后用结构化输出交一份求解报告，报告里的数字也只能写 {{R:Rn}} 引用。
 
 正式求解之前先做执行驱动的方案搜索（explore.py）：评分靠前的几个候选各自试跑，按统一协议比较，
@@ -24,7 +24,7 @@ from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
-from ..state import BranchInput, Finding, SolveReport
+from ..state import BranchInput, Finding, ResultItem, SolveReport
 from .explore import explore, promotion_message
 from .review import feedback_message, review_solution
 
@@ -34,7 +34,8 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 
 工作方式：
 - 用 run_python 执行代码。内核是持久的：前面定义的变量、读入的数据后面都能直接用，不要每次重新读数据。
-- 每次只写一小段代码，看到输出再决定下一步；出错就读回溯修正。
+- 每次写一段完整的代码（读数据、计算、打印关键结果可以放在一起），看到输出再决定下一步；出错就读回溯修正。
+- 只 print 需要看的汇总结果，不要打印整张表或长数组（输出超过约 6000 字会被截断）。
 - 数据文件路径相对于工作目录，例如 data/xxx.csv。
 - 画图用 matplotlib，画完不需要 savefig，系统会自动保存本次执行打开的图并告诉你文件名。
 - 需要传给后续子问题的中间数据，保存到 outputs/intermediate/ 下（csv），并在报告里说明文件名。
@@ -43,7 +44,8 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 
 结果登记（非常重要）：
-- 论文里会用到的每个关键数字（参数估计、预测值、指标、最优解等），先 print 出来，再用 record_result 登记，run_id 填打印它的那次执行。
+- 论文里会用到的每个关键数字（参数估计、预测值、指标、最优解等），先 print 出来，再用 record_results 登记，run_id 填打印它的那次执行。
+- 把一批结果放进一次 record_results 调用里登记，不要一个结果调用一次。
 - 登记的值要和输出一致（可以四舍五入到合理的位数，百分数写成 87.3%）。没出现在输出里的值会被拒绝。
 - 论文要用的图用 record_figure 登记，并写清图题。
 - 至少完成方案中的检验或灵敏度分析，并登记相应结果。
@@ -52,6 +54,9 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 每条主要结论都要写出依据的登记结果，并如实标注证据强度：检验不显著的就标「不显著」，不要把不显著的结果写成有效应。
 这些结论会和其他子问题的结论放在一起做一致性审查。"""
 
+
+OBSERVATION_CHARS = 6000
+WRITING_APPROACH = "基于前序结论撰写"
 
 REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
 
@@ -85,17 +90,24 @@ def build_tools(
             "paper_code",
             f"{subproblem_id} · {result.run_id} · {'成功' if result.ok else '失败'}",
         )
-        return clip(result.to_observation(), 12000)
+        return clip(result.to_observation(), OBSERVATION_CHARS)
 
-    async def record_result(name: str, value: str, run_id: str, unit: str = "", description: str = "") -> str:
-        """登记一个论文会用到的结果。value 必须出现在 run_id 那次执行的输出里。
-        unit 只填物理或计数单位（如 点、秒、米、万元、%），p 值、AUC、系数、比例这类无量纲量留空。
+    async def record_results(items: List[ResultItem]) -> str:
+        """一次登记多个论文会用到的结果（同一次或多次执行的结果放在一起登记，减少往返）。
+        每个 value 必须出现在对应 run_id 那次执行的输出里，未通过核对的逐条说明原因，其余照常登记。
         返回可在报告和论文中使用的引用"""
-        try:
-            result = ctx.registry.record_value(subproblem_id, name, value, run_id, unit, description)
-        except GroundingError as exc:
-            return f"登记失败：{exc}"
-        return f"已登记，引用写作 {{{{R:{result.id}}}}}（{result.name} = {result.display()}）"
+        lines = []
+        for item in items:
+            item = item if isinstance(item, ResultItem) else ResultItem.model_validate(item)
+            try:
+                result = ctx.registry.record_value(
+                    subproblem_id, item.name, item.value, item.run_id, item.unit, item.description
+                )
+            except GroundingError as exc:
+                lines.append(f"- {item.name}：登记失败，{exc}")
+                continue
+            lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}")
+        return "\n".join(lines) or "没有要登记的结果"
 
     async def record_figure(run_id: str, figure: str, caption: str) -> str:
         """登记一张论文要用的图。figure 是执行结果里给出的图片文件名，caption 是图题"""
@@ -109,7 +121,7 @@ def build_tools(
     tools = [StructuredTool.from_function(coroutine=run_python, name="run_python")]
     if record:
         tools += [
-            StructuredTool.from_function(coroutine=record_result, name="record_result"),
+            StructuredTool.from_function(coroutine=record_results, name="record_results"),
             StructuredTool.from_function(coroutine=record_figure, name="record_figure"),
         ]
     return tools
@@ -153,6 +165,18 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     subproblem_id = branch["subproblem"]["id"]
     await ctx.set_stage("solve", "in_progress")
+    if branch["subproblem"].get("kind") == "writing":
+        # 写作类子问题不开内核、不跑编码循环，写作阶段直接依据前序结论撰写
+        await ctx.events.emit("paper_solved", f"{subproblem_id} 为写作类交付物，写作阶段依据前序结论撰写")
+        report = SolveReport(
+            summary="本问为文书类交付物，依据前序各问的结论撰写。",
+            approach=WRITING_APPROACH,
+            key_findings=[],
+        ).model_dump()
+        return {
+            "solutions": {subproblem_id: {**report, "status": "completed", "error": None, "reviews": []}},
+            "log": [f"solve {subproblem_id}: writing"],
+        }
 
     run_log: List[Dict] = []
     exploration = None

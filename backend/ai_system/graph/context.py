@@ -100,6 +100,7 @@ class GraphContext:
     max_review_rounds: int = 1
     explore_top_k: int = 2
     explore_steps: int = 12
+    explore_margin: float = 2.0  # 前两名评审总分（满分 16）差距超过它就不试跑
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)

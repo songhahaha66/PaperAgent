@@ -73,8 +73,23 @@ def _report_text(report: Dict) -> str:
     )
 
 
+def writing_sources(state: PaperState, subproblem: Dict) -> List[Dict]:
+    """写作类子问题依据的子问题：声明的依赖，没有声明时用全部计算类子问题"""
+    subproblems = state["analysis"]["subproblems"]
+    deps = set(subproblem.get("depends_on") or [])
+    return [sp for sp in subproblems if sp["id"] != subproblem["id"] and sp.get("kind") != "writing"
+            and (not deps or sp["id"] in deps)]
+
+
 def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> str:
     sid = subproblem["id"]
+    if subproblem.get("kind") == "writing":
+        sources = "\n\n".join(subproblem_brief(state, ctx, sp) for sp in writing_sources(state, subproblem))
+        return (
+            f"## {sid} {subproblem['title']}（文书类交付物）\n问题：{subproblem['question']}\n"
+            f"交付物：{'；'.join(subproblem.get('deliverables') or [])}\n"
+            f"依据以下各问的结论和登记结果撰写，数字同样只能写引用：\n\n{sources}"
+        )
     design = (state.get("designs") or {}).get(sid)
     report = (state.get("solutions") or {}).get(sid) or {}
     return (

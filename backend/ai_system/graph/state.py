@@ -25,6 +25,10 @@ def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
 
 class Subproblem(BaseModel):
     id: str = Field(description="子问题编号，如 Q1、Q2")
+    kind: Literal["compute", "writing"] = Field(
+        default="compute",
+        description="compute=需要用数据建模计算；writing=只需基于前序结论写成文书（如给教练的备忘录、建议信、政策建议），不需要新的计算",
+    )
     title: str = Field(description="子问题的简短标题")
     question: str = Field(description="子问题要回答的具体内容，忠实于原题")
     deliverables: List[str] = Field(default_factory=list, description="这一问需要给出的结果，如某个预测值、排序、方案、图")
@@ -59,6 +63,14 @@ class CandidateSet(BaseModel):
 
 
 STRENGTHS = ("显著", "倾向", "不显著")
+
+
+class ResultItem(BaseModel):
+    name: str = Field(description="结果名称")
+    value: str = Field(description="结果值，必须出现在 run_id 那次执行的输出里")
+    run_id: str = Field(description="打印该值的那次执行的 run_id")
+    unit: str = Field(default="", description="只填物理或计数单位（如 点、秒、米、万元、%），p 值、AUC、系数、比例这类无量纲量留空")
+    description: str = Field(default="", description="一句话说明")
 
 
 class Finding(BaseModel):
