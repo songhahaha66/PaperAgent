@@ -100,7 +100,7 @@ class GraphContext:
     max_review_rounds: int = 1
     explore_top_k: int = 2
     explore_steps: int = 12
-    audit_claims: bool = True
+    check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)

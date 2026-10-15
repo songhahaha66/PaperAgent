@@ -6,6 +6,7 @@
     uv run python -m evals score --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/baseline
     uv run python -m evals all   --bench ... --out ...        # run + score + 汇总
     uv run python -m evals all   --pipeline v2 --bench ... --out eval_runs/v2   # 状态图版本
+    uv run python -m evals all   --pipeline v2-no-explore ...                   # 消融：关掉方案探索（另有 v2-no-review / v2-no-consistency）
 
 生成模型：EVAL_MODEL / EVAL_API_KEY / EVAL_PROVIDER(默认 openai) / EVAL_BASE_URL
 判分：--judge jev（需要 TYPESAFE_API_KEY，--jev-model 固定版本）
@@ -81,7 +82,7 @@ async def main(args) -> None:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(prog="python -m evals", description="PaperAgent MM-Bench 评测")
     parser.add_argument("command", choices=["run", "score", "all", "report"])
-    parser.add_argument("--pipeline", choices=PIPELINES, default="legacy", help="legacy=原 MainAgent，v2=状态图流水线")
+    parser.add_argument("--pipeline", choices=PIPELINES, default="legacy", help="legacy=原 MainAgent，v2=状态图流水线，v2-no-*=消融版本")
     parser.add_argument("--bench", required=True, help="本地 MMBench 目录（含 problem/ 与 dataset/）")
     parser.add_argument("--out", required=True, help="本次评测的输出目录")
     parser.add_argument("--problems", default="", help="逗号分隔的题号，默认 10 题子集")

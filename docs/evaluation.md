@@ -17,6 +17,8 @@ cd backend
 uv run python -m evals all --bench ~/LLM-MM-Agent/MMBench --out eval_runs/baseline
 # 评测状态图流水线（见 docs/paper_graph.md）
 uv run python -m evals all --pipeline v2 --bench ~/LLM-MM-Agent/MMBench --out eval_runs/v2
+# 消融：各关掉一个模块（方案探索 / 结果审查 / 结论一致性），与 v2 同题对比
+uv run python -m evals all --pipeline v2-no-explore --problems 2024_C,2023_C --bench ... --out eval_runs/v2-no-explore
 # 只重新判分 / 只重新汇总
 uv run python -m evals score  --bench ... --out eval_runs/baseline --judge jev
 uv run python -m evals report --bench ... --out eval_runs/baseline

@@ -66,7 +66,7 @@ def valid_conflicts(conflicts: List[Dict], known: set) -> List[Dict]:
 async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     claims = ctx.registry.claims
-    if len(claims) < 2:
+    if not ctx.check_claims or len(claims) < 2:
         return {"consistency": [], "log": ["reconcile: skipped"]}
     await ctx.events.stage(f"审查 {len(claims)} 条结论的一致性")
     subproblems = "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in state["analysis"]["subproblems"])

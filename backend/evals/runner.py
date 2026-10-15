@@ -76,7 +76,14 @@ def _sum_usage(usage_by_model: Dict[str, Dict]) -> Dict[str, int]:
     return totals
 
 
-PIPELINES = ("legacy", "v2")
+# v2 的消融版本：各关掉一个模块，衡量它对分数的贡献
+V2_VARIANTS = {
+    "v2": {},
+    "v2-no-explore": {"explore_top_k": 1},
+    "v2-no-review": {"max_review_rounds": 0},
+    "v2-no-consistency": {"check_claims": False},
+}
+PIPELINES = ("legacy", *V2_VARIANTS)
 
 
 def _build_agent(pipeline: str, llm, workspace: Path):
@@ -86,11 +93,11 @@ def _build_agent(pipeline: str, llm, workspace: Path):
         # legacy 工具通过环境变量找工作空间
         os.environ["WORKSPACE_DIR"] = str(workspace)
         return MainAgent(llm=llm, workspace_dir=str(workspace), output_mode="markdown")
-    if pipeline == "v2":
+    if pipeline in V2_VARIANTS:
         from ai_system.graph import PaperGraphAgent
 
         # 评测不需要人工确认建模方案
-        return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False)
+        return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False, **V2_VARIANTS[pipeline])
     raise ValueError(f"未知 pipeline: {pipeline}")
 
 
