@@ -725,6 +725,15 @@ def test_report_issues_requires_registered_results(tmp_path):
     issues = report_issues(ctx, {"summary": "读入了数据", "key_findings": []}, "Q1")
     assert len(issues) == 1 and "还没有登记任何结果" in issues[0]
 
+    # Q3 没登记结果，却引用了 Q1 登记的 R1 冒充自己的指标
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "test matches 6")
+    fs.finish_run(run_id, "success")
+    ctx.registry.record_value("Q1", "验证集场数", "6", run_id)
+    stolen = {"summary": "AUC 为 {{R:R1}}", "key_findings": []}
+    assert any("R1 不是本子问题登记的结果" in i for i in report_issues(ctx, stolen, "Q3"))
+    assert not any("不是本子问题" in i for i in report_issues(ctx, stolen, "Q3", ["Q1"]))
+
 
 def test_label_shuffle_control_flags_leakage(tmp_path):
     from types import SimpleNamespace

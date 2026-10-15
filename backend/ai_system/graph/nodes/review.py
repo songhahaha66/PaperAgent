@@ -16,7 +16,7 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 from ..context import GraphContext
-from ..registry import REF_PATTERN, GroundingError
+from ..registry import REF_PATTERN, GroundingError, find_refs
 from ..llm_utils import as_messages, call_structured, clip
 from ..state import BranchInput, ResultReview
 
@@ -173,9 +173,29 @@ def ungrounded_findings(report: Dict) -> List[str]:
     ]
 
 
-def report_issues(ctx: GraphContext, report: Dict, subproblem_id: str) -> List[str]:
-    """不调模型的报告检查：有登记结果 + 标签置换对照 + 结论数字可追溯"""
-    issues = control_issues(ctx, report) + ungrounded_findings(report)
+def foreign_refs(ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: List[str]) -> List[str]:
+    """报告里引用了不存在的、或者不属于本子问题及其依赖的结果
+
+    2024_C 的 Q3 一项结果都没登记，结论却写成"验证集 AUC 为 {{R:R3}}"，R3 是 Q1 登记的"验证集场数"。
+    """
+    allowed = {subproblem_id, *dependencies}
+    texts = [report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])]
+    bad = []
+    for ref in find_refs(" ".join(texts)):
+        result = ctx.registry.get(ref)
+        if (result is None or result.subproblem not in allowed) and ref not in bad:
+            bad.append(ref)
+    if not bad:
+        return []
+    return [
+        f"报告引用的 {', '.join(bad)} 不是本子问题登记的结果（不存在或属于其他子问题）。"
+        "引用只能使用 record_results / record_figure 返回给你的编号，请先登记本问的结果再改写报告。"
+    ]
+
+
+def report_issues(ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: Optional[List[str]] = None) -> List[str]:
+    """不调模型的报告检查：有登记结果 + 引用属于本问 + 标签置换对照 + 结论数字可追溯"""
+    issues = foreign_refs(ctx, report, subproblem_id, dependencies or []) + control_issues(ctx, report) + ungrounded_findings(report)
     if not ctx.registry.for_subproblem(subproblem_id):
         # 2024_C 的 Q1 跑了两段读数据的代码就交了报告，一项结果都没登记
         issues.insert(0, "还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")

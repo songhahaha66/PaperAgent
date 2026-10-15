@@ -123,6 +123,7 @@ def build_tools(
                 )
             except GroundingError as exc:
                 lines.append(f"- {item.name}：登记失败，{exc}")
+                logger.info("%s 登记「%s」被拒：%s", subproblem_id, item.name, exc)
                 continue
             lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}")
         return "\n".join(lines) or "没有要登记的结果"
@@ -286,7 +287,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             if structured is None:
                 break
             current = structured.model_dump()
-            fixes = report_issues(ctx, current, subproblem_id)
+            fixes = report_issues(ctx, current, subproblem_id, branch["subproblem"].get("depends_on") or [])
             if round_index == ctx.max_review_rounds:
                 if not fixes:
                     break
@@ -312,6 +313,9 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             structured = result.get("structured_response") or structured
         if structured is None:
             status = "incomplete"
+        elif not ctx.registry.for_subproblem(subproblem_id):
+            # 返工后仍一项结果都没登记：报告里的数字和引用都不可信，丢掉报告，按未完成交给写作
+            status, error = "incomplete", "没有登记任何结果"
         else:
             report = structured.model_dump()
             # 返工轮数用完仍未通过置换对照的、没有超过简单基线的，写进局限，写作时不能当作有效的预测结论
