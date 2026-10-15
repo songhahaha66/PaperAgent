@@ -97,6 +97,9 @@ class _Structured:
                 return ClaimAudit(issues=[
                     ClaimIssue(section="evaluation", problem="把 C1 写成了显著"),
                     ClaimIssue(section="not_a_section", problem="x"),
+                    # 核对后一致的句子不是问题，不应触发修复
+                    ClaimIssue(section="evaluation", problem="正文称 AUC 为 0.79，与 C1 一致。无矛盾。"),
+                    ClaimIssue(section="evaluation", contradicts=False, problem="没有提到 C1"),
                 ])
             return ClaimAudit()
         if self.schema is ResultReview:
@@ -293,6 +296,7 @@ def test_graph_end_to_end_offline(tmp_path):
 
     # 摘要第一次带了编造数字、模型评价与结论表不一致，校验后同一轮修复
     assert any("与结论表不一致：把 C1 写成了显著" in req for req in model.text_calls)
+    assert not any("无矛盾" in req or "没有提到 C1" in req for req in model.text_calls)
     assert result["repair_round"] == 1
     assert result["issues"] == []
 
@@ -717,6 +721,16 @@ def test_normalize_plan_drops_paper_writing_subproblem():
         {"id": "Q3", "kind": "writing", "title": "完整建模论文撰写", "question": "整合 Q1、Q2", "depends_on": ["Q1", "Q2"]},
     ])
     assert [sp["id"] for sp in plan] == ["Q1", "Q2"]
+
+
+def test_normalize_plan_drops_duplicate_ids():
+    from ai_system.graph.nodes.analyze import normalize_plan
+
+    first = {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []}
+    second = {"id": "Q2", "kind": "compute", "title": "检验", "question": "用 Q1 的模型检验", "depends_on": []}
+    plan = normalize_plan([first, second, {**first, "title": "重复的 Q1"}, second])
+    assert [sp["id"] for sp in plan] == ["Q1", "Q2"]
+    assert plan[0]["title"] == "动量模型" and plan[1]["depends_on"] == ["Q1"]
 
 
 def test_report_issues_requires_registered_results(tmp_path):

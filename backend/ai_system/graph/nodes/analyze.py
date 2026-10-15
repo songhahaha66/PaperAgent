@@ -93,6 +93,9 @@ def normalize_plan(subproblems: List[Dict]) -> List[Dict]:
         sp for sp in subproblems
         if not (PAPER_ITSELF.search(sp.get("title", "")) and not WRITING_TITLE.search(sp.get("title", "")))
     ] or subproblems
+    # 同一编号只留第一次出现的：v2k 的分析把 Q1-Q4 列了两遍，Q1 被并行求解了两次
+    seen = set()
+    subproblems = [sp for sp in subproblems if not (sp["id"] in seen or seen.add(sp["id"]))]
     ids = [sp["id"] for sp in subproblems]
     fixed = []
     for index, sp in enumerate(subproblems):
