@@ -34,6 +34,10 @@ class KernelPool:
             self._kernels[key] = PythonKernel(str(self.workspace), timeout=self.timeout, fs=self.fs)
         return self._kernels[key]
 
+    def promote(self, source: str, target: str) -> None:
+        """把探索分支的内核（变量都在）改挂到正式求解的 key 下"""
+        self._kernels[target] = self._kernels.pop(source)
+
     async def release(self, key: str) -> None:
         kernel = self._kernels.pop(key, None)
         if kernel is not None:
@@ -94,6 +98,8 @@ class GraphContext:
     max_solver_steps: int = 40
     max_repair_rounds: int = 2
     max_review_rounds: int = 1
+    explore_top_k: int = 2
+    explore_steps: int = 12
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)

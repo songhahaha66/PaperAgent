@@ -4,6 +4,9 @@
 每个分支是一个小的 CodeAct 循环：模型写代码 → 持久内核执行 → 看输出 → 继续，
 关键数字和图通过 record_result / record_figure 登记，登记时校验数值确实来自某次执行的输出。
 最后用结构化输出交一份求解报告，报告里的数字也只能写 {{R:Rn}} 引用。
+
+正式求解之前先做执行驱动的方案搜索（explore.py）：评分靠前的几个候选各自试跑，按统一协议比较，
+胜出分支的内核和对话历史直接接着做正式求解。
 """
 
 import logging
@@ -22,6 +25,7 @@ from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, SolveReport
+from .explore import explore, promotion_message
 from .review import feedback_message, review_solution
 
 logger = logging.getLogger(__name__)
@@ -60,8 +64,15 @@ def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
     return "\n\n".join(parts)
 
 
-def build_tools(ctx: GraphContext, subproblem_id: str, run_log: Optional[List[Dict]] = None) -> List[StructuredTool]:
-    kernel = ctx.kernels.get(subproblem_id)
+def build_tools(
+    ctx: GraphContext,
+    subproblem_id: str,
+    run_log: Optional[List[Dict]] = None,
+    kernel_key: Optional[str] = None,
+    record: bool = True,
+) -> List[StructuredTool]:
+    """record=False 时只给 run_python（探索阶段不登记结果）"""
+    kernel = ctx.kernels.get(kernel_key or subproblem_id)
     run_log = run_log if run_log is not None else []
 
     async def run_python(code: str) -> str:
@@ -93,16 +104,24 @@ def build_tools(ctx: GraphContext, subproblem_id: str, run_log: Optional[List[Di
         await ctx.events.file_changed(result.path)
         return f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）"
 
-    return [
-        StructuredTool.from_function(coroutine=run_python, name="run_python"),
-        StructuredTool.from_function(coroutine=record_result, name="record_result"),
-        StructuredTool.from_function(coroutine=record_figure, name="record_figure"),
-    ]
+    tools = [StructuredTool.from_function(coroutine=run_python, name="run_python")]
+    if record:
+        tools += [
+            StructuredTool.from_function(coroutine=record_result, name="record_result"),
+            StructuredTool.from_function(coroutine=record_figure, name="record_figure"),
+        ]
+    return tools
 
 
-def build_task(branch: BranchInput, ctx: GraphContext) -> str:
+def build_task(
+    branch: BranchInput,
+    ctx: GraphContext,
+    candidate: Optional[Dict] = None,
+    extra: str = "",
+    ending: str = "开始求解。",
+) -> str:
     subproblem = branch["subproblem"]
-    chosen = branch["design"]["chosen"]
+    chosen = candidate or branch["design"]["chosen"]
     files = "\n".join(f"- {f}" for f in list_data_files(ctx.workspace)) or "（无）"
     return "\n\n".join(filter(None, [
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n交付物：{'；'.join(subproblem.get('deliverables') or [])}",
@@ -112,16 +131,17 @@ def build_task(branch: BranchInput, ctx: GraphContext) -> str:
         + f"\n检验：{chosen['validation']}",
         f"# 方法参考\n{describe(chosen.get('method_keys') or [])}",
         _dependency_text(branch.get("dependencies") or {}, ctx),
-        "开始求解。",
+        extra,
+        ending,
     ]))
 
 
-async def _run_agent(agent, messages: List, recursion_limit: int):
-    """跑一轮求解循环；模型用文字收尾、没交报告时提醒一次"""
+async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = REPORT_NUDGE):
+    """跑一轮循环；模型用文字收尾、没交报告时提醒一次"""
     result = await agent.ainvoke({"messages": messages}, config={"recursion_limit": recursion_limit})
     if result.get("structured_response") is None:
         result = await agent.ainvoke(
-            {"messages": result["messages"] + [HumanMessage(content=REPORT_NUDGE)]},
+            {"messages": result["messages"] + [HumanMessage(content=nudge)]},
             config={"recursion_limit": 11},
         )
     return result
@@ -131,9 +151,58 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     subproblem_id = branch["subproblem"]["id"]
     await ctx.set_stage("solve", "in_progress")
-    await ctx.events.stage(f"{subproblem_id}：开始编码求解")
 
     run_log: List[Dict] = []
+    exploration = None
+    design = branch["design"]
+    messages = None
+    try:
+        if ctx.explore_top_k > 1:
+            try:
+                exploration = await explore(ctx, branch)
+            except Exception as exc:  # 探索失败不阻塞，按 design 选中的方案直接求解
+                logger.warning("探索 %s 失败，直接求解: %s", subproblem_id, exc)
+        if exploration is not None:
+            winner = exploration.winner
+            design = {**design, "chosen": winner.candidate, "chosen_index": winner.candidate_index,
+                      "exploration": exploration.to_record()}
+            branch = {**branch, "design": design}
+            run_log.extend(winner.run_log)
+            if winner.report is not None:
+                # 胜出分支连同对话历史继续，内核里的变量已经晋升到子问题名下
+                messages = winner.messages + [HumanMessage(content=promotion_message(exploration))]
+        await ctx.events.stage(f"{subproblem_id}：开始编码求解「{design['chosen']['name']}」")
+        status, error, report, reviews = await _solve_loop(
+            ctx, branch, run_log, messages or [HumanMessage(content=build_task(branch, ctx))]
+        )
+    finally:
+        await ctx.kernels.release(subproblem_id)
+
+    if not report:
+        # 没交报告也保留已登记的结果，写作阶段仍可使用
+        recorded = ctx.registry.for_subproblem(subproblem_id)
+        report = SolveReport(
+            summary="求解未正常结束，以下为已登记的结果。",
+            approach=design["chosen"]["name"],
+            key_findings=[f"{r.name}：{{{{{r.id[0]}:{r.id}}}}}" for r in recorded],
+        ).model_dump()
+
+    count = len(ctx.registry.for_subproblem(subproblem_id))
+    await ctx.events.emit("paper_solved", f"{subproblem_id} 求解{'完成' if status == 'completed' else '未完成'}，登记 {count} 项结果")
+    update = {
+        "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
+        "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],
+    }
+    if exploration is not None:
+        # 写作阶段按实际求解的方案描述模型
+        update["designs"] = {subproblem_id: design}
+        update["log"].append(f"explore {subproblem_id}: -> {exploration.chosen_index} ({exploration.reason})")
+    return update
+
+
+async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict], messages: List):
+    """正式求解：CodeAct 循环 + 结果审查返工，返回 (status, error, report, reviews)"""
+    subproblem_id = branch["subproblem"]["id"]
     agent = create_agent(
         model=ctx.coder_llm,
         tools=build_tools(ctx, subproblem_id, run_log),
@@ -146,7 +215,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     report: Dict = {}
     reviews: List[Dict] = []
     try:
-        result = await _run_agent(agent, [HumanMessage(content=build_task(branch, ctx))], limit)
+        result = await run_agent(agent, messages, limit)
         structured = result.get("structured_response")
         # 审查结果，必须修正的问题交回同一个循环（内核变量还在）
         for _ in range(ctx.max_review_rounds):
@@ -157,7 +226,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             if not review.must_fix:
                 break
             await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.must_fix)} 个必须修正的问题，返工中")
-            result = await _run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit)
+            result = await run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit)
             structured = result.get("structured_response") or structured
         if structured is None:
             status = "incomplete"
@@ -168,24 +237,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     except Exception as exc:
         logger.exception("求解 %s 失败", subproblem_id)
         status, error = "failed", str(exc)
-    finally:
-        await ctx.kernels.release(subproblem_id)
-
-    if not report:
-        # 没交报告也保留已登记的结果，写作阶段仍可使用
-        recorded = ctx.registry.for_subproblem(subproblem_id)
-        report = SolveReport(
-            summary="求解未正常结束，以下为已登记的结果。",
-            approach=branch["design"]["chosen"]["name"],
-            key_findings=[f"{r.name}：{{{{{r.id[0]}:{r.id}}}}}" for r in recorded],
-        ).model_dump()
-
-    count = len(ctx.registry.for_subproblem(subproblem_id))
-    await ctx.events.emit("paper_solved", f"{subproblem_id} 求解{'完成' if status == 'completed' else '未完成'}，登记 {count} 项结果")
-    return {
-        "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
-        "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],
-    }
+    return status, error, report, reviews
 
 
 def ready_subproblems(state) -> List[Dict]:

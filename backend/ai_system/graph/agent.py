@@ -70,6 +70,8 @@ class PaperGraphAgent:
         self.judge = default_judge(llm) if judge == "default" else judge
         if confirm_models is None:
             confirm_models = os.getenv("AI_CONFIRM_MODELS", "").lower() in ("1", "true", "yes")
+        if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
+            options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, **options}
         self.last_result: Dict[str, Any] = {}
 

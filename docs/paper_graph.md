@@ -7,7 +7,7 @@
 
 ```
 analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意见)──▶ design
-                                        └─(通过)──▶ solve（按依赖分批并行）──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
+                                        └─(通过)──▶ solve（按依赖分批并行：explore → 正式求解 → 审查）──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
                                                                                                  └─▶ render
 ```
 
@@ -16,6 +16,7 @@ analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意�
 | analyze | 固定代码读取 `data/`、`attachment/` 下的表格生成数据概览；模型拆出子问题 Q1…Qn 及依赖关系 | 数据概览不经过模型，每题一致 |
 | design | 每个子问题并行：从方法库（`methods.py`，25 种常用数模方法）挑 2~4 种 → 生成 n 个候选方案 → 判分器按"贴题 / 可行 / 数据利用 / 严谨"四项打分，选期望分最高的 | actor-critic；有 Jev key 时一次请求评完所有候选，否则用 LLM 结构化打分 |
 | confirm | 可选的人工确认点（`AI_CONFIRM_MODELS=1`）：`interrupt` 把方案发给用户，回复"确认"继续，其他回复作为修改意见重新设计 | checkpoint 落盘，用户隔多久回复都能接着跑 |
+| solve · explore | 评分最高的 k 个候选（默认 2）先在数据上试跑：先定统一验证协议（同一指标、同一划分、同一基线），各候选开独立内核并行跑一个短循环（默认 12 步），按协议汇报指标；指标要通过与结果登记相同的核对才参与比较。有可比指标按指标选（1% 内打平用评审分），没有统一指标时按 critic 对执行证据的评分选 | 借鉴 AIDE / MLE-bench 的执行驱动搜索；胜出分支的内核和对话历史整体晋升为正式求解，探索的计算不浪费；记录在 `designs[Qn].exploration` |
 | solve | 按依赖关系分批并行，每个子问题一个 CodeAct 循环 + 独立的持久 Python 内核；交报告后由审查模型检查数据范围、泄漏、过拟合、指标选择、结论是否被支持，必须修正的问题交回同一循环返工（默认 1 轮） | 变量跨步保留；早期代码和输出按 10 步一块压缩（`compaction.py`），至少保留最近 6 步原文，块内前缀不变以命中缓存 |
 | write | 先并行写各子问题的建模求解章节，再写重述/分析/假设/符号/灵敏度/评价，最后写摘要 | 写作模型只看到结果登记表，数字只能写引用 |
 | validate / repair | 代码校验：章节缺失、未知引用、正文出现未登记的小数/百分数、求解章节没引用结果或没插图；有问题的章节带着问题清单重写，最多 2 轮 | 校验不调模型，只修有问题的章节 |
@@ -57,6 +58,7 @@ analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意�
 |---|---|
 | `AI_PIPELINE=v2` | 聊天接口启用状态图流水线 |
 | `AI_CONFIRM_MODELS=1` | 建模方案需要用户确认 |
+| `AI_EXPLORE_TOPK` | 求解前试跑几个候选方案（默认 2，设为 1 关闭探索） |
 | `TYPESAFE_API_KEY` / `JEV_MODEL` | 用 Jev 评审候选方案（默认 `jev-1.14.0`） |
 
 模型沿用工作的 brain / code / writing 配置：分析与设计用 brain，求解用 code，写作用 writing。

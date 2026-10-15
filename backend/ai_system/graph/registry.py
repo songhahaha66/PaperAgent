@@ -121,6 +121,13 @@ class ResultRegistry:
             return ""
         return self.fs.read_text(info["stdout"])
 
+    def verify(self, value: str, run_id: str) -> None:
+        """核对 value 出现在 run_id 那次成功执行的输出里，不在就抛 GroundingError（不登记）"""
+        if not value_in_output(str(value).strip(), self._run_output(run_id)):
+            raise GroundingError(
+                f"值 {value} 没有出现在 {run_id} 的输出中。请先 print 出这个结果，再用那次执行的 run_id 登记。"
+            )
+
     def record_value(
         self,
         subproblem: str,
@@ -131,11 +138,7 @@ class ResultRegistry:
         description: str = "",
     ) -> Result:
         value = str(value).strip()
-        output = self._run_output(run_id)
-        if not value_in_output(value, output):
-            raise GroundingError(
-                f"值 {value} 没有出现在 {run_id} 的输出中。请先 print 出这个结果，再用那次执行的 run_id 登记。"
-            )
+        self.verify(value, run_id)
         kind = "number" if _parse_number(value) is not None else "text"
         result = Result(
             id=self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
