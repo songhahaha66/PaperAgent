@@ -112,6 +112,8 @@ export default {
     completed: '已完成',
     paused: '已暂停',
     cancelled: '已取消',
+    waiting: '待确认',
+    failed: '失败',
     templates: '我的模板',
     apiKey: 'API Key 配置',
     passkeys: 'Passkey 管理',

@@ -2,6 +2,7 @@ import asyncio
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -60,7 +61,6 @@ def test_long_running_task_is_not_killed_by_age():
 
 def test_websocket_reconnect_replays_only_after_last_seq(monkeypatch):
     import json
-    from types import SimpleNamespace
 
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -89,3 +89,19 @@ def test_websocket_reconnect_replays_only_after_last_seq(monkeypatch):
         assert [m["block"]["content"] for m in replayed] == ["步骤3", "步骤4"]
         assert json.loads(ws.receive_text())["type"] == "reconnect_complete"
     manager._tasks.clear()
+
+
+def test_set_work_status_updates_and_never_raises(monkeypatch):
+    from routers.chat_routes import chat as chat_module
+    calls, closed = [], []
+    monkeypatch.setattr(chat_module, "get_db", lambda: iter([SimpleNamespace(close=lambda: closed.append(1))]))
+    monkeypatch.setattr("services.data_services.crud.update_work_status",
+                        lambda db, work_id, status: calls.append((work_id, status)))
+    chat_module.set_work_status("w1", "waiting")
+    assert calls == [("w1", "waiting")] and closed == [1]
+
+    def boom(db, work_id, status):
+        raise RuntimeError("db down")
+    monkeypatch.setattr("services.data_services.crud.update_work_status", boom)
+    chat_module.set_work_status("w1", "failed")  # 只记日志
+    assert closed == [1, 1]

@@ -554,7 +554,17 @@ const handleConnectionLost = async () => {
 }
 
 // 统一的流式消息处理函数
+// 后端在开始、完成、失败时带上工作状态，页头和侧边栏随之更新
+const applyWorkStatus = (status?: string) => {
+  if (!status || !currentWork.value || currentWork.value.status === status) return
+  currentWork.value.status = status
+  window.dispatchEvent(
+    new CustomEvent('work-status-updated', { detail: { workId: workId.value, status } }),
+  )
+}
+
 const handleStreamMessage = (data: any, messageId: string) => {
+  applyWorkStatus(data.work_status)
   const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
   if (messageIndex === -1) return
   
@@ -1163,7 +1173,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     webSocketHandler.value.onMessage((data) => {
       // 忽略 start 和 auth_success 消息
       if (data.type === 'start' || data.type === 'auth_success') {
-        console.log('收到消息:', data.type)
+        applyWorkStatus(data.work_status)
         return
       }
       handleStreamMessage(data, aiMessageId)
@@ -1220,7 +1230,9 @@ const getStatusTheme = (status: string) => {
     running: 'primary',
     completed: 'success',
     paused: 'warning',
+    waiting: 'warning',
     cancelled: 'danger',
+    failed: 'danger',
   }
   return themes[status] || 'default'
 }
@@ -1233,7 +1245,9 @@ const getStatusText = (status: string) => {
     running: '进行中',
     completed: '已完成',
     paused: '已暂停',
+    waiting: '待确认',
     cancelled: '已取消',
+    failed: '失败',
   }
   return texts[status] || status
 }

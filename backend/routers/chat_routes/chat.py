@@ -24,6 +24,18 @@ from ..utils import route_guard
 
 logger = logging.getLogger(__name__)
 
+def set_work_status(work_id: str, status: str) -> None:
+    """生成过程同步到工作状态（列表和页头的"进行中/待确认/已完成"），失败只记日志，不影响任务"""
+    db = next(get_db())
+    try:
+        from services.data_services.crud import update_work_status
+        update_work_status(db, work_id, status)
+    except Exception as e:
+        logger.warning(f"更新工作状态失败 {work_id} -> {status}: {e}")
+    finally:
+        db.close()
+
+
 router = APIRouter(prefix="/api/chat", tags=["聊天系统"])
 
 # 全局变量用于存储app实例的引用（在WebSocket中使用）
@@ -299,6 +311,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 manager.register(work_id, websocket)
 
         while True:
+            ws_closed = False
             # 接收用户消息
             data = await websocket.receive_text()
             message_data = json.loads(data)
@@ -405,7 +418,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             
             # 创建任务记录；task_id 告诉前端，断线重连时据此续传
             task = task_manager.create_task(work_id, user_id, message_data['problem'])
-            await manager.send(work_id, {'type': 'start', 'message': '开始AI分析...', 'task_id': task.task_id})
+            await loop.run_in_executor(None, set_work_status, work_id, 'in_progress')
+            await manager.send(work_id, {'type': 'start', 'message': '开始AI分析...', 'task_id': task.task_id,
+                                         'work_status': 'in_progress'})
 
             # 创建支持多AI提供商的LLM处理器
             llm_handler = LLMHandler(
@@ -513,12 +528,16 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         
                         await loop.run_in_executor(None, save_final_message)
 
+                        # 停在"确认建模方案"时工作是待确认，不是已完成
+                        work_status = 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'completed'
+                        await loop.run_in_executor(None, set_work_status, work_id, work_status)
+
                         # 标记任务完成
                         task_manager.complete_task(work_id)
                         
                         # 发送完成消息到前端（通过manager获取当前活跃连接）
                         try:
-                            await manager.send(work_id, {'type': 'complete', 'message': 'AI分析完成'})
+                            await manager.send(work_id, {'type': 'complete', 'message': 'AI分析完成', 'work_status': work_status})
                             logger.info(f"[COMPLETE] 完成消息已发送到前端: {work_id}")
                         except Exception as e:
                             logger.debug(f"发送完成消息失败: {e}")
@@ -560,6 +579,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             
                             await loop.run_in_executor(None, save_cancelled_message)
                         
+                        await loop.run_in_executor(None, set_work_status, work_id, 'cancelled')
                         task_manager.cancel_task(work_id)
                         raise
                     except Exception as e:
@@ -597,10 +617,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             
                             await loop.run_in_executor(None, save_failed_message)
                         
+                        await loop.run_in_executor(None, set_work_status, work_id, 'failed')
                         task_manager.fail_task(work_id, str(e))
                         
                         # 通知前端（之前这里调用了不存在的方法，失败时前端会一直停在"生成中"）
-                        await manager.send(work_id, {'type': 'error', 'message': f'AI处理失败: {str(e)}'})
+                        await manager.send(work_id, {'type': 'error', 'message': f'AI处理失败: {str(e)}', 'work_status': 'failed'})
                         raise
 
                 ai_task = asyncio.create_task(run_ai_task())
@@ -628,6 +649,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         pass
 
                 if ws_watch in done:
+                    # 连接已断开，任务在后台继续；不能再回到外层循环 receive，否则 starlette 抛 RuntimeError
+                    ws_closed = True
                     exc = ws_watch.exception() if not ws_watch.cancelled() else None
                     if isinstance(exc, WebSocketDisconnect):
                         logger.info(f"[WS] 用户在任务执行期间断开: {work_id}，AI任务继续后台运行")
@@ -646,6 +669,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     db.close()
                 except Exception as close_error:
                     logger.warning(f"关闭数据库连接时出错: {close_error}")
+
+            if ws_closed:
+                manager.disconnect(work_id, websocket)
+                return
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket客户端断开连接: {work_id}")

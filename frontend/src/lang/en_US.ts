@@ -112,6 +112,8 @@ export default {
     completed: 'Completed',
     paused: 'Paused',
     cancelled: 'Canceled',
+    waiting: 'Awaiting confirmation',
+    failed: 'Failed',
     templates: 'My templates',
     apiKey: 'API key settings',
     passkeys: 'Manage passkeys',
