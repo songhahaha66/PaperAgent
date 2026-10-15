@@ -107,6 +107,18 @@ def test_load_and_stage_problem(tmp_path):
     assert "point by point data" in prompt
 
 
+def test_build_task_prompt_accepts_grouped_descriptions(tmp_path):
+    bench = _make_bench(tmp_path)
+    problem = load_problem(bench, "2024_C")
+    problem.dataset_description = "one csv file"
+    problem.variable_description = [{"Name": "athlete"}, [{"Year": "olympic year"}]]
+
+    prompt = build_task_prompt(problem, ["data/matches.csv"])
+    assert "- one csv file" in prompt
+    assert "- Name: athlete" in prompt
+    assert "- Year: olympic year" in prompt
+
+
 def test_stage_datasets_copies_directories(tmp_path):
     bench = _make_bench(tmp_path)
     folder = bench / "dataset" / "2024_C" / "images"
