@@ -95,9 +95,10 @@ class WorkspaceStructureManager:
             cls._create_plan_md(workspace_path)
             logger.info(f"Word 模式：已创建 paper.docx 和 plan.md")
         elif output_mode == "latex":
-            # LaTeX 模式：暂时回退到 Markdown
+            # LaTeX 模式：流水线先写 paper.md，最后排版出 paper.tex / paper.pdf
             cls._create_paper_md(workspace_path, template_id)
-            logger.info(f"LaTeX 模式暂未实现，回退到 Markdown 模式：已创建 paper.md")
+            cls._create_plan_md(workspace_path)
+            logger.info(f"LaTeX 模式：已创建 paper.md 和 plan.md，完成后排版出 paper.tex / paper.pdf")
         else:
             # 未知模式：默认创建 paper.md
             logger.warning(f"未知的输出模式 '{output_mode}'，默认创建 paper.md")

@@ -59,8 +59,9 @@ class PaperGraphAgent:
             from config.paths import get_workspace_path
 
             workspace_dir = str(get_workspace_path(work_id))
-        if output_mode != "markdown":
-            logger.warning("PaperGraphAgent 目前只支持 markdown 输出，忽略 output_mode=%s", output_mode)
+        if output_mode not in ("markdown", "latex"):
+            logger.warning("PaperGraphAgent 只支持 markdown / latex 输出，按 markdown 处理 output_mode=%s", output_mode)
+            output_mode = "markdown"
 
         self.llm = llm
         self.stream_manager = stream_manager
@@ -76,7 +77,7 @@ class PaperGraphAgent:
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
         if "design_ahead" not in options and os.getenv("AI_DESIGN_AHEAD"):
             options["design_ahead"] = os.environ["AI_DESIGN_AHEAD"].lower() in ("1", "true", "yes")
-        self.options: Dict[str, Any] = {"confirm_models": confirm_models, **options}
+        self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
         self.last_result: Dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -215,7 +216,8 @@ class PaperGraphAgent:
         analysis = result.get("analysis") or {}
         solutions = result.get("solutions") or {}
         issues = result.get("issues") or []
-        lines = [f"论文《{analysis.get('title', '')}》已写入 paper.md。", ""]
+        written = "paper.md" + ("、paper.tex 和 paper.pdf" if (ctx.workspace / "paper.pdf").exists() and ctx.output_mode == "latex" else "")
+        lines = [f"论文《{analysis.get('title', '')}》已写入 {written}。", ""]
         for sp in analysis.get("subproblems") or []:
             status = (solutions.get(sp["id"]) or {}).get("status", "未求解")
             count = len(ctx.registry.for_subproblem(sp["id"]))

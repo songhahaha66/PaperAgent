@@ -7,7 +7,8 @@
                 还在等前序结论的子问题同一批 Send 到 predesign 提前设计 ─────────┼──▶ solve_join      │
                                                        └──────────── 还有未求解的子问题 ◀──────┘
     solve_join ──(全部求解)──▶ reconcile（结论一致性）─▶ write ─▶ validate ─┬─(有问题且未超轮数)─▶ repair ─▶ validate
-                                                  └─▶ render ─▶ END
+                                                  └─▶ render ─┬─(output_mode=latex)─▶ typeset ─▶ END
+                                                              └─▶ END
 """
 
 from typing import List, Union
@@ -22,6 +23,7 @@ from .nodes.confirm import confirm
 from .nodes.consistency import reconcile
 from .nodes.design import design, predesign
 from .nodes.solve import ready_subproblems, solve
+from .nodes.typeset import route_after_render, typeset
 from .nodes.validate import render, repair, route_after_validate, validate
 from .nodes.write import write
 from .state import PaperState
@@ -105,6 +107,7 @@ def build_graph():
     graph.add_node("validate", validate)
     graph.add_node("repair", repair)
     graph.add_node("render", render)
+    graph.add_node("typeset", typeset)
 
     graph.add_edge(START, "analyze")
     graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "predesign", "reconcile"])
@@ -117,7 +120,8 @@ def build_graph():
     graph.add_edge("write", "validate")
     graph.add_conditional_edges("validate", route_after_validate, ["repair", "render"])
     graph.add_edge("repair", "validate")
-    graph.add_edge("render", END)
+    graph.add_conditional_edges("render", route_after_render, ["typeset", END])
+    graph.add_edge("typeset", END)
     return graph
 
 

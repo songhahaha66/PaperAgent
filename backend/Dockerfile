@@ -9,12 +9,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# 安装系统依赖（含中文字体，供 Matplotlib 渲染）
+# 安装系统依赖（含中文字体，供 Matplotlib 渲染；pandoc + TeX Live 供 LaTeX 输出编译 PDF）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     fontconfig \
     fonts-noto-cjk \
+    pandoc \
+    texlive-xetex \
+    texlive-lang-chinese \
+    texlive-latex-recommended \
+    texlive-latex-extra \
+    texlive-fonts-recommended \
+    lmodern \
     && rm -rf /var/lib/apt/lists/* \
     && fc-cache -fv
 
