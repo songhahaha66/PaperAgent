@@ -4,4 +4,4 @@ AI系统核心处理器模块
 """
 
 # 使用字符串类型注解避免循环导入
-__all__ = ['LLMHandler', 'LLMFactory']
+__all__ = ['LLMHandler']

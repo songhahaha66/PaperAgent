@@ -7,7 +7,7 @@ from .auth_routes import auth_router
 from .chat_routes import chat_router
 from .work_routes import work_router, workspace_router
 from .file_routes import template_router
-from .config_routes import model_config_router, context_router
+from .config_routes import model_config_router
 from .mcp_routes import mcp_router
 
 # 所有路由列表，方便在主应用中注册
@@ -18,7 +18,6 @@ all_routers = [
     workspace_router,
     template_router,
     model_config_router,
-    context_router,
     mcp_router
 ]
 
@@ -29,7 +28,6 @@ __all__ = [
     'workspace_router',
     'template_router',
     'model_config_router',
-    'context_router',
     'mcp_router',
     'all_routers'
 ]
