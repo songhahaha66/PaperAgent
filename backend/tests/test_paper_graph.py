@@ -621,7 +621,7 @@ def test_claims_replace_per_subproblem_and_render(tmp_path):
     assert sorted(reloaded.claims) == ["C2", "C3"]
     assert reloaded.claims["C3"].evidence == [p.id] and reloaded.claims["C2"].evidence == []
     table = reloaded.claims_table()
-    assert "| C3 | Q2 | 不显著 | 逐分层面不能拒绝随机 0.2320 | R1 |" in table
+    assert "| C3 | Q2 | 不显著 | 逐分层面不能拒绝随机 0.2320⟨R1⟩ | R1 |" in table
     assert valid_conflicts([{"claims": ["C2", "C9"], "resolution": "r"}, {"claims": ["C9"], "resolution": "r"}], set(reloaded.claims)) == [
         {"claims": ["C2"], "resolution": "r"}
     ]
