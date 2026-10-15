@@ -95,7 +95,7 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("validate", "in_progress")
     issues = check_sections(state, ctx)
-    if ctx.audit_claims:
+    if ctx.check_claims:
         flagged = {issue["section"] for issue in issues}
         # 已有数字问题的章节会整体重写，这一轮先不查口径
         issues += [i for i in await audit_sections(state, ctx) if i["section"] not in flagged]
