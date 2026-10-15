@@ -4,7 +4,7 @@
 校验全部由代码完成（不调模型）：
 - 章节缺失或过短；
 - 引用了不存在的结果编号；
-- 正文出现没有引用登记结果的小数/百分数（题目中出现过的数不算）；
+- 正文出现没有引用登记结果的小数/百分数（题目中出现过的数不算；公式里写成 = 4.05 的也算）；
 - 子问题有登记结果，但求解章节一个都没引用。
 以上不调模型。另外用一次模型调用检查汇总性章节与结论表是否一致（consistency.audit_sections），
 问题合并进同一个清单。有问题的章节交给写作模型带着问题清单重写，最多 max_repair_rounds 轮，其余章节不动。
@@ -18,7 +18,7 @@ from langgraph.runtime import Runtime
 
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
-from ..registry import REF_PATTERN, find_refs
+from ..registry import MATH_PATTERN, REF_PATTERN, find_refs
 from ..state import PaperState
 from .consistency import audit_sections
 from .write import STYLE, section_plan, section_request, solve_key
@@ -35,10 +35,16 @@ STRIP_PATTERNS = [
 ]
 
 
+# 公式里的小数一般是常数或系数，不查；但"= 4.05"这样单独等于一个数的是结果，要查。
+# 2024_C 的 Q2 把没登记的检验统计量写成 $z = 4.05$，原来整段公式都被跳过
+MATH_RESULT = re.compile(r"(?:=|≈|\\approx)\s*(-?\d+\.\d+%?)(?![\w.(\\])")
+
+
 def _prose(text: str) -> str:
+    assigned = [m.group(1) for span in MATH_PATTERN.findall(REF_PATTERN.sub(" ", text)) for m in MATH_RESULT.finditer(span)]
     for pattern in STRIP_PATTERNS:
         text = pattern.sub(" ", text)
-    return text
+    return text + " " + " ".join(assigned)
 
 
 def _normalize(number: str) -> str:
@@ -152,14 +158,41 @@ def demote_headings(text: str, level: int) -> str:
     return HEADING_PATTERN.sub(lambda m: "#" * min(len(m.group(1)) + shift, 6) + m.group(2), text)
 
 
+FIGURE_LINE = re.compile(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", re.MULTILINE)
+INLINE_FIGURE = re.compile(r"\{\{\s*F:\s*(F\d+)\s*\}\}")
+
+
+def place_figures(text: str) -> str:
+    """只在行内提到（"见 {{F:F1}}"）、没有单独一行插入的图，插到首次提到它的段落之后
+
+    行内引用只渲染成"图 k"，2024_C 的论文四处写"见图1"，图却一张都没出现。
+    """
+    placed = set(FIGURE_LINE.findall(text))
+    blocks: Dict[int, str] = {}
+    for match in INLINE_FIGURE.finditer(text):
+        fig = match.group(1)
+        if fig in placed:
+            continue
+        placed.add(fig)
+        end = text.find("\n\n", match.end())
+        end = len(text) if end < 0 else end
+        blocks[end] = blocks.get(end, "") + f"\n\n{{{{F:{fig}}}}}"
+    # 从后往前插，前面的位置不受影响
+    for end in sorted(blocks, reverse=True):
+        text = text[:end] + blocks[end] + text[end:]
+    return text
+
+
 def assemble(state: PaperState) -> str:
     sections = state.get("sections") or {}
+    solve_keys = {solve_key(sp["id"]) for sp in state["analysis"]["subproblems"]}
     lines = [f"# {state['analysis']['title']}", ""]
     for key, title, level in section_plan(state):
         lines.append(f"{'#' * level} {title}")
         lines.append("")
         if key != "solve_heading":
-            lines.append(demote_headings(sections.get(key, "").strip(), level))
+            text = demote_headings(sections.get(key, "").strip(), level)
+            lines.append(place_figures(text) if key in solve_keys else text)
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
