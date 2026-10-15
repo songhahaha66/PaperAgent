@@ -15,6 +15,8 @@
 ```bash
 cd backend
 uv run python -m evals all --bench ~/LLM-MM-Agent/MMBench --out eval_runs/baseline
+# 评测状态图流水线（见 docs/paper_graph.md）
+uv run python -m evals all --pipeline v2 --bench ~/LLM-MM-Agent/MMBench --out eval_runs/v2
 # 只重新判分 / 只重新汇总
 uv run python -m evals score  --bench ... --out eval_runs/baseline --judge jev
 uv run python -m evals report --bench ... --out eval_runs/baseline

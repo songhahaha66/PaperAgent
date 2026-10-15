@@ -75,7 +75,12 @@ class LLMJudge:
         self.label = label or f"llm:{model_name or type(llm).__name__}"
 
     async def _ask_one(self, state_text: str, question: Question) -> BaseModel:
-        structured = self.llm.with_structured_output(_schema_for(question))
+        schema = _schema_for(question)
+        try:
+            # OpenAI 兼容网关普遍支持工具调用，但不一定支持 json_schema
+            structured = self.llm.with_structured_output(schema, method="function_calling")
+        except (TypeError, ValueError, NotImplementedError):
+            structured = self.llm.with_structured_output(schema)
         prompt = (
             "你是一名严格、客观的评审。只依据下面给出的材料回答，不要臆测材料之外的内容。\n\n"
             f"## 材料\n{state_text}\n\n## 问题\n{_render_question(question)}"

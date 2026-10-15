@@ -75,29 +75,42 @@ def _sum_usage(usage_by_model: Dict[str, Dict]) -> Dict[str, int]:
     return totals
 
 
-async def run_legacy(problem: Problem, out_dir: Path, model: ModelSpec) -> Dict:
-    """用现有 MainAgent（markdown 模式）跑一道题"""
-    from ai_system.core_agents.main_agent import MainAgent
+PIPELINES = ("legacy", "v2")
 
+
+def _build_agent(pipeline: str, llm, workspace: Path):
+    if pipeline == "legacy":
+        from ai_system.core_agents.main_agent import MainAgent
+
+        # legacy 工具通过环境变量找工作空间
+        os.environ["WORKSPACE_DIR"] = str(workspace)
+        return MainAgent(llm=llm, workspace_dir=str(workspace), output_mode="markdown")
+    if pipeline == "v2":
+        from ai_system.graph import PaperGraphAgent
+
+        # 评测不需要人工确认建模方案
+        return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False)
+    raise ValueError(f"未知 pipeline: {pipeline}")
+
+
+async def run_problem(problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "legacy") -> Dict:
+    """用指定流水线（markdown 模式）跑一道题"""
     workspace = out_dir / problem.id / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     staged = stage_datasets(problem, workspace)
     prompt = build_task_prompt(problem, staged)
-
-    # legacy 工具通过环境变量找工作空间；状态图版本会改为显式传参
-    os.environ["WORKSPACE_DIR"] = str(workspace)
     llm = model.create_llm(streaming=False)
 
     record = {
         "problem_id": problem.id,
-        "pipeline": "legacy",
+        "pipeline": pipeline,
         "model": model.label,
         "error": None,
     }
     started = time.monotonic()
     with get_usage_metadata_callback() as usage_cb:
         try:
-            agent = MainAgent(llm=llm, workspace_dir=str(workspace), output_mode="markdown")
+            agent = _build_agent(pipeline, llm, workspace)
             record["final_message"] = await agent.run(prompt)
         except Exception:
             record["error"] = traceback.format_exc()

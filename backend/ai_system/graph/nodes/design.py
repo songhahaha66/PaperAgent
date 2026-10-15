@@ -1,0 +1,161 @@
+"""
+阶段 2：建模方案（每个子问题一个并行分支）
+
+1. 从方法库检索 2~4 种适用方法；
+2. 基于这些方法生成 n 个候选方案（actor）；
+3. 判分器按三条标准给每个方案打分（critic，有 Jev 时一次请求完成），选期望分最高的。
+
+参考 MM-Agent 的 actor-critic 与 ModelingAgent 的"多候选 + 评审筛选"。
+"""
+
+import json
+from typing import Dict, List
+
+from langgraph.runtime import Runtime
+
+from ...judge import Score
+from ..context import GraphContext
+from ..llm_utils import as_messages, call_structured
+from ..methods import METHOD_INDEX, describe, methods_catalog
+from ..state import BranchInput, CandidateSet, MethodPick
+
+CRITERIA = {
+    "fit": Score(
+        instructions="这个建模方案是否直接、完整地回答了子问题的要求，交付物是否都能产出？",
+        criteria=[
+            "答非所问或遗漏主要交付物",
+            "只回答了一部分",
+            "基本回答，个别交付物不清楚",
+            "完整回答，交付物明确",
+            "完整回答且对问题有深入理解",
+        ],
+    ),
+    "feasibility": Score(
+        instructions="根据数据概览，这个方案能否只用已给数据和常见 Python 库（pandas、numpy、scipy、sklearn、statsmodels、networkx）在一个下午内实现？",
+        criteria=[
+            "依赖不存在的数据或无法实现",
+            "需要大量额外数据或假设",
+            "可实现但步骤含糊",
+            "可实现，步骤清楚",
+            "可实现且每一步都对应到具体数据列",
+        ],
+    ),
+    "rigor": Score(
+        instructions="方案的数学表述是否严谨，是否包含结果检验和灵敏度分析？",
+        criteria=[
+            "没有数学表述",
+            "表述粗糙，无检验",
+            "有表述，检验较弱",
+            "表述清楚，有检验或灵敏度分析",
+            "表述严谨，检验和灵敏度分析都具体可执行",
+        ],
+    ),
+}
+
+ACTOR_SYSTEM = (
+    "你是数学建模竞赛的建模手。请为给定子问题设计几种不同思路的建模方案，"
+    "方案要能用 Python 在给定数据上实现，步骤具体到用哪些数据、算什么量。"
+    "不同候选之间要有实质差异（不同方法或不同建模角度），不要只换说法。"
+)
+
+
+def _subproblem_text(subproblem: Dict) -> str:
+    deliverables = "；".join(subproblem.get("deliverables") or []) or "（未列出）"
+    return f"{subproblem['id']} {subproblem['title']}\n问题：{subproblem['question']}\n交付物：{deliverables}"
+
+
+async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
+    prompt = (
+        f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
+        f"# 数据概览\n{branch['data_profile']}\n\n"
+        f"# 方法库\n{methods_catalog()}\n\n"
+        "从方法库中挑选 2~4 个最适合这个子问题的方法 key（可以组合使用）。"
+    )
+    pick = await call_structured(ctx.planner_llm, MethodPick, as_messages(ACTOR_SYSTEM, prompt))
+    keys = [k for k in pick.method_keys if k in METHOD_INDEX]
+    return keys[:4]
+
+
+async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]) -> List[Dict]:
+    analysis = branch["analysis"]
+    feedback = branch.get("feedback") or ""
+    prompt = (
+        f"# 题目整体分析\n{analysis['overall_analysis']}\n\n"
+        f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
+        f"# 数据概览\n{branch['data_profile']}\n\n"
+        f"# 参考方法\n{describe(method_keys) or '（自行选择）'}\n\n"
+        + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
+        + f"请给出 {ctx.n_candidates} 个候选方案。"
+    )
+    result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt))
+    candidates = [c.model_dump() for c in result.candidates][: ctx.n_candidates]
+    if not candidates:
+        raise RuntimeError(f"{branch['subproblem']['id']} 没有生成任何候选方案")
+    return candidates
+
+
+async def critique(ctx: GraphContext, branch: BranchInput, candidates: List[Dict]) -> List[Dict]:
+    """返回每个候选的各项期望分（0~4）与总分；没有判分器时全部记 None 并选第一个"""
+    if ctx.judge is None or len(candidates) == 1:
+        return [{"total": None} for _ in candidates]
+    # 状态只放判断需要的内容，过滤掉无关字段，减少判分噪声
+    state = {
+        "子问题": _subproblem_text(branch["subproblem"]),
+        "数据概览": branch["data_profile"][:6000],
+        "候选方案": {f"方案{i + 1}": c for i, c in enumerate(candidates)},
+    }
+    questions = {
+        f"c{i}_{key}": Score(
+            instructions=f"只评价「方案{i + 1}」。{question.instructions}",
+            criteria=question.criteria,
+        )
+        for i in range(len(candidates))
+        for key, question in CRITERIA.items()
+    }
+    answers = await ctx.judge.ask(state, questions)
+    scores = []
+    for i in range(len(candidates)):
+        item = {key: answers.scores[f"c{i}_{key}"].score for key in CRITERIA}
+        item["total"] = round(sum(item.values()), 3)
+        scores.append(item)
+    return scores
+
+
+async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
+    ctx = runtime.context
+    subproblem = branch["subproblem"]
+    await ctx.set_stage("design", "in_progress")
+    await ctx.events.stage(f"{subproblem['id']}：检索方法并设计候选方案")
+
+    method_keys = await pick_methods(ctx, branch)
+    candidates = await propose(ctx, branch, method_keys)
+    try:
+        scores = await critique(ctx, branch, candidates)
+        critic_error = None
+    except Exception as exc:  # 判分失败不阻塞流程，退回第一个候选
+        scores = [{"total": None} for _ in candidates]
+        critic_error = str(exc)
+
+    totals = [s["total"] if s["total"] is not None else -1 for s in scores]
+    chosen_index = max(range(len(candidates)), key=lambda i: totals[i])
+    chosen = candidates[chosen_index]
+
+    summary = f"{subproblem['id']} 选用「{chosen['name']}」"
+    if scores[chosen_index]["total"] is not None:
+        summary += f"（评审 {scores[chosen_index]['total']:.1f}/12，候选 {len(candidates)} 个）"
+    await ctx.events.emit("paper_design", summary)
+
+    return {
+        "designs": {
+            subproblem["id"]: {
+                "methods": method_keys,
+                "candidates": candidates,
+                "scores": scores,
+                "chosen": chosen,
+                "chosen_index": chosen_index,
+                "critic": getattr(ctx.judge, "label", None) or getattr(ctx.judge, "name", None),
+                "critic_error": critic_error,
+            }
+        },
+        "log": [f"design {subproblem['id']}: {json.dumps(totals)} -> {chosen_index}"],
+    }
