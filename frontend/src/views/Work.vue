@@ -123,7 +123,7 @@
                 <MarkdownRenderer
                   :content="mainPaperContent"
                   :work-id="workId"
-                  :base-path="'papers'"
+                  :base-path="''"
                 />
               </div>
             </t-card>
