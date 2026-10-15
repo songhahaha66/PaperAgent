@@ -1,7 +1,7 @@
 # 数模论文状态图流水线（v2）
 
 `backend/ai_system/graph/` 用 LangGraph 状态图替换原来的单个 ReAct 主循环（MainAgent + ReviewAgent 续写）。
-设置 `AI_PIPELINE=v2` 后，无模板的 Markdown 任务走这条流水线；无模板的 LaTeX 任务总是走这条流水线（只有它支持 LaTeX）；其余情况仍用 MainAgent。
+聊天接口默认走这条流水线，Markdown / Word / LaTeX 输出、有无模板都支持。`AI_PIPELINE=legacy` 时退回旧 MainAgent（代码只留作评测基线，`python -m evals --pipeline legacy`），LaTeX 输出仍走流水线。
 
 ## 流程
 
@@ -12,7 +12,7 @@ analyze ─┬─(AI_CONFIRM_MODELS=1)─Send×N──▶ design ──▶ confi
                                    AI_DESIGN_AHEAD=1 时同一批：还在等前序的子问题 ─▶ predesign（提前设计）
 
 solve（按依赖分批并行）──▶ reconcile ──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
-                                                            └─▶ render ─(LaTeX 输出)─▶ typeset
+                                                            └─▶ render ─(LaTeX / Word 输出)─▶ export
 ```
 
 不需要人工确认方案时，设计放进各子问题的求解分支里按需进行：Q1 设计完立即开始求解，不用等其他子问题的设计；
@@ -32,7 +32,7 @@ Q2 轮到时 Q1 已经求解完，候选方案的生成请求里带着 Q1 的实
 | write | 先并行写各子问题的建模求解章节，再并行写重述/分析/假设/符号/灵敏度/评价和摘要（摘要只依据求解报告和登记结果，不必等其他章节） | 写作模型只看到结果登记表，数字只能写引用；每一节都带着结论表和统一口径 |
 | validate / repair | 代码校验：章节缺失、未知引用、正文出现未登记的小数/百分数（公式里写成 `= 4.05` 的也算）、求解章节没引用结果或没插图；再用一次模型调用检查摘要、问题分析、灵敏度、评价是否与结论表一致；有问题的章节带着问题清单重写，最多 2 轮 | 数字校验不调模型；只修有问题的章节 |
 | render | 引用替换为真实数值和图片，图按出现顺序编号，写出 `paper.md`；求解章节里只在行内提到（"见图1"）的图，插到首次提到它的段落之后；带引用的原稿留在 `.system/paper_raw.md` | 每个数字都能追溯到某次代码执行 |
-| typeset | 仅 `output_mode=latex`：`ai_system/latex/` 用 pandoc 把 `paper.md` 转成 LaTeX，套进数模论文模板（ctexart，封面摘要页带关键词，章节"一、"和图号交给 LaTeX 编号），xelatex 编译两遍出 `paper.pdf`，中间文件在 `.system/latex/` | 排版失败不影响 `paper.md`；写作模型常写的 `$\beta_1 = $ 0.80`（数在公式外）合并回公式，`\logit` 等常用算子模板里预先定义；只要出了 PDF 就算成功，编译错误作为警告推给前端 |
+| export | 仅 `output_mode` 为 latex / word：`ai_system/export/` 用 pandoc 转换渲染好的 `paper.md`。LaTeX 套进数模论文模板（ctexart，封面摘要页带关键词，章节"一、"和图号交给 LaTeX 编号），xelatex 编译两遍出 `paper.pdf`，中间文件在 `.system/latex/`；Word 生成 `paper.docx`，公式转成 Word 原生公式，样式来自上传的 Word 模板，没有模板时用默认论文样式（正文宋体小四、标题黑体） | 导出失败不影响 `paper.md`；写作模型常写的 `$\beta_1 = $ 0.80`（数在公式外）合并回公式，`\logit` 等常用算子 LaTeX 模板里预先定义、Word 导出前展开；只要出了 PDF 就算成功，编译错误作为警告推给前端 |
 
 ## 标签置换对照（防泄漏）
 
@@ -84,7 +84,8 @@ DeepSeek 跑 2024_C 时，Q2 只登记了验证集场数和置换次数两项，
 | `.system/llm_calls.json` | 逐次模型调用：外层节点、子问题/章节标签、耗时、输入输出 token、finish_reason、错误；汇总里有慢调用（≥90 秒）、截断、出错次数和各节点耗时，评测写进 `run.json` 的 `llm_calls` |
 | `.system/transcripts/Qn.json` | 各子问题求解循环的完整对话（模型每一步写了什么、调了什么工具） |
 | `plan.md` / `plan.json` | 各阶段进度，前端固定展示 |
-| `paper.tex` / `paper.pdf` / `.system/latex/` | LaTeX 输出模式的排版结果和 xelatex 中间文件 |
+| `paper.tex` / `paper.pdf` / `.system/latex/` | LaTeX 输出的排版结果和 xelatex 中间文件 |
+| `paper.docx` / `.system/export/reference.docx` | Word 输出和默认样式参考文档 |
 
 结构化输出第一次用工具调用；参数不合 schema（如候选方案给了空列表）或模型没调用工具时，重试改为要纯文本 JSON 再校验。
 候选方案的名称或思路是占位内容（`placeholder`、`...`、`待定` 等，DeepSeek 会把 schema 当模板原样填回）也算不合 schema。
@@ -121,6 +122,14 @@ analyze → Q1（设计、探索、求解、审查返工）→ Q2（依赖 Q1）
 | 写作分三轮串行：求解章节 → 其余章节 → 摘要 | 摘要和其余章节同一轮并行 |
 | 看不出时间花在哪 | `.system/llm_calls.json` 逐次调用记录，慢调用写日志 |
 
+## 用户模板
+
+上传模板时 `services/file_services/template_contract.py` 在工作空间写一份模板契约（`.system/template_contract.md`，含标题骨架和显式格式要求），Word 模板原件另存为 `.system/_template_original.docx`。流水线这样使用：
+
+- **章节结构**（`graph/outline.py`）：从契约里取最上层标题（只有一个最上层标题且下面还有章节时，它是论文题目，取下一级），按关键词对应到摘要、问题重述、问题分析、假设、符号、建模求解、灵敏度、评价；对不上的（"结论与建议""参考文献"）记为模板自定义章节，写作时按模板标题单独撰写（参考文献一节要求不编造文献）。模板没有建模求解章节时，求解内容插在最后一个"求解之前"的章节后面。规则是确定性的，同一个模板每次结构相同；结构存在 `state["outline"]`。
+- **写作要求**：契约全文（截取前 4000 字）附在每一节的写作请求后，措辞、格式、篇幅按模板。
+- **样式**：Word 输出用模板原件作 pandoc 参考文档，标题、正文样式和页边距沿用模板。
+
 ## 前端事件
 
 流水线通过 `stream_manager.send_json_block` 推送事件，前端 `JsonChatRenderer` 发现消息里有 `paper_*` 事件时改用 `PaperPipelineCard` 汇总显示（`frontend/src/utils/paperPipeline.ts`），旧 MainAgent 的消息仍逐块显示。
@@ -132,14 +141,14 @@ analyze → Q1（设计、探索、求解、审查返工）→ Q2（依赖 Q1）
 | `paper_analysis` | 标题与子问题列表 | 题目分析 |
 | `paper_design` / `paper_explore` / `paper_review` / `paper_solved` / `paper_code` | 以 `Qn` 开头的文字 | 按子问题汇总成一行，`paper_code` 只计执行次数和失败次数 |
 | `paper_confirm` | 待确认的方案 | 停在确认点时高亮，提示回复"确认"或修改意见 |
-| `paper_consistency` / `paper_validation` / `paper_typeset` | 文字 | 进展列表 |
+| `paper_consistency` / `paper_validation` / `paper_export` | 文字 | 进展列表 |
 | `plan_updated` / `file_changed` | 计划 / 文件路径 | 右侧计划面板、文件列表刷新，不进聊天卡片 |
 
 ## 配置
 
 | 环境变量 | 作用 |
 |---|---|
-| `AI_PIPELINE=v2` | 聊天接口启用状态图流水线 |
+| `AI_PIPELINE=legacy` | 聊天接口退回旧 MainAgent（默认 v2，即本流水线） |
 | `AI_CONFIRM_MODELS=1` | 建模方案需要用户确认 |
 | `AI_DESIGN_AHEAD=1` | 依赖前序的子问题和前序求解同时提前设计（默认关） |
 | `AI_EXPLORE_TOPK` | 求解前试跑几个候选方案（默认 2，设为 1 关闭探索） |
