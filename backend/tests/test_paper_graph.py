@@ -19,7 +19,14 @@ from ai_system.graph.nodes.confirm import is_approval
 from ai_system.graph.nodes.solve import ready_subproblems
 from ai_system.graph.nodes.validate import untracked_numbers
 from ai_system.graph.registry import value_in_output
-from ai_system.graph.state import CandidateSet, MethodPick, ModelCandidate, ProblemAnalysis, Subproblem
+from ai_system.graph.state import (
+    CandidateSet,
+    MethodPick,
+    ModelCandidate,
+    ProblemAnalysis,
+    ResultReview,
+    Subproblem,
+)
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
 
@@ -52,6 +59,8 @@ def _candidate(name: str) -> ModelCandidate:
 
 
 class _Structured:
+    reviewed_q1 = False
+
     def __init__(self, schema):
         self.schema = schema
 
@@ -62,6 +71,13 @@ class _Structured:
             return MethodPick(method_keys=["arima", "not_a_method", "regression"], reason="r")
         if self.schema is CandidateSet:
             return CandidateSet(candidates=[_candidate("方案甲"), _candidate("方案乙")])
+        if self.schema is ResultReview:
+            # Q1 第一次审查要求返工，其余直接通过
+            prompt = messages[-1].content
+            if "子问题 Q1" in prompt and not _Structured.reviewed_q1:
+                _Structured.reviewed_q1 = True
+                return ResultReview(sound=False, issues=["只用了一场比赛"], must_fix=["改用全部比赛重新估计"])
+            return ResultReview(sound=True)
         raise AssertionError(self.schema)
 
 
@@ -106,7 +122,7 @@ class FakeModel(BaseChatModel):
                 "sensitivity": "稳定", "limitations": ["样本少"],
             }),
         ]
-        name, args = script[step]
+        name, args = script[min(step, len(script) - 1)]
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{sid}_{step}"}])
 
     def _write(self, request: str) -> str:
@@ -150,6 +166,7 @@ def _context(ws: Path, model: FakeModel, **options) -> GraphContext:
 
 
 def test_graph_end_to_end_offline(tmp_path):
+    _Structured.reviewed_q1 = False
     ws = _make_workspace(tmp_path)
     model = FakeModel()
     ctx = _context(ws, model)
@@ -171,7 +188,11 @@ def test_graph_end_to_end_offline(tmp_path):
     design = result["designs"]["Q1"]
     assert design["methods"] == ["arima", "regression"]
     assert design["chosen_index"] == 1 and design["chosen"]["name"] == "方案乙"
-    assert design["scores"][1]["total"] == 9.0
+    assert design["scores"][1]["total"] == 12.0
+
+    # 审查要求 Q1 返工一轮后通过；Q2 一次通过
+    assert [bool(r["must_fix"]) for r in result["solutions"]["Q1"]["reviews"]] == [True]
+    assert [bool(r["must_fix"]) for r in result["solutions"]["Q2"]["reviews"]] == [False]
 
     # 两个子问题都求解完成；编造值登记被拒绝，只登记了真实结果和图
     assert {k: v["status"] for k, v in result["solutions"].items()} == {"Q1": "completed", "Q2": "completed"}
@@ -326,3 +347,52 @@ def test_ready_subproblems_respects_dependencies():
 def test_is_approval():
     assert is_approval("确认") and is_approval("OK!") and is_approval("")
     assert not is_approval("问题二换成双重差分")
+
+
+def test_render_units_math_and_duplicates(tmp_path):
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "p 0.687 excess -6.26 z 1.2908")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    rate = registry.record_value("Q1", "胜率", "68.7%", run_id, unit="%")
+    excess = registry.record_value("Q1", "超额", "-6.26", run_id, unit="点")
+    z = registry.record_value("Q1", "z", "1.2908", run_id, unit="z分数")
+
+    text = f"胜率 {{{{R:{rate.id}}}}}，超额 {{{{R:{excess.id}}}}} 点，统计量 $z={{{{R:{z.id}}}}}$。"
+    assert registry.render(text) == "胜率 68.7%，超额 -6.26 点，统计量 $z=1.2908$。"
+
+
+def test_demote_headings_nests_section_body():
+    from ai_system.graph.nodes.validate import demote_headings
+
+    assert demote_headings("### 模型的建立\n正文\n#### 细节", 3) == "#### 模型的建立\n正文\n##### 细节"
+    assert demote_headings("### 背景\n正文", 2) == "### 背景\n正文"
+
+
+def test_compact_messages_keeps_recent_steps_and_stable_prefix():
+    from ai_system.graph.compaction import compact_messages, compaction_boundary
+
+    def history(steps):
+        messages = [HumanMessage(content="task")]
+        for i in range(steps):
+            messages.append(AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": f"# {i}\n" + "x" * 2000}, "id": f"c{i}"}]))
+            messages.append(ToolMessage(content=f"out{i} " + "y" * 2000, tool_call_id=f"c{i}"))
+        return messages
+
+    # 边界按整块推进：块内不变，前缀稳定才能命中缓存
+    assert [compaction_boundary(n, 6, 10) for n in (10, 16, 17, 25, 26, 36)] == [0, 0, 10, 10, 20, 30]
+
+    assert compact_messages(history(16), keep_recent=6, block=10) == history(16)
+    messages = history(20)
+    compacted = compact_messages(messages, keep_recent=6, block=10)
+    assert len(compacted) == len(messages) and compacted[0].content == "task"
+    # 前 10 步被截短，之后原样保留
+    assert len(compacted[1].tool_calls[0]["args"]["code"]) < 1000 and "已压缩" in compacted[20].content
+    assert compacted[21] is messages[21] and compacted[-1] is messages[-1]
+    assert compacted[1].tool_calls[0]["id"] == "c0"
+    assert len(messages[1].tool_calls[0]["args"]["code"]) > 2000
+    # 再走几步（同一块内），被压缩部分完全一致
+    later = compact_messages(history(24), keep_recent=6, block=10)
+    assert [m.content for m in later[:21]] == [m.content for m in compacted[:21]]

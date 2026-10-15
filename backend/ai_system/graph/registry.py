@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from services.file_services.workspace_fs import WorkspaceFS
 
 REGISTRY_PATH = ".system/results.json"
+MATH_PATTERN = re.compile(r"\$\$.*?\$\$|\$[^$\n]+\$", re.DOTALL)
 REF_PATTERN = re.compile(r"\{\{\s*([RF]):\s*([RF]\d+)\s*\}\}")
 NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
@@ -38,8 +39,11 @@ class Result:
     description: str = ""
     path: str = ""  # 图片的 outputs/ 路径
 
-    def display(self) -> str:
-        return f"{self.value}{self.unit}" if self.unit in ("%", "‰") else f"{self.value} {self.unit}".strip()
+    def display(self, with_unit: bool = True) -> str:
+        unit = self.unit.strip()
+        if not with_unit or not unit or self.value.endswith(unit):
+            return self.value
+        return f"{self.value}{unit}" if unit in ("%", "‰") else f"{self.value} {unit}"
 
 
 def _parse_number(text: str) -> Optional[float]:
@@ -166,7 +170,12 @@ class ResultRegistry:
         rows = self.for_subproblem(subproblem)
         if not rows:
             return "（没有登记的结果）"
-        lines = ["| 引用 | 子问题 | 名称 | 值 | 说明 |", "|---|---|---|---|---|"]
+        lines = [
+            "引用渲染时会自动带上单位，正文在引用后不要再写单位。",
+            "",
+            "| 引用 | 子问题 | 名称 | 值（含单位） | 说明 |",
+            "|---|---|---|---|---|",
+        ]
         for r in rows:
             ref = f"{{{{{r.id[0]}:{r.id}}}}}"
             shown = r.path if r.kind == "figure" else r.display()
@@ -195,15 +204,32 @@ class ResultRegistry:
 
         text = re.sub(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", figure_block, text, flags=re.MULTILINE)
 
-        def inline(match: re.Match) -> str:
+        # 公式里的引用只放数值，单位会破坏 LaTeX
+        math_spans = [m.span() for m in MATH_PATTERN.finditer(text)]
+        parts: List[str] = []
+        cursor = 0
+        for match in REF_PATTERN.finditer(text):
+            if match.start() < cursor:
+                continue
             result = self.results.get(match.group(2))
+            parts.append(text[cursor:match.start()])
+            cursor = match.end()
             if result is None or result.id[0] != match.group(1):
-                return match.group(0)
-            if result.kind == "figure":
-                return f"图{figure_numbers[result.id]}"
-            return result.display()
-
-        return REF_PATTERN.sub(inline, text)
+                parts.append(match.group(0))
+            elif result.kind == "figure":
+                parts.append(f"图{figure_numbers[result.id]}")
+            elif any(start <= match.start() < end for start, end in math_spans):
+                parts.append(result.display(with_unit=False))
+            else:
+                parts.append(result.display())
+                # 写作模型常在引用后再写一遍单位，去掉重复
+                unit = result.unit.strip()
+                rest = text[cursor:]
+                stripped = rest.lstrip(" ")
+                if unit and stripped.startswith(unit):
+                    cursor += len(rest) - len(stripped) + len(unit)
+        parts.append(text[cursor:])
+        return "".join(parts)
 
 
 def find_refs(text: str) -> List[str]:

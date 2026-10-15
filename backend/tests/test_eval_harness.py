@@ -300,3 +300,31 @@ def test_llm_judge_uses_structured_output():
     assert answers.choices["kind"].confidence is None
     assert answers.scores["q"].score == 3.0
     assert answers.scores["q"].reason == "清楚"
+
+
+def test_llm_judge_retries_when_model_skips_tool_call(monkeypatch):
+    import ai_system.judge.llm as llm_module
+
+    async def no_wait(*_):
+        return None
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", no_wait)
+
+    class FlakyStructured:
+        calls = 0
+
+        def __init__(self, schema):
+            self.schema = schema
+
+        async def ainvoke(self, prompt):
+            FlakyStructured.calls += 1
+            return None if FlakyStructured.calls == 1 else self.schema(reason="r", level=2)
+
+    class FakeLLM:
+        model_name = "fake"
+
+        def with_structured_output(self, schema, **kwargs):
+            return FlakyStructured(schema)
+
+    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {"q": Score(instructions="?", criteria=["0", "1", "2"])}))
+    assert answers.scores["q"].score == 2.0 and FlakyStructured.calls == 2

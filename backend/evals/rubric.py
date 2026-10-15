@@ -185,13 +185,24 @@ class PaperScore:
         }
 
 
+# LLM 判分读全文；超过这个长度才截断（远大于常见论文长度）
+MAX_FULL_PAPER_CHARS = 150000
+
+
+def paper_for_judge(judge: Judge, paper: str, keywords: Tuple[str, ...]) -> str:
+    """Jev 单题上下文 32k，只喂相关章节；LLM 判分读全文"""
+    if getattr(judge, "name", "") == "jev":
+        return select_sections(paper, keywords)
+    return paper[:MAX_FULL_PAPER_CHARS]
+
+
 async def score_paper(judge: Judge, background: str, requirement: str, paper: str) -> PaperScore:
     result = PaperScore(judge=judge.name)
     for dim in DIMENSIONS:
         state = {
             "problem_background": background,
             "problem_requirement": requirement,
-            "paper": select_sections(paper, dim.section_keywords),
+            "paper": paper_for_judge(judge, paper, dim.section_keywords),
         }
         questions = {
             sub.key: Score(instructions=sub.instructions, criteria=list(sub.levels))
