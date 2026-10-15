@@ -140,6 +140,13 @@ def baseline_check(ctx: GraphContext, control: Dict, real: float, higher: bool) 
     baseline = _as_float(control["baseline_value"])
     if baseline is None:
         return [f"{metric} 的基线值不是数值，请填写数值"], []
+    chance = _as_float(control.get("chance", ""))
+    if chance is not None and abs(baseline - chance) <= MIN_LIFT * max(abs(chance), 1e-9) * 2:
+        # v2h 的 Q1 拿"常数先验胜率"当基线，它就是无信息水平，绕过了和发球方先验的比较
+        return [
+            f"{metric} 的基线 {control['baseline_value']} 就是无信息水平 {control['chance']}，不算有信息的基线。"
+            "请换成只用显而易见结构的基线（如按发球方区分的先验胜率），重新算出并登记。"
+        ], []
     lift = (real - baseline) if higher else (baseline - real)
     if lift > MIN_LIFT * max(abs(baseline), 1e-9):
         return [], []
