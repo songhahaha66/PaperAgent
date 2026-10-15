@@ -11,10 +11,13 @@ CodeAct 循环每一步都把完整历史重新发给模型，输入随步数增
 压缩只作用于发给模型的请求，不改动 agent 状态，因此不影响登记和报告。
 """
 
+import logging
 from typing import Any, Awaitable, Callable, List
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+
+logger = logging.getLogger(__name__)
 
 KEEP_RECENT_STEPS = 6
 BLOCK_STEPS = 10
@@ -159,6 +162,9 @@ class TruncationGuardMiddleware(AgentMiddleware):
             return response
         if (message.response_metadata or {}).get("finish_reason") == "length":
             note = TRUNCATED_NOTE
+            # 截断的调用会被丢掉、transcript 里看不到；记下开头和结尾，能看出是代码太长还是重复输出停不下来
+            partial = " ".join(str(c.get("args") or "") for c in message.invalid_tool_calls) or str(message.content)
+            logger.warning("输出被截断（%d 字）：%r ... %r", len(partial), partial[:150], partial[-300:])
         elif message.invalid_tool_calls:
             note = MALFORMED_NOTE
         else:
