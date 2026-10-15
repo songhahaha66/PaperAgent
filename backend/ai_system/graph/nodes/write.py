@@ -38,7 +38,9 @@ STYLE = (
     "题目给定的常数、年份、编号可以直接写。\n"
     "2. 插图单独占一行写 {{F:F1}}，正文提到它时也写 {{F:F1}}，系统会编号。\n"
     "3. 公式用 LaTeX（行内 $...$，独立公式 $$...$$），公式中的符号可以写，但不要在公式里代入计算结果数字。\n"
-    "4. 只输出本节正文，不要输出本节的标题，不要输出代码。小节标题用 ### 开头。"
+    "4. 只输出本节正文，不要输出本节的标题，不要输出代码。小节标题用 ### 开头。\n"
+    "5. 论文是给评委读的：不要出现代码里的变量名、列名和程序输出的原样字符串（如 word_length、valAUC、n_repeat），"
+    "改写成中文名称（如\"单词长度\"）。只引用支撑结论的关键结果，多个同类结果用表格对比，不要在一句话里罗列一串统计量。"
 )
 
 
@@ -142,6 +144,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             f"撰写「{title}」的建模与求解小节，一般依次包含：模型的建立（变量、公式推导）、求解过程与算法、"
             f"结果与图表、结果检验。如果这一问的交付物是备忘录、信件、建议书等文体，"
             f"就按交付物要求的文体和篇幅直接写成正文，不要套用上面的结构。"
+            f"篇幅控制在 1500~3000 字，次要的检验细节一句话带过。"
             f"\n\n{subproblem_brief(state, ctx, subproblem)}"
         )
 
@@ -157,12 +160,12 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         )
     if key == "assumptions":
         extra = [a for sp in subproblems for a in (state["designs"].get(sp["id"], {}).get("chosen", {}).get("assumptions") or [])]
-        return "撰写「模型假设」，合并去重后编号列出，每条附简短理由。\n\n" + "\n".join(
+        return "撰写「模型假设」，合并去重后只保留对建模最关键的 5~8 条，编号列出，每条附一句理由。\n\n" + "\n".join(
             f"- {a}" for a in list(analysis["assumptions"]) + extra
         )
     solved_text = "\n\n".join(clip(sections.get(solve_key(sp["id"]), ""), 4000) for sp in subproblems)
     if key == "symbols":
-        return f"撰写「符号说明」，用 Markdown 表格（符号 | 说明 | 单位），只列下文实际用到的主要符号。\n\n求解章节：\n{solved_text}"
+        return f"撰写「符号说明」，用 Markdown 表格（符号 | 说明 | 单位），只列下文公式里实际用到的主要符号，不超过 15 行，不列代码变量名。\n\n求解章节：\n{solved_text}"
     if key == "sensitivity":
         return (
             "撰写「灵敏度分析」，汇总各子问题的检验和灵敏度分析结论，必须引用登记结果。\n\n"
@@ -176,7 +179,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         )
     if key == "abstract":
         return (
-            "撰写「摘要」：一段总述 + 每个子问题一段（方法 + 关键结果，关键结果必须引用登记结果）+ 一段总结，"
+            "撰写「摘要」：一段总述 + 每个子问题一段（2~4 句：用了什么方法、得到什么结论，只引用 1~3 个最关键的登记结果）"
+            "+ 一段总结，全文不超过 1000 字，不写检验统计量的罗列，不用小节标题；"
             "最后一行写「**关键词**：」并列出 4~6 个关键词。\n\n"
             f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )

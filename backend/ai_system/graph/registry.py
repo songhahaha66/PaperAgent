@@ -30,6 +30,19 @@ class GroundingError(ValueError):
     """登记的值在 run 输出中找不到"""
 
 
+# 一条结果只能是一个数或一小段文字。整行输出（"ATTR word_length coef -0.0377 p 0 valAUC 0.500"、
+# "lag7 p=0.3261 lag14 p=0.8776"）登记成一条结果后，正文一引用就把原始输出原样贴进论文
+COMPOSITE_MAX_LEN = 24
+
+
+def composite_value(value: str) -> bool:
+    """value 是不是把多个量挤在一起的整行输出"""
+    text = value.strip()
+    if "=" in text or "|" in text or ";" in text or "；" in text:
+        return True
+    return len(text) > COMPOSITE_MAX_LEN and len(NUMBER_PATTERN.findall(text)) >= 2
+
+
 @dataclass
 class Result:
     id: str
@@ -158,6 +171,11 @@ class ResultRegistry:
         description: str = "",
     ) -> Result:
         value = str(value).strip()
+        if composite_value(value):
+            raise GroundingError(
+                f"值「{value}」把多个量写在了一起。每个数单独登记一条（名称写清是什么量），"
+                "例如 lag7 的 p 值、lag14 的 p 值各登记一条；区间写成上下限两条。"
+            )
         self.verify(value, run_id)
         kind = "number" if _parse_number(value) is not None else "text"
         # 同一子问题同名结果只保留一条：重复登记直接复用，返工后的新值原地更新，
