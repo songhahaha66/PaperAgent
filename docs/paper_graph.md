@@ -44,6 +44,9 @@ analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意�
 | `.system/validation.json` | 最近一轮校验问题 |
 | `plan.md` / `plan.json` | 各阶段进度，前端固定展示 |
 
+外部原因（网关故障、账号受限）让子问题求解失败时，`PaperGraphAgent.resume_failed()` 回到这些子问题开始求解之前的 checkpoint 重放，
+先清掉它们失败时登记的结果；已完成的子问题不重跑。评测里对应 `python -m evals run --pipeline v2 --resume`。
+
 ## 2024_C 首轮评测发现的问题与对应改动
 
 | 现象 | 改动 |

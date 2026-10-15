@@ -124,21 +124,7 @@ class PaperGraphAgent:
                 if isinstance(graph_input, dict):
                     ctx.registry.reset()
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}
-                self._save_thread(thread_id, "running")
-                result = await graph.ainvoke(graph_input, config, context=ctx)
-                self.last_result = result
-
-                interrupts = result.get("__interrupt__") or []
-                if interrupts:
-                    self._save_thread(thread_id, "interrupted")
-                    message = interrupts[0].value.get("message", "") if isinstance(interrupts[0].value, dict) else str(interrupts[0].value)
-                    await self._emit("paper_confirm", message)
-                    return message
-
-                self._save_thread(thread_id, "done")
-                output = self._final_message(result, ctx)
-                await self._emit("main_agent_complete", output)
-                return output
+                return await self._invoke(graph, graph_input, config, thread_id, ctx)
         except Exception as exc:
             logger.error("PaperGraphAgent 执行失败: %s", exc, exc_info=True)
             error_msg = f"任务执行失败: {exc}"
@@ -146,6 +132,62 @@ class PaperGraphAgent:
             return error_msg
         finally:
             await ctx.kernels.close()
+
+    async def resume_failed(self) -> str:
+        """回到失败子问题求解之前的 checkpoint 接着跑
+
+        网关故障、账号受限这类外部原因会让正在求解的子问题失败（并把状态写进 checkpoint），
+        之后的写作也没有意义。外部问题解决后，从这些子问题开始求解之前的 checkpoint 重放，
+        已完成的子问题不用重跑。没有失败的子问题时，从最新 checkpoint 接着跑完。
+        """
+        ctx = self._context()
+        checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
+        thread_id = self._load_thread()
+        if not thread_id or not checkpoint.exists():
+            raise RuntimeError("没有可恢复的运行记录")
+        try:
+            async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
+                graph = compile_graph(saver)
+                config = {"configurable": {"thread_id": thread_id}}
+                target = await graph.aget_state(config)
+                failed = [
+                    sid for sid, sol in (target.values.get("solutions") or {}).items()
+                    if sol.get("status") != "completed"
+                ]
+                if failed:
+                    target = None
+                    async for snapshot in graph.aget_state_history(config):
+                        solved = snapshot.values.get("solutions") or {}
+                        if snapshot.next and not any(sid in solved for sid in failed):
+                            target = snapshot
+                            break
+                    if target is None:
+                        raise RuntimeError(f"找不到 {', '.join(failed)} 求解之前的 checkpoint")
+                    for sid in failed:
+                        ctx.registry.drop_subproblem(sid)
+                logger.info("从 checkpoint 恢复，重跑 %s，下一步 %s", failed or "无", target.next)
+                await self._emit("paper_stage", f"从断点恢复：重新求解 {', '.join(failed)}" if failed else "从断点恢复")
+                resume_config = {**target.config, "recursion_limit": GRAPH_RECURSION_LIMIT}
+                return await self._invoke(graph, None, resume_config, thread_id, ctx)
+        finally:
+            await ctx.kernels.close()
+
+    async def _invoke(self, graph, graph_input, config, thread_id: str, ctx: GraphContext) -> str:
+        self._save_thread(thread_id, "running")
+        result = await graph.ainvoke(graph_input, config, context=ctx)
+        self.last_result = result
+
+        interrupts = result.get("__interrupt__") or []
+        if interrupts:
+            self._save_thread(thread_id, "interrupted")
+            message = interrupts[0].value.get("message", "") if isinstance(interrupts[0].value, dict) else str(interrupts[0].value)
+            await self._emit("paper_confirm", message)
+            return message
+
+        self._save_thread(thread_id, "done")
+        output = self._final_message(result, ctx)
+        await self._emit("main_agent_complete", output)
+        return output
 
     async def _prepare(self, graph, user_input: str):
         """决定是恢复已有 thread 还是开新 thread"""

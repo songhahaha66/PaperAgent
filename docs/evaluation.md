@@ -19,6 +19,8 @@ uv run python -m evals all --bench ~/LLM-MM-Agent/MMBench --out eval_runs/baseli
 uv run python -m evals all --pipeline v2 --bench ~/LLM-MM-Agent/MMBench --out eval_runs/v2
 # 消融：各关掉一个模块（方案探索 / 结果审查 / 结论一致性），与 v2 同题对比
 uv run python -m evals all --pipeline v2-no-explore --problems 2024_C,2023_C --bench ... --out eval_runs/v2-no-explore
+# v2 被外部原因中断后，从失败子问题之前的 checkpoint 接着跑
+uv run python -m evals run --pipeline v2 --resume --problems 2024_C --bench ... --out eval_runs/v2
 # 只重新判分 / 只重新汇总
 uv run python -m evals score  --bench ... --out eval_runs/baseline --judge jev
 uv run python -m evals report --bench ... --out eval_runs/baseline

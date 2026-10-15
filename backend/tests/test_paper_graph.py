@@ -105,6 +105,10 @@ class _Structured:
         raise AssertionError(self.schema)
 
 
+# 模拟网关故障：这些子问题在登记第一个结果后失败一次
+FAIL_ONCE: set = set()
+
+
 class FakeModel(BaseChatModel):
     loose_number_once: bool = True
     text_calls: List[str] = []
@@ -139,6 +143,9 @@ class FakeModel(BaseChatModel):
         last = tool_results[-1].content if tool_results else ""
         run_id = re.search(r"\[run_id: (\S+)\]", last).group(1) if "run_id" in last else ""
         step = len(tool_results)
+        if step == 2 and sid in FAIL_ONCE:
+            FAIL_ONCE.discard(sid)
+            raise RuntimeError("403 real_name_required")
         value = "1234.57" if sid == "Q1" else "8.5%"
         script = [
             ("run_python", {"code": "forecast = 1234.5678\nprint('forecast', forecast)\nprint('saving', 0.085)"}),
@@ -563,3 +570,22 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     # 返工前的 20 步不计入；第二次已到 9 步，追加提醒
     assert seen[0][-1].content == "ok"
     assert "还剩约 3 步。请交报告" in seen[1][-1].content
+
+
+def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path):
+    _Structured.reviewed_q1 = True
+    ws = _make_workspace(tmp_path)
+    FAIL_ONCE.add("Q2")
+    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge())
+    first = asyncio.run(agent.run(TASK))
+    assert "Q2 政策评估：failed" in first
+    assert len(ResultRegistry.load(WorkspaceFS(str(ws))).for_subproblem("Q2")) == 1
+
+    second = asyncio.run(agent.resume_failed())
+    assert "Q1 用电量预测：完成" in second and "Q2 政策评估：完成" in second
+    registry = ResultRegistry.load(WorkspaceFS(str(ws)))
+    # 失败时登记的结果被清掉，重跑后不重复
+    assert sorted((r.subproblem, r.kind) for r in registry.results.values()) == [
+        ("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")
+    ]
+    assert "8.5%" in (ws / "paper.md").read_text(encoding="utf-8")

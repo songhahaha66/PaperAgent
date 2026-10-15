@@ -61,8 +61,8 @@ async def main(args) -> None:
         for problem in problems:
             if args.skip_existing and (out_dir / problem.id / "run.json").exists():
                 continue
-            logging.info("运行 %s", problem.id)
-            record = await run_problem(problem, out_dir, model, args.pipeline)
+            logging.info("%s %s", "恢复" if args.resume else "运行", problem.id)
+            record = await run_problem(problem, out_dir, model, args.pipeline, resume=args.resume)
             logging.info("%s 完成：%.0fs，论文=%s", problem.id, record["seconds"], record["paper_exists"])
 
     if args.command in ("score", "all"):
@@ -89,6 +89,7 @@ def parse_args(argv=None):
     parser.add_argument("--judge", choices=["auto", "jev", "llm", "none"], default="auto")
     parser.add_argument("--jev-model", default=DEFAULT_JEV_MODEL, help="固定 Jev 版本，保证前后可比")
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run.json 的题目")
+    parser.add_argument("--resume", action="store_true", help="v2：从失败子问题求解之前的 checkpoint 接着跑")
     return parser.parse_args(argv)
 
 

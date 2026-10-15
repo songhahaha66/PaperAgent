@@ -179,6 +179,12 @@ class ResultRegistry:
         self.save()
         return result
 
+    def drop_subproblem(self, subproblem: str) -> None:
+        """重跑某个子问题前清掉它的结果和结论，避免重复登记"""
+        self.results = {rid: r for rid, r in self.results.items() if r.subproblem != subproblem}
+        self.claims = {cid: c for cid, c in self.claims.items() if c.subproblem != subproblem}
+        self.save()
+
     def set_claims(self, subproblem: str, findings: List[Dict]) -> List[Claim]:
         """用求解报告的结论替换该子问题的结论（返工后报告会变）；证据只保留存在的登记结果"""
         self.claims = {cid: c for cid, c in self.claims.items() if c.subproblem != subproblem}
