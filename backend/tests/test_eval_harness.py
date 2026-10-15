@@ -107,6 +107,20 @@ def test_load_and_stage_problem(tmp_path):
     assert "point by point data" in prompt
 
 
+def test_stage_datasets_copies_directories(tmp_path):
+    bench = _make_bench(tmp_path)
+    folder = bench / "dataset" / "2024_C" / "images"
+    folder.mkdir()
+    (folder / "a.txt").write_text("x", encoding="utf-8")
+    data = json.loads((bench / "problem" / "2024_C.json").read_text(encoding="utf-8"))
+    data["dataset_path"].append("images")
+    (bench / "problem" / "2024_C.json").write_text(json.dumps(data), encoding="utf-8")
+
+    staged = stage_datasets(load_problem(bench, "2024_C"), tmp_path / "ws")
+    assert staged == ["data/matches.csv", "data/images"]
+    assert (tmp_path / "ws" / "data" / "images" / "a.txt").exists()
+
+
 def test_load_problem_reports_missing_dataset(tmp_path):
     bench = _make_bench(tmp_path)
     (bench / "dataset" / "2024_C" / "matches.csv").unlink()

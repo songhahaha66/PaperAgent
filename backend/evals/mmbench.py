@@ -14,13 +14,14 @@ from pathlib import Path
 from typing import Dict, List
 
 # 默认子集：7 道带数据的题（C/D）+ 3 道纯建模题，覆盖 2020–2025
+# 不含 2021_C：数据约 700MB 图片，且题目 JSON 里的 PDF 文件名与实际文件不一致
 DEFAULT_SUBSET = [
     "2025_C",
     "2024_C",
     "2023_C",
     "2022_C",
-    "2021_C",
     "2020_C",
+    "2020_D",
     "2021_D",
     "2025_A",
     "2024_A",
@@ -64,7 +65,10 @@ def stage_datasets(problem: Problem, workspace: Path) -> List[str]:
     data_dir.mkdir(parents=True, exist_ok=True)
     staged = []
     for src in problem.dataset_files:
-        shutil.copy2(src, data_dir / src.name)
+        if src.is_dir():
+            shutil.copytree(src, data_dir / src.name, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, data_dir / src.name)
         staged.append(f"data/{src.name}")
     return staged
 
