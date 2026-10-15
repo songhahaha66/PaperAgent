@@ -348,10 +348,13 @@ def test_confirm_interrupt_and_feedback(tmp_path):
 def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     ws = _make_workspace(tmp_path)
     events = []
+    phases = []
 
     class Recorder:
         async def send_json_block(self, block_type, content):
             events.append(block_type)
+            if block_type == "paper_phase":
+                phases.append((content["stage"], content["status"]))
 
     agent = PaperGraphAgent(FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), judge=FixedJudge())
     output = asyncio.run(agent.run(TASK))
@@ -361,6 +364,8 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     assert json.loads((ws / ".system" / "graph_thread.json").read_text())["status"] == "done"
     assert events[0] == "main_agent_start" and events[-1] == "main_agent_complete"
     assert "plan_updated" in events and "file_changed" in events
+    # 前端阶段卡片依赖的结构化阶段事件
+    assert phases[0] == ("analyze", "in_progress") and ("render", "completed") in phases
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
     calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
     tagged = {(c["node"], c["label"]) for c in calls}
@@ -1037,3 +1042,17 @@ def test_run_agent_asks_for_report_when_steps_run_out():
     # 没有对话记录时照常抛出
     with pytest.raises(GraphRecursionError):
         asyncio.run(run_agent(Agent(), [], 5, fallback=ReportFallback(Reporter(), SolveReport, "系统", HistoryRecorder())))
+
+
+def test_stream_manager_accepts_structured_block():
+    """plan_updated / paper_phase 的 content 是 dict，send_json_block 不能按字符串切片"""
+    from ai_system.core_managers.stream_manager import StreamOutputManager
+
+    received = []
+
+    class Callback:
+        async def on_json_block(self, block):
+            received.append(block)
+
+    asyncio.run(StreamOutputManager(Callback()).send_json_block("paper_phase", {"stage": "solve", "status": "in_progress"}))
+    assert received == [{"type": "paper_phase", "content": {"stage": "solve", "status": "in_progress"}}]

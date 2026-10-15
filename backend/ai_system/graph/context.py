@@ -143,6 +143,8 @@ class GraphContext:
         self.stage_status[key] = status
         if note:
             self.stage_notes[key] = note
+        # 聊天里阶段卡片的进度条；plan_updated 由右侧计划面板消费，前端不放进消息
+        await self.events.emit("paper_phase", {"stage": key, "status": status, "note": note})
         lines = ["# 数模论文生成计划", "", "| 序号 | 章节/任务 | 状态 | 说明 |", "|------|-----------|------|------|"]
         for order, (stage_key, title) in enumerate(STAGES, start=1):
             label = STATUS_LABEL[self.stage_status.get(stage_key, "pending")]

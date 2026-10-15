@@ -68,14 +68,14 @@ class StreamOutputManager:
                 logger.debug("无回调函数，直接打印")
                 print(content, end="", flush=True)
 
-    async def send_json_block(self, block_type: str, content: str):
-        """发送JSON格式的数据块"""
+    async def send_json_block(self, block_type: str, content: Any):
+        """发送JSON格式的数据块（content 可以是字符串，也可以是 plan_updated 这类结构化数据）"""
         block = {
             "type": block_type,
             "content": content
         }
 
-        logger.debug(f"发送JSON块: {block_type} - {repr(content[:50])}...")
+        logger.debug(f"发送JSON块: {block_type} - {repr(str(content)[:50])}...")
 
         if self.stream_callback:
             try:
