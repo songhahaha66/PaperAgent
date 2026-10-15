@@ -461,6 +461,14 @@ def test_place_figures_inserts_inline_only_figures_after_paragraph():
     assert place_figures("{{F:F1}}\n\n见 {{F:F1}}") == "{{F:F1}}\n\n见 {{F:F1}}"
 
 
+def test_hypothesis_test_subproblems_skip_exploration():
+    from ai_system.graph.nodes.explore import is_hypothesis_test
+
+    assert is_hypothesis_test({"title": "检验势头是否随机(教练假说检验)", "question": "检验比赛中的波动是否随机"})
+    assert not is_hypothesis_test({"title": "换挡点预测", "question": "预测转折并检验泛化性"})
+    assert not is_hypothesis_test({"title": "政策评估", "question": "评估节能政策"})
+
+
 def test_ready_subproblems_respects_dependencies():
     state = {"analysis": {"subproblems": [
         {"id": "Q1", "depends_on": []},
