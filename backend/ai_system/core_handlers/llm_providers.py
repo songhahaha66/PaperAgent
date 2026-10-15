@@ -111,7 +111,10 @@ class OpenAIProvider(BaseLLMProvider):
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
             # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
-            max_retries=kwargs.get('max_retries', 6)
+            max_retries=kwargs.get('max_retries', 6),
+            # 默认 600 秒；DLUT 网关卡住的请求要等满 300 秒才回 524，2024_C 一轮白等了 6 次。
+            # 非流式时这是等整个响应的上限，流式时是两个分块之间的上限
+            timeout=kwargs.get('timeout', 180),
         )
 
     def validate_config(self) -> bool:
@@ -189,7 +192,10 @@ class LocalProvider(BaseLLMProvider):
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
             # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
-            max_retries=kwargs.get('max_retries', 6)
+            max_retries=kwargs.get('max_retries', 6),
+            # 默认 600 秒；DLUT 网关卡住的请求要等满 300 秒才回 524，2024_C 一轮白等了 6 次。
+            # 非流式时这是等整个响应的上限，流式时是两个分块之间的上限
+            timeout=kwargs.get('timeout', 180),
         )
 
     def validate_config(self) -> bool:

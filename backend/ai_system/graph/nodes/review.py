@@ -19,6 +19,7 @@ from ..context import GraphContext
 from ..registry import REF_PATTERN, GroundingError, find_refs
 from ..llm_utils import as_messages, call_structured, clip
 from ..state import BranchInput, ResultReview
+from ..tracing import labelled
 
 SYSTEM = (
     "你是数学建模竞赛的评审老师，负责在写论文之前审查一个子问题的求解结果。"
@@ -299,7 +300,8 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
 
 async def review_solution(ctx: GraphContext, branch: BranchInput, report: Dict, runs: List[Dict]) -> ResultReview:
     prompt = review_prompt(branch, report, ctx, runs)
-    return await call_structured(ctx.planner_llm, ResultReview, as_messages(SYSTEM, prompt))
+    with labelled(f"{branch['subproblem']['id']}:review"):
+        return await call_structured(ctx.planner_llm, ResultReview, as_messages(SYSTEM, prompt))
 
 
 def feedback_message(review: ResultReview) -> str:

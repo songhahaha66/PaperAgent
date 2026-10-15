@@ -1,7 +1,7 @@
 """
 阶段 5：按登记结果写作
 
-先并行写每个子问题的"模型建立与求解"，再并行写重述、分析、假设、符号、灵敏度、评价，最后写摘要。
+先并行写每个子问题的"模型建立与求解"，再并行写重述、分析、假设、符号、灵敏度、评价和摘要。
 写作模型只看得到登记表，数字和图只能用 {{R:Rn}} / {{F:Fn}} 引用，杜绝编造数值。
 """
 
@@ -14,6 +14,7 @@ from ..context import GraphContext
 from .consistency import consistency_text
 from ..llm_utils import as_messages, call_text, clip
 from ..state import PaperState
+from ..tracing import labelled
 
 # (key, 标题)；solve:<id> 是每个子问题的求解章节，按子问题顺序展开
 FRAME_SECTIONS: List[Tuple[str, str]] = [
@@ -160,7 +161,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
 
 async def write_section(ctx: GraphContext, state: PaperState, key: str, title: str) -> str:
     request = section_request(key, title, state, ctx)
-    return await call_text(ctx.writer_llm, as_messages(STYLE, request))
+    with labelled(key):
+        return await call_text(ctx.writer_llm, as_messages(STYLE, request))
 
 
 async def write_many(ctx: GraphContext, state: PaperState, items: List[Tuple[str, str]]) -> Dict[str, str]:
@@ -178,11 +180,9 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     sections: Dict[str, str] = {}
     sections.update(await write_many(ctx, state, [(solve_key(sp["id"]), f"{sp['id']} {sp['title']}") for sp in subproblems]))
 
-    await ctx.set_stage("write", "in_progress", "撰写其余章节")
+    # 摘要只依据各问的求解报告和登记结果，不读其他章节，和其余章节一起并行写，少一轮串行等待
+    await ctx.set_stage("write", "in_progress", "撰写其余章节和摘要")
     with_solved = {**state, "sections": sections}
-    sections.update(await write_many(ctx, with_solved, FRAME_SECTIONS + TAIL_SECTIONS))
-
-    await ctx.set_stage("write", "in_progress", "撰写摘要")
-    sections.update(await write_many(ctx, {**state, "sections": sections}, [("abstract", "摘要")]))
+    sections.update(await write_many(ctx, with_solved, FRAME_SECTIONS + TAIL_SECTIONS + [("abstract", "摘要")]))
     await ctx.set_stage("write", "completed", f"{len(sections)} 个章节")
     return {"sections": sections, "log": [f"write: {len(sections)} sections"]}

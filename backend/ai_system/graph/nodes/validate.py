@@ -20,6 +20,7 @@ from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
 from ..registry import MATH_PATTERN, REF_PATTERN, find_refs
 from ..state import PaperState
+from ..tracing import labelled
 from .consistency import audit_sections
 from .review import CONVENTIONS
 from .write import STYLE, section_plan, section_request, solve_key
@@ -134,7 +135,8 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             + "\n".join(f"- {p}" for p in problems)
             + "\n\n请输出修正后的完整本节正文。"
         )
-        return await call_text(ctx.writer_llm, as_messages(STYLE, prompt))
+        with labelled(f"repair:{key}"):
+            return await call_text(ctx.writer_llm, as_messages(STYLE, prompt))
 
     keys = list(by_section)
     texts = await asyncio.gather(*(fix(k, by_section[k]) for k in keys))

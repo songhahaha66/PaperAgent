@@ -305,9 +305,10 @@ def test_graph_end_to_end_offline(tmp_path):
         assert heading in paper
     assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
 
-    # 按需设计：Q2 设计时 Q1 已经求解完，候选方案的请求里带着 Q1 的结论
-    q2_design = next(p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p)
-    assert "前序子问题的结论" in q2_design and "## Q1" in q2_design
+    # 提前设计：Q2 依赖 Q1，和 Q1 的求解同时设计（这时还没有 Q1 的结论），只设计一次
+    q2_designs = [p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p]
+    assert len(q2_designs) == 1 and "前序子问题的结论" not in q2_designs[0]
+    assert any(line.startswith("design Q2") and line.endswith("(ahead)") for line in result["log"])
     # 依赖：Q2 的求解任务里带上了 Q1 的结论
     plan = json.loads((ws / "plan.json").read_text(encoding="utf-8"))
     assert plan["stats"]["completed"] == plan["stats"]["total"]
@@ -357,6 +358,10 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     assert json.loads((ws / ".system" / "graph_thread.json").read_text())["status"] == "done"
     assert events[0] == "main_agent_start" and events[-1] == "main_agent_complete"
     assert "plan_updated" in events and "file_changed" in events
+    # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
+    calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
+    tagged = {(c["node"], c["label"]) for c in calls}
+    assert {("solve", "Q1"), ("solve", "Q2:review"), ("write", "abstract"), ("repair", "repair:abstract")} <= tagged
 
     # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
     first_thread = json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"]
@@ -863,3 +868,81 @@ def test_strip_template_tokens_from_code():
     leaked = "print(df['swing'].mean())</｜DSML｜parameter>    }  ]</｜DSML｜invoke></think>Let me define the target"
     assert strip_template_tokens(leaked) == "print(df['swing'].mean())"
     assert strip_template_tokens("x = 1\nprint(x)") == "x = 1\nprint(x)"
+
+
+def test_llm_call_trace_records_label_node_and_slow_calls():
+    from uuid import uuid4
+
+    from langchain_core.outputs import LLMResult
+
+    from ai_system.graph.tracing import LLMCallTrace, labelled
+
+    trace = LLMCallTrace()
+    ok, failed = uuid4(), uuid4()
+    with labelled("Q2:design"):
+        trace.on_chat_model_start({}, [[]], run_id=ok, metadata={"langgraph_checkpoint_ns": "solve:abc|model:def"})
+    trace.on_chat_model_start({}, [[]], run_id=failed, metadata={"langgraph_node": "write"})
+    message = AIMessage(content="x", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+                        response_metadata={"finish_reason": "length"})
+    trace.on_llm_end(LLMResult(generations=[[ChatGeneration(message=message)]]), run_id=ok)
+    trace.on_llm_error(TimeoutError("timed out"), run_id=failed)
+
+    first, second = trace.calls
+    assert (first["node"], first["label"], first["input"], first["output"], first["finish"]) == ("solve", "Q2:design", 100, 20, "length")
+    assert second["node"] == "write" and second["label"] == "" and "TimeoutError" in second["error"]
+    summary = trace.summary()
+    assert (summary["calls"], summary["truncated"], summary["errors"]) == (2, 1, 1)
+    assert summary["by_node"]["solve"]["output"] == 20
+
+
+def test_cap_output_only_lowers_max_tokens():
+    from langchain_openai import ChatOpenAI
+
+    from ai_system.graph.llm_utils import cap_output
+
+    llm = ChatOpenAI(model="m", api_key="k", max_tokens=16000)
+    assert cap_output(llm, 4096).max_tokens == 4096 and llm.max_tokens == 16000
+    small = ChatOpenAI(model="m", api_key="k", max_tokens=1000)
+    assert cap_output(small, 4096) is small
+    assert cap_output(FakeModel(), 4096).__class__ is FakeModel
+
+
+def test_placeholder_runs_are_not_executed(tmp_path):
+    from ai_system.graph.nodes.solve import PLACEHOLDER_REPLY, build_tools
+
+    ws = _make_workspace(tmp_path)
+    ctx = _context(ws, FakeModel())
+    run_log: List = []
+    run_python = build_tools(ctx, "Q1", run_log)[0]
+
+    async def go():
+        try:
+            return [await run_python.ainvoke({"code": code}) for code in ("print('x')", "print('ok')\nprint('done')", "print(1 + 1)")]
+        finally:
+            await ctx.kernels.close()
+
+    outputs = asyncio.run(go())
+    assert outputs[:2] == [PLACEHOLDER_REPLY, PLACEHOLDER_REPLY]
+    assert "2" in outputs[2] and len(run_log) == 1
+
+
+def test_truncation_guard_retries_with_note():
+    from ai_system.graph.compaction import TRUNCATED_NOTE, TruncationGuardMiddleware
+
+    class Request:
+        def __init__(self, messages):
+            self.messages = messages
+
+        def override(self, messages):
+            return Request(messages)
+
+    seen = []
+
+    async def handler(request):
+        seen.append(request.messages)
+        reason = "length" if len(seen) == 1 else "stop"
+        return AIMessage(content="", response_metadata={"finish_reason": reason})
+
+    result = asyncio.run(TruncationGuardMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
+    assert result.response_metadata["finish_reason"] == "stop"
+    assert len(seen) == 2 and seen[1][-1].content == TRUNCATED_NOTE and seen[1][0].content == "go"

@@ -15,17 +15,18 @@ from typing import Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, messages_to_dict
 from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
 from langgraph.runtime import Runtime
 
-from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware
+from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware, TruncationGuardMiddleware
 from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
+from ..tracing import labelled, set_label
 from .explore import explore, is_hypothesis_test, promotion_message
 from .review import (
     baseline_gaps,
@@ -80,6 +81,13 @@ REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解
 # 一起塞进代码参数，整段执行时 SyntaxError；2024_C 一次运行 30 次执行里有 4 次这样浪费掉
 TEMPLATE_TOKEN = re.compile(r"</?｜|｜DSML｜|</think>|<think>")
 
+# v2h/v2k 的返工阶段各有 30~40 次 print('x') / print('ok') 这种空执行：每次占一步预算、一次模型往返
+PLACEHOLDER_CODE = re.compile(r"""^\s*(?:print\(\s*(['"])[\w\s.!-]{0,12}\1\s*\)\s*;?\s*)+$""")
+PLACEHOLDER_REPLY = (
+    "这段代码只打印了一个固定字符串，没有执行。不需要用 run_python 占位或确认："
+    "登记结果直接调用 record_results（run_id 填之前打印该值的那次执行），全部完成后直接提交 SolveReport。"
+)
+
 
 def strip_template_tokens(code: str) -> str:
     """截掉代码里第一个对话模板标记及其之后的内容"""
@@ -123,6 +131,8 @@ def build_tools(
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
         code = strip_template_tokens(code)
+        if PLACEHOLDER_CODE.match(code):
+            return PLACEHOLDER_REPLY
         result = await kernel.execute(code)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
         await ctx.events.emit(
@@ -210,6 +220,7 @@ async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = RE
 async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     subproblem_id = branch["subproblem"]["id"]
+    set_label(subproblem_id)
     await ctx.set_stage("solve", "in_progress")
     if branch["subproblem"].get("kind") == "writing":
         # 写作类子问题不开内核、不跑编码循环，写作阶段直接依据前序结论撰写
@@ -246,7 +257,8 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     try:
         if ctx.explore_top_k > 1:
             try:
-                exploration = await explore(ctx, branch)
+                with labelled(f"{subproblem_id}:explore"):
+                    exploration = await explore(ctx, branch)
             except Exception as exc:  # 探索失败不阻塞，按 design 选中的方案直接求解
                 logger.warning("探索 %s 失败，直接求解: %s", subproblem_id, exc)
         if exploration is not None:
@@ -298,7 +310,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         tools=build_tools(ctx, subproblem_id, run_log),
         system_prompt=SYSTEM,
         response_format=ToolStrategy(SolveReport),
-        middleware=[CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE)],
+        middleware=[CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE),
+                    TruncationGuardMiddleware()],
     )
     limit = ctx.max_solver_steps * 2 + 1
     status, error = "completed", None
@@ -307,6 +320,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     structured = None
     kept = None  # 最近一份有内容的报告
     dropped = False
+    result = None
     try:
         result = await run_agent(agent, messages, limit)
         structured = result.get("structured_response")
@@ -372,6 +386,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     except Exception as exc:
         logger.exception("求解 %s 失败", subproblem_id)
         status, error = "failed", str(exc)
+    if result is not None:
+        save_transcript(ctx, subproblem_id, result["messages"])
     if not report and structured is not None and ctx.registry.for_subproblem(subproblem_id):
         # 返工超出步数或出错时保留返工前交的报告：v2h 的 Q2 登记了 20 项结果，返工超步数后整份报告被丢掉，结论表里没有 Q2
         report = structured.model_dump()
@@ -379,6 +395,14 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             f"审查要求的返工没有完成（{error}），以下结论来自返工前的报告：" + "；".join((reviews[-1].get("must_fix") or [])[:3] if reviews else [])
         ]
     return status, error, report, reviews
+
+
+def save_transcript(ctx: GraphContext, name: str, messages: List) -> None:
+    """求解对话落盘（.system/transcripts/），读 trace 时能看到每一步模型写了什么、调用了什么工具"""
+    try:
+        ctx.write_json(f".system/transcripts/{name}.json", messages_to_dict(messages))
+    except Exception as exc:  # 只是排查用的记录，失败不影响求解
+        logger.warning("保存 %s 的求解对话失败: %s", name, exc)
 
 
 def ready_subproblems(state) -> List[Dict]:

@@ -20,11 +20,13 @@ from ..judge import JevJudge, LLMJudge, jev_available
 from .build import compile_graph
 from .context import GraphContext
 from .nodes.confirm import is_approval
+from .tracing import LLMCallTrace
 
 logger = logging.getLogger(__name__)
 
 CHECKPOINT_PATH = ".system/graph.sqlite"
 THREAD_PATH = ".system/graph_thread.json"
+CALLS_PATH = ".system/llm_calls.json"
 GRAPH_RECURSION_LIMIT = 200
 DEFAULT_JEV_MODEL = "jev-1.14.0"
 
@@ -174,7 +176,11 @@ class PaperGraphAgent:
 
     async def _invoke(self, graph, graph_input, config, thread_id: str, ctx: GraphContext) -> str:
         self._save_thread(thread_id, "running")
-        result = await graph.ainvoke(graph_input, config, context=ctx)
+        trace = LLMCallTrace()
+        try:
+            result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
+        finally:
+            trace.dump(Path(self.workspace_dir) / CALLS_PATH)
         self.last_result = result
 
         interrupts = result.get("__interrupt__") or []

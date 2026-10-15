@@ -107,3 +107,20 @@ class CompactHistoryMiddleware(AgentMiddleware):
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
     ) -> Any:
         return await handler(request.override(messages=compact_messages(request.messages, self.keep_recent, self.block)))
+
+
+TRUNCATED_NOTE = "[系统提醒] 你上一次输出太长，在中途被截断，没有执行。请把代码拆成更短的一段，只写这一步需要的部分。"
+
+
+class TruncationGuardMiddleware(AgentMiddleware):
+    """输出撞到长度上限时工具调用的参数不完整，循环会误以为模型收尾了；带提示重试一次"""
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
+    ) -> Any:
+        response = await handler(request)
+        messages = getattr(response, "result", None) or [response]
+        message = next((m for m in messages if isinstance(m, AIMessage)), None)
+        if message is None or (message.response_metadata or {}).get("finish_reason") != "length":
+            return response
+        return await handler(request.override(messages=[*request.messages, HumanMessage(content=TRUNCATED_NOTE)]))
