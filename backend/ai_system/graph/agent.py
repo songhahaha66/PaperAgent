@@ -74,6 +74,8 @@ class PaperGraphAgent:
             confirm_models = os.getenv("AI_CONFIRM_MODELS", "").lower() in ("1", "true", "yes")
         if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
+        if "design_ahead" not in options and os.getenv("AI_DESIGN_AHEAD"):
+            options["design_ahead"] = os.environ["AI_DESIGN_AHEAD"].lower() in ("1", "true", "yes")
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, **options}
         self.last_result: Dict[str, Any] = {}
 

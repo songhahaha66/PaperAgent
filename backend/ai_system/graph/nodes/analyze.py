@@ -141,6 +141,7 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         # 需要人工确认方案时才提前把所有子问题设计完；否则按需设计，
         # 先就绪的子问题不用等其他子问题的设计，后面的子问题还能参考前序结论
         "plan_ahead": bool(ctx.confirm_models),
+        "design_ahead": bool(ctx.design_ahead),
         "design_round": 0,
         "repair_round": 0,
         "log": [f"analyze: {len(ids)} subproblems"],

@@ -52,7 +52,7 @@ def send_solves(state: PaperState) -> Union[List[Send], str]:
             "design": (state.get("designs") or {}).get(sp["id"]),
             "dependencies": {dep: solutions[dep] for dep in sp.get("depends_on") or [] if dep in solutions},
         }))
-    if not state.get("plan_ahead"):
+    if state.get("design_ahead") and not state.get("plan_ahead"):
         sends += send_predesigns(state, {s.arg["subproblem"]["id"] for s in sends})
     return sends
 

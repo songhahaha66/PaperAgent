@@ -215,7 +215,7 @@ async def _make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, st
 
 
 async def predesign(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
-    """按需设计时，还在等前序结论的子问题和前序求解并行设计，不占关键路径
+    """按需设计时，还在等前序结论的子问题和前序求解并行设计，不占关键路径（AI_DESIGN_AHEAD=1 开启，默认关）
 
     2024_C 的 Q2 依赖 Q1，原先要等 Q1 求解完（二十多分钟）才开始设计，设计本身又要三分钟。
     提前设计看不到前序的登记结果（只有题目和整体分析），求解时仍会拿到前序结论和中间数据。

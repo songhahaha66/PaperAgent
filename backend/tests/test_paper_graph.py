@@ -305,10 +305,9 @@ def test_graph_end_to_end_offline(tmp_path):
         assert heading in paper
     assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
 
-    # 提前设计：Q2 依赖 Q1，和 Q1 的求解同时设计（这时还没有 Q1 的结论），只设计一次
-    q2_designs = [p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p]
-    assert len(q2_designs) == 1 and "前序子问题的结论" not in q2_designs[0]
-    assert any(line.startswith("design Q2") and line.endswith("(ahead)") for line in result["log"])
+    # 按需设计（默认不提前设计）：Q2 设计时 Q1 已经求解完，候选方案的请求里带着 Q1 的结论
+    q2_design = next(p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p)
+    assert "前序子问题的结论" in q2_design and "## Q1" in q2_design
     # 依赖：Q2 的求解任务里带上了 Q1 的结论
     plan = json.loads((ws / "plan.json").read_text(encoding="utf-8"))
     assert plan["stats"]["completed"] == plan["stats"]["total"]
@@ -946,3 +945,20 @@ def test_truncation_guard_retries_with_note():
     result = asyncio.run(TruncationGuardMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
     assert result.response_metadata["finish_reason"] == "stop"
     assert len(seen) == 2 and seen[1][-1].content == TRUNCATED_NOTE and seen[1][0].content == "go"
+
+
+def test_design_ahead_sends_blocked_subproblems_to_predesign():
+    from ai_system.graph.build import send_solves
+
+    subproblems = [
+        {"id": "Q1", "title": "a", "question": "a", "depends_on": []},
+        {"id": "Q2", "title": "b", "question": "b", "depends_on": ["Q1"]},
+        {"id": "Q3", "title": "c", "question": "c", "depends_on": ["Q2"], "kind": "writing"},
+    ]
+    state = {"analysis": {"subproblems": subproblems}, "data_profile": ""}
+    targets = lambda sends: [(s.node, s.arg["subproblem"]["id"]) for s in sends]
+    assert targets(send_solves(state)) == [("solve", "Q1")]
+    ahead = {**state, "design_ahead": True}
+    assert targets(send_solves(ahead)) == [("solve", "Q1"), ("predesign", "Q2")]
+    # 已经提前设计过的不再重复
+    assert targets(send_solves({**ahead, "designs": {"Q2": {}}})) == [("solve", "Q1")]
