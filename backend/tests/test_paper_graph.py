@@ -94,8 +94,10 @@ class _Structured:
                 ])
             return ClaimAudit()
         if self.schema is ResultReview:
-            # Q1 第一次审查要求返工，其余直接通过
+            # Q1 第一次审查要求返工；Q2 审查调用失败，报告应保留；其余直接通过
             prompt = messages[-1].content
+            if "子问题 Q2" in prompt:
+                raise RuntimeError("网关错误")
             if "子问题 Q1" in prompt and not _Structured.reviewed_q1:
                 _Structured.reviewed_q1 = True
                 return ResultReview(sound=False, issues=["只用了一场比赛"], must_fix=["改用全部比赛重新估计"])
@@ -242,7 +244,7 @@ def test_graph_end_to_end_offline(tmp_path):
 
     # 审查要求 Q1 返工一轮后通过；Q2 一次通过
     assert [bool(r["must_fix"]) for r in result["solutions"]["Q1"]["reviews"]] == [True]
-    assert [bool(r["must_fix"]) for r in result["solutions"]["Q2"]["reviews"]] == [False]
+    assert result["solutions"]["Q2"]["reviews"] == [] and result["solutions"]["Q2"]["summary"] == "完成，预测为 {{R:R1}}"
 
     # 两个子问题都求解完成；编造值登记被拒绝，只登记了真实结果和图
     assert {k: v["status"] for k, v in result["solutions"].items()} == {"Q1": "completed", "Q2": "completed"}

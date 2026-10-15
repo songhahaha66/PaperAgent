@@ -225,7 +225,11 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         for _ in range(ctx.max_review_rounds):
             if structured is None:
                 break
-            review = await review_solution(ctx, branch, structured.model_dump(), run_log)
+            try:
+                review = await review_solution(ctx, branch, structured.model_dump(), run_log)
+            except Exception as exc:  # 审查失败不能丢掉已经交上来的报告
+                logger.warning("审查 %s 失败，跳过审查: %s", subproblem_id, exc)
+                break
             reviews.append(review.model_dump())
             if not review.must_fix:
                 break

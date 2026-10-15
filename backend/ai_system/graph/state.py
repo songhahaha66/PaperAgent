@@ -78,7 +78,7 @@ class SolveReport(BaseModel):
 
 class ValidationProtocol(BaseModel):
     applicable: bool = Field(description="能否用一个统一的数值指标比较不同方案（预测、分类、拟合类通常可以；优化、评价、描述类通常不行）")
-    metric: str = Field(default="", description="比较用的指标，如 验证集 AUC、留出集 RMSE")
+    metric: str = Field(default="", description="比较用的单个数值指标，如 验证集 AUC、留出集 RMSE；不能是多个指标的组合")
     higher_is_better: bool = Field(default=True, description="指标是否越大越好")
     procedure: str = Field(default="", description="所有方案共用的验证做法：数据划分方式（如按比赛分组留出 20%）、随机种子")
     baseline: str = Field(default="", description="对照基线，如 多数类、常数预测、上一期值")
