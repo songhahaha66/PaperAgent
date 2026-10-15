@@ -8,7 +8,6 @@ from typing import Optional, Any, Dict
 from langchain_core.language_models import BaseLanguageModel
 
 from .llm_providers import LLMProviderFactory, create_llm_from_model_config
-from ..core_agents.main_agent import MainAgent
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,6 @@ class LLMHandler:
     """
     简化的LLM处理器
     - 只负责创建LangChain LLM实例
-    - 提供创建Agent的便捷方法
     - 不再处理复杂的流式输出逻辑
     """
 
@@ -70,29 +68,6 @@ class LLMHandler:
             logger.info(f"LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
 
         logger.info(f"简化LLMHandler初始化完成，提供商: {self.provider}, 模型: {self.model}")
-
-    def create_main_agent(self, workspace_dir: str = None, work_id: str = None,
-                         template_id: int = None) -> MainAgent:
-        """
-        创建 MainAgent 实例的便捷方法
-
-        Args:
-            workspace_dir: 工作空间目录
-            work_id: 工作ID
-            template_id: 模板ID
-
-        Returns:
-            MainAgent 实例
-        """
-        return MainAgent(
-            llm=self.llm,
-            stream_manager=self.stream_manager,
-            workspace_dir=workspace_dir,
-            work_id=work_id,
-            template_id=template_id
-        )
-
-    # CodeAgent 由 code_agent.py 提供 LangChain 实现，可按需直接创建
 
     def get_llm_instance(self) -> BaseLanguageModel:
         """

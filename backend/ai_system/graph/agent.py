@@ -1,5 +1,5 @@
 """
-PaperGraphAgent：状态图版本的入口，接口与 MainAgent 保持一致（构造参数 + async run）
+PaperGraphAgent：状态图流水线的入口（构造参数 + async run），聊天接口和评测共用
 
 - 每次运行对应 checkpoint 里的一个 thread，状态存在 <workspace>/.system/graph.sqlite；
 - 图在"确认建模方案"处 interrupt 时，run 返回待确认内容，用户下一条消息作为回复恢复运行；

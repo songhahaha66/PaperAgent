@@ -88,16 +88,10 @@ V2_VARIANTS = {
     "v2-no-review": {"max_review_rounds": 0},
     "v2-no-consistency": {"check_claims": False},
 }
-PIPELINES = ("legacy", *V2_VARIANTS)
+PIPELINES = tuple(V2_VARIANTS)
 
 
 def _build_agent(pipeline: str, llm, workspace: Path):
-    if pipeline == "legacy":
-        from ai_system.core_agents.main_agent import MainAgent
-
-        # legacy 工具通过环境变量找工作空间
-        os.environ["WORKSPACE_DIR"] = str(workspace)
-        return MainAgent(llm=llm, workspace_dir=str(workspace), output_mode="markdown")
     if pipeline in V2_VARIANTS:
         from ai_system.graph import PaperGraphAgent
 
@@ -107,7 +101,7 @@ def _build_agent(pipeline: str, llm, workspace: Path):
 
 
 async def run_problem(
-    problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "legacy", resume: bool = False
+    problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "v2", resume: bool = False
 ) -> Dict:
     """用指定流水线（markdown 模式）跑一道题；resume=True 时从 v2 的 checkpoint 恢复，耗时和用量累加到上次记录上"""
     workspace = out_dir / problem.id / "workspace"

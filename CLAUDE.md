@@ -26,24 +26,19 @@ PaperAgent is an AI-powered academic paper writing assistant that helps research
 
 ### Backend (FastAPI + Python)
 - **Location**: `backend/`
-- **Tech Stack**: FastAPI, SQLAlchemy, PostgreSQL, LiteLLM, WebSocket
-- **AI System**: Multi-agent architecture with MainAgent (controller) and CodeAgent (code execution)
+- **Tech Stack**: FastAPI, SQLAlchemy, PostgreSQL, LangChain + LangGraph, WebSocket
+- **AI System**: LangGraph state-graph pipeline (`ai_system/graph/`) with a sandboxed Python kernel for computation
 
 ### AI System Architecture
 ```
 ai_system/
-├── MainAgent (main control AI)
-│   ├── Task analysis and planning
-│   ├── Model scheduling coordination
-│   └── Context management
-├── CodeAgent (code execution AI)
-│   ├── Python code execution
-│   ├── Data analysis and processing
-│   └── Visualization chart generation
-└── Tools Framework
-    ├── File operation tools
-    ├── Template processing tools
-    └── Code execution tools
+├── graph/      LangGraph pipeline: analyze → design → solve → reconcile → write → validate → render → export
+├── sandbox/    Python kernel the solve stage runs code in
+├── export/     paper.md → paper.docx / paper.tex + paper.pdf (pandoc, xelatex)
+├── judge/      paper scoring for evals
+├── core_handlers/  LLM provider setup
+├── core_managers/  stream manager (WebSocket JSON blocks)
+└── core_tools/     template docx image/style inspection
 ```
 
 ## Development Commands
@@ -73,7 +68,7 @@ uv run python -m evals all --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs
 ```
 
 ### State-graph pipeline (v2)
-`backend/ai_system/graph/` is the LangGraph version of the 数模 pipeline (see docs/paper_graph.md). The chat API uses it by default for markdown / word / latex output, with or without a user template (rendered `paper.md` is exported by `ai_system/export/` to `paper.docx` or `paper.tex`/`paper.pdf`). `AI_PIPELINE=legacy` falls back to the old MainAgent, which is kept only as the eval baseline. Numbers in the paper must come from the result registry (`{{R:Rn}}` / `{{F:Fn}}` references), which only accepts values that appear in a successful kernel run's output.
+`backend/ai_system/graph/` is the 数模 paper pipeline (see docs/paper_graph.md). The chat API uses it for markdown / word / latex output, with or without a user template (rendered `paper.md` is exported by `ai_system/export/` to `paper.docx` or `paper.tex`/`paper.pdf`). The old MainAgent/CodeAgent/WriterAgent/ReviewAgent code was deleted; check out `12a9041` to rerun the legacy eval baseline. Numbers in the paper must come from the result registry (`{{R:Rn}}` / `{{F:Fn}}` references), which only accepts values that appear in a successful kernel run's output.
 
 ### Frontend Development
 ```bash
@@ -117,7 +112,7 @@ VITE_APP_VERSION=
 ## Project Structure
 
 ### Backend Directories
-- `ai_system/` - Core AI system with multi-agent architecture
+- `ai_system/` - Paper pipeline, sandbox, export and judge
 - `routers/` - API route definitions
 - `models/` - Database models
 - `database/` - Database configuration and connection
@@ -141,17 +136,16 @@ VITE_APP_VERSION=
 
 ## AI Integration
 
-- **Provider**: LiteLLM (supports OpenAI, Anthropic, Google, etc.)
+- **Provider**: LangChain chat models (OpenAI-compatible, Anthropic, Google)
 - **Model Configuration**: Managed through admin interface
-- **Features**: Multi-model coordination, context sharing, specialized task agents
+- **Features**: separate models per role (brain / code / writing configs)
 
 ## Development Notes
 
 ### AI System Development
-- The AI system uses a multi-agent approach where different agents handle different aspects of paper generation
-- MainAgent coordinates the overall task and delegates to specialized agents
-- CodeAgent handles Python code execution, data analysis, and visualization
-- Context is shared between agents to maintain consistency
+- The chat API runs `PaperGraphAgent` (`ai_system/graph/agent.py`); each node is a plain async function over `PaperState`
+- Computation happens in the sandbox kernel; numbers reach the paper only through the result registry
+- Progress reaches the frontend as `paper_*` JSON blocks (see docs/paper_graph.md)
 
 ### Frontend Development
 - Uses TDesign Vue Next for UI components
