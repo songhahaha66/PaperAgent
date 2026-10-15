@@ -27,7 +27,7 @@ from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from .explore import explore, is_hypothesis_test, promotion_message
-from .review import baseline_gaps, control_issues, feedback_message, report_issues, review_solution
+from .review import baseline_gaps, control_issues, feedback_message, needs_figure, report_issues, review_solution
 
 logger = logging.getLogger(__name__)
 
@@ -306,8 +306,10 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             if structured is None:
                 break
             current = structured.model_dump()
+            subproblem = branch["subproblem"]
             fixes = report_issues(
-                ctx, current, subproblem_id, branch["subproblem"].get("depends_on") or [], is_hypothesis_test(branch["subproblem"])
+                ctx, current, subproblem_id, subproblem.get("depends_on") or [],
+                hypothesis=is_hypothesis_test(subproblem), figure_required=needs_figure(subproblem),
             )
             if round_index == ctx.max_review_rounds:
                 if not fixes:

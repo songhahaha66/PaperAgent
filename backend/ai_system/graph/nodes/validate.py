@@ -21,6 +21,7 @@ from ..llm_utils import as_messages, call_text
 from ..registry import MATH_PATTERN, REF_PATTERN, find_refs
 from ..state import PaperState
 from .consistency import audit_sections
+from .review import CONVENTIONS
 from .write import STYLE, section_plan, section_request, solve_key
 
 MIN_SECTION_CHARS = 80
@@ -56,7 +57,7 @@ def untracked_numbers(text: str, allowed_text: str) -> List[str]:
     found = []
     for match in DECIMAL_PATTERN.finditer(_prose(text)):
         value = match.group()
-        if _normalize(value) not in allowed and value not in found:
+        if _normalize(value) not in allowed and value not in found and value not in CONVENTIONS:
             found.append(value)
     return found
 
