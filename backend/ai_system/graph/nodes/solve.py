@@ -24,9 +24,9 @@ from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
-from ..state import BranchInput, Finding, ResultItem, SolveReport
+from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from .explore import explore, promotion_message
-from .review import feedback_message, review_solution
+from .review import control_issues, feedback_message, review_solution
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 需要传给后续子问题的中间数据，保存到 outputs/intermediate/ 下（csv），并在报告里说明文件名。
 - 默认使用题目给出的全部相关数据（例如全部比赛、全部年份），只用子集时要在报告里说明理由。
 - 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
+- 报告预测效果（AUC、准确率、LogLoss、RMSE 等）时必须做标签置换对照：在构造特征之前把目标列随机打乱，其余流程完全不变，
+  重新算一遍同一指标，print 并登记真实值和打乱后的值，填进报告的 controls。打乱后指标仍明显好于无信息水平，说明存在泄漏。
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 
 结果登记（非常重要）：
@@ -249,11 +251,18 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         for _ in range(ctx.max_review_rounds):
             if structured is None:
                 break
+            # 标签置换对照是确定性检查，模型审查失败时也照样生效
+            leaks = control_issues(ctx, structured.model_dump())
             try:
                 review = await review_solution(ctx, branch, structured.model_dump(), run_log)
             except Exception as exc:  # 审查失败不能丢掉已经交上来的报告
                 logger.warning("审查 %s 失败，跳过审查: %s", subproblem_id, exc)
-                break
+                if not leaks:
+                    break
+                review = ResultReview(sound=False)
+            if leaks:
+                review.must_fix = leaks + review.must_fix
+                review.sound = False
             reviews.append(review.model_dump())
             if not review.must_fix:
                 break
@@ -264,6 +273,12 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             status = "incomplete"
         else:
             report = structured.model_dump()
+            # 返工轮数用完仍未通过置换对照的，写进局限，写作时不能当作有效的预测结论
+            leaks = control_issues(ctx, report)
+            if leaks:
+                report["limitations"] = list(report.get("limitations") or []) + [
+                    f"预测效果未通过标签置换对照，可能存在数据泄漏，不能作为有效结论：{issue}" for issue in leaks
+                ]
     except GraphRecursionError:
         status, error = "incomplete", f"超过 {ctx.max_solver_steps} 步仍未完成"
     except Exception as exc:

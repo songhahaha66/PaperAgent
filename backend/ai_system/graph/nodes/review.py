@@ -5,11 +5,18 @@
 2024_C 的 trace 里出现过：只用了一场比赛的数据、类别不平衡下用 F1 显得很高、训练/验证差距大。
 这里让审查模型对照代码和登记结果逐项检查，有必须修正的问题就把意见交回同一个求解循环
 （内核还在，变量不用重算），最多 max_review_rounds 轮。
+
+模型审查抓不住所有泄漏：2024_C 的 Q1 用卡尔曼滤波"预测"当前这一分时，滤波值已经吸收了这一分的结果，
+LogLoss 从 0.68 降到 0.49，审查模型没有发现。所以预测效果另加一道确定性检查——标签置换对照（negative control）：
+在构造特征之前把目标列打乱、流程不变再算一遍指标。没有泄漏时打乱后应回到无信息水平；
+打乱后仍保留真实提升的一半以上，就判定为泄漏，作为必须修正的问题交回求解循环。
 """
 
-from typing import Dict, List
+import re
+from typing import Dict, List, Optional
 
 from ..context import GraphContext
+from ..registry import GroundingError
 from ..llm_utils import as_messages, call_structured, clip
 from ..state import BranchInput, ResultReview
 
@@ -26,6 +33,59 @@ CHECKLIST = """逐项检查：
 4. 指标是否合适：类别不平衡时是否报告了 AUC、基准率或对照基线；回归是否有残差诊断。
 5. 结论是否被结果支持：主要结论与登记的数值是否一致，是否夸大。
 6. 交付物是否齐全：题目要求的每一项是否都有对应结果。"""
+
+
+# 报告里出现这些预测效果指标时，必须附带标签置换对照
+PREDICTIVE = re.compile(r"AUC|准确率|精确率|召回率|F1|LogLoss|对数损失|Brier|RMSE|MAE|MAPE|R²|R\^2|决定系数|命中率", re.IGNORECASE)
+# 打乱标签后仍保留的提升占真实提升的比例，超过就判定为泄漏
+LEAK_RATIO = 0.5
+
+
+def _as_float(text: str) -> Optional[float]:
+    cleaned = str(text).strip().replace(",", "")
+    try:
+        return float(cleaned.rstrip("%")) / (100 if cleaned.endswith("%") else 1)
+    except ValueError:
+        return None
+
+
+def leaked(real: float, shuffled: float, chance: float, higher_is_better: bool) -> bool:
+    """真实标签相对无信息水平有提升，且打乱标签后仍保留一半以上，判定为泄漏"""
+    sign = 1 if higher_is_better else -1
+    gain, kept = sign * (real - chance), sign * (shuffled - chance)
+    return gain > 0 and kept >= LEAK_RATIO * gain
+
+
+def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
+    """标签置换对照的确定性检查，返回必须修正的问题"""
+    controls = report.get("controls") or []
+    text = " ".join([report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])])
+    if not controls:
+        if PREDICTIVE.search(ctx.registry.render(text)):
+            return [
+                "报告了预测效果但没有做标签置换对照：在构造特征之前把目标列随机打乱、其余流程完全不变，"
+                "重新计算同一指标，print 并登记真实值和打乱后的值，填进报告的 controls。"
+            ]
+        return []
+    issues = []
+    for c in controls:
+        try:
+            ctx.registry.verify(c["value"], c["run_id"])
+            ctx.registry.verify(c["shuffled_value"], c["shuffled_run_id"])
+        except GroundingError as exc:
+            issues.append(f"{c['metric']} 的置换对照数值无法核对：{exc}")
+            continue
+        real, shuffled, chance = (_as_float(c[k]) for k in ("value", "shuffled_value", "chance"))
+        if None in (real, shuffled, chance):
+            issues.append(f"{c['metric']} 的置换对照里有不是数值的字段，请填写数值")
+            continue
+        if leaked(real, shuffled, chance, c.get("higher_is_better", True)):
+            issues.append(
+                f"{c['metric']} 打乱标签后仍为 {c['shuffled_value']}（无信息水平 {c['chance']}，真实标签下 {c['value']}），"
+                "说明特征构造或评估用到了标签本身的信息（数据泄漏，例如滤波/平滑/滚动统计包含了当期结果）。"
+                "请定位泄漏来源，只用预测时刻之前的信息重新构造特征，再重新评估并重做置换对照。"
+            )
+    return issues
 
 
 def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: List[Dict]) -> str:
