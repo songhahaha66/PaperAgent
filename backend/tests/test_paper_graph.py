@@ -206,9 +206,10 @@ class FixedJudge:
     name = "fixed"
 
     async def ask(self, state, questions):
-        # 第二个候选（c1）分数更高
+        # 第二个候选（方案2）分数更高；每次只评一个候选
         return Answers(
-            scores={k: ScoreAnswer(score=3.0 if k.startswith("c1") else 1.0, probabilities={}, confidence=None) for k in questions},
+            scores={k: ScoreAnswer(score=3.0 if "「方案2」" in q.instructions else 1.0, probabilities={}, confidence=None)
+                    for k, q in questions.items()},
             judge="fixed",
         )
 

@@ -8,6 +8,7 @@
 参考 MM-Agent 的 actor-critic 与 ModelingAgent 的"多候选 + 评审筛选"。
 """
 
+import asyncio
 import json
 from typing import Dict, List
 
@@ -114,21 +115,19 @@ async def critique(ctx: GraphContext, branch: BranchInput, candidates: List[Dict
         "数据概览": branch["data_profile"][:6000],
         "候选方案": {f"方案{i + 1}": c for i, c in enumerate(candidates)},
     }
-    questions = {
-        f"c{i}_{key}": Score(
-            instructions=f"只评价「方案{i + 1}」。{question.instructions}",
-            criteria=question.criteria,
-        )
-        for i in range(len(candidates))
-        for key, question in CRITERIA.items()
-    }
-    answers = await ctx.judge.ask(state, questions)
-    scores = []
-    for i in range(len(candidates)):
-        item = {key: answers.scores[f"c{i}_{key}"].score for key in CRITERIA}
+    # 每个候选单独一次请求（四项一起问），候选之间并行。所有候选放进同一次请求时，
+    # 实测 DeepSeek 会给三个候选打出完全相同的分；逐项逐候选分开问又要 12 次请求
+    async def judge_one(i: int) -> Dict:
+        questions = {
+            key: Score(instructions=f"只评价「方案{i + 1}」。{question.instructions}", criteria=question.criteria)
+            for key, question in CRITERIA.items()
+        }
+        answers = await ctx.judge.ask(state, questions)
+        item = {key: answers.scores[key].score for key in CRITERIA}
         item["total"] = round(sum(item.values()), 3)
-        scores.append(item)
-    return scores
+        return item
+
+    return list(await asyncio.gather(*(judge_one(i) for i in range(len(candidates)))))
 
 
 WRITING_DESIGN = {

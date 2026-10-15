@@ -363,3 +363,32 @@ def test_v2_ablation_variants_pass_options(tmp_path, monkeypatch):
     assert _build_agent("v2-no-review", object(), tmp_path).options["max_review_rounds"] == 0
     assert _build_agent("v2-no-consistency", object(), tmp_path).options["check_claims"] is False
     assert "explore_top_k" not in _build_agent("v2", object(), tmp_path).options
+
+
+def test_llm_judge_asks_all_questions_in_one_call():
+    calls = []
+
+    class FakeStructured:
+        def __init__(self, schema):
+            self.schema = schema
+
+        async def ainvoke(self, prompt):
+            calls.append(self.schema.__name__)
+            assert "问题 a" in prompt and "问题 b" in prompt
+            return self.schema.model_validate({
+                "a": {"reason": "好", "level": 2},
+                "b": {"reason": "一般", "level": 1},
+            })
+
+    class FakeLLM:
+        model_name = "fake-model"
+
+        def with_structured_output(self, schema, **kwargs):
+            return FakeStructured(schema)
+
+    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {
+        "a": Score(instructions="甲?", criteria=["0", "1", "2"]),
+        "b": Score(instructions="乙?", criteria=["0", "1", "2"]),
+    }))
+    assert calls == ["BatchVerdict"]
+    assert answers.scores["a"].score == 2.0 and answers.scores["b"].reason == "一般"

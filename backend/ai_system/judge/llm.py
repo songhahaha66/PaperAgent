@@ -1,7 +1,8 @@
 """
 LLM 回退判断器：没有 Jev key 时用任意 LangChain 聊天模型回答同一组问题
 
-每个问题一次结构化输出调用，并行执行。答案是单点（概率 one-hot），
+先把全部问题合成一次结构化输出调用（材料只发一次，各问题在同一上下文里比较着回答）；
+批量调用失败时退回每个问题一次调用、并行执行。答案是单点（概率 one-hot），
 没有校准置信度，因此 confidence 为 None。
 """
 
@@ -131,10 +132,41 @@ class LLMJudge:
             await asyncio.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"判分失败（重试 {MAX_ATTEMPTS} 次）: {last_error}") from last_error
 
+    async def _ask_batch(self, state_text: str, questions: Mapping[str, Question]) -> Optional[list]:
+        """所有问题一次问完；任何一步不合格都返回 None，由调用方逐题重问"""
+        keys = list(questions.keys())
+        schema = create_model(
+            "BatchVerdict",
+            **{key: (_schema_for(questions[key]), Field(description=f"问题 {key} 的回答")) for key in keys},
+        )
+        blocks = "\n\n".join(f"### 问题 {key}\n{_render_question(questions[key])}" for key in keys)
+        prompt = (
+            "你是一名严格、客观的评审。只依据下面给出的材料回答，不要臆测材料之外的内容。"
+            "每个问题单独回答，字段名就是问题编号。\n\n"
+            f"## 材料\n{state_text}\n\n## 问题\n{blocks}"
+        )
+        try:
+            try:
+                structured = self.llm.with_structured_output(schema, method="function_calling")
+            except (TypeError, ValueError, NotImplementedError):
+                structured = self.llm.with_structured_output(schema)
+            verdict = await structured.ainvoke(prompt)
+            if verdict is None:
+                reply = await self.llm.ainvoke(prompt + _json_instruction(schema))
+                content = reply.content if isinstance(reply.content, str) else str(reply.content)
+                verdict = parse_verdict(content, schema)
+        except Exception:
+            return None
+        if verdict is None:
+            return None
+        return [getattr(verdict, key) for key in keys]
+
     async def ask(self, state: Any, questions: Mapping[str, Question]) -> Answers:
         state_text = _render_state(state)
         keys = list(questions.keys())
-        verdicts = await asyncio.gather(*(self._ask_one(state_text, questions[k]) for k in keys))
+        verdicts = await self._ask_batch(state_text, questions) if len(keys) > 1 else None
+        if verdicts is None:
+            verdicts = await asyncio.gather(*(self._ask_one(state_text, questions[k]) for k in keys))
 
         answers = Answers(judge=self.label)
         for key, verdict in zip(keys, verdicts):
