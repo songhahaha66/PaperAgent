@@ -735,6 +735,27 @@ def test_report_issues_requires_registered_results(tmp_path):
     assert not any("不是本子问题" in i for i in report_issues(ctx, stolen, "Q3", ["Q1"]))
 
 
+def test_record_results_recovers_mistyped_run_id(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.solve import build_tools
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "permutation p = 0.0123")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    ctx = SimpleNamespace(registry=registry, kernels=SimpleNamespace(get=lambda key: None))
+    run_log = [{"run_id": run_id, "code": "", "ok": True}]
+    record = {t.name: t for t in build_tools(ctx, "Q2", run_log)}["record_results"]
+    reply = asyncio.run(record.coroutine([{"name": "p值", "value": "0.0123", "run_id": run_id[:-3] + "zzz"}]))
+    assert "{{R:R1}}" in reply and registry.get("R1").run_id == run_id
+    # 最近的执行里也没有这个值：照样拒绝
+    reply = asyncio.run(record.coroutine([{"name": "编造", "value": "0.9876", "run_id": "run_x"}]))
+    assert "登记失败" in reply and len(registry.results) == 1
+
+
 def test_label_shuffle_control_flags_leakage(tmp_path):
     from types import SimpleNamespace
 
