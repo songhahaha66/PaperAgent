@@ -27,7 +27,7 @@ from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from .explore import explore, promotion_message
-from .review import control_issues, feedback_message, review_solution
+from .review import control_issues, feedback_message, report_issues, review_solution
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
 - 报告预测效果（AUC、准确率、LogLoss、RMSE 等）时必须做标签置换对照：把原始结果列（如每一分的胜者）在构造任何特征和标签之前随机打乱，
   其余流程完全不变，重新算一遍同一指标；只打乱训练集标签不算，print 并登记真实值和打乱后的值，填进报告的 controls。打乱后指标仍明显好于无信息水平，说明存在泄漏。
+  假设检验（自相关、游程、卡方等）不需要这种对照：检验的零分布本身就是对照，controls 留空。
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 
 结果登记（非常重要）：
@@ -280,8 +281,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         for _ in range(ctx.max_review_rounds):
             if structured is None:
                 break
-            # 标签置换对照是确定性检查，模型审查失败时也照样生效
-            leaks = control_issues(ctx, structured.model_dump())
+            # 标签置换对照、结论数字可追溯是确定性检查，模型审查失败时也照样生效
+            leaks = report_issues(ctx, structured.model_dump())
             try:
                 review = await review_solution(ctx, branch, structured.model_dump(), run_log)
             except Exception as exc:  # 审查失败不能丢掉已经交上来的报告

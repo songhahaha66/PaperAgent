@@ -16,7 +16,7 @@ import re
 from typing import Dict, List, Optional
 
 from ..context import GraphContext
-from ..registry import GroundingError
+from ..registry import REF_PATTERN, GroundingError
 from ..llm_utils import as_messages, call_structured, clip
 from ..state import BranchInput, ResultReview
 
@@ -101,6 +101,35 @@ def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
                 "请定位泄漏来源，只用预测时刻之前的信息重新构造特征，再重新评估并重做置换对照。"
             )
     return issues
+
+
+# 报告里直接写的小数或百分数（整数是场次、阶数这类计数，不查）
+LOOSE_NUMBER = re.compile(r"(?<![\w.])-?\d+\.\d+%?|(?<![\w.])\d+%")
+
+
+def ungrounded_findings(report: Dict) -> List[str]:
+    """报告概要和主要结论里没写成引用的数字
+
+    2024_C 的 Q2 只登记了 2 项（验证集场数、置换次数），检验统计量 z=4.05、9.18 直接写在结论里，
+    结论节点没有证据可指，写作时这些数又被放进公式 $z = 4.05$ 躲过了正文数字校验。
+    """
+    texts = [report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])]
+    loose: List[str] = []
+    for text in texts:
+        for match in LOOSE_NUMBER.finditer(REF_PATTERN.sub(" ", text or "")):
+            if match.group() not in loose:
+                loose.append(match.group())
+    if not loose:
+        return []
+    return [
+        f"报告的概要或主要结论里直接写了数字 {', '.join(loose[:8])}，没有对应的登记结果。"
+        "请先 print 这些数（检验统计量、p 值、指标等），用 record_results 登记，再把报告里的数字改成引用后重新提交。"
+    ]
+
+
+def report_issues(ctx: GraphContext, report: Dict) -> List[str]:
+    """不调模型的报告检查：标签置换对照 + 结论数字可追溯"""
+    return control_issues(ctx, report) + ungrounded_findings(report)
 
 
 def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: List[Dict]) -> str:

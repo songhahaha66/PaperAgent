@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
 from ai_system.graph.nodes.confirm import is_approval
 from ai_system.graph.nodes.solve import ready_subproblems
-from ai_system.graph.nodes.validate import untracked_numbers
+from ai_system.graph.nodes.review import ungrounded_findings
+from ai_system.graph.nodes.validate import place_figures, untracked_numbers
 from ai_system.graph.registry import value_in_output
 from ai_system.graph.state import (
     CandidateSet,
@@ -438,6 +439,26 @@ def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
 def test_untracked_numbers_ignores_refs_formulas_and_allowed():
     text = "预测值 {{R:R1}}，公式 $y = 0.5x$，题目给定 0.65，另有 3.14 与 20%。整数 2025 不检查。"
     assert untracked_numbers(text, allowed_text="给定 0.65") == ["3.14", "20%"]
+    # 公式里单独等于一个数的是结果（Q2 把没登记的检验统计量写成 $z = 4.05$）
+    assert untracked_numbers("真实序列 $z = 4.05$，$\\hat p \\approx 0.673$，$x = {{R:R1}}$", "") == ["4.05", "0.673"]
+
+
+def test_ungrounded_findings_flags_numbers_outside_refs():
+    report = {
+        "summary": "Ljung-Box 检验 {{R:R2}}，验证集 6 场",
+        "key_findings": [{"statement": "真实序列 z=4.05，置换后 9.18，换挡率约 5%", "strength": "不显著"}],
+    }
+    issues = ungrounded_findings(report)
+    assert len(issues) == 1 and "4.05, 9.18, 5%" in issues[0]
+    report["key_findings"][0]["statement"] = "真实序列 {{R:R3}}，置换后 {{R:R4}}"
+    assert ungrounded_findings(report) == []
+
+
+def test_place_figures_inserts_inline_only_figures_after_paragraph():
+    text = "见 {{F:F1}} 与 {{F:F2}}。\n续行\n\n{{F:F2}}\n\n末段见{{F:F3}}"
+    assert place_figures(text) == "见 {{F:F1}} 与 {{F:F2}}。\n续行\n\n{{F:F1}}\n\n{{F:F2}}\n\n末段见{{F:F3}}\n\n{{F:F3}}"
+    # 已经单独成行的不重复插入
+    assert place_figures("{{F:F1}}\n\n见 {{F:F1}}") == "{{F:F1}}\n\n见 {{F:F1}}"
 
 
 def test_ready_subproblems_respects_dependencies():
