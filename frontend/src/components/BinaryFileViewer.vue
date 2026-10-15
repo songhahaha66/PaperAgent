@@ -28,14 +28,22 @@
       </div>
     </div>
 
-    <div class="file-message">
+    <div v-if="isPdf" class="pdf-preview">
+      <iframe v-if="pdfUrl" :src="pdfUrl" :title="fileInfo.filename" class="pdf-frame" />
+      <div v-else-if="pdfError" class="file-message">
+        <t-alert theme="warning" :message="pdfError" />
+      </div>
+      <t-loading v-else size="small" text="正在加载 PDF..." />
+    </div>
+
+    <div v-else class="file-message">
       <t-alert theme="info" message="此文件类型无法预览，请使用下载按钮查看文件内容" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 
 interface BinaryFileInfo {
@@ -55,6 +63,50 @@ interface Props {
 const props = defineProps<Props>()
 const downloading = ref(false)
 
+const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
+const fetchFile = async (): Promise<Blob> => {
+  const response = await fetch(`${apiBase}${props.fileInfo.download_url}`, {
+    headers: {
+      Authorization: `Bearer ${props.token}`,
+    },
+  })
+  if (!response.ok) {
+    throw new Error(`下载失败: ${response.status} ${response.statusText}`)
+  }
+  return response.blob()
+}
+
+// PDF（如 LaTeX 编译出的 paper.pdf）用浏览器内置阅读器预览
+const isPdf = computed(
+  () =>
+    props.fileInfo.mime_type === 'application/pdf' ||
+    props.fileInfo.filename.toLowerCase().endsWith('.pdf'),
+)
+const pdfUrl = ref('')
+const pdfError = ref('')
+
+const releasePdf = () => {
+  if (pdfUrl.value) URL.revokeObjectURL(pdfUrl.value)
+  pdfUrl.value = ''
+}
+
+const loadPdf = async () => {
+  releasePdf()
+  pdfError.value = ''
+  if (!isPdf.value) return
+  try {
+    const blob = await fetchFile()
+    pdfUrl.value = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
+  } catch (error) {
+    console.error('加载 PDF 失败:', error)
+    pdfError.value = 'PDF 加载失败，请使用下载按钮查看'
+  }
+}
+
+watch(() => props.fileInfo.download_url, loadPdf, { immediate: true })
+onBeforeUnmount(releasePdf)
+
 // 格式化文件大小
 const formatFileSize = (bytes: number): string => {
   if (bytes === 0) return '0 B'
@@ -69,19 +121,7 @@ const downloadFile = async () => {
   downloading.value = true
 
   try {
-    const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${props.fileInfo.download_url}`
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${props.token}`,
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`下载失败: ${response.status} ${response.statusText}`)
-    }
-
-    const blob = await response.blob()
+    const blob = await fetchFile()
     const downloadUrl = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = downloadUrl
@@ -172,6 +212,14 @@ const downloadFile = async () => {
 
 .file-message {
   margin-top: 8px;
+}
+
+.pdf-frame {
+  width: 100%;
+  height: 75vh;
+  border: 1px solid #e0e6ed;
+  border-radius: 4px;
+  background: #fff;
 }
 
 @media (max-width: 768px) {

@@ -19,30 +19,39 @@
               <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
               <MarkdownRenderer v-if="getTextContent(message)" :content="getTextContent(message)" />
 
+              <!-- 状态图流水线（v2）的事件汇总成阶段卡片 -->
+              <PaperPipelineCard
+                v-if="isPipelineMessage(getJsonBlocks(message))"
+                :blocks="getJsonBlocks(message)"
+                :streaming="message.isStreaming"
+              />
+
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
-              <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
-                <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
-                  <div 
-                    class="json-block-header" 
-                    @click="toggleBlock(message.id, bIndex)"
-                    :class="{ 'collapsed': isBlockCollapsed(message.id, bIndex) }"
-                  >
-                    <span class="header-text">Type: {{ block.type || 'unknown' }}</span>
-                    <span class="content-preview" v-if="isBlockCollapsed(message.id, bIndex)">
-                      {{ getContentPreview(block.content) }}
-                    </span>
-                    <t-icon 
-                      :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'" 
-                      class="toggle-icon"
-                    />
+              <template v-else>
+                <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
+                  <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
+                    <div 
+                      class="json-block-header" 
+                      @click="toggleBlock(message.id, bIndex)"
+                      :class="{ 'collapsed': isBlockCollapsed(message.id, bIndex) }"
+                    >
+                      <span class="header-text">Type: {{ block.type || 'unknown' }}</span>
+                      <span class="content-preview" v-if="isBlockCollapsed(message.id, bIndex)">
+                        {{ getContentPreview(block.content) }}
+                      </span>
+                      <t-icon 
+                        :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'" 
+                        class="toggle-icon"
+                      />
+                    </div>
+                    <div 
+                      class="json-block-content" 
+                      v-show="!isBlockCollapsed(message.id, bIndex)"
+                    >
+                      <MarkdownRenderer :content="String(block.content || '')" />
+                    </div>
                   </div>
-                  <div 
-                    class="json-block-content" 
-                    v-show="!isBlockCollapsed(message.id, bIndex)"
-                  >
-                    <MarkdownRenderer :content="String(block.content || '')" />
-                  </div>
-                </div>
+                </template>
               </template>
             </div>
           </template>
@@ -75,6 +84,8 @@ import { ref, computed } from 'vue'
 import { ChatItem } from '@tdesign-vue-next/chat'
 import { MessagePlugin } from 'tdesign-vue-next'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import PaperPipelineCard from '@/components/PaperPipelineCard.vue'
+import { isPipelineMessage } from '@/utils/paperPipeline'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
 // 定义消息类型
@@ -247,28 +258,17 @@ const getTextContent = (message: ChatMessage) => {
   return message.content || ''
 }
 
+// 进度与文件变更事件由右侧面板展示，不进聊天卡片（历史记录里也会保存这些块）
+const HIDDEN_BLOCK_TYPES = new Set(['plan_updated', 'file_changed'])
+
 // 提取 JSON 块数组
 const getJsonBlocks = (message: ChatMessage) => {
   if (!message) return [] as any[]
-
-  // 添加调试日志
-  console.log('getJsonBlocks called for message:', {
-    id: message.id,
-    role: message.role,
-    hasJsonBlocks: !!(message.json_blocks && message.json_blocks.length > 0),
-    jsonBlocksCount: message.json_blocks?.length || 0,
-    messageType: message.message_type,
-    contentLength: message.content?.length || 0
-  })
-
-  if (message.json_blocks && message.json_blocks.length > 0) {
-    console.log('Using explicit json_blocks for message:', message.id, 'blocks:', message.json_blocks)
-    return message.json_blocks
-  }
-
-  const { blocks } = parseJsonBlocks(message.content || '')
-  console.log('Parsed json blocks from content for message:', message.id, 'count:', blocks.length)
-  return blocks
+  const blocks =
+    message.json_blocks && message.json_blocks.length > 0
+      ? message.json_blocks
+      : parseJsonBlocks(message.content || '').blocks
+  return blocks.filter((block) => !HIDDEN_BLOCK_TYPES.has(block?.type))
 }
 
 // 复制消息

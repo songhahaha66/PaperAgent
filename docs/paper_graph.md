@@ -119,6 +119,20 @@ analyze → Q1（设计、探索、求解、审查返工）→ Q2（依赖 Q1）
 | 写作分三轮串行：求解章节 → 其余章节 → 摘要 | 摘要和其余章节同一轮并行 |
 | 看不出时间花在哪 | `.system/llm_calls.json` 逐次调用记录，慢调用写日志 |
 
+## 前端事件
+
+流水线通过 `stream_manager.send_json_block` 推送事件，前端 `JsonChatRenderer` 发现消息里有 `paper_*` 事件时改用 `PaperPipelineCard` 汇总显示（`frontend/src/utils/paperPipeline.ts`），旧 MainAgent 的消息仍逐块显示。
+
+| 事件 | 内容 | 前端 |
+|---|---|---|
+| `paper_phase` | `{stage, status, note}`，每次 `set_stage` 发出 | 顶部阶段进度条 |
+| `paper_stage` | 当前在做什么（文字） | 运行中时显示在进度条下 |
+| `paper_analysis` | 标题与子问题列表 | 题目分析 |
+| `paper_design` / `paper_explore` / `paper_review` / `paper_solved` / `paper_code` | 以 `Qn` 开头的文字 | 按子问题汇总成一行，`paper_code` 只计执行次数和失败次数 |
+| `paper_confirm` | 待确认的方案 | 停在确认点时高亮，提示回复"确认"或修改意见 |
+| `paper_consistency` / `paper_validation` / `paper_typeset` | 文字 | 进展列表 |
+| `plan_updated` / `file_changed` | 计划 / 文件路径 | 右侧计划面板、文件列表刷新，不进聊天卡片 |
+
 ## 配置
 
 | 环境变量 | 作用 |
