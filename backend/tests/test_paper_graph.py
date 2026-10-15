@@ -724,6 +724,9 @@ def test_report_issues_requires_registered_results(tmp_path):
     ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
     issues = report_issues(ctx, {"summary": "读入了数据", "key_findings": []}, "Q1")
     assert len(issues) == 1 and "还没有登记任何结果" in issues[0]
+    # 要求可视化却没登记图
+    issues = report_issues(ctx, {"summary": "读入了数据", "key_findings": []}, "Q1", figure_required=True)
+    assert any("还没有登记任何图" in i for i in issues)
 
     # Q3 没登记结果，却引用了 Q1 登记的 R1 冒充自己的指标
     run_id = fs.create_run()

@@ -213,15 +213,32 @@ def foreign_refs(ctx: GraphContext, report: Dict, subproblem_id: str, dependenci
     ]
 
 
+# 题目要求出图的子问题
+VISUAL_TASK = re.compile(r"可视化|画图|绘制|作图|图表|图示|visuali", re.IGNORECASE)
+
+
+def needs_figure(subproblem: Dict) -> bool:
+    text = " ".join([subproblem.get("title", ""), subproblem.get("question", ""), *(subproblem.get("deliverables") or [])])
+    return bool(VISUAL_TASK.search(text))
+
+
 def report_issues(
-    ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: Optional[List[str]] = None, hypothesis: bool = False
+    ctx: GraphContext,
+    report: Dict,
+    subproblem_id: str,
+    dependencies: Optional[List[str]] = None,
+    hypothesis: bool = False,
+    figure_required: bool = False,
 ) -> List[str]:
-    """不调模型的报告检查：有登记结果 + 引用属于本问 + 标签置换对照 + 结论数字可追溯"""
+    """不调模型的报告检查：有登记结果 + 引用属于本问 + 标签置换对照 + 结论数字可追溯 + 要求的图已登记"""
     issues = (
         foreign_refs(ctx, report, subproblem_id, dependencies or [])
         + control_issues(ctx, report, hypothesis)
         + ungrounded_findings(report)
     )
+    if figure_required and not any(r.kind == "figure" for r in ctx.registry.for_subproblem(subproblem_id)):
+        # v2h 的 Q1 要求"可视化比赛流向"却一张图都没登记，写作时编了一个不存在的 {{F:F1}}
+        issues.append("题目要求可视化，但还没有登记任何图：请画出要求的图，用 record_figure 登记后在报告里引用。")
     if not ctx.registry.for_subproblem(subproblem_id):
         # 2024_C 的 Q1 跑了两段读数据的代码就交了报告，一项结果都没登记
         issues.insert(0, "还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")
