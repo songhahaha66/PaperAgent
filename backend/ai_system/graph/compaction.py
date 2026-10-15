@@ -115,10 +115,22 @@ class CompactHistoryMiddleware(AgentMiddleware):
 
 
 TRUNCATED_NOTE = "[系统提醒] 你上一次输出太长，在中途被截断，没有执行。请把代码拆成更短的一段，只写这一步需要的部分。"
+MALFORMED_NOTE = "[系统提醒] 你上一次工具调用的参数不是合法 JSON，没有执行。请重新调用，代码里的引号和换行要正确转义。"
+
+
+def drop_invalid_calls(message: AIMessage) -> AIMessage:
+    """参数解析失败的工具调用不能留在历史里：发回接口时会被当成正常调用，又没有对应的工具结果，接口直接 400"""
+    if not message.invalid_tool_calls:
+        return message
+    return message.model_copy(update={"invalid_tool_calls": []})
 
 
 class TruncationGuardMiddleware(AgentMiddleware):
-    """输出撞到长度上限时工具调用的参数不完整，循环会误以为模型收尾了；带提示重试一次"""
+    """工具调用不完整时带提示重试一次：输出撞到长度上限，或参数不是合法 JSON。
+
+    这两种情况下 tool_calls 为空，循环会误以为模型收尾了；坏掉的调用留在历史里，
+    下一次请求还会因为"工具调用没有对应结果"被接口拒绝（官方 DeepSeek API 返回 400，v2l 的 Q1 因此整段失败）。
+    """
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
@@ -126,6 +138,16 @@ class TruncationGuardMiddleware(AgentMiddleware):
         response = await handler(request)
         messages = getattr(response, "result", None) or [response]
         message = next((m for m in messages if isinstance(m, AIMessage)), None)
-        if message is None or (message.response_metadata or {}).get("finish_reason") != "length":
+        if message is None:
             return response
-        return await handler(request.override(messages=[*request.messages, HumanMessage(content=TRUNCATED_NOTE)]))
+        if (message.response_metadata or {}).get("finish_reason") == "length":
+            note = TRUNCATED_NOTE
+        elif message.invalid_tool_calls:
+            note = MALFORMED_NOTE
+        else:
+            return response
+        retried = await handler(request.override(messages=[*request.messages, HumanMessage(content=note)]))
+        if hasattr(retried, "result"):
+            retried.result = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in retried.result]
+            return retried
+        return drop_invalid_calls(retried) if isinstance(retried, AIMessage) else retried
