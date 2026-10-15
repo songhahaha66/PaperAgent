@@ -21,6 +21,10 @@ from ai_system.graph.nodes.validate import untracked_numbers
 from ai_system.graph.registry import value_in_output
 from ai_system.graph.state import (
     CandidateSet,
+    ClaimAudit,
+    ClaimIssue,
+    Conflict,
+    ConsistencyReview,
     MethodPick,
     ModelCandidate,
     ProblemAnalysis,
@@ -61,6 +65,7 @@ def _candidate(name: str) -> ModelCandidate:
 
 class _Structured:
     reviewed_q1 = False
+    audits = 0
 
     def __init__(self, schema):
         self.schema = schema
@@ -74,6 +79,20 @@ class _Structured:
             return CandidateSet(candidates=[_candidate("方案甲"), _candidate("方案乙")])
         if self.schema is ValidationProtocol:
             return ValidationProtocol(applicable=True, metric="留出集 AUC", procedure="按年份留出", baseline="常数预测")
+        if self.schema is ConsistencyReview:
+            # 编号写错的冲突（C99）应被过滤
+            return ConsistencyReview(conflicts=[
+                Conflict(claims=["C1", "C99"], issue="Q1 结论强度与 Q2 不符", resolution="统一表述为倾向性结论"),
+                Conflict(claims=["C99"], issue="不存在", resolution="x"),
+            ])
+        if self.schema is ClaimAudit:
+            _Structured.audits += 1
+            if _Structured.audits == 1:
+                return ClaimAudit(issues=[
+                    ClaimIssue(section="evaluation", problem="把 C1 写成了显著"),
+                    ClaimIssue(section="not_a_section", problem="x"),
+                ])
+            return ClaimAudit()
         if self.schema is ResultReview:
             # Q1 第一次审查要求返工，其余直接通过
             prompt = messages[-1].content
@@ -126,7 +145,7 @@ class FakeModel(BaseChatModel):
             ("run_python", {"code": "import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])"}),
             ("record_figure", {"run_id": run_id, "figure": "figure_1.png", "caption": f"{sid} 结果图"}),
             ("SolveReport", {
-                "summary": "完成，预测为 {{R:R1}}", "approach": "ARIMA", "key_findings": ["结论 {{R:R1}}"],
+                "summary": "完成，预测为 {{R:R1}}", "approach": "ARIMA", "key_findings": [{"statement": "结论 {{R:R1}}", "strength": "显著"}],
                 "sensitivity": "稳定", "limitations": ["样本少"],
             }),
         ]
@@ -191,6 +210,8 @@ def _context(ws: Path, model: FakeModel, **options) -> GraphContext:
 
 def test_graph_end_to_end_offline(tmp_path):
     _Structured.reviewed_q1 = False
+    _Structured.audits = 0
+    FakeModel.text_calls = []
     ws = _make_workspace(tmp_path)
     model = FakeModel()
     ctx = _context(ws, model)
@@ -231,7 +252,15 @@ def test_graph_end_to_end_offline(tmp_path):
     assert all(r.value != "99.99" for r in registry.results.values())
     assert (ws / "outputs" / "figures" / "F1.png").exists()
 
-    # 摘要第一次带了编造数字，校验后修复一轮
+    # 结论图：每个子问题的结论登记为节点，证据指向登记结果
+    claims = sorted((c.subproblem, c.strength, tuple(c.evidence)) for c in registry.claims.values())
+    assert claims == [("Q1", "显著", ("R1",)), ("Q2", "显著", ("R1",))]
+    # 写作前的一致性审查：指向不存在结论的冲突被过滤，统一口径带进每一节的写作请求
+    assert [c["claims"] for c in result["consistency"]] == [["C1"]]
+    assert all("全文结论表" in req and "统一表述为倾向性结论" in req for req in model.text_calls)
+
+    # 摘要第一次带了编造数字、模型评价与结论表不一致，校验后同一轮修复
+    assert any("与结论表不一致：把 C1 写成了显著" in req for req in model.text_calls)
     assert result["repair_round"] == 1
     assert result["issues"] == []
 
@@ -455,3 +484,29 @@ def test_select_probe_metric_direction_ties_and_fallbacks():
     design = {"candidates": [{}, {}, {}], "scores": [{"total": 5}, {"total": 9}, {"total": None}], "chosen_index": 1}
     assert shortlist(design, 2) == [1, 0]
     assert shortlist({"candidates": [{}], "chosen_index": 0}, 2) == [0]
+
+
+def test_claims_replace_per_subproblem_and_render(tmp_path):
+    from ai_system.graph.nodes.consistency import valid_conflicts
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "p 0.2320")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    p = registry.record_value("Q2", "游程检验p值", "0.2320", run_id)
+
+    registry.set_claims("Q2", [{"statement": f"不能拒绝随机 {{{{R:{p.id}}}}}，见 {{{{R:R99}}}}", "strength": "不显著"}])
+    registry.set_claims("Q3", [{"statement": "动量可预测", "strength": "显著"}, {"statement": " ", "strength": "显著"}])
+    # 返工后重新提交，Q2 的旧结论被替换，编号继续递增
+    registry.set_claims("Q2", [{"statement": f"逐分层面不能拒绝随机 {{{{R:{p.id}}}}}", "strength": "不显著"}])
+
+    reloaded = ResultRegistry.load(fs)
+    assert sorted(reloaded.claims) == ["C2", "C3"]
+    assert reloaded.claims["C3"].evidence == [p.id] and reloaded.claims["C2"].evidence == []
+    table = reloaded.claims_table()
+    assert "| C3 | Q2 | 不显著 | 逐分层面不能拒绝随机 0.2320 | R1 |" in table
+    assert valid_conflicts([{"claims": ["C2", "C9"], "resolution": "r"}, {"claims": ["C9"], "resolution": "r"}], set(reloaded.claims)) == [
+        {"claims": ["C2"], "resolution": "r"}
+    ]

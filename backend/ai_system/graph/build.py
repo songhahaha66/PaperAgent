@@ -5,7 +5,7 @@
                                             └─(通过)─▶ 按依赖分批 Send ─▶ solve ─▶ solve_join ─┐
                                                        ▲                                     │
                                                        └──────────── 还有未求解的子问题 ◀──────┘
-    solve_join ──(全部求解)──▶ write ─▶ validate ─┬─(有问题且未超轮数)─▶ repair ─▶ validate
+    solve_join ──(全部求解)──▶ reconcile（结论一致性）─▶ write ─▶ validate ─┬─(有问题且未超轮数)─▶ repair ─▶ validate
                                                   └─▶ render ─▶ END
 """
 
@@ -18,6 +18,7 @@ from langgraph.types import Send
 from .context import GraphContext
 from .nodes.analyze import analyze
 from .nodes.confirm import confirm
+from .nodes.consistency import reconcile
 from .nodes.design import design
 from .nodes.solve import ready_subproblems, solve
 from .nodes.validate import render, repair, route_after_validate, validate
@@ -40,7 +41,7 @@ def send_designs(state: PaperState) -> List[Send]:
 def send_solves(state: PaperState) -> Union[List[Send], str]:
     solutions = state.get("solutions") or {}
     if all(sp["id"] in solutions for sp in state["analysis"]["subproblems"]):
-        return "write"
+        return "reconcile"
     sends = []
     for sp in ready_subproblems(state):
         sends.append(Send("solve", {
@@ -71,6 +72,7 @@ def build_graph():
     graph.add_node("confirm", confirm)
     graph.add_node("solve", solve)
     graph.add_node("solve_join", solve_join)
+    graph.add_node("reconcile", reconcile)
     graph.add_node("write", write)
     graph.add_node("validate", validate)
     graph.add_node("repair", repair)
@@ -79,9 +81,10 @@ def build_graph():
     graph.add_edge(START, "analyze")
     graph.add_conditional_edges("analyze", send_designs, ["design"])
     graph.add_edge("design", "confirm")
-    graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "write"])
+    graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "reconcile"])
     graph.add_edge("solve", "solve_join")
-    graph.add_conditional_edges("solve_join", send_solves, ["solve", "write"])
+    graph.add_conditional_edges("solve_join", send_solves, ["solve", "reconcile"])
+    graph.add_edge("reconcile", "write")
     graph.add_edge("write", "validate")
     graph.add_conditional_edges("validate", route_after_validate, ["repair", "render"])
     graph.add_edge("repair", "validate")

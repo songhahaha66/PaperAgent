@@ -6,7 +6,8 @@
 - 引用了不存在的结果编号；
 - 正文出现没有引用登记结果的小数/百分数（题目中出现过的数不算）；
 - 子问题有登记结果，但求解章节一个都没引用。
-有问题的章节交给写作模型带着问题清单重写，最多 max_repair_rounds 轮，其余章节不动。
+以上不调模型。另外用一次模型调用检查汇总性章节与结论表是否一致（consistency.audit_sections），
+问题合并进同一个清单。有问题的章节交给写作模型带着问题清单重写，最多 max_repair_rounds 轮，其余章节不动。
 """
 
 import asyncio
@@ -19,6 +20,7 @@ from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
 from ..registry import REF_PATTERN, find_refs
 from ..state import PaperState
+from .consistency import audit_sections
 from .write import STYLE, section_plan, section_request, solve_key
 
 MIN_SECTION_CHARS = 80
@@ -93,6 +95,10 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("validate", "in_progress")
     issues = check_sections(state, ctx)
+    if ctx.audit_claims:
+        flagged = {issue["section"] for issue in issues}
+        # 已有数字问题的章节会整体重写，这一轮先不查口径
+        issues += [i for i in await audit_sections(state, ctx) if i["section"] not in flagged]
     ctx.write_json(".system/validation.json", {"round": state.get("repair_round", 0), "issues": issues})
     note = f"第 {state.get('repair_round', 0)} 轮：{len(issues)} 个问题"
     await ctx.events.emit("paper_validation", note if issues else "校验通过")

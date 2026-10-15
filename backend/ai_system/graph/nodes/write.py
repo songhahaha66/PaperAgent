@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple
 from langgraph.runtime import Runtime
 
 from ..context import GraphContext
+from .consistency import consistency_text
 from ..llm_utils import as_messages, call_text, clip
 from ..state import PaperState
 
@@ -61,7 +62,10 @@ def _design_text(design: Dict) -> str:
 
 
 def _report_text(report: Dict) -> str:
-    findings = "\n".join(f"- {f}" for f in report.get("key_findings") or [])
+    findings = "\n".join(
+        f"- [{f['strength']}] {f['statement']}" if isinstance(f, dict) else f"- {f}"
+        for f in report.get("key_findings") or []
+    )
     limitations = "；".join(report.get("limitations") or [])
     return (
         f"概要：{report.get('summary', '')}\n实际方法：{report.get('approach', '')}\n主要结论：\n{findings}\n"
@@ -81,6 +85,13 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
 
 
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
+    """每一节都带上全文结论表和统一口径，各节结论口径一致"""
+    request = _section_body(key, title, state, ctx)
+    shared = consistency_text(ctx, state.get("consistency") or [])
+    return f"{request}\n\n{shared}" if shared else request
+
+
+def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
     analysis = state["analysis"]
     subproblems = analysis["subproblems"]
     sections = state.get("sections") or {}
@@ -95,7 +106,6 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
             f"\n\n{subproblem_brief(state, ctx, subproblem)}"
         )
 
-    "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in subproblems)
     if key == "restatement":
         return f"撰写「问题重述」，包括问题背景和需要解决的问题（逐条列出）。\n\n题目：\n{state['task']}"
     if key == "analysis":

@@ -100,6 +100,7 @@ class GraphContext:
     max_review_rounds: int = 1
     explore_top_k: int = 2
     explore_steps: int = 12
+    audit_claims: bool = True
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)
