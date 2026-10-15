@@ -82,9 +82,17 @@ async def profile_data(ctx: GraphContext) -> str:
 WRITING_TITLE = re.compile(r"备忘录|建议信|公开信|致.{0,12}的?信|信函|memo|letter", re.IGNORECASE)
 
 
+# "撰写完整论文"本身就是流水线的产出，不是一个子问题；2024_C 有一次被拆成了 Q5
+PAPER_ITSELF = re.compile(r"(完整|整篇)?(建模)?论文(的)?(撰写|写作|整理|汇总)|撰写.{0,6}论文")
+
+
 def normalize_plan(subproblems: List[Dict]) -> List[Dict]:
     """用确定性规则补齐模型漏填的子问题类型和依赖，避免文书类子问题在没有结论时就开写、
-    或后一问在前一问结果出来之前就开跑。只补不删：模型给出的合法依赖全部保留。"""
+    或后一问在前一问结果出来之前就开跑。模型给出的合法依赖全部保留；只删掉"撰写论文"这种子问题。"""
+    subproblems = [
+        sp for sp in subproblems
+        if not (PAPER_ITSELF.search(sp.get("title", "")) and not WRITING_TITLE.search(sp.get("title", "")))
+    ] or subproblems
     ids = [sp["id"] for sp in subproblems]
     fixed = []
     for index, sp in enumerate(subproblems):
@@ -119,13 +127,13 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
 
     plan = analysis.model_dump()
     plan["subproblems"] = normalize_plan(plan["subproblems"])
-    ids = [sp.id for sp in analysis.subproblems]
+    ids = [sp["id"] for sp in plan["subproblems"]]
     await ctx.set_stage("analyze", "completed", f"{len(ids)} 个子问题：{'、'.join(ids)}")
     if not ctx.confirm_models:
         await ctx.set_stage("confirm", "completed", "自动通过")
     await ctx.events.emit(
         "paper_analysis",
-        "\n".join([f"**{analysis.title}**", ""] + [f"- {sp.id} {sp.title}" for sp in analysis.subproblems]),
+        "\n".join([f"**{analysis.title}**", ""] + [f"- {sp['id']} {sp['title']}" for sp in plan["subproblems"]]),
     )
     return {
         "data_profile": data_profile,
