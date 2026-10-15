@@ -1025,13 +1025,37 @@ def test_placeholder_runs_are_not_executed(tmp_path):
 
     async def go():
         try:
-            return [await run_python.ainvoke({"code": code}) for code in ("print('x')", "print('ok')\nprint('done')", "print(1 + 1)")]
+            return [await run_python.ainvoke({"code": code}) for code in ("print('x')", "print('ok')\nprint('done')", "import pandas as pd, numpy as np\nprint('q3')", "print(1 + 1)")]
         finally:
             await ctx.kernels.close()
 
     outputs = asyncio.run(go())
-    assert outputs[:2] == [PLACEHOLDER_REPLY, PLACEHOLDER_REPLY]
-    assert "2" in outputs[2] and len(run_log) == 1
+    assert outputs[:3] == [PLACEHOLDER_REPLY] * 3
+    assert "2" in outputs[3] and len(run_log) == 1
+
+
+def test_refused_steps_dropped_from_request():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from ai_system.graph.compaction import drop_refused_steps
+
+    def call(i):
+        return {"name": "run_python", "args": {"code": "x"}, "id": f"c{i}"}
+
+    messages = [
+        HumanMessage(content="task"),
+        AIMessage(content="", tool_calls=[call(1)]),
+        ToolMessage(content="NO", tool_call_id="c1"),
+        AIMessage(content="", tool_calls=[call(2), call(3)]),
+        ToolMessage(content="NO", tool_call_id="c2"),
+        ToolMessage(content="out", tool_call_id="c3"),
+        AIMessage(content="", tool_calls=[call(4)]),
+        ToolMessage(content="out", tool_call_id="c4"),
+    ]
+    kept = drop_refused_steps(messages, "NO")
+    # 全部被拒的一步整步去掉；部分被拒的一步保留，否则剩下的调用没有对应结果
+    assert [getattr(m, "tool_call_id", None) for m in kept] == [None, None, "c2", "c3", None, "c4"]
+    assert drop_refused_steps(messages[:1], "NO") == messages[:1]
 
 
 def test_truncation_guard_retries_with_note():

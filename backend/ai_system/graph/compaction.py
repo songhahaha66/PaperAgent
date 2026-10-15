@@ -105,6 +105,46 @@ class StepBudgetMiddleware(AgentMiddleware):
         return await handler(request)
 
 
+def drop_refused_steps(messages: List[BaseMessage], refusal: str) -> List[BaseMessage]:
+    """去掉所有工具调用都被拒绝（结果是 refusal）的那几步：AI 消息连同它的工具结果一起去掉
+
+    只有部分调用被拒时整步保留，否则剩下的调用没有对应结果，接口直接 400。
+    """
+    refused = {m.tool_call_id for m in messages if isinstance(m, ToolMessage) and m.content == refusal}
+    if not refused:
+        return messages
+    drop_calls = set()
+    kept = []
+    for message in messages:
+        if isinstance(message, AIMessage) and message.tool_calls:
+            ids = {c.get("id") for c in message.tool_calls}
+            if ids <= refused:
+                drop_calls |= ids
+                continue
+        if isinstance(message, ToolMessage) and message.tool_call_id in drop_calls:
+            continue
+        kept.append(message)
+    return kept
+
+
+class DropRefusedStepsMiddleware(AgentMiddleware):
+    """请求里不带被拒绝的空执行
+
+    v3 的 2022_C Q3 先打了几次 print('ok')，被拒后照着历史里的样子越打越多，57 次空执行把步数用光，
+    报告只剩"..."。历史里不留这些步，模型就没有可模仿的样子。放在 StepBudget 里层：预算照样按全部步数算。
+    去掉是确定性的，同一段历史每次去掉的内容一样，不破坏前缀缓存。
+    """
+
+    def __init__(self, refusal: str):
+        super().__init__()
+        self.refusal = refusal
+
+    async def awrap_model_call(
+        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
+    ) -> Any:
+        return await handler(request.override(messages=drop_refused_steps(request.messages, self.refusal)))
+
+
 class CompactHistoryMiddleware(AgentMiddleware):
     def __init__(self, keep_recent: int = KEEP_RECENT_STEPS, block: int = BLOCK_STEPS):
         super().__init__()

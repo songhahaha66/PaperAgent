@@ -25,7 +25,13 @@ from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
 from ...judge import Score
-from ..compaction import CompactHistoryMiddleware, HistoryRecorder, StepBudgetMiddleware, TruncationGuardMiddleware
+from ..compaction import (
+    CompactHistoryMiddleware,
+    DropRefusedStepsMiddleware,
+    HistoryRecorder,
+    StepBudgetMiddleware,
+    TruncationGuardMiddleware,
+)
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured
 from ..registry import GroundingError, _parse_number
@@ -224,7 +230,7 @@ def protocol_text(protocol: Dict[str, Any]) -> str:
 
 
 async def run_probe(ctx: GraphContext, branch: BranchInput, probe: Probe, protocol: Dict[str, Any]) -> Probe:
-    from .solve import ReportFallback, build_task, build_tools, run_agent  # 避免循环导入
+    from .solve import PLACEHOLDER_REPLY, ReportFallback, build_task, build_tools, run_agent  # 避免循环导入
 
     subproblem_id = branch["subproblem"]["id"]
     recorder = HistoryRecorder()
@@ -235,7 +241,7 @@ async def run_probe(ctx: GraphContext, branch: BranchInput, probe: Probe, protoc
         system_prompt=system,
         response_format=ToolStrategy(ProbeReport),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.explore_steps, 3, PROBE_NUDGE),
-                    TruncationGuardMiddleware()],
+                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware()],
     )
     task = build_task(branch, ctx, candidate=probe.candidate, extra=protocol_text(protocol), ending="开始探索。")
     try:
