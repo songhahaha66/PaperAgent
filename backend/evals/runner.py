@@ -101,8 +101,10 @@ def _build_agent(pipeline: str, llm, workspace: Path):
     raise ValueError(f"未知 pipeline: {pipeline}")
 
 
-async def run_problem(problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "legacy") -> Dict:
-    """用指定流水线（markdown 模式）跑一道题"""
+async def run_problem(
+    problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "legacy", resume: bool = False
+) -> Dict:
+    """用指定流水线（markdown 模式）跑一道题；resume=True 时从 v2 的 checkpoint 恢复，耗时和用量累加到上次记录上"""
     workspace = out_dir / problem.id / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     staged = stage_datasets(problem, workspace)
@@ -119,7 +121,10 @@ async def run_problem(problem: Problem, out_dir: Path, model: ModelSpec, pipelin
     with get_usage_metadata_callback() as usage_cb:
         try:
             agent = _build_agent(pipeline, llm, workspace)
-            record["final_message"] = await agent.run(prompt)
+            if resume:
+                record["final_message"] = await agent.resume_failed()
+            else:
+                record["final_message"] = await agent.run(prompt)
         except Exception:
             record["error"] = traceback.format_exc()
             logger.exception("运行 %s 失败", problem.id)
@@ -128,7 +133,17 @@ async def run_problem(problem: Problem, out_dir: Path, model: ModelSpec, pipelin
     record["usage_by_model"] = usage_cb.usage_metadata
     record["paper_exists"] = (workspace / PAPER_FILENAME).exists()
 
-    (out_dir / problem.id / "run.json").write_text(
+    previous_path = out_dir / problem.id / "run.json"
+    if resume:
+        previous = json.loads(previous_path.read_text(encoding="utf-8")) if previous_path.exists() else {}
+        record["resumes"] = previous.get("resumes", 0) + 1
+        # 被外部中断的那次没有写 run.json 时，之前的耗时和用量无从累加，记下来避免误读
+        record["partial_usage"] = previous.get("partial_usage", not previous)
+        record["seconds"] = round(record["seconds"] + previous.get("seconds", 0), 1)
+        for key, value in (previous.get("usage") or {}).items():
+            record["usage"][key] = record["usage"].get(key, 0) + value
+
+    previous_path.write_text(
         json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return record
