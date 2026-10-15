@@ -15,6 +15,7 @@ design 阶段的 critic 只能在动手前判断方案"看起来"好不好。202
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,12 +37,22 @@ logger = logging.getLogger(__name__)
 # 两个指标相对差距在 1% 以内视为打平
 TIE_TOLERANCE = 0.01
 
+# 假设检验类子问题（"是否随机""是否存在"）没有"越大越好"的指标：不同检验的统计量和 p 值不能比高低。
+# 2024_C 的 Q2 曾为此试跑 13 分钟，最后"只有一个方案跑通"
+HYPOTHESIS_TASK = re.compile(r"检验|假说|是否.{0,8}(随机|存在|显著|有关)")
+PREDICTIVE_TASK = re.compile(r"预测|分类|识别|回归|拟合|估计")
+
+
+def is_hypothesis_test(subproblem: Dict) -> bool:
+    text = f"{subproblem.get('title', '')} {subproblem.get('question', '')}"
+    return bool(HYPOTHESIS_TASK.search(text)) and not PREDICTIVE_TASK.search(text)
+
 PROTOCOL_SYSTEM = (
     "你是数学建模竞赛的指导老师。几个候选建模方案要先在数据上各跑一小段再决定用哪个，"
     "请为这个子问题定一个所有方案共用的验证协议，使它们的结果可以直接比较。"
     "协议要防止数据泄漏（例如按比赛或按时间划分，而不是随机打乱逐行划分），并给出一个简单的对照基线。"
     "指标只能是一个数（例如 AUC），不能是“检验力与第一类错误率”这样的组合；需要兼顾多个量时，定义一个合成的单一分数。"
-    "如果这个子问题本质上没有可比的数值指标（如优化方案、综合评价、描述性分析、写备忘录），applicable 设为 false。"
+    "如果这个子问题本质上没有可比的数值指标（如优化方案、综合评价、描述性分析、假设检验、写备忘录），applicable 设为 false。"
 )
 
 PROBE_SYSTEM = """你是数学建模竞赛的编程手，现在处于方案探索阶段：几个候选方案各自在数据上先跑一小段，
@@ -310,6 +321,8 @@ async def explore(ctx: GraphContext, branch: BranchInput) -> Optional[Exploratio
     priors = [scores[i].get("total") for i in picks]
     # 评审已经明显分出高下时，试跑带来的信息不值它的成本
     if None not in priors[:2] and priors[0] - priors[1] > ctx.explore_margin:
+        return None
+    if is_hypothesis_test(branch["subproblem"]):
         return None
     protocol = await make_protocol(ctx, branch, [candidates[i] for i in picks])
     # 没有统一指标时各分支无法直接比较，只能再请 critic 读执行证据，收益小于成本，直接按评审选择求解
