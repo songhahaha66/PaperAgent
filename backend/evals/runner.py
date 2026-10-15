@@ -34,10 +34,11 @@ class ModelSpec:
     model_id: str
     api_key: str
     base_url: Optional[str] = None
+    extra_body: Optional[Dict] = None
 
     @classmethod
     def from_env(cls, prefix: str) -> Optional["ModelSpec"]:
-        """读取 <prefix>_PROVIDER / _MODEL / _API_KEY / _BASE_URL，缺模型或 key 时返回 None"""
+        """读取 <prefix>_PROVIDER / _MODEL / _API_KEY / _BASE_URL / _EXTRA_BODY（JSON），缺模型或 key 时返回 None"""
         model_id = os.getenv(f"{prefix}_MODEL")
         api_key = os.getenv(f"{prefix}_API_KEY")
         if not model_id or not api_key:
@@ -47,10 +48,14 @@ class ModelSpec:
             model_id=model_id,
             api_key=api_key,
             base_url=os.getenv(f"{prefix}_BASE_URL") or None,
+            extra_body=json.loads(os.environ[f"{prefix}_EXTRA_BODY"]) if os.getenv(f"{prefix}_EXTRA_BODY") else None,
         )
 
     def create_llm(self, **kwargs):
         from ai_system.core_handlers.llm_providers import LLMProviderFactory
+
+        if self.extra_body:
+            kwargs.setdefault("extra_body", self.extra_body)
 
         return LLMProviderFactory.create_llm_instance(
             {

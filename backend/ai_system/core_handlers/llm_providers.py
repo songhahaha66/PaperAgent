@@ -115,6 +115,8 @@ class OpenAIProvider(BaseLLMProvider):
             # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
             # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
             timeout=kwargs.get('timeout', 600),
+            # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
+            extra_body=kwargs.get('extra_body'),
         )
 
     def validate_config(self) -> bool:
@@ -196,6 +198,8 @@ class LocalProvider(BaseLLMProvider):
             # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
             # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
             timeout=kwargs.get('timeout', 600),
+            # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
+            extra_body=kwargs.get('extra_body'),
         )
 
     def validate_config(self) -> bool:
