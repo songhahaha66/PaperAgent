@@ -22,6 +22,7 @@ from langgraph.runtime import Runtime
 
 from ..compaction import (
     CompactHistoryMiddleware,
+    DropRefusedStepsMiddleware,
     HistoryRecorder,
     StepBudgetMiddleware,
     TruncationGuardMiddleware,
@@ -90,7 +91,10 @@ REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解
 TEMPLATE_TOKEN = re.compile(r"</?｜|｜DSML｜|</think>|<think>")
 
 # v2h/v2k 的返工阶段各有 30~40 次 print('x') / print('ok') 这种空执行：每次占一步预算、一次模型往返
-PLACEHOLDER_CODE = re.compile(r"""^\s*(?:print\(\s*(['"])[\w\s.!-]{0,12}\1\s*\)\s*;?\s*)+$""")
+# 前面带几行 import 的也算（v3 的 2022_C Q3："import pandas as pd, numpy as np\nprint('q3')" 执行了十几次）
+PLACEHOLDER_CODE = re.compile(
+    r"""^\s*(?:(?:import [\w., ]+|from [\w.]+ import [\w., ]+)\s*\n\s*)*(?:print\(\s*(['"])[\w\s.!-]{0,12}\1\s*\)\s*;?\s*)+$"""
+)
 PLACEHOLDER_REPLY = (
     "这段代码只打印了一个固定字符串，没有执行。不需要用 run_python 占位或确认："
     "登记结果直接调用 record_results（run_id 填之前打印该值的那次执行），全部完成后直接提交 SolveReport。"
@@ -385,7 +389,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         system_prompt=SYSTEM,
         response_format=ToolStrategy(SolveReport),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE),
-                    TruncationGuardMiddleware()],
+                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware()],
     )
     limit = ctx.max_solver_steps * 2 + 1
     fallback = ReportFallback(ctx.coder_llm, SolveReport, SYSTEM, recorder)
