@@ -34,6 +34,8 @@ STRIP_PATTERNS = [
     re.compile(r"```.*?```", re.DOTALL),
     re.compile(r"`[^`\n]+`"),
     REF_PATTERN,
+    # 小标题编号（"### 4.1 整体思路"）不是结果；v2m 的问题分析因此被报了 5 个"未引用的数字"
+    re.compile(r"^[ \t]*#{1,6}[ \t]*[A-Za-z]*\d+(?:\.\d+)+", re.MULTILINE),
 ]
 
 

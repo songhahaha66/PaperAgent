@@ -460,6 +460,7 @@ def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
 def test_untracked_numbers_ignores_refs_formulas_and_allowed():
     text = "预测值 {{R:R1}}，公式 $y = 0.5x$，题目给定 0.65，另有 3.14 与 20%。整数 2025 不检查。"
     assert untracked_numbers(text, allowed_text="给定 0.65") == ["3.14", "20%"]
+    assert untracked_numbers("### 4.1 整体思路\n#### Q1.2 求解\n正文 4.5", "") == ["4.5"]
     # 公式里单独等于一个数的是结果（Q2 把没登记的检验统计量写成 $z = 4.05$）
     assert untracked_numbers("真实序列 $z = 4.05$，$\\hat p \\approx 0.673$，$x = {{R:R1}}$", "") == ["4.05", "0.673"]
 
