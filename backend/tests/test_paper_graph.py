@@ -26,6 +26,7 @@ from ai_system.graph.state import (
     ProblemAnalysis,
     ResultReview,
     Subproblem,
+    ValidationProtocol,
 )
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
@@ -71,6 +72,8 @@ class _Structured:
             return MethodPick(method_keys=["arima", "not_a_method", "regression"], reason="r")
         if self.schema is CandidateSet:
             return CandidateSet(candidates=[_candidate("方案甲"), _candidate("方案乙")])
+        if self.schema is ValidationProtocol:
+            return ValidationProtocol(applicable=True, metric="留出集 AUC", procedure="按年份留出", baseline="常数预测")
         if self.schema is ResultReview:
             # Q1 第一次审查要求返工，其余直接通过
             prompt = messages[-1].content
@@ -102,6 +105,11 @@ class FakeModel(BaseChatModel):
         first = next(m for m in messages if isinstance(m, HumanMessage)).content
         if "开始求解" in first:
             return self._solver_step(first, messages)
+        if "开始探索" in first:
+            promoted = [i for i, m in enumerate(messages) if isinstance(m, HumanMessage) and "正式求解" in m.content]
+            if promoted:
+                return self._solver_step(first, messages[promoted[-1]:])
+            return self._probe_step(first, messages)
         return AIMessage(content=self._write(first))
 
     def _solver_step(self, task: str, messages: List[BaseMessage]) -> AIMessage:
@@ -124,6 +132,22 @@ class FakeModel(BaseChatModel):
         ]
         name, args = script[min(step, len(script) - 1)]
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{sid}_{step}"}])
+
+    def _probe_step(self, task: str, messages: List[BaseMessage]) -> AIMessage:
+        # 方案甲真实 AUC 0.71；方案乙打印 0.65 却报告 0.99（编造），核对后不参与比较
+        sid = re.search(r"# 子问题 (Q\d)", task).group(1)
+        name = re.search(r"# 选定的建模方案：(\S+)", task).group(1)
+        tool_results = [m for m in messages if isinstance(m, ToolMessage)]
+        if not tool_results:
+            auc = "0.71" if name == "方案甲" else "0.65"
+            code = f"model = '{name}'\nprint('AUC', {auc})\nprint('baseline', 0.5)"
+            return AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": code}, "id": f"probe_{sid}_{name}_0"}])
+        run_id = re.search(r"\[run_id: (\S+)\]", tool_results[-1].content).group(1)
+        report = {
+            "works": True, "metric_value": "0.71" if name == "方案甲" else "0.99", "metric_run_id": run_id,
+            "baseline_value": "0.5", "summary": f"{name} 跑通", "problems": [],
+        }
+        return AIMessage(content="", tool_calls=[{"name": "ProbeReport", "args": report, "id": f"probe_{sid}_{name}_1"}])
 
     def _write(self, request: str) -> str:
         self.text_calls.append(request)
@@ -187,8 +211,13 @@ def test_graph_end_to_end_offline(tmp_path):
     # 方法检索过滤掉不存在的 key；评审选了分数更高的第二个候选
     design = result["designs"]["Q1"]
     assert design["methods"] == ["arima", "regression"]
-    assert design["chosen_index"] == 1 and design["chosen"]["name"] == "方案乙"
     assert design["scores"][1]["total"] == 12.0
+    # 评审选了分数更高的方案乙，但探索时按统一协议实测，方案甲胜出；方案乙编造的指标没通过核对
+    exploration = design["exploration"]
+    assert [p["name"] for p in exploration["probes"]] == ["方案乙", "方案甲"]
+    assert [p["metric_grounded"] for p in exploration["probes"]] == [False, True]
+    assert exploration["chosen_index"] == 0 and design["chosen"]["name"] == "方案甲"
+    assert "留出集 AUC" in exploration["reason"]
 
     # 审查要求 Q1 返工一轮后通过；Q2 一次通过
     assert [bool(r["must_fix"]) for r in result["solutions"]["Q1"]["reviews"]] == [True]
@@ -396,3 +425,33 @@ def test_compact_messages_keeps_recent_steps_and_stable_prefix():
     # 再走几步（同一块内），被压缩部分完全一致
     later = compact_messages(history(24), keep_recent=6, block=10)
     assert [m.content for m in later[:21]] == [m.content for m in compacted[:21]]
+
+
+def test_select_probe_metric_direction_ties_and_fallbacks():
+    from ai_system.graph.nodes.explore import Probe, select_probe, shortlist
+
+    def probe(i, prior, works=True, metric=None, evidence=None):
+        p = Probe(candidate_index=i, candidate={"name": f"方案{i}"}, kernel_key=f"Q1~c{i}", prior=prior, evidence=evidence)
+        p.report = {"works": works, "metric_value": str(metric) if metric is not None else ""}
+        p.metric = metric
+        return p
+
+    rmse = {"applicable": True, "metric": "RMSE", "higher_is_better": False}
+    # 越小越好
+    assert select_probe([probe(0, 10, metric=3.2), probe(1, 8, metric=2.1)], rmse)[0].candidate_index == 1
+    # 相差 1% 以内视为打平，用评审分打破平局
+    assert select_probe([probe(0, 8, metric=2.000), probe(1, 10, metric=2.010)], rmse)[0].candidate_index == 1
+    # 没跑通的不参与；指标没核对通过的只能按证据/评审分
+    assert select_probe([probe(0, 12, works=False, metric=1.0), probe(1, 5, metric=9.0)], rmse)[0].candidate_index == 1
+    assert select_probe([probe(0, 12), probe(1, 5)], rmse)[0].candidate_index == 0
+    # 没有统一指标时按执行证据评分
+    none = {"applicable": False}
+    winner, reason = select_probe([probe(0, 12, evidence=1.0), probe(1, 5, evidence=3.0)], none)
+    assert winner.candidate_index == 1 and "执行证据" in reason
+    # 都没跑通就沿用评审选择
+    winner, reason = select_probe([probe(0, 5, works=False), probe(1, 9, works=False)], none)
+    assert winner.candidate_index == 1 and "沿用" in reason
+
+    design = {"candidates": [{}, {}, {}], "scores": [{"total": 5}, {"total": 9}, {"total": None}], "chosen_index": 1}
+    assert shortlist(design, 2) == [1, 0]
+    assert shortlist({"candidates": [{}], "chosen_index": 0}, 2) == [0]

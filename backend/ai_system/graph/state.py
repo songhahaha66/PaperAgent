@@ -66,6 +66,23 @@ class SolveReport(BaseModel):
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
 
 
+class ValidationProtocol(BaseModel):
+    applicable: bool = Field(description="能否用一个统一的数值指标比较不同方案（预测、分类、拟合类通常可以；优化、评价、描述类通常不行）")
+    metric: str = Field(default="", description="比较用的指标，如 验证集 AUC、留出集 RMSE")
+    higher_is_better: bool = Field(default=True, description="指标是否越大越好")
+    procedure: str = Field(default="", description="所有方案共用的验证做法：数据划分方式（如按比赛分组留出 20%）、随机种子")
+    baseline: str = Field(default="", description="对照基线，如 多数类、常数预测、上一期值")
+
+
+class ProbeReport(BaseModel):
+    works: bool = Field(description="核心模型是否已在真实数据上跑通")
+    metric_value: str = Field(default="", description="按验证协议算出的指标值，必须是某次执行 print 出的数")
+    metric_run_id: str = Field(default="", description="打印该指标的那次执行的 run_id")
+    baseline_value: str = Field(default="", description="基线在同一协议下的指标值")
+    summary: str = Field(description="做了什么、结果如何，2~4 句")
+    problems: List[str] = Field(default_factory=list, description="遇到的问题或方案本身的缺陷")
+
+
 class ResultReview(BaseModel):
     sound: bool = Field(description="结果是否可以直接用于写作")
     issues: List[str] = Field(default_factory=list, description="发现的问题，每条写清依据")
