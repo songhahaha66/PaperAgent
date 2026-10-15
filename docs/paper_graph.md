@@ -7,7 +7,7 @@
 
 ```
 analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意见)──▶ design
-                                        └─(通过)──▶ solve（按依赖分批并行：explore → 正式求解 → 审查）──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
+                                        └─(通过)──▶ solve（按依赖分批并行：explore → 正式求解 → 审查）──▶ reconcile ──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
                                                                                                  └─▶ render
 ```
 
@@ -18,8 +18,9 @@ analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意�
 | confirm | 可选的人工确认点（`AI_CONFIRM_MODELS=1`）：`interrupt` 把方案发给用户，回复"确认"继续，其他回复作为修改意见重新设计 | checkpoint 落盘，用户隔多久回复都能接着跑 |
 | solve · explore | 评分最高的 k 个候选（默认 2）先在数据上试跑：先定统一验证协议（同一指标、同一划分、同一基线），各候选开独立内核并行跑一个短循环（默认 12 步），按协议汇报指标；指标要通过与结果登记相同的核对才参与比较。有可比指标按指标选（1% 内打平用评审分），没有统一指标时按 critic 对执行证据的评分选 | 借鉴 AIDE / MLE-bench 的执行驱动搜索；胜出分支的内核和对话历史整体晋升为正式求解，探索的计算不浪费；记录在 `designs[Qn].exploration` |
 | solve | 按依赖关系分批并行，每个子问题一个 CodeAct 循环 + 独立的持久 Python 内核；交报告后由审查模型检查数据范围、泄漏、过拟合、指标选择、结论是否被支持，必须修正的问题交回同一循环返工（默认 1 轮） | 变量跨步保留；早期代码和输出按 10 步一块压缩（`compaction.py`），至少保留最近 6 步原文，块内前缀不变以命中缓存 |
-| write | 先并行写各子问题的建模求解章节，再写重述/分析/假设/符号/灵敏度/评价，最后写摘要 | 写作模型只看到结果登记表，数字只能写引用 |
-| validate / repair | 代码校验：章节缺失、未知引用、正文出现未登记的小数/百分数、求解章节没引用结果或没插图；有问题的章节带着问题清单重写，最多 2 轮 | 校验不调模型，只修有问题的章节 |
+| reconcile | 各子问题报告的主要结论登记为结论节点（陈述 + 证据强度 显著/倾向/不显著 + 指向登记结果的证据）；审查模型通读结论表，找出跨子问题矛盾和强度与证据不符的结论，给出统一口径 | 结论图：登记表从"数字可追溯"扩展到"结论可追溯"；统一口径写进 `.system/consistency.json` |
+| write | 先并行写各子问题的建模求解章节，再写重述/分析/假设/符号/灵敏度/评价，最后写摘要 | 写作模型只看到结果登记表，数字只能写引用；每一节都带着结论表和统一口径 |
+| validate / repair | 代码校验：章节缺失、未知引用、正文出现未登记的小数/百分数、求解章节没引用结果或没插图；再用一次模型调用检查摘要、问题分析、灵敏度、评价是否与结论表一致；有问题的章节带着问题清单重写，最多 2 轮 | 数字校验不调模型；只修有问题的章节 |
 | render | 引用替换为真实数值和图片，图按出现顺序编号，写出 `paper.md`；带引用的原稿留在 `.system/paper_raw.md` | 每个数字都能追溯到某次代码执行 |
 
 ## 结果登记表
@@ -38,7 +39,8 @@ analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意�
 |---|---|
 | `.system/graph.sqlite` | LangGraph checkpoint（AsyncSqliteSaver） |
 | `.system/graph_thread.json` | 当前 thread 及状态（running / interrupted / done） |
-| `.system/results.json` | 结果登记表 |
+| `.system/results.json` | 结果登记表（`results`）与结论节点（`claims`） |
+| `.system/consistency.json` | 结论冲突与统一口径 |
 | `.system/validation.json` | 最近一轮校验问题 |
 | `plan.md` / `plan.json` | 各阶段进度，前端固定展示 |
 

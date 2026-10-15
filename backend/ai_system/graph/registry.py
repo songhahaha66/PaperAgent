@@ -86,9 +86,21 @@ def value_in_output(value: str, output: str) -> bool:
 
 
 @dataclass
+class Claim:
+    """一条结论：陈述 + 证据强度 + 依据的登记结果（结论图的节点，证据是它指向结果的边）"""
+
+    id: str
+    subproblem: str
+    statement: str
+    strength: str
+    evidence: List[str] = field(default_factory=list)
+
+
+@dataclass
 class ResultRegistry:
     fs: WorkspaceFS
     results: Dict[str, Result] = field(default_factory=dict)
+    claims: Dict[str, Claim] = field(default_factory=dict)
 
     @classmethod
     def load(cls, fs: WorkspaceFS) -> "ResultRegistry":
@@ -96,19 +108,24 @@ class ResultRegistry:
         if fs.exists(REGISTRY_PATH):
             data = json.loads(fs.read_text(REGISTRY_PATH))
             registry.results = {item["id"]: Result(**item) for item in data.get("results", [])}
+            registry.claims = {item["id"]: Claim(**item) for item in data.get("claims", [])}
         return registry
 
     def save(self) -> None:
-        payload = {"results": [asdict(r) for r in self.results.values()]}
+        payload = {
+            "results": [asdict(r) for r in self.results.values()],
+            "claims": [asdict(c) for c in self.claims.values()],
+        }
         self.fs.write_text(REGISTRY_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def reset(self) -> None:
         """新任务开始时清空，避免上一篇论文的结果混进来"""
         self.results = {}
+        self.claims = {}
         self.save()
 
     def _next_id(self, prefix: str) -> str:
-        used = [int(rid[1:]) for rid in self.results if rid.startswith(prefix)]
+        used = [int(rid[1:]) for rid in [*self.results, *self.claims] if rid.startswith(prefix)]
         return f"{prefix}{max(used, default=0) + 1}"
 
     def _run_output(self, run_id: str) -> str:
@@ -161,6 +178,34 @@ class ResultRegistry:
         self.results[result.id] = result
         self.save()
         return result
+
+    def set_claims(self, subproblem: str, findings: List[Dict]) -> List[Claim]:
+        """用求解报告的结论替换该子问题的结论（返工后报告会变）；证据只保留存在的登记结果"""
+        self.claims = {cid: c for cid, c in self.claims.items() if c.subproblem != subproblem}
+        added = []
+        for finding in findings:
+            statement = str(finding.get("statement", "")).strip()
+            if not statement:
+                continue
+            evidence = [ref for ref in dict.fromkeys(find_refs(statement)) if ref in self.results]
+            claim = Claim(
+                id=self._next_id("C"), subproblem=subproblem, statement=statement,
+                strength=finding.get("strength") or "倾向", evidence=evidence,
+            )
+            self.claims[claim.id] = claim
+            added.append(claim)
+        self.save()
+        return added
+
+    def claims_table(self) -> str:
+        """结论表：陈述里的引用替换为真实数值，供一致性审查和写作使用"""
+        if not self.claims:
+            return "（没有登记的结论）"
+        lines = ["| 结论 | 子问题 | 证据强度 | 陈述 | 依据 |", "|---|---|---|---|---|"]
+        for c in self.claims.values():
+            statement = self.render(c.statement).replace("\n", " ").replace("|", "/")
+            lines.append(f"| {c.id} | {c.subproblem} | {c.strength} | {statement} | {', '.join(c.evidence) or '无'} |")
+        return "\n".join(lines)
 
     def get(self, result_id: str) -> Optional[Result]:
         return self.results.get(result_id)

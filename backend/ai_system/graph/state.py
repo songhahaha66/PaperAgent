@@ -6,7 +6,7 @@ LLM、内核、登记表这类运行时对象放在 GraphContext 里（不进 ch
 """
 
 import operator
-from typing import Annotated, Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -58,10 +58,20 @@ class CandidateSet(BaseModel):
     candidates: List[ModelCandidate]
 
 
+STRENGTHS = ("显著", "倾向", "不显著")
+
+
+class Finding(BaseModel):
+    statement: str = Field(description="一条结论，依据的数值写成 {{R:Rn}} 引用")
+    strength: Literal["显著", "倾向", "不显著"] = Field(
+        description="证据强度：检验显著或结果明确=显著；方向一致但证据有限=倾向；检验不显著或无法判断=不显著"
+    )
+
+
 class SolveReport(BaseModel):
     summary: str = Field(description="求解过程和结论的概要，结论中的数值用 {{R:Rn}} 引用")
     approach: str = Field(description="实际采用的模型与算法，与计划不同时说明原因")
-    key_findings: List[str] = Field(description="主要结论，每条引用登记的结果")
+    key_findings: List[Finding] = Field(description="主要结论，每条写明依据的登记结果和证据强度")
     sensitivity: str = Field(default="", description="灵敏度分析或检验的做法与结论")
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
 
@@ -81,6 +91,25 @@ class ProbeReport(BaseModel):
     baseline_value: str = Field(default="", description="基线在同一协议下的指标值")
     summary: str = Field(description="做了什么、结果如何，2~4 句")
     problems: List[str] = Field(default_factory=list, description="遇到的问题或方案本身的缺陷")
+
+
+class Conflict(BaseModel):
+    claims: List[str] = Field(description="涉及的结论编号，如 [\"C2\", \"C7\"]；结论与自身证据不符时只填一个")
+    issue: str = Field(description="哪里矛盾，引用结论原文说明")
+    resolution: str = Field(description="写作时统一采用的口径：怎样表述才与全部证据一致")
+
+
+class ConsistencyReview(BaseModel):
+    conflicts: List[Conflict] = Field(default_factory=list, description="没有矛盾则为空")
+
+
+class ClaimIssue(BaseModel):
+    section: str = Field(description="有问题的章节 key")
+    problem: str = Field(description="本节哪句话与哪条结论（编号）不一致，应怎样改")
+
+
+class ClaimAudit(BaseModel):
+    issues: List[ClaimIssue] = Field(default_factory=list, description="没有不一致则为空")
 
 
 class ResultReview(BaseModel):
@@ -107,6 +136,8 @@ class PaperState(TypedDict, total=False):
     solutions: Annotated[Dict[str, Dict[str, Any]], merge_dict]
     # 章节 key -> 带引用的 markdown 正文
     sections: Annotated[Dict[str, str], merge_dict]
+    # 跨子问题的结论冲突及统一口径
+    consistency: List[Dict[str, Any]]
     issues: List[Dict[str, str]]
     repair_round: int
     paper_path: str

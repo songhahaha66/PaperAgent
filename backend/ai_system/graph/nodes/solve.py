@@ -24,7 +24,7 @@ from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
-from ..state import BranchInput, SolveReport
+from ..state import BranchInput, Finding, SolveReport
 from .explore import explore, promotion_message
 from .review import feedback_message, review_solution
 
@@ -48,7 +48,9 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 论文要用的图用 record_figure 登记，并写清图题。
 - 至少完成方案中的检验或灵敏度分析，并登记相应结果。
 
-完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。"""
+完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。
+每条主要结论都要写出依据的登记结果，并如实标注证据强度：检验不显著的就标「不显著」，不要把不显著的结果写成有效应。
+这些结论会和其他子问题的结论放在一起做一致性审查。"""
 
 
 REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
@@ -184,8 +186,10 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         report = SolveReport(
             summary="求解未正常结束，以下为已登记的结果。",
             approach=design["chosen"]["name"],
-            key_findings=[f"{r.name}：{{{{{r.id[0]}:{r.id}}}}}" for r in recorded],
+            key_findings=[Finding(statement=f"{r.name}：{{{{{r.id[0]}:{r.id}}}}}", strength="倾向") for r in recorded],
         ).model_dump()
+    else:
+        ctx.registry.set_claims(subproblem_id, report.get("key_findings") or [])
 
     count = len(ctx.registry.for_subproblem(subproblem_id))
     await ctx.events.emit("paper_solved", f"{subproblem_id} 求解{'完成' if status == 'completed' else '未完成'}，登记 {count} 项结果")
