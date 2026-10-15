@@ -624,3 +624,23 @@ def test_design_falls_back_when_candidates_keep_failing(tmp_path, monkeypatch):
     # 一个子问题设计失败不应中止整篇，改由求解者自行设计
     assert "Q2 政策评估：完成" in message
     assert (ws / "paper.md").exists()
+
+
+def test_normalize_plan_fills_writing_kind_and_dependencies():
+    from ai_system.graph.nodes.analyze import normalize_plan
+
+    plan = normalize_plan([
+        {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []},
+        {"id": "Q2", "kind": "compute", "title": "随机性检验", "question": "用Q1建立的指标检验，不涉及 Q12", "depends_on": ["Q9"]},
+        {"id": "Q3", "kind": "compute", "title": "给教练的备忘录", "question": "总结建议", "depends_on": []},
+    ])
+    assert [(sp["kind"], sp["depends_on"]) for sp in plan] == [
+        ("compute", []), ("compute", ["Q1"]), ("writing", ["Q1", "Q2"]),
+    ]
+
+
+def test_model_candidate_rejects_empty_placeholder():
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        ModelCandidate(name="", method_keys=[], idea="", formulation="", steps=[], validation="")
