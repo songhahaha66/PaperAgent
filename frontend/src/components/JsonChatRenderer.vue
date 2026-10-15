@@ -24,6 +24,7 @@
                 v-if="isPipelineMessage(getJsonBlocks(message))"
                 :blocks="getJsonBlocks(message)"
                 :streaming="message.isStreaming"
+                :superseded="index < messages.length - 1"
               />
 
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->

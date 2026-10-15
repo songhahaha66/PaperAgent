@@ -284,7 +284,7 @@ import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 
 import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
-import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
+import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import { useBreakpoint } from '@/composables/useBreakpoint';
@@ -519,11 +519,8 @@ const setupWebSocketForReconnect = async () => {
       }
     })
     
-    // 设置断开回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接断开')
-      // 不立即重置 isStreaming，可能是临时断开
-    })
+    // 设置断开回调（重连用尽或被关闭）
+    webSocketHandler.value.onDisconnect(() => handleConnectionLost())
     
     // 连接WebSocket
     await webSocketHandler.value.connect()
@@ -535,6 +532,25 @@ const setupWebSocketForReconnect = async () => {
     reconnectMessageId.value = null
     MessagePlugin.error('恢复AI任务失败')
   }
+}
+
+// 连接断开且自动重连用尽：问后端任务还在不在。任务已结束就以服务器保存的记录为准，不让界面一直停在"生成中"
+const handleConnectionLost = async () => {
+  if (!isStreaming.value || !authStore.token || !workId.value) return
+  try {
+    const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
+    if (taskStatus.has_task && taskStatus.status === 'running') {
+      MessagePlugin.warning('与服务器的连接已断开，任务仍在后台运行，刷新页面可继续查看进度')
+      return
+    }
+  } catch (error) {
+    MessagePlugin.error('与服务器的连接已断开，请检查网络后刷新页面')
+    return
+  }
+  isStreaming.value = false
+  reconnectMessageId.value = null
+  await loadChatHistory()
+  loadWorkspaceFiles()
 }
 
 // 统一的流式消息处理函数
@@ -1140,10 +1156,8 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     // 创建WebSocket处理器
     webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
 
-    // 设置断开连接回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接已断开')
-    })
+    // 设置断开连接回调（重连用尽或被关闭）
+    webSocketHandler.value.onDisconnect(() => handleConnectionLost())
 
     // 设置消息监听器 - 使用统一的处理函数
     webSocketHandler.value.onMessage((data) => {

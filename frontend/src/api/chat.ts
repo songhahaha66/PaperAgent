@@ -1,12 +1,5 @@
 import { apiClient } from '@/utils/apiClient'
 
-// 聊天会话相关接口
-export interface ChatSessionCreateRequest {
-  work_id: string
-  system_type: 'brain' | 'code' | 'writing'
-  title?: string
-}
-
 export interface ChatSessionResponse {
   id: number
   session_id: string
@@ -20,36 +13,8 @@ export interface ChatSessionResponse {
   total_messages: number
 }
 
-export interface ChatMessageResponse {
-  id: number
-  session_id: string
-  role: string
-  content: string
-  tool_calls?: any
-  tool_results?: any
-  message_metadata?: any
-  created_at: string
-  json_blocks?: any[]
-  message_type?: 'text' | 'json_card'
-}
-
 // 聊天API
 export const chatAPI = {
-  // 创建聊天会话
-  async createChatSession(
-    token: string,
-    request: ChatSessionCreateRequest,
-  ): Promise<ChatSessionResponse> {
-    const response = await apiClient.request<ChatSessionResponse>('/api/chat/session/create', {
-      method: 'POST',
-      body: JSON.stringify(request),
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-    return response
-  },
-
   // 获取工作的聊天历史（新API）
   async getWorkChatHistory(
     token: string,
@@ -61,105 +26,6 @@ export const chatAPI = {
         method: 'GET',
       },
     )
-    return response
-  },
-
-  // 兼容旧的聊天历史接口
-  async getChatHistory(
-    token: string,
-    sessionId: string,
-    limit: number = 50,
-  ): Promise<ChatMessageResponse[]> {
-    // 尝试从sessionId推导workId，或者直接使用新接口
-    const response = await apiClient.request<ChatMessageResponse[]>(
-      `/api/chat/session/${sessionId}/history?limit=${limit}`,
-      {
-        method: 'GET',
-      },
-    )
-    return response
-  },
-
-  // 简化的获取聊天会话（重构后一个work对应一个session）
-  async getChatSessions(token: string, workId?: string): Promise<ChatSessionResponse[]> {
-    if (!workId) {
-      // 如果没有workId，返回空数组（新架构下需要指定work）
-      return []
-    }
-
-    try {
-      // 尝试获取工作的聊天记录来验证是否有session
-      await this.getWorkChatHistory(token, workId)
-
-      // 如果成功，返回一个虚拟的session对象（兼容旧接口）
-      return [
-        {
-          id: 1,
-          session_id: `${workId}_main_session`,
-          work_id: workId,
-          system_type: 'brain',
-          title: '主会话',
-          status: 'active',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          created_by: 0,
-          total_messages: 0,
-        },
-      ]
-    } catch (error) {
-      // 如果获取失败，说明还没有session，返回空数组
-      return []
-    }
-  },
-
-  // 更新会话标题
-  async updateSessionTitle(
-    token: string,
-    sessionId: string,
-    title: string,
-  ): Promise<{ status: string; message: string }> {
-    const response = await apiClient.request<{ status: string; message: string }>(
-      `/api/chat/session/${sessionId}/title?title=${encodeURIComponent(title)}`,
-      {
-        method: 'PUT',
-      },
-    )
-    return response
-  },
-
-  // 删除聊天会话
-  async deleteChatSession(
-    token: string,
-    sessionId: string,
-  ): Promise<{ status: string; message: string }> {
-    const response = await apiClient.request<{ status: string; message: string }>(
-      `/api/chat/session/${sessionId}`,
-      {
-        method: 'DELETE',
-      },
-    )
-    return response
-  },
-
-  // 重置聊天会话
-  async resetChatSession(
-    token: string,
-    sessionId: string,
-  ): Promise<{ status: string; message: string }> {
-    const response = await apiClient.request<{ status: string; message: string }>(
-      `/api/chat/session/${sessionId}/reset`,
-      {
-        method: 'POST',
-      },
-    )
-    return response
-  },
-
-  // 获取会话上下文信息（主要用于中枢大脑模式）
-  async getSessionContext(token: string, sessionId: string): Promise<any> {
-    const response = await apiClient.request<any>(`/api/chat/session/${sessionId}/context`, {
-      method: 'GET',
-    })
     return response
   },
 
@@ -207,7 +73,7 @@ export class WebSocketChatHandler {
   private token: string
   private baseUrl: string
   private reconnectAttempts = 0
-  private maxReconnectAttempts = 5
+  private maxReconnectAttempts = 10
   private reconnectDelay = 1000
   private messageQueue: any[] = []
   private isConnecting = false
@@ -215,9 +81,11 @@ export class WebSocketChatHandler {
   private heartbeatTimer: number | null = null
   private messageCallback: ((data: any) => void) | null = null
   private disconnectCallback: (() => void) | null = null
-  private jsonBlockCallback: ((block: any) => void) | null = null
   private reconnectCallback: ((data: any) => void) | null = null
   private isReconnecting = false
+  // 当前任务和已收到的最大序号：断线重连时带给后端，只补发断点之后的输出；重复的序号直接丢弃
+  private taskId: string | null = null
+  private lastSeq = 0
 
   constructor(workId: string, token: string) {
     // 参数改为workId
@@ -254,7 +122,7 @@ export class WebSocketChatHandler {
 
           // 发送认证信息
           try {
-            this.ws!.send(JSON.stringify({ token: this.token }))
+            this.ws!.send(JSON.stringify({ token: this.token, task_id: this.taskId, last_seq: this.lastSeq }))
 
             // 发送队列中的消息
             while (this.messageQueue.length > 0) {
@@ -401,6 +269,16 @@ export class WebSocketChatHandler {
           return
         }
 
+        // 新任务开始或恢复的是另一个任务时，序号从头算
+        if ((data.type === 'start' || data.type === 'reconnect') && data.task_id && data.task_id !== this.taskId) {
+          this.taskId = data.task_id
+          this.lastSeq = 0
+        }
+        if (typeof data.seq === 'number') {
+          if (data.seq <= this.lastSeq) return
+          this.lastSeq = data.seq
+        }
+
         // 处理重连相关消息
         if (data.type === 'reconnect') {
           console.log('检测到正在进行的AI任务，开始恢复...')
@@ -436,11 +314,6 @@ export class WebSocketChatHandler {
     this.bindMessageHandler()
   }
 
-  // 监听JSON块消息
-  onJsonBlock(callback: (block: any) => void) {
-    this.jsonBlockCallback = callback
-  }
-
   // 监听断开连接
   onDisconnect(callback: () => void) {
     this.disconnectCallback = callback
@@ -451,57 +324,21 @@ export class WebSocketChatHandler {
     this.reconnectCallback = callback
   }
 
-  // 检查是否正在重连恢复
-  isReconnectingTask(): boolean {
-    return this.isReconnecting
-  }
-
   // 关闭连接
   disconnect() {
     this.clearReconnectTimer()
     this.stopHeartbeat()
 
+    // 主动断开（换新连接、离开页面）不是连接丢失，不触发断开回调，也不再接收旧连接的消息
+    this.disconnectCallback = null
+    this.messageCallback = null
     if (this.ws) {
+      this.ws.onmessage = null
       this.ws.close(1000, '用户主动断开')
       this.ws = null
     }
     this.isConnecting = false
     this.messageQueue = []
-
-    // 调用断开回调
-    if (this.disconnectCallback) {
-      this.disconnectCallback()
-    }
-  }
-
-  // 检查连接状态
-  isConnected(): boolean {
-    return this.ws !== null && this.ws.readyState === WebSocket.OPEN
-  }
-
-  // 获取连接状态
-  getConnectionState(): string {
-    if (!this.ws) return 'disconnected'
-    switch (this.ws.readyState) {
-      case WebSocket.CONNECTING:
-        return 'connecting'
-      case WebSocket.OPEN:
-        return 'connected'
-      case WebSocket.CLOSING:
-        return 'closing'
-      case WebSocket.CLOSED:
-        return 'closed'
-      default:
-        return 'unknown'
-    }
-  }
-
-  // 强制重连
-  async forceReconnect(): Promise<void> {
-    console.log('强制重连...')
-    this.disconnect()
-    this.reconnectAttempts = 0
-    await this.connect()
   }
 }
 
@@ -516,101 +353,4 @@ export interface ChatMessage {
   isStreaming?: boolean
   json_blocks?: any[]
   message_type?: 'text' | 'json_card'
-}
-
-// 聊天状态管理
-export interface ChatState {
-  currentSession: ChatSessionResponse | null
-  messages: ChatMessage[]
-  isLoading: boolean
-  isStreaming: boolean
-  error: string | null
-}
-
-// 聊天操作类型
-export type ChatAction =
-  | { type: 'SET_SESSION'; payload: ChatSessionResponse }
-  | { type: 'ADD_MESSAGE'; payload: ChatMessage }
-  | { type: 'UPDATE_MESSAGE'; payload: { id: string; updates: Partial<ChatMessage> } }
-  | { type: 'SET_LOADING'; payload: boolean }
-  | { type: 'SET_STREAMING'; payload: boolean }
-  | { type: 'SET_ERROR'; payload: string | null }
-  | { type: 'CLEAR_MESSAGES' }
-  | { type: 'RESET_STATE' }
-
-// 聊天状态管理器
-export class ChatStateManager {
-  private state: ChatState = {
-    currentSession: null,
-    messages: [],
-    isLoading: false,
-    isStreaming: false,
-    error: null,
-  }
-
-  private listeners: ((state: ChatState) => void)[] = []
-
-  // 获取当前状态
-  getState(): ChatState {
-    return { ...this.state }
-  }
-
-  // 订阅状态变化
-  subscribe(listener: (state: ChatState) => void) {
-    this.listeners.push(listener)
-    return () => {
-      const index = this.listeners.indexOf(listener)
-      if (index > -1) {
-        this.listeners.splice(index, 1)
-      }
-    }
-  }
-
-  // 分发动作
-  dispatch(action: ChatAction) {
-    switch (action.type) {
-      case 'SET_SESSION':
-        this.state.currentSession = action.payload
-        break
-      case 'ADD_MESSAGE':
-        this.state.messages.push(action.payload)
-        break
-      case 'UPDATE_MESSAGE':
-        const messageIndex = this.state.messages.findIndex((m) => m.id === action.payload.id)
-        if (messageIndex > -1) {
-          const existingMessage = this.state.messages[messageIndex]
-          if (existingMessage) {
-            this.state.messages[messageIndex] = {
-              ...existingMessage,
-              ...action.payload.updates,
-            } as ChatMessage
-          }
-        }
-        break
-      case 'SET_LOADING':
-        this.state.isLoading = action.payload
-        break
-      case 'SET_STREAMING':
-        this.state.isStreaming = action.payload
-        break
-      case 'SET_ERROR':
-        this.state.error = action.payload
-        break
-      case 'CLEAR_MESSAGES':
-        this.state.messages = []
-        break
-      case 'RESET_STATE':
-        this.state = {
-          currentSession: null,
-          messages: [],
-          isLoading: false,
-          isStreaming: false,
-          error: null,
-        }
-        break
-    }
-
-    // 通知所有监听器
-    this.listeners.forEach((listener) => listener({ ...this.state }))
-  }
 }
