@@ -195,7 +195,8 @@ def assemble(state: PaperState) -> str:
         lines.append("")
         if key != "solve_heading":
             text = demote_headings(sections.get(key, "").strip(), level)
-            lines.append(place_figures(text) if key in solve_keys else text)
+            # 图只放在求解章节里；摘要、灵敏度分析等处独占一行的图改成行内引用
+            lines.append(place_figures(text) if key in solve_keys else FIGURE_LINE.sub(r"（见{{F:\1}}）", text))
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

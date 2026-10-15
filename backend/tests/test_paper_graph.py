@@ -18,7 +18,7 @@ from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, Resul
 from ai_system.graph.nodes.confirm import is_approval
 from ai_system.graph.nodes.solve import ready_subproblems
 from ai_system.graph.nodes.review import ungrounded_findings
-from ai_system.graph.nodes.validate import place_figures, untracked_numbers
+from ai_system.graph.nodes.validate import assemble, place_figures, untracked_numbers
 from ai_system.graph.registry import value_in_output
 from ai_system.graph.state import (
     CandidateSet,
@@ -447,6 +447,12 @@ def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
     assert "比例为 50%，见 图1。" in rendered
     assert "![图1 趋势](outputs/figures/F1.png)\n\n*图1 趋势*" in rendered
     assert "{{R:R99}}" in rendered
+    # 图名自带的编号去掉；同一张图第二次独占一行只写"见图"；编号按图片出现顺序，不按摘要里的行内提及
+    second = registry.record_figure("Q1", run_id, "runs/x/artifacts/figure_1.png", "图3 敏感性")
+    ref = f"{{{{F:{second.id}}}}}"
+    rendered = registry.render(f"摘要见 {ref}。\n\n{{{{F:{fig.id}}}}}\n\n{ref}\n\n{ref}")
+    assert "摘要见 图2。" in rendered and "*图2 敏感性*" in rendered and "图2 图3" not in rendered
+    assert rendered.count("![图2") == 1 and rendered.endswith("（见图2）")
     # 重新加载后编号连续
     assert ResultRegistry.load(fs).get("R1").value == "50%"
 
@@ -474,6 +480,19 @@ def test_place_figures_inserts_inline_only_figures_after_paragraph():
     assert place_figures(text) == "见 {{F:F1}} 与 {{F:F2}}。\n续行\n\n{{F:F1}}\n\n{{F:F2}}\n\n末段见{{F:F3}}\n\n{{F:F3}}"
     # 已经单独成行的不重复插入
     assert place_figures("{{F:F1}}\n\n见 {{F:F1}}") == "{{F:F1}}\n\n见 {{F:F1}}"
+
+
+def test_assemble_keeps_figures_out_of_summary_sections():
+    from ai_system.graph.nodes.write import solve_key
+
+    state = {
+        "analysis": {"title": "T", "subproblems": [{"id": "Q1", "title": "建模"}]},
+        "sections": {"abstract": "结论见下图\n\n{{F:F1}}", solve_key("Q1"): "曲线见 {{F:F1}}。"},
+    }
+    raw = assemble(state)
+    abstract = raw.split("## 摘要", 1)[1].split("##", 1)[0]
+    assert "（见{{F:F1}}）" in abstract and "\n{{F:F1}}\n" not in abstract
+    assert "曲线见 {{F:F1}}。\n\n{{F:F1}}" in raw
 
 
 def test_hypothesis_test_subproblems_skip_exploration():

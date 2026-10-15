@@ -20,6 +20,9 @@ from services.file_services.workspace_fs import WorkspaceFS
 REGISTRY_PATH = ".system/results.json"
 MATH_PATTERN = re.compile(r"\$\$.*?\$\$|\$[^$\n]+\$", re.DOTALL)
 REF_PATTERN = re.compile(r"\{\{\s*([RF]):\s*([RF]\d+)\s*\}\}")
+FIGURE_LINE = re.compile(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", re.MULTILINE)
+# 图名里自带的编号（"图3 遗忘因子……"），渲染时统一重新编号，留着会变成"图2 图3 ……"
+FIGURE_NAME_NUMBER = re.compile(r"^\s*(图|Figure|Fig\.?)\s*\d+\s*[:：.、]?\s*", re.IGNORECASE)
 NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
 
@@ -245,24 +248,31 @@ class ResultRegistry:
     def render(self, text: str) -> str:
         """把正文中的引用替换成真实内容
 
-        - 独占一行的 {{F:F1}} 渲染为图片和图题，按首次出现顺序编号；
+        - 独占一行的 {{F:F1}} 渲染为图片和图题，按图片首次出现的顺序编号；同一张图再次独占一行时只写"（见图 k）"；
         - 行内的 {{F:F1}} 渲染为"图 k"；
         - {{R:R1}} 渲染为数值和单位；
         - 未知引用保留原样，由校验环节报告。
         """
         figure_numbers: Dict[str, int] = {}
-        for ref in find_refs(text):
+        placed = [m.group(1) for m in FIGURE_LINE.finditer(text)]
+        for ref in placed + find_refs(text):
             if ref.startswith("F") and ref in self.results and ref not in figure_numbers:
                 figure_numbers[ref] = len(figure_numbers) + 1
+        shown: set = set()
 
         def figure_block(match: re.Match) -> str:
             result = self.results.get(match.group(1))
             if result is None:
                 return match.group(0)
-            label = f"图{figure_numbers[result.id]} {result.name}"
+            number = figure_numbers[result.id]
+            # v2l 的同一张图在摘要、正文、备忘录里各插了一次
+            if result.id in shown:
+                return f"（见图{number}）"
+            shown.add(result.id)
+            label = f"图{number} {FIGURE_NAME_NUMBER.sub('', result.name)}"
             return f"![{label}]({result.path})\n\n*{label}*"
 
-        text = re.sub(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", figure_block, text, flags=re.MULTILINE)
+        text = FIGURE_LINE.sub(figure_block, text)
 
         # 公式里的引用只放数值，单位会破坏 LaTeX
         math_spans = [m.span() for m in MATH_PATTERN.finditer(text)]
