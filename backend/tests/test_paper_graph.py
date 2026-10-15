@@ -449,7 +449,7 @@ def test_ungrounded_findings_flags_numbers_outside_refs():
         "key_findings": [{"statement": "真实序列 z=4.05，置换后 9.18，换挡率约 5%", "strength": "不显著"}],
     }
     issues = ungrounded_findings(report)
-    assert len(issues) == 1 and "4.05, 9.18, 5%" in issues[0]
+    assert len(issues) == 1 and "4.05, 9.18" in issues[0] and "5%" not in issues[0]
     report["key_findings"][0]["statement"] = "真实序列 {{R:R3}}，置换后 {{R:R4}}"
     assert ungrounded_findings(report) == []
 
@@ -784,13 +784,17 @@ def test_label_shuffle_control_flags_leakage(tmp_path):
     flat = report(**auc, baseline_value="0.71")
     assert control_issues(ctx, flat) == [] and "没有优于基线" in baseline_gaps(ctx, flat)[0]
     # 拿无信息水平充当基线：要换
-    assert "就是无信息水平" in control_issues(ctx, report(**{**auc, "chance": "0.502"}, baseline_value="0.502"))[0]
+    assert "就是无信息水平" in control_issues(ctx, report(**auc, baseline_value="0.502"))[0]
     # 打乱后的值不在输出里：不能通过
     assert "无法核对" in control_issues(ctx, report(value="0.4934", shuffled_value="0.6801", chance="0.6778"))[0]
     # 报告了 AUC 却没做对照
     missing = control_issues(ctx, {"summary": "测试集 AUC 0.71", "key_findings": [], "controls": []})
     assert "没有做标签置换对照" in missing[0]
     assert control_issues(ctx, {"summary": "检验 p 值 0.03", "key_findings": [], "controls": []}) == []
+    # 假设检验类子问题不要求置换对照
+    assert control_issues(ctx, {"summary": "检验功效 AUC 0.71", "key_findings": [], "controls": []}, hypothesis=True) == []
+    # 打乱后的值恰好等于无信息水平：像是填的理论值
+    assert "恰好等于无信息水平" in control_issues(ctx, report(**{**auc, "shuffled_value": "0.6", "chance": "0.6"}, baseline_value="0.71"))[0]
 
 
 def test_probe_metric_rejected_when_shuffled_labels_keep_the_gain(tmp_path):

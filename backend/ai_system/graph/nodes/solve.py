@@ -26,7 +26,7 @@ from ..llm_utils import clip
 from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
-from .explore import explore, promotion_message
+from .explore import explore, is_hypothesis_test, promotion_message
 from .review import baseline_gaps, control_issues, feedback_message, report_issues, review_solution
 
 logger = logging.getLogger(__name__)
@@ -295,6 +295,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     status, error = "completed", None
     report: Dict = {}
     reviews: List[Dict] = []
+    structured = None
     try:
         result = await run_agent(agent, messages, limit)
         structured = result.get("structured_response")
@@ -305,7 +306,9 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             if structured is None:
                 break
             current = structured.model_dump()
-            fixes = report_issues(ctx, current, subproblem_id, branch["subproblem"].get("depends_on") or [])
+            fixes = report_issues(
+                ctx, current, subproblem_id, branch["subproblem"].get("depends_on") or [], is_hypothesis_test(branch["subproblem"])
+            )
             if round_index == ctx.max_review_rounds:
                 if not fixes:
                     break
@@ -346,6 +349,12 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     except Exception as exc:
         logger.exception("求解 %s 失败", subproblem_id)
         status, error = "failed", str(exc)
+    if not report and structured is not None and ctx.registry.for_subproblem(subproblem_id):
+        # 返工超出步数或出错时保留返工前交的报告：v2h 的 Q2 登记了 20 项结果，返工超步数后整份报告被丢掉，结论表里没有 Q2
+        report = structured.model_dump()
+        report["limitations"] = list(report.get("limitations") or []) + [
+            f"审查要求的返工没有完成（{error}），以下结论来自返工前的报告：" + "；".join((reviews[-1].get("must_fix") or [])[:3] if reviews else [])
+        ]
     return status, error, report, reviews
 
 

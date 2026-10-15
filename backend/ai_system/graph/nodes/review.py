@@ -72,9 +72,9 @@ def leaked(real: float, shuffled: float, chance: float, higher_is_better: bool) 
     return gain > 0 and kept >= LEAK_RATIO * gain
 
 
-def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
+def control_issues(ctx: GraphContext, report: Dict, hypothesis: bool = False) -> List[str]:
     """标签置换对照的确定性检查，返回必须修正的问题"""
-    return control_findings(ctx, report)[0]
+    return control_findings(ctx, report, hypothesis)[0]
 
 
 def baseline_gaps(ctx: GraphContext, report: Dict) -> List[str]:
@@ -82,12 +82,16 @@ def baseline_gaps(ctx: GraphContext, report: Dict) -> List[str]:
     return control_findings(ctx, report)[1]
 
 
-def control_findings(ctx: GraphContext, report: Dict) -> Tuple[List[str], List[str]]:
-    """返回 (必须修正的问题, 没有超过基线的指标)"""
+def control_findings(ctx: GraphContext, report: Dict, hypothesis: bool = False) -> Tuple[List[str], List[str]]:
+    """返回 (必须修正的问题, 没有超过基线的指标)
+
+    hypothesis=True（假设检验类子问题）时不要求置换对照：检验的零分布本身就是对照。
+    v2h 的 Q2 报告里出现了"检验功效""95%"等字样，被当成预测效果要求做置换对照，与求解提示矛盾。
+    """
     controls = report.get("controls") or []
     text = " ".join([report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])])
     if not controls:
-        if PREDICTIVE.search(ctx.registry.render(text)):
+        if not hypothesis and PREDICTIVE.search(ctx.registry.render(text)):
             return [
                 "报告了预测效果但没有做标签置换对照：在构造特征之前把目标列随机打乱、其余流程完全不变，"
                 "重新计算同一指标，print 并登记真实值和打乱后的值，填进报告的 controls。"
@@ -105,6 +109,13 @@ def control_findings(ctx: GraphContext, report: Dict) -> Tuple[List[str], List[s
         real, shuffled, chance = (_as_float(c[k]) for k in ("value", "shuffled_value", "chance"))
         if None in (real, shuffled, chance):
             issues.append(f"{c['metric']} 的置换对照里有不是数值的字段，请填写数值")
+            continue
+        if shuffled == chance:
+            # v2h 的 Q3 填了 shuffled_value=0.5、chance=0.5：实际重算的 AUC 几乎不可能恰好是 0.5，像是填的理论值
+            issues.append(
+                f"{c['metric']} 打乱后的值 {c['shuffled_value']} 恰好等于无信息水平，看起来是理论值而不是实际重算的结果。"
+                "请真的把原始结果列打乱、重跑同一流程，print 实际得到的指标值再填写。"
+            )
             continue
         direction = metric_direction(c.get("metric", ""))
         higher = c.get("higher_is_better", True) if direction is None else direction
@@ -156,6 +167,8 @@ def baseline_check(ctx: GraphContext, control: Dict, real: float, higher: bool) 
     ]
 
 
+# 显著性水平、置信水平这类约定常数可以直接写
+CONVENTIONS = {"0.05", "0.01", "0.001", "0.1", "0.10", "5%", "1%", "10%", "90%", "95%", "99%"}
 # 报告里直接写的小数或百分数（整数是场次、阶数这类计数，不查）
 LOOSE_NUMBER = re.compile(r"(?<![\w.])-?\d+\.\d+%?|(?<![\w.])\d+%")
 
@@ -170,7 +183,7 @@ def ungrounded_findings(report: Dict) -> List[str]:
     loose: List[str] = []
     for text in texts:
         for match in LOOSE_NUMBER.finditer(REF_PATTERN.sub(" ", text or "")):
-            if match.group() not in loose:
+            if match.group() not in loose and match.group() not in CONVENTIONS:
                 loose.append(match.group())
     if not loose:
         return []
@@ -200,9 +213,15 @@ def foreign_refs(ctx: GraphContext, report: Dict, subproblem_id: str, dependenci
     ]
 
 
-def report_issues(ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: Optional[List[str]] = None) -> List[str]:
+def report_issues(
+    ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: Optional[List[str]] = None, hypothesis: bool = False
+) -> List[str]:
     """不调模型的报告检查：有登记结果 + 引用属于本问 + 标签置换对照 + 结论数字可追溯"""
-    issues = foreign_refs(ctx, report, subproblem_id, dependencies or []) + control_issues(ctx, report) + ungrounded_findings(report)
+    issues = (
+        foreign_refs(ctx, report, subproblem_id, dependencies or [])
+        + control_issues(ctx, report, hypothesis)
+        + ungrounded_findings(report)
+    )
     if not ctx.registry.for_subproblem(subproblem_id):
         # 2024_C 的 Q1 跑了两段读数据的代码就交了报告，一项结果都没登记
         issues.insert(0, "还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")
