@@ -15,12 +15,12 @@ from typing import Dict, List, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import HumanMessage, messages_to_dict
+from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
 from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
 from langgraph.runtime import Runtime
 
-from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware, TruncationGuardMiddleware
+from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware, TruncationGuardMiddleware, drop_invalid_calls
 from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
@@ -210,8 +210,9 @@ async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = RE
     """跑一轮循环；模型用文字收尾、没交报告时提醒一次"""
     result = await agent.ainvoke({"messages": messages}, config={"recursion_limit": recursion_limit})
     if result.get("structured_response") is None:
+        history = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in result["messages"]]
         result = await agent.ainvoke(
-            {"messages": result["messages"] + [HumanMessage(content=nudge)]},
+            {"messages": history + [HumanMessage(content=nudge)]},
             config={"recursion_limit": 11},
         )
     return result
