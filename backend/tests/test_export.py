@@ -102,7 +102,9 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path):
     assert (ws / "paper.md").exists() and (ws / "paper.tex").exists()
     assert (ws / "paper.pdf").read_bytes().startswith(b"%PDF")
     assert "paper.pdf" in output
-    assert any(t == "paper_phase" and c["stage"] == "export" and c["status"] == "completed" for t, c in events)
+    export_phases = [c["status"] for t, c in events if t == "paper_phase" and c["stage"] == "export"]
+    # 一开始就告诉前端有排版导出这一步，最后完成
+    assert export_phases[0] == "pending" and export_phases[-1] == "completed"
     assert any(t == "paper_export" and "paper.pdf" in c for t, c in events)
     assert "LaTeX 排版" in (ws / "plan.md").read_text(encoding="utf-8")
 

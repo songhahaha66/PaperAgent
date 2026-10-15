@@ -37,9 +37,6 @@ async def lifespan(app: FastAPI):
     logger.info(f"工作空间目录: {get_workspaces_path()}")
     logger.info(f"模板目录: {get_templates_path()}")
     
-    # Word tools are now directly integrated, no MCP initialization needed
-    logger.info("Word tools ready (direct integration)")
-    
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")

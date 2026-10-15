@@ -131,7 +131,7 @@ export const derivePhases = (blocks: PipelineBlock[], opts: { done?: boolean } =
 
   // 默认按需设计时，设计在求解分支里进行，后面的阶段开始了它还没被标记；排在已开始阶段之前的都算完成
   const shown = PHASES.filter((p) => !OPTIONAL_PHASES.has(p.key) || status[p.key])
-  const lastStarted = shown.reduce((last, p, i) => (status[p.key] ? i : last), -1)
+  const lastStarted = shown.reduce((last, p, i) => (status[p.key] && status[p.key] !== 'pending' ? i : last), -1)
   return shown.map((p, i) => ({
     ...p,
     status: status[p.key] ?? (i < lastStarted ? 'completed' : 'pending'),

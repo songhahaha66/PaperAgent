@@ -256,6 +256,7 @@ const getStatusTheme = (status?: string) => {
   const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
     created: 'default',
     in_progress: 'primary',
+    running: 'primary',
     completed: 'success',
     paused: 'warning',
     cancelled: 'danger',
@@ -269,6 +270,7 @@ const getStatusText = (status?: string) => {
   const texts: Record<string, string> = {
     created: t('sidebar.created'),
     in_progress: t('sidebar.inProgress'),
+    running: t('sidebar.inProgress'),
     completed: t('sidebar.completed'),
     paused: t('sidebar.paused'),
     cancelled: t('sidebar.cancelled'),

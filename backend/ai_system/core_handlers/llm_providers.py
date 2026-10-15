@@ -266,5 +266,8 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
         'base_url': model_config.base_url,
         'is_active': getattr(model_config, 'is_active', True)
     }
+    extra_body = getattr(model_config, 'extra_body', None)
+    if extra_body:
+        kwargs.setdefault('extra_body', extra_body)
 
     return LLMProviderFactory.create_llm_instance(config, **kwargs)

@@ -32,6 +32,8 @@ export default {
     chooseTemplate: 'Choose a {format} template',
     noTemplate: 'No template',
     noTemplateDescription: 'Start from scratch and customize your paper structure',
+    builtinLatex: 'Built-in modeling paper layout',
+    builtinLatexDescription: 'ctexart layout (Song body, Hei headings), compiled to PDF with xelatex',
     existingTemplates: 'Or choose an existing {format} template',
     loadingTemplates: 'Loading {format} templates...',
     noTemplates: 'No {format} templates yet',

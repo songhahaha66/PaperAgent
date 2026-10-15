@@ -32,6 +32,8 @@ export default {
     chooseTemplate: '选择{format}模板',
     noTemplate: '不使用模板',
     noTemplateDescription: '从头开始创建论文，完全自定义内容结构',
+    builtinLatex: '使用内置数模论文版式',
+    builtinLatexDescription: 'ctexart 版式（宋体正文、黑体标题），xelatex 编译出 PDF',
     existingTemplates: '或者选择现有{format}模板',
     loadingTemplates: '正在加载{format}模板...',
     noTemplates: '暂无{format}模板',

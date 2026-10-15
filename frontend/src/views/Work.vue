@@ -202,7 +202,15 @@
             <t-card title="工作信息">
               <div class="work-details">
                 <p><strong>标题：</strong>{{ currentWork.title }}</p>
-                <p><strong>描述：</strong>{{ currentWork.description || '暂无描述' }}</p>
+                <p :class="['work-description', { expanded: descriptionExpanded }]">
+                  <strong>描述：</strong>{{ currentWork.description || '暂无描述' }}
+                </p>
+                <t-link
+                  v-if="(currentWork.description || '').length > 200"
+                  theme="primary"
+                  size="small"
+                  @click="descriptionExpanded = !descriptionExpanded"
+                >{{ descriptionExpanded ? '收起' : '展开全部' }}</t-link>
                 <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
                 <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
                 <p>
@@ -294,6 +302,7 @@ const workId = computed(() => route.params.work_id as string);
 const { isMobile } = useBreakpoint()
 
 // 侧边栏折叠状态 - 手机端默认收起
+const descriptionExpanded = ref(false)
 const isSidebarCollapsed = ref(isMobile.value)
 
 type MobilePanel = 'chat' | 'files' | 'preview'
@@ -467,7 +476,7 @@ const checkAndResumeRunningTask = async () => {
         role: 'assistant' as const,
         content: '',
         datetime: new Date().toLocaleString(),
-        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
+        avatar: ASSISTANT_AVATAR,
         isStreaming: true,
         json_blocks: [],
         message_type: 'json_card' as const,
@@ -869,7 +878,7 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
       role: 'user' as const,
       content: `已上传文件: ${result.attachment.original_filename} (${(result.attachment.file_size / 1024).toFixed(2)} KB)`,
       datetime: new Date().toLocaleString(),
-      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+      avatar: USER_AVATAR,
     }
 
     chatMessages.value.push(uploadMessage)
@@ -1040,12 +1049,14 @@ const hideDivider = () => {
   hoveredDivider.value = null
 }
 
-// 根据角色获取头像
+// 根据角色获取头像（用站内图片，不依赖外部头像服务）
+const USER_AVATAR = '/avatar-user.svg'
+const ASSISTANT_AVATAR = '/logo.png'
 const getAvatarByRole = (role: string) => {
   const avatars = {
-    user: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    assistant: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-    system: 'https://api.dicebear.com/7.x/bottts/svg?seed=system&backgroundColor=ed7b2f',
+    user: USER_AVATAR,
+    assistant: ASSISTANT_AVATAR,
+    system: ASSISTANT_AVATAR,
   }
   return avatars[role as keyof typeof avatars] || avatars.assistant
 }
@@ -1061,7 +1072,7 @@ const sendMessage = async (messageContent?: string) => {
     role: 'user' as const,
     content: content,
     datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+    avatar: USER_AVATAR,
   }
 
   chatMessages.value.push(userMessage)
@@ -1088,7 +1099,7 @@ const sendRealMessage = async (message: string) => {
     role: 'assistant' as const,
     content: '',
     datetime: new Date().toLocaleString(),
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
+    avatar: ASSISTANT_AVATAR,
     isStreaming: true,
   }
 
@@ -1192,6 +1203,7 @@ const getStatusTheme = (status: string) => {
   const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
     created: 'default',
     in_progress: 'primary',
+    running: 'primary',
     completed: 'success',
     paused: 'warning',
     cancelled: 'danger',
@@ -1204,6 +1216,7 @@ const getStatusText = (status: string) => {
   const texts: Record<string, string> = {
     created: '已创建',
     in_progress: '进行中',
+    running: '进行中',
     completed: '已完成',
     paused: '已暂停',
     cancelled: '已取消',
@@ -1380,6 +1393,18 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+}
+
+.work-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.work-description.expanded {
+  display: block;
 }
 </style>
 
