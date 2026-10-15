@@ -533,3 +533,33 @@ def test_call_structured_falls_back_to_plain_json():
 
     pick = asyncio.run(call_structured(LLM(), MethodPick, [HumanMessage(content="挑方法")]))
     assert pick.method_keys == ["arima"]
+
+
+def test_step_budget_nudges_near_limit_counting_since_last_human():
+    from langchain.agents.middleware import ModelRequest
+
+    from ai_system.graph.compaction import StepBudgetMiddleware
+
+    def history(old_steps, new_steps):
+        msgs = [HumanMessage(content="任务")]
+        for i in range(old_steps):
+            msgs += [AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "1"}, "id": f"a{i}"}]),
+                     ToolMessage(content="ok", tool_call_id=f"a{i}")]
+        msgs.append(HumanMessage(content="返工"))
+        for i in range(new_steps):
+            msgs += [AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "1"}, "id": f"b{i}"}]),
+                     ToolMessage(content="ok", tool_call_id=f"b{i}")]
+        return msgs
+
+    seen = []
+
+    async def handler(request):
+        seen.append(request.messages)
+        return None
+
+    middleware = StepBudgetMiddleware(budget=12, reserve=3, message="请交报告")
+    for msgs in (history(20, 8), history(0, 9)):
+        asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=msgs), handler))
+    # 返工前的 20 步不计入；第二次已到 9 步，追加提醒
+    assert seen[0][-1].content == "ok"
+    assert "还剩约 3 步。请交报告" in seen[1][-1].content
