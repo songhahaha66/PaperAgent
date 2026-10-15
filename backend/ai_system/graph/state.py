@@ -86,7 +86,7 @@ class NegativeControl(BaseModel):
     metric: str = Field(description="预测效果指标名，如 测试集 AUC、LogLoss、RMSE")
     value: str = Field(description="真实标签下的指标值，必须是 run_id 那次执行 print 出的数")
     run_id: str = Field(description="打印 value 的那次执行的 run_id")
-    shuffled_value: str = Field(description="在构造特征之前把目标列随机打乱、其余流程完全不变时同一指标的值")
+    shuffled_value: str = Field(description="把原始结果列在构造任何特征和标签之前随机打乱、其余流程完全不变时同一指标的值（只打乱训练集标签不算）")
     shuffled_run_id: str = Field(description="打印 shuffled_value 的那次执行的 run_id")
     chance: str = Field(description="无信息时的水平，如 AUC 0.5、多数类准确率、常数预测的 LogLoss 或 RMSE")
     higher_is_better: bool = Field(description="指标是否越大越好")

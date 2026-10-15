@@ -727,3 +727,11 @@ def test_metric_direction_overrides_model_for_known_metrics():
     assert metric_direction("宏平均 F1") is True
     assert metric_direction("综合得分") is None
     assert metric_direction("测试集负对数似然") is None  # 两边都命中时不覆盖
+
+
+def test_strip_template_tokens_from_code():
+    from ai_system.graph.nodes.solve import strip_template_tokens
+
+    leaked = "print(df['swing'].mean())</｜DSML｜parameter>    }  ]</｜DSML｜invoke></think>Let me define the target"
+    assert strip_template_tokens(leaked) == "print(df['swing'].mean())"
+    assert strip_template_tokens("x = 1\nprint(x)") == "x = 1\nprint(x)"

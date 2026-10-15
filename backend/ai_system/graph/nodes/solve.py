@@ -10,6 +10,7 @@
 """
 
 import logging
+import re
 from typing import Dict, List, Optional
 
 from langchain.agents import create_agent
@@ -41,8 +42,8 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 需要传给后续子问题的中间数据，保存到 outputs/intermediate/ 下（csv），并在报告里说明文件名。
 - 默认使用题目给出的全部相关数据（例如全部比赛、全部年份），只用子集时要在报告里说明理由。
 - 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
-- 报告预测效果（AUC、准确率、LogLoss、RMSE 等）时必须做标签置换对照：在构造特征之前把目标列随机打乱，其余流程完全不变，
-  重新算一遍同一指标，print 并登记真实值和打乱后的值，填进报告的 controls。打乱后指标仍明显好于无信息水平，说明存在泄漏。
+- 报告预测效果（AUC、准确率、LogLoss、RMSE 等）时必须做标签置换对照：把原始结果列（如每一分的胜者）在构造任何特征和标签之前随机打乱，
+  其余流程完全不变，重新算一遍同一指标；只打乱训练集标签不算，print 并登记真实值和打乱后的值，填进报告的 controls。打乱后指标仍明显好于无信息水平，说明存在泄漏。
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 
 结果登记（非常重要）：
@@ -61,6 +62,17 @@ OBSERVATION_CHARS = 6000
 WRITING_APPROACH = "基于前序结论撰写"
 
 REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
+
+
+# 网关的工具调用解析偶尔把模型的对话模板标记（DeepSeek 的 <｜DSML｜…>、</think>）连同后面的文字
+# 一起塞进代码参数，整段执行时 SyntaxError；2024_C 一次运行 30 次执行里有 4 次这样浪费掉
+TEMPLATE_TOKEN = re.compile(r"</?｜|｜DSML｜|</think>|<think>")
+
+
+def strip_template_tokens(code: str) -> str:
+    """截掉代码里第一个对话模板标记及其之后的内容"""
+    match = TEMPLATE_TOKEN.search(code)
+    return code[: match.start()].rstrip() if match else code
 
 
 def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
@@ -86,6 +98,7 @@ def build_tools(
 
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
+        code = strip_template_tokens(code)
         result = await kernel.execute(code)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
         await ctx.events.emit(
