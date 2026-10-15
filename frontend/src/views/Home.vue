@@ -121,7 +121,6 @@
                 :class="{ selected: selectedOutputMode === 'latex' }"
                 @click="selectOutputMode('latex')"
                 class="output-mode-card"
-                :disabled="true"
               >
                 <div class="output-mode-content">
                   <t-icon name="file-pdf" size="24px" />

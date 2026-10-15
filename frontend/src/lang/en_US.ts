@@ -28,7 +28,7 @@ export default {
     outputFormat: 'Choose an output format',
     markdownDescription: 'Lightweight markup language (default)',
     wordDescription: 'Microsoft Word format',
-    latexDescription: 'Professional typesetting (coming soon)',
+    latexDescription: 'Math modeling paper template, compiled to PDF',
     chooseTemplate: 'Choose a {format} template',
     noTemplate: 'No template',
     noTemplateDescription: 'Start from scratch and customize your paper structure',

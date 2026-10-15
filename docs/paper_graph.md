@@ -1,7 +1,7 @@
 # 数模论文状态图流水线（v2）
 
 `backend/ai_system/graph/` 用 LangGraph 状态图替换原来的单个 ReAct 主循环（MainAgent + ReviewAgent 续写）。
-设置 `AI_PIPELINE=v2` 后，无模板的 Markdown 任务走这条流水线，其余情况仍用 MainAgent。
+设置 `AI_PIPELINE=v2` 后，无模板的 Markdown 任务走这条流水线；无模板的 LaTeX 任务总是走这条流水线（只有它支持 LaTeX）；其余情况仍用 MainAgent。
 
 ## 流程
 
@@ -12,7 +12,7 @@ analyze ─┬─(AI_CONFIRM_MODELS=1)─Send×N──▶ design ──▶ confi
                                    AI_DESIGN_AHEAD=1 时同一批：还在等前序的子问题 ─▶ predesign（提前设计）
 
 solve（按依赖分批并行）──▶ reconcile ──▶ write ──▶ validate ─┬─▶ repair ──▶ validate
-                                                            └─▶ render
+                                                            └─▶ render ─(LaTeX 输出)─▶ typeset
 ```
 
 不需要人工确认方案时，设计放进各子问题的求解分支里按需进行：Q1 设计完立即开始求解，不用等其他子问题的设计；
@@ -32,6 +32,7 @@ Q2 轮到时 Q1 已经求解完，候选方案的生成请求里带着 Q1 的实
 | write | 先并行写各子问题的建模求解章节，再并行写重述/分析/假设/符号/灵敏度/评价和摘要（摘要只依据求解报告和登记结果，不必等其他章节） | 写作模型只看到结果登记表，数字只能写引用；每一节都带着结论表和统一口径 |
 | validate / repair | 代码校验：章节缺失、未知引用、正文出现未登记的小数/百分数（公式里写成 `= 4.05` 的也算）、求解章节没引用结果或没插图；再用一次模型调用检查摘要、问题分析、灵敏度、评价是否与结论表一致；有问题的章节带着问题清单重写，最多 2 轮 | 数字校验不调模型；只修有问题的章节 |
 | render | 引用替换为真实数值和图片，图按出现顺序编号，写出 `paper.md`；求解章节里只在行内提到（"见图1"）的图，插到首次提到它的段落之后；带引用的原稿留在 `.system/paper_raw.md` | 每个数字都能追溯到某次代码执行 |
+| typeset | 仅 `output_mode=latex`：`ai_system/latex/` 用 pandoc 把 `paper.md` 转成 LaTeX，套进数模论文模板（ctexart，封面摘要页带关键词，章节"一、"和图号交给 LaTeX 编号），xelatex 编译两遍出 `paper.pdf`，中间文件在 `.system/latex/` | 排版失败不影响 `paper.md`；写作模型常写的 `$\beta_1 = $ 0.80`（数在公式外）合并回公式，`\logit` 等常用算子模板里预先定义；只要出了 PDF 就算成功，编译错误作为警告推给前端 |
 
 ## 标签置换对照（防泄漏）
 
@@ -83,6 +84,7 @@ DeepSeek 跑 2024_C 时，Q2 只登记了验证集场数和置换次数两项，
 | `.system/llm_calls.json` | 逐次模型调用：外层节点、子问题/章节标签、耗时、输入输出 token、finish_reason、错误；汇总里有慢调用（≥90 秒）、截断、出错次数和各节点耗时，评测写进 `run.json` 的 `llm_calls` |
 | `.system/transcripts/Qn.json` | 各子问题求解循环的完整对话（模型每一步写了什么、调了什么工具） |
 | `plan.md` / `plan.json` | 各阶段进度，前端固定展示 |
+| `paper.tex` / `paper.pdf` / `.system/latex/` | LaTeX 输出模式的排版结果和 xelatex 中间文件 |
 
 结构化输出第一次用工具调用；参数不合 schema（如候选方案给了空列表）或模型没调用工具时，重试改为要纯文本 JSON 再校验。
 候选方案的名称或思路是占位内容（`placeholder`、`...`、`待定` 等，DeepSeek 会把 schema 当模板原样填回）也算不合 schema。

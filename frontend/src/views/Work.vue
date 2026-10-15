@@ -665,6 +665,17 @@ const loadWorkspaceFiles = async () => {
 const handleMainPaperClick = async () => {
   if (!workId.value || !authStore.token) return
 
+  // LaTeX 输出的工作优先预览编译好的 paper.pdf，还没生成时退回 paper.md
+  if (currentWork.value?.output_mode === 'latex') {
+    try {
+      await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.pdf')
+      await handleWorkspaceFileSelect('paper.pdf')
+      return
+    } catch {
+      // paper.pdf 不存在
+    }
+  }
+
   try {
     const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.md')
     mainPaperContent.value = response.content || ''

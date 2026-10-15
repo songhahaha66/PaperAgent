@@ -366,6 +366,8 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     assert "plan_updated" in events and "file_changed" in events
     # 前端阶段卡片依赖的结构化阶段事件
     assert phases[0] == ("analyze", "in_progress") and ("render", "completed") in phases
+    # markdown 输出不排版
+    assert not any(stage == "typeset" for stage, _ in phases) and not (ws / "paper.tex").exists()
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
     calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
     tagged = {(c["node"], c["label"]) for c in calls}

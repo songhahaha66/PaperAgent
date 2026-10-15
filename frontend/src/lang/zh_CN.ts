@@ -28,7 +28,7 @@ export default {
     outputFormat: '选择输出格式',
     markdownDescription: '轻量级标记语言（默认）',
     wordDescription: 'Microsoft Word 格式',
-    latexDescription: '专业排版系统（即将推出）',
+    latexDescription: '数模论文模板排版，编译出 PDF',
     chooseTemplate: '选择{format}模板',
     noTemplate: '不使用模板',
     noTemplateDescription: '从头开始创建论文，完全自定义内容结构',

@@ -79,7 +79,9 @@ STAGES = [
     ("write", "按登记结果撰写各章节"),
     ("validate", "校验引用与数字，修复问题章节"),
     ("render", "生成 paper.md"),
+    ("typeset", "LaTeX 排版并编译 PDF"),
 ]
+LATEX_ONLY_STAGES = {"typeset"}
 # 编码循环每步只写一段代码，4096 token 足够；不设上限时一次重复输出能把请求拖到网关 300 秒超时
 CODER_MAX_TOKENS = 4096
 STATUS_LABEL = {"pending": "⬜ 待写", "in_progress": "⏳ 进行中", "completed": "✅ 已完成", "blocked": "❌ 阻塞"}
@@ -106,6 +108,7 @@ class GraphContext:
     design_ahead: bool = False
     explore_steps: int = 12
     explore_margin: float = 2.0  # 前两名评审总分（满分 16）差距超过它就不试跑
+    output_mode: str = "markdown"  # latex 时 render 之后排版出 paper.tex / paper.pdf
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
@@ -146,7 +149,8 @@ class GraphContext:
         # 聊天里阶段卡片的进度条；plan_updated 由右侧计划面板消费，前端不放进消息
         await self.events.emit("paper_phase", {"stage": key, "status": status, "note": note})
         lines = ["# 数模论文生成计划", "", "| 序号 | 章节/任务 | 状态 | 说明 |", "|------|-----------|------|------|"]
-        for order, (stage_key, title) in enumerate(STAGES, start=1):
+        stages = [s for s in STAGES if self.output_mode == "latex" or s[0] not in LATEX_ONLY_STAGES]
+        for order, (stage_key, title) in enumerate(stages, start=1):
             label = STATUS_LABEL[self.stage_status.get(stage_key, "pending")]
             lines.append(f"| {order} | {title} | {label} | {self.stage_notes.get(stage_key, '')} |")
         markdown = "\n".join(lines) + "\n"
