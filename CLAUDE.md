@@ -67,6 +67,9 @@ uv run main.py
 
 # Run tests
 uv run pytest
+
+# End-to-end eval on MM-Bench (see docs/evaluation.md)
+uv run python -m evals all --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/<name>
 ```
 
 ### Frontend Development
