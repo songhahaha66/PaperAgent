@@ -860,15 +860,48 @@ def test_leaky_metric_downgrades_findings(tmp_path):
     registry.record_value("Q1", "AUC", "0.7768", run_id)
     registry.record_value("Q1", "权重", "0.3416", run_id)
     report = {
-        "controls": [{"metric": "AUC", "value": "0.7768", "shuffled_value": "0.6440", "chance": "0.5", "higher_is_better": True}],
+        "controls": [
+            {"metric": "AUC", "value": "0.7768", "run_id": run_id, "shuffled_value": "0.6440", "chance": "0.5", "higher_is_better": True},
+            # 检验的 p 值不是预测指标，置换后仍偏小也不算泄漏
+            {"metric": "单侧p值", "value": "0.0428", "run_id": run_id, "shuffled_value": "0.1442", "chance": "0.5", "higher_is_better": False},
+        ],
         "key_findings": [
             {"statement": "综合动量 AUC 为 {{R:R1}}，提升来自有效信号", "strength": "显著"},
             {"statement": "得分率权重 {{R:R2}} 最高", "strength": "显著"},
+            {"statement": "波动幅度检验 p={{R:R3}}", "strength": "显著"},
+            {"statement": "另一次运行碰巧同值 {{R:R4}}", "strength": "显著"},
         ],
     }
+    other = fs.create_run()
+    fs.save_run_stdout(run_id, "auc 0.7768 shuffled 0.6440 weight 0.3416 p 0.0428")
+    fs.save_run_stdout(other, "0.7768")
+    fs.finish_run(other, "success")
+    registry.record_value("Q2", "p", "0.0428", run_id)
+    registry.record_value("Q1", "另一个", "0.7768", other)
     downgrade_findings(SimpleNamespace(registry=registry), report)
-    assert [f["strength"] for f in report["key_findings"]] == ["不显著", "显著"]
+    assert [f["strength"] for f in report["key_findings"]] == ["不显著", "显著", "显著", "显著"]
     assert "未通过标签置换对照" in report["key_findings"][0]["statement"]
+
+
+def test_implausible_refs_catch_wrong_reference_numbers(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.review import implausible_refs
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "chi2 9.6546 p 0.0412 events 426 auc 0.5657")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    for name, value in [("卡方统计量", "9.6546"), ("p", "0.0412"), ("事件数", "426"), ("AUC", "0.5657")]:
+        registry.record_value("Q2", name, value, run_id)
+    ctx = SimpleNamespace(registry=registry)
+    bad = {"summary": "检验 p={{R:R1}}，AUC 为 {{R:R3}}", "key_findings": [{"statement": "q=1.5 时事件 {{R:R3}} 个"}]}
+    issues = implausible_refs(ctx, bad)
+    assert len(issues) == 1 and "{{R:R1}}" in issues[0] and "AUC 为 {{R:R3}}" in issues[0] and "卡方统计量" in issues[0]
+    good = {"summary": "卡方 {{R:R1}}，p 值为 {{R:R2}}，AUC={{R:R4}}，共 {{R:R3}} 个事件", "key_findings": []}
+    assert implausible_refs(ctx, good) == []
 
 
 def test_probe_metric_rejected_when_shuffled_labels_keep_the_gain(tmp_path):
@@ -898,6 +931,9 @@ def test_metric_direction_overrides_model_for_known_metrics():
     assert metric_direction("宏平均 F1") is True
     assert metric_direction("综合得分") is None
     assert metric_direction("测试集负对数似然") is None  # 两边都命中时不覆盖
+    # 取了负号的损失越大越好
+    assert metric_direction("验证集 -LogLoss（球员1赢分）") is True
+    assert metric_direction("负对数损失") is True
 
 
 def test_strip_template_tokens_from_code():
