@@ -10,7 +10,7 @@
 
 import asyncio
 import json
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from langgraph.runtime import Runtime
 
@@ -90,11 +90,16 @@ async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
 async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]) -> List[Dict]:
     analysis = branch["analysis"]
     feedback = branch.get("feedback") or ""
+    from .solve import _dependency_text  # 避免循环导入
+
+    # 按需设计时前序子问题已经求解完，方案可以建立在它们的实际结论上
+    dependency_text = _dependency_text(branch.get("dependencies") or {}, ctx)
     prompt = (
         f"# 题目整体分析\n{analysis['overall_analysis']}\n\n"
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
         f"# 参考方法\n{describe(method_keys) or '（自行选择）'}\n\n"
+        + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
         + f"请给出 {ctx.n_candidates} 个候选方案。"
     )
@@ -154,19 +159,14 @@ SELF_DESIGN = {
 }
 
 
-async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
-    ctx = runtime.context
+async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str]:
+    """为一个子问题产出方案记录，返回 (记录, 日志)"""
     subproblem = branch["subproblem"]
-    await ctx.set_stage("design", "in_progress")
     if subproblem.get("kind") == "writing":
         # 写作类子问题（备忘录、建议信等）不需要建模方案
-        return {
-            "designs": {subproblem["id"]: {
-                "methods": [], "candidates": [WRITING_DESIGN], "scores": [{"total": None}],
-                "chosen": WRITING_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
-            }},
-            "log": [f"design {subproblem['id']}: writing"],
-        }
+        record = {"methods": [], "candidates": [WRITING_DESIGN], "scores": [{"total": None}],
+                  "chosen": WRITING_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None}
+        return record, f"design {subproblem['id']}: writing"
     await ctx.events.stage(f"{subproblem['id']}：检索方法并设计候选方案")
 
     try:
@@ -177,14 +177,10 @@ async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         candidates = await propose(ctx, branch, method_keys)
     except Exception as exc:
         await ctx.events.emit("paper_design", f"{subproblem['id']} 候选方案生成失败，改由求解时自行设计")
-        return {
-            "designs": {subproblem["id"]: {
-                "methods": method_keys, "candidates": [SELF_DESIGN], "scores": [{"total": None}],
-                "chosen": SELF_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
-                "design_error": str(exc),
-            }},
-            "log": [f"design {subproblem['id']}: fallback ({exc})"],
-        }
+        record = {"methods": method_keys, "candidates": [SELF_DESIGN], "scores": [{"total": None}],
+                  "chosen": SELF_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
+                  "design_error": str(exc)}
+        return record, f"design {subproblem['id']}: fallback ({exc})"
     try:
         scores = await critique(ctx, branch, candidates)
         critic_error = None
@@ -200,18 +196,21 @@ async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     if scores[chosen_index]["total"] is not None:
         summary += f"（评审 {scores[chosen_index]['total']:.1f}/{4 * len(CRITERIA)}，候选 {len(candidates)} 个）"
     await ctx.events.emit("paper_design", summary)
-
-    return {
-        "designs": {
-            subproblem["id"]: {
-                "methods": method_keys,
-                "candidates": candidates,
-                "scores": scores,
-                "chosen": chosen,
-                "chosen_index": chosen_index,
-                "critic": getattr(ctx.judge, "label", None) or getattr(ctx.judge, "name", None),
-                "critic_error": critic_error,
-            }
-        },
-        "log": [f"design {subproblem['id']}: {json.dumps(totals)} -> {chosen_index}"],
+    record = {
+        "methods": method_keys,
+        "candidates": candidates,
+        "scores": scores,
+        "chosen": chosen,
+        "chosen_index": chosen_index,
+        "critic": getattr(ctx.judge, "label", None) or getattr(ctx.judge, "name", None),
+        "critic_error": critic_error,
     }
+    return record, f"design {subproblem['id']}: {json.dumps(totals)} -> {chosen_index}"
+
+
+async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
+    """需要人工确认方案时，全部子问题先并行设计，再统一交给 confirm"""
+    ctx = runtime.context
+    await ctx.set_stage("design", "in_progress")
+    record, log = await make_design(ctx, branch)
+    return {"designs": {branch["subproblem"]["id"]: record}, "log": [log]}

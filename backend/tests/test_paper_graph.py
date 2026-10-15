@@ -77,6 +77,7 @@ class _Structured:
         if self.schema is MethodPick:
             return MethodPick(method_keys=["arima", "not_a_method", "regression"], reason="r")
         if self.schema is CandidateSet:
+            CANDIDATE_PROMPTS.append(messages[-1].content)
             if any(f"子问题\n{sid} " in messages[-1].content for sid in NO_CANDIDATES):
                 # 真实解析器对不合 schema 的输出会抛校验错误
                 return CandidateSet.model_validate({"candidates": []})
@@ -113,6 +114,8 @@ class _Structured:
 FAIL_ONCE: set = set()
 # 这些子问题的候选方案总是空的
 NO_CANDIDATES: set = set()
+# 生成候选方案时的请求，用来检查按需设计带上了前序结论
+CANDIDATE_PROMPTS: list = []
 
 
 class FakeModel(BaseChatModel):
@@ -301,6 +304,9 @@ def test_graph_end_to_end_offline(tmp_path):
         assert heading in paper
     assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
 
+    # 按需设计：Q2 设计时 Q1 已经求解完，候选方案的请求里带着 Q1 的结论
+    q2_design = next(p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p)
+    assert "前序子问题的结论" in q2_design and "## Q1" in q2_design
     # 依赖：Q2 的求解任务里带上了 Q1 的结论
     plan = json.loads((ws / "plan.json").read_text(encoding="utf-8"))
     assert plan["stats"]["completed"] == plan["stats"]["total"]

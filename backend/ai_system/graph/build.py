@@ -1,8 +1,9 @@
 """
 数模论文状态图
 
-    analyze ──Send×N──▶ design ──▶ confirm ─┬─(有修改意见)─Send×N─▶ design
-                                            └─(通过)─▶ 按依赖分批 Send ─▶ solve ─▶ solve_join ─┐
+    analyze ─┬─(需要人工确认)─Send×N──▶ design ──▶ confirm ─┬─(有修改意见)─Send×N─▶ design
+             │                                             └─(通过)─▶ 按依赖分批 Send ─▶ solve ─▶ solve_join ─┐
+             └─(不确认：按需设计，solve 内先设计再求解)──────────────────────▲
                                                        ▲                                     │
                                                        └──────────── 还有未求解的子问题 ◀──────┘
     solve_join ──(全部求解)──▶ reconcile（结论一致性）─▶ write ─▶ validate ─┬─(有问题且未超轮数)─▶ repair ─▶ validate
@@ -48,10 +49,14 @@ def send_solves(state: PaperState) -> Union[List[Send], str]:
             "subproblem": sp,
             "analysis": state["analysis"],
             "data_profile": state.get("data_profile", ""),
-            "design": state["designs"][sp["id"]],
+            "design": (state.get("designs") or {}).get(sp["id"]),
             "dependencies": {dep: solutions[dep] for dep in sp.get("depends_on") or [] if dep in solutions},
         }))
     return sends
+
+
+def route_after_analyze(state: PaperState) -> Union[List[Send], str]:
+    return send_designs(state) if state.get("plan_ahead") else send_solves(state)
 
 
 def route_after_confirm(state: PaperState) -> Union[List[Send], str]:
@@ -61,7 +66,10 @@ def route_after_confirm(state: PaperState) -> Union[List[Send], str]:
 
 
 async def solve_join(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
-    """并行求解的汇合点，保证路由只算一次"""
+    """并行求解的汇合点，保证路由只算一次；按需设计时，所有子问题都设计过后标记设计阶段完成"""
+    designs = state.get("designs") or {}
+    if not state.get("plan_ahead") and all(sp["id"] in designs for sp in state["analysis"]["subproblems"]):
+        await runtime.context.set_stage("design", "completed")
     return {}
 
 
@@ -79,7 +87,7 @@ def build_graph():
     graph.add_node("render", render)
 
     graph.add_edge(START, "analyze")
-    graph.add_conditional_edges("analyze", send_designs, ["design"])
+    graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "reconcile"])
     graph.add_edge("design", "confirm")
     graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "reconcile"])
     graph.add_edge("solve", "solve_join")
