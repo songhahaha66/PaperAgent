@@ -24,6 +24,8 @@ FIGURE_LINE = re.compile(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", re.MULTILIN
 # 图名里自带的编号（"图3 遗忘因子……"），渲染时统一重新编号，留着会变成"图2 图3 ……"
 FIGURE_NAME_NUMBER = re.compile(r"^\s*(图|Figure|Fig\.?)\s*\d+\s*[:：.、]?\s*", re.IGNORECASE)
 NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+# 结论里手写的小数或科学计数（整数常是个数、年份，不自动换）
+LITERAL_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+(?:[eE][-+]?\d+)?|[eE][-+]?\d+)%?(?![\w.])")
 
 
 class GroundingError(ValueError):
@@ -199,7 +201,7 @@ class ResultRegistry:
         self.claims = {cid: c for cid, c in self.claims.items() if c.subproblem != subproblem}
         added = []
         for finding in findings:
-            statement = str(finding.get("statement", "")).strip()
+            statement = self.ground_statement(subproblem, str(finding.get("statement", "")).strip())
             if not statement:
                 continue
             evidence = [ref for ref in dict.fromkeys(find_refs(statement)) if ref in self.results]
@@ -211,6 +213,54 @@ class ResultRegistry:
             added.append(claim)
         self.save()
         return added
+
+    def ground_statement(self, subproblem: str, statement: str) -> str:
+        """结论里直接写出的数，如果与本子问题某个登记结果的值逐字相同，换成引用
+
+        v3 的 2023_C Q1 把 R1~R9 都登记了，七条结论却全写成"R²=0.883""p=1.04e-164"这样的字面数，
+        结论图里没有证据边，写作时也只能照抄字面数，校验再报"未引用"。值相同的结果不止一个时不换，避免张冠李戴。
+        """
+        by_value: Dict[str, List[Result]] = {}
+        for r in self.for_subproblem(subproblem):
+            if r.kind == "number":
+                by_value.setdefault(r.value.strip(), []).append(r)
+
+        # 常见写法"r=0.95（{{R:R14}}）"：数和括号里的引用是同一个结果，合并成一个引用，渲染后不会变成"0.95（0.95）"
+        def merge(match: re.Match) -> str:
+            result = self.results.get(match.group(3))
+            same = result is not None and result.subproblem == subproblem and result.value.strip() == match.group(1)
+            return f"{{{{R:{result.id}}}}}" if same else match.group(0)
+
+        statement = re.sub(
+            rf"({LITERAL_NUMBER.pattern})\s*[（(]\s*{REF_PATTERN.pattern}\s*[）)]", merge, statement
+        )
+        cited = set(find_refs(statement))
+
+        def replace(match: re.Match) -> str:
+            found = by_value.get(match.group())
+            # 已经引用过的结果不再替换：多半是"数（引用）"里数与值的写法不同，换了会重复
+            if not found or len(found) != 1 or found[0].id in cited:
+                return match.group(0)
+            return f"{{{{R:{found[0].id}}}}}"
+
+        def ground(text: str) -> str:
+            out = LITERAL_NUMBER.sub(replace, text)
+            # 渲染时引用会自动带单位，原文紧跟的同一单位去掉，避免"3.5 元 元"
+            for r in self.for_subproblem(subproblem):
+                unit = r.unit.strip()
+                if unit and unit != "%":
+                    out = re.sub(rf"(\{{\{{R:{r.id}\}}\}})\s*{re.escape(unit)}", r"\1", out)
+            return out
+
+        # 已有的引用和公式不动
+        protected = re.compile(f"{REF_PATTERN.pattern}|{MATH_PATTERN.pattern}", re.DOTALL)
+        parts, last = [], 0
+        for m in protected.finditer(statement):
+            parts.append(ground(statement[last:m.start()]))
+            parts.append(m.group(0))
+            last = m.end()
+        parts.append(ground(statement[last:]))
+        return "".join(parts)
 
     def claims_table(self) -> str:
         """结论表：陈述里的引用替换为"真实数值⟨编号⟩"，供一致性审查和写作使用
