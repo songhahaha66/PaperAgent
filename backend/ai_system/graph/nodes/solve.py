@@ -88,6 +88,18 @@ def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
     return "\n\n".join(parts)
 
 
+def _record_from_recent(ctx: GraphContext, subproblem_id: str, item: ResultItem, run_log: List[Dict], recent: int = 8):
+    """run_id 核对不上时，到本问最近几次成功执行里找输出含这个值的那次"""
+    for run in reversed([r for r in run_log if r.get("ok")][-recent:]):
+        if run["run_id"] == item.run_id:
+            continue
+        try:
+            return ctx.registry.record_value(subproblem_id, item.name, item.value, run["run_id"], item.unit, item.description)
+        except GroundingError:
+            continue
+    return None
+
+
 def build_tools(
     ctx: GraphContext,
     subproblem_id: str,
@@ -121,11 +133,17 @@ def build_tools(
                 result = ctx.registry.record_value(
                     subproblem_id, item.name, item.value, item.run_id, item.unit, item.description
                 )
+                note = ""
             except GroundingError as exc:
-                lines.append(f"- {item.name}：登记失败，{exc}")
-                logger.info("%s 登记「%s」被拒：%s", subproblem_id, item.name, exc)
-                continue
-            lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}")
+                # 模型常把 run_id 的随机后缀记错（115040_8c4fb0 写成了 115040_4c80fb 这种）；
+                # 值必须出现在某次真实执行输出里这一条不变，只是到本问最近的几次执行里找
+                result = _record_from_recent(ctx, subproblem_id, item, run_log)
+                if result is None:
+                    lines.append(f"- {item.name}：登记失败，{exc}")
+                    logger.info("%s 登记「%s」被拒：%s", subproblem_id, item.name, exc)
+                    continue
+                note = f"（{item.run_id} 核对不上，已按输出里含这个值的 {result.run_id} 登记）"
+            lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}{note}")
         return "\n".join(lines) or "没有要登记的结果"
 
     async def record_figure(run_id: str, figure: str, caption: str) -> str:
