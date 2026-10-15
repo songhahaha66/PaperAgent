@@ -142,6 +142,19 @@ WRITING_DESIGN = {
 }
 
 
+# 候选方案生成多次失败时的退路：交给求解者结合数据自行确定方法，
+# 一个子问题的设计失败不应让整篇论文中止
+SELF_DESIGN = {
+    "name": "求解时自行设计",
+    "method_keys": [],
+    "idea": "候选方案生成失败，由求解者根据子问题要求和数据先做探索，再自行确定建模方法。",
+    "formulation": "",
+    "steps": ["探索相关数据列", "选择并说明建模方法", "求解并检验", "灵敏度分析"],
+    "assumptions": [],
+    "validation": "给出检验结果和灵敏度分析",
+}
+
+
 async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     subproblem = branch["subproblem"]
@@ -157,8 +170,22 @@ async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         }
     await ctx.events.stage(f"{subproblem['id']}：检索方法并设计候选方案")
 
-    method_keys = await pick_methods(ctx, branch)
-    candidates = await propose(ctx, branch, method_keys)
+    try:
+        method_keys = await pick_methods(ctx, branch)
+    except Exception:  # 方法检索失败时不给参考方法，候选方案照常生成
+        method_keys = []
+    try:
+        candidates = await propose(ctx, branch, method_keys)
+    except Exception as exc:
+        await ctx.events.emit("paper_design", f"{subproblem['id']} 候选方案生成失败，改由求解时自行设计")
+        return {
+            "designs": {subproblem["id"]: {
+                "methods": method_keys, "candidates": [SELF_DESIGN], "scores": [{"total": None}],
+                "chosen": SELF_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
+                "design_error": str(exc),
+            }},
+            "log": [f"design {subproblem['id']}: fallback ({exc})"],
+        }
     try:
         scores = await critique(ctx, branch, candidates)
         critic_error = None

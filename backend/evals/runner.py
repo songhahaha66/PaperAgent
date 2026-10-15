@@ -125,6 +125,9 @@ async def run_problem(
                 record["final_message"] = await agent.resume_failed()
             else:
                 record["final_message"] = await agent.run(prompt)
+            # 智能体自己捕获了异常、只返回失败说明时，也要记为出错，否则汇总里看不出来
+            if str(record["final_message"] or "").startswith("任务执行失败"):
+                record["error"] = record["final_message"]
         except Exception:
             record["error"] = traceback.format_exc()
             logger.exception("运行 %s 失败", problem.id)
