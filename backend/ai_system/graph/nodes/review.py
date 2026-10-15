@@ -13,7 +13,7 @@ LogLoss 从 0.68 降到 0.49，审查模型没有发现。所以预测效果另�
 """
 
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..context import GraphContext
 from ..registry import REF_PATTERN, GroundingError
@@ -39,6 +39,8 @@ CHECKLIST = """逐项检查：
 PREDICTIVE = re.compile(r"AUC|准确率|精确率|召回率|F1|LogLoss|对数损失|Brier|RMSE|MAE|MAPE|R²|R\^2|决定系数|命中率", re.IGNORECASE)
 # 打乱标签后仍保留的提升占真实提升的比例，超过就判定为泄漏
 LEAK_RATIO = 0.5
+# 相对简单基线的提升不到基线值的这个比例，就算没有提升
+MIN_LIFT = 0.005
 
 
 def _as_float(text: str) -> Optional[float]:
@@ -72,6 +74,16 @@ def leaked(real: float, shuffled: float, chance: float, higher_is_better: bool) 
 
 def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
     """标签置换对照的确定性检查，返回必须修正的问题"""
+    return control_findings(ctx, report)[0]
+
+
+def baseline_gaps(ctx: GraphContext, report: Dict) -> List[str]:
+    """没有超过简单基线的预测指标；这是结果本身，返工只能改写结论，不能让它消失"""
+    return control_findings(ctx, report)[1]
+
+
+def control_findings(ctx: GraphContext, report: Dict) -> Tuple[List[str], List[str]]:
+    """返回 (必须修正的问题, 没有超过基线的指标)"""
     controls = report.get("controls") or []
     text = " ".join([report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])])
     if not controls:
@@ -79,9 +91,10 @@ def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
             return [
                 "报告了预测效果但没有做标签置换对照：在构造特征之前把目标列随机打乱、其余流程完全不变，"
                 "重新计算同一指标，print 并登记真实值和打乱后的值，填进报告的 controls。"
-            ]
-        return []
-    issues = []
+            ], []
+        return [], []
+    issues: List[str] = []
+    gaps: List[str] = []
     for c in controls:
         try:
             ctx.registry.verify(c["value"], c["run_id"])
@@ -94,13 +107,46 @@ def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
             issues.append(f"{c['metric']} 的置换对照里有不是数值的字段，请填写数值")
             continue
         direction = metric_direction(c.get("metric", ""))
-        if leaked(real, shuffled, chance, c.get("higher_is_better", True) if direction is None else direction):
+        higher = c.get("higher_is_better", True) if direction is None else direction
+        if leaked(real, shuffled, chance, higher):
             issues.append(
                 f"{c['metric']} 打乱标签后仍为 {c['shuffled_value']}（无信息水平 {c['chance']}，真实标签下 {c['value']}），"
                 "说明特征构造或评估用到了标签本身的信息（数据泄漏，例如滤波/平滑/滚动统计包含了当期结果）。"
                 "请定位泄漏来源，只用预测时刻之前的信息重新构造特征，再重新评估并重做置换对照。"
             )
-    return issues
+            continue
+        problem, gap = baseline_check(ctx, c, real, higher)
+        issues += problem
+        gaps += gap
+    return issues, gaps
+
+
+def baseline_check(ctx: GraphContext, control: Dict, real: float, higher: bool) -> Tuple[List[str], List[str]]:
+    """模型相对最简单的有信息基线有没有提升
+
+    置换对照只能说明"比无信息水平好"。2024_C 的 Q1 用滤波势头预测下一分，LogLoss 优于无信息水平和置换对照，
+    结论写成"势头携带预测信息"；但灵敏度分析里换任何噪声设置指标都不变，信息其实全来自发球方先验。
+    """
+    metric = control.get("metric", "")
+    if not str(control.get("baseline_value") or "").strip():
+        return [
+            f"{metric} 没有和最简单的有信息基线比较：请在同一划分上算一个只用显而易见结构的基线（如只用发球方先验胜率、只用上一期值），"
+            "print 并登记，填进 controls 的 baseline_name / baseline_value / baseline_run_id。"
+        ], []
+    try:
+        ctx.registry.verify(control["baseline_value"], control.get("baseline_run_id", ""))
+    except GroundingError as exc:
+        return [f"{metric} 的基线数值无法核对：{exc}"], []
+    baseline = _as_float(control["baseline_value"])
+    if baseline is None:
+        return [f"{metric} 的基线值不是数值，请填写数值"], []
+    lift = (real - baseline) if higher else (baseline - real)
+    if lift > MIN_LIFT * max(abs(baseline), 1e-9):
+        return [], []
+    return [], [
+        f"{metric} 为 {control['value']}，没有优于基线「{control.get('baseline_name') or '简单基线'}」的 {control['baseline_value']}。"
+        "预测信息来自基线已包含的结构，不能说模型（或其中的动量、状态等成分）有额外预测力。"
+    ]
 
 
 # 报告里直接写的小数或百分数（整数是场次、阶数这类计数，不查）
