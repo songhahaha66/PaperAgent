@@ -29,8 +29,8 @@ class Subproblem(BaseModel):
         default="compute",
         description="compute=需要用数据建模计算；writing=只需基于前序结论写成文书（如给教练的备忘录、建议信、政策建议），不需要新的计算",
     )
-    title: str = Field(description="子问题的简短标题")
-    question: str = Field(description="子问题要回答的具体内容，忠实于原题")
+    title: str = Field(min_length=1, description="子问题的简短标题")
+    question: str = Field(min_length=1, description="子问题要回答的具体内容，忠实于原题")
     deliverables: List[str] = Field(default_factory=list, description="这一问需要给出的结果，如某个预测值、排序、方案、图")
     depends_on: List[str] = Field(default_factory=list, description="依赖哪些子问题的结果（编号），没有依赖则为空")
 
@@ -39,7 +39,8 @@ class ProblemAnalysis(BaseModel):
     title: str = Field(description="论文标题，概括研究对象和主要方法")
     restatement: str = Field(description="用自己的话重述题目背景和要求")
     overall_analysis: str = Field(description="整体思路：各子问题之间的关系、数据如何使用")
-    subproblems: List[Subproblem]
+    # 空列表能通过类型校验，DeepSeek 偶尔这样返回；要求至少一个，校验失败会进入重试
+    subproblems: List[Subproblem] = Field(min_length=1)
     assumptions: List[str] = Field(description="全局建模假设，每条说明理由")
 
 
