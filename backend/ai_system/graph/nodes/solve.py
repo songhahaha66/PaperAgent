@@ -19,7 +19,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
 from langgraph.runtime import Runtime
 
-from ..compaction import CompactHistoryMiddleware
+from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware
 from ..context import GraphContext, list_data_files
 from ..llm_utils import clip
 from ..methods import describe
@@ -212,7 +212,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         tools=build_tools(ctx, subproblem_id, run_log),
         system_prompt=SYSTEM,
         response_format=ToolStrategy(SolveReport),
-        middleware=[CompactHistoryMiddleware()],
+        middleware=[CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE)],
     )
     limit = ctx.max_solver_steps * 2 + 1
     status, error = "completed", None
