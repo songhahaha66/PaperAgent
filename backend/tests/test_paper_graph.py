@@ -689,6 +689,33 @@ def test_model_candidate_rejects_empty_placeholder():
 
     with pytest.raises(pydantic.ValidationError):
         ModelCandidate(name="", method_keys=[], idea="", formulation="", steps=[], validation="")
+    # 把 schema 当模板原样填回的占位方案
+    with pytest.raises(pydantic.ValidationError):
+        ModelCandidate(name="placeholder", method_keys=[], idea="placeholder", formulation="", steps=["x"], validation="")
+    ModelCandidate(name="逻辑回归", method_keys=[], idea="用前序得分预测下一分", formulation="", steps=["拟合"], validation="")
+
+
+def test_normalize_plan_drops_paper_writing_subproblem():
+    from ai_system.graph.nodes.analyze import normalize_plan
+
+    plan = normalize_plan([
+        {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []},
+        {"id": "Q2", "kind": "writing", "title": "给教练的备忘录与报告整理", "question": "总结建议", "depends_on": []},
+        {"id": "Q3", "kind": "writing", "title": "完整建模论文撰写", "question": "整合 Q1、Q2", "depends_on": ["Q1", "Q2"]},
+    ])
+    assert [sp["id"] for sp in plan] == ["Q1", "Q2"]
+
+
+def test_report_issues_requires_registered_results(tmp_path):
+    from types import SimpleNamespace
+
+    from ai_system.graph.nodes.review import report_issues
+
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
+    issues = report_issues(ctx, {"summary": "读入了数据", "key_findings": []}, "Q1")
+    assert len(issues) == 1 and "还没有登记任何结果" in issues[0]
 
 
 def test_label_shuffle_control_flags_leakage(tmp_path):

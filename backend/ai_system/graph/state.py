@@ -8,7 +8,7 @@ LLM、内核、登记表这类运行时对象放在 GraphContext 里（不进 ch
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
@@ -48,6 +48,9 @@ class MethodPick(BaseModel):
     reason: str
 
 
+PLACEHOLDERS = {"placeholder", "string", "...", "…", "todo", "tbd", "待定", "示例", "方案名称", "核心思路", "name", "idea"}
+
+
 class ModelCandidate(BaseModel):
     # 名称、思路、步骤不能为空：模型偶尔返回全空的占位方案，空字符串也能通过类型校验
     name: str = Field(min_length=1, description="方案名称")
@@ -57,6 +60,13 @@ class ModelCandidate(BaseModel):
     steps: List[str] = Field(min_length=1, description="求解步骤，每步能用代码实现")
     assumptions: List[str] = Field(default_factory=list, description="本方案额外需要的假设")
     validation: str = Field(description="如何检验结果和做灵敏度分析")
+
+    @model_validator(mode="after")
+    def _not_placeholder(self):
+        # DeepSeek 还会把 schema 当模板原样填回 "placeholder"，2024_C 的 Q1 就按「placeholder」方案求解了
+        if self.name.strip().lower() in PLACEHOLDERS or self.idea.strip().lower() in PLACEHOLDERS:
+            raise ValueError("候选方案是占位内容，请写出具体的方案名称和思路")
+        return self
 
 
 class CandidateSet(BaseModel):

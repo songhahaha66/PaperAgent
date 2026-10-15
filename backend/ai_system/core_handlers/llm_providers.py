@@ -109,7 +109,9 @@ class OpenAIProvider(BaseLLMProvider):
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
-            streaming=kwargs.get('streaming', True)
+            streaming=kwargs.get('streaming', True),
+            # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
+            max_retries=kwargs.get('max_retries', 6)
         )
 
     def validate_config(self) -> bool:
@@ -185,7 +187,9 @@ class LocalProvider(BaseLLMProvider):
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else "http://localhost:11434/v1",
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
-            streaming=kwargs.get('streaming', True)
+            streaming=kwargs.get('streaming', True),
+            # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
+            max_retries=kwargs.get('max_retries', 6)
         )
 
     def validate_config(self) -> bool:

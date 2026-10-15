@@ -282,7 +282,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             if structured is None:
                 break
             # 标签置换对照、结论数字可追溯是确定性检查，模型审查失败时也照样生效
-            leaks = report_issues(ctx, structured.model_dump())
+            leaks = report_issues(ctx, structured.model_dump(), subproblem_id)
             try:
                 review = await review_solution(ctx, branch, structured.model_dump(), run_log)
             except Exception as exc:  # 审查失败不能丢掉已经交上来的报告

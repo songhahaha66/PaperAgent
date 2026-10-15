@@ -127,9 +127,13 @@ def ungrounded_findings(report: Dict) -> List[str]:
     ]
 
 
-def report_issues(ctx: GraphContext, report: Dict) -> List[str]:
-    """不调模型的报告检查：标签置换对照 + 结论数字可追溯"""
-    return control_issues(ctx, report) + ungrounded_findings(report)
+def report_issues(ctx: GraphContext, report: Dict, subproblem_id: str) -> List[str]:
+    """不调模型的报告检查：有登记结果 + 标签置换对照 + 结论数字可追溯"""
+    issues = control_issues(ctx, report) + ungrounded_findings(report)
+    if not ctx.registry.for_subproblem(subproblem_id):
+        # 2024_C 的 Q1 跑了两段读数据的代码就交了报告，一项结果都没登记
+        issues.insert(0, "还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")
+    return issues
 
 
 def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: List[Dict]) -> str:
