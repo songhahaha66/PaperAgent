@@ -1114,3 +1114,11 @@ def test_stream_manager_accepts_structured_block():
 
     asyncio.run(StreamOutputManager(Callback()).send_json_block("paper_phase", {"stage": "solve", "status": "in_progress"}))
     assert received == [{"type": "paper_phase", "content": {"stage": "solve", "status": "in_progress"}}]
+
+
+def test_writing_brief_asks_for_actionable_advice():
+    from ai_system.graph.nodes.write import ACTIONABLE_ADVICE, subproblem_brief
+
+    memo = {"id": "Q4", "kind": "writing", "title": "给教练的备忘录", "question": "给出建议", "deliverables": ["一页备忘录"]}
+    brief = subproblem_brief({"analysis": {"subproblems": [memo]}}, None, memo)
+    assert ACTIONABLE_ADVICE in brief
