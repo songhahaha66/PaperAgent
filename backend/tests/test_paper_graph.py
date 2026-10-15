@@ -716,3 +716,14 @@ def test_probe_metric_rejected_when_shuffled_labels_keep_the_gain(tmp_path):
     assert "泄漏" in shuffle_check(ctx, {**report, "shuffled_value": "0.48"}, protocol)
     assert shuffle_check(ctx, {**report, "shuffled_value": "0.675"}, protocol) == ""
     assert shuffle_check(ctx, report, protocol) == "没有做标签置换对照"
+
+
+def test_metric_direction_overrides_model_for_known_metrics():
+    from ai_system.graph.nodes.review import metric_direction
+
+    assert metric_direction("验证集上的对数损失（LogLoss）") is False
+    assert metric_direction("测试集 RMSE") is False
+    assert metric_direction("留出集 AUC") is True
+    assert metric_direction("宏平均 F1") is True
+    assert metric_direction("综合得分") is None
+    assert metric_direction("测试集负对数似然") is None  # 两边都命中时不覆盖

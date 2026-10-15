@@ -29,7 +29,7 @@ from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured
 from ..registry import GroundingError, _parse_number
 from ..state import BranchInput, ProbeReport, ValidationProtocol
-from .review import leaked
+from .review import leaked, metric_direction
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,13 @@ async def make_protocol(ctx: GraphContext, branch: BranchInput, candidates: List
         f"# 待比较的候选方案\n{names}"
     )
     protocol = await call_structured(ctx.planner_llm, ValidationProtocol, as_messages(PROTOCOL_SYSTEM, prompt))
-    return protocol.model_dump()
+    protocol = protocol.model_dump()
+    direction = metric_direction(protocol.get("metric", ""))
+    if direction is not None:
+        protocol["higher_is_better"] = direction
+    return protocol
+
+
 
 
 def protocol_text(protocol: Dict[str, Any]) -> str:
