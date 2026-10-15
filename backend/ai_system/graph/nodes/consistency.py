@@ -14,6 +14,7 @@
 """
 
 import json
+import re
 from typing import Dict, List
 
 from langgraph.runtime import Runtime
@@ -34,8 +35,11 @@ RECONCILE_SYSTEM = (
 AUDIT_SYSTEM = (
     "你是论文终审。下面给出全文统一的结论表和口径，以及几个汇总性章节的正文（引用已替换为数值）。"
     "逐句检查这些章节是否与结论表一致：结论方向、显著与否、强弱程度、适用范围是否被改写或夸大。"
-    "只报告与结论表或统一口径实际矛盾的句子，措辞风格问题不要报告。"
+    "只报告与结论表或统一口径实际矛盾的句子；一致的、或只是没有提到某条结论的都不要列入，措辞风格问题也不要报告。"
 )
+
+# 审查模型常把"核对过、一致"的句子也列成问题（v2k 的 7 条全是"……无矛盾"），每条都会触发一次无谓的章节修复
+NOT_A_CONFLICT = re.compile(r"无矛盾|没有矛盾|不矛盾|不存在矛盾|并无矛盾")
 
 # 需要与结论表保持一致的汇总性章节
 AUDITED_SECTIONS = ("abstract", "analysis", "sensitivity", "evaluation")
@@ -104,5 +108,6 @@ async def audit_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str,
         return []
     return [
         {"section": issue.section, "message": f"与结论表不一致：{issue.problem}"}
-        for issue in audit.issues if issue.section in keys
+        for issue in audit.issues
+        if issue.section in keys and issue.contradicts and not NOT_A_CONFLICT.search(issue.problem)
     ]
