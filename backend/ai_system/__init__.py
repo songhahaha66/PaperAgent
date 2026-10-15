@@ -19,11 +19,8 @@ __version__ = "0.1.0"
 __all__ = [
     'MainAgent',
     'CodeAgent',
-    'BaseAgent',
     'LLMHandler',
-    'LLMFactory',
     'StreamOutputManager',
-    'ContextManager',
     'CodeExecutor',
     'FileTools',
     'TemplateAgentTools'
@@ -32,11 +29,9 @@ __all__ = [
 
 def _import_core_components():
     """延迟导入核心组件"""
-    from .core_agents import MainAgent, CodeAgent, BaseAgent
+    from .core_agents import MainAgent, CodeAgent
     from .core_handlers.llm_handler import LLMHandler
-    from .core_handlers.llm_factory import LLMFactory
     from .core_managers.stream_manager import StreamOutputManager
-    from .core_managers.context_manager import ContextManager
     # ToolManager 已移除，不再导入
     from .core_tools.code_executor import CodeExecutor
     from .core_tools.file_tools import FileTools
@@ -45,11 +40,8 @@ def _import_core_components():
     return {
         'MainAgent': MainAgent,
         'CodeAgent': CodeAgent,
-        'BaseAgent': BaseAgent,
         'LLMHandler': LLMHandler,
-        'LLMFactory': LLMFactory,
         'StreamOutputManager': StreamOutputManager,
-        'ContextManager': ContextManager,
         # 'ToolManager': ToolManager,  # 已移除
         'CodeExecutor': CodeExecutor,
         'FileTools': FileTools,

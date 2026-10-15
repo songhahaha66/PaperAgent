@@ -5,3 +5,5 @@ frontend/.env
 .kiro
 .codex
 .trae
+# 评测输出
+backend/eval_runs
