@@ -77,6 +77,26 @@ def control_issues(ctx: GraphContext, report: Dict, hypothesis: bool = False) ->
     return control_findings(ctx, report, hypothesis)[0]
 
 
+def downgrade_findings(ctx: GraphContext, report: Dict) -> None:
+    """没通过置换对照时，引用了这些指标的结论一律降为不显著
+
+    v2j 的 Q1 打乱标签后 AUC 仍有 0.644（真实 0.777），对照判为泄漏、写进了局限，
+    结论里却还写着"提升主要来自有效信号而非泄漏"，写作时两者互相矛盾。
+    """
+    leaky = set()
+    for c in report.get("controls") or []:
+        real, shuffled, chance = (_as_float(c.get(k, "")) for k in ("value", "shuffled_value", "chance"))
+        direction = metric_direction(c.get("metric", ""))
+        higher = c.get("higher_is_better", True) if direction is None else direction
+        if None not in (real, shuffled, chance) and leaked(real, shuffled, chance, higher):
+            leaky.add(str(c["value"]).strip())
+    leaky_refs = {r.id for r in ctx.registry.results.values() if r.kind != "figure" and r.value.strip() in leaky}
+    for finding in report.get("key_findings") or []:
+        if set(find_refs(finding.get("statement", ""))) & leaky_refs:
+            finding["strength"] = "不显著"
+            finding["statement"] = finding["statement"].rstrip("。") + "（该指标未通过标签置换对照，可能存在数据泄漏）"
+
+
 def baseline_gaps(ctx: GraphContext, report: Dict) -> List[str]:
     """没有超过简单基线的预测指标；这是结果本身，返工只能改写结论，不能让它消失"""
     return control_findings(ctx, report)[1]
@@ -213,6 +233,14 @@ def foreign_refs(ctx: GraphContext, report: Dict, subproblem_id: str, dependenci
     ]
 
 
+MIN_SUMMARY_CHARS = 8
+
+
+def degenerate(report: Dict) -> bool:
+    """概要几乎为空或没有主要结论的报告"""
+    return len((report.get("summary") or "").strip()) < MIN_SUMMARY_CHARS or not report.get("key_findings")
+
+
 # 题目要求出图的子问题
 VISUAL_TASK = re.compile(r"可视化|画图|绘制|作图|图表|图示|visuali", re.IGNORECASE)
 
@@ -232,6 +260,13 @@ def report_issues(
 ) -> List[str]:
     """不调模型的报告检查：有登记结果 + 引用属于本问 + 标签置换对照 + 结论数字可追溯 + 要求的图已登记"""
     issues = (
+        # v2j 的 Q3 被要求补置换对照、改引用之后，交了概要为 "test"、没有任何结论的报告：
+        # 空报告不触发其他检查，等于绕过了检查
+        [
+            "报告的概要或主要结论为空：请提交完整的求解报告，写明主要结论（数字用登记结果的引用），"
+            "并按之前的审查意见补齐对照和登记，不能删掉结论来回避检查。"
+        ] if degenerate(report) else []
+    ) + (
         foreign_refs(ctx, report, subproblem_id, dependencies or [])
         + control_issues(ctx, report, hypothesis)
         + ungrounded_findings(report)

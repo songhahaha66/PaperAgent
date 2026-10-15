@@ -27,7 +27,16 @@ from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from .explore import explore, is_hypothesis_test, promotion_message
-from .review import baseline_gaps, control_issues, feedback_message, needs_figure, report_issues, review_solution
+from .review import (
+    baseline_gaps,
+    control_issues,
+    degenerate,
+    downgrade_findings,
+    feedback_message,
+    needs_figure,
+    report_issues,
+    review_solution,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +305,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     report: Dict = {}
     reviews: List[Dict] = []
     structured = None
+    kept = None  # 最近一份有内容的报告
+    dropped = False
     try:
         result = await run_agent(agent, messages, limit)
         structured = result.get("structured_response")
@@ -332,8 +343,14 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             if not review.must_fix:
                 break
             await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.must_fix)} 个必须修正的问题，返工中")
+            if not degenerate(current):
+                kept = structured
             result = await run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit)
             structured = result.get("structured_response") or structured
+        if structured is not None and kept is not None and degenerate(structured.model_dump()):
+            # 返工后交了空报告：退回返工前那份有内容的报告，没解决的审查意见写进局限
+            structured = kept
+            dropped = True
         if structured is None:
             status = "incomplete"
         elif not ctx.registry.for_subproblem(subproblem_id):
@@ -346,6 +363,10 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             report["limitations"] = list(report.get("limitations") or []) + [
                 f"预测效果没有通过对照检查，不能作为有效结论：{issue}" for issue in leaks
             ] + baseline_gaps(ctx, report)
+            if dropped and reviews:
+                report["limitations"].append("审查意见没有在返工中解决：" + "；".join(reviews[-1].get("must_fix") or []))
+            if leaks:
+                downgrade_findings(ctx, report)
     except GraphRecursionError:
         status, error = "incomplete", f"超过 {ctx.max_solver_steps} 步仍未完成"
     except Exception as exc:
