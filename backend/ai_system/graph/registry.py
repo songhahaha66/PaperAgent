@@ -255,7 +255,7 @@ class ResultRegistry:
     def render(self, text: str) -> str:
         """把正文中的引用替换成真实内容
 
-        - 独占一行的 {{F:F1}} 渲染为图片和图题，按图片首次出现的顺序编号；同一张图再次独占一行时只写"（见图 k）"；
+        - 独占一行的 {{F:F1}} 渲染为图片和图题，按图片首次出现的顺序编号；同一张图再次独占一行时整行去掉；
         - 行内的 {{F:F1}} 渲染为"图 k"；
         - {{R:R1}} 渲染为数值和单位；
         - 未知引用保留原样，由校验环节报告。
@@ -272,9 +272,10 @@ class ResultRegistry:
             if result is None:
                 return match.group(0)
             number = figure_numbers[result.id]
-            # v2l 的同一张图在摘要、正文、备忘录里各插了一次
+            # v2l 的同一张图在摘要、正文、备忘录里各插了一次；重复的整行去掉
+            # （写成"见图k"时 v2n 的备忘录末尾连着五行"（见图1）……（见图5）"）
             if result.id in shown:
-                return f"（见图{number}）"
+                return ""
             shown.add(result.id)
             label = f"图{number} {FIGURE_NAME_NUMBER.sub('', result.name)}"
             return f"![{label}]({result.path})\n\n*{label}*"
