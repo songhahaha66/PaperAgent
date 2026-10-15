@@ -11,18 +11,25 @@
 
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, messages_to_dict
 from langchain_core.tools import StructuredTool
 from langgraph.errors import GraphRecursionError
 from langgraph.runtime import Runtime
 
-from ..compaction import CompactHistoryMiddleware, StepBudgetMiddleware, TruncationGuardMiddleware, drop_invalid_calls
+from ..compaction import (
+    CompactHistoryMiddleware,
+    HistoryRecorder,
+    StepBudgetMiddleware,
+    TruncationGuardMiddleware,
+    compact_messages,
+    drop_invalid_calls,
+)
 from ..context import GraphContext, list_data_files
-from ..llm_utils import clip
+from ..llm_utils import call_structured, clip
 from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
@@ -74,6 +81,7 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 OBSERVATION_CHARS = 6000
 WRITING_APPROACH = "基于前序结论撰写"
 
+FINAL_NUDGE = "步数已经用完，不能再执行代码。请根据上面已经得到的输出和登记的结果，现在提交报告；报告里的数字只能写登记返回的引用。"
 REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
 
 
@@ -206,16 +214,39 @@ def build_task(
     ]))
 
 
-async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = REPORT_NUDGE):
-    """跑一轮循环；模型用文字收尾、没交报告时提醒一次"""
-    result = await agent.ainvoke({"messages": messages}, config={"recursion_limit": recursion_limit})
-    if result.get("structured_response") is None:
-        history = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in result["messages"]]
-        result = await agent.ainvoke(
-            {"messages": history + [HumanMessage(content=nudge)]},
-            config={"recursion_limit": 11},
-        )
-    return result
+class ReportFallback(NamedTuple):
+    """步数用完时直接要报告：用哪个模型、什么报告格式、什么系统提示，对话从哪份记录取"""
+
+    llm: Any
+    schema: Any
+    system: str
+    recorder: HistoryRecorder
+
+
+async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = REPORT_NUDGE,
+                    fallback: Optional[ReportFallback] = None):
+    """跑一轮循环；模型用文字收尾、没交报告时提醒一次
+
+    步数用完（GraphRecursionError）时，有 fallback 就从记录里取回对话，不给任何执行工具、直接用结构化输出要报告：
+    官方 API 的 deepseek-flash 步子很碎，最后一步只给报告工具它也照样调 run_python，v2l 的 Q3 跑满 40 步后整段作废。
+    """
+    try:
+        result = await agent.ainvoke({"messages": messages}, config={"recursion_limit": recursion_limit})
+        if result.get("structured_response") is None:
+            history = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in result["messages"]]
+            result = await agent.ainvoke(
+                {"messages": history + [HumanMessage(content=nudge)]},
+                config={"recursion_limit": 11},
+            )
+        return result
+    except GraphRecursionError:
+        if fallback is None or not fallback.recorder.messages:
+            raise
+        history = list(fallback.recorder.messages)
+        logger.warning("步数用完，用 %d 条对话直接要报告", len(history))
+        prompt = [SystemMessage(content=fallback.system), *compact_messages(history), HumanMessage(content=FINAL_NUDGE)]
+        report = await call_structured(fallback.llm, fallback.schema, prompt)
+        return {"messages": history + [HumanMessage(content=FINAL_NUDGE)], "structured_response": report}
 
 
 async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
@@ -306,15 +337,17 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
 async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict], messages: List):
     """正式求解：CodeAct 循环 + 结果审查返工，返回 (status, error, report, reviews)"""
     subproblem_id = branch["subproblem"]["id"]
+    recorder = HistoryRecorder()
     agent = create_agent(
         model=ctx.coder_llm,
         tools=build_tools(ctx, subproblem_id, run_log),
         system_prompt=SYSTEM,
         response_format=ToolStrategy(SolveReport),
-        middleware=[CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE),
+        middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE),
                     TruncationGuardMiddleware()],
     )
     limit = ctx.max_solver_steps * 2 + 1
+    fallback = ReportFallback(ctx.coder_llm, SolveReport, SYSTEM, recorder)
     status, error = "completed", None
     report: Dict = {}
     reviews: List[Dict] = []
@@ -323,7 +356,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     dropped = False
     result = None
     try:
-        result = await run_agent(agent, messages, limit)
+        result = await run_agent(agent, messages, limit, fallback=fallback)
         structured = result.get("structured_response")
         # 审查结果，必须修正的问题交回同一个循环（内核变量还在）。
         # 模型审查之后再多一轮只看确定性检查（登记、引用、置换对照）：返工时模型常常补了计算却忘了改报告
@@ -360,7 +393,9 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.must_fix)} 个必须修正的问题，返工中")
             if not degenerate(current):
                 kept = structured
-            result = await run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit)
+            result = await run_agent(
+                agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit, fallback=fallback
+            )
             structured = result.get("structured_response") or structured
         if structured is not None and kept is not None and degenerate(structured.model_dump()):
             # 返工后交了空报告：退回返工前那份有内容的报告，没解决的审查意见写进局限
