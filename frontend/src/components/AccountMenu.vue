@@ -17,8 +17,7 @@
     >
       <span class="account-avatar">{{ userName.charAt(0).toUpperCase() }}</span>
       <span v-if="!collapsed" class="account-trigger-details"
-        ><strong>{{ userName }}</strong
-        ><span>{{ auth.currentUser?.email }}</span></span
+        ><strong :title="userName">{{ userName }}</strong></span
       >
       <t-icon v-if="!collapsed" name="chevron-up" class="account-trigger-chevron" />
     </button>
@@ -39,13 +38,8 @@
         </div>
         <div class="account-divider" />
         <nav :aria-label="isZh ? '账户设置' : 'Account settings'">
-          <button
-            v-for="item in items"
-            :key="item.path"
-            class="account-action"
-            @click="navigate(item.path)"
-          >
-            <t-icon :name="item.icon" /><span>{{ item.label }}</span
+          <button class="account-action" @click="navigate('/passkey')">
+            <t-icon name="secured" /><span>{{ t('sidebar.passkeys') }}</span
             ><t-icon name="chevron-right" class="action-chevron" />
           </button>
         </nav>
@@ -93,11 +87,6 @@ const languages = [
   { value: 'zh-CN', label: '中文' },
   { value: 'en-US', label: 'English' },
 ]
-const items = computed(() => [
-  { path: '/template', label: t('sidebar.templates'), icon: 'file-copy' },
-  { path: '/api-config', label: t('sidebar.apiKey'), icon: 'setting' },
-  { path: '/passkey', label: t('sidebar.passkeys'), icon: 'secured' },
-])
 const popupStyle = {
   width: '272px',
   maxWidth: 'calc(100vw - 24px)',
@@ -163,18 +152,16 @@ function logout() {
   flex: 1;
 }
 .account-trigger-details strong {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.account-trigger-details > span {
-  font-size: 10px;
-  color: #999;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.account-trigger:not(.compact) > .account-avatar {
+  width: 36px;
+  height: 36px;
+  font-size: 14px;
 }
 .account-trigger-chevron {
   font-size: 14px;
@@ -213,14 +200,14 @@ function logout() {
   min-width: 0;
 }
 .account-summary strong {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .account-summary > div > span {
-  font-size: 11px;
+  font-size: 13px;
   color: #999;
   overflow: hidden;
   text-overflow: ellipsis;

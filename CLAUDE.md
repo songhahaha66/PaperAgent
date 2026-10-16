@@ -174,5 +174,5 @@ The project is designed for deployment with:
 ## Important Notes
 
 - The project does not use HTTPS for the frontend due to backend hosting constraints in China
-- Desktop keeps the side-by-side chat + preview workspace; phones (≤768px) use a single-panel layout with bottom tabs for chat, files, and preview
+- Each work uses one tabbed workspace on desktop and mobile. Chat stays pinned; paper, figures, files/plan, and individual files open from the tab bar or file list. Drag tabs to any content edge to form two adjustable panes; dragging them back to the other tab strip merges the panes. Narrow screens stack the panes. Per-work tabs, pane arrangement, drafts, and reading positions live in the user-scoped workPanels store.
 - Shared breakpoint logic lives in `frontend/src/composables/useBreakpoint.ts` and tracks viewport changes via `matchMedia`

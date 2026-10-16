@@ -52,6 +52,15 @@ export interface FileInfo {
   category_path?: string // 分类内的相对路径
 }
 
+export interface FileContent {
+  type: 'text' | 'image' | 'binary'
+  content?: string
+  filename: string
+  size: number
+  mime_type?: string
+  download_url?: string
+  message?: string
+}
 
 export interface FileUploadResponse {
   message: string
@@ -82,12 +91,12 @@ export interface WorkMetadata {
 }
 
 export interface AttachmentInfo {
-  filename: string           // 存储的文件名
-  original_filename: string  // 原始文件名
-  file_type: string         // 文件类型
-  file_size: number         // 文件大小
-  mime_type: string         // MIME类型
-  upload_time: string       // 上传时间
+  filename: string // 存储的文件名
+  original_filename: string // 原始文件名
+  file_type: string // 文件类型
+  file_size: number // 文件大小
+  mime_type: string // MIME类型
+  upload_time: string // 上传时间
 }
 
 export interface AttachmentListResponse {
@@ -276,37 +285,24 @@ export const workspaceFileAPI = {
   },
 
   // 读取文件
-  async readFile(token: string, workId: string, filePath: string): Promise<{
-    type: 'text' | 'image' | 'binary';
-    content?: string;
-    filename: string;
-    size: number;
-    mime_type?: string;
-    download_url?: string;
-    message?: string;
-  }> {
-    const response = await apiClient.request<{
-      type: 'text' | 'image' | 'binary';
-      content?: string;
-      filename: string;
-      size: number;
-      mime_type?: string;
-      download_url?: string;
-      message?: string;
-    }>(
+  async readFile(token: string, workId: string, filePath: string): Promise<FileContent> {
+    return apiClient.request<FileContent>(
       `/api/workspace/${workId}/files/${encodeURIComponent(filePath)}`,
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
       },
     )
-    return response
   },
 
   // 获取图片文件URL
   getImageUrl(token: string, workId: string, filePath: string): string {
     let decoded = filePath
-    try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
+    try {
+      decoded = decodeURIComponent(filePath)
+    } catch {
+      /* keep original */
+    }
     return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId}/images/${encodeURIComponent(decoded)}`
   },
 
@@ -391,8 +387,6 @@ export const workspaceFileAPI = {
     return response
   },
 
-  
-  
   // 导出工作空间
   async exportWorkspace(token: string, workId: string): Promise<Blob> {
     // 获取API基础URL
@@ -419,12 +413,12 @@ export const attachmentAPI = {
   async uploadAttachment(
     token: string,
     workId: string,
-    file: File
+    file: File,
   ): Promise<AttachmentUploadResponse> {
     return await apiClient.uploadFile<AttachmentUploadResponse>(
       `/api/works/${workId}/attachment`,
       file,
-      token
+      token,
     )
   },
 
@@ -435,7 +429,7 @@ export const attachmentAPI = {
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     )
     return response
   },
@@ -444,14 +438,14 @@ export const attachmentAPI = {
   async deleteAttachment(
     token: string,
     workId: string,
-    filename: string
+    filename: string,
   ): Promise<{ message: string }> {
     const response = await apiClient.request<{ message: string }>(
       `/api/works/${workId}/attachment/${encodeURIComponent(filename)}`,
       {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     )
     return response
   },

@@ -14,7 +14,9 @@
     "type-check": "vue-tsc --build",
     "format": "prettier --write src/",
     "test:history": "node --experimental-vm-modules tests/workHistory.test.cjs",
-    "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs"
+    "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs",
+    "test:panels": "node --experimental-vm-modules tests/workPanels.test.cjs && node --experimental-vm-modules tests/workPaneLayout.test.cjs && node --experimental-vm-modules tests/workInteractions.test.cjs",
+    "test:workspace": "npm run test:panels && npm run test:preview && npm run test:history"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

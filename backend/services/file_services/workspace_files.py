@@ -226,11 +226,6 @@ class WorkspaceFileService:
                 "message": "Binary file - use download button to view"
             }
 
-    def _is_image_file(self, file_path: str) -> bool:
-        """判断文件是否为图片文件"""
-        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
-        return any(file_path.lower().endswith(ext) for ext in image_extensions)
-
     def detect_file_type(self, file_path: str) -> str:
         """检测文件类型：返回 'text', 'image', 'binary'"""
 
@@ -252,16 +247,6 @@ class WorkspaceFileService:
             '.log', '.out', '.err', '.debug', '.trace'
         }
 
-        # 二进制文件扩展名（常见文档、压缩包、可执行文件等）
-        binary_extensions = {
-            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-            '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
-            '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
-            '.mp3', '.mp4', '.avi', '.mov', '.wmv', '.flv', '.mkv',
-            '.ttf', '.otf', '.woff', '.woff2', '.eot',
-            '.psd', '.ai', '.eps', '.sketch', '.fig'
-        }
-
         # 获取文件扩展名
         ext = Path(file_path).suffix.lower()
 
@@ -270,11 +255,7 @@ class WorkspaceFileService:
             return 'image'
         elif ext in text_extensions:
             return 'text'
-        elif ext in binary_extensions:
-            return 'binary'
-        else:
-            # 未知扩展名，默认为二进制文件
-            return 'binary'
+        return 'binary'
 
     @handle_service_errors()
     def write_file(self, work_id: str, file_path: str, content: str) -> Dict[str, Any]:

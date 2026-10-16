@@ -1,16 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, Form, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from database.database import get_db
 from auth.auth import get_current_user
 from services import crud
 from services.file_services.workspace_files import workspace_file_service
-from typing import Optional
 from urllib.parse import unquote
-import os
-import tempfile
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
+def _require_workspace_access(db: Session, work_id: str, user_id: int, *, exporting: bool = False) -> None:
+    work = crud.get_work(db, work_id)
+    if not work:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+    if work.created_by != user_id:
+        action = "export" if exporting else "access"
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorized to {action} this workspace")
+
 
 @router.get("/{work_id}/files")
 async def list_workspace_files(
@@ -21,19 +27,7 @@ async def list_workspace_files(
 ):
     """列出工作空间中的文件"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
         
         return workspace_file_service.list_files(work_id, path)
     except HTTPException:
@@ -53,19 +47,7 @@ async def download_workspace_file(
 ):
     """下载工作空间中的文件"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
 
         # 构建文件路径
         workspace_path = workspace_file_service.get_workspace_path(work_id)
@@ -107,51 +89,9 @@ async def read_workspace_file(
 ):
     """读取工作空间中的文件内容"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
+        _require_workspace_access(db, work_id, current_user)
 
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
-
-        # 使用新的文件读取方法，它会返回不同类型文件的处理结果
-        file_data = workspace_file_service.read_file(work_id, file_path)
-
-        # 如果是图片文件，返回base64内容
-        if file_data["type"] == "image":
-            return {
-                "type": "image",
-                "content": file_data["content"],
-                "filename": file_data["filename"],
-                "size": file_data["size"]
-            }
-
-        # 如果是文本文件，返回内容
-        elif file_data["type"] == "text":
-            return {
-                "type": "text",
-                "content": file_data["content"],
-                "filename": file_data["filename"],
-                "size": file_data["size"]
-            }
-
-        # 如果是二进制文件，返回元数据
-        elif file_data["type"] == "binary":
-            return {
-                "type": "binary",
-                "filename": file_data["filename"],
-                "size": file_data["size"],
-                "mime_type": file_data["mime_type"],
-                "download_url": file_data["download_url"],
-                "message": file_data["message"]
-            }
+        return workspace_file_service.read_file(work_id, file_path)
 
     except HTTPException:
         raise
@@ -170,19 +110,7 @@ async def get_workspace_image(
 ):
     """获取工作空间中的图片文件"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
         
         # 获取图片文件的完整路径
         workspace_path = workspace_file_service.get_workspace_path(work_id)
@@ -230,19 +158,7 @@ async def write_workspace_file(
 ):
     """写入文件到工作空间"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
         
         return workspace_file_service.write_file(work_id, file_path, content)
     except HTTPException:
@@ -263,19 +179,7 @@ async def upload_file_to_workspace(
 ):
     """上传文件到工作空间"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
         
         return workspace_file_service.upload_file(work_id, file_path, file)
     except HTTPException:
@@ -295,19 +199,7 @@ async def delete_workspace_file(
 ):
     """删除工作空间中的文件或目录"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
         
         return workspace_file_service.delete_file(work_id, file_path)
     except HTTPException:
@@ -327,19 +219,7 @@ async def create_workspace_directory(
 ):
     """在工作空间中创建目录"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-        
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to access this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user)
         
         return workspace_file_service.create_directory(work_id, dir_path)
     except HTTPException:
@@ -361,19 +241,7 @@ async def export_workspace(
 ):
     """导出工作空间为ZIP文件"""
     try:
-        # 检查工作是否存在且用户有权限
-        work = crud.get_work(db, work_id)
-        if not work:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Work not found"
-            )
-
-        if work.created_by != current_user:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not authorized to export this workspace"
-            )
+        _require_workspace_access(db, work_id, current_user, exporting=True)
 
         # 生成ZIP文件
         zip_path = workspace_file_service.export_workspace(work_id)
