@@ -1,6 +1,6 @@
 # Versioned research control
 
-`PaperGraphAgent` uses one engine, `research-v2`, with research snapshot schema 2.
+`PaperGraphAgent` uses one engine, `research-v3`, with research snapshot schema 2.
 Older protocol records cannot be resumed or revised; start a new research run.
 Existing files remain available for read-only inspection. There is no migration
 or legacy execution path.
@@ -27,6 +27,29 @@ publishing evidence. A change to an unrelated task does not reject the result.
 Repeated identical submissions return the original receipt; stale attempts remain
 in history but cannot become active. Failed execution and failed acceptance are
 separate. Only accepted current results reach the writing registry.
+
+Local `ResultReview` returns typed `IssueReport` findings. Each audit records the
+exact report hash and cited evidence; local repairs must receive a fresh final
+audit. Open findings, missing/stale audits and audit service errors block delivery.
+Historical audit evidence survives replacement in the worker registry but cannot
+enter active results, claims or numeric acceptance checks. Closed findings retain
+their resolution attempt. Resume freezes the old open findings into the next work
+order and rechecks them; recovery never silently clears local audit failures.
+Only findings naming applicable fixed check IDs can launch an independent
+countercheck. Uncheckable findings remain inconclusive rather than being dismissed
+by an unrelated passing numeric check.
+
+Selected designs and solve reports declare new key premises as `AssumptionDraft`
+(stable task-local key, statement, falsification checks). Only the selected route
+is registered. The coordinator assigns task-scoped premise/check IDs, source attempt, version 1
+and dependent scope atomically. Designing stops before formal solving when its
+premises are new; premises discovered during solving make that attempt provisional.
+Both paths resume with a new frozen work order; provisional results cannot be
+published. Repeated declarations are idempotent, while silent replacement or
+revival is rejected. Later consumers inherit premise versions through their
+dependencies. Refutation and explicit plan revisions use the same version/history
+and selective invalidation mechanisms as initial assumptions. Writing reads only
+the registered current premises, including their design/solve provenance.
 
 Requirements preserve exact user source quotes and task coverage. Hard constraints
 must specify executable checks: existence, finite numbers, inequalities, equality
@@ -95,6 +118,13 @@ estimator, independently discover a counterexample before or after writing, chan
 the upstream plan/assumption, recompute its consumer and deliver with new evidence
 while retaining an unrelated task. These are deterministic offline integration
 tests, not live-model research-quality benchmarks.
+
+`test_review_lifecycle.py` reproduces unresolved local audit findings that used to
+allow delivery, verifies fresh re-audits, audit-failure recovery, independent
+countercheck confirmation/dismissal, retained historical evidence, adopted design
+and solve premises, idempotence, inherited consumers and rejection of stale work.
+The former `sound`/string `must_fix` output protocol has been removed, with no
+adapter or old-checkpoint migration.
 
 The evaluation CLI defaults to `--pipeline research`. Its `research-no-explore`,
 `research-no-review`, `research-no-consistency` and `research-no-planner` variants

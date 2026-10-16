@@ -25,7 +25,7 @@ def seed(root):
     (run / "input.py").write_text("print(0.82)")
     (run / "stdout.log").write_text("AUC=0.82")
     (root / "paper.md").write_text("# 研究\n已有报告，不得改写")
-    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v2", "status": "done"}))
+    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "done"}))
     (root / ".system/results.json").write_text(json.dumps({
         "results": [
             {"id": "R1", "subproblem": "Q1", "name": "AUC", "value": "0.82", "run_id": "run_one"},
@@ -203,7 +203,7 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     client, work, calls, statuses, saved, root = web
     if action in {"confirm", "revise"}:
         work.status = "waiting"
-        (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v2", "status": "interrupted"}))
+        (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "interrupted"}))
     elif action == "resume":
         work.status = "failed"
     events = exchange(client, {"problem": "换一种方法", "action": action})
@@ -270,7 +270,7 @@ def test_question_failure_preserves_research_status_and_hides_provider_error(web
 def test_asking_about_waiting_plan_does_not_confirm_or_redesign(web):
     client, work, calls, statuses, saved, root = web
     work.status = "waiting"
-    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v2", "status": "interrupted"}))
+    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "interrupted"}))
     events = exchange(client, {"problem": "解释这个方案有什么风险"})
     assert [name for name, _ in calls] == ["ask"]
     assert events[-1]["work_status"] == "waiting" and statuses == []

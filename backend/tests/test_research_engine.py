@@ -64,7 +64,7 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
     assert len(agent.llm.text_calls) == written
     assert store.snapshot()["commit_seq"] == commit_seq
     snapshot = research_snapshot(agent.workspace_dir, "work", "completed")
-    assert snapshot.engine_version == "research-v2" and snapshot.research_revision == 2
+    assert snapshot.engine_version == "research-v3" and snapshot.research_revision == 2
     assert len(snapshot.tasks) == 3
 
 

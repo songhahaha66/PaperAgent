@@ -92,14 +92,16 @@ const { hostRenderer } = require('./vueHost.cjs')
     ...snapshot.value,
     tasks: [{ task_id: 'Q4', kind: 'verify', revision: 1, execution_status: 'running', acceptance: 'pending', validity: 'current' }],
     requirements: [{ id: 'RQ1', task_ids: ['Q1'], status: 'pending', statement: '满足容量约束', source_quote: '容量不超过10' }],
-    assumptions: [{ id: 'A1', revision: 1, status: 'refuted', statement: '均值具有代表性' }],
-    issues: [{ id: 'issue-one', task_id: 'Q1', task_revision: 1, assumption_id: 'A1', status: 'repairing', message: '独立核验发现反例', evidence_refs: ['R7'] }],
+    assumptions: [{ id: 'A1', revision: 1, status: 'refuted', statement: '均值具有代表性', source: 'solve', task_ids: ['Q1', 'Q2'] }],
+    issues: [{ id: 'issue-one', task_id: 'Q1', task_revision: 1, assumption_id: 'A1', status: 'repairing', source: 'local_review', message: '独立核验发现反例', evidence_refs: ['R7'] }],
     issue_evidence: [{ id: 'R7', name: 'residual', value: '4', unit: '', run_id: 'run_one' }],
   }
   await flush()
   assert.match(text(host.root), /容量不超过10/)
   assert.match(text(host.root), /已被反证/)
   assert.match(text(host.root), /计划修复中/)
+  assert.match(text(host.root), /求解中提出/)
+  assert.match(text(host.root), /求解审查/)
   assert.match(text(host.root), /R7 · residual：4/)
   assert.equal(button('修改这部分'), undefined, 'verification tasks are controlled by the issue protocol')
   button('查看核验输出').props.onClick()

@@ -430,7 +430,7 @@ const messageActionOptions = computed(() => [
       questionScope.value = null
     },
   },
-  ...(researchSnapshot.value?.engine_version === 'research-v2' &&
+  ...(researchSnapshot.value?.engine_version === 'research-v3' &&
   researchSnapshot.value?.tasks?.length &&
   currentWork.value?.status !== 'waiting'
     ? [

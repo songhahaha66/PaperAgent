@@ -257,7 +257,7 @@ class PaperGraphAgent:
     @staticmethod
     def _final_message(result: Dict[str, Any], ctx: GraphContext) -> str:
         if result.get("research_blocked"):
-            return "研究已暂停：存在未通过验收的任务。已验收结果已保留，可修改要求或继续重试。"
+            return "研究已暂停：存在未关闭的研究或审查问题，或任务尚未通过验收。已有结果已保留，可查看问题记录、修改要求或继续重试。"
         analysis = result.get("analysis") or {}
         solutions = result.get("solutions") or {}
         issues = result.get("issues") or []

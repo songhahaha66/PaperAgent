@@ -1,3 +1,3 @@
 """Versioned research control; execution capabilities remain in graph.nodes."""
 
-ENGINE_VERSION = "research-v2"
+ENGINE_VERSION = "research-v3"

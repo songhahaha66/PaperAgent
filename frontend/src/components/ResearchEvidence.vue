@@ -50,6 +50,9 @@
         <p v-for="assumption in snapshot.assumptions" :key="assumption.id">
           <strong>{{ assumption.id }} · v{{ assumption.revision }}</strong> ·
           {{ assumptionLabel(assumption.status) }} <br />{{ assumption.statement }}
+          <small v-if="assumption.source" class="source-quote">
+            {{ premiseSource(assumption.source) }} · {{ assumption.task_ids.join(', ') }}
+          </small>
         </p>
       </details>
       <details v-if="snapshot.issues?.length" class="research-contract">
@@ -60,6 +63,8 @@
             {{ issueLabel(issue.status) }}</strong
           >
           <span v-if="issue.assumption_id"> · {{ issue.assumption_id }}</span
+          ><span v-if="issue.source === 'local_review'">
+            · {{ isZh ? '求解审查' : 'Solution review' }}</span
           ><br />{{ issue.message }}
           <small
             v-for="evidence in evidenceFor(issue.evidence_refs)"
@@ -176,6 +181,12 @@ defineEmits<{
   revise: [subproblemId: string]
 }>()
 const { isZh } = useStudioCopy()
+const premiseSource = (source: string) =>
+  ({
+    analysis: isZh.value ? '题目分析提出' : 'Analysis',
+    design: isZh.value ? '选定方案提出' : 'Selected design',
+    solve: isZh.value ? '求解中提出' : 'Solving',
+  })[source] || source
 const taskLabel = (execution: string, acceptance: string, validity: string) => {
   if (validity === 'stale')
     return isZh.value ? '结果已失效，等待重算' : 'Stale, awaiting recomputation'

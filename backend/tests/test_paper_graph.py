@@ -33,7 +33,7 @@ from ai_system.graph.state import (
     ValidationProtocol,
 )
 from ai_system.research import ENGINE_VERSION
-from ai_system.research.models import Requirement, Assumption
+from ai_system.research.models import Requirement, Assumption, IssueReport
 from ai_system.research.planner import AmendmentSpec
 from ai_system.research.store import ResearchStore
 from ai_system.judge import Answers, ScoreAnswer
@@ -67,7 +67,7 @@ def _analysis() -> ProblemAnalysis:
 def _candidate(name: str) -> ModelCandidate:
     return ModelCandidate(
         name=name, method_keys=["arima", "regression"], idea="思路", formulation="$y_t = a y_{t-1}$",
-        steps=["读数据", "拟合"], assumptions=["序列平稳"], validation="残差检验",
+        steps=["读数据", "拟合"], assumptions=[], validation="残差检验",
     )
 
 
@@ -119,14 +119,12 @@ class _Structured:
                 ])
             return ClaimAudit()
         if self.schema is ResultReview:
-            # Q1 第一次审查要求返工；Q2 审查调用失败，报告应保留；其余直接通过
+            # Q1 第一次审查要求返工，随后重新审查通过；其余直接通过
             prompt = messages[-1].content
-            if "子问题 Q2" in prompt:
-                raise RuntimeError("网关错误")
             if "子问题 Q1" in prompt and not _Structured.reviewed_q1:
                 _Structured.reviewed_q1 = True
-                return ResultReview(sound=False, issues=["只用了一场比赛"], must_fix=["改用全部比赛重新估计"])
-            return ResultReview(sound=True)
+                return ResultReview(issues=[IssueReport(task_id="Q1", category="data", message="改用全部比赛重新估计")])
+            return ResultReview()
         raise AssertionError(self.schema)
 
 
@@ -295,8 +293,8 @@ def test_graph_end_to_end_offline(tmp_path):
     assert "留出集 AUC" in exploration["reason"]
 
     # 审查要求 Q1 返工一轮后通过；Q2 一次通过
-    assert [bool(r["must_fix"]) for r in result["solutions"]["Q1"]["reviews"]] == [True]
-    assert result["solutions"]["Q2"]["reviews"] == [] and result["solutions"]["Q2"]["summary"] == "完成，预测为 {{R:R1}}"
+    assert [bool(r["issues"]) for r in result["solutions"]["Q1"]["reviews"]] == [True, False]
+    assert not result["solutions"]["Q2"]["reviews"][-1]["issues"] and result["solutions"]["Q2"]["summary"] == "完成，预测为 {{R:R1}}"
 
     # 两个子问题都求解完成；编造值登记被拒绝，只登记了真实结果和图
     assert {k: v["status"] for k, v in result["solutions"].items()} == {"Q1": "completed", "Q2": "completed", "Q3": "completed"}
@@ -396,7 +394,7 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
     calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
     tagged = {(c["node"], c["label"]) for c in calls}
-    assert {("solve", "Q1"), ("solve", "Q2:review"), ("write", "abstract"), ("repair", "repair:abstract")} <= tagged
+    assert {("solve", "Q1"), ("solve", "Q2"), ("write", "abstract"), ("repair", "repair:abstract")} <= tagged
 
     # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
     first_thread = json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"]

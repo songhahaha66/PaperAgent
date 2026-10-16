@@ -66,7 +66,7 @@ async def observe(state, runtime):
     if complete:
         await ctx.set_stage("design", "completed")
     if blocked:
-        await ctx.set_stage("solve", "blocked", "存在未通过验收的任务或尝试预算已耗尽")
+        await ctx.set_stage("solve", "blocked", "存在未关闭的研究或审查问题、未验收任务，或尝试预算已耗尽")
     analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values() if t["kind"] != "verify"],
                 "requirements": snapshot["spec"]["requirements"],
                 "assumptions": [a for a in snapshot["assumptions"].values() if a["status"] != "retired"]}
@@ -91,6 +91,7 @@ def dispatch(state, runtime):
             "research_contract": {"requirements": [r for r in snapshot["spec"]["requirements"] if r["id"] in task["requirement_ids"]],
                 "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},
             "design": (state.get("designs") or {}).get(key),
+            "review_findings": [i for i in snapshot["issues"] if i["source"] == "local_review" and i["task_id"] == key and i["status"] not in {"resolved", "dismissed"}],
             "dependencies": {dep: snapshot["tasks"][dep]["report"] for dep in task["dependencies"]}}))
     return sends
 
@@ -163,7 +164,7 @@ async def execute(branch, runtime):
     ctx = runtime.context
     key = branch["subproblem"]["id"]
     try:
-        order = ctx.research.claim(key)
+        order = ctx.research.claim(key, review_required=ctx.max_review_rounds > 0 and branch["subproblem"].get("kind") != "writing")
     except ResearchConflict as exc:
         await ctx.events.stage(str(exc))
         return {}
@@ -173,32 +174,41 @@ async def execute(branch, runtime):
         local = worker_context(ctx, order)
         update = await solve(branch, SimpleNamespace(context=local))
         report = update["solutions"][key]
-        checks = [] if branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
+        checks = [] if report["status"] == "prepared" or branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
             local, report, key, branch["subproblem"].get("depends_on") or [],
             hypothesis=is_hypothesis_test(branch["subproblem"]), figure_required=needs_figure(branch["subproblem"]))
-        if report["status"] != "completed":
+        if report["status"] not in {"completed", "prepared"}:
             checks.append(report.get("error") or "求解未完成")
         results = [asdict(r) for r in local.registry.for_subproblem(key)]
-        for item in results:
+        reviews = report.get("reviews", [])
+        evidence = {item["id"]: item for review in reviews for item in review["evidence"]}
+        evidence.update({item["id"]: item for item in results})
+        for item in evidence.values():
             if item["path"]:
                 src = local.workspace / item["path"]
-                rel = f"outputs/research/{order.attempt_id}/{Path(item['path']).name}"
+                rel = f"outputs/research/{order.attempt_id}/{item['id']}_{Path(item['path']).name}"
                 target = ctx.workspace / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(src, target)
                 ctx.fs.register_file(rel, kind="image", source_run=item["run_id"], visibility="internal")
                 item["path"] = rel
+        for review in reviews:
+            review["evidence"] = [evidence[item["id"]] for item in review["evidence"]]
         # Immutable run IDs preserve existing grounding and evidence links.
         _copy_tree(local.workspace / "runs", ctx.workspace / "runs")
         for run_id, info in local.fs._manifest.get("runs", {}).items():
             ctx.fs._manifest.setdefault("runs", {})[run_id] = info
         ctx.fs._save_manifest()
         result = WorkerResult(order=order,
-            execution_status="succeeded" if report["status"] == "completed" else "failed",
+            execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
             acceptance="rejected" if checks else "accepted", report=report,
             design=(update.get("designs") or {}).get(key) or branch.get("design"),
             results=results, claims=[asdict(c) for c in local.registry.claims.values() if c.subproblem == key], issues=[IssueReport(task_id=key, category="evidence", message=message, evidence_refs=[r["id"] for r in results]) for message in checks]
-                + [IssueReport.model_validate(i) for i in report.get("research_issues", [])])
+                + [IssueReport.model_validate(i) for i in report.get("research_issues", [])],
+            reviews=report.get("reviews", []),
+            assumptions=[{**a, "source": source} for source, drafts in (
+                ("design", ((update.get("designs") or {}).get(key) or branch.get("design") or {}).get("chosen", {}).get("assumptions", [])),
+                ("solve", report.get("assumptions", []))) for a in drafts])
         receipt = ctx.research.commit(result)
         refresh_registry(ctx)
         if receipt["published"] and not checks:

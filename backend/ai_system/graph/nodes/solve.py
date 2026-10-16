@@ -12,6 +12,7 @@
 import json
 import logging
 import re
+from dataclasses import asdict
 from typing import Any, Dict, List, NamedTuple, Optional
 
 from langchain.agents import create_agent
@@ -36,11 +37,13 @@ from ..methods import describe
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from ..tracing import labelled, set_label
+from ...research.assumptions import unbound_assumptions
+from ...research.models import IssueReport, ReviewRecord
+from ...research.validation import report_fingerprint
 from .explore import explore, is_hypothesis_test, promotion_message
 from .review import (
     baseline_gaps,
     control_issues,
-    degenerate,
     downgrade_findings,
     feedback_message,
     needs_figure,
@@ -76,6 +79,8 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 至少完成方案中的检验或灵敏度分析，并登记相应结果。
 
 完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。
+若求解中发现必须新增的关键前提，填入assumptions，使用稳定key、statement和可证伪checks；已有契约前提不要重复创建或静默改写。
+新前提会先登记版本再按冻结契约重算；它不是原题事实，也不因代码跑通而被验证。
 每条主要结论都要写出依据的登记结果，并如实标注证据强度：检验不显著的就标「不显著」，不要把不显著的结果写成有效应。
 这些结论会和其他子问题的结论放在一起做一致性审查。"""
 
@@ -325,12 +330,18 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         # 按需设计：轮到这个子问题时才设计，候选方案能参考已经求解完的前序结论
         from .design import make_design  # 避免循环导入
 
-        record, _ = await make_design(ctx, branch)
+        if branch["subproblem"].get("kind") == "verify":
+            chosen = {"name": "独立复算固定验收", "method_keys": [], "idea": "从冻结输入独立复算争议检查，不引入新的建模前提。",
+                "formulation": "", "steps": ["读取冻结输入", "独立复算并登记指定指标"], "assumptions": [], "validation": "提交固定检查所需证据"}
+            record = {"methods": [], "candidates": [chosen], "scores": [{"total": None}], "chosen": chosen,
+                "chosen_index": 0, "critic": None, "critic_error": None}
+        else:
+            record, _ = await make_design(ctx, branch)
         branch = {**branch, "design": record}
     design = branch["design"]
     messages = None
     try:
-        if ctx.explore_top_k > 1:
+        if ctx.explore_top_k > 1 and branch["subproblem"].get("kind") != "verify" and not design.get("exploration"):
             try:
                 with labelled(f"{subproblem_id}:explore"):
                     exploration = await explore(ctx, branch)
@@ -345,6 +356,9 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             if winner.report is not None:
                 # 胜出分支连同对话历史继续，内核里的变量已经晋升到子问题名下
                 messages = winner.messages + [HumanMessage(content=promotion_message(exploration))]
+        if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
+            return {"solutions": {subproblem_id: {"status": "prepared", "reviews": []}},
+                    "designs": {subproblem_id: design}, "log": [f"prepare {subproblem_id}: register selected premises"]}
         await ctx.events.stage(f"{subproblem_id}：开始编码求解「{design['chosen']['name']}」")
         status, error, report, reviews = await _solve_loop(
             ctx, branch, run_log, messages or [HumanMessage(content=build_task(branch, ctx))]
@@ -354,7 +368,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         export_solution_code(ctx, subproblem_id, run_log)
 
     if not report:
-        # 没交报告也保留已登记的结果，写作阶段仍可使用
+        # 保留已登记结果供恢复和回查；未完成状态仍由提交器阻止验收。
         recorded = ctx.registry.for_subproblem(subproblem_id)
         report = SolveReport(
             summary="求解未正常结束，以下为已登记的结果。",
@@ -399,71 +413,49 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     report: Dict = {}
     reviews: List[Dict] = []
     structured = None
-    kept = None  # 最近一份有内容的报告
-    dropped = False
     result = None
     try:
         result = await run_agent(agent, messages, limit, fallback=fallback)
         structured = result.get("structured_response")
-        # 审查结果，必须修正的问题交回同一个循环（内核变量还在）。
-        # 模型审查之后再多一轮只看确定性检查（登记、引用、置换对照）：返工时模型常常补了计算却忘了改报告
-        rounds = ctx.max_review_rounds + 1 if ctx.max_review_rounds else 0
-        for round_index in range(rounds):
+        for round_index in range(ctx.max_review_rounds + 1):
             if structured is None:
                 break
-            current = structured.model_dump()
-            subproblem = branch["subproblem"]
-            fixes = report_issues(
-                ctx, current, subproblem_id, subproblem.get("depends_on") or [],
-                hypothesis=is_hypothesis_test(subproblem), figure_required=needs_figure(subproblem),
-            )
-            if round_index == ctx.max_review_rounds:
-                if not fixes:
-                    break
-                review = ResultReview(sound=False, must_fix=fixes)
-            else:
-                gaps = [f"{gap}请把相应结论改写为“相对基线没有额外提升”并标为不显著，或者改进模型后重新评估。"
-                        for gap in baseline_gaps(ctx, current)] if round_index == 0 else []
-                try:
-                    review = await review_solution(ctx, branch, current, run_log)
-                except Exception as exc:  # 审查失败不能丢掉已经交上来的报告
-                    logger.warning("审查 %s 失败，跳过审查: %s", subproblem_id, exc)
-                    if not fixes and not gaps:
-                        break
-                    review = ResultReview(sound=False)
-                if fixes or gaps:
-                    review.must_fix = fixes + gaps + review.must_fix
-                    review.sound = False
-            reviews.append(review.model_dump())
-            if not review.must_fix:
-                break
-            await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.must_fix)} 个必须修正的问题，返工中")
-            if not degenerate(current):
-                kept = structured
-            result = await run_agent(
-                agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit, fallback=fallback
-            )
-            structured = result.get("structured_response") or structured
-        if structured is not None and kept is not None and degenerate(structured.model_dump()):
-            # 返工后交了空报告：退回返工前那份有内容的报告，没解决的审查意见写进局限
-            structured = kept
-            dropped = True
-        if structured is None:
-            status = "incomplete"
-        elif not ctx.registry.for_subproblem(subproblem_id):
-            # 返工后仍一项结果都没登记：报告里的数字和引用都不可信，丢掉报告，按未完成交给写作
-            status, error = "incomplete", "没有登记任何结果"
-        else:
             report = structured.model_dump()
-            # 返工轮数用完仍未通过置换对照的、没有超过简单基线的，写进局限，写作时不能当作有效的预测结论
+            for finding in report.get("key_findings", []):
+                finding["statement"] = ctx.registry.ground_statement(subproblem_id, str(finding["statement"]))
             leaks = control_issues(ctx, report)
-            report["limitations"] = list(report.get("limitations") or []) + [
+            report["limitations"] = list(dict.fromkeys(report["limitations"] + [
                 f"预测效果没有通过对照检查，不能作为有效结论：{issue}" for issue in leaks
-            ] + baseline_gaps(ctx, report)
-            if dropped and reviews:
-                report["limitations"].append("审查意见没有在返工中解决：" + "；".join(reviews[-1].get("must_fix") or []))
+            ] + baseline_gaps(ctx, report)))
             if leaks:
                 downgrade_findings(ctx, report)
+            if unbound_assumptions(subproblem_id, report["assumptions"], branch.get("research_contract", {})):
+                break  # Register new premises before accepting/reviewing their conclusions.
+            if not ctx.max_review_rounds:
+                break
+            subproblem = branch["subproblem"]
+            fixes = [] if subproblem.get("kind") == "verify" else report_issues(
+                ctx, report, subproblem_id, subproblem.get("depends_on") or [],
+                hypothesis=is_hypothesis_test(subproblem), figure_required=needs_figure(subproblem))
+            prior = branch.get("review_findings", []) + [issue for r in reviews for issue in r["issues"]]
+            try:
+                review = await review_solution(ctx, {**branch, "review_findings": prior}, report, run_log)
+            except Exception as exc:
+                review = ResultReview(issues=[IssueReport(task_id=subproblem_id, category="service", message=f"局部审查未完成：{exc}")])
+            review.issues = [IssueReport(task_id=subproblem_id, category="evidence", message=message) for message in fixes] + review.issues
+            cited = {ref for i in review.issues for ref in i.evidence_refs}
+            reviews.append(ReviewRecord(report_hash=report_fingerprint(report), issues=review.issues,
+                evidence=[asdict(r) for r in ctx.registry.for_subproblem(subproblem_id) if r.id in cited]).model_dump())
+            if not review.issues or round_index == ctx.max_review_rounds or any(i.category == "service" for i in review.issues):
+                break
+            await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.issues)} 个问题，返工后重新核验")
+            result = await run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit, fallback=fallback)
+            structured = result.get("structured_response")
+            if structured is None:
+                status, error = "incomplete", "审查返工未提交完整报告"
+                break
+        if not report or not ctx.registry.for_subproblem(subproblem_id):
+            status, error = "incomplete", "没有提交完整报告或登记结果"
     except GraphRecursionError:
         status, error = "incomplete", f"超过 {ctx.max_solver_steps} 步仍未完成"
     except Exception as exc:
@@ -471,12 +463,6 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         status, error = "failed", str(exc)
     if result is not None:
         save_transcript(ctx, subproblem_id, result["messages"])
-    if not report and structured is not None and ctx.registry.for_subproblem(subproblem_id):
-        # 返工超出步数或出错时保留返工前交的报告：v2h 的 Q2 登记了 20 项结果，返工超步数后整份报告被丢掉，结论表里没有 Q2
-        report = structured.model_dump()
-        report["limitations"] = list(report.get("limitations") or []) + [
-            f"审查要求的返工没有完成（{error}），以下结论来自返工前的报告：" + "；".join((reviews[-1].get("must_fix") or [])[:3] if reviews else [])
-        ]
     return status, error, report, reviews
 
 

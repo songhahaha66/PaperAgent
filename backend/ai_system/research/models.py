@@ -56,6 +56,16 @@ class Assumption(Contract):
     checks: list[DomainCheck] = Field(default_factory=list, description="可证伪条件，无法操作化时留空并保留为待验证假设")
 
 
+class AssumptionDraft(Contract):
+    key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$", description="本任务内稳定的假设键；同一前提复用同一键")
+    statement: str = Field(min_length=1, description="实际计算或结论依赖的关键前提，不记录一般说明或用户给定事实")
+    checks: list[DomainCheck] = Field(default_factory=list, description="check.id使用本假设内稳定的局部键，系统分配全局编号；重复声明时复用原始局部键")
+
+
+class AssumptionProposal(AssumptionDraft):
+    source: Literal["design", "solve"]
+
+
 class IssueReport(Contract):
     task_id: str
     category: Literal["domain", "assumption", "model", "data", "evidence", "execution", "writing", "coverage", "service"]
@@ -71,6 +81,8 @@ class Issue(IssueReport):
     task_revision: int
     assumption_revision: int | None = None
     producer_attempt: str | None = None
+    resolution_attempt: str | None = None
+    source: str
     status: Literal["suspected", "confirmed", "repairing", "resolved", "dismissed", "inconclusive"]
     action: Literal["verify", "recompute", "retry", "rewrite"]
     blocking: bool = True
@@ -91,6 +103,12 @@ class ValidationRecord(Contract):
     protocol_hash: str
     checks: list[CheckResult]
     outcome: Literal["accepted", "rejected", "inconclusive"]
+
+
+class ReviewRecord(Contract):
+    report_hash: str
+    issues: list[IssueReport]
+    evidence: list[dict[str, Any]] = Field(default_factory=list, description="审查实际引用的本次尝试证据，保留返工前已被替换的值")
 
 
 class AssumptionChange(Contract):
@@ -137,6 +155,8 @@ class WorkOrder(Contract):
     lease: str
     input_refs: dict[str, str]
     protocol_hash: str
+    review_required: bool = False
+    review_issue_ids: list[str] = Field(default_factory=list)
 
 
 class WorkerResult(Contract):
@@ -148,6 +168,8 @@ class WorkerResult(Contract):
     results: list[dict[str, Any]] = Field(default_factory=list)
     claims: list[dict[str, Any]] = Field(default_factory=list)
     issues: list[IssueReport] = Field(default_factory=list)
+    reviews: list[ReviewRecord] = Field(default_factory=list)
+    assumptions: list[AssumptionProposal] = Field(default_factory=list)
 
 
 class ResearchConflict(ValueError):

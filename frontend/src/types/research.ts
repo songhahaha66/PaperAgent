@@ -47,6 +47,7 @@ export interface ResearchSnapshot {
     revision: number
     status: string
     task_ids: string[]
+    source?: string
   }[]
   validations?: {
     attempt_id: string
@@ -61,6 +62,7 @@ export interface ResearchSnapshot {
     blocking: boolean
     status: string
     action: string
+    source?: string
     evidence_refs: string[]
     assumption_id: string | null
   }[]

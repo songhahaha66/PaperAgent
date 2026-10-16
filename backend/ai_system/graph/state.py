@@ -9,7 +9,7 @@ import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, Field, model_validator
-from ..research.models import Requirement, Assumption, IssueReport
+from ..research.models import Contract, Requirement, Assumption, AssumptionDraft, IssueReport
 
 
 def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
@@ -65,7 +65,7 @@ class ModelCandidate(BaseModel):
     idea: str = Field(min_length=1, description="核心思路，2~4 句")
     formulation: str = Field(description="模型的数学表述要点：变量、目标/方程、约束，可用 LaTeX")
     steps: List[str] = Field(min_length=1, description="求解步骤，每步能用代码实现")
-    assumptions: List[str] = Field(default_factory=list, description="本方案额外需要的假设")
+    assumptions: List[AssumptionDraft] = Field(default_factory=list, description="本方案实际依赖的新增关键前提；已有研究契约中的前提不要重复创建")
     validation: str = Field(description="如何检验结果和做灵敏度分析")
 
     @model_validator(mode="after")
@@ -123,6 +123,7 @@ class SolveReport(BaseModel):
     key_findings: List[Finding] = Field(description="主要结论，每条写明依据的登记结果和证据强度")
     sensitivity: str = Field(default="", description="灵敏度分析或检验的做法与结论")
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
+    assumptions: List[AssumptionDraft] = Field(default_factory=list, description="求解中新发现且实际采用的关键前提；先登记冻结后重算，不能把未登记前提当已验证事实")
     requirement_evidence: List[RequirementEvidence] = Field(default_factory=list, description="每项本任务要求的证据引用；必须使用自己或前序任务的实际登记编号")
     research_issues: List[IssueReport] = Field(default_factory=list, description="发现上游模型、数据或假设可能有错时提交带证据的疑点；不要擅自沿用错误前提")
     controls: List[NegativeControl] = Field(
@@ -172,10 +173,8 @@ class ClaimAudit(BaseModel):
     issues: List[ClaimIssue] = Field(default_factory=list, description="没有不一致则为空")
 
 
-class ResultReview(BaseModel):
-    sound: bool = Field(description="结果是否可以直接用于写作")
-    issues: List[str] = Field(default_factory=list, description="发现的问题，每条写清依据")
-    must_fix: List[str] = Field(default_factory=list, description="必须回去重做或补充的事项，每条可直接执行；没有则为空")
+class ResultReview(Contract):
+    issues: List[IssueReport] = Field(default_factory=list, description="当前仍未解决的实质问题；逐项核对先前意见，全部有依据地解决后留空。填写目标任务、证据和适用检查，不把怀疑当事实")
 
 
 # ----------------------------------------------------------------------
@@ -215,6 +214,7 @@ class BranchInput(TypedDict, total=False):
     """Send 给单个子问题分支的输入"""
 
     research_contract: Dict[str, Any]
+    review_findings: List[Dict[str, Any]]
     subproblem: Dict[str, Any]
     analysis: Dict[str, Any]
     data_profile: str

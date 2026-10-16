@@ -66,7 +66,7 @@ def _design_text(design: Dict) -> str:
     chosen = design["chosen"]
     return (
         f"方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"
-        f"假设：{'；'.join(chosen.get('assumptions') or [])}\n检验：{chosen['validation']}"
+        f"假设：{'；'.join(a['statement'] for a in chosen.get('assumptions') or [])}\n检验：{chosen['validation']}"
     )
 
 
@@ -175,9 +175,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             )
         )
     if key == "assumptions":
-        extra = [a for sp in subproblems for a in (state["designs"].get(sp["id"], {}).get("chosen", {}).get("assumptions") or [])]
         return "撰写「模型假设」，合并去重后只保留对建模最关键的 5~8 条，编号列出，每条附一句理由。\n\n" + "\n".join(
-            f"- {a}" for a in [a["statement"] for a in analysis["assumptions"]] + extra
+            f"- {a}" for a in [a["statement"] for a in analysis["assumptions"]]
         )
     solved_text = "\n\n".join(clip(sections.get(solve_key(sp["id"]), ""), 4000) for sp in subproblems)
     if key == "symbols":

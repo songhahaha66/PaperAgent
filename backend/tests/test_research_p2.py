@@ -251,7 +251,7 @@ class ClosedLoopModel(FakeModel):
                 if schema is ClaimAudit:
                     return ClaimAudit(issues=[])
                 if schema is ResultReview:
-                    return ResultReview(sound=True)
+                    return ResultReview()
                 return await FakeModel.with_structured_output(outer, schema, **kwargs).ainvoke(messages)
         return Bound()
 

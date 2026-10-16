@@ -346,7 +346,11 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
         f"# 选定方案\n{branch['design']['chosen']['name']}：{branch['design']['chosen']['idea']}\n\n"
         f"# 求解报告\n{report}\n\n"
         f"# 登记结果\n{ctx.registry.to_prompt_table(subproblem['id'])}\n\n"
-        f"# 最近的代码\n{code or '（无）'}\n\n{CHECKLIST}"
+        f"# 最近的代码\n{code or '（无）'}\n\n{CHECKLIST}\n\n"
+        f"# 研究契约\n{branch.get('research_contract', {})}\n"
+        f"# 必须逐项重新核对的先前意见\n{branch.get('review_findings', [])}\n"
+        "只返回仍未解决的问题，填写目标任务、实际证据引用、适用的check_ids和assumption_id。"
+        "问题没有验证依据时保留疑点；不能仅因求解者称已修复就清空。全部有依据地解决后issues留空。"
     )
 
 
@@ -357,7 +361,7 @@ async def review_solution(ctx: GraphContext, branch: BranchInput, report: Dict, 
 
 
 def feedback_message(review: ResultReview) -> str:
-    items = "\n".join(f"{i + 1}. {item}" for i, item in enumerate(review.must_fix))
+    items = "\n".join(f"{i + 1}. [{item.category}] {item.task_id}：{item.message}" for i, item in enumerate(review.issues))
     return (
         "评审老师审查了你的结果，以下问题必须修正：\n"
         f"{items}\n\n"

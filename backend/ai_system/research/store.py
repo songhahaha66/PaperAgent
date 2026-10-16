@@ -14,8 +14,9 @@ from contextlib import contextmanager, closing
 from pathlib import Path
 
 from . import ENGINE_VERSION
-from .models import PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
-from .validation import validate_spec, protocol, evaluate, fingerprint
+from .models import Assumption, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
+from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint
+from .assumptions import assumption_id, premise_definition
 
 DB_PATH = ".system/research.sqlite"
 
@@ -125,12 +126,13 @@ class ResearchStore:
                      "research_id": self.research_id, "revision": 1, "commit_seq": 0,
                      "spec": {"requirement": requirement, "amendments": [],
                               "requirements": [{**r.model_dump(), "revision": 1} for r in requirements]},
-                     "assumptions": {a.id: {**a.model_dump(), "revision": 1, "status": "active"} for a in assumptions},
+                     "assumptions": {a.id: {**a.model_dump(), "revision": 1, "status": "active", "source": "analysis", "producer_attempt": None} for a in assumptions},
                      "assumption_history": [], "validations": [],
                      "tasks": tasks, "attempts": {}, "evidence": {}, "claims": {},
                      "sections": {}, "issues": [], "outcome": "running", "max_attempts": max_attempts,
                      "planning_calls": 0, "proposal_hashes": [], "max_total_attempts": len(tasks) * max_attempts + 6}
             self._validate_contracts(state)
+            self._bind_assumption_inputs(state)
             self._save(db, state, "initialized", {"spec": state["spec"], "tasks": tasks})
             return state
 
@@ -191,7 +193,7 @@ class ResearchStore:
                 self._save(db, state, "inputs_changed", {"affected": affected})
             return state
 
-    def claim(self, task_id: str) -> WorkOrder:
+    def claim(self, task_id: str, *, review_required=False) -> WorkOrder:
         files = self.file_inputs()
         with self._transaction() as db:
             state = self._read(db)
@@ -211,7 +213,9 @@ class ResearchStore:
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
-                              protocol_hash=digest(protocol(state, task_id)))
+                              protocol_hash=digest(protocol(state, task_id)), review_required=review_required,
+                              review_issue_ids=[i["id"] for i in state["issues"] if i["source"] == "local_review" and
+                                  i["task_id"] == task_id and i["status"] not in {"resolved", "dismissed"}])
             state["attempts"][order.attempt_id] = {**order.model_dump(), "execution_status": "running", "started_at": time.time()}
             task.update(execution_status="running", active_attempt=order.attempt_id)
             self._save(db, state, "claimed", order.model_dump())
@@ -229,7 +233,7 @@ class ResearchStore:
                 return attempt["commit"]
             order = result.order
             task = state["tasks"][order.task_id]
-            if any(attempt[key] != getattr(order, key) for key in ("task_id", "revision", "lease", "input_digest", "input_refs", "protocol_hash")):
+            if any(attempt[key] != getattr(order, key) for key in ("task_id", "revision", "lease", "input_digest", "input_refs", "protocol_hash", "review_required", "review_issue_ids")):
                 raise ResearchConflict("执行权或冻结输入不匹配")
             current = (task["revision"] == order.revision and task["active_attempt"] == order.attempt_id
                        and attempt["execution_status"] == "running"
@@ -241,24 +245,37 @@ class ResearchStore:
             if current:
                 if result.acceptance == "accepted" and result.execution_status != "succeeded":
                     raise ValueError("执行失败的结果不能通过验收")
-                # Evidence identifiers never point at a different value later.
-                for item in result.results:
+                # Audited intermediate values remain historical evidence even
+                # when the worker's registry replaced them during local repair.
+                all_evidence = {}
+                for item in [*result.results, *[e for r in result.reviews for e in r.evidence]]:
+                    if item["id"] in all_evidence and all_evidence[item["id"]] != item:
+                        raise ValueError("同一证据编号不能对应不同内容")
+                    all_evidence[item["id"]] = item
+                for item in all_evidence.values():
                     if item["id"] in state["evidence"] or item["subproblem"] != order.task_id:
                         raise ValueError("结果编号重复或不属于当前任务")
                 ids = {r["id"] for r in result.results}
                 frozen = {v for k, v in order.input_refs.items() if k.startswith("task:")}
-                input_evidence = {rid for rid, entry in state["evidence"].items() if entry["producer_attempt"] in frozen}
+                input_evidence = {rid for rid, entry in state["evidence"].items() if entry["producer_attempt"] in frozen and entry["active"]}
                 for claim in result.claims:
                     if claim["id"] in state["claims"] or claim["subproblem"] != order.task_id:
                         raise ValueError("结论编号重复或不属于当前任务")
                     if not set(claim.get("evidence", [])) <= (ids | input_evidence):
                         raise ValueError("结论引用了不可用证据")
-                for item in result.results:
+                for item in all_evidence.values():
                     state["evidence"][item["id"]] = {"payload": item, "content_hash": digest(item),
-                        "artifact_hash": self._artifact_hash(item), "producer_attempt": order.attempt_id}
+                        "artifact_hash": self._artifact_hash(item), "producer_attempt": order.attempt_id, "active": item["id"] in ids}
+                introduced = self._register_assumptions(state, result) if result.execution_status == "succeeded" else []
                 for item in result.claims:
                     state["claims"][item["id"]] = {"payload": item, "producer_attempt": order.attempt_id,
-                        "assumption_refs": {aid: state["assumptions"][aid]["revision"] for aid in task["assumption_ids"]}}
+                        "assumption_refs": {k.removeprefix("assumption:"): int(v) for k, v in order.input_refs.items() if k.startswith("assumption:")}}
+                review_clear = self._commit_reviews(state, result, set(all_evidence) | input_evidence, staging=bool(introduced))
+                if introduced:
+                    attempt.update(acceptance="inconclusive", validity="stale", introduced_assumptions=introduced)
+                    receipt.update(published=False, reason="关键假设已登记，按冻结契约重新执行")
+                    self._save(db, state, "assumptions_registered", {"attempt_id": order.attempt_id, "assumptions": introduced})
+                    return receipt
                 validation = evaluate(state, order.task_id, result.results) if result.execution_status == "succeeded" else ValidationRecord(
                     protocol_hash=order.protocol_hash, checks=[], outcome="inconclusive")
                 attempt["validation"] = validation.model_dump()
@@ -295,14 +312,15 @@ class ResearchStore:
                 if task.get("verifies_issue"):
                     issue = next(i for i in state["issues"] if i["id"] == task["verifies_issue"])
                     issue["evidence_refs"] = sorted(set(issue["evidence_refs"]) | {rid for c in validation.checks for rid in c.evidence_refs})
-                    if validation.outcome == "rejected":
+                    if validation.outcome == "rejected" and review_clear:
                         self._confirm_issue(state, issue)
                         # Invalidating the disputed task also invalidates its investigation
                         # dependency. Preserve this completed counterexample as history.
                         task.update(acceptance="accepted", validity="current", active_attempt=order.attempt_id,
                                     execution_status="succeeded")
-                    elif validation.outcome == "accepted" and result.execution_status == "succeeded":
+                    elif validation.outcome == "accepted" and result.execution_status == "succeeded" and review_clear:
                         issue["status"] = "dismissed"
+                        issue["resolution_attempt"] = order.attempt_id
                         task["acceptance"] = "accepted"
                     else:
                         issue["status"] = "inconclusive"
@@ -320,7 +338,7 @@ class ResearchStore:
                         issue = self._record_issue(state, report, "confirmed", producer_attempt=order.attempt_id)
                         self._confirm_issue(state, issue, refute=check.outcome == "failed")
                 attempt["acceptance"] = task["acceptance"] if task.get("verifies_issue") else acceptance
-                self._resolve_repairs(state)
+                self._resolve_repairs(state, order.attempt_id)
                 if any(i["blocking"] and i["status"] not in {"resolved", "dismissed"} for i in state["issues"]):
                     state["outcome"] = "blocked"
             else:
@@ -332,8 +350,83 @@ class ResearchStore:
             self._save(db, state, "attempt_committed", receipt)
             return receipt
 
+    def _register_assumptions(self, state, result):
+        """Stage newly adopted premises; no result is accepted under unfrozen inputs."""
+        if not result.assumptions:
+            return []
+        root = result.order.task_id
+        if state["tasks"][root]["kind"] != "compute":
+            raise ValueError("验证和写作任务不能引入新的建模前提")
+        scope = {root}
+        while True:
+            more = {k for k, t in state["tasks"].items() if t["kind"] != "verify" and set(t["dependencies"]) & scope}
+            if more <= scope:
+                break
+            scope |= more
+        introduced, seen = [], {}
+        for proposal in result.assumptions:
+            aid = assumption_id(root, proposal.key)
+            definition = premise_definition(root, proposal)
+            if aid in seen:
+                if seen[aid] != definition:
+                    raise ValueError("同次提交的假设键冲突")
+                continue
+            seen[aid] = definition
+            known = state["assumptions"].get(aid)
+            if known:
+                if "assumption:" + aid not in result.order.input_refs:
+                    raise ResearchConflict("已有假设不在本次冻结输入中")
+                if any(known[k] != v for k, v in definition.items()) or known["status"] != "active":
+                    raise ResearchConflict("不能静默覆盖或复活已有假设，必须通过问题与计划修订")
+                continue
+            state["assumptions"][aid] = {"id": aid, **definition, "task_ids": [root, *sorted(scope - {root})],
+                "revision": 1, "status": "active", "source": proposal.source, "producer_attempt": result.order.attempt_id}
+            introduced.append(aid)
+        if not introduced:
+            return []
+        for key in scope:
+            task = state["tasks"][key]
+            task["assumption_ids"] += [aid for aid in introduced if aid not in task["assumption_ids"]]
+            task["revision"] += 1
+        self._validate_contracts(state)
+        self._invalidate(state, scope, "新增关键假设，需要按冻结契约重算")
+        state["tasks"][root]["design"] = result.design
+        state["revision"] += 1
+        return introduced
+
+    def _commit_reviews(self, state, result, available, *, staging):
+        order = result.order
+        recorded = []
+        allowed = available | {ref for i in state["issues"] if i["id"] in order.review_issue_ids for ref in i["evidence_refs"]}
+        for review in result.reviews:
+            for report in review.issues:
+                if not set(report.evidence_refs) <= allowed:
+                    raise ValueError("局部审查引用了冻结上下文之外的证据")
+                issue = self._record_issue(state, report, "confirmed" if report.category == "service" else "suspected",
+                    producer_attempt=order.attempt_id, source="local_review",
+                    target_revision=order.revision if report.task_id == order.task_id else None)
+                issue["blocking"] = True
+                recorded.append(issue)
+        if staging or result.execution_status != "succeeded":
+            return
+        fresh = bool(result.reviews and result.reviews[-1].report_hash == report_fingerprint(result.report))
+        if order.review_required and not fresh:
+            self._record_issue(state, IssueReport(task_id=order.task_id, category="service", message="缺少当前报告的完整局部审查"),
+                "confirmed", producer_attempt=order.attempt_id, source="local_review")
+        if fresh:
+            # Successful auditing closes service faults; scientific findings close
+            # only when the current report has been rechecked with no open issues.
+            clear = not result.reviews[-1].issues
+            for issue in [*recorded, *[i for i in state["issues"] if i["id"] in order.review_issue_ids]]:
+                if issue["source"] != "local_review" or issue["action"] == "recompute" or issue["task_id"] != order.task_id:
+                    continue
+                if clear or issue["category"] == "service" and not any(r.category == "service" for r in result.reviews[-1].issues):
+                    issue["status"] = "resolved"
+                    issue["resolution_attempt"] = order.attempt_id
+        return (fresh and not result.reviews[-1].issues) or (not order.review_required and not result.reviews)
+
     @staticmethod
-    def _record_issue(state, report, status, producer_attempt=None):
+    def _record_issue(state, report, status, producer_attempt=None, source="worker", target_revision=None):
         if report.task_id not in state["tasks"]:
             raise ValueError("问题指向未知任务")
         task = state["tasks"][report.task_id]
@@ -342,14 +435,15 @@ class ResearchStore:
             raise ValueError("问题引用了未知证据")
         if report.assumption_id and report.assumption_id not in state["assumptions"]:
             raise ValueError("问题指向未知假设")
-        identity = digest({**report.model_dump(), "revision": task["revision"]})[:24]
+        revision = target_revision if target_revision is not None else task["revision"]
+        identity = digest({**report.model_dump(), "revision": revision, "source": source})[:24]
         previous = next((i for i in state["issues"] if i["id"] == identity), None)
         if previous:
-            if report.category in {"writing", "service"} and previous["status"] in {"resolved", "dismissed"}:
+            if (report.category in {"writing", "service"} or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed"}:
                 previous["status"] = status
             return previous
-        issue = Issue(**report.model_dump(), id=identity, task_revision=task["revision"],
-            producer_attempt=producer_attempt, status=status,
+        issue = Issue(**report.model_dump(), id=identity, task_revision=revision,
+            producer_attempt=producer_attempt, status=status, source=source,
             assumption_revision=state["assumptions"][report.assumption_id]["revision"] if report.assumption_id else None,
             action="retry" if report.category in {"execution", "service"} else "rewrite" if report.category == "writing" else "verify",
             blocking=report.category != "writing").model_dump()
@@ -369,23 +463,26 @@ class ResearchStore:
         issue["action"] = "recompute"
 
     @staticmethod
-    def _resolve_repairs(state):
+    def _resolve_repairs(state, resolution_attempt):
         for issue in state["issues"]:
             if issue["status"] != "repairing":
                 continue
+            if issue["source"] == "local_review" and issue["action"] != "recompute":
+                continue  # Only a fresh review or an independent check closes these findings.
             if all(state["tasks"][key]["acceptance"] == "accepted" and
                    state["tasks"][key]["validity"] == "current" and state["tasks"][key]["revision"] >= revision
                    for key, revision in issue["repair_targets"].items()):
                 issue["status"] = "resolved"
+                issue["resolution_attempt"] = resolution_attempt
 
     def report_issues(self, reports, source):
         with self._transaction() as db:
             state = self._read(db)
             if source == "sections":
                 for issue in state["issues"]:
-                    if issue["category"] == "writing" and issue.get("section") != "paper":
+                    if issue["source"] == "sections" and issue["category"] == "writing" and issue.get("section") != "paper":
                         issue["status"] = "resolved"
-            recorded = [self._record_issue(state, report, "confirmed" if report.category in {"writing", "service"} else "suspected")
+            recorded = [self._record_issue(state, report, "confirmed" if report.category in {"writing", "service"} else "suspected", source=source)
                         for report in reports]
             self._save(db, state, "issues_reported", {"source": source, "issues": recorded})
             return [i for i in recorded if i["status"] not in {"resolved", "dismissed"}]
@@ -402,6 +499,10 @@ class ResearchStore:
             changed = False
             for issue in state["issues"]:
                 if issue["status"] != "suspected" or any(t.get("verifies_issue") == issue["id"] for t in state["tasks"].values()):
+                    continue
+                if issue["source"] == "local_review" and not issue["check_ids"]:
+                    issue["status"] = "inconclusive"
+                    changed = True
                     continue
                 candidates = []
                 for key, original in state["tasks"].items():
@@ -436,7 +537,7 @@ class ResearchStore:
     def _active_registry(state):
         accepted = {t["active_attempt"] for t in state["tasks"].values()
                     if t["kind"] != "verify" and t["acceptance"] == "accepted" and t["validity"] == "current"}
-        results = [e["payload"] for e in state["evidence"].values() if e["producer_attempt"] in accepted]
+        results = [e["payload"] for e in state["evidence"].values() if e["producer_attempt"] in accepted and e["active"]]
         claims = [c["payload"] for c in state["claims"].values() if c["producer_attempt"] in accepted]
         return {"results": results, "claims": claims, "results_by_id": {r["id"]: r for r in results}}
 
@@ -509,7 +610,7 @@ class ResearchStore:
                     raise ValueError("假设作用范围包含未知任务")
                 state["assumption_history"].append(dict(previous))
                 assumption_roots |= set(previous["task_ids"]) | set(change.task_ids)
-                state["assumptions"][change.assumption_id] = {"id": change.assumption_id, "revision": previous["revision"] + 1,
+                state["assumptions"][change.assumption_id] = {**previous, "id": change.assumption_id, "revision": previous["revision"] + 1,
                     "statement": change.statement, "task_ids": change.task_ids, "checks": [c.model_dump() for c in change.checks], "status": change.status}
             ids = [c.task_id for c in patch.changes]
             if len(set(ids)) != len(ids):
@@ -552,6 +653,7 @@ class ResearchStore:
                 if key in assumption_roots and key not in ids:
                     task["revision"] += 1
             validate_dependencies(state["tasks"])
+            self._bind_assumption_inputs(state)
             self._validate_contracts(state)
             affected = self._invalidate(state, set(ids) | assumption_roots, patch.reason)
             changed_assumptions = {change.assumption_id for change in patch.assumptions}
@@ -584,11 +686,23 @@ class ResearchStore:
         return any(ResearchStore._reaches(state, upstream, dep) for dep in state["tasks"][target]["dependencies"])
 
     @staticmethod
+    def _bind_assumption_inputs(state):
+        bound = {}
+        def visit(key):
+            if key not in bound:
+                own = {aid for aid, a in state["assumptions"].items() if key in a["task_ids"] and a["status"] != "retired"}
+                bound[key] = sorted(own | {aid for dep in state["tasks"][key]["dependencies"] for aid in visit(dep)})
+            return bound[key]
+        for key, task in state["tasks"].items():
+            if task["kind"] != "verify":
+                task["assumption_ids"] = visit(key)
+
+    @staticmethod
     def _validate_contracts(state):
         regular = [t["subproblem"] for t in state["tasks"].values() if t["kind"] != "verify"]
         analysis = {"subproblems": regular,
             "requirements": [{k: v for k, v in r.items() if k != "revision"} for r in state["spec"]["requirements"]],
-            "assumptions": [{k: v for k, v in a.items() if k not in {"revision", "status"}}
+            "assumptions": [{k: v for k, v in a.items() if k in Assumption.model_fields}
                             for a in state["assumptions"].values()]}
         validate_spec(state["spec"]["requirement"] + "\n" + "\n".join(state["spec"]["amendments"]), analysis)
         for task in state["tasks"].values():
@@ -671,12 +785,14 @@ class ResearchStore:
                         issue["status"] = "suspected"
             pending = {key for key, task in state["tasks"].items()
                        if not task["retired"] and (task["acceptance"] != "accepted" or task["validity"] != "current")}
+            pending |= {i["task_id"] for i in state["issues"] if i["source"] == "local_review" and
+                        i["status"] not in {"resolved", "dismissed"} and i["action"] != "recompute"}
             for attempt in state["attempts"].values():
                 if attempt["execution_status"] == "running":
                     attempt["execution_status"] = "cancelled"
             self._invalidate(state, pending, "从已提交业务状态恢复")
             for issue in state["issues"]:
-                if issue["category"] == "service":
+                if issue["category"] == "service" and issue["source"] != "local_review":
                     issue["status"] = "resolved"  # The graph will rerun the failed audit before delivery.
                 elif issue["action"] == "retry" and issue["status"] == "confirmed":
                     issue["status"] = "repairing"

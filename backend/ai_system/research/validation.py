@@ -10,6 +10,10 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def report_fingerprint(report):
+    return fingerprint({k: v for k, v in report.items() if k not in {"status", "error", "reviews"}})
+
+
 def validate_spec(source, analysis):
     tasks = {sp["id"] for sp in analysis["subproblems"]}
     requirements = [Requirement.model_validate(r) for r in analysis["requirements"]]
@@ -67,7 +71,7 @@ def evaluate(state, task_id, results):
     task = state["tasks"][task_id]
     current_attempts = {t["active_attempt"] for t in state["tasks"].values()
                         if t["acceptance"] == "accepted" and t["validity"] == "current"}
-    available = [entry["payload"] for entry in state["evidence"].values() if entry["producer_attempt"] in current_attempts]
+    available = [entry["payload"] for entry in state["evidence"].values() if entry["producer_attempt"] in current_attempts and entry["active"]]
     available += results
     checks = []
     for rule in rules:

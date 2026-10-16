@@ -80,6 +80,7 @@ async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
     prompt = (
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
+        f"# 已登记的要求与假设\n{json.dumps(branch.get('research_contract', {}), ensure_ascii=False)}\n\n"
         f"# 方法库\n{methods_catalog()}\n\n"
         "从方法库中挑选 2~4 个最适合这个子问题的方法 key（可以组合使用）。"
     )
@@ -102,7 +103,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         f"# 参考方法\n{describe(method_keys) or '（自行选择）'}\n\n"
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
-        + f"请给出 {ctx.n_candidates} 个候选方案。"
+        + f"请给出 {ctx.n_candidates} 个候选方案。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
     )
     result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt))
     candidates = [c.model_dump() for c in result.candidates][: ctx.n_candidates]
