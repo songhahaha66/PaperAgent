@@ -328,15 +328,15 @@ onUnmounted(() => {
 }
 .header-title h2 {
   font-family: var(--td-font-family);
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.4px;
   margin: 0;
   color: #262626;
 }
 .header-logo {
-  width: 22px;
-  height: 26px;
+  width: 30px;
+  height: 36px;
   object-fit: contain;
   order: -1;
 }
@@ -357,8 +357,8 @@ onUnmounted(() => {
   min-height: 72px;
 }
 .header-logo-small {
-  width: 25px;
-  height: 29px;
+  width: 30px;
+  height: 34px;
   object-fit: contain;
 }
 .sidebar-collapsed .sidebar-header {
@@ -622,12 +622,12 @@ onUnmounted(() => {
   gap: 8px;
   color: #333;
   text-decoration: none;
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 600;
 }
 .mobile-brand img {
-  width: 19px;
-  height: 23px;
+  width: 24px;
+  height: 28px;
   object-fit: contain;
 }
 .mobile-account {

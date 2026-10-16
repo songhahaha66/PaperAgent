@@ -35,7 +35,7 @@
                 ? '输入研究题目，或添加题目与数据文件…'
                 : 'Describe your research, or attach a question and data…'
             "
-            :autosize="{ minRows: 3, maxRows: 10 }"
+            :autosize="{ minRows: 2, maxRows: 10 }"
             :disabled="creating"
             :aria-label="ui.question"
             class="research-input"
@@ -50,7 +50,7 @@
               accept=".csv,.tsv,.xls,.xlsx,.json,.pdf,.doc,.docx,.tex,.txt,.zip,.png,.jpg,.jpeg,.gif,.webp"
               @change="addAttachments"
             />
-            <t-tooltip :content="ui.attachments"
+            <t-tooltip :content="ui.fileHint"
               ><t-button
                 theme="default"
                 variant="text"
@@ -68,6 +68,8 @@
               class="layout-button"
               :disabled="creating"
               :aria-expanded="layoutOpen"
+              aria-controls="composer-layout-settings"
+              :aria-label="ui.template"
               @click="layoutOpen = !layoutOpen"
               ><t-icon name="file-copy" /><span>{{ ui.template }}</span
               ><t-icon :name="layoutOpen ? 'chevron-up' : 'chevron-down'"
@@ -97,7 +99,7 @@
                 ><t-icon name="arrow-up" /></t-button
             ></t-tooltip>
           </div>
-          <div v-if="layoutOpen" class="layout-settings">
+          <div v-if="layoutOpen" id="composer-layout-settings" class="layout-settings">
             <div>
               <label>{{ ui.template }}</label
               ><t-select
@@ -125,13 +127,11 @@
           :message="creationError"
           class="creation-error"
         />
-        <div class="composer-meta">
-          <span>{{ isZh ? '支持 CSV、Excel、PDF、Word 等' : 'CSV, Excel, PDF, Word & more' }}</span
-          ><router-link to="/api-config"
-            ><span :class="['readiness-dot', { ready: modelsReady }]" />{{
-              modelsReady ? ui.ready : ui.notReady
-            }}</router-link
-          >
+        <div v-if="modelConfigLoaded && !modelsReady" class="composer-meta">
+          <router-link to="/api-config">
+            <t-icon name="setting" />{{ isZh ? '配置模型连接' : 'Set up a model connection' }}
+            <t-icon name="chevron-right" />
+          </router-link>
         </div>
         <div class="suggestions">
           <button :disabled="creating" @click="fillExample">
@@ -186,6 +186,7 @@ const recentWorks = computed(() => historyStore.works.slice(0, 3))
 const loadingTemplates = ref(false),
   creating = ref(false),
   modelsReady = ref(false),
+  modelConfigLoaded = ref(false),
   creationError = ref('')
 const formats = computed(() => [
   { value: 'latex' as const, label: ui.value.pdf, hint: ui.value.pdfHint, icon: 'file-pdf' },
@@ -300,6 +301,8 @@ onMounted(async () => {
     )
   } catch {
     modelsReady.value = false
+  } finally {
+    modelConfigLoaded.value = true
   }
 })
 </script>
@@ -330,43 +333,35 @@ onMounted(async () => {
   font-weight: 500;
   color: var(--td-text-color-primary);
 }
-.home-header :deep(.language-switcher) {
-  border: 0;
-  background: transparent;
-  color: var(--td-text-color-secondary);
-  font-size: 13px;
-}
 .home-content {
   width: calc(100% - 80px);
-  max-width: 780px;
+  max-width: 760px;
   margin: clamp(44px, 13vh, 140px) auto 64px;
 }
 .home-content h1 {
   font-family: var(--td-font-family);
-  font-size: 30px;
-  font-weight: 600;
+  font-size: 29px;
+  font-weight: 500;
   line-height: 1.5;
   text-align: center;
-  margin: 0 0 28px;
+  margin: 0 0 30px;
   color: var(--td-text-color-primary);
   letter-spacing: -0.4px;
 }
 .research-composer {
-  border: 1px solid #d9dedd;
-  border-radius: 24px;
-  background: #fcfcfc;
-  box-shadow: 0 4px 18px #00000007;
+  border: 1px solid #daddda;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 2px 8px #00000005;
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
   overflow: hidden;
-  padding: 7px 10px 10px;
+  padding: 8px 12px 12px;
 }
 .research-composer:focus-within {
-  border-color: #9db5a8;
-  box-shadow:
-    0 0 0 3px #16865d08,
-    0 4px 18px #00000007;
+  border-color: #9daf9f;
+  box-shadow: 0 0 0 2px #16865d0a;
 }
 .research-input {
   width: 100%;
@@ -376,13 +371,13 @@ onMounted(async () => {
   box-shadow: none !important;
   background: transparent !important;
   border-radius: 0 !important;
-  padding: 12px 12px 10px;
+  padding: 12px 10px 8px;
   font-size: 16px;
-  line-height: 1.8;
+  line-height: 1.65;
   resize: none;
 }
 .research-input :deep(.t-textarea__inner::placeholder) {
-  color: #818181;
+  color: #858a86;
   font-size: 15px;
 }
 .research-input :deep(.t-textarea__inner:focus-visible) {
@@ -391,29 +386,28 @@ onMounted(async () => {
 .composer-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 9px 0 0;
-  min-height: 46px;
-  border-top: 1px solid #eceeed;
+  gap: 8px;
+  padding: 4px 0 0;
+  min-height: 40px;
 }
 .composer-toolbar .attach-button {
   width: 36px;
   height: 36px;
   color: #333;
-  font-size: 23px;
+  font-size: 20px;
   flex-shrink: 0;
 }
 .composer-toolbar .layout-button {
-  font-size: 12px;
-  color: #555;
-  height: 34px;
-  padding: 0 9px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #555b56;
+  height: 36px;
+  padding: 0 10px;
 }
 .layout-button :deep(.t-button__text) {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
 }
 .layout-button .t-icon {
   font-size: 15px;
@@ -425,15 +419,17 @@ onMounted(async () => {
   flex: 1;
 }
 .format-select {
-  width: 126px;
+  width: 120px;
   flex-shrink: 0;
 }
 .format-select :deep(.t-input) {
   background: transparent !important;
   border-radius: 18px;
-  color: #4d4d4d;
+  color: #555b56;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
+  height: 36px;
+  min-height: 36px;
 }
 .format-select :deep(.t-input:hover) {
   background: #f6f6f6 !important;
@@ -446,13 +442,13 @@ onMounted(async () => {
   height: 36px;
   min-width: 36px;
   flex-shrink: 0;
-  margin: 0 2px 0 5px;
-  font-size: 22px;
+  margin: 0 0 0 2px;
+  font-size: 20px;
 }
 .composer-toolbar .start-button.t-is-disabled {
-  background: #eee;
-  color: #aaa;
-  border-color: #eee;
+  background: #edf0ed;
+  color: #a0a7a1;
+  border-color: #edf0ed;
 }
 .attachment-chips {
   display: flex;
@@ -489,33 +485,19 @@ onMounted(async () => {
 }
 .composer-meta {
   display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: center;
-  padding: 14px 15px 0;
-  color: #777;
+  justify-content: flex-end;
+  padding: 12px 4px 0;
   font-size: 12px;
-  line-height: 1.7;
 }
 .composer-meta a {
-  color: #777;
-  text-decoration: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  white-space: nowrap;
+  color: #636b65;
+  text-decoration: none;
 }
 .composer-meta a:hover {
-  color: #555;
-}
-.readiness-dot {
-  width: 5px;
-  height: 5px;
-  background: #c7a270;
-  border-radius: 50%;
-}
-.readiness-dot.ready {
-  background: #79a38c;
+  color: var(--td-brand-color);
 }
 .suggestions {
   display: flex;
@@ -633,40 +615,37 @@ onMounted(async () => {
   }
   .home-content h1 {
     font-size: 25px;
-    font-weight: 600;
+    font-weight: 500;
     margin-bottom: 26px;
   }
   .research-composer {
-    border-radius: 22px;
-    padding: 6px 8px 8px;
+    border-radius: 20px;
+    padding: 8px 10px 10px;
   }
   .research-input :deep(.t-textarea__inner) {
     font-size: 16px;
-    padding: 12px 10px 10px;
+    padding: 10px 8px 8px;
   }
   .research-input :deep(.t-textarea__inner::placeholder) {
     font-size: 14px;
   }
   .composer-toolbar {
-    gap: 2px;
+    gap: 4px;
   }
   .composer-toolbar .layout-button {
     padding: 0 6px;
-    font-size: 11px;
+    font-size: 13px;
   }
   .layout-button > .t-icon {
     font-size: 13px;
   }
   .format-select {
-    width: 115px;
-  }
-  .format-select :deep(.t-input) {
-    font-size: 12px;
+    width: 108px;
   }
   .composer-toolbar .start-button {
-    width: 34px;
-    min-width: 34px;
-    height: 34px;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
     margin-left: 2px;
   }
   .composer-meta {
@@ -703,11 +682,8 @@ onMounted(async () => {
     max-width: 100%;
   }
 }
-@media (max-width: 360px) {
-  .composer-meta > span {
-    max-width: 155px;
-  }
-  .layout-button :deep(.t-icon:first-child) {
+@media (max-width: 380px) {
+  .layout-button :deep(.t-button__text > span) {
     display: none;
   }
   .format-select {
