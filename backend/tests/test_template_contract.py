@@ -1,4 +1,6 @@
 from pathlib import Path
+
+import pytest
 import sys
 import importlib.util
 import importlib
@@ -326,7 +328,8 @@ def test_get_work_metadata_reconciles_plan_before_reading(tmp_path: Path, monkey
     assert metadata["progress"] == 100
 
 
-def test_get_work_detail_syncs_status_from_workspace_metadata(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("task_status", ["created", "in_progress", "waiting", "failed", "completed"])
+def test_get_work_detail_preserves_task_status_and_syncs_progress(tmp_path: Path, monkeypatch, task_status):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "metadata.json").write_text(
@@ -342,17 +345,18 @@ def test_get_work_detail_syncs_status_from_workspace_metadata(tmp_path: Path, mo
     (workspace / "paper.md").write_text("# 第一章\n\n" + "正文内容" * 80, encoding="utf-8")
 
     work_module = _load_work_routes_module()
-    work = Mock(work_id="w1", created_by=7, status="created", progress=0)
+    work = Mock(work_id="w1", created_by=7, status=task_status, progress=0)
     monkeypatch.setattr(work_module, "get_workspace_path", lambda work_id: workspace)
     monkeypatch.setattr(work_module.crud, "get_work", lambda db, work_id: work)
 
     result = __import__("asyncio").run(work_module.get_work("w1", db=object(), current_user=7))
 
-    assert result.status == "completed"
+    assert result.status == task_status
     assert result.progress == 100
 
 
-def test_get_works_list_syncs_status_from_workspace_metadata(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("task_status", ["created", "in_progress", "waiting", "failed", "completed"])
+def test_get_works_list_preserves_task_status_and_syncs_progress(tmp_path: Path, monkeypatch, task_status):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "metadata.json").write_text(
@@ -368,7 +372,7 @@ def test_get_works_list_syncs_status_from_workspace_metadata(tmp_path: Path, mon
     (workspace / "paper.md").write_text("# 第一章\n\n" + "正文内容" * 80, encoding="utf-8")
 
     work_module = _load_work_routes_module()
-    work = Mock(work_id="w1", created_by=7, status="created", progress=0)
+    work = Mock(work_id="w1", created_by=7, status=task_status, progress=0)
     monkeypatch.setattr(work_module, "get_workspace_path", lambda work_id: workspace)
     monkeypatch.setattr(
         work_module.crud,
@@ -385,5 +389,5 @@ def test_get_works_list_syncs_status_from_workspace_metadata(tmp_path: Path, mon
         work_module.get_works(db=object(), current_user=7)
     )
 
-    assert result["works"][0].status == "completed"
+    assert result["works"][0].status == task_status
     assert result["works"][0].progress == 100
