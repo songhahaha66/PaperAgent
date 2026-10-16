@@ -29,7 +29,14 @@
     <!-- 展开状态的内容 -->
     <div class="sidebar-content" v-if="!isSidebarCollapsed">
       <div class="menu-section">
-        <t-button theme="primary" block @click="createNewTask">{{ t('sidebar.newWork') }}</t-button>
+        <t-button
+          theme="default"
+          variant="text"
+          block
+          class="new-task-button"
+          @click="createNewTask"
+          ><template #icon><t-icon name="edit" /></template>{{ t('sidebar.newWork') }}</t-button
+        >
       </div>
 
       <nav class="sidebar-nav" :aria-label="ui.workspace">
@@ -58,32 +65,23 @@
 
           <!-- 历史工作列表 -->
           <template v-else-if="historyItems.length > 0">
-            <t-card
+            <button
               v-for="item in historyItems"
               :key="item.id"
               class="history-item"
-              :class="{ active: activeHistoryId === item.id }"
+              :class="{
+                active: activeHistoryId === item.id || route.params.work_id === item.work_id,
+              }"
+              :title="`${item.title || ui.untitled} · ${getStatusText(item.status)} · ${formatWorkDate(item.date, locale)}`"
               @click="selectHistory(item)"
             >
-              <div class="history-item-content">
-                <div class="history-header">
-                  <h4>
-                    <span v-if="item.title && item.title.trim()">{{ item.title }}</span>
-                    <t-loading v-else size="small" :text="t('sidebar.generating')" />
-                  </h4>
-                  <t-tag
-                    v-if="item.status"
-                    :theme="getStatusTheme(item.status)"
-                    variant="light"
-                    size="small"
-                  >
-                    {{ getStatusText(item.status) }}
-                  </t-tag>
-                </div>
-                <p class="history-date">{{ formatWorkDate(item.date, locale) }}</p>
-                <p class="history-content">{{ item.content || t('common.noDescription') }}</p>
-              </div>
-            </t-card>
+              <span class="history-title">{{ item.title?.trim() || t('sidebar.generating') }}</span>
+              <span
+                v-if="item.status === 'in_progress' || item.status === 'running'"
+                class="running-dot"
+                :aria-label="getStatusText(item.status)"
+              />
+            </button>
           </template>
 
           <!-- 无历史记录时显示空状态 -->
@@ -117,7 +115,8 @@
     <!-- 收起时居中的新建按钮（位于 header 和 footer-collapsed 之间） -->
     <div v-if="isSidebarCollapsed" class="collapsed-center">
       <t-button
-        theme="primary"
+        theme="default"
+        variant="text"
         shape="square"
         @click="createNewTask"
         class="sidebar-create-btn"
@@ -412,490 +411,332 @@ const userOptions = computed(() => [
 
 <style scoped>
 .sidebar {
-  width: 300px;
-  background: white;
-  border-right: 1px solid #eee;
+  width: 248px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
-  transition: width 0.3s ease;
+  background: #fff;
+  border-right: 1px solid #ededed;
   overflow: hidden;
+  transition: width 0.2s;
 }
-
 .sidebar-collapsed {
-  width: 60px;
+  width: 64px;
 }
-
 .sidebar-header {
-  padding: 10px;
-  border-bottom: 1px solid #eee;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 72px;
+  min-height: 72px;
+  padding: 0 17px;
 }
-
 .header-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  min-width: 0;
 }
-
+.header-title h2 {
+  font-family: var(--td-font-family);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  margin: 0;
+  color: #262626;
+}
 .header-logo {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 26px;
   object-fit: contain;
+  order: -1;
 }
-
-/* 收起状态下的 logo 区域 */
+.header-controls {
+  margin-left: auto;
+}
+.sidebar-toggle-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: #888;
+}
 .collapsed-logo-section {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid #eee;
+  padding-top: 22px;
 }
-
 .header-logo-small {
-  width: 36px;
-  height: 36px;
+  width: 25px;
+  height: 29px;
   object-fit: contain;
 }
-
+.sidebar-collapsed .sidebar-header {
+  min-height: 47px;
+  height: 47px;
+  padding: 0 16px;
+}
 .sidebar-content {
   flex: 1;
-  padding: 20px 15px;
-  overflow-y: auto;
   min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px;
+  scrollbar-width: thin;
 }
-
 .menu-section {
-  margin-bottom: 25px;
+  margin-bottom: 22px;
 }
-
-.menu-title {
-  display: flex;
-  align-items: center;
-  font-weight: 500;
-  color: #2c3e50;
-  margin-bottom: 12px;
-  padding: 5px 10px;
-}
-
-.menu-title .t-icon {
-  margin-right: 8px;
-}
-
 .new-task-button {
   width: 100%;
-  text-align: center;
-  vertical-align: middle;
+  height: 39px;
+  border-radius: 10px;
+  justify-content: flex-start;
+  font-size: 13px;
+  color: #333;
 }
-
-.history-list {
-  overflow: hidden;
-}
-
-.history-item {
-  margin-bottom: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-  overflow: hidden;
-}
-
-.history-item:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.history-item.active {
-  border-left: 4px solid #3498db;
-}
-
-.history-item-content h4 {
-  margin: 0 0 5px 0;
-  font-size: 14px;
-  color: #2c3e50;
-}
-
-.history-item-content p {
-  margin: 0;
-  font-size: 12px;
-  color: #7f8c8d;
-}
-
-.history-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 5px;
-}
-
-.history-header h4 {
+.new-task-button :deep(.t-button__text) {
+  text-align: left;
   flex: 1;
-  margin-right: 8px;
-  line-height: 1.2;
-}
-
-.history-date {
-  margin: 5px 0;
-  font-size: 11px;
-  color: #999;
-}
-
-.history-content {
-  margin: 8px 0 0 0;
-  font-size: 11px;
-  color: #666;
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-}
-
-.sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid #eee;
-}
-
-.sidebar-footer-collapsed {
-  padding: 15px 10px;
-  border-top: 1px solid #eee;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-top: auto;
-}
-
-/* 用户信息样式 */
-.user-info {
-  display: flex;
-  align-items: center;
-  padding: 10px 15px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  gap: 10px;
-}
-
-.user-info:hover {
-  background-color: #f0f0f0;
-}
-
-.settings-icon {
-  margin-left: auto;
-  color: #7f8c8d;
-  font-size: 18px;
-}
-
-.user-avatar {
-  width: 40px;
-  height: 40px;
-  background-color: #3498db;
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-right: 15px;
-}
-
-.user-avatar-text {
-  color: white;
-  font-size: 18px;
-  font-weight: bold;
-}
-
-.user-details {
-  display: flex;
-  flex-direction: column;
-}
-
-.user-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #2c3e50;
-}
-
-.user-email {
-  font-size: 12px;
-  color: #7f8c8d;
-}
-
-.user-avatar-collapsed {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.user-avatar-collapsed:hover {
-  transform: scale(1.05);
-}
-
-.collapsed-avatar {
-  background-color: #3498db;
-  color: white;
-  font-weight: bold;
-  font-size: 18px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-/* 侧边栏折叠按钮 */
-.sidebar-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 侧边栏收起时的新建工作按钮 */
-.sidebar-create-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-/* 收起时中间区域的新建按钮 */
-.collapsed-center {
-  display: flex;
-  justify-content: center;
-  padding: 12px;
-}
-
-.sidebar-backdrop {
-  display: none;
-}
-
-/* 手机端浮动展开按钮容器 */
-.mobile-expand-btn-container {
-  position: fixed;
-  bottom: 20px;
-  left: 20px;
-  z-index: 1080;
-  display: none; /* 默认隐藏，只在手机端显示 */
-}
-
-.mobile-expand-btn {
-  width: 48px;
-  height: 48px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-/* 手机端样式 - 当侧边栏收起时完全隐藏内容区域 */
-@media (max-width: 768px) {
-  .sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100vh;
-    height: 100dvh;
-    width: min(320px, 86vw);
-    z-index: 1100;
-    transform: translateX(-100%);
-    transition:
-      transform 0.3s ease,
-      width 0.3s ease;
-  }
-
-  .sidebar:not(.sidebar-collapsed) {
-    transform: translateX(0);
-    width: min(320px, 86vw);
-  }
-
-  .sidebar-collapsed {
-    width: 0;
-    min-width: 0;
-  }
-
-  .sidebar-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    z-index: 1090;
-  }
-
-  /* 在手机端显示浮动展开按钮 */
-  .mobile-expand-btn-container {
-    display: block;
-  }
-}
-
-/* 加载状态样式 */
-.loading-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: #7f8c8d;
-}
-
-.loading-state p {
-  margin-top: 16px;
-  color: #7f8c8d;
-}
-
-/* 空状态样式 */
-.empty-history {
-  text-align: center;
-  padding: 40px 20px;
-  color: #7f8c8d;
-}
-
-.empty-icon {
-  font-size: 48px;
-  color: #c0c4cc;
-  margin-bottom: 16px;
-}
-
-.empty-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: #2c3e50;
-  margin: 0 0 8px 0;
-}
-
-.empty-hint {
-  font-size: 14px;
-  color: #7f8c8d;
-  margin: 0;
-  line-height: 1.4;
-}
-
-.sidebar {
-  width: 260px;
-  box-shadow: none;
-  border-color: var(--td-component-stroke);
-  background: #fff;
-  flex-shrink: 0;
-}
-.sidebar-collapsed {
-  width: 60px;
-}
-.sidebar-header {
-  padding: 16px 14px;
-  min-height: 68px;
-}
-.header-title h2 {
-  font-size: 21px;
-  margin: 0;
-}
-.sidebar-content {
-  padding: 18px 14px;
 }
 .sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: -10px 0 24px;
+  gap: 2px;
+  margin: -14px 0 32px;
+}
+.sidebar-nav .t-button {
+  justify-content: flex-start;
+  height: 37px;
+  border-radius: 10px;
+  color: #555;
+  font-size: 13px;
+  padding: 0 12px;
 }
 .sidebar-nav :deep(.t-button__text) {
   flex: 1;
   text-align: left;
 }
-.sidebar-nav .t-button {
-  height: 38px;
-  justify-content: flex-start;
-  color: var(--td-text-color-secondary);
-  font-size: 14px;
+.sidebar-nav .t-button:hover {
+  background: #f7f7f7;
 }
 .sidebar-nav .nav-active {
-  background: var(--td-bg-color-secondarycontainer);
-  color: var(--td-text-color-primary);
+  background: #f4f4f4;
+  color: #222;
 }
-.history-item {
-  border-color: #eee;
+.menu-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #999;
+  font-family: var(--td-font-family);
 }
-.history-item:hover {
-  box-shadow: none;
-  border-color: #ccc;
-}
-.history-item.active {
-  border-left: 2px solid var(--td-brand-color);
-  background: #fafafa;
-}
-.history-header {
-  flex-direction: column;
-  gap: 6px;
-}
-.history-header h4 {
-  line-height: 1.6;
-}
-.history-content {
+.menu-title > .t-icon {
   display: none;
 }
-.history-date {
-  font-size: 11px !important;
-  color: #999 !important;
-  margin-top: 8px !important;
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 13px;
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  color: #555;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 2px;
+}
+.history-item:hover {
+  background: #f7f7f7;
+}
+.history-item.active {
+  background: #f2f2f2;
+  color: #222;
+}
+.history-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.running-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--td-success-color);
+  flex-shrink: 0;
 }
 .sidebar-footer {
-  padding: 12px;
+  padding: 12px 10px;
+  margin-top: auto;
+  border-top: 0;
 }
 .user-info {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
   border: 0;
   background: #fff;
+  border-radius: 12px;
   text-align: left;
-  width: 100%;
-  padding: 10px 8px;
-  gap: 10px;
+  padding: 10px 11px;
+  cursor: pointer;
+}
+.user-info:hover {
+  background: #f7f7f7;
 }
 .user-avatar {
-  background: #eee;
-  color: #333;
-  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 32px;
   height: 32px;
-  margin: 0;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #eee;
 }
 .user-avatar-text {
-  font-size: 14px;
-  color: #333;
+  color: #666;
+  font-size: 13px;
+  font-weight: 500;
 }
 .user-details {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
+  flex: 1;
 }
 .user-name {
-  font-size: 13px;
+  font-size: 12px;
+  color: #444;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .user-email {
-  font-size: 11px;
+  font-size: 10px;
+  color: #999;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-icon {
+  font-size: 15px;
+  color: #aaa;
+  margin-left: auto;
+}
+.collapsed-center {
+  display: flex;
+  justify-content: center;
+  padding: 5px 0;
+}
+.sidebar-create-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  color: #555;
+}
+.sidebar-footer-collapsed {
+  padding: 15px 10px;
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+}
+.user-avatar-collapsed {
+  cursor: pointer;
 }
 .collapsed-avatar {
+  width: 32px;
+  height: 32px;
   background: #eee;
-  color: #333;
+  color: #555;
+  font-size: 13px;
   box-shadow: none;
 }
+.sidebar-backdrop,
 .mobile-expand-btn-container {
-  top: 14px;
+  display: none;
+}
+.mobile-expand-btn-container {
+  position: fixed;
+  top: 15px;
   left: 14px;
-  bottom: auto;
+  z-index: 1080;
 }
 .mobile-expand-btn {
   width: 32px;
   height: 32px;
-  border-radius: 4px;
+  border: 0;
+  border-radius: 9px;
   box-shadow: none;
   background: #fff;
+  color: #555;
+  font-size: 21px;
+}
+.loading-state {
+  text-align: center;
+  padding: 30px 16px;
+  color: #999;
+  font-size: 12px;
+}
+.empty-history {
+  padding: 22px 12px;
+  color: #999;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.empty-icon {
+  font-size: 24px;
+  color: #bbb;
+}
+.empty-text {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.empty-hint {
+  font-size: 11px;
+  color: #aaa;
+  margin: 0;
 }
 @media (max-width: 768px) {
   .sidebar {
-    width: min(300px, 86vw);
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(280px, 86vw);
+    height: 100dvh;
+    z-index: 1100;
+    transform: translateX(0);
+    transition: transform 0.2s;
   }
   .sidebar-collapsed {
-    width: 0;
+    transform: translateX(-100%);
+    width: min(280px, 86vw);
   }
-  .sidebar:not(.sidebar-collapsed) {
-    width: min(300px, 86vw);
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: #0005;
+    z-index: 1090;
   }
-}
-.history-item-content h4,
-.menu-title {
-  font-family: var(--td-font-family);
+  .mobile-expand-btn-container {
+    display: block;
+  }
+  .sidebar-header {
+    height: 68px;
+    min-height: 68px;
+  }
 }
 </style>

@@ -1058,7 +1058,7 @@ onMounted(() => {
 }
 .template-content > .t-card {
   border-color: var(--td-component-stroke);
-  border-radius: 6px;
+  border-radius: 14px;
   box-shadow: none;
 }
 .template-content :deep(.t-card__title) {

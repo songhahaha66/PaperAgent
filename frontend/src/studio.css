@@ -1,6 +1,9 @@
 /* Small layout and accessibility adjustments on top of the existing TDesign theme. */
 :root {
   --td-brand-color: #16865d;
+  --td-radius-default: 8px;
+  --td-radius-medium: 12px;
+  --td-radius-large: 16px;
   --td-brand-color-hover: #12734f;
   --td-brand-color-active: #0f6042;
   --td-brand-color-focus: #d7eee2;
@@ -92,4 +95,24 @@ select {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* White TDesign surfaces with softer form and card geometry. */
+.t-card {
+  border-radius: 14px;
+  box-shadow: none;
+  border-color: #ededed;
+}
+.t-button:not(.t-button--shape-circle):not(.t-button--shape-round) {
+  border-radius: 9px;
+}
+.t-input,
+.t-textarea__inner {
+  border-radius: 10px;
+}
+.t-dialog {
+  border-radius: 18px;
+}
+.language-switcher {
+  border-radius: 12px;
 }

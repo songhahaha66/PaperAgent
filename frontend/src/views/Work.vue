@@ -128,7 +128,7 @@
                   <t-button
                     theme="default"
                     variant="text"
-                    shape="square"
+                    shape="circle"
                     :disabled="isStreaming"
                     :aria-label="isZh ? '添加附件' : 'Add attachment'"
                     @click="chatFileInput?.click()"
@@ -136,11 +136,11 @@
                   /></t-button>
                   <t-button
                     theme="primary"
-                    shape="square"
+                    shape="circle"
                     :disabled="isStreaming || !inputValue.trim()"
                     :aria-label="isZh ? '发送消息' : 'Send message'"
                     @click="sendMessage()"
-                    ><t-icon name="send"
+                    ><t-icon name="arrow-up"
                   /></t-button>
                 </template>
               </ChatSender>
@@ -2649,7 +2649,7 @@ const generateWorkTitle = async (question: string) => {
   color: var(--td-text-color-placeholder);
 }
 .chat-input :deep(.t-chat__sender__textarea) {
-  border-radius: 8px;
+  border-radius: 24px;
 }
 .chat-input :deep(.t-chat__sender__suffix) {
   gap: 8px;
@@ -2684,6 +2684,70 @@ const generateWorkTitle = async (question: string) => {
   }
   .document-actions {
     gap: 12px;
+  }
+}
+
+.workspace-header,
+.progress-strip,
+.panel-header,
+.resource-tabs :deep(.t-tabs__nav-container) {
+  border-color: #ededed;
+}
+.chat-input {
+  border-top: 0;
+  padding: 12px 18px 0;
+}
+.chat-input :deep(.t-chat__sender__textarea) {
+  border-radius: 24px;
+  border-color: #e5e7e8;
+  box-shadow: 0 2px 12px #00000004;
+  overflow: hidden;
+}
+.chat-input :deep(.t-chat__sender__textarea:focus-within) {
+  border-color: #c8ceca;
+}
+.chat-input :deep(.t-chat__sender__textarea textarea) {
+  font-size: 14px;
+  border-radius: 0;
+  padding: 14px 16px;
+  line-height: 1.8;
+}
+.chat-input :deep(.t-chat__sender__textarea textarea::placeholder) {
+  font-size: 13px;
+}
+.chat-input :deep(.t-chat__sender__suffix .t-button) {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+}
+.chat-input :deep(.t-chat__sender__footer) {
+  padding: 0 12px 10px;
+}
+.input-note {
+  padding: 1px 5px;
+}
+.recovery-banner {
+  border-radius: 13px;
+}
+.figure-card {
+  border-radius: 12px;
+  border-color: #ededed;
+}
+.jump-latest {
+  border-radius: 18px;
+}
+@media (max-width: 768px) {
+  .chat-input {
+    padding: 10px 12px 0;
+  }
+  .chat-input :deep(.t-chat__sender__textarea) {
+    border-radius: 22px;
+  }
+  .chat-input :deep(.t-chat__sender__textarea textarea) {
+    font-size: 16px;
+  }
+  .chat-input :deep(.t-chat__sender__textarea textarea::placeholder) {
+    font-size: 13px;
   }
 }
 </style>
