@@ -13,7 +13,8 @@ import json
 import logging
 import re
 from dataclasses import asdict
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
+from pydantic import create_model, model_validator
 
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
@@ -49,6 +50,8 @@ from .review import (
     needs_figure,
     report_issues,
     review_solution,
+    report_submission_issues,
+    submission_inventory_issues,
 )
 
 logger = logging.getLogger(__name__)
@@ -269,6 +272,34 @@ class ReportFallback(NamedTuple):
     schema: Any
     system: str
     recorder: HistoryRecorder
+    preflight: Optional[Callable[[], List[str]]] = None
+
+
+class IncompleteSubmission(ValueError):
+    """No tool budget remains to fill the report's missing evidence."""
+
+
+def submission_schema(ctx: GraphContext, branch: BranchInput, runs: List[Dict]):
+    """Let ToolStrategy return concrete gaps to the same live tool loop."""
+    @model_validator(mode="after")
+    def ready(report):
+        sid = branch["subproblem"]["id"]
+        # A new premise is staged centrally, never accepted as a solved task.
+        if unbound_assumptions(sid, report.assumptions, branch.get("research_contract", {})):
+            return report
+        for finding in report.key_findings:
+            finding.statement = ctx.registry.ground_statement(sid, finding.statement)
+        issues = report_submission_issues(ctx, branch, report.model_dump(), runs)
+        if issues:
+            available = ctx.registry.to_prompt_table(sid)
+            successful = [r["run_id"] for r in runs if r.get("ok")][-8:]
+            raise ValueError("报告未提交，先补齐以下缺项：\n" + "\n".join(f"- {issue}" for issue in issues)
+                + f"\n本问实际登记结果：\n{available}\n本次成功执行：{successful}"
+                + "\n内核与变量仍在。已有输出就调用 record_results / record_figure；缺指标再调用 run_python。"
+                  "使用工具返回的真实编号补齐 requirement_evidence 和报告，再调用 SolveReport，禁止自造引用。")
+        return report
+
+    return create_model("SolveReport", __base__=SolveReport, __validators__={"submission_ready": ready})
 
 
 async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = REPORT_NUDGE,
@@ -290,6 +321,10 @@ async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = RE
     except GraphRecursionError:
         if fallback is None or not fallback.recorder.messages:
             raise
+        if fallback.preflight:
+            gaps = fallback.preflight()
+            if gaps:
+                raise IncompleteSubmission("步数已用尽，报告仍缺少证据：" + "；".join(gaps))
         history = list(fallback.recorder.messages)
         logger.warning("步数用完，用 %d 条对话直接要报告", len(history))
         prompt = [SystemMessage(content=fallback.system), *compact_messages(history), HumanMessage(content=FINAL_NUDGE)]
@@ -399,16 +434,18 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     """正式求解：CodeAct 循环 + 结果审查返工，返回 (status, error, report, reviews)"""
     subproblem_id = branch["subproblem"]["id"]
     recorder = HistoryRecorder()
+    schema = submission_schema(ctx, branch, run_log)
     agent = create_agent(
         model=ctx.coder_llm,
         tools=build_tools(ctx, subproblem_id, run_log),
         system_prompt=SYSTEM,
-        response_format=ToolStrategy(SolveReport),
+        response_format=ToolStrategy(schema),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE),
                     DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware()],
     )
     limit = ctx.max_solver_steps * 2 + 1
-    fallback = ReportFallback(ctx.coder_llm, SolveReport, SYSTEM, recorder)
+    fallback = ReportFallback(ctx.coder_llm, schema, SYSTEM, recorder,
+        lambda: submission_inventory_issues(ctx, branch, run_log))
     status, error = "completed", None
     report: Dict = {}
     reviews: List[Dict] = []
@@ -458,11 +495,15 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             status, error = "incomplete", "没有提交完整报告或登记结果"
     except GraphRecursionError:
         status, error = "incomplete", f"超过 {ctx.max_solver_steps} 步仍未完成"
+    except IncompleteSubmission as exc:
+        status, error = "incomplete", str(exc)
     except Exception as exc:
         logger.exception("求解 %s 失败", subproblem_id)
         status, error = "failed", str(exc)
     if result is not None:
         save_transcript(ctx, subproblem_id, result["messages"])
+    elif recorder.messages:
+        save_transcript(ctx, subproblem_id, recorder.messages)
     return status, error, report, reviews
 
 

@@ -737,6 +737,10 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     assert seen[0][0][-1].content == "ok" and seen[0][1] == ["run_python"]
     assert "还剩约 3 步。请交报告" in seen[1][0][-1].content and seen[1][1] == ["run_python"]
     assert "步数已用完" in seen[2][0][-1].content and seen[2][1] == []
+    from langgraph.errors import GraphRecursionError
+    with pytest.raises(GraphRecursionError):
+        asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=history(0, 12), tools=[]), handler))
+    assert len(seen) == 3, "invalid final reports cannot keep calling the model past the step budget"
 
 
 def test_design_falls_back_when_candidates_keep_failing(tmp_path, monkeypatch):

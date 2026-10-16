@@ -66,6 +66,19 @@ def _number(value):
     return number
 
 
+def requirement_evidence_gaps(requirement_ids, proofs, available_refs):
+    """Shared submission/commit checks for the frozen requirement bindings."""
+    supplied = {}
+    for proof in proofs:
+        supplied.setdefault(proof["requirement_id"], set()).update(proof["evidence_refs"])
+    gaps = {rid: f"要求 {rid} 不属于本任务的冻结契约" for rid in supplied if rid not in requirement_ids}
+    for rid in requirement_ids:
+        refs = supplied.get(rid, set())
+        if not refs or not refs <= available_refs:
+            gaps[rid] = f"要求 {rid} 缺少有效登记证据映射，请在 requirement_evidence 中填写本问或依赖任务的实际登记编号"
+    return gaps
+
+
 def evaluate(state, task_id, results):
     rules = protocol(state, task_id)
     task = state["tasks"][task_id]

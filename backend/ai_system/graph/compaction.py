@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, List
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,10 @@ class StepBudgetMiddleware(AgentMiddleware):
         # recursion_limit 按单次调用计：只数最后一条用户消息（任务、晋升、返工意见）之后的步数
         last_human = max((i for i, m in enumerate(request.messages) if isinstance(m, HumanMessage)), default=-1)
         steps = sum(1 for m in request.messages[last_human + 1:] if isinstance(m, AIMessage) and m.tool_calls)
+        if steps >= self.budget:
+            # Failed structured submissions return directly to the model without
+            # a tools node, so recursion_limit alone is not a tool-step budget.
+            raise GraphRecursionError(f"工具调用步数已达到预算 {self.budget}")
         if steps >= self.budget - 1:
             # 最后一步只留报告工具（ToolStrategy 下 tool_choice=any，模型只能交报告），不会撞 recursion_limit。
             # 官方 API 的 deepseek-flash 一步只要几秒、步子很碎，v2l 的 Q1 三分钟用完 40 步没交报告，对话和报告全丢

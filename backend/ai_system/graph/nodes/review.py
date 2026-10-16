@@ -20,6 +20,7 @@ from ..registry import REF_PATTERN, GroundingError, find_refs
 from ..llm_utils import as_messages, call_structured, clip
 from ..state import BranchInput, ResultReview
 from ..tracing import labelled
+from ...research.validation import requirement_evidence_gaps
 
 SYSTEM = (
     "你是数学建模竞赛的评审老师，负责在写论文之前审查一个子问题的求解结果。"
@@ -238,7 +239,8 @@ def foreign_refs(ctx: GraphContext, report: Dict, subproblem_id: str, dependenci
     2024_C 的 Q3 一项结果都没登记，结论却写成"验证集 AUC 为 {{R:R3}}"，R3 是 Q1 登记的"验证集场数"。
     """
     allowed = {subproblem_id, *dependencies}
-    texts = [report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])]
+    texts = [report.get(key, "") for key in ("summary", "approach", "sensitivity")]
+    texts += [*report.get("limitations", []), *(f.get("statement", "") for f in report.get("key_findings") or [])]
     bad = []
     for ref in find_refs(" ".join(texts)):
         result = ctx.registry.get(ref)
@@ -302,15 +304,14 @@ def needs_figure(subproblem: Dict) -> bool:
     return bool(VISUAL_TASK.search(text))
 
 
-def report_issues(
+def submission_issues(
     ctx: GraphContext,
     report: Dict,
     subproblem_id: str,
     dependencies: Optional[List[str]] = None,
-    hypothesis: bool = False,
     figure_required: bool = False,
 ) -> List[str]:
-    """不调模型的报告检查：有登记结果 + 引用属于本问 + 标签置换对照 + 结论数字可追溯 + 要求的图已登记"""
+    """报告的结构与引用检查；数值是否满足领域条件仍由提交器验收。"""
     issues = (
         # v2j 的 Q3 被要求补置换对照、改引用之后，交了概要为 "test"、没有任何结论的报告：
         # 空报告不触发其他检查，等于绕过了检查
@@ -320,7 +321,6 @@ def report_issues(
         ] if degenerate(report) else []
     ) + (
         foreign_refs(ctx, report, subproblem_id, dependencies or [])
-        + control_issues(ctx, report, hypothesis)
         + ungrounded_findings(report)
         + implausible_refs(ctx, report)
     )
@@ -331,6 +331,65 @@ def report_issues(
         # 2024_C 的 Q1 跑了两段读数据的代码就交了报告，一项结果都没登记
         issues.insert(0, "还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")
     return issues
+
+
+def submission_inventory_issues(ctx: GraphContext, branch: BranchInput, runs: List[Dict]) -> List[str]:
+    """Check required metrics and their actual executions, without judging thresholds."""
+    sid = branch["subproblem"]["id"]
+    own = ctx.registry.for_subproblem(sid)
+    issues = []
+    if not own:
+        issues.append("还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")
+    if needs_figure(branch["subproblem"]) and not any(r.kind == "figure" for r in own):
+        issues.append("题目要求可视化，但还没有登记任何图：请画出要求的图，用 record_figure 登记后在报告里引用。")
+    allowed = {sid, *(branch["subproblem"].get("depends_on") or [])}
+    successful = {run["run_id"] for run in runs if run.get("ok")}
+    for result in own:
+        try:
+            if result.run_id not in successful:
+                raise GroundingError("来源不是本次任务的成功执行")
+            if result.kind == "figure":
+                info = ctx.fs.get_run_info(result.run_id)
+                if not info or info.get("status") != "success":
+                    raise GroundingError("图片来源不是成功执行")
+                if not result.path or not ctx.fs.exists(result.path):
+                    raise GroundingError("登记的图片文件不存在")
+            else:
+                ctx.registry.verify(result.value, result.run_id)
+        except (GroundingError, OSError, ValueError) as exc:
+            issues.append(f"登记结果 {result.id}「{result.name}」来源无效：{exc}；请重新执行并登记")
+    for rule in (branch.get("research_contract") or {}).get("checks", []):
+        check = rule["check"]
+        for key in ("left", "right"):
+            selector = check.get(key)
+            if not selector:
+                continue
+            target = selector["task_id"]
+            if branch["subproblem"].get("kind") == "verify" and target == check["left"]["task_id"]:
+                target = sid
+            found = [r for r in ctx.registry.results.values() if r.subproblem == target and r.name == selector["name"]]
+            if target not in allowed or len(found) != 1:
+                issues.append(f"检查 {check['id']} 缺少唯一登记指标 {target}「{selector['name']}」；请按契约原名计算、print并登记，不能改名或放宽检查")
+    return list(dict.fromkeys(issues))
+
+
+def report_submission_issues(ctx: GraphContext, branch: BranchInput, report: Dict, runs: List[Dict]) -> List[str]:
+    subproblem = branch["subproblem"]
+    sid = subproblem["id"]
+    deps = subproblem.get("depends_on") or []
+    issues = submission_issues(ctx, report, sid, deps, figure_required=needs_figure(subproblem))
+    issues += submission_inventory_issues(ctx, branch, runs)
+    available = {r.id for r in ctx.registry.results.values() if r.subproblem in {sid, *deps}}
+    requirements = (branch.get("research_contract") or {}).get("requirements", [])
+    issues += list(requirement_evidence_gaps([r["id"] for r in requirements], report.get("requirement_evidence", []), available).values())
+    return list(dict.fromkeys(issues))
+
+
+def report_issues(
+    ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: Optional[List[str]] = None,
+    hypothesis: bool = False, figure_required: bool = False,
+) -> List[str]:
+    return submission_issues(ctx, report, subproblem_id, dependencies, figure_required=figure_required) + control_issues(ctx, report, hypothesis)
 
 
 def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: List[Dict]) -> str:

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import ENGINE_VERSION
 from .models import Assumption, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
-from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint
+from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps
 from .assumptions import assumption_id, premise_definition
 
 DB_PATH = ".system/research.sqlite"
@@ -287,18 +287,12 @@ class ResearchStore:
                             validity="current", report=result.report, design=result.design)
                 if task["kind"] == "compute" and result.execution_status == "succeeded":
                     available_refs = ids | input_evidence
-                    supplied = {}
-                    for proof in result.report.get("requirement_evidence", []):
-                        supplied.setdefault(proof["requirement_id"], set()).update(proof["evidence_refs"])
-                    for rid in task["requirement_ids"]:
-                        refs = supplied.get(rid, set())
-                        if not refs or not refs <= available_refs:
-                            acceptance = "inconclusive"
-                            task["acceptance"] = acceptance
-                            report = IssueReport(task_id=order.task_id, category="coverage",
-                                message=f"要求 {rid} 缺少有效登记证据映射", evidence_refs=sorted(ids))
-                            issue = self._record_issue(state, report, "confirmed", producer_attempt=order.attempt_id)
-                            self._confirm_issue(state, issue, refute=False)
+                    for message in requirement_evidence_gaps(task["requirement_ids"], result.report.get("requirement_evidence", []), available_refs).values():
+                        acceptance = "inconclusive"
+                        task["acceptance"] = acceptance
+                        report = IssueReport(task_id=order.task_id, category="coverage", message=message, evidence_refs=sorted(ids))
+                        issue = self._record_issue(state, report, "confirmed", producer_attempt=order.attempt_id)
+                        self._confirm_issue(state, issue, refute=False)
                 for report in result.issues:
                     if not set(report.evidence_refs) <= (ids | input_evidence):
                         raise ValueError("执行问题引用了冻结输入之外的证据")

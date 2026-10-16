@@ -58,6 +58,20 @@ Percentage values use ratios. Each compute task must map requirements to actual
 own/dependency evidence. The store evaluates checks again at commit; a worker's
 accepted flag cannot override failure or a missing/ambiguous metric.
 
+`SolveReport` has a task-scoped submission validator inside the existing CodeAct
+tool loop. It checks mandatory metric names from the frozen protocol, requirement
+evidence bindings, all report references, successful current-attempt execution
+sources and required figure files. Invalid submissions return the specific gaps,
+actual result IDs and successful run IDs as tool feedback; the solver can register
+existing output or compute a missing metric in the same kernel before resubmitting.
+No extra model reviewer or independent repair loop is added. The submission and
+central commit share requirement-evidence checks; numeric threshold failures stay
+with central domain acceptance and causal replanning, so a counterexample can still
+be submitted truthfully. Newly declared premises still stage before frozen reruns.
+Invalid submissions count against the existing hard tool-step budget. Once it is
+exhausted, missing evidence stops the run instead of requesting a tool-free report
+that cannot fill those gaps; transcripts and execution output are retained.
+
 All findings use `IssueReport` / `Issue`, with evidence, task/assumption revisions,
 check IDs, repair targets and lifecycle status. Deterministic acceptance failures
 are confirmed; solver, consistency and final-section semantic findings start as
@@ -140,6 +154,11 @@ adapter or old-checkpoint migration.
 check rejection, independent metric disagreement, publication gates after writing
 repair exhaustion, frontend state events, and draft-preserving resume without
 recomputing accepted tasks.
+
+`test_report_submission.py` exercises premature submission, missing metric names,
+requirement bindings, out-of-scope references, invalid execution sources, figure
+files, independent countercheck bindings, task-local validator isolation, bounded
+failure and tool-driven gap repair without rerunning the completed computation.
 
 The evaluation CLI defaults to `--pipeline research`. Its `research-no-explore`,
 `research-no-review`, `research-no-consistency` and `research-no-planner` variants
