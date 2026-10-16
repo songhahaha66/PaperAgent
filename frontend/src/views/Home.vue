@@ -7,7 +7,7 @@
       @create-new-task="resetDraft"
     />
     <main class="home-main">
-      <header class="home-header"><span>PaperAgent</span><LanguageSwitcher /></header>
+      <header class="home-header"><span>PaperAgent</span></header>
       <section class="home-content" :aria-label="ui.newPaper">
         <h1>{{ isZh ? '想研究什么？' : 'What would you like to research?' }}</h1>
         <div class="research-composer" :class="{ 'is-busy': creating }">
@@ -167,7 +167,6 @@ import { useAuthStore } from '@/stores/auth'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import Sidebar from '@/components/Sidebar.vue'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 const { ui, isZh } = useStudioCopy()
 const { isMobile } = useBreakpoint()
 const collapsed = ref(isMobile.value)

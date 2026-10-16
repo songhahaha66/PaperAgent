@@ -1,13 +1,21 @@
 <template>
   <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
-    <!-- 收起状态 - logo 单独在最顶部 -->
     <div v-if="isSidebarCollapsed" class="collapsed-logo-section">
-      <img src="/logo.png" alt="PaperAgent Logo" class="header-logo-small" />
+      <button
+        class="logo-toggle"
+        :title="isZh ? '展开侧边栏' : 'Expand sidebar'"
+        :aria-label="isZh ? '展开侧边栏' : 'Expand sidebar'"
+        :aria-expanded="false"
+        @click="toggleSidebar"
+      >
+        <img src="/logo.png" alt="" class="header-logo-small" /><t-icon
+          name="view-column"
+          class="logo-toggle-icon"
+        />
+      </button>
     </div>
-
-    <div class="sidebar-header">
-      <!-- 展开状态 -->
-      <div v-if="!isSidebarCollapsed" class="header-title">
+    <div v-else class="sidebar-header">
+      <div class="header-title">
         <h2>PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
       </div>
@@ -20,9 +28,8 @@
           class="sidebar-toggle-btn"
           :title="t('sidebar.toggle')"
           :aria-label="t('sidebar.toggle')"
-        >
-          <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-        </t-button>
+          ><t-icon name="chevron-left"
+        /></t-button>
       </div>
     </div>
 
@@ -97,18 +104,7 @@
     </div>
 
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
-      <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-        <button class="user-info" aria-label="账户与设置">
-          <div class="user-avatar">
-            <span class="user-avatar-text">{{ userName.charAt(0).toUpperCase() }}</span>
-          </div>
-          <div class="user-details">
-            <div class="user-name">{{ userName }}</div>
-            <div class="user-email">{{ userEmail }}</div>
-          </div>
-          <t-icon name="setting" class="settings-icon" />
-        </button>
-      </t-dropdown>
+      <AccountMenu :collapsed="false" @navigate="closeSidebarOnMobile" />
     </div>
 
     <!-- 收起状态下的用户头像 -->
@@ -127,16 +123,7 @@
     </div>
 
     <div class="sidebar-footer-collapsed" v-if="isSidebarCollapsed">
-      <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-        <div class="user-avatar-collapsed">
-          <t-avatar
-            :content="userName.charAt(0).toUpperCase()"
-            size="large"
-            shape="circle"
-            class="collapsed-avatar"
-          />
-        </div>
-      </t-dropdown>
+      <AccountMenu :collapsed="true" @navigate="closeSidebarOnMobile" />
     </div>
   </div>
 
@@ -148,12 +135,12 @@
     <t-button
       theme="default"
       variant="outline"
-      aria-label="打开导航"
+      :aria-label="isZh ? '打开导航' : 'Open navigation'"
       shape="square"
       @click="toggleSidebar"
       class="mobile-expand-btn"
     >
-      <t-icon name="view-list" />
+      <img src="/logo.png" alt="" class="mobile-logo-toggle" />
     </t-button>
   </div>
 </template>
@@ -163,7 +150,7 @@ import { useI18n } from 'vue-i18n'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { BrowseIcon } from 'tdesign-icons-vue-next'
-import { MessagePlugin } from 'tdesign-vue-next'
+import AccountMenu from '@/components/AccountMenu.vue'
 import { useAuthStore } from '@/stores/auth'
 import { workspaceAPI } from '@/api/workspace'
 import { useBreakpoint } from '@/composables/useBreakpoint'
@@ -189,7 +176,7 @@ const emit = defineEmits<Emits>()
 const { t, locale } = useI18n()
 const router = useRouter()
 const route = useRoute()
-const { ui } = useStudioCopy()
+const { ui, isZh } = useStudioCopy()
 const authStore = useAuthStore()
 const { isMobile } = useBreakpoint()
 
@@ -249,11 +236,6 @@ const selectHistory = (item: any) => {
   }
 }
 
-// 用户信息
-const userName = computed(() => authStore.currentUser?.username || t('common.user'))
-const userEmail = computed(() => authStore.currentUser?.email || '')
-const userAvatar = ref('') // 默认头像，如果为空则使用默认头像
-
 // 加载用户工作列表
 const loadUserWorks = async () => {
   if (!authStore.token) return
@@ -282,22 +264,6 @@ const loadUserWorks = async () => {
 
 // 当前选中的历史工作ID
 const activeHistoryId = computed(() => props.activeHistoryId)
-
-// 获取状态主题
-const getStatusTheme = (status?: string) => {
-  if (!status) return 'default'
-  const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
-    created: 'default',
-    in_progress: 'primary',
-    running: 'primary',
-    completed: 'success',
-    paused: 'warning',
-    waiting: 'warning',
-    cancelled: 'danger',
-    failed: 'danger',
-  }
-  return themes[status] || 'default'
-}
 
 // 获取状态文本
 const getStatusText = (status?: string) => {
@@ -373,40 +339,6 @@ onMounted(() => {
     })
   })
 })
-
-// 用户菜单选项
-const userOptions = computed(() => [
-  {
-    content: t('sidebar.templates'),
-    value: 'template',
-    onClick: () => {
-      router.push('/template')
-    },
-  },
-  {
-    content: t('sidebar.apiKey'),
-    value: 'api-key',
-    onClick: () => {
-      router.push('/api-config')
-    },
-  },
-  {
-    content: t('sidebar.passkeys'),
-    value: 'passkey',
-    onClick: () => {
-      router.push('/passkey')
-    },
-  },
-  {
-    content: t('sidebar.logout'),
-    value: 'logout',
-    onClick: () => {
-      authStore.logout()
-      MessagePlugin.success(t('sidebar.loggedOut'))
-      router.push('/login')
-    },
-  },
-])
 </script>
 
 <style scoped>
@@ -465,7 +397,8 @@ const userOptions = computed(() => [
   display: flex;
   justify-content: center;
   align-items: center;
-  padding-top: 22px;
+  height: 72px;
+  min-height: 72px;
 }
 .header-logo-small {
   width: 25px;
@@ -579,63 +512,6 @@ const userOptions = computed(() => [
   margin-top: auto;
   border-top: 0;
 }
-.user-info {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 10px;
-  border: 0;
-  background: #fff;
-  border-radius: 12px;
-  text-align: left;
-  padding: 10px 11px;
-  cursor: pointer;
-}
-.user-info:hover {
-  background: #f7f7f7;
-}
-.user-avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: #eee;
-}
-.user-avatar-text {
-  color: #666;
-  font-size: 13px;
-  font-weight: 500;
-}
-.user-details {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-.user-name {
-  font-size: 12px;
-  color: #444;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.user-email {
-  font-size: 10px;
-  color: #999;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.settings-icon {
-  font-size: 15px;
-  color: #aaa;
-  margin-left: auto;
-}
 .collapsed-center {
   display: flex;
   justify-content: center;
@@ -648,21 +524,10 @@ const userOptions = computed(() => [
   color: #555;
 }
 .sidebar-footer-collapsed {
-  padding: 15px 10px;
+  padding: 12px 10px;
   margin-top: auto;
   display: flex;
   justify-content: center;
-}
-.user-avatar-collapsed {
-  cursor: pointer;
-}
-.collapsed-avatar {
-  width: 32px;
-  height: 32px;
-  background: #eee;
-  color: #555;
-  font-size: 13px;
-  box-shadow: none;
 }
 .sidebar-backdrop,
 .mobile-expand-btn-container {
@@ -738,5 +603,43 @@ const userOptions = computed(() => [
     height: 68px;
     min-height: 68px;
   }
+}
+
+.logo-toggle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  border-radius: 11px;
+  cursor: pointer;
+}
+.logo-toggle:hover,
+.logo-toggle:focus-visible {
+  background: #f5f5f5;
+}
+.logo-toggle-icon {
+  position: absolute;
+  font-size: 21px;
+  color: #666;
+  opacity: 0;
+}
+.logo-toggle:hover .header-logo-small,
+.logo-toggle:focus-visible .header-logo-small {
+  opacity: 0;
+}
+.logo-toggle:hover .logo-toggle-icon,
+.logo-toggle:focus-visible .logo-toggle-icon {
+  opacity: 1;
+}
+.sidebar-footer-collapsed {
+  padding: 12px 10px;
+}
+.mobile-logo-toggle {
+  width: 22px;
+  height: 26px;
+  object-fit: contain;
 }
 </style>

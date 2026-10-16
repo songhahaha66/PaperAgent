@@ -11,7 +11,6 @@
           <h1>{{ ui.modelTitle }}</h1>
           <p>{{ ui.modelSubtitle }}</p>
         </div>
-        <LanguageSwitcher />
       </header>
       <div class="models-body">
         <t-card :title="ui.defaultConnection" class="connection-card"
@@ -108,7 +107,6 @@
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import { Input, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { modelConfigAPI, type ModelConfig } from '@/api/modelConfig'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
