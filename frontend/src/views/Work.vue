@@ -378,6 +378,7 @@ import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { ChatItem, ChatSender } from '@tdesign-vue-next/chat'
 
 import { useAuthStore } from '@/stores/auth'
+import { useWorkHistoryStore } from '@/stores/workHistory'
 import {
   workspaceAPI,
   workspaceFileAPI,
@@ -409,6 +410,7 @@ const { ui, isZh } = useStudioCopy()
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const historyStore = useWorkHistoryStore()
 const workId = computed(() => route.params.work_id as string)
 
 const { isMobile } = useBreakpoint()
@@ -699,6 +701,7 @@ const loadWork = async () => {
   try {
     const work = await workspaceAPI.getWork(authStore.token, workId.value)
     currentWork.value = work
+    historyStore.upsert(work)
 
     // 设置当前选中的历史工作
     activeHistoryId.value = work.id
@@ -1174,6 +1177,7 @@ const deleteWork = async () => {
 
   try {
     await workspaceAPI.deleteWork(authStore.token, workId.value)
+    historyStore.remove(workId.value)
     MessagePlugin.success('工作已删除')
 
     // 跳转回首页
@@ -2699,8 +2703,9 @@ const generateWorkTitle = async (question: string) => {
 }
 .chat-input :deep(.t-chat__sender__textarea) {
   border-radius: 24px;
-  border-color: #e5e7e8;
-  box-shadow: 0 2px 12px #00000004;
+  border-color: #d9dedd;
+  background: #fcfcfc;
+  box-shadow: 0 3px 14px #00000007;
   overflow: hidden;
 }
 .chat-input :deep(.t-chat__sender__textarea:focus-within) {

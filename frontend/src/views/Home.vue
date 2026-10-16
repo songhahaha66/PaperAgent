@@ -35,7 +35,7 @@
                 ? '输入研究题目，或添加题目与数据文件…'
                 : 'Describe your research, or attach a question and data…'
             "
-            :autosize="{ minRows: 2, maxRows: 10 }"
+            :autosize="{ minRows: 3, maxRows: 10 }"
             :disabled="creating"
             :aria-label="ui.question"
             class="research-input"
@@ -164,6 +164,7 @@ import { templateAPI, type PaperTemplate } from '@/api/template'
 import { attachmentAPI, workspaceAPI, type Work } from '@/api/workspace'
 import { modelConfigAPI } from '@/api/modelConfig'
 import { useAuthStore } from '@/stores/auth'
+import { useWorkHistoryStore } from '@/stores/workHistory'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import Sidebar from '@/components/Sidebar.vue'
@@ -173,14 +174,15 @@ const collapsed = ref(isMobile.value)
 watch(isMobile, (mobile) => {
   if (mobile) collapsed.value = true
 })
+const historyStore = useWorkHistoryStore()
 const auth = useAuthStore(),
   router = useRouter()
 const question = ref(''),
   mode = ref<'markdown' | 'word' | 'latex'>('latex'),
   templateId = ref(0)
 const files = ref<UploadFile[]>([]),
-  templates = ref<PaperTemplate[]>([]),
-  recentWorks = ref<Work[]>([])
+  templates = ref<PaperTemplate[]>([])
+const recentWorks = computed(() => historyStore.works.slice(0, 3))
 const loadingTemplates = ref(false),
   creating = ref(false),
   modelsReady = ref(false),
@@ -270,6 +272,7 @@ async function startWork() {
         uploaded.add(raw)
       }
     }
+    historyStore.upsert(draft)
     localStorage.setItem(`pendingQuestion:${draft.work_id}`, question.value.trim())
     await router.push(`/work/${draft.work_id}`)
   } catch (error) {
@@ -289,17 +292,15 @@ function resetDraft() {
 }
 onMounted(async () => {
   if (!auth.token) return
-  const results = await Promise.allSettled([
-    modelConfigAPI.getAllModelConfigs(),
-    workspaceAPI.getWorks(auth.token, 0, 3),
-  ])
-  const configs = results[0]
-  if (configs.status === 'fulfilled')
+  void historyStore.ensureLoaded()
+  try {
+    const configs = await modelConfigAPI.getAllModelConfigs()
     modelsReady.value = ['brain', 'code', 'writing'].every((role) =>
-      configs.value.some((c) => c.type === role && c.is_active),
+      configs.some((config) => config.type === role && config.is_active),
     )
-  const works = results[1]
-  if (works.status === 'fulfilled') recentWorks.value = works.value.works
+  } catch {
+    modelsReady.value = false
+  }
 })
 </script>
 <style scoped>
@@ -338,23 +339,23 @@ onMounted(async () => {
 .home-content {
   width: calc(100% - 80px);
   max-width: 780px;
-  margin: clamp(60px, 17vh, 180px) auto 80px;
+  margin: clamp(44px, 13vh, 140px) auto 64px;
 }
 .home-content h1 {
   font-family: var(--td-font-family);
-  font-size: 29px;
-  font-weight: 500;
+  font-size: 30px;
+  font-weight: 600;
   line-height: 1.5;
   text-align: center;
-  margin: 0 0 32px;
+  margin: 0 0 28px;
   color: var(--td-text-color-primary);
   letter-spacing: -0.4px;
 }
 .research-composer {
-  border: 1px solid #e5e7e8;
-  border-radius: 28px;
-  background: #fff;
-  box-shadow: 0 3px 16px #00000006;
+  border: 1px solid #d9dedd;
+  border-radius: 24px;
+  background: #fcfcfc;
+  box-shadow: 0 4px 18px #00000007;
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
@@ -362,8 +363,10 @@ onMounted(async () => {
   padding: 7px 10px 10px;
 }
 .research-composer:focus-within {
-  border-color: #c8ceca;
-  box-shadow: 0 3px 20px #00000009;
+  border-color: #9db5a8;
+  box-shadow:
+    0 0 0 3px #16865d08,
+    0 4px 18px #00000007;
 }
 .research-input {
   width: 100%;
@@ -379,7 +382,7 @@ onMounted(async () => {
   resize: none;
 }
 .research-input :deep(.t-textarea__inner::placeholder) {
-  color: #999;
+  color: #818181;
   font-size: 15px;
 }
 .research-input :deep(.t-textarea__inner:focus-visible) {
@@ -388,9 +391,11 @@ onMounted(async () => {
 .composer-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 0 0;
-  min-height: 42px;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 9px 0 0;
+  min-height: 46px;
+  border-top: 1px solid #eceeed;
 }
 .composer-toolbar .attach-button {
   width: 36px;
@@ -401,7 +406,7 @@ onMounted(async () => {
 }
 .composer-toolbar .layout-button {
   font-size: 12px;
-  color: #777;
+  color: #555;
   height: 34px;
   padding: 0 9px;
 }
@@ -426,8 +431,9 @@ onMounted(async () => {
 .format-select :deep(.t-input) {
   background: transparent !important;
   border-radius: 18px;
-  color: #777;
+  color: #4d4d4d;
   font-size: 13px;
+  font-weight: 500;
 }
 .format-select :deep(.t-input:hover) {
   background: #f6f6f6 !important;
@@ -467,7 +473,7 @@ onMounted(async () => {
 }
 .attachment-chip > .t-icon {
   font-size: 19px;
-  color: #888;
+  color: #737373;
   flex-shrink: 0;
 }
 .attachment-chip > span {
@@ -487,12 +493,12 @@ onMounted(async () => {
   gap: 20px;
   align-items: center;
   padding: 14px 15px 0;
-  color: #a0a0a0;
-  font-size: 11px;
+  color: #777;
+  font-size: 12px;
   line-height: 1.7;
 }
 .composer-meta a {
-  color: #999;
+  color: #777;
   text-decoration: none;
   display: inline-flex;
   align-items: center;
@@ -515,7 +521,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 27px;
+  margin-top: 20px;
   padding: 0 9px;
 }
 .suggestions > button {
@@ -527,7 +533,7 @@ onMounted(async () => {
   border-radius: 12px;
   padding: 13px 12px;
   text-align: left;
-  color: #929292;
+  color: #636363;
   font-size: 14px;
   cursor: pointer;
   width: 100%;
@@ -542,7 +548,7 @@ onMounted(async () => {
 }
 .suggestions > button > .t-icon {
   font-size: 19px;
-  color: #888;
+  color: #737373;
   flex-shrink: 0;
 }
 .suggestions > button > .t-icon:last-child {
@@ -602,7 +608,7 @@ onMounted(async () => {
 }
 @media (min-width: 1700px) {
   .home-content {
-    margin-top: clamp(100px, 21vh, 240px);
+    margin-top: clamp(80px, 16vh, 190px);
   }
 }
 @media (max-width: 1000px) {
@@ -627,11 +633,11 @@ onMounted(async () => {
   }
   .home-content h1 {
     font-size: 25px;
-    font-weight: 500;
+    font-weight: 600;
     margin-bottom: 26px;
   }
   .research-composer {
-    border-radius: 25px;
+    border-radius: 22px;
     padding: 6px 8px 8px;
   }
   .research-input :deep(.t-textarea__inner) {
@@ -665,7 +671,7 @@ onMounted(async () => {
   }
   .composer-meta {
     padding: 12px 6px 0;
-    font-size: 10px;
+    font-size: 11px;
     gap: 10px;
   }
   .suggestions {

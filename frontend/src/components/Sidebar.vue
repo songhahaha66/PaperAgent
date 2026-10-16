@@ -8,8 +8,7 @@
         :aria-expanded="false"
         @click="toggleSidebar"
       >
-        <img src="/logo.png" alt="" class="header-logo-small" /><t-icon
-          name="view-column"
+        <img src="/logo.png" alt="" class="header-logo-small" /><SidebarToggleIcon
           class="logo-toggle-icon"
         />
       </button>
@@ -28,7 +27,7 @@
           class="sidebar-toggle-btn"
           :title="t('sidebar.toggle')"
           :aria-label="t('sidebar.toggle')"
-          ><t-icon name="chevron-left"
+          ><SidebarToggleIcon :collapsed="false"
         /></t-button>
       </div>
     </div>
@@ -65,7 +64,10 @@
         </div>
         <div class="history-list">
           <!-- 加载状态 -->
-          <div v-if="loadingHistory" class="loading-state">
+          <div
+            v-if="loadingHistory && !historyStore.hasLoaded && !historyItems.length"
+            class="loading-state"
+          >
             <t-loading size="small" />
             <p>{{ t('common.loading') }}</p>
           </div>
@@ -147,12 +149,12 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { BrowseIcon } from 'tdesign-icons-vue-next'
 import AccountMenu from '@/components/AccountMenu.vue'
-import { useAuthStore } from '@/stores/auth'
-import { workspaceAPI } from '@/api/workspace'
+import { useWorkHistoryStore } from '@/stores/workHistory'
+import SidebarToggleIcon from '@/components/SidebarToggleIcon.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import { formatWorkDate } from '@/utils/dates'
@@ -177,7 +179,7 @@ const { t, locale } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const { ui, isZh } = useStudioCopy()
-const authStore = useAuthStore()
+const historyStore = useWorkHistoryStore()
 const { isMobile } = useBreakpoint()
 
 // 历史工作数据类型定义
@@ -190,9 +192,17 @@ interface HistoryItem {
   status?: string
 }
 
-// 历史工作数据状态
-const historyItems = ref<HistoryItem[]>([])
-const loadingHistory = ref(false)
+const historyItems = computed<HistoryItem[]>(() =>
+  historyStore.works.map((work) => ({
+    id: work.id,
+    work_id: work.work_id,
+    title: work.title,
+    date: work.created_at,
+    content: work.description || '',
+    status: work.status,
+  })),
+)
+const loadingHistory = computed(() => historyStore.loading)
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = computed(() => props.isSidebarCollapsed)
@@ -236,32 +246,6 @@ const selectHistory = (item: any) => {
   }
 }
 
-// 加载用户工作列表
-const loadUserWorks = async () => {
-  if (!authStore.token) return
-
-  loadingHistory.value = true
-  try {
-    const worksResponse = await workspaceAPI.getWorks(authStore.token, 0, 10)
-
-    // 转换工作数据为历史记录格式
-    historyItems.value = worksResponse.works.map((work) => ({
-      id: work.id,
-      work_id: work.work_id,
-      title: work.title,
-      date: work.created_at,
-      content: work.description || '',
-      status: work.status,
-    }))
-  } catch (error) {
-    console.error('加载工作列表失败:', error)
-    // 清空历史记录，显示空状态
-    historyItems.value = []
-  } finally {
-    loadingHistory.value = false
-  }
-}
-
 // 当前选中的历史工作ID
 const activeHistoryId = computed(() => props.activeHistoryId)
 
@@ -298,46 +282,21 @@ onUnmounted(() => {
 })
 
 const onWorkStatusUpdated = (event: Event) => {
-  const { workId, status } = (event as CustomEvent).detail
-  const workItem = historyItems.value.find((item) => item.work_id === workId)
-  if (workItem) workItem.status = status
+  const { workId, status } = (event as CustomEvent<{ workId: string; status: string }>).detail
+  historyStore.patch(workId, { status })
 }
-onUnmounted(() => window.removeEventListener('work-status-updated', onWorkStatusUpdated))
-
-// 组件挂载时加载历史工作数据
+const onWorkTitleUpdated = (event: Event) => {
+  const { workId, newTitle } = (event as CustomEvent<{ workId: string; newTitle: string }>).detail
+  historyStore.patch(workId, { title: newTitle })
+}
 onMounted(() => {
-  loadUserWorks()
-
-  // 监听工作标题更新事件，刷新侧边栏工作列表
-  window.addEventListener('work-title-updated', (event: any) => {
-    const { workId, newTitle } = event.detail
-
-    // 找到对应的工作项并更新标题
-    const workItem = historyItems.value.find((item) => item.work_id === workId)
-    if (workItem) {
-      workItem.title = newTitle
-      console.log('侧边栏工作标题已更新:', newTitle)
-    }
-
-    // 也可以选择重新加载整个工作列表
-    // loadUserWorks();
-  })
-
+  void historyStore.ensureLoaded()
   window.addEventListener('work-status-updated', onWorkStatusUpdated)
-
-  // 组件卸载时清理事件监听器
-  onUnmounted(() => {
-    window.removeEventListener('work-title-updated', (event: any) => {
-      const { workId, newTitle } = event.detail
-
-      // 找到对应的工作项并更新标题
-      const workItem = historyItems.value.find((item) => item.work_id === workId)
-      if (workItem) {
-        workItem.title = newTitle
-        console.log('侧边栏工作标题已更新:', newTitle)
-      }
-    })
-  })
+  window.addEventListener('work-title-updated', onWorkTitleUpdated)
+})
+onUnmounted(() => {
+  window.removeEventListener('work-status-updated', onWorkStatusUpdated)
+  window.removeEventListener('work-title-updated', onWorkTitleUpdated)
 })
 </script>
 
@@ -454,8 +413,9 @@ onMounted(() => {
   background: #f7f7f7;
 }
 .sidebar-nav .nav-active {
-  background: #f4f4f4;
+  background: #f1f2f1;
   color: #222;
+  font-weight: 500;
 }
 .menu-title {
   display: flex;
@@ -464,8 +424,8 @@ onMounted(() => {
   padding: 0 13px;
   margin: 0 0 12px;
   font-size: 12px;
-  font-weight: 400;
-  color: #999;
+  font-weight: 500;
+  color: #7a7a7a;
   font-family: var(--td-font-family);
 }
 .menu-title > .t-icon {
