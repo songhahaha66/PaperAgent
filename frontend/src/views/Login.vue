@@ -1,7 +1,6 @@
 <template>
   <div class="login-page">
     <div class="login-container">
-      <div class="language-control"><LanguageSwitcher /></div>
       <div class="login-header">
         <div class="title-with-logo">
           <img src="/logo.png" alt="PaperAgent Logo" class="logo" />
@@ -117,7 +116,6 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessagePlugin, type FormInstanceFunctions } from 'tdesign-vue-next'
@@ -323,12 +321,6 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 </script>
 
 <style scoped>
-.language-control {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 20px;
-}
-
 .login-page {
   min-height: 100vh;
   display: flex;

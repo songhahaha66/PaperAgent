@@ -6,7 +6,6 @@
         <h1 class="header-title">PaperAgent</h1>
       </div>
       <div class="header-right">
-        <LanguageSwitcher />
         <t-button
           theme="default"
           variant="outline"
@@ -97,7 +96,6 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { onMounted, ref, onUnmounted, computed } from 'vue'
