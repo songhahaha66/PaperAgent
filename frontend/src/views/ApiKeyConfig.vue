@@ -19,6 +19,7 @@
           <div class="provider-row">
             <label>{{ isZh ? '服务商' : 'Provider' }}</label
             ><t-radio-group
+              variant="primary-filled"
               :value="isDeepSeek ? 'deepseek' : 'custom'"
               :disabled="saving || loading"
               @change="selectProvider"
@@ -84,7 +85,7 @@
               <div class="role-actions">
                 <t-button
                   theme="primary"
-                  variant="outline"
+                  variant="base"
                   :disabled="!valid(forms[role.type]) || !!savingRole"
                   :loading="savingRole === role.type"
                   @click="saveRole(role.type)"

@@ -15,7 +15,7 @@
       <div class="file-actions">
         <t-button
           theme="primary"
-          variant="outline"
+          variant="base"
           @click="downloadFile"
           :loading="downloading"
           class="download-btn"

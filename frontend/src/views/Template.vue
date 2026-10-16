@@ -93,7 +93,7 @@
                 </t-tag>
               </div>
               <div class="template-card-actions">
-                <t-button theme="primary" variant="outline" size="small" @click="editTemplate(row)">
+                <t-button theme="primary" variant="base" size="small" @click="editTemplate(row)">
                   编辑
                 </t-button>
                 <t-button

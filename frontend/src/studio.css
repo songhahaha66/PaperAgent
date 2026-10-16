@@ -1,6 +1,24 @@
 /* Small layout and accessibility adjustments on top of the existing TDesign theme. */
-:root {
+:root,
+:root[theme-mode='light'] {
+  --td-brand-color-1: #eef7f2;
+  --td-brand-color-2: #d7eee2;
+  --td-brand-color-3: #b5d8c6;
+  --td-brand-color-4: #89c3a8;
+  --td-brand-color-5: #56aa85;
+  --td-brand-color-6: #16865d;
+  --td-brand-color-7: #12734f;
+  --td-brand-color-8: #0f6042;
+  --td-brand-color-9: #0c5038;
+  --td-brand-color-10: #083b2a;
   --td-brand-color: #16865d;
+  --td-success-color: #16865d;
+  --td-success-color-hover: #12734f;
+  --td-font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial,
+    sans-serif;
+  --td-font-family-medium: var(--td-font-family);
+  --td-font-family-heading: var(--td-font-family);
   --td-radius-default: 8px;
   --td-radius-medium: 12px;
   --td-radius-large: 16px;
@@ -132,4 +150,10 @@ select {
   .passkey-page > .main-content {
     min-height: 0;
   }
+}
+
+/* Positive status badges use the same solid accent as primary actions. */
+.t-tag--success.t-tag--light {
+  background: var(--td-brand-color);
+  color: #fff;
 }

@@ -27,7 +27,11 @@
             </t-button>
           </template>
 
-          <t-alert v-if="!passkeySupported" theme="warning" message="当前浏览器不支持 Passkey，请使用最新版 Chrome、Edge、Safari 或 Firefox。" />
+          <t-alert
+            v-if="!passkeySupported"
+            theme="warning"
+            message="当前浏览器不支持 Passkey，请使用最新版 Chrome、Edge、Safari 或 Firefox。"
+          />
           <t-alert v-else-if="originHint" theme="warning" :message="originHint" />
 
           <t-table
@@ -67,7 +71,11 @@
     >
       <t-form>
         <t-form-item label="名称">
-          <t-input v-model="newPasskeyName" placeholder="例如：我的笔记本、iPhone" maxlength="100" />
+          <t-input
+            v-model="newPasskeyName"
+            placeholder="例如：我的笔记本、iPhone"
+            maxlength="100"
+          />
         </t-form-item>
       </t-form>
       <p class="dialog-hint">浏览器将弹出系统提示，请使用指纹、面容、PIN 或安全密钥完成绑定。</p>
@@ -90,7 +98,12 @@ import { useRouter } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
 import { authAPI, type PasskeyCredential } from '@/api/auth'
-import { createPasskey, isPasskeyCanceled, isPasskeySupported, passkeyOriginHint } from '@/utils/passkey'
+import {
+  createPasskey,
+  isPasskeyCanceled,
+  isPasskeySupported,
+  passkeyOriginHint,
+} from '@/utils/passkey'
 
 const router = useRouter()
 const isSidebarCollapsed = ref(window.innerWidth <= 768)
@@ -275,5 +288,62 @@ onMounted(async () => {
   margin: 8px 0 0;
   color: #7f8c8d;
   font-size: 13px;
+}
+
+.passkey-page {
+  background: #fff;
+}
+.main-content {
+  min-width: 0;
+}
+.workspace-header {
+  padding: 30px 32px 24px;
+  border-color: #eceeeb;
+}
+.workspace-header h1 {
+  font-family: var(--td-font-family);
+  font-size: 26px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #252525;
+  margin: 0 0 10px;
+}
+.workspace-header p {
+  font-size: 13px;
+  color: #6c726b;
+  line-height: 1.8;
+}
+.passkey-content {
+  padding: 24px 32px;
+  background: #fff;
+}
+.passkey-content :deep(.t-card) {
+  border-color: #dedfde;
+  border-radius: 14px;
+  box-shadow: none;
+}
+.passkey-content :deep(.t-card__title) {
+  font-family: var(--td-font-family);
+  font-size: 16px;
+  font-weight: 600;
+  color: #333;
+}
+@media (max-width: 768px) {
+  .workspace-header {
+    padding: 26px 20px 22px;
+  }
+  .workspace-header h1 {
+    font-size: 23px;
+  }
+  .workspace-header p {
+    font-size: 12px;
+  }
+  .passkey-content {
+    padding: 0 20px 28px;
+  }
+  .passkey-content :deep(.t-card__header),
+  .passkey-content :deep(.t-card__body) {
+    padding: 20px;
+  }
 }
 </style>

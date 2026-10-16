@@ -305,9 +305,9 @@ function logout() {
   line-height: 1.4;
 }
 .language-options button.selected {
-  background: #fff;
-  box-shadow: 0 1px 3px #0000000b;
-  color: #444;
+  background: var(--td-brand-color);
+  box-shadow: none;
+  color: #fff;
 }
 .logout-action {
   margin-top: 4px;

@@ -35,12 +35,7 @@
     <!-- 展开状态的内容 -->
     <div class="sidebar-content" v-if="!isSidebarCollapsed">
       <div class="menu-section">
-        <t-button
-          theme="default"
-          variant="text"
-          block
-          class="new-task-button"
-          @click="createNewTask"
+        <t-button theme="primary" block class="new-task-button" @click="createNewTask"
           ><template #icon><t-icon name="edit" /></template>{{ t('sidebar.newWork') }}</t-button
         >
       </div>
@@ -113,8 +108,7 @@
     <!-- 收起时居中的新建按钮（位于 header 和 footer-collapsed 之间） -->
     <div v-if="isSidebarCollapsed" class="collapsed-center">
       <t-button
-        theme="default"
-        variant="text"
+        theme="primary"
         shape="square"
         @click="createNewTask"
         class="sidebar-create-btn"
@@ -222,7 +216,6 @@ const closeSidebarOnMobile = () => {
 }
 
 const navigationItems = computed(() => [
-  { path: '/home', label: ui.value.workspace, icon: 'home' },
   { path: '/template', label: ui.value.templates, icon: 'file-copy' },
   { path: '/api-config', label: ui.value.models, icon: 'setting' },
 ])
@@ -388,7 +381,7 @@ onUnmounted(() => {
   border-radius: 10px;
   justify-content: flex-start;
   font-size: 13px;
-  color: #333;
+  color: #fff;
 }
 .new-task-button :deep(.t-button__text) {
   text-align: left;
@@ -416,8 +409,8 @@ onUnmounted(() => {
   background: #f7f7f7;
 }
 .sidebar-nav .nav-active {
-  background: #f1f2f1;
-  color: #222;
+  background: var(--td-brand-color);
+  color: #fff;
   font-weight: 500;
 }
 .menu-title {
@@ -454,8 +447,8 @@ onUnmounted(() => {
   background: #f7f7f7;
 }
 .history-item.active {
-  background: #f2f2f2;
-  color: #222;
+  background: var(--td-brand-color);
+  color: #fff;
 }
 .history-title {
   overflow: hidden;
@@ -484,7 +477,7 @@ onUnmounted(() => {
   width: 36px;
   height: 36px;
   border-radius: 11px;
-  color: #555;
+  color: #fff;
 }
 .sidebar-footer-collapsed {
   padding: 12px 10px;
@@ -638,5 +631,16 @@ onUnmounted(() => {
   width: 28px;
   height: 28px;
   font-size: 12px;
+}
+.sidebar-nav .nav-active:hover {
+  background: var(--td-brand-color-hover);
+  color: #fff;
+}
+.history-item.active:hover {
+  background: var(--td-brand-color-hover);
+  color: #fff;
+}
+.history-item.active .running-dot {
+  background: #fff;
 }
 </style>

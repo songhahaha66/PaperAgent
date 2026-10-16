@@ -325,7 +325,7 @@
                   <t-button
                     v-if="paperAvailable"
                     theme="primary"
-                    variant="outline"
+                    variant="base"
                     @click="handleMainPaperClick"
                     >{{ ui.viewResults }}</t-button
                   ><t-button theme="default" variant="text" @click="openFiles"

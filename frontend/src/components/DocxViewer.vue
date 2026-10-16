@@ -15,7 +15,7 @@
       <div class="file-actions">
         <t-button
           theme="primary"
-          variant="outline"
+          variant="base"
           @click="downloadFile"
           :loading="downloading"
           class="download-btn"
@@ -112,9 +112,9 @@ const loadDocx = async () => {
     console.log('DocxViewer - 开始渲染...')
     await renderAsync(blob, docxContainer.value, undefined, {
       className: 'docx-preview-content',
-      inWrapper: true,  // 使用包装器以支持分页
+      inWrapper: true, // 使用包装器以支持分页
       ignoreWidth: false,
-      ignoreHeight: false,  // 保持页面高度
+      ignoreHeight: false, // 保持页面高度
       ignoreFonts: false,
       breakPages: true,
       ignoreLastRenderedPageBreak: false,
