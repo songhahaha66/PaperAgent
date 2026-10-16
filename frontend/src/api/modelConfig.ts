@@ -25,6 +25,22 @@ export interface ModelConfigUpdate {
 }
 
 class ModelConfigAPI {
+  async applyDefault(): Promise<ModelConfig[]> {
+    return apiClient.request<ModelConfig[]>('/model-configs/apply-default', { method: 'POST' })
+  }
+
+  async testConnection(config: {
+    type: string
+    model_id: string
+    base_url: string
+    api_key?: string
+  }): Promise<{ ok: boolean }> {
+    return apiClient.request<{ ok: boolean }>('/model-configs/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    })
+  }
+
   // 获取所有模型配置
   async getAllModelConfigs(skip: number = 0, limit: number = 100): Promise<ModelConfig[]> {
     return apiClient.request<ModelConfig[]>(`/model-configs?skip=${skip}&limit=${limit}`)

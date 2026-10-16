@@ -5,6 +5,7 @@
         v-if="!fillHeight"
         variant="text"
         shape="square"
+        :aria-label="isCollapsed ? '展开文件管理器' : '收起文件管理器'"
         @click="isCollapsed = !isCollapsed"
         class="fm-btn"
       >
@@ -31,7 +32,14 @@
         </t-tab-panel>
       </t-tabs>
       <span v-else class="fm-collapsed-title">文件管理器</span>
-      <t-button variant="text" shape="square" @click.stop="handleRefresh" :loading="isLoading" class="fm-btn">
+      <t-button
+        variant="text"
+        shape="square"
+        aria-label="刷新文件与计划"
+        @click.stop="handleRefresh"
+        :loading="isLoading"
+        class="fm-btn"
+      >
         <template #icon>
           <t-icon name="refresh" size="16px" />
         </template>
@@ -70,7 +78,13 @@
             <div class="plan-heading">
               <div class="plan-title">{{ planData.title || '写作计划' }}</div>
               <div class="plan-meta">
-                {{ planData.planning_mode === 'dynamic' ? '动态计划' : planData.methodology === 'spec-driven' ? '规范计划' : '结构化计划' }}
+                {{
+                  planData.planning_mode === 'dynamic'
+                    ? '动态计划'
+                    : planData.methodology === 'spec-driven'
+                      ? '规范计划'
+                      : '结构化计划'
+                }}
                 <span v-if="planData.revision !== undefined"> · r{{ planData.revision }}</span>
                 <span v-if="planData.updated_at"> · {{ formatPlanTime(planData.updated_at) }}</span>
               </div>
@@ -81,7 +95,10 @@
             </div>
           </div>
           <div class="plan-progress">
-            <div class="plan-progress-bar" :style="{ width: `${planData.stats.progress_percent}%` }" />
+            <div
+              class="plan-progress-bar"
+              :style="{ width: `${planData.stats.progress_percent}%` }"
+            />
           </div>
           <div class="plan-stats">
             <span>完成 {{ planData.stats.completed }}/{{ planData.stats.total }}</span>
@@ -96,7 +113,9 @@
             </div>
             <div v-if="planData.next_actions?.length" class="dynamic-row">
               <span class="dynamic-label">下一步</span>
-              <span class="dynamic-value">{{ planData.next_actions.map((item) => item.title).join('、') }}</span>
+              <span class="dynamic-value">{{
+                planData.next_actions.map((item) => item.title).join('、')
+              }}</span>
             </div>
           </div>
 
@@ -118,7 +137,9 @@
               <div class="plan-item-body">
                 <div class="plan-item-head">
                   <span class="plan-item-title">{{ item.title }}</span>
-                  <span class="plan-item-status">{{ statusLabel(item.status, item.status_label) }}</span>
+                  <span class="plan-item-status">{{
+                    statusLabel(item.status, item.status_label)
+                  }}</span>
                 </div>
                 <div v-if="item.description" class="plan-item-desc">{{ item.description }}</div>
               </div>
@@ -210,7 +231,7 @@ const processedFileTreeData = computed(() => {
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
     // 返回默认的空结构，使用后端的五个分类
     return [
-       {
+      {
         value: 'papers',
         label: '论文文档 (0)',
         children: [],
@@ -259,7 +280,7 @@ const processedFileTreeData = computed(() => {
       code: [] as any[],
       outputs: [] as any[],
       papers: [] as any[],
-      attachments: [] as any[]
+      attachments: [] as any[],
     }
 
     fileInfos.forEach((file) => {
@@ -270,7 +291,7 @@ const processedFileTreeData = computed(() => {
           label: file.name || file.path.split('/').pop() || 'Unknown',
           isLeaf: true,
           category: category,
-          category_path: file.category_path
+          category_path: file.category_path,
         }
 
         if (categorizedFiles[category as keyof typeof categorizedFiles]) {
@@ -280,14 +301,14 @@ const processedFileTreeData = computed(() => {
     })
 
     // 对每个分类的文件进行排序
-    Object.keys(categorizedFiles).forEach(category => {
+    Object.keys(categorizedFiles).forEach((category) => {
       categorizedFiles[category as keyof typeof categorizedFiles].sort((a, b) =>
-        a.label.localeCompare(b.label)
+        a.label.localeCompare(b.label),
       )
     })
 
     return [
-       {
+      {
         value: 'papers',
         label: `论文文档 (${categorizedFiles.papers.length})`,
         children: categorizedFiles.papers,
@@ -523,7 +544,7 @@ const handleFileSelect = (selectedKeys: string[]) => {
   if (selectedKeys && selectedKeys.length > 0) {
     const selectedKey = selectedKeys[0]
     if (!selectedKey) return
-    
+
     console.log('选中的key:', selectedKey)
 
     // 检查是否是叶子节点（文件）且不是分类名称

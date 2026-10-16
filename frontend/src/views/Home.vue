@@ -1,1129 +1,485 @@
 <template>
   <div class="home-page">
     <Sidebar
-      :is-sidebar-collapsed="isSidebarCollapsed"
-      :active-history-id="activeHistoryId"
-      @toggle-sidebar="toggleSidebar"
-      @create-new-task="createNewTask"
-      @select-history="selectHistory"
+      :is-sidebar-collapsed="collapsed"
+      :active-history-id="null"
+      @toggle-sidebar="collapsed = !collapsed"
+      @create-new-task="resetDraft"
     />
-
-    <div class="home-container">
-      <div class="language-control"><LanguageSwitcher /></div>
-      <!-- 欢迎标题 -->
-      <div class="welcome-header">
-        <h1>{{ t('home.greeting', { name: userName }) }}</h1>
-        <p>{{ t('home.subtitle') }}</p>
-      </div>
-
-      <!-- 主要任务创建区域 -->
-      <div class="main-task-area">
-        <div class="input-container">
-          <!-- 第一阶段：输入问题和上传附件 -->
-          <div v-if="currentStep === 1" class="step-content">
-            <div class="input-wrapper">
-              <t-textarea
-                v-model="researchQuestion"
-                :placeholder="t('home.questionPlaceholder')"
-                :autosize="{ minRows: 5, maxRows: 8 }"
-                class="question-input"
-              />
-
-              <!-- 按钮容器 -->
-              <div class="button-container">
-                <!-- 附件按钮 - 左下角 -->
-                <div class="attachment-btn">
-                  <t-upload
-                    v-model="uploadedFiles"
-                    :auto-upload="false"
-                    :multiple="true"
-                    :accept="'.pdf,.doc,.docx,.tex,.txt,.zip,.rar,.png,.jpg,.jpeg,.gif'"
-                    :max="10"
-                    :drag="false"
-                    :show-upload-progress="true"
-                    class="file-upload"
-                  >
-                    <t-button theme="default" variant="text" size="middle">
-                      <template #icon>
-                        <t-icon name="attach" />
-                      </template>
-                      {{ t('home.attachments') }}
-                    </t-button>
-                  </t-upload>
-                  <span class="file-count" v-if="uploadedFiles.length > 0">{{
-                    uploadedFiles.length
-                  }}</span>
-                </div>
-
-                <!-- 下一步按钮 - 右下角 -->
-                <div class="next-btn-wrapper">
-                  <t-button
-                    theme="primary"
-                    size="middle"
-                    @click="nextStep"
-                    :disabled="!researchQuestion.trim()"
-                    class="next-btn"
-                  >
-                    {{ t('common.next') }}
-                    <template #suffix>
-                      <t-icon name="arrow-right" />
-                    </template>
-                  </t-button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 第二阶段：选择输出格式 -->
-          <div v-if="currentStep === 2" class="step-content">
-            <h3>{{ t('home.outputFormat') }}</h3>
-
-            <!-- 输出模式选择 -->
-            <div class="output-mode-selector">
-              <!-- Markdown 选项 -->
-              <t-card
-                :class="{ selected: selectedOutputMode === 'markdown' }"
-                @click="selectOutputMode('markdown')"
-                class="output-mode-card"
-              >
-                <div class="output-mode-content">
-                  <t-icon name="file-1" size="24px" />
-                  <div class="output-mode-text">
-                    <h4>Markdown</h4>
-                    <p>{{ t('home.markdownDescription') }}</p>
-                  </div>
-                  <div v-if="selectedOutputMode === 'markdown'" class="selection-indicator">
-                    <t-icon name="check-circle-filled" theme="success" />
-                  </div>
-                </div>
-              </t-card>
-
-              <!-- Word 选项 -->
-              <t-card
-                :class="{ selected: selectedOutputMode === 'word' }"
-                @click="selectOutputMode('word')"
-                class="output-mode-card"
-              >
-                <div class="output-mode-content">
-                  <t-icon name="file-word" size="24px" />
-                  <div class="output-mode-text">
-                    <h4>Word (.docx)</h4>
-                    <p>{{ t('home.wordDescription') }}</p>
-                  </div>
-                  <div v-if="selectedOutputMode === 'word'" class="selection-indicator">
-                    <t-icon name="check-circle-filled" theme="success" />
-                  </div>
-                </div>
-              </t-card>
-
-              <!-- LaTeX 选项 -->
-              <t-card
-                :class="{ selected: selectedOutputMode === 'latex' }"
-                @click="selectOutputMode('latex')"
-                class="output-mode-card"
-              >
-                <div class="output-mode-content">
-                  <t-icon name="file-pdf" size="24px" />
-                  <div class="output-mode-text">
-                    <h4>LaTeX</h4>
-                    <p>{{ t('home.latexDescription') }}</p>
-                  </div>
-                  <div v-if="selectedOutputMode === 'latex'" class="selection-indicator">
-                    <t-icon name="check-circle-filled" theme="success" />
-                  </div>
-                </div>
-              </t-card>
-            </div>
-
-            <div class="step-actions">
-              <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
-                {{ t('common.previous') }}
-              </t-button>
-
-              <t-button theme="primary" size="middle" @click="nextStep" class="next-btn">
-                {{ t('common.next') }}
-                <template #suffix>
-                  <t-icon name="arrow-right" />
-                </template>
-              </t-button>
-            </div>
-          </div>
-
-          <!-- 第三阶段：选择模板 -->
-          <div v-if="currentStep === 3" class="step-content">
-            <h3>{{ t('home.chooseTemplate', { format: getOutputModeLabel() }) }}</h3>
-
-            <!-- 不使用模板选项 -->
-            <div class="no-template-option">
-              <t-card
-                :class="{ selected: selectedTemplateId === null }"
-                @click="selectNoTemplate"
-                class="no-template-card"
-              >
-                <div class="no-template-content">
-                  <t-icon name="file-add" theme="default" size="32px" />
-                  <div class="no-template-text">
-                    <h4>{{ selectedOutputMode === 'latex' ? t('home.builtinLatex') : t('home.noTemplate') }}</h4>
-                    <p>{{ selectedOutputMode === 'latex' ? t('home.builtinLatexDescription') : t('home.noTemplateDescription') }}</p>
-                  </div>
-                  <div v-if="selectedTemplateId === null" class="selection-indicator">
-                    <t-icon name="check-circle-filled" theme="success" />
-                  </div>
-                </div>
-              </t-card>
-            </div>
-
-            <!-- LaTeX 输出用内置数模版式排版，暂不支持上传 LaTeX 模板 -->
-            <template v-if="selectedOutputMode !== 'latex'">
-            <!-- 或者分割线 -->
-            <div class="template-divider">
-              <span>{{ t('home.existingTemplates', { format: getOutputModeLabel() }) }}</span>
-            </div>
-
-            <!-- 加载状态 -->
-            <div v-if="loading" class="loading-state">
-              <t-loading size="large" />
-              <p>{{ t('home.loadingTemplates', { format: getOutputModeLabel() }) }}</p>
-            </div>
-
-            <!-- 模板列表 -->
-            <div v-else-if="availableTemplates.length > 0" class="template-list-container">
-              <t-list>
-                <t-list-item
-                  v-for="template in availableTemplates"
-                  :key="template.id"
-                  :class="{ selected: selectedTemplateId === template.id }"
-                  @click="selectTemplate(template.id)"
-                >
-                  <t-list-item-meta
-                    :title="template.name"
-                    :description="template.description || t('common.noDescription')"
-                  >
-                  </t-list-item-meta>
-
-                  <template #action>
-                    <t-space>
-                      <t-button
-                        theme="default"
-                        variant="text"
-                        size="small"
-                        @click.stop="previewTemplate(template)"
-                      >
-                        {{ t('common.preview') }}
-                      </t-button>
-                      <div v-if="selectedTemplateId === template.id">
-                        <t-icon name="check-circle-filled" theme="success" />
-                      </div>
-                      <t-button
-                        v-else
-                        theme="primary"
-                        variant="text"
-                        size="small"
-                        @click.stop="selectTemplate(template.id)"
-                      >
-                        {{ t('common.select') }}
-                      </t-button>
-                    </t-space>
-                  </template>
-                </t-list-item>
-              </t-list>
-            </div>
-
-            <!-- 无模板状态 -->
-            <div v-else class="no-template-state">
-              <div class="no-template-icon">
-                <t-icon name="file" theme="default" size="48px" />
-              </div>
-              <h4>{{ t('home.noTemplates', { format: getOutputModeLabel() }) }}</h4>
-              <p>{{ t('home.noTemplatesDescription', { format: getOutputModeLabel() }) }}</p>
-              <t-button theme="primary" variant="outline" @click="goToTemplatePage">
-                {{ t('home.createTemplate') }}
-              </t-button>
-            </div>
-            </template>
-
-            <div class="step-actions">
-              <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">
-                {{ t('common.previous') }}
-              </t-button>
-
-              <t-button
-                theme="success"
-                size="middle"
-                @click="startWork"
-                :disabled="creatingWork"
-                class="start-btn"
-              >
-                <template #icon>
-                  <t-icon name="play" />
-                </template>
-                {{ creatingWork ? t('home.creating') : t('home.start') }}
-              </t-button>
-            </div>
-          </div>
+    <main class="home-main">
+      <header class="home-header">
+        <div>
+          <h1>{{ ui.title }}</h1>
+          <p>{{ ui.subtitle }}</p>
         </div>
-      </div>
-    </div>
-
-    <!-- 模板预览对话框 -->
-    <t-dialog
-      v-model:visible="showPreviewDialog"
-      :header="t('home.previewTitle', { name: previewTemplateData?.name || '' })"
-      :width="isMobile ? '92vw' : '900px'"
-      @confirm="closePreviewDialog"
-      @cancel="closePreviewDialog"
-    >
-      <div class="template-preview">
-        <div class="template-info">
-          <p>
-            <strong>{{ t('home.templateName') }}</strong
-            >{{ previewTemplateData?.name }}
-          </p>
-          <p>
-            <strong>{{ t('home.templateDescription') }}</strong
-            >{{ previewTemplateData?.description || t('common.noDescription') }}
-          </p>
-          <p>
-            <strong>{{ t('home.templateCategory') }}</strong
-            >{{ previewTemplateData?.category || t('common.uncategorized') }}
-          </p>
-        </div>
-        <div class="template-content">
-          <h4>{{ t('home.templateContent') }}</h4>
-          <div class="content-display">
-            <!-- 加载状态 -->
-            <div v-if="templatePreviewLoading" class="loading-container">
-              <t-loading size="large" :text="t('common.loading')" />
+        <LanguageSwitcher />
+      </header>
+      <section class="home-content">
+        <t-card :title="ui.question" :bordered="true"
+          ><template #actions
+            ><t-button theme="default" variant="text" size="small" @click="fillExample"
+              ><template #icon><t-icon name="lightbulb" /></template>{{ ui.example }}</t-button
+            ></template
+          >
+          <t-textarea
+            id="research-question"
+            v-model="question"
+            :placeholder="ui.placeholder"
+            :autosize="{ minRows: 5, maxRows: 10 }"
+            :disabled="creating"
+            class="research-input"
+          />
+          <div class="attachment-area">
+            <t-upload
+              v-model="files"
+              :auto-upload="false"
+              multiple
+              accept=".csv,.tsv,.xls,.xlsx,.json,.pdf,.doc,.docx,.tex,.txt,.zip,.png,.jpg,.jpeg,.gif,.webp"
+              :max="10"
+              :size-limit="{ size: 50, unit: 'MB' }"
+              :disabled="creating"
+              ><t-button variant="outline" theme="default"
+                ><template #icon><t-icon name="attach" /></template>{{ ui.attachments }}</t-button
+              ></t-upload
+            >
+            <p class="field-hint">{{ ui.fileHint }}</p>
+          </div>
+          <t-divider />
+          <div class="output-fields">
+            <div class="output-field">
+              <label class="field-label" id="output-label">{{ ui.output }}</label
+              ><t-radio-group
+                v-model="mode"
+                variant="default-filled"
+                :disabled="creating"
+                aria-labelledby="output-label"
+                ><t-radio-button
+                  v-for="format in formats"
+                  :key="format.value"
+                  :value="format.value"
+                  >{{ format.label }}</t-radio-button
+                ></t-radio-group
+              >
+              <p class="field-hint">{{ formats.find((f) => f.value === mode)?.hint }}</p>
             </div>
-
-            <!-- 文本文件预览 -->
-            <div v-else-if="templatePreviewData?.type === 'text'" class="text-preview">
-              <MarkdownRenderer
-                v-if="previewTemplateData?.file_path?.endsWith('.md')"
-                :content="templatePreviewData.content || ''"
-                :base-path="''"
-              />
-              <t-textarea
-                v-else
-                :model-value="templatePreviewData.content || ''"
-                readonly
-                :autosize="{ minRows: 15, maxRows: 25 }"
-                :placeholder="t('home.contentLoading')"
-              />
-            </div>
-
-            <!-- 图片文件预览 -->
-            <div v-else-if="templatePreviewData?.type === 'image'" class="image-preview">
-              <img
-                :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
-                :alt="templatePreviewData.filename"
-                style="max-width: 100%; height: auto"
-              />
-            </div>
-
-            <!-- 二进制文件预览 -->
-            <div v-else-if="templatePreviewData?.type === 'binary'" class="binary-preview">
-              <!-- DOCX文件使用DocxViewer预览 -->
-              <DocxViewer
-                v-if="templatePreviewData.filename?.toLowerCase().endsWith('.docx')"
-                :file-info="{
-                  filename: templatePreviewData.filename || '',
-                  size: templatePreviewData.size,
-                  mime_type: templatePreviewData.mime_type || '',
-                  download_url: templatePreviewData.download_url || '',
-                  message: templatePreviewData.message || '',
-                }"
-                :work-id="''"
-                :token="authStore.token || ''"
-              />
-              <!-- 其他二进制文件显示下载信息 -->
-              <div v-else class="file-info">
-                <t-icon name="file" size="48px" />
-                <p>
-                  <strong>{{ t('home.filename') }}</strong
-                  >{{ templatePreviewData.filename }}
-                </p>
-                <p>
-                  <strong>{{ t('home.fileSize') }}</strong
-                  >{{ formatFileSize(templatePreviewData.size) }}
-                </p>
-                <p>
-                  <strong>{{ t('home.fileType') }}</strong
-                  >{{ templatePreviewData.mime_type }}
-                </p>
-                <p>{{ templatePreviewData.message }}</p>
-                <t-button theme="primary" @click="downloadTemplateFile" style="margin-top: 16px">
-                  {{ t('common.download') }}
-                </t-button>
-              </div>
-            </div>
-
-            <!-- 预览失败 -->
-            <div v-else-if="templatePreviewError" class="error-preview">
-              <t-icon name="error-circle" size="48px" />
-              <p>{{ t('home.previewFailed') }}</p>
-              <p>{{ t(templatePreviewError) }}</p>
+            <div class="output-field">
+              <label class="field-label"
+                >{{ ui.template }} <span>{{ ui.optional }}</span></label
+              ><t-select
+                v-model="templateId"
+                :loading="loadingTemplates"
+                :disabled="creating || mode === 'latex'"
+                :aria-label="ui.template"
+                ><t-option
+                  :value="0"
+                  :label="mode === 'latex' ? ui.builtIn : ui.noTemplate" /><t-option
+                  v-for="item in templates"
+                  :key="item.id"
+                  :value="item.id"
+                  :label="item.name" /></t-select
+              ><router-link to="/template" class="manage-link">{{
+                ui.manageTemplates
+              }}</router-link>
             </div>
           </div>
-        </div>
-      </div>
-      <template #footer>
-        <t-button theme="primary" @click="closePreviewDialog">{{ t('common.close') }}</t-button>
-      </template>
-    </t-dialog>
+          <div class="form-footer">
+            <router-link to="/api-config" class="model-link"
+              ><t-icon :name="modelsReady ? 'check-circle' : 'setting'" /><span>{{
+                modelsReady ? ui.ready : ui.notReady
+              }}</span></router-link
+            ><t-button
+              theme="primary"
+              :loading="creating"
+              :disabled="!question.trim()"
+              @click="startWork"
+              >{{ creating ? ui.starting : ui.start
+              }}<template #suffix><t-icon name="arrow-right" /></template
+            ></t-button>
+          </div>
+          <t-alert
+            v-if="creationError"
+            theme="error"
+            :message="creationError"
+            class="creation-error"
+          />
+        </t-card>
+        <section v-if="recentWorks.length" class="recent-section">
+          <h2>{{ ui.recent }}</h2>
+          <t-list :split="true"
+            ><t-list-item v-for="work in recentWorks" :key="work.work_id"
+              ><t-list-item-meta
+                :title="work.title.trim() || ui.untitled"
+                :description="formatWorkDate(work.created_at, locale)" /><template #action
+                ><t-space
+                  ><t-tag size="small" variant="light">{{ statusLabel(work.status) }}</t-tag
+                  ><t-button
+                    theme="default"
+                    variant="text"
+                    size="small"
+                    @click="router.push(`/work/${work.work_id}`)"
+                    >{{ ui.openWork
+                    }}<template #suffix
+                      ><t-icon
+                        name="chevron-right" /></template></t-button></t-space></template></t-list-item
+          ></t-list>
+        </section>
+      </section>
+    </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { useI18n } from 'vue-i18n'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
-import { ref, computed, watch, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { useI18n } from 'vue-i18n'
+import type { UploadFile } from 'tdesign-vue-next'
 import { templateAPI, type PaperTemplate } from '@/api/template'
-import { workspaceAPI, type WorkCreate } from '@/api/workspace'
-import { attachmentAPI } from '@/api/workspace'
-import Sidebar from '@/components/Sidebar.vue'
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
-import DocxViewer from '@/components/DocxViewer.vue'
+import { attachmentAPI, workspaceAPI, type Work } from '@/api/workspace'
+import { modelConfigAPI } from '@/api/modelConfig'
+import { useAuthStore } from '@/stores/auth'
 import { useBreakpoint } from '@/composables/useBreakpoint'
-
-const { t } = useI18n()
-const router = useRouter()
-const authStore = useAuthStore()
+import { useStudioCopy } from '@/lang/studio'
+import { formatWorkDate } from '@/utils/dates'
+import Sidebar from '@/components/Sidebar.vue'
+import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
+const { ui, isZh } = useStudioCopy()
+const { t, locale } = useI18n()
 const { isMobile } = useBreakpoint()
-
-// 侧边栏折叠状态 - 手机端默认收起
-const isSidebarCollapsed = ref(isMobile.value)
-
+const collapsed = ref(isMobile.value)
 watch(isMobile, (mobile) => {
-  if (mobile) {
-    isSidebarCollapsed.value = true
-  }
+  if (mobile) collapsed.value = true
 })
-
-// 任务创建步骤（现在有3步：1.输入问题 2.选择模板 3.选择输出格式）
-const currentStep = ref(1)
-
-// 研究问题
-const researchQuestion = ref('')
-
-// 选择的模板ID
-const selectedTemplateId = ref<number | null>(null)
-
-// 选择的输出模式
-const selectedOutputMode = ref<'markdown' | 'word' | 'latex'>('markdown')
-
-// 上传的文件
-const uploadedFiles = ref([])
-
-// 可用模板列表
-const availableTemplates = ref<PaperTemplate[]>([])
-
-// 加载状态
-const loading = ref(false)
-
-// 创建工作状态
-const creatingWork = ref(false)
-
-// 用户名
-const userName = computed(() => authStore.currentUser?.username || t('common.user'))
-
-// 当前选中的历史工作ID
-const activeHistoryId = ref<number | null>(null)
-
-// 模板预览相关
-const showPreviewDialog = ref(false)
-const previewTemplateData = ref<PaperTemplate | null>(null)
-const templateContent = ref('')
-const templatePreviewLoading = ref(false)
-const templatePreviewData = ref<{
-  type: 'text' | 'image' | 'binary'
-  content?: string
-  filename: string
-  size: number
-  mime_type?: string
-  download_url?: string
-  message?: string
-} | null>(null)
-const templatePreviewError = ref('')
-
-// 上传相关配置
-const tempWorkId = ref<string | null>(null) // 临时存储的工作ID
-
-// 加载用户模板（根据选定的输出格式）
-const loadUserTemplates = async () => {
-  if (!authStore.token) return
-
-  loading.value = true
-  try {
-    const templates = await templateAPI.getUserTemplates(
-      authStore.token,
-      0,
-      100,
-      selectedOutputMode.value,
-    )
-    availableTemplates.value = templates
-  } catch (error) {
-    console.error('加载模板失败:', error)
-    MessagePlugin.error(t('home.loadTemplatesFailed'))
-  } finally {
-    loading.value = false
-  }
+const auth = useAuthStore(),
+  router = useRouter()
+const question = ref(''),
+  mode = ref<'markdown' | 'word' | 'latex'>('latex'),
+  templateId = ref(0)
+const files = ref<UploadFile[]>([]),
+  templates = ref<PaperTemplate[]>([]),
+  recentWorks = ref<Work[]>([])
+const loadingTemplates = ref(false),
+  creating = ref(false),
+  modelsReady = ref(false),
+  creationError = ref('')
+const formats = computed(() => [
+  { value: 'latex' as const, label: ui.value.pdf, hint: ui.value.pdfHint, icon: 'file-pdf' },
+  { value: 'word' as const, label: ui.value.word, hint: ui.value.wordHint, icon: 'file-word' },
+  { value: 'markdown' as const, label: ui.value.md, hint: ui.value.mdHint, icon: 'file-1' },
+])
+function statusLabel(status: string) {
+  return t(
+    `sidebar.${({ created: 'created', in_progress: 'inProgress', running: 'inProgress', completed: 'completed', paused: 'paused', failed: 'failed', cancelled: 'cancelled', waiting: 'waiting' } as Record<string, string>)[status] || 'created'}`,
+  )
 }
-
-// 下一步
-const nextStep = () => {
-  if (currentStep.value === 2) {
-    // 进入第三步时加载对应格式的模板
-    loadUserTemplates()
-  }
-
-  if (currentStep.value < 3) {
-    currentStep.value++
-  }
-}
-
-// 选择输出格式
-const selectOutputMode = (mode: 'markdown' | 'word' | 'latex') => {
-  selectedOutputMode.value = mode
-  // 清除已选择的模板
-  selectedTemplateId.value = null
-}
-
-// 上一步
-const prevStep = () => {
-  if (currentStep.value > 1) {
-    currentStep.value--
-  }
-}
-
-// 选择模板
-const selectTemplate = (templateId: number) => {
-  selectedTemplateId.value = templateId
-}
-
-// 选择"不使用模板"
-const selectNoTemplate = () => {
-  selectedTemplateId.value = null
-}
-
-// 预览模板
-const previewTemplate = async (template: PaperTemplate) => {
-  if (!authStore.token) return
-
-  previewTemplateData.value = template
-  showPreviewDialog.value = true
-  templatePreviewLoading.value = true
-  templatePreviewError.value = ''
-  templatePreviewData.value = null
-
-  try {
-    const result = await templateAPI.getTemplatePreview(authStore.token, template.id)
-    templatePreviewData.value = result
-
-    // 为了向后兼容，如果是文本类型，也设置templateContent
-    if (result.type === 'text') {
-      templateContent.value = result.content || ''
-    }
-  } catch (error) {
-    templatePreviewError.value = 'home.previewFailed'
-    MessagePlugin.error(t('home.previewFailed'))
-    console.error('加载模板预览失败:', error)
-  } finally {
-    templatePreviewLoading.value = false
-  }
-}
-
-// 关闭预览对话框
-const closePreviewDialog = () => {
-  showPreviewDialog.value = false
-  previewTemplateData.value = null
-  templateContent.value = ''
-  templatePreviewData.value = null
-  templatePreviewError.value = ''
-  templatePreviewLoading.value = false
-}
-
-// 格式化文件大小
-const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes'
-  const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-}
-
-// 下载模板文件
-const downloadTemplateFile = () => {
-  if (templatePreviewData.value?.download_url) {
-    window.open(templatePreviewData.value.download_url, '_blank')
-  }
-}
-
-// 跳转到模板页面
-const goToTemplatePage = () => {
-  router.push('/template')
-}
-
-// 上传成功回调
-const onUploadSuccess = (response: any, file: any) => {
-  MessagePlugin.success(t('home.fileUploaded', { name: file.name }))
-}
-
-// 上传失败回调
-const onUploadFail = (error: any, file: any) => {
-  MessagePlugin.error(t('home.fileUploadFailed', { name: file.name }))
-}
-
-// 格式化上传响应
-const formatUploadResponse = (response: any) => {
-  return {
-    name: response.filename,
-    url: response.file_url,
-    status: 'success',
-  }
-}
-
-// 开始工作
-const startWork = async () => {
-  if (!researchQuestion.value.trim() || !authStore.token) {
+let templateRequest = 0
+async function loadTemplates() {
+  const request = ++templateRequest
+  templateId.value = 0
+  if (!auth.token || mode.value === 'latex') {
+    templates.value = []
+    loadingTemplates.value = false
     return
   }
-
-  creatingWork.value = true
-
+  loadingTemplates.value = true
   try {
-    // 创建工作数据，标题用空格作为初始值
-    const workData: WorkCreate = {
-      title: ' ', // 用空格作为初始标题，后续由AI生成
-      description: t('home.workDescription', {
-        question: researchQuestion.value,
-        template: selectedTemplateId.value
-          ? t('home.usingTemplate', { name: getSelectedTemplateName() })
-          : t('home.startFromScratch'),
-        format: getOutputModeLabel(),
-      }),
-      tags: '研究,论文,AI生成',
-      template_id: selectedTemplateId.value || undefined, // 如果为null则传undefined
-      output_mode: selectedOutputMode.value, // 添加输出模式
-    }
-
-    // 调用API创建工作
-    const newWork = await workspaceAPI.createWork(authStore.token, workData)
-    tempWorkId.value = newWork.work_id
-
-    // 将研究问题存储到localStorage，供Work.vue使用
-    localStorage.setItem('pendingQuestion', researchQuestion.value)
-
-    // 如果有附件，先上传附件
-    if (uploadedFiles.value.length > 0) {
-      await uploadAttachments(newWork.work_id)
-    }
-
-    MessagePlugin.success(t('home.workCreated'))
-
-    // 跳转到工作页面
-    router.push(`/work/${newWork.work_id}`)
-  } catch (error) {
-    console.error('创建工作失败:', error)
-    MessagePlugin.error(t('home.createWorkFailed'))
+    const result = await templateAPI.getUserTemplates(auth.token, 0, 100, mode.value)
+    if (request === templateRequest) templates.value = result
+  } catch {
+    if (request === templateRequest) templates.value = []
   } finally {
-    creatingWork.value = false
-    tempWorkId.value = null
+    if (request === templateRequest) loadingTemplates.value = false
   }
 }
-
-// 上传附件
-const uploadAttachments = async (workId: string) => {
-  if (!authStore.token || uploadedFiles.value.length === 0) return
-
-  const uploadPromises = uploadedFiles.value.map(async (file: any) => {
-    try {
-      const result = await attachmentAPI.uploadAttachment(
-        authStore.token!,
-        workId,
-        file.raw || file,
-      )
-      console.log('附件上传成功:', result)
-      return result
-    } catch (error) {
-      console.error(`文件 ${file.name} 上传失败:`, error)
-      throw error
-    }
-  })
-
+watch(mode, loadTemplates)
+function fillExample() {
+  question.value = isZh.value
+    ? '请研究某高校食堂的午餐备餐问题。最近 20 个工作日销量（份）依次为：420、435、410、460、475、430、448、425、482、490、445、455、438、498、510、458、472、450、515、530。每 5 天为周一至周五。比较移动平均与线性趋势两种预测方法，用最后 5 天验证误差，预测下一周每日需求。假设每份售价 15 元、成本 8 元、剩余残值 2 元，讨论合理备餐量及不确定性。请保留代码、输出图表，并写出包含假设、建模、验证和局限性的简短论文。'
+    : 'Study a university cafeteria’s lunch preparation. Sales for the last 20 weekdays were: 420, 435, 410, 460, 475, 430, 448, 425, 482, 490, 445, 455, 438, 498, 510, 458, 472, 450, 515, 530 portions. Each group of five is Monday–Friday. Compare moving averages and a linear trend, validate on the final five days, and forecast next week. With a selling price of 15, cost of 8 and salvage value of 2 per portion, discuss preparation quantities and uncertainty. Keep reproducible code and charts and write a short paper with assumptions, validation and limitations.'
+  document.getElementById('research-question')?.focus()
+}
+let draft: Work | null = null
+const uploaded = new WeakSet<File>()
+async function startWork() {
+  if (!auth.token || !question.value.trim() || creating.value) return
+  creating.value = true
+  creationError.value = ''
   try {
-    const results = await Promise.allSettled(uploadPromises)
-    const failed = results.filter((result) => result.status === 'rejected')
-
-    if (failed.length > 0) {
-      MessagePlugin.warning(
-        t('home.partialUpload', {
-          failed: failed.length,
-          succeeded: results.length - failed.length,
-        }),
-      )
-    } else {
-      MessagePlugin.success(t('home.attachmentsUploaded', { count: results.length }))
+    const data = {
+      title: ' ',
+      description: question.value,
+      tags: '研究,论文',
+      output_mode: mode.value,
+      template_id: templateId.value || undefined,
     }
+    if (!draft) draft = await workspaceAPI.createWork(auth.token, data)
+    else
+      await workspaceAPI.updateWork(auth.token, draft.work_id, {
+        ...data,
+        template_id: templateId.value || undefined,
+      })
+    for (const item of files.value) {
+      const raw = item.raw
+      if (!raw)
+        throw new Error(
+          isZh.value
+            ? '附件不可读取，请移除后重新添加。'
+            : 'Cannot read attachment. Please remove it and add it again.',
+        )
+      if (!uploaded.has(raw)) {
+        await attachmentAPI.uploadAttachment(auth.token, draft.work_id, raw)
+        uploaded.add(raw)
+      }
+    }
+    localStorage.setItem(`pendingQuestion:${draft.work_id}`, question.value.trim())
+    await router.push(`/work/${draft.work_id}`)
   } catch (error) {
-    MessagePlugin.error(t('home.uploadError'))
+    creationError.value = `${isZh.value ? '准备工作空间失败，已保留输入。可重试：' : 'Could not prepare workspace. Your input is preserved. Retry: '}${error instanceof Error ? error.message : ''}`
+  } finally {
+    creating.value = false
   }
 }
-
-// 获取选中的模板名称
-const getSelectedTemplateName = () => {
-  if (selectedTemplateId.value === null) {
-    return t('home.noTemplate')
-  }
-  const template = availableTemplates.value.find((t) => t.id === selectedTemplateId.value)
-  return template ? template.name : t('home.notSelected')
+function resetDraft() {
+  if (creating.value) return
+  question.value = ''
+  files.value = []
+  templateId.value = 0
+  draft = null
+  creationError.value = ''
 }
-
-// 获取输出模式标签
-const getOutputModeLabel = () => {
-  const labels = {
-    markdown: 'Markdown',
-    word: 'Word (.docx)',
-    latex: 'LaTeX',
-  }
-  return labels[selectedOutputMode.value]
-}
-
-// 切换侧边栏折叠状态
-const toggleSidebar = () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value
-}
-
-// 创建新工作（侧边栏调用）
-const createNewTask = () => {
-  currentStep.value = 1
-  researchQuestion.value = ''
-  selectedTemplateId.value = null // 重置为null，表示不使用模板
-  selectedOutputMode.value = 'markdown' // 重置为默认的markdown模式
-  uploadedFiles.value = []
-  tempWorkId.value = null
-}
-
-// 选择历史工作（侧边栏调用）
-const selectHistory = (id: number) => {
-  activeHistoryId.value = id
-  // 侧边栏会处理跳转逻辑，这里只需要更新选中状态
-}
+onMounted(async () => {
+  if (!auth.token) return
+  const results = await Promise.allSettled([
+    modelConfigAPI.getAllModelConfigs(),
+    workspaceAPI.getWorks(auth.token, 0, 3),
+  ])
+  const configs = results[0]
+  if (configs.status === 'fulfilled')
+    modelsReady.value = ['brain', 'code', 'writing'].every((role) =>
+      configs.value.some((c) => c.type === role && c.is_active),
+    )
+  const works = results[1]
+  if (works.status === 'fulfilled') recentWorks.value = works.value.works
+})
 </script>
-
 <style scoped>
-.language-control {
-  align-self: flex-end;
-  margin-bottom: 20px;
-}
-
 .home-page {
   display: flex;
-  height: 100vh;
   height: 100dvh;
-  width: 100vw;
-  background: #ffffff;
+  background: #fff;
   overflow: hidden;
 }
-
-.home-container {
+.home-main {
   flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 36px 40px;
+}
+.home-header {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  padding: 40px 20px;
-  overflow-y: auto;
-  max-width: 800px;
+  justify-content: space-between;
+  align-items: start;
+  gap: 24px;
+  max-width: 900px;
+  margin: 0 auto 28px;
+}
+.home-header h1 {
+  font-family: var(--td-font-family);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--td-text-color-primary);
+  margin: 0 0 10px;
+}
+.home-header p {
+  font-size: 14px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.8;
+  margin: 0;
+}
+.home-content {
+  max-width: 900px;
   margin: 0 auto;
 }
-
-.welcome-header {
-  text-align: center;
-  margin-bottom: 60px;
+.home-content :deep(.t-card__title) {
+  font-family: var(--td-font-family);
+  font-size: 16px;
 }
-
-.welcome-header h1 {
-  font-size: 3rem;
-  color: #2c3e50;
-  margin-bottom: 16px;
-  font-weight: 700;
+.research-input :deep(textarea) {
+  font-size: 14px;
+  line-height: 1.8;
+  padding: 14px;
 }
-
-.welcome-header p {
-  font-size: 1.2rem;
-  color: #7f8c8d;
-  margin: 0;
-}
-
-.main-task-area {
-  width: 100%;
-  max-width: 800px;
-}
-
-.input-container:focus-within {
-  border-color: #0052d9;
-  background: white;
-}
-
-.input-wrapper {
-  position: relative;
-}
-
-.question-input {
-  width: 100%;
-  flex: 1;
-  margin-bottom: 0;
-}
-
-/* 按钮容器 */
-.button-container {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.attachment-area {
   margin-top: 16px;
-  width: 100%;
 }
-
-/* 附件按钮 - 左下角 */
-.attachment-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.file-upload {
-  display: inline-block;
-}
-
-.file-count {
-  background: #0052d9;
-  color: white;
-  border-radius: 50%;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.field-hint {
   font-size: 12px;
-  font-weight: 600;
+  color: var(--td-text-color-placeholder);
+  line-height: 1.7;
+  margin: 10px 0 0;
 }
-
-.attachment-hint {
-  color: #999;
-  font-size: 12px;
+.output-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
 }
-
-/* 下一步按钮 - 右下角 */
-.next-btn-wrapper {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.next-btn {
-  min-width: 80px;
-}
-
-/* 加载状态 */
-.loading-state {
-  text-align: center;
-  padding: 40px 20px;
-}
-
-.loading-state p {
-  margin-top: 16px;
-  color: #7f8c8d;
-}
-
-/* 模板列表容器 */
-.template-list-container {
-  width: 100%;
-  margin: 24px 0;
-}
-
-/* 模板列表项选中状态 */
-.t-list-item.selected {
-  background-color: #e6f4ff;
-  border: 2px solid #0052d9;
-  border-radius: 8px;
-  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
-}
-
-/* 无模板状态 */
-.no-template-state {
-  text-align: center;
-  padding: 40px 20px;
-}
-
-.no-template-icon {
-  margin-bottom: 16px;
-  color: #c0c4cc;
-}
-
-.no-template-state h4 {
-  color: #2c3e50;
-  margin: 0 0 8px 0;
-  font-size: 1.2rem;
-}
-
-.no-template-state p {
-  color: #7f8c8d;
-  margin: 0 0 24px 0;
-}
-
-/* 不使用模板选项 */
-.no-template-option {
-  margin-bottom: 24px;
-}
-
-.no-template-card {
-  cursor: pointer;
-  border: 2px solid #e0e6ed;
-  border-radius: 8px;
-  padding: 16px;
-  transition: all 0.2s ease;
-  background-color: #f5f7fa;
-}
-
-.no-template-card:hover {
-  background-color: #e6f4ff;
-  border-color: #0052d9;
-}
-
-.no-template-card.selected {
-  background-color: #e6f4ff;
-  border-color: #0052d9;
-  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
-}
-
-.no-template-content {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  width: 100%;
-}
-
-.no-template-text {
-  flex: 1;
-}
-
-.no-template-text h4 {
-  margin: 0 0 8px 0;
-  color: #2c3e50;
-  font-size: 1.2rem;
-  font-weight: 600;
-}
-
-.no-template-text p {
-  margin: 0;
-  color: #7f8c8d;
-  font-size: 0.95rem;
-  line-height: 1.4;
-}
-
-.selection-indicator {
-  margin-left: auto;
-}
-
-/* 输出模式选择器 */
-.output-mode-selector {
+.output-field {
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-bottom: 32px;
+  align-items: start;
+}
+.output-field > .t-select__wrap {
   width: 100%;
 }
-
-.output-mode-card {
-  cursor: pointer;
-  border: 2px solid #e0e6ed;
-  border-radius: 8px;
-  padding: 12px;
-  transition: all 0.2s ease;
-  background-color: #f5f7fa;
-}
-
-.output-mode-card:hover {
-  background-color: #e6f4ff;
-  border-color: #0052d9;
-}
-
-.output-mode-card.selected {
-  background-color: #e6f4ff;
-  border-color: #0052d9;
-  box-shadow: 0 0 0 2px rgba(0, 82, 217, 0.1);
-}
-
-.output-mode-card .output-mode-content {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  width: 100%;
-}
-
-.output-mode-text {
-  flex: 1;
-}
-
-.output-mode-text h4 {
-  margin: 0 0 4px 0;
-  color: #2c3e50;
-  font-size: 1rem;
-  font-weight: 600;
-}
-
-.output-mode-text p {
-  margin: 0;
-  color: #7f8c8d;
-  font-size: 0.85rem;
-  line-height: 1.3;
-}
-
-.selection-indicator {
-  margin-left: auto;
-  color: #00a870;
-}
-
-/* 分割线 */
-.template-divider {
-  text-align: center;
-  margin: 32px 0;
-  position: relative;
-}
-
-.template-divider span {
-  background-color: #ffffff;
-  padding: 0 16px;
-  color: #7f8c8d;
-  font-size: 0.9rem;
+.field-label {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 12px;
   font-weight: 500;
-  position: relative;
-  z-index: 1;
 }
-
-.template-divider::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 100%;
-  height: 1px;
-  background-color: #e0e6ed;
-  z-index: 0;
+.field-label > span {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  font-weight: 400;
+  margin-left: 6px;
 }
-
-.step-actions {
+.manage-link {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  margin-top: 10px;
+  text-decoration: none;
+}
+.manage-link:hover {
+  text-decoration: underline;
+}
+.form-footer {
   display: flex;
-  gap: 16px;
+  align-items: center;
   justify-content: space-between;
+  gap: 16px;
+  margin-top: 30px;
 }
-
-/* 模板预览样式 */
-.template-preview {
+.model-link {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  text-decoration: none;
   display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.template-info {
-  background-color: #f5f7fa;
-  padding: 16px;
-  border-radius: 8px;
-  border: 1px solid #e0e6ed;
-}
-
-.template-info p {
-  margin: 8px 0;
-  color: #2c3e50;
-}
-
-.template-content h4 {
-  margin: 0 0 12px 0;
-  color: #2c3e50;
-  font-size: 1.1rem;
-}
-
-.content-display {
-  border: 1px solid #e0e6ed;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-/* 预览内容样式 */
-.loading-container {
-  display: flex;
-  justify-content: center;
   align-items: center;
-  padding: 60px 20px;
+  gap: 6px;
 }
-
-.text-preview {
-  background-color: #f5f5f5;
-  border-radius: 4px;
-  padding: 16px;
+.model-link:hover {
+  color: var(--td-text-color-primary);
 }
-
-.image-preview {
-  text-align: center;
-  padding: 16px;
-  background-color: #fafafa;
+.recent-section {
+  margin-top: 32px;
 }
-
-.binary-preview {
-  padding: 20px;
-  text-align: center;
+.recent-section h2 {
+  font-family: var(--td-font-family);
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0 0 10px;
 }
-
-.file-info {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 20px;
-  background-color: #f8f9fa;
-  border-radius: 8px;
+.recent-section :deep(.t-list-item) {
+  padding: 16px 0;
 }
-
-.file-info p {
-  margin: 4px 0;
-  color: #495057;
+.recent-section :deep(.t-list-item__meta-title) {
+  font-size: 14px;
 }
-
-.error-preview {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 40px 20px;
-  color: #dc3545;
+.recent-section :deep(.t-list-item__meta-description) {
+  font-size: 12px;
 }
-
+.creation-error {
+  margin-top: 16px;
+}
+@media (max-width: 1150px) {
+  .home-main {
+    padding: 30px;
+  }
+  .output-fields {
+    gap: 24px;
+  }
+  .output-field :deep(.t-radio-button) {
+    padding: 0 12px;
+  }
+}
+@media (max-width: 950px) {
+  .output-fields {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+}
 @media (max-width: 768px) {
-  .home-container {
+  .home-main {
     padding: 20px 16px;
-    justify-content: flex-start;
-    max-width: 100%;
   }
-
-  .welcome-header h1 {
-    font-size: 1.6rem;
+  .home-header {
+    padding-left: 44px;
+    gap: 12px;
+    margin-bottom: 24px;
+    min-height: 50px;
   }
-
-  .input-container {
+  .home-header h1 {
+    font-size: 22px;
+  }
+  .home-header p {
+    font-size: 12px;
+  }
+  .home-header :deep(.language-switcher) {
+    min-width: 76px;
+  }
+  .home-content :deep(.t-card__header) {
     padding: 16px;
   }
-
-  .step-actions {
-    flex-direction: column;
+  .home-content :deep(.t-card__body) {
+    padding: 16px;
   }
-
-  .prev-btn,
-  .next-btn,
-  .start-btn {
+  .home-content :deep(.t-card__title) {
+    font-size: 15px;
+  }
+  .output-fields {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .output-field :deep(.t-radio-group) {
     width: 100%;
+    display: flex;
+  }
+  .output-field :deep(.t-radio-button) {
+    flex: 1;
+    text-align: center;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  .research-input :deep(textarea) {
+    font-size: 14px;
+    padding: 12px;
+  }
+  .attachment-area > .field-hint {
+    font-size: 11px;
+  }
+  .form-footer {
+    margin-top: 26px;
+  }
+  .recent-section :deep(.t-list-item) {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .recent-section :deep(.t-list-item__action) {
+    margin-left: 0;
+  }
+  .recent-section :deep(.t-space) {
+    flex-direction: column;
+    align-items: end;
+  }
+  .recent-section :deep(.t-list-item__meta) {
+    min-width: 0;
+  }
+  .recent-section :deep(.t-list-item__meta-title) {
+    line-height: 1.7;
+    font-size: 13px;
+  }
+  .recent-section :deep(.t-list-item__meta-description) {
+    font-size: 11px;
   }
 }
 </style>

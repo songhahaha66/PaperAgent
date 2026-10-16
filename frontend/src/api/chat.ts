@@ -48,6 +48,10 @@ export const chatAPI = {
     return response
   },
 
+  async pauseWork(workId: string): Promise<{ work_status: string }> {
+    return apiClient.request(`/api/chat/work/${workId}/pause`, { method: 'POST' })
+  },
+
   // 获取AI任务状态（用于断线重连）
   async getTaskStatus(
     token: string,
@@ -57,6 +61,7 @@ export const chatAPI = {
     task_id?: string
     status?: string
     message?: string
+    started_at?: number
     output_count?: number
   }> {
     const response = await apiClient.request<any>(`/api/chat/work/${workId}/task-status`, {
@@ -122,7 +127,9 @@ export class WebSocketChatHandler {
 
           // 发送认证信息
           try {
-            this.ws!.send(JSON.stringify({ token: this.token, task_id: this.taskId, last_seq: this.lastSeq }))
+            this.ws!.send(
+              JSON.stringify({ token: this.token, task_id: this.taskId, last_seq: this.lastSeq }),
+            )
 
             // 发送队列中的消息
             while (this.messageQueue.length > 0) {
@@ -270,7 +277,11 @@ export class WebSocketChatHandler {
         }
 
         // 新任务开始或恢复的是另一个任务时，序号从头算
-        if ((data.type === 'start' || data.type === 'reconnect') && data.task_id && data.task_id !== this.taskId) {
+        if (
+          (data.type === 'start' || data.type === 'reconnect') &&
+          data.task_id &&
+          data.task_id !== this.taskId
+        ) {
           this.taskId = data.task_id
           this.lastSeq = 0
         }

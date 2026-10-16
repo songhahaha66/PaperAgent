@@ -10,8 +10,8 @@
 
     <div class="main-content">
       <div class="workspace-header">
-        <h1>我的模板</h1>
-        <p>管理和配置您的论文模板</p>
+        <h1>{{ ui.templates }}</h1>
+        <p>{{ ui.templateEmptyHint }}</p>
       </div>
 
       <div class="template-content">
@@ -20,8 +20,21 @@
             <t-button theme="primary" @click="showCreateTemplateDialog = true"> 新建模板 </t-button>
           </template>
 
+          <div v-if="!loading && templateList.length === 0" class="template-welcome">
+            <t-icon name="file-copy" size="48px" style="color: var(--td-text-color-placeholder)" />
+            <h2>{{ ui.templateEmpty }}</h2>
+            <p>{{ ui.templateEmptyHint }}</p>
+            <div>
+              <t-button theme="primary" @click="showCreateTemplateDialog = true">{{
+                ui.templateCreate
+              }}</t-button
+              ><button class="sample-link" @click="downloadSample">
+                {{ ui.templateSample }}<t-icon name="download" />
+              </button>
+            </div>
+          </div>
           <t-table
-            v-if="!isMobile"
+            v-else-if="!isMobile"
             :data="templateList"
             :columns="columns"
             row-key="id"
@@ -50,7 +63,7 @@
                 <t-button theme="default" variant="text" @click="viewTemplateContent(row)">
                   查看内容
                 </t-button>
-                <t-button theme="danger" variant="text" @click="deleteTemplate(row)">
+                <t-button theme="danger" variant="text" @click="requestDeleteTemplate(row)">
                   删除
                 </t-button>
               </t-space>
@@ -63,7 +76,11 @@
             <t-card v-for="row in templateList" :key="row.id" class="template-mobile-card">
               <div class="template-card-title">
                 <h3>{{ row.name }}</h3>
-                <t-tag :theme="getOutputFormatTheme(row.output_format)" variant="light" size="small">
+                <t-tag
+                  :theme="getOutputFormatTheme(row.output_format)"
+                  variant="light"
+                  size="small"
+                >
                   {{ getOutputFormatLabel(row.output_format) }}
                 </t-tag>
               </div>
@@ -79,10 +96,20 @@
                 <t-button theme="primary" variant="outline" size="small" @click="editTemplate(row)">
                   编辑
                 </t-button>
-                <t-button theme="default" variant="outline" size="small" @click="viewTemplateContent(row)">
+                <t-button
+                  theme="default"
+                  variant="outline"
+                  size="small"
+                  @click="viewTemplateContent(row)"
+                >
                   查看内容
                 </t-button>
-                <t-button theme="danger" variant="outline" size="small" @click="deleteTemplate(row)">
+                <t-button
+                  theme="danger"
+                  variant="outline"
+                  size="small"
+                  @click="requestDeleteTemplate(row)"
+                >
                   删除
                 </t-button>
               </div>
@@ -93,7 +120,10 @@
               :page-size="pagination.defaultPageSize"
               :total="pagination.total"
               :show-page-size="false"
-              @change="(pageInfo: { current: number; pageSize: number }) => onPageChange(pageInfo.current, pageInfo)"
+              @change="
+                (pageInfo: { current: number; pageSize: number }) =>
+                  onPageChange(pageInfo.current, pageInfo)
+              "
             />
           </div>
         </t-card>
@@ -112,10 +142,10 @@
         <t-form-item label="模板名称" name="name">
           <t-input v-model="templateForm.name" placeholder="请输入模板名称" />
         </t-form-item>
-        <t-form-item label="模板描述" name="description">
+        <t-form-item label="模板描述（可选）" name="description">
           <t-textarea v-model="templateForm.description" placeholder="请输入模板描述" />
         </t-form-item>
-        <t-form-item label="模板分类" name="category">
+        <t-form-item label="模板分类（可选）" name="category">
           <t-input v-model="templateForm.category" placeholder="请输入模板分类" />
         </t-form-item>
         <t-form-item label="输出格式" name="output_format">
@@ -126,7 +156,11 @@
           </t-select>
         </t-form-item>
         <t-form-item label="是否公开" name="is_public">
-          <t-switch v-model="templateForm.is_public" />
+          <div>
+            <t-switch v-model="templateForm.is_public" /><span class="public-hint">
+              公开后其他用户也可使用此模板</span
+            >
+          </div>
         </t-form-item>
         <t-form-item label="模板文件" name="file" v-if="!editingTemplate">
           <t-upload
@@ -160,14 +194,14 @@
           <div v-if="templatePreviewLoading" class="loading-container">
             <t-loading size="large" text="加载中..." />
           </div>
-          
+
           <!-- 预览失败 -->
           <div v-else-if="templatePreviewError" class="error-preview">
             <t-icon name="error-circle" size="48px" />
             <p>模板预览加载失败</p>
             <p>{{ templatePreviewError }}</p>
           </div>
-          
+
           <t-tabs v-else-if="templatePreviewData" v-model="contentTab" class="content-tabs">
             <t-tab-panel value="original" label="原文">
               <!-- 文本文件预览 -->
@@ -184,16 +218,16 @@
                   :autosize="{ minRows: 15, maxRows: 25 }"
                 />
               </div>
-              
+
               <!-- 图片文件预览 -->
               <div v-else-if="templatePreviewData.type === 'image'" class="image-preview">
                 <img
                   :src="`data:image/${templatePreviewData.filename.split('.').pop()};base64,${templatePreviewData.content}`"
                   :alt="templatePreviewData.filename"
-                  style="max-width: 100%; height: auto;"
+                  style="max-width: 100%; height: auto"
                 />
               </div>
-              
+
               <!-- 二进制文件预览 -->
               <div v-else-if="templatePreviewData.type === 'binary'" class="binary-preview">
                 <!-- DOCX文件使用DocxViewer预览 -->
@@ -204,7 +238,7 @@
                     size: templatePreviewData.size,
                     mime_type: templatePreviewData.mime_type || '',
                     download_url: templatePreviewData.download_url || '',
-                    message: templatePreviewData.message || ''
+                    message: templatePreviewData.message || '',
                   }"
                   :work-id="''"
                   :token="authStore.token || ''"
@@ -222,21 +256,29 @@
               <div v-if="templateAnalysisLoading" class="loading-container">
                 <t-loading size="medium" text="正在读取上传阶段解析结果..." />
               </div>
-              <div v-else-if="templateAnalysisError && !templateAnalysis?.contract" class="error-preview">
+              <div
+                v-else-if="templateAnalysisError && !templateAnalysis?.contract"
+                class="error-preview"
+              >
                 <t-icon name="error-circle" size="48px" />
                 <p>模板解读加载失败</p>
                 <p>{{ templateAnalysisError }}</p>
               </div>
               <div v-else-if="templateAnalysis" class="analysis-preview">
                 <p class="analysis-hint">
-                  上传时已完成静态解析。写作阶段只读取当前 paper.docx 的实时状态，不再重复扫描原始模板。
+                  上传时已完成静态解析。写作阶段只读取当前 paper.docx
+                  的实时状态，不再重复扫描原始模板。
                 </p>
                 <div class="analysis-meta">
                   <t-space>
                     <span>状态: {{ templateAnalysis.status }}</span>
                     <span>图片: {{ templateAnalysis.image_count }}</span>
-                    <span>样式指纹: {{ templateAnalysis.has_style_profile ? '已保存' : '无' }}</span>
-                    <span v-if="templateAnalysis.analyzed_at">解析时间: {{ templateAnalysis.analyzed_at }}</span>
+                    <span
+                      >样式指纹: {{ templateAnalysis.has_style_profile ? '已保存' : '无' }}</span
+                    >
+                    <span v-if="templateAnalysis.analyzed_at"
+                      >解析时间: {{ templateAnalysis.analyzed_at }}</span
+                    >
                   </t-space>
                 </div>
                 <div v-if="templateAnalysisError" class="analysis-error">
@@ -283,7 +325,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import {
   templateAPI,
@@ -296,6 +338,9 @@ import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import DocxViewer from '@/components/DocxViewer.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
+import { useStudioCopy } from '@/lang/studio'
+import { formatWorkDate } from '@/utils/dates'
+const { ui, isZh } = useStudioCopy()
 const { isMobile } = useBreakpoint()
 
 // 侧边栏折叠状态 - 手机端默认收起
@@ -395,7 +440,7 @@ const templateForm = reactive({
   description: '',
   category: '',
   output_format: 'markdown', // 默认为markdown格式
-  file_path: '',  // 用于显示当前文件名
+  file_path: '', // 用于显示当前文件名
   is_public: false,
 })
 
@@ -423,7 +468,7 @@ const getAcceptedFileTypes = () => {
   const acceptMap: Record<string, string> = {
     markdown: '.md',
     word: '.docx',
-    latex: '.tex'
+    latex: '.tex',
   }
   return acceptMap[templateForm.output_format] || '.md,.docx,.tex'
 }
@@ -433,7 +478,7 @@ const getUploadTips = () => {
   const tipsMap: Record<string, string> = {
     markdown: '只能上传 .md 文件',
     word: '只能上传 .docx 文件',
-    latex: '只能上传 .tex 文件'
+    latex: '只能上传 .tex 文件',
   }
   return tipsMap[templateForm.output_format] || '请先选择输出格式'
 }
@@ -443,7 +488,7 @@ const getOutputFormatLabel = (format: string) => {
   const labels = {
     markdown: 'Markdown',
     word: 'Word',
-    latex: 'LaTeX'
+    latex: 'LaTeX',
   }
   return labels[format as keyof typeof labels] || format
 }
@@ -453,7 +498,7 @@ const getOutputFormatTheme = (format: string) => {
   const themes = {
     markdown: 'primary',
     word: 'success',
-    latex: 'warning'
+    latex: 'warning',
   }
   return themes[format as keyof typeof themes] || 'default'
 }
@@ -472,6 +517,29 @@ const editTemplate = async (template: PaperTemplate) => {
 }
 
 // 删除模板
+const requestDeleteTemplate = (template: PaperTemplate) => {
+  const dialog = DialogPlugin.confirm({
+    header: isZh.value ? '删除这份模板？' : 'Delete this template?',
+    body: template.name,
+    confirmBtn: { content: ui.value.confirm, theme: 'danger' },
+    cancelBtn: ui.value.cancel,
+    onConfirm: async () => {
+      dialog.destroy()
+      await deleteTemplate(template)
+    },
+  })
+}
+const downloadSample = () => {
+  const content = isZh.value
+    ? '# 论文标题\n\n## 摘要\n概述研究目标、方法、主要结果与结论。\n\n关键词：建模；预测；优化\n\n## 问题重述\n\n## 模型假设\n\n## 符号说明\n\n## 模型建立与求解\n\n## 模型检验与评价\n\n## 结论与局限\n\n## 参考文献\n'
+    : '# Paper title\n\n## Abstract\nDescribe the research question, methods, results, and conclusions.\n\n## Problem statement\n\n## Assumptions\n\n## Notation\n\n## Modeling and results\n\n## Validation\n\n## Conclusions and limitations\n\n## References\n'
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'paper-template.md'
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 const deleteTemplate = async (template: PaperTemplate) => {
   if (!authStore.token) return
 
@@ -580,7 +648,7 @@ const saveTemplate = async () => {
           templateForm.output_format,
           templateForm.description || undefined,
           templateForm.category || undefined,
-          templateForm.is_public
+          templateForm.is_public,
         )
 
         console.log('模板创建成功:', newTemplate)
@@ -671,7 +739,7 @@ const viewTemplateContent = async (template: PaperTemplate) => {
       }),
     ])
     templatePreviewData.value = result
-    
+
     // 为了向后兼容，如果是文本类型，也设置templateContent
     if (result.type === 'text') {
       templateContent.value = result.content || ''
@@ -959,6 +1027,128 @@ onMounted(() => {
 
   .template-content {
     padding: 12px 16px;
+  }
+}
+
+.template-page {
+  background: #fff;
+}
+.main-content {
+  min-width: 0;
+}
+.workspace-header {
+  padding: 28px 32px;
+  background: #fff;
+  border-color: var(--td-component-stroke);
+}
+.workspace-header h1 {
+  font-family: var(--td-font-family);
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0 0 10px;
+  color: var(--td-text-color-primary);
+}
+.workspace-header p {
+  font-size: 14px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.8;
+}
+.template-content {
+  padding: 24px 32px;
+}
+.template-content > .t-card {
+  border-color: var(--td-component-stroke);
+  border-radius: 6px;
+  box-shadow: none;
+}
+.template-content :deep(.t-card__title) {
+  font-family: var(--td-font-family);
+  font-size: 16px;
+  font-weight: 500;
+}
+.template-welcome {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 350px;
+  padding: 30px 20px;
+  text-align: center;
+}
+.template-welcome h2 {
+  font-family: var(--td-font-family);
+  font-size: 18px;
+  font-weight: 500;
+  margin: 14px 0;
+}
+.template-welcome p {
+  font-size: 13px;
+  line-height: 1.9;
+  color: var(--td-text-color-secondary);
+  max-width: 400px;
+  margin: 0;
+}
+.template-welcome > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin-top: 24px;
+}
+.sample-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.public-hint {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  margin-left: 10px;
+}
+@media (max-width: 768px) {
+  .workspace-header {
+    padding: 20px 16px 20px 60px;
+  }
+  .workspace-header h1 {
+    font-size: 22px;
+  }
+  .workspace-header p {
+    font-size: 12px;
+  }
+  .template-content {
+    padding: 16px 12px;
+  }
+  .template-content :deep(.t-card__header) {
+    padding: 16px;
+  }
+  .template-content :deep(.t-card__body) {
+    padding: 16px;
+  }
+  .template-welcome {
+    padding: 24px 0;
+    min-height: 330px;
+  }
+  .template-welcome > div:last-child {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .template-mobile-card {
+    box-shadow: none;
+    border-color: var(--td-component-stroke);
+  }
+  .public-hint {
+    display: block;
+    margin: 8px 0 0;
+    font-size: 12px;
+  }
+  .content-tabs {
+    min-height: 200px;
   }
 }
 </style>

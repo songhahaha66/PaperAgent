@@ -242,7 +242,7 @@ class WorkspaceFileService:
 
         # 文本文件扩展名
         text_extensions = {
-            '.txt', '.md', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
+            '.txt', '.md', '.tex', '.bib', '.cls', '.sty', '.csv', '.tsv', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
             '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
             '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
             '.java', '.kt', '.scala', '.rs', '.go', '.php', '.rb', '.swift',

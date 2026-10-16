@@ -7,6 +7,7 @@ import i18n from './lang'
 import 'tdesign-vue-next/es/style/index.css'
 import 'tdesign-icons-vue-next/esm/style/index.css'
 import './theme.css'
+import './studio.css'
 
 const app = createApp(App)
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="work-page" :class="{ 'is-mobile': isMobile }">
+  <div class="work-page">
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
@@ -7,95 +7,163 @@
       @create-new-task="createNewTask"
       @select-history="selectHistory"
     />
-
-    <div class="main-content">
-      <div class="workspace-header" v-if="currentWork">
-        <div class="work-info">
+    <main class="workspace-container">
+      <header class="workspace-header">
+        <div class="work-heading">
           <div class="work-title-row">
-            <h1>
-              <span v-if="currentWork.title && currentWork.title.trim()">{{
-                currentWork.title
-              }}</span>
-              <t-loading v-else size="small" text="生成中" />
-            </h1>
-            <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
-              {{ getStatusText(currentWork.status) }}
-            </t-tag>
-            <p v-if="!isMobile && (isStreaming || currentWork.status === 'in_progress')">生成过程中请耐心等待！</p>
+            <h1>{{ currentWork?.title?.trim() || ui.untitled }}</h1>
+            <t-tag
+              v-if="currentWork"
+              :theme="getStatusTheme(currentWork.status)"
+              variant="light"
+              size="small"
+              >{{ getStatusText(currentWork.status) }}</t-tag
+            >
           </div>
-          <p v-if="!isMobile">创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
-        <div v-if="!isMobile" class="work-actions">
+        <div class="work-actions">
           <t-button
+            v-if="primaryArtifact"
             theme="primary"
-            variant="outline"
-            size="middle"
-            @click="exportWorkspace"
-            :loading="exportLoading"
-          >
-            <template #icon>
-              <t-icon name="download" />
-            </template>
-            导出文件
-          </t-button>
-          <t-button theme="danger" variant="outline" size="middle" @click="deleteWork">
-            <template #icon>
-              <t-icon name="delete" />
-            </template>
-            删除
-          </t-button>
+            :loading="downloadLoading"
+            @click="downloadArtifact"
+            ><template #icon><t-icon name="download" /></template>{{ downloadLabel }}</t-button
+          ><t-dropdown :options="workActionOptions" trigger="click"
+            ><t-button theme="default" variant="outline" shape="square" :aria-label="ui.more"
+              ><t-icon name="more" /></t-button
+          ></t-dropdown>
         </div>
-        <t-dropdown v-else :options="mobileWorkActionOptions" trigger="click">
-          <t-button theme="default" variant="text" shape="square">
-            <t-icon name="more" />
-          </t-button>
-        </t-dropdown>
+      </header>
+      <section class="progress-strip" aria-label="研究进度">
+        <div class="progress-summary" aria-live="polite">
+          <span :class="['live-dot', { running: isStreaming, attention: canResume }]" /><strong>{{
+            stageText
+          }}</strong
+          ><span v-if="elapsedText" class="elapsed">{{ ui.elapsed }} {{ elapsedText }}</span
+          ><span
+            v-if="isStreaming"
+            :class="['connection-state', { lost: connectionState === 'lost' }]"
+            >{{
+              connectionState === 'lost'
+                ? ui.disconnected
+                : connectionState === 'reconnecting'
+                  ? ui.reconnect
+                  : ui.connected
+            }}</span
+          ><button v-if="connectionState === 'lost'" class="text-action" @click="reconnectTask">
+            {{ ui.reconnect }}
+          </button>
+        </div>
+        <div class="phase-track">
+          <span
+            v-for="(phase, index) in visiblePhases"
+            :key="phase.key"
+            :class="['phase-step', `is-${phase.status}`]"
+            ><span class="phase-number"
+              ><t-icon v-if="phase.status === 'completed'" name="check" /><template v-else>{{
+                index + 1
+              }}</template></span
+            >{{ phase.label }}<span v-if="index < visiblePhases.length - 1" class="phase-connector"
+          /></span>
+        </div>
+      </section>
+      <div v-if="canResume" class="recovery-banner" role="status">
+        <t-icon name="pause-circle" />
+        <div>
+          <strong>{{ currentWork?.status === 'failed' ? ui.failedTitle : ui.pausedTitle }}</strong>
+          <p>{{ currentWork?.status === 'failed' ? ui.failedHint : ui.pausedHint }}</p>
+        </div>
+        <t-button theme="primary" size="small" @click="sendMessage('继续')"
+          >{{ ui.resume }}<template #suffix><t-icon name="arrow-right" /></template
+        ></t-button>
       </div>
-
-      <div class="workspace-header" v-else>
-        <h1>论文生成工作区</h1>
-        <p>正在加载工作信息...</p>
+      <div
+        v-else-if="currentWork?.status === 'waiting' && !isStreaming"
+        class="recovery-banner confirmation-banner"
+      >
+        <t-icon name="task-checked" />
+        <div>
+          <strong>{{ isZh ? '建模方案已准备好' : 'The modeling plan is ready' }}</strong>
+          <p>
+            {{
+              isZh
+                ? '在对话中查看方案，确认后开始求解；也可以直接补充修改意见。'
+                : 'Review the plan in the conversation, then confirm or suggest changes.'
+            }}
+          </p>
+        </div>
+        <t-button theme="primary" size="small" @click="sendMessage('确认')">{{
+          isZh ? '确认并执行' : 'Confirm & run'
+        }}</t-button>
       </div>
-
-      <div class="workspace-content" :class="{ 'is-mobile': isMobile }">
-        <div class="chat-section" v-show="!isMobile || activeMobilePanel === 'chat'">
+      <div class="workspace-content">
+        <section class="chat-section" v-show="!isMobile || activeMobilePanel === 'chat'">
+          <div class="panel-header">
+            <span><t-icon name="chat" />{{ ui.conversation }}</span
+            ><span class="panel-hint">{{ isStreaming ? ui.working : ui.saved }}</span>
+          </div>
           <div class="chat-container">
-            <div class="chat-messages-container">
-              <JsonChatRenderer :messages="chatMessages" />
+            <div class="chat-messages-container" @scroll.capture="trackChatScroll">
+              <JsonChatRenderer :messages="chatMessages" /><button
+                v-if="!atBottom && isStreaming"
+                class="jump-latest"
+                @click="jumpToLatest"
+              >
+                <t-icon name="arrow-down" />{{ isZh ? '查看最新进展' : 'Latest progress' }}
+              </button>
             </div>
-            <div class="chat-bottom-section">
-              <FileManager
-                v-if="!isMobile"
-                :work-id="workId"
-                :loading="loading"
-                :file-tree-data="workspaceFiles"
-                :plan-data="planData"
-                @file-select="handleWorkspaceFileSelect"
-                @refresh="handleFileRefresh"
-                @main-paper-click="handleMainPaperClick"
-              />
-              <div class="chat-input">
-                <ChatSender
-                  v-model="inputValue"
-                  placeholder="请输入您的问题..."
-                  @send="sendMessage"
-                  @file-select="handleFileSelect"
-                  :disabled="isStreaming"
+            <div class="chat-input">
+              <ChatSender
+                v-model="inputValue"
+                :textarea-props="{
+                  placeholder: ui.inputHint,
+                  autosize: { minRows: 2, maxRows: 6 },
+                }"
+                @send="sendMessage"
+                @file-select="handleFileSelect"
+                :disabled="isStreaming"
+              >
+                <template #suffix>
+                  <input ref="chatFileInput" type="file" hidden @change="handleAttachmentChange" />
+                  <t-button
+                    theme="default"
+                    variant="text"
+                    shape="square"
+                    :disabled="isStreaming"
+                    :aria-label="isZh ? '添加附件' : 'Add attachment'"
+                    @click="chatFileInput?.click()"
+                    ><t-icon name="attach"
+                  /></t-button>
+                  <t-button
+                    theme="primary"
+                    shape="square"
+                    :disabled="isStreaming || !inputValue.trim()"
+                    :aria-label="isZh ? '发送消息' : 'Send message'"
+                    @click="sendMessage()"
+                    ><t-icon name="send"
+                  /></t-button>
+                </template>
+              </ChatSender>
+              <div class="input-note">
+                <span>{{
+                  isZh
+                    ? 'AI 生成内容，请核验关键数据与结论。'
+                    : 'Verify key data and conclusions generated by AI.'
+                }}</span
+                ><t-button
+                  v-if="isStreaming"
+                  size="small"
+                  theme="default"
+                  variant="text"
+                  :loading="pausing"
+                  @click="pauseTask"
+                  ><template #icon><t-icon name="pause" /></template>{{ ui.pause }}</t-button
                 >
-                  <template #suffix="{ renderPresets }">
-                    <component :is="renderPresets([{ name: 'uploadAttachment' }])" />
-                  </template>
-                </ChatSender>
               </div>
             </div>
           </div>
-        </div>
-
-        <div
-          v-if="isMobile"
-          class="files-section"
-          v-show="activeMobilePanel === 'files'"
-        >
+        </section>
+        <section v-if="isMobile" class="files-section" v-show="activeMobilePanel === 'files'">
           <FileManager
             fill-height
             :work-id="workId"
@@ -106,198 +174,242 @@
             @refresh="handleFileRefresh"
             @main-paper-click="handleMainPaperClick"
           />
-        </div>
-
-        <div class="preview-section" v-show="!isMobile || activeMobilePanel === 'preview'">
-          <!-- 主要论文显示 -->
-          <div v-if="showMainPaper && mainPaperContent">
-            <t-card title="主要论文">
-              <template #actions>
-                <t-button size="small" variant="text" @click="showMainPaper = false">
-                  <template #icon>
-                    <t-icon name="close" />
-                  </template>
-                </t-button>
-              </template>
-              <div class="paper-preview">
-                <MarkdownRenderer
-                  :content="mainPaperContent"
-                  :work-id="workId"
-                  :base-path="''"
+        </section>
+        <section class="preview-section" v-show="!isMobile || activeMobilePanel === 'preview'">
+          <t-tabs v-model="resourceTab" class="resource-tabs" :aria-label="ui.preview">
+            <t-tab-panel v-for="tab in resourceTabs" :key="tab.value" :value="tab.value">
+              <template #label
+                ><span class="resource-tab-label"
+                  ><t-icon :name="tab.icon" />{{ tab.label
+                  }}<span v-if="tab.value === 'figures' && figureFiles.length">{{
+                    figureFiles.length
+                  }}</span></span
+                ></template
+              >
+            </t-tab-panel>
+            <template #action
+              ><t-button
+                shape="square"
+                variant="text"
+                :aria-label="ui.details"
+                @click="detailsOpen = true"
+                ><t-icon name="info-circle" /></t-button
+            ></template>
+          </t-tabs>
+          <div v-if="resourceTab === 'files'" class="resource-files">
+            <FileManager
+              fill-height
+              :work-id="workId"
+              :loading="loading"
+              :file-tree-data="workspaceFiles"
+              :plan-data="planData"
+              @file-select="handleWorkspaceFileSelect"
+              @refresh="handleFileRefresh"
+              @main-paper-click="handleMainPaperClick"
+            />
+          </div>
+          <div v-else-if="resourceTab === 'figures'" class="figures-panel">
+            <div v-if="!figureFiles.length" class="studio-empty">
+              <t-icon name="chart-line" size="40px" />
+              <h2>{{ ui.noFigures }}</h2>
+              <p>{{ ui.noFiguresHint }}</p>
+            </div>
+            <div v-else class="figure-grid">
+              <button
+                v-for="figure in figureFiles"
+                :key="figure.path"
+                class="figure-card"
+                @click="handleWorkspaceFileSelect(figure.path)"
+              >
+                <img
+                  v-if="imageUrls[figure.path]"
+                  :src="imageUrls[figure.path]"
+                  :alt="figure.name"
                 />
-              </div>
-            </t-card>
+                <div v-else class="figure-placeholder"><t-icon name="image" /></div>
+                <span>{{ figure.name }}</span>
+              </button>
+            </div>
           </div>
-          <!-- 普通文件预览 -->
-          <div v-else-if="selectedFile">
-            <t-card :title="`文件预览: ${selectedFile}`">
-              <div class="file-preview">
-                <!-- 加载状态 -->
-                <div v-if="!currentFileData" class="loading-container">
-                </div>
-                <!-- 文本文件预览 -->
-                <div v-else-if="currentFileData.type === 'text'" class="text-preview">
-                  <CodeHighlight v-if="selectedFile.endsWith('.py')" :code="currentFileContent" language="python" />
-                  <MarkdownRenderer
-                    v-else-if="selectedFile.endsWith('.md')"
-                    :content="currentFileContent"
-                    :work-id="workId"
-                    :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
-                  />
-                  <pre v-else>{{ currentFileContent }}</pre>
-                </div>
-                <!-- 图片文件预览 -->
-                <div v-else-if="currentFileData.type === 'image'" class="image-preview">
-                  <img
-                    v-if="imageUrls[selectedFile]"
-                    :src="imageUrls[selectedFile]"
-                    :alt="selectedFile"
-                    style="max-width: 100%; height: auto"
-                  />
-                  <div v-else class="loading-image">正在加载图片...</div>
-                </div>
-                <!-- 二进制文件信息 -->
-                <div v-else-if="currentFileData.type === 'binary'" class="binary-preview">
-                  <!-- DOCX文件使用DocxViewer预览 -->
-                  <DocxViewer
-                    v-if="isDocxFile(selectedFile)"
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                  <!-- 其他二进制文件使用BinaryFileViewer -->
-                  <BinaryFileViewer
-                    v-else
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                </div>
-                <!-- 未知文件类型 - 使用 BinaryFileViewer 统一处理 -->
-                <div v-else-if="currentFileData" class="binary-preview">
-                  <!-- DOCX文件使用DocxViewer预览 -->
-                  <DocxViewer
-                    v-if="isDocxFile(selectedFile)"
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                  <!-- 其他文件使用BinaryFileViewer -->
-                  <BinaryFileViewer
-                    v-else
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                </div>
-                <div v-else class="no-preview">
-                  <t-icon name="file" size="48px" />
-                  <p>文件信息加载中...</p>
+          <div v-else class="preview-body">
+            <div v-if="showMainPaper && mainPaperContent" class="paper-preview">
+              <div class="document-caption">
+                <span>{{ isZh ? '正文预览 · paper.md' : 'Text preview · paper.md' }}</span>
+                <div class="document-actions">
+                  <t-button
+                    v-if="
+                      currentWork?.output_mode === 'latex' &&
+                      workspaceFiles.some((f) => f.path === 'paper.tex')
+                    "
+                    size="small"
+                    theme="default"
+                    variant="text"
+                    @click="handleWorkspaceFileSelect('paper.tex')"
+                    >{{ isZh ? 'LaTeX 源码' : 'LaTeX source' }}</t-button
+                  >
+                  <button class="text-action" @click="handleMainPaperClick">
+                    <t-icon name="refresh" />{{ isZh ? '刷新正文' : 'Refresh' }}
+                  </button>
                 </div>
               </div>
-            </t-card>
-          </div>
-
-          <div v-else-if="currentWork">
-            <t-card title="工作信息">
-              <div class="work-details">
-                <p><strong>标题：</strong>{{ currentWork.title }}</p>
-                <p :class="['work-description', { expanded: descriptionExpanded }]">
-                  <strong>描述：</strong>{{ currentWork.description || '暂无描述' }}
-                </p>
-                <t-link
-                  v-if="(currentWork.description || '').length > 200"
-                  theme="primary"
-                  size="small"
-                  @click="descriptionExpanded = !descriptionExpanded"
-                >{{ descriptionExpanded ? '收起' : '展开全部' }}</t-link>
-                <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
-                <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
+              <MarkdownRenderer :content="mainPaperContent" :work-id="workId" base-path="" />
+            </div>
+            <div v-else-if="selectedFile" class="selected-preview">
+              <div class="document-caption">
+                <span :title="selectedFile">{{ selectedFile }}</span
+                ><button
+                  class="text-action"
+                  :aria-label="isZh ? '关闭文件预览' : 'Close file preview'"
+                  @click="closeFilePreview"
+                >
+                  <t-icon name="close" />
+                </button>
+              </div>
+              <div v-if="!currentFileData" class="studio-empty">
+                <t-loading :text="ui.loading" />
+              </div>
+              <div
+                v-else-if="currentFileData.type === 'text' && !currentFileContent.trim()"
+                class="studio-empty"
+              >
+                <t-icon name="file-1" size="40px" />
+                <h2>{{ ui.emptyFile }}</h2>
+                <p>{{ ui.emptyFileHint }}</p>
+              </div>
+              <div v-else-if="currentFileData.type === 'text'" class="text-preview">
+                <CodeHighlight
+                  v-if="selectedFile.endsWith('.py') || selectedFile.endsWith('.tex')"
+                  :code="currentFileContent"
+                  :language="selectedFile.endsWith('.tex') ? 'latex' : 'python'"
+                /><MarkdownRenderer
+                  v-else-if="selectedFile.endsWith('.md')"
+                  :content="currentFileContent"
+                  :work-id="workId"
+                  :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
+                />
+                <pre v-else>{{ currentFileContent }}</pre>
+              </div>
+              <div v-else-if="currentFileData.type === 'image'" class="image-preview">
+                <img
+                  v-if="imageUrls[selectedFile]"
+                  :src="imageUrls[selectedFile]"
+                  :alt="selectedFile"
+                /><t-loading v-else />
+              </div>
+              <DocxViewer
+                v-else-if="isDocxFile(selectedFile)"
+                :file-info="currentFileData"
+                :work-id="workId"
+                :token="authStore.token || ''"
+              /><BinaryFileViewer
+                v-else
+                :file-info="currentFileData"
+                :work-id="workId"
+                :token="authStore.token || ''"
+              />
+            </div>
+            <div v-else class="preview-placeholder">
+              <div class="studio-empty">
+                <t-icon name="file-1" size="48px" />
+                <h2>{{ isZh ? '论文预览' : 'Paper preview' }}</h2>
                 <p>
-                  <strong>输出格式：</strong>
-                  <t-tag :theme="getOutputModeTheme(currentWork.output_mode)" variant="light" size="small">
-                    <template #icon>
-                      <t-icon :name="getOutputModeIcon(currentWork.output_mode)" />
-                    </template>
-                    {{ getOutputModeText(currentWork.output_mode) }}
-                  </t-tag>
-                </p>
-                <p>
-                  <strong>模板：</strong
-                  >{{
-                    currentWork.template_id ? `模板ID: ${currentWork.template_id}` : '未选择模板'
+                  {{
+                    isStreaming || canResume
+                      ? ui.previewEmptyHint
+                      : isZh
+                        ? '从文件中选择正文、图表或其他文件进行预览。'
+                        : 'Select a paper, figure, or another file to preview.'
                   }}
                 </p>
+                <div class="preview-empty-actions">
+                  <t-button
+                    v-if="paperAvailable"
+                    theme="primary"
+                    variant="outline"
+                    @click="handleMainPaperClick"
+                    >{{ ui.viewResults }}</t-button
+                  ><t-button theme="default" variant="text" @click="openFiles"
+                    >{{ ui.files }}<template #suffix><t-icon name="chevron-right" /></template
+                  ></t-button>
+                </div>
               </div>
-            </t-card>
+            </div>
           </div>
-
-          <div v-else>
-            <t-card title="论文展示区">
-              <div class="pdf-info">
-                <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
-                <p>{{ isMobile ? '在文件页中点击文件可查看具体内容。' : '在左侧文件管理器中点击文件可查看具体内容。' }}</p>
-              </div>
-            </t-card>
-          </div>
-        </div>
+        </section>
       </div>
-
-      <nav v-if="isMobile" class="mobile-tab-bar" aria-label="工作区导航">
+      <nav v-if="isMobile" class="mobile-tab-bar" :aria-label="ui.workspace">
         <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'chat' }"
-          @click="activeMobilePanel = 'chat'"
+          v-for="tab in mobileTabs"
+          :key="tab.value"
+          :aria-current="activeMobilePanel === tab.value ? 'page' : undefined"
+          :class="{ active: activeMobilePanel === tab.value }"
+          @click="activeMobilePanel = tab.value"
         >
-          <t-icon name="chat" />
-          <span>对话</span>
-        </button>
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'files' }"
-          @click="activeMobilePanel = 'files'"
-        >
-          <t-icon name="folder-open" />
-          <span>文件</span>
-        </button>
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'preview' }"
-          @click="activeMobilePanel = 'preview'"
-        >
-          <t-icon name="browse" />
-          <span>预览</span>
+          <t-icon :name="tab.icon" /><span>{{ tab.label }}</span>
         </button>
       </nav>
-    </div>
+      <t-drawer
+        v-model:visible="detailsOpen"
+        :header="ui.details"
+        :size="isMobile ? '90%' : '420px'"
+        :footer="false"
+        ><div v-if="currentWork" class="work-details">
+          <t-tag variant="light">{{ workId }}</t-tag>
+          <h2>{{ currentWork.title }}</h2>
+          <p>{{ currentWork.description }}</p>
+          <dl>
+            <dt>{{ isZh ? '创建时间' : 'Created' }}</dt>
+            <dd>{{ formatDate(currentWork.created_at) }}</dd>
+            <dt>{{ ui.output }}</dt>
+            <dd>{{ getOutputModeText(currentWork.output_mode) }}</dd>
+            <dt>{{ isZh ? '状态' : 'Status' }}</dt>
+            <dd>{{ getStatusText(currentWork.status) }}</dd>
+          </dl>
+        </div></t-drawer
+      >
+    </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
-import { MessagePlugin } from 'tdesign-vue-next';
-import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { ChatItem, ChatSender } from '@tdesign-vue-next/chat'
 
-import { useAuthStore } from '@/stores/auth';
-import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
-import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse } from '@/api/chat';
-import Sidebar from '@/components/Sidebar.vue';
-import FileManager from '@/components/FileManager.vue';
-import { useBreakpoint } from '@/composables/useBreakpoint';
-import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
-import CodeHighlight from '@/components/CodeHighlight.vue';
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
-import BinaryFileViewer from '@/components/BinaryFileViewer.vue';
-import DocxViewer from '@/components/DocxViewer.vue';
+import { useAuthStore } from '@/stores/auth'
+import {
+  workspaceAPI,
+  workspaceFileAPI,
+  attachmentAPI,
+  type Work,
+  type FileInfo,
+  type PlanData,
+  type PlanItemStatus,
+} from '@/api/workspace'
+import {
+  chatAPI,
+  WebSocketChatHandler,
+  type ChatMessage,
+  type ChatSessionResponse,
+} from '@/api/chat'
+import Sidebar from '@/components/Sidebar.vue'
+import FileManager from '@/components/FileManager.vue'
+import { useBreakpoint } from '@/composables/useBreakpoint'
+import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
+import CodeHighlight from '@/components/CodeHighlight.vue'
+import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
+import BinaryFileViewer from '@/components/BinaryFileViewer.vue'
+import DocxViewer from '@/components/DocxViewer.vue'
 
-const route = useRoute();
-const router = useRouter();
-const authStore = useAuthStore();
-const workId = computed(() => route.params.work_id as string);
+import { useStudioCopy } from '@/lang/studio'
+import { formatWorkDate } from '@/utils/dates'
+import { asText, derivePhases, deriveSubproblems, type PipelineBlock } from '@/utils/paperPipeline'
+const { ui, isZh } = useStudioCopy()
+const route = useRoute()
+const router = useRouter()
+const authStore = useAuthStore()
+const workId = computed(() => route.params.work_id as string)
 
 const { isMobile } = useBreakpoint()
 
@@ -314,20 +426,6 @@ watch(isMobile, (mobile) => {
   }
 })
 
-const mobileWorkActionOptions = [
-  {
-    content: '导出文件',
-    value: 'export',
-    onClick: () => exportWorkspace(),
-  },
-  {
-    content: '删除',
-    value: 'delete',
-    theme: 'error',
-    onClick: () => deleteWork(),
-  },
-]
-
 // 当前工作信息
 const currentWork = ref<Work | null>(null)
 
@@ -335,8 +433,7 @@ const currentWork = ref<Work | null>(null)
 const loading = ref(false)
 
 // 定义聊天消息类型（使用API中的类型）
-interface ChatMessageDisplay extends ChatMessage {
-}
+interface ChatMessageDisplay extends ChatMessage {}
 
 // 聊天消息数据
 const chatMessages = ref<ChatMessageDisplay[]>([])
@@ -379,6 +476,221 @@ const isStreaming = ref(false)
 const webSocketHandler = ref<WebSocketChatHandler | null>(null)
 const isFileRefreshing = ref(false) // 防止重复刷新文件列表
 
+// Stable controls stay outside the scrolling transcript.
+const resourceTab = ref<'paper' | 'figures' | 'files'>('paper')
+const detailsOpen = ref(false),
+  pausing = ref(false),
+  downloadLoading = ref(false)
+const connectionState = ref<'idle' | 'live' | 'reconnecting' | 'lost'>('idle')
+const atBottom = ref(true),
+  taskStartedAt = ref<number | null>(null),
+  clockNow = ref(Date.now())
+let elapsedTimer: ReturnType<typeof setInterval> | undefined
+const latestBlocks = computed<PipelineBlock[]>(
+  () => [...chatMessages.value].reverse().find((m) => m.role === 'assistant')?.json_blocks || [],
+)
+const latestSubproblems = computed(() => deriveSubproblems(latestBlocks.value))
+const canResume = computed(
+  () =>
+    !isStreaming.value &&
+    ((!!currentWork.value &&
+      ['paused', 'cancelled', 'failed'].includes(currentWork.value.status)) ||
+      latestSubproblems.value.some((s) => s.status === 'failed')),
+)
+const visiblePhases = computed(() =>
+  derivePhases(latestBlocks.value, {
+    done: currentWork.value?.status === 'completed' && !canResume.value,
+  }),
+)
+const stageText = computed(() => {
+  if (canResume.value) return ui.value.needsAttention
+  if (currentWork.value?.status === 'waiting')
+    return isZh.value ? '等待确认建模方案' : 'Waiting for plan approval'
+  if (!isStreaming.value)
+    return currentWork.value ? getStatusText(currentWork.value.status) : ui.value.loading
+  return (
+    asText([...latestBlocks.value].reverse().find((b) => b.type === 'paper_stage')?.content) ||
+    ui.value.working
+  )
+})
+const elapsedText = computed(() => {
+  if (!isStreaming.value || !taskStartedAt.value) return ''
+  const seconds = Math.max(0, Math.floor((clockNow.value - taskStartedAt.value) / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+})
+const primaryArtifact = computed(() => {
+  const names =
+    currentWork.value?.output_mode === 'latex'
+      ? ['paper.pdf', 'paper.md']
+      : currentWork.value?.output_mode === 'word'
+        ? ['paper.docx', 'paper.md']
+        : ['paper.md']
+  for (const name of names) {
+    const file = workspaceFiles.value.find(
+      (f) => f.type === 'file' && f.path === name && (f.size || 0) > 0,
+    )
+    if (file) return file
+  }
+  return null
+})
+const paperAvailable = computed(() => !!primaryArtifact.value)
+const downloadLabel = computed(() =>
+  primaryArtifact.value?.name.endsWith('.pdf')
+    ? ui.value.downloadPdf
+    : primaryArtifact.value?.name.endsWith('.docx')
+      ? ui.value.downloadWord
+      : ui.value.downloadMd,
+)
+const figureFiles = computed(() =>
+  workspaceFiles.value.filter(
+    (f) => f.type === 'file' && isImageFile(f.path) && f.category !== 'attachments',
+  ),
+)
+const resourceTabs = computed(() => [
+  { value: 'paper' as const, label: ui.value.preview, icon: 'file-1' },
+  { value: 'figures' as const, label: ui.value.figures, icon: 'chart-line' },
+  ...(!isMobile.value
+    ? [{ value: 'files' as const, label: ui.value.files, icon: 'folder-open' }]
+    : []),
+])
+const mobileTabs = computed(() => [
+  { value: 'chat' as const, label: ui.value.conversation, icon: 'chat' },
+  { value: 'files' as const, label: ui.value.files, icon: 'folder-open' },
+  { value: 'preview' as const, label: ui.value.preview, icon: 'browse' },
+])
+const workActionOptions = computed(() => [
+  { content: ui.value.archive, value: 'export', onClick: () => exportWorkspace() },
+  {
+    content: ui.value.details,
+    value: 'details',
+    onClick: () => {
+      detailsOpen.value = true
+    },
+  },
+  {
+    content: ui.value.delete,
+    value: 'delete',
+    theme: 'error' as const,
+    disabled: isStreaming.value,
+    onClick: () => confirmDeleteWork(),
+  },
+])
+const chatFileInput = ref<HTMLInputElement | null>(null)
+async function handleAttachmentChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (input.files?.length) await handleFileSelect({ files: input.files, name: 'uploadAttachment' })
+  input.value = ''
+}
+function closeFilePreview() {
+  selectedFile.value = null
+  currentFileData.value = null
+}
+function openFiles() {
+  if (isMobile.value) activeMobilePanel.value = 'files'
+  else resourceTab.value = 'files'
+}
+function confirmDeleteWork() {
+  if (isStreaming.value) return
+  const dialog = DialogPlugin.confirm({
+    header: ui.value.deleteWorkTitle,
+    body: ui.value.deleteWorkHint,
+    confirmBtn: { content: ui.value.confirm, theme: 'danger' },
+    cancelBtn: ui.value.cancel,
+    onConfirm: async () => {
+      await deleteWork()
+      dialog.destroy()
+    },
+  })
+}
+async function downloadArtifact() {
+  if (!primaryArtifact.value || !authStore.token) return
+  downloadLoading.value = true
+  try {
+    const data = await workspaceFileAPI.readFile(
+      authStore.token,
+      workId.value,
+      primaryArtifact.value.path,
+    )
+    let blob: Blob
+    if (data.type === 'text')
+      blob = new Blob([data.content || ''], { type: 'text/markdown;charset=utf-8' })
+    else {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${data.download_url}`,
+        { headers: { Authorization: `Bearer ${authStore.token}` } },
+      )
+      if (!response.ok) throw new Error('download')
+      blob = await response.blob()
+    }
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = data.filename
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch {
+    MessagePlugin.error(isZh.value ? '下载失败，请重试' : 'Download failed. Please retry.')
+  } finally {
+    downloadLoading.value = false
+  }
+}
+async function pauseTask() {
+  if (pausing.value || !authStore.token) return
+  pausing.value = true
+  try {
+    const result = await chatAPI.pauseWork(workId.value)
+    applyWorkStatus(result.work_status)
+    isStreaming.value = false
+    await loadChatHistory()
+    await loadWorkspaceFiles()
+  } catch {
+    MessagePlugin.error(isZh.value ? '暂停失败，请重试' : 'Could not pause. Please retry.')
+  } finally {
+    pausing.value = false
+  }
+}
+async function reconnectTask() {
+  connectionState.value = 'reconnecting'
+  isStreaming.value = false
+  await checkAndResumeRunningTask()
+  if (!isStreaming.value) {
+    await loadChatHistory()
+    if (authStore.token)
+      currentWork.value = await workspaceAPI.getWork(authStore.token, workId.value)
+    connectionState.value = 'idle'
+  }
+}
+function trackChatScroll(event: Event) {
+  const target = event.target as HTMLElement
+  if (target.classList.contains('chat-messages'))
+    atBottom.value = target.scrollHeight - target.scrollTop - target.clientHeight < 100
+}
+function jumpToLatest() {
+  atBottom.value = true
+  scrollToBottom(true)
+}
+watch(resourceTab, async (tab) => {
+  if (tab !== 'figures') return
+  const currentId = workId.value
+  await Promise.allSettled(
+    figureFiles.value
+      .filter((f) => !imageUrls.value[f.path])
+      .map(async (f) => {
+        const url = await getImageBlobUrl(f.path)
+        if (currentId === workId.value) imageUrls.value[f.path] = url
+        else URL.revokeObjectURL(url)
+      }),
+  )
+})
+onMounted(() => {
+  elapsedTimer = setInterval(() => {
+    clockNow.value = Date.now()
+  }, 1000)
+})
+onUnmounted(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer)
+})
+
 // 加载工作信息
 const loadWork = async () => {
   if (!workId.value || !authStore.token) return
@@ -400,6 +712,14 @@ const loadWork = async () => {
 
     // 检查并自动发送第一句话
     await checkAndAutoSendFirstMessage()
+    if (
+      !isMobile.value &&
+      work.status === 'completed' &&
+      paperAvailable.value &&
+      !selectedFile.value
+    ) {
+      await handleMainPaperClick()
+    }
   } catch (error) {
     console.error('加载工作信息失败:', error)
     MessagePlugin.error('加载工作信息失败')
@@ -460,29 +780,31 @@ const checkAndResumeRunningTask = async () => {
   try {
     // 查询任务状态
     const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
-    
+
     if (taskStatus.has_task && taskStatus.status === 'running') {
-      console.log('检测到正在进行的AI任务，准备恢复...', taskStatus)
-      
+      taskStartedAt.value = taskStatus.started_at ? taskStatus.started_at * 1000 : null
+
       // 设置流式状态
       isStreaming.value = true
-      
+
       // 创建AI回复消息框架
       const aiMessageId = `reconnect_${Date.now()}`
       reconnectMessageId.value = aiMessageId
-      
+
       const aiMessage: ChatMessageDisplay = {
         id: aiMessageId,
         role: 'assistant' as const,
         content: '',
-        datetime: new Date().toLocaleString(),
+        datetime: taskStatus.started_at
+          ? new Date(taskStatus.started_at * 1000).toLocaleString()
+          : '',
         avatar: ASSISTANT_AVATAR,
         isStreaming: true,
         json_blocks: [],
         message_type: 'json_card' as const,
       }
       chatMessages.value.push(aiMessage)
-      
+
       // 建立WebSocket连接恢复流式输出
       await setupWebSocketForReconnect()
     }
@@ -498,34 +820,34 @@ const setupWebSocketForReconnect = async () => {
     webSocketHandler.value.disconnect()
     webSocketHandler.value = null
   }
-  
+
   try {
     webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
-    
+
     // 设置重连回调
     webSocketHandler.value.onReconnect((data) => {
       console.log('重连事件:', data)
+      connectionState.value = data.type === 'reconnect_complete' ? 'live' : 'reconnecting'
       if (data.type === 'reconnect') {
         MessagePlugin.info('正在恢复AI任务输出...')
       } else if (data.type === 'reconnect_complete') {
         MessagePlugin.success('历史输出恢复完成，继续接收...')
       }
     })
-    
+
     // 设置消息监听 - 使用统一的消息处理
     webSocketHandler.value.onMessage((data) => {
       if (reconnectMessageId.value) {
         handleStreamMessage(data, reconnectMessageId.value)
       }
     })
-    
+
     // 设置断开回调（重连用尽或被关闭）
     webSocketHandler.value.onDisconnect(() => handleConnectionLost())
-    
+
     // 连接WebSocket
     await webSocketHandler.value.connect()
-    console.log('WebSocket重连成功')
-    
+    connectionState.value = 'live'
   } catch (error) {
     console.error('恢复WebSocket连接失败:', error)
     isStreaming.value = false
@@ -536,6 +858,7 @@ const setupWebSocketForReconnect = async () => {
 
 // 连接断开且自动重连用尽：问后端任务还在不在。任务已结束就以服务器保存的记录为准，不让界面一直停在"生成中"
 const handleConnectionLost = async () => {
+  connectionState.value = 'lost'
   if (!isStreaming.value || !authStore.token || !workId.value) return
   try {
     const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
@@ -550,6 +873,7 @@ const handleConnectionLost = async () => {
   isStreaming.value = false
   reconnectMessageId.value = null
   await loadChatHistory()
+  currentWork.value = await workspaceAPI.getWork(authStore.token, workId.value)
   loadWorkspaceFiles()
 }
 
@@ -567,7 +891,7 @@ const handleStreamMessage = (data: any, messageId: string) => {
   applyWorkStatus(data.work_status)
   const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
   if (messageIndex === -1) return
-  
+
   const currentMessage = chatMessages.value[messageIndex]
   if (!currentMessage) return
 
@@ -581,7 +905,7 @@ const handleStreamMessage = (data: any, messageId: string) => {
 
     case 'json_block':
       const block = data.block
-      
+
       if (block?.type === 'file_changed') {
         setTimeout(() => loadWorkspaceFiles(), 500)
       } else if (block?.type === 'plan_updated') {
@@ -606,6 +930,8 @@ const handleStreamMessage = (data: any, messageId: string) => {
       }
       isStreaming.value = false
       reconnectMessageId.value = null
+      if (data.reload_history) loadChatHistory()
+      connectionState.value = 'idle'
       // 刷新文件列表
       loadWorkspaceFiles()
       break
@@ -628,7 +954,8 @@ const handleStreamMessage = (data: any, messageId: string) => {
 // 重构后不再需要显式创建聊天会话，MainAgent会自动处理
 
 // 自动滚动到底部
-const scrollToBottom = () => {
+const scrollToBottom = (force = false) => {
+  if (!force && !atBottom.value) return
   nextTick(() => {
     const chatContainer = document.querySelector('.chat-messages')
     if (chatContainer) {
@@ -659,8 +986,9 @@ const loadChatHistory = async () => {
       }
     })
 
-    // 加载完聊天历史后自动滚动到底部
-    scrollToBottom()
+    // Open saved history at the latest message; streaming respects manual scrolling.
+    atBottom.value = true
+    scrollToBottom(true)
   } catch (error) {
     console.error('加载聊天历史失败:', error)
     // 如果加载失败，初始化为空数组
@@ -672,9 +1000,9 @@ const loadChatHistory = async () => {
 let lastFileUpdateTime = 0
 const loadWorkspaceFiles = async () => {
   if (!workId.value || !authStore.token) return
-  
+
   const now = Date.now()
-  if (isFileRefreshing.value || (now - lastFileUpdateTime < 1000)) {
+  if (isFileRefreshing.value || now - lastFileUpdateTime < 1000) {
     return
   }
 
@@ -698,32 +1026,26 @@ const loadWorkspaceFiles = async () => {
 
 // 处理主要论文点击
 const handleMainPaperClick = async () => {
+  resourceTab.value = 'paper'
   if (!workId.value || !authStore.token) return
-
-  // LaTeX / Word 输出的工作优先预览导出的 paper.pdf / paper.docx，还没生成时退回 paper.md
-  const exported: Record<string, string> = { latex: 'paper.pdf', word: 'paper.docx' }
-  const exportedFile = exported[currentWork.value?.output_mode || '']
-  if (exportedFile) {
-    try {
-      await workspaceFileAPI.readFile(authStore.token, workId.value, exportedFile)
-      await handleWorkspaceFileSelect(exportedFile)
-      return
-    } catch {
-      // 还没导出
-    }
-  }
-
+  // The reading view uses the paper text; the header downloads the typeset PDF/Word.
   try {
     const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.md')
-    mainPaperContent.value = response.content || ''
-    showMainPaper.value = true
-    selectedFile.value = 'paper.md'
-    if (isMobile.value) {
-      activeMobilePanel.value = 'preview'
+    if (response.content?.trim()) {
+      mainPaperContent.value = response.content
+      showMainPaper.value = true
+      selectedFile.value = 'paper.md'
+      if (isMobile.value) activeMobilePanel.value = 'preview'
+      return
     }
-  } catch (error) {
-    console.error('获取论文内容失败:', error)
-    MessagePlugin.error('获取论文内容失败')
+  } catch {
+    /* Try the formatted document when there is no Markdown source. */
+  }
+  if (primaryArtifact.value) await handleWorkspaceFileSelect(primaryArtifact.value.path)
+  else {
+    selectedFile.value = null
+    showMainPaper.value = false
+    if (isMobile.value) activeMobilePanel.value = 'preview'
   }
 }
 
@@ -744,21 +1066,45 @@ const loadPlanContent = async () => {
 
 const normalizePlanStatus = (rawStatus: string): PlanItemStatus => {
   const text = rawStatus.toLowerCase()
-  if (text.includes('❌') || text.includes('阻塞') || text.includes('blocked') || text.includes('失败')) return 'blocked'
-  if (text.includes('⬜') || text.includes('待写') || text.includes('pending') || text.includes('todo')) return 'pending'
-  if (text.includes('⏳') || text.includes('进行') || text.includes('progress')) return 'in_progress'
+  if (
+    text.includes('❌') ||
+    text.includes('阻塞') ||
+    text.includes('blocked') ||
+    text.includes('失败')
+  )
+    return 'blocked'
+  if (
+    text.includes('⬜') ||
+    text.includes('待写') ||
+    text.includes('pending') ||
+    text.includes('todo')
+  )
+    return 'pending'
+  if (text.includes('⏳') || text.includes('进行') || text.includes('progress'))
+    return 'in_progress'
   if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
   return 'pending'
 }
 
 const markdownPlanToData = (content: string): PlanData | null => {
   if (!content.trim()) return null
-  const title = content.split('\n').find((line) => line.trim().startsWith('#'))?.replace(/^#+/, '').trim() || '写作计划'
+  const title =
+    content
+      .split('\n')
+      .find((line) => line.trim().startsWith('#'))
+      ?.replace(/^#+/, '')
+      .trim() || '写作计划'
   const rows = content
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.startsWith('|') && !line.includes('---'))
-    .map((line) => line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
+    .map((line) =>
+      line
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split('|')
+        .map((cell) => cell.trim()),
+    )
   const items = rows.slice(1).map((row, index) => {
     const order = Number.parseInt(row[0] || `${index + 1}`, 10) || index + 1
     const status = normalizePlanStatus(row[2] || '')
@@ -781,10 +1127,16 @@ const markdownPlanToData = (content: string): PlanData | null => {
     blocked: items.filter((item) => item.status === 'blocked').length,
     pending: items.filter((item) => item.status === 'pending').length,
     progress_percent: items.length
-      ? Math.round((items.filter((item) => item.status === 'completed').length / items.length) * 100)
+      ? Math.round(
+          (items.filter((item) => item.status === 'completed').length / items.length) * 100,
+        )
       : 0,
   }
-  const current_focus = items.find((item) => item.status === 'in_progress') || items.find((item) => item.status === 'pending') || items.find((item) => item.status === 'blocked') || null
+  const current_focus =
+    items.find((item) => item.status === 'in_progress') ||
+    items.find((item) => item.status === 'pending') ||
+    items.find((item) => item.status === 'blocked') ||
+    null
   return {
     version: 1,
     revision: 0,
@@ -801,12 +1153,14 @@ const markdownPlanToData = (content: string): PlanData | null => {
     items,
     stats,
     current_focus,
-    next_actions: items.filter((item) => item.status === 'pending' || item.status === 'blocked').slice(0, 3).map((item) => ({ id: item.id, title: item.title })),
+    next_actions: items
+      .filter((item) => item.status === 'pending' || item.status === 'blocked')
+      .slice(0, 3)
+      .map((item) => ({ id: item.id, title: item.title })),
     source: 'frontend_markdown_fallback',
     source_markdown: content,
   }
 }
-
 
 // 处理文件刷新
 const handleFileRefresh = async () => {
@@ -814,8 +1168,6 @@ const handleFileRefresh = async () => {
   await loadWorkspaceFiles()
 }
 
-  
-  
 // 删除工作
 const deleteWork = async () => {
   if (!workId.value || !authStore.token || !currentWork.value) return
@@ -866,7 +1218,7 @@ const exportWorkspace = async () => {
 }
 
 // 处理ChatSender文件上传
-const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
+const handleFileSelect = async (fileInfo: { files: FileList; name: string }) => {
   console.log('ChatSender文件选择:', fileInfo)
 
   const { files, name } = fileInfo
@@ -874,7 +1226,7 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
 
   const file = files[0] // 取第一个文件
   if (!file) return
-  
+
   console.log('上传文件:', file.name, file.size, file.type)
 
   if (!authStore.token || !workId.value) {
@@ -886,11 +1238,7 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
     MessagePlugin.info(`正在上传文件: ${file.name}`)
 
     // 使用attachmentAPI上传，保持与Home.vue一致
-    const result = await attachmentAPI.uploadAttachment(
-      authStore.token,
-      workId.value,
-      file
-    )
+    const result = await attachmentAPI.uploadAttachment(authStore.token, workId.value, file)
 
     console.log('附件上传成功:', result)
     MessagePlugin.success(`文件上传成功: ${result.attachment.original_filename}`)
@@ -911,7 +1259,6 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
 
     // 自动滚动到底部
     scrollToBottom()
-
   } catch (error) {
     console.error('文件上传失败:', error)
     MessagePlugin.error(`文件上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
@@ -921,6 +1268,8 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
 // 处理FileManager文件选择
 const handleWorkspaceFileSelect = async (filePath: string) => {
   console.log('文件被选中:', filePath)
+  resourceTab.value = 'paper'
+  currentFileData.value = null
   currentFileName.value = filePath
   selectedFile.value = filePath // 设置选中的文件
   showMainPaper.value = false
@@ -956,7 +1305,6 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
       currentFileContent.value = 'BINARY_FILE'
       console.log('二进制文件信息:', fileData)
     }
-
   } catch (error) {
     console.error('获取文件内容失败:', error)
     currentFileContent.value = '文件读取失败'
@@ -986,32 +1334,125 @@ const isImageFile = (filePath: string): boolean => {
 // 判断是否为DOCX文件
 const isDocxFile = (filePath: string | null): boolean => {
   if (!filePath) return false
-  return filePath.toLowerCase().endsWith('.docx') || 
-         filePath.toLowerCase().includes('wordprocessingml')
+  return (
+    filePath.toLowerCase().endsWith('.docx') || filePath.toLowerCase().includes('wordprocessingml')
+  )
 }
 
 // 获取文件类型
 const getFileType = (filePath: string): 'text' | 'image' | 'binary' => {
-  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif']
+  const imageExtensions = [
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.gif',
+    '.bmp',
+    '.svg',
+    '.webp',
+    '.ico',
+    '.tiff',
+    '.tif',
+  ]
 
   const textExtensions = [
-    '.txt', '.md', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
-    '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
-    '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
-    '.java', '.kt', '.scala', '.rs', '.go', '.php', '.rb', '.swift',
-    '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
-    '.sql', '.r', '.m', '.pl', '.lua', '.vim', '.dockerfile',
-    '.gitignore', '.gitattributes', '.editorconfig', '.eslintrc', '.prettierrc',
-    '.log', '.out', '.err', '.debug', '.trace'
+    '.txt',
+    '.md',
+    '.py',
+    '.js',
+    '.ts',
+    '.vue',
+    '.html',
+    '.css',
+    '.scss',
+    '.less',
+    '.json',
+    '.xml',
+    '.yaml',
+    '.yml',
+    '.toml',
+    '.ini',
+    '.cfg',
+    '.conf',
+    '.c',
+    '.cpp',
+    '.cc',
+    '.cxx',
+    '.h',
+    '.hpp',
+    '.hxx',
+    '.java',
+    '.kt',
+    '.scala',
+    '.rs',
+    '.go',
+    '.php',
+    '.rb',
+    '.swift',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.fish',
+    '.ps1',
+    '.bat',
+    '.cmd',
+    '.sql',
+    '.r',
+    '.m',
+    '.pl',
+    '.lua',
+    '.vim',
+    '.dockerfile',
+    '.gitignore',
+    '.gitattributes',
+    '.editorconfig',
+    '.eslintrc',
+    '.prettierrc',
+    '.log',
+    '.out',
+    '.err',
+    '.debug',
+    '.trace',
   ]
 
   const binaryExtensions = [
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
-    '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
-    '.mp3', '.mp4', '.avi', '.mov', 'wmv', '.flv', '.mkv',
-    '.ttf', '.otf', '.woff', '.woff2', '.eot',
-    '.psd', '.ai', '.eps', '.sketch', '.fig'
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.xls',
+    '.xlsx',
+    '.ppt',
+    '.pptx',
+    '.zip',
+    '.rar',
+    '.7z',
+    '.tar',
+    '.gz',
+    '.bz2',
+    '.xz',
+    '.exe',
+    '.msi',
+    '.dmg',
+    '.pkg',
+    '.deb',
+    '.rpm',
+    '.apk',
+    '.mp3',
+    '.mp4',
+    '.avi',
+    '.mov',
+    'wmv',
+    '.flv',
+    '.mkv',
+    '.ttf',
+    '.otf',
+    '.woff',
+    '.woff2',
+    '.eot',
+    '.psd',
+    '.ai',
+    '.eps',
+    '.sketch',
+    '.fig',
   ]
 
   const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.'))
@@ -1031,7 +1472,11 @@ const getFileType = (filePath: string): 'text' | 'image' | 'binary' => {
 // 获取图片URL（使用新的图片API）
 const getImageUrl = (filePath: string): string => {
   let decoded = filePath
-  try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
+  try {
+    decoded = decodeURIComponent(filePath)
+  } catch {
+    /* keep original */
+  }
   return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId.value}/images/${encodeURIComponent(decoded)}`
 }
 
@@ -1044,7 +1489,11 @@ const getImageBlobUrl = async (filePath: string): Promise<string> => {
     }
 
     let decoded = filePath
-    try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
+    try {
+      decoded = decodeURIComponent(filePath)
+    } catch {
+      /* keep original */
+    }
     const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId.value}/images/${encodeURIComponent(decoded)}`
 
     const response = await fetch(url, {
@@ -1101,6 +1550,7 @@ const sendMessage = async (messageContent?: string) => {
     avatar: USER_AVATAR,
   }
 
+  atBottom.value = true
   chatMessages.value.push(userMessage)
   inputValue.value = ''
 
@@ -1117,6 +1567,9 @@ const sendRealMessage = async (message: string) => {
   if (!currentChatSession.value || !authStore.token) return
 
   isStreaming.value = true
+  connectionState.value = 'reconnecting'
+  taskStartedAt.value = Date.now()
+  clockNow.value = Date.now()
 
   // 创建AI回复消息
   const aiMessageId = (Date.now() + 1).toString()
@@ -1169,6 +1622,9 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     // 设置断开连接回调（重连用尽或被关闭）
     webSocketHandler.value.onDisconnect(() => handleConnectionLost())
 
+    webSocketHandler.value.onReconnect((data) => {
+      connectionState.value = data.type === 'reconnect_complete' ? 'live' : 'reconnecting'
+    })
     // 设置消息监听器 - 使用统一的处理函数
     webSocketHandler.value.onMessage((data) => {
       // 忽略 start 和 auth_success 消息
@@ -1181,7 +1637,7 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
 
     // 连接WebSocket
     await webSocketHandler.value.connect()
-    console.log('WebSocket connected successfully')
+    connectionState.value = 'live'
 
     // 等待一下确保监听器设置完成
     await new Promise((resolve) => setTimeout(resolve, 100))
@@ -1219,7 +1675,7 @@ const selectHistory = (id: number) => {
 
 // 格式化日期
 const formatDate = (dateString: string) => {
-  return new Date(dateString).toLocaleString()
+  return formatWorkDate(dateString)
 }
 
 // 获取状态主题
@@ -1257,7 +1713,7 @@ const getOutputModeText = (mode?: string) => {
   const texts: Record<string, string> = {
     markdown: 'Markdown',
     word: 'Word (.docx)',
-    latex: 'LaTeX'
+    latex: 'LaTeX',
   }
   return texts[mode || 'markdown'] || 'Markdown'
 }
@@ -1267,7 +1723,7 @@ const getOutputModeIcon = (mode?: string) => {
   const icons: Record<string, string> = {
     markdown: 'file-1',
     word: 'file-word',
-    latex: 'file-pdf'
+    latex: 'file-pdf',
   }
   return icons[mode || 'markdown'] || 'file-1'
 }
@@ -1277,7 +1733,7 @@ const getOutputModeTheme = (mode?: string) => {
   const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
     markdown: 'primary',
     word: 'success',
-    latex: 'warning'
+    latex: 'warning',
   }
   return themes[mode || 'markdown'] || 'primary'
 }
@@ -1322,6 +1778,13 @@ watch(
       // 清理文件内容，避免不同work的文件内容混淆
       currentFileContent.value = ''
       selectedFile.value = null
+      currentFileData.value = null
+      showMainPaper.value = false
+      mainPaperContent.value = ''
+      resourceTab.value = 'paper'
+      connectionState.value = 'idle'
+      taskStartedAt.value = null
+      atBottom.value = true
 
       // 清理图片URL缓存，避免不同work的图片混淆
       Object.values(imageUrls.value).forEach((url) => {
@@ -1365,8 +1828,11 @@ onMounted(() => {
 
 // 检查并自动发送第一句话
 const checkAndAutoSendFirstMessage = async () => {
-  const pendingQuestion = localStorage.getItem('pendingQuestion')
+  const pendingKey = `pendingQuestion:${workId.value}`
+  const pendingQuestion =
+    localStorage.getItem(pendingKey) || localStorage.getItem('pendingQuestion')
   if (pendingQuestion && currentWork.value?.title?.trim() === '') {
+    localStorage.removeItem(pendingKey)
     localStorage.removeItem('pendingQuestion')
     try {
       generateWorkTitle(pendingQuestion).catch((err: Error) =>
@@ -1406,434 +1872,818 @@ const generateWorkTitle = async (question: string) => {
   }
 }
 </script>
-
-<style>
-/* 全局样式确保页面占满视口 */
-html,
-body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
-#app {
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
-}
-
-.work-description {
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: pre-wrap;
-}
-
-.work-description.expanded {
-  display: block;
-}
-</style>
-
 <style scoped>
 .work-page {
   display: flex;
-  height: 100vh;
   height: 100dvh;
-  width: 100vw;
-  background: #f5f7fa;
+  width: 100%;
+  background: #fff;
   overflow: hidden;
 }
-
-.main-content {
+.workspace-container {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-
 .workspace-header {
-  padding: 15px 30px;
-  background: white;
-  border-bottom: 1px solid #eee;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  gap: 20px;
+  flex-shrink: 0;
+  background: #fff;
+  border-bottom: 1px solid var(--td-component-stroke);
 }
-
-.work-info {
-  flex: 1;
+.work-heading {
+  min-width: 0;
 }
-
-.work-info h1 {
-  margin: 0 0 8px 0;
-  color: #2c3e50;
-  font-size: 1.5em;
-}
-
-.work-info p {
-  margin: 0;
-  color: #7f8c8d;
-  font-size: 0.9em;
-}
-
 .work-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  min-width: 0;
 }
-
+.work-title-row h1 {
+  font-family: var(--td-font-family);
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5;
+}
+.work-title-row .t-tag {
+  flex-shrink: 0;
+}
 .work-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
 }
-
+.progress-strip {
+  padding: 14px 24px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--td-component-stroke);
+}
+.progress-summary {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-height: 20px;
+}
+.progress-summary strong {
+  font-size: 13px;
+  font-weight: 500;
+  max-width: 65%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--td-text-color-placeholder);
+  flex-shrink: 0;
+}
+.live-dot.running {
+  background: var(--td-success-color);
+}
+.live-dot.attention {
+  background: var(--td-warning-color);
+}
+.elapsed {
+  color: var(--td-text-color-secondary);
+  margin-left: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.connection-state {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+}
+.connection-state.lost {
+  color: var(--td-error-color);
+}
+.phase-track {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+.phase-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  flex: 1;
+}
+.phase-number {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--td-component-border);
+  border-radius: 50%;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.phase-number > .t-icon {
+  font-size: 12px;
+}
+.phase-connector {
+  height: 1px;
+  background: var(--td-component-stroke);
+  min-width: 10px;
+  flex: 1;
+  margin: 0 10px;
+}
+.phase-step:last-child {
+  flex: 0;
+}
+.phase-step.is-completed {
+  color: var(--td-success-color);
+}
+.phase-step.is-completed .phase-number {
+  border-color: var(--td-success-color);
+}
+.phase-step.is-in_progress {
+  color: var(--td-brand-color);
+  font-weight: 500;
+}
+.phase-step.is-in_progress .phase-number {
+  background: var(--td-brand-color);
+  border-color: var(--td-brand-color);
+  color: #fff;
+}
+.phase-step.is-blocked {
+  color: var(--td-warning-color);
+}
+.recovery-banner {
+  margin: 16px 20px 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #eadbbd;
+  background: var(--td-warning-color-light);
+  border-radius: 6px;
+  padding: 14px 16px;
+  flex-shrink: 0;
+}
+.recovery-banner > .t-icon {
+  font-size: 22px;
+  color: var(--td-warning-color);
+  flex-shrink: 0;
+}
+.recovery-banner > div {
+  flex: 1;
+  min-width: 0;
+}
+.recovery-banner strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.recovery-banner p {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  margin: 6px 0 0;
+  line-height: 1.8;
+}
+.recovery-banner .t-button {
+  flex-shrink: 0;
+}
+.confirmation-banner {
+  background: var(--td-brand-color-light);
+  border-color: var(--td-component-stroke);
+}
 .workspace-content {
-  flex: 1;
   display: flex;
-  padding: 0;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
-  height: calc(100vh - 120px); /* 固定高度，减去header高度 */
 }
-
 .chat-section {
-  flex: 1;
+  width: 48%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #eee;
-  padding: 20px;
-  min-width: 300px;
+  background: #fff;
   overflow: hidden;
-  height: 100%; /* 确保占满父容器高度 */
+  border-right: 1px solid var(--td-component-stroke);
 }
-
-.preview-section {
-  flex: 1;
-  padding: 20px;
-  overflow-y: auto;
-  background: #f9f9f9;
-  height: 100%; /* 确保占满父容器高度 */
+.panel-header {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--td-component-stroke);
+  min-height: 52px;
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
-
+.panel-header > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+.panel-header .t-icon {
+  color: var(--td-text-color-secondary);
+  font-size: 16px;
+}
+.panel-hint {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+}
 .chat-container {
-  flex: 1;
   display: flex;
   flex-direction: column;
-  border: 1px solid #eee;
-  border-radius: 8px;
-  overflow: hidden;
-  background: white;
-  height: 100%; /* 确保占满父容器高度 */
+  flex: 1;
+  min-height: 0;
 }
-
 .chat-messages-container {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
-  min-height: 0; /* 允许flex子项收缩 */
+  position: relative;
 }
-
-.chat-bottom-section {
-  flex-shrink: 0; /* 防止底部区域被压缩 */
+.chat-messages-container :deep(.json-chat-renderer) {
+  height: 100%;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid #eee;
-  background: white;
 }
-
-.chat-messages {
-  flex: 1;
-  padding: 16px;
+.chat-messages-container :deep(.chat-messages) {
+  height: 100%;
   overflow-y: auto;
-  background: #fafafa;
-  min-height: 0; /* 允许flex子项收缩 */
+  padding: 20px 16px;
+  box-sizing: border-box;
+  scrollbar-width: thin;
 }
-
-.chat-input {
-  padding: 16px;
-  border-top: 1px solid #eee;
-  background: white;
-  flex-shrink: 0; /* 防止输入框被压缩 */
-  min-height: 80px; /* 确保输入框有最小高度 */
+.chat-messages-container :deep(.t-chat__inner) {
+  padding: 0;
 }
-
-/* 确保FileManager组件有合适的高度 */
-.chat-bottom-section .file-manager {
-  flex-shrink: 0; /* 防止文件管理器被压缩 */
-  max-height: 300px; /* 限制文件管理器最大高度 */
-  overflow-y: auto; /* 如果内容过多，允许滚动 */
+.chat-messages-container :deep(.chat-markdown) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-
-.chat-message-wrapper {
-  position: relative;
-  margin-bottom: 8px;
-}
-
-.system-label {
-  position: absolute;
-  top: 8px;
-  right: 16px;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-  z-index: 1;
-}
-
-.system-label.brain {
-  background: rgba(0, 82, 217, 0.1);
-  color: #0052d9;
-  border: 1px solid rgba(0, 82, 217, 0.2);
-}
-
-.system-label.code {
-  background: rgba(0, 168, 112, 0.1);
-  color: #00a870;
-  border: 1px solid rgba(0, 168, 112, 0.2);
-}
-
-.system-label.writing {
-  background: rgba(237, 123, 47, 0.1);
-  color: #ed7b2f;
-  border: 1px solid rgba(237, 123, 47, 0.2);
-}
-
-/* 对话分割线样式 */
-.message-divider {
-  position: relative;
-  height: 40px;
-  margin: 12px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-}
-
-.message-divider:hover {
-  height: 50px;
-  margin: 6px 0;
-}
-
-.divider-line {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: #e0e0e0;
-  transition: all 0.3s ease;
-}
-
-.message-divider:hover .divider-line {
-  background: #c0c0c0;
-  height: 2px;
-}
-
-.divider-icon {
-  position: relative;
-  width: 36px;
-  height: 36px;
-  background: #f5f5f5;
-  border: 1px solid #e0e0e0;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transform: scale(0.8);
-  transition: all 0.3s ease;
-  z-index: 1;
-  cursor: pointer;
-}
-
-.divider-icon.show {
-  opacity: 1;
-  transform: scale(1);
-  background: #f0f0f0;
-  border-color: #c0c0c0;
-}
-
-.divider-icon .t-icon {
-  font-size: 16px;
-  color: #666;
-}
-
-.message-divider:hover .divider-icon {
-  opacity: 1;
-  transform: scale(1);
-  background: #e8e8e8;
-  border-color: #b0b0b0;
-}
-
-/* 对话变灰效果 */
-.message-dimmed {
-  opacity: 0.4;
-  filter: grayscale(0.6);
-  transition: all 0.3s ease;
-}
-
-.message-dimmed .t-chat__message {
-  opacity: 0.4;
-}
-
-.message-dimmed .system-label {
-  opacity: 0.4;
-}
-
-.work-details {
-  padding: 16px;
-  background: #f0f2f5;
-  border-radius: 8px;
-  border: 1px solid #e0e0e0;
-}
-
-.work-details p {
-  margin: 8px 0;
-  color: #555;
+.chat-messages-container :deep(.markdown-body) {
   font-size: 14px;
+  line-height: 1.85;
 }
-
-.work-details strong {
-  color: #333;
-  font-weight: 600;
+.chat-messages-container :deep(.markdown-body h1) {
+  font-size: 22px;
 }
-
-/* 文件预览样式 */
-.file-preview {
-  max-height: 600px;
-  overflow-y: auto;
+.chat-messages-container :deep(.markdown-body h2) {
+  font-size: 19px;
 }
-
-.code-preview {
-  background-color: #f5f5f5;
+.chat-messages-container :deep(.markdown-body h3) {
+  font-size: 16px;
+}
+.chat-input {
+  padding: 14px 16px 0;
+  border-top: 1px solid var(--td-component-stroke);
+  background: #fff;
+  flex-shrink: 0;
+}
+.input-note {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 36px;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+}
+.input-note .t-button {
+  font-size: 12px;
+  padding: 0 4px;
+}
+.jump-latest {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--td-component-border);
   border-radius: 4px;
-  padding: 16px;
-  overflow-x: auto;
+  background: #fff;
+  box-shadow: var(--td-shadow-1);
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  padding: 8px 14px;
+  cursor: pointer;
+  white-space: nowrap;
 }
-
-.code-preview pre {
-  margin: 0;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+.preview-section {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  overflow: hidden;
+}
+.resource-tabs {
+  height: 53px;
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--td-component-stroke);
+  padding: 0 20px;
+  gap: 24px;
+  flex-shrink: 0;
+}
+.resource-tabs > button:not(.t-button) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--td-text-color-secondary);
+  font-size: 14px;
+  white-space: nowrap;
+}
+.resource-tabs > button.active {
+  border-bottom-color: var(--td-brand-color);
+  color: var(--td-brand-color);
+}
+.resource-tabs > button > .t-icon {
+  font-size: 16px;
+}
+.resource-tabs > button > span {
+  font-size: 11px;
+  margin-left: 2px;
+  color: var(--td-text-color-placeholder);
+}
+.resource-tabs > .details-button {
+  margin-left: auto;
+  align-self: center;
+  color: var(--td-text-color-placeholder);
+}
+.preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: #fff;
+  padding: 24px;
+}
+.paper-preview,
+.selected-preview {
+  min-height: 100%;
+  box-sizing: border-box;
+  background: #fff;
+}
+.document-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  border-bottom: 1px solid var(--td-component-stroke);
+  padding-bottom: 14px;
+  margin-bottom: 24px;
+}
+.document-caption > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.text-action {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--td-brand-color);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.text-preview pre {
   font-size: 13px;
-  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
 }
-
-.markdown-preview {
-  padding: 16px;
-  line-height: 1.6;
-}
-
 .image-preview {
-  text-align: center;
-  padding: 16px;
+  padding: 10px 0;
 }
-
 .image-preview img {
+  display: block;
   max-width: 100%;
   height: auto;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  margin: auto;
 }
-
-.text-preview {
-  background-color: #f5f5f5;
-  border-radius: 4px;
-  padding: 16px;
-  overflow-x: auto;
-}
-
-.text-preview pre {
-  margin: 0;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
+.resource-files,
 .files-section {
-  display: none;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
-
+.resource-files :deep(.file-manager) {
+  border: 0;
+  border-radius: 0;
+  height: 100%;
+}
+.figures-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+  background: #fff;
+}
+.figure-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.figure-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--td-component-stroke);
+  background: #fff;
+  border-radius: 4px;
+  padding: 12px;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+}
+.figure-card:hover {
+  border-color: var(--td-component-border);
+}
+.figure-card img {
+  width: 100%;
+  height: 150px;
+  object-fit: contain;
+}
+.figure-card > span {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.figure-placeholder {
+  display: grid;
+  place-items: center;
+  height: 150px;
+  background: #fafafa;
+  color: var(--td-text-color-placeholder);
+  font-size: 30px;
+}
 .mobile-tab-bar {
   display: none;
 }
-
-.work-page.is-mobile {
-  height: 100vh;
-  height: 100dvh;
+.work-details h2 {
+  font-family: var(--td-font-family);
+  font-size: 20px;
+  margin: 20px 0;
 }
-
-.work-page.is-mobile :deep(.mobile-expand-btn-container) {
-  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+.work-details p {
+  white-space: pre-wrap;
+  line-height: 1.9;
+  font-size: 14px;
+  color: var(--td-text-color-secondary);
 }
-
-.workspace-content.is-mobile {
-  flex-direction: column;
-  height: auto;
-  flex: 1;
-  min-height: 0;
+.work-details dl {
+  margin-top: 24px;
+  border-top: 1px solid var(--td-component-stroke);
+  padding-top: 16px;
 }
-
-.workspace-content.is-mobile .chat-section,
-.workspace-content.is-mobile .preview-section,
-.workspace-content.is-mobile .files-section {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  width: 100%;
-  height: auto;
-  padding: 8px;
-  border-right: none;
+.work-details dt {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  margin: 16px 0 6px;
 }
-
-.workspace-content.is-mobile .files-section {
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-  overflow: hidden;
-}
-
-.workspace-content.is-mobile .file-preview {
-  max-height: none;
-}
-
-.work-page.is-mobile .workspace-header {
-  padding: 10px 12px;
-}
-
-.work-page.is-mobile .work-info h1 {
-  font-size: 1.05em;
+.work-details dd {
   margin: 0;
+  font-size: 14px;
 }
-
-.work-page.is-mobile .mobile-tab-bar {
-  display: flex;
-  flex-shrink: 0;
-  border-top: 1px solid #eee;
-  background: #fff;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+.preview-body :deep(.markdown-body) {
+  font-size: 14px;
+  line-height: 1.9;
 }
-
-.mobile-tab {
-  flex: 1;
+.preview-body :deep(.markdown-body h1) {
+  font-size: 24px;
+}
+.preview-body :deep(.markdown-body h2) {
+  font-size: 20px;
+}
+.preview-placeholder {
+  height: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  padding: 8px 0;
-  border: none;
-  background: none;
-  color: #666;
+}
+.preview-placeholder h2 {
+  font-size: 18px;
+}
+.preview-empty-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-top: 8px;
+}
+@media (max-width: 1200px) {
+  .phase-step {
+    flex: none;
+    font-size: 11px;
+  }
+  .phase-connector {
+    width: 16px;
+    min-width: 16px;
+    margin: 0 6px;
+  }
+  .resource-tabs {
+    gap: 18px;
+    padding: 0 16px;
+  }
+  .resource-tabs > button:not(.t-button) {
+    font-size: 13px;
+  }
+  .preview-body {
+    padding: 20px;
+  }
+  .recovery-banner {
+    margin: 12px 16px 0;
+  }
+}
+@media (max-width: 768px) {
+  .workspace-header {
+    padding: 16px 12px 16px 60px;
+    min-height: 64px;
+    box-sizing: border-box;
+    gap: 8px;
+  }
+  .work-title-row {
+    gap: 7px;
+  }
+  .work-title-row h1 {
+    font-size: 15px;
+    max-width: 100%;
+  }
+  .work-title-row .t-tag {
+    font-size: 10px;
+    height: 20px;
+    padding: 0 5px;
+  }
+  .work-actions {
+    gap: 5px;
+  }
+  .work-actions .t-button {
+    font-size: 12px;
+    height: 30px;
+    padding: 0 8px;
+  }
+  .work-actions .t-button--shape-square {
+    width: 28px;
+    padding: 0;
+  }
+  .progress-strip {
+    padding: 12px 16px;
+  }
+  .progress-summary {
+    gap: 7px;
+  }
+  .progress-summary strong {
+    font-size: 12px;
+    max-width: 70%;
+  }
+  .connection-state {
+    font-size: 11px;
+  }
+  .elapsed {
+    display: none;
+  }
+  .phase-track {
+    margin-top: 12px;
+  }
+  .phase-step {
+    font-size: 11px;
+    gap: 5px;
+    flex: none;
+  }
+  .phase-connector {
+    width: 12px;
+    min-width: 12px;
+  }
+  .phase-number {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+  .workspace-content {
+    min-height: 0;
+  }
+  .chat-section,
+  .preview-section,
+  .files-section {
+    width: 100%;
+    flex: 1;
+    min-height: 0;
+    border: 0;
+  }
+  .chat-messages-container :deep(.chat-messages) {
+    padding: 14px 12px;
+  }
+  .chat-messages-container :deep(.markdown-body) {
+    font-size: 14px;
+  }
+  .panel-header {
+    padding: 12px 16px;
+    min-height: 46px;
+  }
+  .panel-header > span:first-child {
+    font-size: 13px;
+  }
+  .panel-hint {
+    font-size: 11px;
+  }
+  .chat-input {
+    padding: 12px 12px 0;
+  }
+  .input-note {
+    min-height: 32px;
+    font-size: 10px;
+  }
+  .recovery-banner {
+    margin: 12px;
+    padding: 12px;
+    gap: 9px;
+    flex-wrap: wrap;
+  }
+  .recovery-banner > .t-icon {
+    font-size: 20px;
+    align-self: start;
+    margin-top: 2px;
+  }
+  .recovery-banner > div {
+    min-width: calc(100% - 35px);
+  }
+  .recovery-banner strong {
+    font-size: 13px;
+  }
+  .recovery-banner p {
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .recovery-banner > .t-button {
+    margin-left: 29px;
+    height: 30px;
+    font-size: 12px;
+  }
+  .mobile-tab-bar {
+    display: flex;
+    flex-shrink: 0;
+    justify-content: space-around;
+    align-items: center;
+    padding: 6px 8px max(7px, env(safe-area-inset-bottom));
+    background: #fff;
+    border-top: 1px solid var(--td-component-stroke);
+    gap: 12px;
+    min-height: 54px;
+  }
+  .mobile-tab-bar button {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: var(--td-text-color-secondary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 4px 12px;
+    flex: 1;
+    white-space: nowrap;
+  }
+  .mobile-tab-bar button > .t-icon {
+    font-size: 20px;
+  }
+  .mobile-tab-bar button.active {
+    color: var(--td-brand-color);
+  }
+  .resource-tabs {
+    height: 46px;
+    gap: 20px;
+    padding: 0 16px;
+  }
+  .resource-tabs > button:not(.t-button) {
+    font-size: 13px;
+  }
+  .preview-body {
+    padding: 16px;
+  }
+  .figure-grid {
+    gap: 12px;
+  }
+  .figure-card img,
+  .figure-placeholder {
+    height: 120px;
+  }
+  .figures-panel {
+    padding: 16px;
+  }
+  .preview-body :deep(.markdown-body) {
+    font-size: 14px;
+  }
+  .preview-placeholder {
+    align-items: start;
+    padding-top: 40px;
+  }
+  .studio-empty {
+    padding: 24px 12px;
+  }
+  .resource-tabs .details-button {
+    width: 28px;
+  }
+  .work-title-row {
+    flex-wrap: wrap;
+  }
+}
+.resource-tabs {
+  display: block;
+  height: auto;
+  padding: 0 16px;
+  min-height: 53px;
+  border: 0;
+}
+.resource-tabs :deep(.t-tabs__nav-item) {
+  font-size: 14px;
+}
+.resource-tabs :deep(.t-tabs__nav-container) {
+  border-bottom: 1px solid var(--td-component-stroke);
+}
+.resource-tabs :deep(.t-tabs__content) {
+  display: none;
+}
+.resource-tabs :deep(.t-tabs__actions) {
+  padding-right: 4px;
+}
+.resource-tab-label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.resource-tab-label > span {
   font-size: 12px;
+  color: var(--td-text-color-placeholder);
 }
-
-.mobile-tab.active {
-  color: #0052d9;
+.chat-input :deep(.t-chat__sender__textarea) {
+  border-radius: 8px;
 }
-
-.mobile-tab .t-icon {
-  font-size: 20px;
+.chat-input :deep(.t-chat__sender__suffix) {
+  gap: 8px;
+}
+@media (max-width: 768px) {
+  .resource-tabs {
+    padding: 0 12px;
+    min-height: 46px;
+  }
+  .resource-tabs :deep(.t-tabs__nav-item) {
+    font-size: 13px;
+    padding: 0 12px;
+  }
+  .resource-tabs :deep(.t-tabs__nav) {
+    height: 46px;
+  }
+}
+.document-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.document-actions > .t-button {
+  font-size: 12px;
+  padding: 0 4px;
+}
+@media (max-width: 768px) {
+  .document-caption {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .document-actions {
+    gap: 12px;
+  }
 }
 </style>

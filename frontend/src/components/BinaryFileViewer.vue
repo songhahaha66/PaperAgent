@@ -28,6 +28,7 @@
       </div>
     </div>
 
+    <p v-if="isPdf" class="pdf-help">如浏览器未显示预览，可下载 PDF 查看完整排版。</p>
     <div v-if="isPdf" class="pdf-preview">
       <iframe v-if="pdfUrl" :src="pdfUrl" :title="fileInfo.filename" class="pdf-frame" />
       <div v-else-if="pdfError" class="file-message">
@@ -196,7 +197,8 @@ const downloadFile = async () => {
   align-items: center;
 }
 
-.file-size, .file-type {
+.file-size,
+.file-type {
   font-size: 14px;
   color: #7f8c8d;
 }
@@ -240,5 +242,11 @@ const downloadFile = async () => {
   .download-btn {
     width: 100%;
   }
+}
+.pdf-help {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.8;
+  margin: 0;
 }
 </style>

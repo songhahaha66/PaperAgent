@@ -1,0 +1,95 @@
+/* Small layout and accessibility adjustments on top of the existing TDesign theme. */
+:root {
+  --td-brand-color: #16865d;
+  --td-brand-color-hover: #12734f;
+  --td-brand-color-active: #0f6042;
+  --td-brand-color-focus: #d7eee2;
+  --td-brand-color-light: #eef7f2;
+  --td-brand-color-disabled: #b5d8c6;
+  --pa-ink: var(--td-text-color-primary);
+  --pa-muted: var(--td-text-color-secondary);
+  --pa-accent: var(--td-brand-color);
+  --pa-page: #fff;
+  --pa-line: var(--td-component-stroke);
+  --pa-paper: #fff;
+}
+body {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+:where(button, a, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--td-brand-color);
+  outline-offset: 3px;
+}
+.studio-empty {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--td-text-color-placeholder);
+}
+.studio-empty h2 {
+  font-family: var(--td-font-family);
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+}
+.studio-empty p {
+  max-width: 340px;
+  margin: 0;
+  line-height: 1.8;
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
+}
+.studio-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.t-dialog__body {
+  overscroll-behavior: contain;
+}
+@media (max-width: 768px) {
+  .t-dialog__position {
+    padding: 12px !important;
+  }
+  .t-dialog {
+    max-height: calc(100dvh - 24px);
+    display: flex;
+    flex-direction: column;
+    margin: 0 !important;
+    max-width: 100%;
+  }
+  .t-dialog__header {
+    flex-shrink: 0;
+  }
+  .t-dialog__body {
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .t-dialog__footer {
+    flex-shrink: 0;
+    background: white;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

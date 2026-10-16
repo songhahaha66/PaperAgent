@@ -19,6 +19,7 @@
           @click="toggleSidebar"
           class="sidebar-toggle-btn"
           :title="t('sidebar.toggle')"
+          :aria-label="t('sidebar.toggle')"
         >
           <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
         </t-button>
@@ -31,6 +32,18 @@
         <t-button theme="primary" block @click="createNewTask">{{ t('sidebar.newWork') }}</t-button>
       </div>
 
+      <nav class="sidebar-nav" :aria-label="ui.workspace">
+        <t-button
+          v-for="item in navigationItems"
+          :key="item.path"
+          theme="default"
+          variant="text"
+          block
+          :class="{ 'nav-active': route.path === item.path }"
+          @click="navigate(item.path)"
+          ><template #icon><t-icon :name="item.icon" /></template>{{ item.label }}</t-button
+        >
+      </nav>
       <div class="menu-section">
         <div class="menu-title">
           <browse-icon />
@@ -67,7 +80,7 @@
                     {{ getStatusText(item.status) }}
                   </t-tag>
                 </div>
-                <p class="history-date">{{ new Date(item.date).toLocaleString(locale) }}</p>
+                <p class="history-date">{{ formatWorkDate(item.date, locale) }}</p>
                 <p class="history-content">{{ item.content || t('common.noDescription') }}</p>
               </div>
             </t-card>
@@ -87,7 +100,7 @@
 
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
       <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-        <div class="user-info">
+        <button class="user-info" aria-label="账户与设置">
           <div class="user-avatar">
             <span class="user-avatar-text">{{ userName.charAt(0).toUpperCase() }}</span>
           </div>
@@ -96,7 +109,7 @@
             <div class="user-email">{{ userEmail }}</div>
           </div>
           <t-icon name="setting" class="settings-icon" />
-        </div>
+        </button>
       </t-dropdown>
     </div>
 
@@ -133,8 +146,15 @@
 
   <!-- 手机端侧边栏收起时的浮动展开按钮 -->
   <div v-if="isSidebarCollapsed" class="mobile-expand-btn-container">
-    <t-button theme="primary" shape="round" @click="toggleSidebar" class="mobile-expand-btn">
-      <t-icon name="chevron-right" />
+    <t-button
+      theme="default"
+      variant="outline"
+      aria-label="打开导航"
+      shape="square"
+      @click="toggleSidebar"
+      class="mobile-expand-btn"
+    >
+      <t-icon name="view-list" />
     </t-button>
   </div>
 </template>
@@ -142,12 +162,14 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { BrowseIcon } from 'tdesign-icons-vue-next'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { workspaceAPI } from '@/api/workspace'
 import { useBreakpoint } from '@/composables/useBreakpoint'
+import { useStudioCopy } from '@/lang/studio'
+import { formatWorkDate } from '@/utils/dates'
 
 // 定义props
 interface Props {
@@ -167,6 +189,8 @@ const emit = defineEmits<Emits>()
 
 const { t, locale } = useI18n()
 const router = useRouter()
+const route = useRoute()
+const { ui } = useStudioCopy()
 const authStore = useAuthStore()
 const { isMobile } = useBreakpoint()
 
@@ -198,8 +222,18 @@ const closeSidebarOnMobile = () => {
   }
 }
 
+const navigationItems = computed(() => [
+  { path: '/home', label: ui.value.workspace, icon: 'home' },
+  { path: '/template', label: ui.value.templates, icon: 'file-copy' },
+  { path: '/api-config', label: ui.value.models, icon: 'setting' },
+])
+function navigate(path: string) {
+  closeSidebarOnMobile()
+  router.push(path)
+}
 // 新建工作
 const createNewTask = () => {
+  emit('create-new-task')
   closeSidebarOnMobile()
   router.push('/home')
 }
@@ -727,5 +761,141 @@ const userOptions = computed(() => [
   color: #7f8c8d;
   margin: 0;
   line-height: 1.4;
+}
+
+.sidebar {
+  width: 260px;
+  box-shadow: none;
+  border-color: var(--td-component-stroke);
+  background: #fff;
+  flex-shrink: 0;
+}
+.sidebar-collapsed {
+  width: 60px;
+}
+.sidebar-header {
+  padding: 16px 14px;
+  min-height: 68px;
+}
+.header-title h2 {
+  font-size: 21px;
+  margin: 0;
+}
+.sidebar-content {
+  padding: 18px 14px;
+}
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: -10px 0 24px;
+}
+.sidebar-nav :deep(.t-button__text) {
+  flex: 1;
+  text-align: left;
+}
+.sidebar-nav .t-button {
+  height: 38px;
+  justify-content: flex-start;
+  color: var(--td-text-color-secondary);
+  font-size: 14px;
+}
+.sidebar-nav .nav-active {
+  background: var(--td-bg-color-secondarycontainer);
+  color: var(--td-text-color-primary);
+}
+.history-item {
+  border-color: #eee;
+}
+.history-item:hover {
+  box-shadow: none;
+  border-color: #ccc;
+}
+.history-item.active {
+  border-left: 2px solid var(--td-brand-color);
+  background: #fafafa;
+}
+.history-header {
+  flex-direction: column;
+  gap: 6px;
+}
+.history-header h4 {
+  line-height: 1.6;
+}
+.history-content {
+  display: none;
+}
+.history-date {
+  font-size: 11px !important;
+  color: #999 !important;
+  margin-top: 8px !important;
+}
+.sidebar-footer {
+  padding: 12px;
+}
+.user-info {
+  border: 0;
+  background: #fff;
+  text-align: left;
+  width: 100%;
+  padding: 10px 8px;
+  gap: 10px;
+}
+.user-avatar {
+  background: #eee;
+  color: #333;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+}
+.user-avatar-text {
+  font-size: 14px;
+  color: #333;
+}
+.user-details {
+  min-width: 0;
+}
+.user-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-email {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.collapsed-avatar {
+  background: #eee;
+  color: #333;
+  box-shadow: none;
+}
+.mobile-expand-btn-container {
+  top: 14px;
+  left: 14px;
+  bottom: auto;
+}
+.mobile-expand-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  box-shadow: none;
+  background: #fff;
+}
+@media (max-width: 768px) {
+  .sidebar {
+    width: min(300px, 86vw);
+  }
+  .sidebar-collapsed {
+    width: 0;
+  }
+  .sidebar:not(.sidebar-collapsed) {
+    width: min(300px, 86vw);
+  }
+}
+.history-item-content h4,
+.menu-title {
+  font-family: var(--td-font-family);
 }
 </style>

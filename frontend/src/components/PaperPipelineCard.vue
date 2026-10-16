@@ -34,9 +34,15 @@
       <div v-for="sp in subproblems" :key="sp.id" :class="['subproblem-row', `is-${sp.status}`]">
         <span class="sp-id">{{ sp.id }}</span>
         <span class="sp-text">{{ sp.text }}</span>
-        <span v-if="sp.runs" class="sp-runs">
-          执行 {{ sp.runs }} 次<template v-if="sp.fails">，失败 {{ sp.fails }}</template>
-        </span>
+        <span :class="['sp-status', `is-${sp.status}`]">{{
+          sp.status === 'completed'
+            ? '已完成'
+            : sp.status === 'failed'
+              ? '需重试'
+              : running
+                ? '进行中'
+                : '已保存'
+        }}</span>
       </div>
     </div>
 
@@ -66,21 +72,24 @@
     </div>
 
     <!-- 原始事件（排查用） -->
-    <div class="pipeline-raw">
-      <t-link theme="default" size="small" @click="showRaw = !showRaw">
-        {{ showRaw ? '收起事件明细' : `事件明细（${events.length}）` }}
-      </t-link>
-      <ul v-if="showRaw" class="raw-list">
+    <details class="pipeline-raw">
+      <summary>
+        技术详情 <span>{{ events.length }} 条事件</span>
+      </summary>
+      <div v-for="sp in subproblems.filter((s) => s.runs)" :key="sp.id" class="run-stat">
+        {{ sp.id }} · 执行 {{ sp.runs }} 次<span v-if="sp.fails"> · 失败 {{ sp.fails }} 次</span>
+      </div>
+      <ul class="raw-list">
         <li v-for="(block, i) in events" :key="i">
           <code>{{ block.type }}</code> {{ asText(block.content) }}
         </li>
       </ul>
-    </div>
+    </details>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import {
   derivePhases,
@@ -92,8 +101,6 @@ import {
 
 // superseded：这条消息之后已经有新消息（例如用户已回复确认），卡片不再提示等待确认
 const props = defineProps<{ blocks: PipelineBlock[]; streaming?: boolean; superseded?: boolean }>()
-
-const showRaw = ref(false)
 
 const events = computed(() => props.blocks.filter(isPaperEvent))
 
@@ -269,5 +276,32 @@ const currentText = computed(() => {
 
 .raw-list code {
   font-size: 11px;
+}
+.sp-status {
+  font-size: 11px;
+  color: var(--td-text-color-secondary);
+  white-space: nowrap;
+}
+.sp-status.is-completed {
+  color: var(--td-success-color);
+}
+.sp-status.is-failed {
+  color: var(--td-warning-color);
+}
+.pipeline-raw summary {
+  cursor: pointer;
+  color: var(--td-text-color-secondary);
+}
+.pipeline-raw summary > span {
+  font-size: 11px;
+  color: var(--td-text-color-placeholder);
+  margin-left: 8px;
+}
+.run-stat {
+  font-size: 12px;
+  margin-top: 8px;
+}
+.raw-list {
+  overflow-wrap: anywhere;
 }
 </style>

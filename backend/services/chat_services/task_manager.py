@@ -42,6 +42,7 @@ class AITask:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     error: Optional[str] = None
+    cancel_reason: Optional[str] = None
     # 累积的输出（用于断线重连恢复）。不设上限：长任务的早期事件（题目分析、阶段）也要能恢复；
     # 体积最大的 plan_updated 只保留最新一条
     outputs: list = field(default_factory=list)
@@ -159,18 +160,19 @@ class TaskManager:
             task.status = TaskStatus.FAILED
             task.completed_at = time.time()
             task.error = error
-            if task._async_task and not task._async_task.done():
+            if task._async_task and not task._async_task.done() and task._async_task is not asyncio.current_task():
                 task._async_task.cancel()
             logger.error(f"任务失败: {task.task_id}, 错误: {error}")
             asyncio.create_task(self._cleanup_completed_task(work_id))
     
-    def cancel_task(self, work_id: str):
+    def cancel_task(self, work_id: str, reason: str = "cancelled"):
         """取消任务"""
         task = self._tasks.get(work_id)
         if task:
+            task.cancel_reason = reason
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
-            if task._async_task and not task._async_task.done():
+            if task._async_task and not task._async_task.done() and task._async_task is not asyncio.current_task():
                 task._async_task.cancel()
             logger.info(f"任务取消: {task.task_id}")
     

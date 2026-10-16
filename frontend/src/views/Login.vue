@@ -23,7 +23,9 @@
           <t-input
             v-model="formData.email"
             :placeholder="t('login.email')"
-            type="email"
+            :aria-label="t('login.email')"
+            type="text"
+            inputmode="email"
             autocomplete="username webauthn"
             clearable
           >
@@ -42,7 +44,12 @@
         </t-form-item>
 
         <t-form-item name="password">
-          <t-input v-model="formData.password" :placeholder="t('login.password')" type="password">
+          <t-input
+            v-model="formData.password"
+            :placeholder="t('login.password')"
+            :aria-label="t('login.password')"
+            type="password"
+          >
             <template #prefix-icon>
               <LockOnIcon />
             </template>
@@ -97,7 +104,12 @@
           <t-link theme="primary" @click="switchMode">{{ t('login.signInNow') }}</t-link>
         </p>
         <p v-if="isLogin" class="passkey-hint">{{ t('login.passkeyHint') }}</p>
-        <p v-if="isLogin && originHint" class="passkey-hint">{{ originHint }}</p>
+        <details v-if="isLogin && originHint" class="passkey-help">
+          <summary>
+            {{ locale.startsWith('zh') ? '关于通行密钥登录' : 'About passkey sign-in' }}
+          </summary>
+          <p class="passkey-hint">{{ originHint }}</p>
+        </details>
       </div>
     </div>
   </div>
@@ -414,5 +426,15 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   margin-top: 12px !important;
   font-size: 12px;
   color: #95a5a6;
+}
+.login-page {
+  background: #fff;
+}
+.passkey-help {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+}
+.passkey-help summary {
+  cursor: pointer;
 }
 </style>

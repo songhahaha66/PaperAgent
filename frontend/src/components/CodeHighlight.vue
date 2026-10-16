@@ -8,10 +8,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
+import latex from 'highlight.js/lib/languages/latex'
 import 'highlight.js/styles/github.css'
 
 // Register the Python language
 hljs.registerLanguage('python', python)
+hljs.registerLanguage('latex', latex)
 
 interface Props {
   code: string
@@ -19,20 +21,20 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  language: 'python'
+  language: 'python',
 })
 
 const codeElement = ref<HTMLElement>()
 
 const highlightedCode = computed(() => {
   if (!props.code) return ''
-  
+
   try {
     const result = hljs.highlight(props.code, { language: props.language })
     return result.value
   } catch (error) {
     console.warn('Syntax highlighting failed, falling back to plain text:', error)
-    return props.code
+    return props.code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
 })
 

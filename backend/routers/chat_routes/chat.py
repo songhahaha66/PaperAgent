@@ -240,6 +240,29 @@ async def get_task_status(
     return task_manager.get_task_status(work_id)
 
 
+@router.post("/work/{work_id}/pause")
+@route_guard
+async def pause_work(
+    work_id: str,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from services.data_services.crud import get_work
+    work = get_work(db, work_id)
+    if not work or work.created_by != current_user_id:
+        raise HTTPException(status_code=403, detail="无权限访问")
+    task = task_manager.get_running_task(work_id)
+    if not task:
+        return {"work_status": work.status}
+    task_manager.cancel_task(work_id, reason="paused")
+    if task._async_task:
+        try:
+            await asyncio.shield(task._async_task)
+        except asyncio.CancelledError:
+            pass
+    return {"work_status": "paused"}
+
+
 @router.websocket("/ws/{work_id}")
 async def websocket_chat(websocket: WebSocket, work_id: str):
     """WebSocket聊天接口，支持断线重连恢复"""
@@ -309,6 +332,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
         else:
             async with manager.lock(work_id):
                 manager.register(work_id, websocket)
+            if auth_info.get('task_id'):
+                await websocket.send_text(json.dumps({
+                    'type': 'complete', 'work_status': work.status, 'reload_history': True,
+                }))
 
         while True:
             ws_closed = False
@@ -529,7 +556,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         await loop.run_in_executor(None, save_final_message)
 
                         # 停在"确认建模方案"时工作是待确认，不是已完成
-                        work_status = 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'completed'
+                        failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
+                        solutions = (getattr(main_agent, 'last_result', None) or {}).get('solutions') or {}
+                        incomplete = any(solution.get('status') != 'completed' for solution in solutions.values())
+                        work_status = ('failed' if failed_blocks else 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'paused' if incomplete else 'completed')
                         await loop.run_in_executor(None, set_work_status, work_id, work_status)
 
                         # 标记任务完成
@@ -547,6 +577,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except asyncio.CancelledError:
                         logger.info(f"AI任务被取消: {work_id}")
                         
+                        task = task_manager.get_task(work_id)
+                        interrupted_status = 'paused' if task and task.cancel_reason == 'paused' else 'failed' if task and task.error else 'cancelled'
                         # 取消时也保存已生成的内容
                         partial_content = ws_callback.content.strip()
                         partial_json_blocks = ws_callback.json_blocks
@@ -558,19 +590,24 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 save_db = next(get_db())
                                 try:
                                     save_chat_service = ChatService(save_db)
-                                    cancel_notice = "\n\n---\n⚠️ *任务已取消，以上为部分生成内容*"
+                                    notices = {
+                                        'paused': "任务已暂停，进度已保存。可从断点继续。",
+                                        'failed': "任务意外中断，已有结果已保存。可从断点继续。",
+                                        'cancelled': "任务已取消，已有结果已保存。可从断点继续。",
+                                    }
+                                    cancel_notice = "\n\n---\n" + notices[interrupted_status]
                                     final_content = partial_content + cancel_notice
                                     
                                     if partial_json_blocks:
                                         save_chat_service.add_json_card_message(
                                             work_id, "assistant", final_content,
                                             partial_json_blocks,
-                                            {"system_type": "brain", "status": "cancelled"}
+                                            {"system_type": "brain", "status": interrupted_status}
                                         )
                                     else:
                                         save_chat_service.add_message(
                                             work_id, "assistant", final_content,
-                                            {"system_type": "brain", "status": "cancelled"}
+                                            {"system_type": "brain", "status": interrupted_status}
                                         )
                                 except Exception as save_error:
                                     logger.error(f"[CANCELLED] 保存部分内容失败: {save_error}")
@@ -579,8 +616,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             
                             await loop.run_in_executor(None, save_cancelled_message)
                         
-                        await loop.run_in_executor(None, set_work_status, work_id, 'cancelled')
-                        task_manager.cancel_task(work_id)
+                        await loop.run_in_executor(None, set_work_status, work_id, interrupted_status)
+                        try:
+                            await manager.send(work_id, {'type': 'complete', 'work_status': interrupted_status, 'reload_history': True})
+                        except Exception:
+                            pass
                         raise
                     except Exception as e:
                         logger.error(f"AI任务执行失败: {e}")
@@ -657,7 +697,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     elif exc:
                         logger.warning(f"[WS] ws_watch 异常退出: {exc}")
 
-                if ai_task in done and ai_task.exception():
+                if ai_task in done and not ai_task.cancelled() and ai_task.exception():
                     raise ai_task.exception()
 
             except Exception as e:
