@@ -163,8 +163,8 @@
                 <div class="no-template-content">
                   <t-icon name="file-add" theme="default" size="32px" />
                   <div class="no-template-text">
-                    <h4>{{ t('home.noTemplate') }}</h4>
-                    <p>{{ t('home.noTemplateDescription') }}</p>
+                    <h4>{{ selectedOutputMode === 'latex' ? t('home.builtinLatex') : t('home.noTemplate') }}</h4>
+                    <p>{{ selectedOutputMode === 'latex' ? t('home.builtinLatexDescription') : t('home.noTemplateDescription') }}</p>
                   </div>
                   <div v-if="selectedTemplateId === null" class="selection-indicator">
                     <t-icon name="check-circle-filled" theme="success" />
@@ -173,6 +173,8 @@
               </t-card>
             </div>
 
+            <!-- LaTeX 输出用内置数模版式排版，暂不支持上传 LaTeX 模板 -->
+            <template v-if="selectedOutputMode !== 'latex'">
             <!-- 或者分割线 -->
             <div class="template-divider">
               <span>{{ t('home.existingTemplates', { format: getOutputModeLabel() }) }}</span>
@@ -238,6 +240,7 @@
                 {{ t('home.createTemplate') }}
               </t-button>
             </div>
+            </template>
 
             <div class="step-actions">
               <t-button theme="default" size="middle" @click="prevStep" class="prev-btn">

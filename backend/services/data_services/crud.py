@@ -71,8 +71,13 @@ def authenticate_user(db: Session, email: str, password: str):
     return user
 
 def get_system_config(db: Session):
-    """获取系统配置"""
+    """获取系统配置；新数据库里还没有这一行时按默认值（允许注册）创建"""
     config = db.query(models.SystemConfig).first()
+    if config is None:
+        config = models.SystemConfig(is_allow_register=True)
+        db.add(config)
+        db.commit()
+        db.refresh(config)
     return config
 
 def update_system_config(db: Session, is_allow_register: bool):

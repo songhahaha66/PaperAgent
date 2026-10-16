@@ -79,6 +79,7 @@ class PaperGraphAgent:
             options["design_ahead"] = os.environ["AI_DESIGN_AHEAD"].lower() in ("1", "true", "yes")
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
         self.last_result: Dict[str, Any] = {}
+        self.waiting_confirm = False
 
     # ------------------------------------------------------------------
 
@@ -187,6 +188,7 @@ class PaperGraphAgent:
         self.last_result = result
 
         interrupts = result.get("__interrupt__") or []
+        self.waiting_confirm = bool(interrupts)
         if interrupts:
             self._save_thread(thread_id, "interrupted")
             message = interrupts[0].value.get("message", "") if isinstance(interrupts[0].value, dict) else str(interrupts[0].value)

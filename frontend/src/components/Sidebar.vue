@@ -256,9 +256,12 @@ const getStatusTheme = (status?: string) => {
   const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
     created: 'default',
     in_progress: 'primary',
+    running: 'primary',
     completed: 'success',
     paused: 'warning',
+    waiting: 'warning',
     cancelled: 'danger',
+    failed: 'danger',
   }
   return themes[status] || 'default'
 }
@@ -269,9 +272,12 @@ const getStatusText = (status?: string) => {
   const texts: Record<string, string> = {
     created: t('sidebar.created'),
     in_progress: t('sidebar.inProgress'),
+    running: t('sidebar.inProgress'),
     completed: t('sidebar.completed'),
     paused: t('sidebar.paused'),
+    waiting: t('sidebar.waiting'),
     cancelled: t('sidebar.cancelled'),
+    failed: t('sidebar.failed'),
   }
   return texts[status] || status
 }
@@ -292,6 +298,13 @@ onUnmounted(() => {
   document.body.style.overflow = ''
 })
 
+const onWorkStatusUpdated = (event: Event) => {
+  const { workId, status } = (event as CustomEvent).detail
+  const workItem = historyItems.value.find((item) => item.work_id === workId)
+  if (workItem) workItem.status = status
+}
+onUnmounted(() => window.removeEventListener('work-status-updated', onWorkStatusUpdated))
+
 // 组件挂载时加载历史工作数据
 onMounted(() => {
   loadUserWorks()
@@ -310,6 +323,8 @@ onMounted(() => {
     // 也可以选择重新加载整个工作列表
     // loadUserWorks();
   })
+
+  window.addEventListener('work-status-updated', onWorkStatusUpdated)
 
   // 组件卸载时清理事件监听器
   onUnmounted(() => {

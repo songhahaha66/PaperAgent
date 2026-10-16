@@ -414,6 +414,23 @@ def test_registry_rejects_failed_or_unknown_runs(tmp_path):
         registry.record_value("Q1", "x", "1.5", "run_missing")
 
 
+def test_registry_rejects_composite_output_lines(tmp_path):
+    """整行输出登记成一条结果，正文引用时会把原始输出贴进论文"""
+    fs = WorkspaceFS(str(tmp_path))
+    fs.init_structure()
+    run_id = fs.create_run()
+    fs.save_run_stdout(run_id, "ATTR word_length coef -0.0377 p 0 valAUC 0.500\nlag7 p=0.3261 lag14 p=0.8776\n"
+                               "order (0,1,1)(1,0,1)_7 range 2022-01-07..2022-10-20")
+    fs.finish_run(run_id, "success")
+    registry = ResultRegistry.load(fs)
+    for value in ("ATTR word_length coef -0.0377 p 0 valAUC 0.500", "lag7 p=0.3261 lag14 p=0.8776"):
+        with pytest.raises(GroundingError, match="单独登记"):
+            registry.record_value("Q1", "x", value, run_id)
+    assert registry.record_value("Q1", "p", "0.3261", run_id).kind == "number"
+    assert registry.record_value("Q1", "order", "(0,1,1)(1,0,1)_7", run_id).kind == "text"
+    assert registry.record_value("Q1", "range", "2022-01-07..2022-10-20", run_id).kind == "text"
+
+
 def test_registry_reuses_id_for_same_name(tmp_path):
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()

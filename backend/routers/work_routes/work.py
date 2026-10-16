@@ -27,10 +27,12 @@ def _sync_work_from_workspace_metadata(work):
         metadata_file = workspace_path / "metadata.json"
         if metadata_file.exists():
             metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-            if metadata.get("status"):
-                work.status = metadata["status"]
+            # 状态以数据库为准（由生成任务的开始/待确认/完成/失败写入）；
+            # 计划推算出的状态在论文已导出后仍可能停在"进行中"，这里只取进度
             if metadata.get("progress") is not None:
                 work.progress = max(0, min(100, int(metadata["progress"])))
+        if work.status == "completed":
+            work.progress = 100
     except Exception:
         pass
     return work
