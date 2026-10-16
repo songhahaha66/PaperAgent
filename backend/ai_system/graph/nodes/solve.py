@@ -484,16 +484,3 @@ def save_transcript(ctx: GraphContext, name: str, messages: List) -> None:
         ctx.write_json(f".system/transcripts/{name}.json", messages_to_dict(messages))
     except Exception as exc:  # 只是排查用的记录，失败不影响求解
         logger.warning("保存 %s 的求解对话失败: %s", name, exc)
-
-
-def ready_subproblems(state) -> List[Dict]:
-    """依赖都已求解的子问题；有环或依赖不存在时把剩下的一起放出，避免卡死"""
-    subproblems = state["analysis"]["subproblems"]
-    solved = set(state.get("solutions") or {})
-    known = {sp["id"] for sp in subproblems}
-    pending = [sp for sp in subproblems if sp["id"] not in solved]
-    ready = [
-        sp for sp in pending
-        if all(dep in solved or dep not in known or dep == sp["id"] for dep in sp.get("depends_on") or [])
-    ]
-    return ready or pending

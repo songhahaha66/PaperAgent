@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai_system.graph.nodes.confirm import is_approval
+from ai_system.research import ENGINE_VERSION
 
 ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "revise_research"]
 ACTIONS = {"auto", "ask", "run", "resume", "confirm", "revise", "revise_research"}
@@ -59,7 +60,7 @@ class ResearchClaim(BaseModel):
 
 class ResearchSnapshot(BaseModel):
     schema_version: int = 1
-    engine_version: str = "legacy"
+    engine_version: str | None = None
     research_revision: int = 0
     commit_seq: int = 0
     outcome: str | None = None
@@ -108,7 +109,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     root = Path(workspace).resolve()
     thread = _read_json(root, ".system/graph_thread.json")
     business = None
-    if thread.get("engine_version") == "research-v1" and (root / ".system/research.sqlite").exists():
+    if thread.get("engine_version") == ENGINE_VERSION and (root / ".system/research.sqlite").exists():
         from ai_system.research.store import ResearchStore
         from ai_system.research.control import public_snapshot
         store = ResearchStore(root, thread["thread_id"], read_only=True)
@@ -168,7 +169,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             issues = []
     control = public_snapshot(business) if business else {}
     return ResearchSnapshot(
-        engine_version=thread.get("engine_version", "legacy"),
+        engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
         outcome=control.get("outcome"), tasks=control.get("tasks", []),
         blocking_issues=control.get("issues", []),
@@ -187,15 +188,18 @@ def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot) -> 
     waiting = snapshot.graph_status == "interrupted" or snapshot.work_status == "waiting"
     if requested == "auto":
         if waiting and is_approval(message):
-            return "confirm"
-        if snapshot.has_research and snapshot.work_status in {"paused", "cancelled", "failed"} and is_approval(message):
-            return "resume"
-        return "ask" if snapshot.has_research else "run"
+            requested = "confirm"
+        elif snapshot.has_research and snapshot.work_status in {"paused", "cancelled", "failed"} and is_approval(message):
+            requested = "resume"
+        else:
+            requested = "ask" if snapshot.has_research else "run"
+    if requested in {"confirm", "revise", "resume"} and snapshot.engine_version != ENGINE_VERSION:
+        raise ValueError("该研究记录不支持恢复，请重新研究")
     if requested in {"confirm", "revise"} and not waiting:
         raise ValueError("当前没有等待确认的建模方案")
     if requested == "resume" and (not snapshot.research_id or snapshot.work_status == "completed"):
         raise ValueError("当前没有可恢复的研究任务")
-    if requested == "revise_research" and (snapshot.engine_version != "research-v1" or not snapshot.tasks or waiting):
+    if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.tasks or waiting):
         raise ValueError("当前研究不支持增量修改，请先完成方案确认")
     return requested
 

@@ -121,7 +121,6 @@ class ResultRegistry:
     claims: Dict[str, Claim] = field(default_factory=dict)
 
     allocate_id: Optional[Callable] = field(default=None, repr=False)
-    immutable: bool = False
     staged_history: List[Result] = field(default_factory=list, repr=False)
 
     @classmethod
@@ -131,6 +130,7 @@ class ResultRegistry:
             data = json.loads(fs.read_text(REGISTRY_PATH))
             registry.results = {item["id"]: Result(**item) for item in data.get("results", [])}
             registry.claims = {item["id"]: Claim(**item) for item in data.get("claims", [])}
+            registry.staged_history = [Result(**item) for item in data.get("staged_history", [])]
         return registry
 
     def save(self) -> None:
@@ -138,7 +138,7 @@ class ResultRegistry:
             "results": [asdict(r) for r in self.results.values()],
             "claims": [asdict(c) for c in self.claims.values()],
         }
-        if self.immutable:
+        if self.staged_history:
             payload["staged_history"] = [asdict(r) for r in self.staged_history]
         self.fs.write_text(REGISTRY_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -146,6 +146,7 @@ class ResultRegistry:
         """新任务开始时清空，避免上一篇论文的结果混进来"""
         self.results = {}
         self.claims = {}
+        self.staged_history = []
         self.save()
 
     def _next_id(self, prefix: str) -> str:
@@ -188,13 +189,12 @@ class ResultRegistry:
             )
         self.verify(value, run_id)
         kind = "number" if _parse_number(value) is not None else "text"
-        # 同一子问题同名结果只保留一条：重复登记直接复用，返工后的新值原地更新，
-        # 编号不变，已写好的引用和结论证据自动指向新值
+        # 完全相同的登记复用编号；值或来源改变时保留历史，并分配新引用。
         same = next(
             (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip()),
             None,
         )
-        if self.immutable and same and (same.value, same.run_id, same.unit, same.description) != (value, run_id, unit.strip(), description.strip()):
+        if same and (same.value, same.run_id, same.unit, same.description) != (value, run_id, unit.strip(), description.strip()):
             self.staged_history.append(self.results.pop(same.id))
             same = None
         result = Result(
@@ -218,12 +218,6 @@ class ResultRegistry:
         self.results[result.id] = result
         self.save()
         return result
-
-    def drop_subproblem(self, subproblem: str) -> None:
-        """重跑某个子问题前清掉它的结果和结论，避免重复登记"""
-        self.results = {rid: r for rid, r in self.results.items() if r.subproblem != subproblem}
-        self.claims = {cid: c for cid, c in self.claims.items() if c.subproblem != subproblem}
-        self.save()
 
     def set_claims(self, subproblem: str, findings: List[Dict]) -> List[Claim]:
         """用求解报告的结论替换该子问题的结论（返工后报告会变）；证据只保留存在的登记结果"""

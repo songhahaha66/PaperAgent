@@ -135,7 +135,6 @@ def worker_context(ctx, order):
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref
-    local.registry.immutable = True
     # Progress belongs to the coordinator. Attempts only emit local messages.
     local.set_stage = ctx.set_stage
     return local

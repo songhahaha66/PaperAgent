@@ -2,10 +2,10 @@
 评测命令行
 
     cd backend
-    uv run python -m evals run   --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/v2
-    uv run python -m evals score --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/v2
-    uv run python -m evals all   --bench ... --out ...        # run + score + 汇总（默认 v2 状态图流水线）
-    uv run python -m evals all   --pipeline v2-no-explore ...                   # 消融：关掉方案探索（另有 v2-no-review / v2-no-consistency）
+    uv run python -m evals run   --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/research
+    uv run python -m evals score --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/research
+    uv run python -m evals all   --bench ... --out ...        # run + score + 汇总（默认 research 版本化研究引擎）
+    uv run python -m evals all   --pipeline research-no-explore ...                   # 消融：关掉方案探索（另有 research-no-review / research-no-consistency）
 
 生成模型：EVAL_MODEL / EVAL_API_KEY / EVAL_PROVIDER(默认 openai) / EVAL_BASE_URL / EVAL_EXTRA_BODY（JSON，如 {"thinking": {"type": "disabled"}}）
 判分：--judge jev（需要 TYPESAFE_API_KEY，--jev-model 固定版本）
@@ -81,14 +81,14 @@ async def main(args) -> None:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(prog="python -m evals", description="PaperAgent MM-Bench 评测")
     parser.add_argument("command", choices=["run", "score", "all", "report"])
-    parser.add_argument("--pipeline", choices=PIPELINES, default="v2", help="v2=旧状态图，research=版本化研究控制，*-no-*=消融版本")
+    parser.add_argument("--pipeline", choices=PIPELINES, default="research", help="research=版本化研究控制，research-no-*=消融版本")
     parser.add_argument("--bench", required=True, help="本地 MMBench 目录（含 problem/ 与 dataset/）")
     parser.add_argument("--out", required=True, help="本次评测的输出目录")
     parser.add_argument("--problems", default="", help="逗号分隔的题号，默认 10 题子集")
     parser.add_argument("--judge", choices=["auto", "jev", "llm", "none"], default="auto")
     parser.add_argument("--jev-model", default=DEFAULT_JEV_MODEL, help="固定 Jev 版本，保证前后可比")
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run.json 的题目")
-    parser.add_argument("--resume", action="store_true", help="v2：从失败子问题求解之前的 checkpoint 接着跑")
+    parser.add_argument("--resume", action="store_true", help="从已提交研究状态恢复未完成任务")
     return parser.parse_args(argv)
 
 

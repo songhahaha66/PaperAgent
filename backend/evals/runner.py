@@ -81,32 +81,29 @@ def _sum_usage(usage_by_model: Dict[str, Dict]) -> Dict[str, int]:
     return totals
 
 
-# v2 的消融版本：各关掉一个模块，衡量它对分数的贡献
-V2_VARIANTS = {
-    "v2": {},
-    "v2-no-explore": {"explore_top_k": 1},
-    "v2-no-review": {"max_review_rounds": 0},
-    "v2-no-consistency": {"check_claims": False},
+# All evaluation variants use the same versioned research engine.
+RESEARCH_VARIANTS = {
+    "research": {},
+    "research-no-explore": {"explore_top_k": 1},
+    "research-no-review": {"max_review_rounds": 0},
+    "research-no-consistency": {"check_claims": False},
+    "research-no-planner": {"max_planning_calls": 0},
 }
-RESEARCH_VARIANTS = {"research": {}, "research-no-planner": {"max_planning_calls": 0}}
-PIPELINES = (*V2_VARIANTS, *RESEARCH_VARIANTS)
+PIPELINES = tuple(RESEARCH_VARIANTS)
 
 
 def _build_agent(pipeline: str, llm, workspace: Path):
-    if pipeline in V2_VARIANTS or pipeline in RESEARCH_VARIANTS:
-        from ai_system.graph import PaperGraphAgent
+    if pipeline not in RESEARCH_VARIANTS:
+        raise ValueError(f"未知 pipeline: {pipeline}")
+    from ai_system.graph import PaperGraphAgent
 
-        # 评测不需要人工确认建模方案
-        options = V2_VARIANTS[pipeline] if pipeline in V2_VARIANTS else RESEARCH_VARIANTS[pipeline]
-        return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False,
-                               engine_version="legacy" if pipeline in V2_VARIANTS else "research-v1", **options)
-    raise ValueError(f"未知 pipeline: {pipeline}")
+    return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False, **RESEARCH_VARIANTS[pipeline])
 
 
 async def run_problem(
-    problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "v2", resume: bool = False
+    problem: Problem, out_dir: Path, model: ModelSpec, pipeline: str = "research", resume: bool = False
 ) -> Dict:
-    """用指定流水线（markdown 模式）跑一道题；resume=True 时从 v2 的 checkpoint 恢复，耗时和用量累加到上次记录上"""
+    """用指定流水线（markdown 模式）跑一道题；resume=True 时从已提交研究状态恢复，耗时和用量累加到上次记录上"""
     workspace = out_dir / problem.id / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     staged = stage_datasets(problem, workspace)
@@ -142,7 +139,7 @@ async def run_problem(
     record["paper_exists"] = (workspace / PAPER_FILENAME).exists()
     calls_path = workspace / ".system" / "llm_calls.json"
     if calls_path.exists():
-        # 逐次模型调用的耗时汇总（v2 才有）：慢调用、截断、出错次数和各节点耗时
+        # 逐次模型调用的耗时汇总：慢调用、截断、出错次数和各节点耗时
         record["llm_calls"] = json.loads(calls_path.read_text(encoding="utf-8")).get("summary")
 
     previous_path = out_dir / problem.id / "run.json"

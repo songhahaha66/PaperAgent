@@ -25,7 +25,7 @@ def seed(root):
     (run / "input.py").write_text("print(0.82)")
     (run / "stdout.log").write_text("AUC=0.82")
     (root / "paper.md").write_text("# 研究\n已有报告，不得改写")
-    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "status": "done"}))
+    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v1", "status": "done"}))
     (root / ".system/results.json").write_text(json.dumps({
         "results": [
             {"id": "R1", "subproblem": "Q1", "name": "AUC", "value": "0.82", "run_id": "run_one"},
@@ -203,7 +203,7 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     client, work, calls, statuses, saved, root = web
     if action in {"confirm", "revise"}:
         work.status = "waiting"
-        (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "status": "interrupted"}))
+        (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v1", "status": "interrupted"}))
     elif action == "resume":
         work.status = "failed"
     events = exchange(client, {"problem": "换一种方法", "action": action})
@@ -270,7 +270,7 @@ def test_question_failure_preserves_research_status_and_hides_provider_error(web
 def test_asking_about_waiting_plan_does_not_confirm_or_redesign(web):
     client, work, calls, statuses, saved, root = web
     work.status = "waiting"
-    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "status": "interrupted"}))
+    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v1", "status": "interrupted"}))
     events = exchange(client, {"problem": "解释这个方案有什么风险"})
     assert [name for name, _ in calls] == ["ask"]
     assert events[-1]["work_status"] == "waiting" and statuses == []
@@ -329,3 +329,17 @@ def test_unscoped_question_balances_subproblems_and_includes_actual_validation(t
     assert ".system/validation.json" in blocks[0]["files"]
     assert "缺少基线说明" in captured[-1].content
 
+
+
+@pytest.mark.parametrize("action", ["resume", "confirm", "revise", "auto"])
+def test_unversioned_history_is_read_only_and_cannot_enter_graph(tmp_path, action):
+    seed(tmp_path)
+    thread = tmp_path / ".system/graph_thread.json"
+    metadata = json.loads(thread.read_text())
+    metadata.pop("engine_version")
+    thread.write_text(json.dumps(metadata))
+    snapshot = research_snapshot(tmp_path, "work", "waiting")
+    assert snapshot.results and snapshot.engine_version is None
+    assert resolve_action("ask", "解释已有结果", snapshot) == "ask"
+    with pytest.raises(ValueError, match="不支持恢复"):
+        resolve_action(action, "继续", snapshot)

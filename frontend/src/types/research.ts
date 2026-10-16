@@ -18,7 +18,7 @@ export interface ResearchResult {
 }
 export interface ResearchSnapshot {
   schema_version: 1
-  engine_version?: string
+  engine_version?: string | null
   research_revision?: number
   commit_seq?: number
   outcome?: string | null

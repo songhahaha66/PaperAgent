@@ -257,7 +257,7 @@ def test_staged_value_change_gets_new_reference_without_rebinding_old_reference(
     run = fs.create_run()
     fs.save_run_stdout(run, "old 1.25 new 2.75")
     fs.finish_run(run, "success")
-    registry = ResultRegistry(fs, immutable=True)
+    registry = ResultRegistry(fs)
     first = registry.record_value("Q1", "estimate", "1.25", run)
     second = registry.record_value("Q1", "estimate", "2.75", run)
     assert first.id != second.id

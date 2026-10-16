@@ -16,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
 from ai_system.graph.nodes.confirm import is_approval
-from ai_system.graph.nodes.solve import ready_subproblems
 from ai_system.graph.nodes.review import ungrounded_findings
 from ai_system.graph.nodes.validate import assemble, place_figures, untracked_numbers
 from ai_system.graph.registry import value_in_output
@@ -33,6 +32,7 @@ from ai_system.graph.state import (
     Subproblem,
     ValidationProtocol,
 )
+from ai_system.research.store import ResearchStore
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
 
@@ -245,6 +245,7 @@ def test_graph_end_to_end_offline(tmp_path):
     model = FakeModel()
     # 评审分差 8 分，默认会跳过试跑；放宽阈值以覆盖探索流程
     ctx = _context(ws, model, explore_margin=100)
+    ctx.research = ResearchStore(ws, "t")
 
     async def go():
         graph = compile_graph(InMemorySaver())
@@ -285,7 +286,7 @@ def test_graph_end_to_end_offline(tmp_path):
     kinds = sorted((r.subproblem, r.kind) for r in registry.results.values())
     assert kinds == [("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")]
     assert all(r.value != "99.99" for r in registry.results.values())
-    assert (ws / "outputs" / "figures" / "F1.png").exists()
+    assert (ws / registry.get("F1").path).exists()
 
     # 结论图：每个子问题的结论登记为节点，证据指向登记结果
     claims = sorted((c.subproblem, c.strength, tuple(c.evidence)) for c in registry.claims.values())
@@ -303,7 +304,7 @@ def test_graph_end_to_end_offline(tmp_path):
     paper = (ws / "paper.md").read_text(encoding="utf-8")
     assert paper.startswith("# 基于时间序列的城市用电量预测与政策评估")
     assert "1234.57 万千瓦时" in paper and "8.5%" in paper
-    assert "![图1 Q1 结果图](outputs/figures/F1.png)" in paper
+    assert f"![图1 Q1 结果图]({registry.get('F1').path})" in paper
     assert "{{" not in paper and "12.345" not in paper
     for heading in ("## 摘要", "## 三、模型假设", "### Q2 政策评估", "## 七、模型的评价与推广"):
         assert heading in paper
@@ -323,6 +324,7 @@ def test_confirm_interrupt_and_feedback(tmp_path):
     ws = _make_workspace(tmp_path)
     model = FakeModel()
     ctx = _context(ws, model, confirm_models=True)
+    ctx.research = ResearchStore(ws, "t")
     config = {"configurable": {"thread_id": "t"}, "recursion_limit": 100}
 
     async def go():
@@ -431,7 +433,7 @@ def test_registry_rejects_composite_output_lines(tmp_path):
     assert registry.record_value("Q1", "range", "2022-01-07..2022-10-20", run_id).kind == "text"
 
 
-def test_registry_reuses_id_for_same_name(tmp_path):
+def test_registry_reuses_only_identical_records(tmp_path):
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
     first, second = fs.create_run(), fs.create_run()
@@ -444,8 +446,10 @@ def test_registry_reuses_id_for_same_name(tmp_path):
     b = registry.record_value("Q1", "AUC", "0.71", first)
     c = registry.record_value("Q1", "AUC", "0.66", second)
     other = registry.record_value("Q2", "AUC", "0.66", second)
-    assert a.id == b.id == c.id == "R1" and other.id == "R2"
-    assert registry.get("R1").value == "0.66" and len(registry.results) == 2
+    assert a.id == b.id == "R1" and c.id == "R2" and other.id == "R3"
+    assert registry.get("R1") is None and registry.get("R2").value == "0.66"
+    assert registry.staged_history[0].value == "0.71" and len(registry.results) == 2
+    assert ResultRegistry.load(fs).staged_history[0] == a
 
 
 def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
@@ -519,19 +523,6 @@ def test_hypothesis_test_subproblems_skip_exploration():
     assert is_hypothesis_test({"title": "检验势头是否随机(教练假说检验)", "question": "检验比赛中的波动是否随机"})
     assert not is_hypothesis_test({"title": "换挡点预测", "question": "预测转折并检验泛化性"})
     assert not is_hypothesis_test({"title": "政策评估", "question": "评估节能政策"})
-
-
-def test_ready_subproblems_respects_dependencies():
-    state = {"analysis": {"subproblems": [
-        {"id": "Q1", "depends_on": []},
-        {"id": "Q2", "depends_on": ["Q1"]},
-        {"id": "Q3", "depends_on": ["Q9"]},
-    ]}, "solutions": {}}
-    assert [sp["id"] for sp in ready_subproblems(state)] == ["Q1", "Q3"]
-    state["solutions"] = {"Q1": {}, "Q3": {}}
-    assert [sp["id"] for sp in ready_subproblems(state)] == ["Q2"]
-    cyclic = {"analysis": {"subproblems": [{"id": "A", "depends_on": ["B"]}, {"id": "B", "depends_on": ["A"]}]}}
-    assert len(ready_subproblems(cyclic)) == 2
 
 
 def test_is_approval():
@@ -725,45 +716,6 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     assert seen[0][0][-1].content == "ok" and seen[0][1] == ["run_python"]
     assert "还剩约 3 步。请交报告" in seen[1][0][-1].content and seen[1][1] == ["run_python"]
     assert "步数已用完" in seen[2][0][-1].content and seen[2][1] == []
-
-
-@pytest.mark.parametrize("resume_mode", ["direct", "chat"])
-@pytest.mark.parametrize("interrupted", [False, True])
-def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path, monkeypatch, resume_mode, interrupted):
-    _Structured.reviewed_q1 = True
-    ws = _make_workspace(tmp_path)
-    FAIL_ONCE.add("Q2")
-    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge(), engine_version="legacy")
-    if interrupted:
-        import ai_system.graph.build as build_module
-        write = build_module.write
-
-        async def interrupt_writing(state, runtime):
-            raise asyncio.CancelledError()
-
-        monkeypatch.setattr(build_module, "write", interrupt_writing)
-        first = asyncio.run(agent.run(TASK))
-        assert "任务执行失败" in first
-        monkeypatch.setattr(build_module, "write", write)
-    else:
-        first = asyncio.run(agent.run(TASK))
-        assert "Q2 政策评估：failed" in first
-    before = ResultRegistry.load(WorkspaceFS(str(ws)))
-    assert len(before.for_subproblem("Q2")) == 1
-    preserved = [(r.id, r.run_id) for r in before.for_subproblem("Q1")]
-    thread = agent._load_thread()
-
-    second = asyncio.run(agent.run("继续") if resume_mode == "chat" else agent.resume_failed())
-    assert agent._load_thread() == thread
-    assert "Q1 用电量预测：完成" in second and "Q2 政策评估：完成" in second
-    registry = ResultRegistry.load(WorkspaceFS(str(ws)))
-    # 已完成的前序问题不重算，证据仍指向原来的执行记录。
-    assert [(r.id, r.run_id) for r in registry.for_subproblem("Q1")] == preserved
-    # 失败时登记的结果被清掉，重跑后不重复
-    assert sorted((r.subproblem, r.kind) for r in registry.results.values()) == [
-        ("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")
-    ]
-    assert "8.5%" in (ws / "paper.md").read_text(encoding="utf-8")
 
 
 def test_design_falls_back_when_candidates_keep_failing(tmp_path, monkeypatch):
@@ -1115,23 +1067,6 @@ def test_truncation_guard_retries_with_note():
     result = asyncio.run(TruncationGuardMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
     assert result.response_metadata["finish_reason"] == "stop"
     assert len(seen) == 2 and seen[1][-1].content == TRUNCATED_NOTE and seen[1][0].content == "go"
-
-
-def test_design_ahead_sends_blocked_subproblems_to_predesign():
-    from ai_system.graph.build import send_solves
-
-    subproblems = [
-        {"id": "Q1", "title": "a", "question": "a", "depends_on": []},
-        {"id": "Q2", "title": "b", "question": "b", "depends_on": ["Q1"]},
-        {"id": "Q3", "title": "c", "question": "c", "depends_on": ["Q2"], "kind": "writing"},
-    ]
-    state = {"analysis": {"subproblems": subproblems}, "data_profile": ""}
-    targets = lambda sends: [(s.node, s.arg["subproblem"]["id"]) for s in sends]
-    assert targets(send_solves(state)) == [("solve", "Q1")]
-    ahead = {**state, "design_ahead": True}
-    assert targets(send_solves(ahead)) == [("solve", "Q1"), ("predesign", "Q2")]
-    # 已经提前设计过的不再重复
-    assert targets(send_solves({**ahead, "designs": {"Q2": {}}})) == [("solve", "Q1")]
 
 
 def test_malformed_tool_call_is_retried_and_never_left_in_history():

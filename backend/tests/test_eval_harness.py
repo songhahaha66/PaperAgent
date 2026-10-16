@@ -354,15 +354,20 @@ def test_llm_judge_falls_back_to_plain_json_when_tool_call_ignored():
     assert "只输出一个 JSON 对象" in FakeLLM.prompts[0]
 
 
-def test_v2_ablation_variants_pass_options(tmp_path, monkeypatch):
+def test_research_ablation_variants_pass_options(tmp_path, monkeypatch):
     from evals.runner import PIPELINES, _build_agent
 
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    assert {"v2", "v2-no-explore", "v2-no-review", "v2-no-consistency"} <= set(PIPELINES)
-    assert _build_agent("v2-no-explore", object(), tmp_path).options["explore_top_k"] == 1
-    assert _build_agent("v2-no-review", object(), tmp_path).options["max_review_rounds"] == 0
-    assert _build_agent("v2-no-consistency", object(), tmp_path).options["check_claims"] is False
-    assert "explore_top_k" not in _build_agent("v2", object(), tmp_path).options
+    assert {"research", "research-no-explore", "research-no-review", "research-no-consistency"} <= set(PIPELINES)
+    assert _build_agent("research-no-explore", object(), tmp_path).options["explore_top_k"] == 1
+    assert _build_agent("research-no-review", object(), tmp_path).options["max_review_rounds"] == 0
+    assert _build_agent("research-no-consistency", object(), tmp_path).options["check_claims"] is False
+    assert "explore_top_k" not in _build_agent("research", object(), tmp_path).options
+    assert _build_agent("research-no-planner", object(), tmp_path).options["max_planning_calls"] == 0
+    with pytest.raises(ValueError, match="未知 pipeline"):
+        _build_agent("v2", object(), tmp_path)
+    from evals.__main__ import parse_args
+    assert parse_args(["run", "--bench", str(tmp_path), "--out", str(tmp_path)]).pipeline == "research"
 
 
 def test_llm_judge_asks_all_questions_in_one_call():

@@ -109,8 +109,6 @@ class GraphContext:
     max_repair_rounds: int = 2
     max_review_rounds: int = 1
     explore_top_k: int = 2
-    # 默认关：提前设计省约 3 分钟，但候选方案看不到前序的实际结论，等评测证明不掉分再打开
-    design_ahead: bool = False
     explore_steps: int = 12
     explore_margin: float = 2.0  # 前两名评审总分（满分 16）差距超过它就不试跑
     output_mode: str = "markdown"  # latex / word 时 render 之后导出 paper.pdf / paper.docx

@@ -181,7 +181,6 @@ class PaperState(TypedDict, total=False):
     analysis: Dict[str, Any]
     # 子问题编号 -> {"methods", "candidates", "scores", "chosen", "critic"}
     plan_ahead: bool  # True：全部子问题先设计再统一确认；False：每个子问题轮到求解时才设计
-    design_ahead: bool  # 按需设计时，等待前序的子问题是否提前设计（省时间，但设计看不到前序结果）
     designs: Annotated[Dict[str, Dict[str, Any]], merge_dict]
     feedback: str
     approved: bool

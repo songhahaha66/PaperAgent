@@ -1,7 +1,7 @@
 """
 状态图版本的数模论文流水线（聊天接口和评测都用它）
 
-analyze → design(候选 + 评审) → confirm → solve(按依赖并行) → write → validate/repair → render
+analyze/confirm → observe → solve/commit → observe → write → validate/repair → render
 """
 
 from .agent import PaperGraphAgent

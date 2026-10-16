@@ -1,7 +1,7 @@
 """
 PaperGraphAgent：状态图流水线的入口（构造参数 + async run），聊天接口和评测共用
 
-- 每次运行对应 checkpoint 里的一个 thread，状态存在 <workspace>/.system/graph.sqlite；
+- 每次运行对应一个 thread；业务状态在 .system/research.sqlite，执行位置在 .system/graph.sqlite；
 - 图在"确认建模方案"处 interrupt 时，run 返回待确认内容，用户下一条消息作为回复恢复运行；
 - 进程中断后，用户发"继续"会先补跑失败子问题，再从断点完成写作和导出。
 """
@@ -43,6 +43,8 @@ def default_judge(llm):
 
 
 class PaperGraphAgent:
+    engine_version = ENGINE_VERSION
+
     def __init__(
         self,
         llm,
@@ -79,12 +81,6 @@ class PaperGraphAgent:
             confirm_models = os.getenv("AI_CONFIRM_MODELS", "").lower() in ("1", "true", "yes")
         if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
-        if "design_ahead" not in options and os.getenv("AI_DESIGN_AHEAD"):
-            options["design_ahead"] = os.environ["AI_DESIGN_AHEAD"].lower() in ("1", "true", "yes")
-        self.engine_version = options.pop("engine_version", ENGINE_VERSION)
-        if self.engine_version not in ("legacy", ENGINE_VERSION):
-            raise ValueError("不支持的研究引擎版本")
-        self.new_engine_version = self.engine_version
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
@@ -99,6 +95,13 @@ class PaperGraphAgent:
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8")).get("thread_id")
         return None
+
+    def _require_current_thread(self) -> None:
+        path = self._thread_file()
+        if not path.exists():
+            raise ValueError("没有可恢复的研究记录")
+        if json.loads(path.read_text(encoding="utf-8")).get("engine_version") != ENGINE_VERSION:
+            raise ValueError("该研究记录不支持恢复，请重新研究")
 
     def _save_thread(self, thread_id: str, status: str) -> None:
         path = self._thread_file()
@@ -136,18 +139,11 @@ class PaperGraphAgent:
         await self._emit("main_agent_start", f"开始执行: {user_input[:100]}")
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
-                if new_run:
-                    self.engine_version = self.new_engine_version
-                if not new_run and self._thread_file().exists():
-                    self.engine_version = json.loads(self._thread_file().read_text()).get("engine_version", "legacy")
-                graph = compile_graph(saver, engine_version=self.engine_version)
+                graph = compile_graph(saver)
                 graph_input, thread_id = ({"task": user_input}, uuid.uuid4().hex) if new_run else await self._prepare(graph, user_input)
                 if isinstance(graph_input, dict):
-                    self.engine_version = self.new_engine_version
-                    graph = compile_graph(saver, engine_version=self.engine_version)
                     ctx.registry.reset()
-                if self.engine_version != "legacy":
-                    ctx.research = ResearchStore(self.workspace_dir, thread_id)
+                ctx.research = ResearchStore(self.workspace_dir, thread_id)
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}
                 if graph_input is None:
                     return await self._resume_graph(graph, config, thread_id, ctx)
@@ -165,10 +161,7 @@ class PaperGraphAgent:
         """Apply an idempotent revision, then selectively resume this research."""
         if research_id != self._load_thread():
             raise ValueError("研究标识已改变，请刷新后重试")
-        metadata = json.loads(self._thread_file().read_text())
-        if metadata.get("engine_version", "legacy") != ENGINE_VERSION:
-            raise ValueError("旧研究不支持增量修订，请使用重新研究")
-        self.engine_version = ENGINE_VERSION
+        self._require_current_thread()
         store = ResearchStore(self.workspace_dir, research_id)
         snapshot = store.snapshot()
         if not snapshot:
@@ -181,7 +174,7 @@ class PaperGraphAgent:
             # A delivered command retry must not republish the paper or rerun export.
             checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
-                graph = compile_graph(saver, engine_version=self.engine_version)
+                graph = compile_graph(saver)
                 saved = await graph.aget_state({"configurable": {"thread_id": research_id}})
             self.last_result = saved.values
             ctx = self._context()
@@ -193,12 +186,8 @@ class PaperGraphAgent:
         return await self.resume_failed()
 
     async def resume_failed(self) -> str:
-        """回到失败子问题求解之前的 checkpoint 接着跑
-
-        网关故障、账号受限这类外部原因会让正在求解的子问题失败（并把状态写进 checkpoint），
-        之后的写作也没有意义。外部问题解决后，从这些子问题开始求解之前的 checkpoint 重放，
-        已完成的子问题不用重跑。没有失败的子问题时，从最新 checkpoint 接着跑完。
-        """
+        """从当前提交状态恢复；重新领取未验收任务，不回放历史结果。"""
+        self._require_current_thread()
         ctx = self._context()
         checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
         thread_id = self._load_thread()
@@ -206,43 +195,20 @@ class PaperGraphAgent:
             raise RuntimeError("没有可恢复的运行记录")
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
-                self.engine_version = json.loads(self._thread_file().read_text()).get("engine_version", "legacy")
-                graph = compile_graph(saver, engine_version=self.engine_version)
-                if self.engine_version != "legacy":
-                    ctx.research = ResearchStore(self.workspace_dir, thread_id)
+                graph = compile_graph(saver)
+                ctx.research = ResearchStore(self.workspace_dir, thread_id)
                 config = {"configurable": {"thread_id": thread_id}}
                 return await self._resume_graph(graph, config, thread_id, ctx)
         finally:
             await ctx.kernels.close()
 
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
-        """聊天继续和评测恢复共用：先补跑失败子问题，再完成后续阶段。"""
-        target = await graph.aget_state(config)
-        if ctx.research is not None and ctx.research.snapshot() is not None:
+        """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
+        if ctx.research.snapshot() is not None:
             ctx.research.recover()
             refresh_registry(ctx)
-            # Jump forward from the latest checkpoint; never rewind committed evidence.
             await graph.aupdate_state(config, {"research_blocked": False}, as_node="solve_join")
-            return await self._invoke(graph, None, {**config, "recursion_limit": GRAPH_RECURSION_LIMIT}, thread_id, ctx)
-        failed = [
-            sid for sid, sol in (target.values.get("solutions") or {}).items()
-            if sol.get("status") != "completed"
-        ]
-        if failed:
-            target = None
-            async for snapshot in graph.aget_state_history(config):
-                solved = snapshot.values.get("solutions") or {}
-                if snapshot.next and not any(sid in solved for sid in failed):
-                    target = snapshot
-                    break
-            if target is None:
-                raise RuntimeError(f"找不到 {', '.join(failed)} 求解之前的 checkpoint")
-            for sid in failed:
-                ctx.registry.drop_subproblem(sid)
-        logger.info("从 checkpoint 恢复，重跑 %s，下一步 %s", failed or "无", target.next)
-        await self._emit("paper_stage", f"从断点恢复：重新求解 {', '.join(failed)}" if failed else "从断点恢复")
-        resume_config = {**target.config, "recursion_limit": GRAPH_RECURSION_LIMIT}
-        return await self._invoke(graph, None, resume_config, thread_id, ctx)
+        return await self._invoke(graph, None, {**config, "recursion_limit": GRAPH_RECURSION_LIMIT}, thread_id, ctx)
 
     async def _invoke(self, graph, graph_input, config, thread_id: str, ctx: GraphContext) -> str:
         self._save_thread(thread_id, "running")
@@ -273,15 +239,12 @@ class PaperGraphAgent:
         """决定是恢复已有 thread 还是开新 thread"""
         thread_id = self._load_thread()
         if thread_id:
+            self._require_current_thread()
             snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
             if snapshot.interrupts:
                 logger.info("恢复等待确认的 thread %s", thread_id)
                 return Command(resume=user_input), thread_id
-            has_failed = any(
-                sol.get("status") != "completed"
-                for sol in (snapshot.values.get("solutions") or {}).values()
-            )
-            if is_approval(user_input) and (snapshot.next or has_failed or snapshot.values.get("research_blocked")):
+            if is_approval(user_input) and (snapshot.next or snapshot.values.get("research_blocked")):
                 logger.info("从断点继续 thread %s，下一步 %s", thread_id, snapshot.next)
                 return None, thread_id
         return {"task": user_input}, uuid.uuid4().hex

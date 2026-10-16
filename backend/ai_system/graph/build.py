@@ -1,28 +1,18 @@
-"""
-数模论文状态图
+"""Research graph: analyze/confirm → observe → execute → commit → observe.
 
-    analyze ─┬─(需要人工确认)─Send×N──▶ design ──▶ confirm ─┬─(有修改意见)─Send×N─▶ design
-             │                                             └─(通过)─▶ 按依赖分批 Send ─▶ solve ─▶ solve_join ─┐
-             └─(不确认：按需设计，solve 内先设计再求解)──────────────────────▲                       │
-                还在等前序结论的子问题同一批 Send 到 predesign 提前设计 ─────────┼──▶ solve_join      │
-                                                       └──────────── 还有未求解的子问题 ◀──────┘
-    solve_join ──(全部求解)──▶ reconcile（结论一致性）─▶ write ─▶ validate ─┬─(有问题且未超轮数)─▶ repair ─▶ validate
-                                                  └─▶ render ─┬─(output_mode=latex/word)─▶ export ─▶ END
-                                                              └─▶ END
+The observation loop schedules dependency-ready tasks from research.sqlite;
+accepted work continues through consistency review, writing and delivery.
 """
-
 from typing import List, Union
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.runtime import Runtime
 from langgraph.types import Send
 
 from .context import GraphContext
 from .nodes.analyze import analyze
 from .nodes.confirm import confirm
 from .nodes.consistency import reconcile
-from .nodes.design import design, predesign
-from .nodes.solve import ready_subproblems, solve
+from .nodes.design import design
 from .nodes.export import export, route_after_render
 from .nodes.validate import render, repair, route_after_validate, validate
 from .nodes.write import write
@@ -41,105 +31,46 @@ def send_designs(state: PaperState) -> List[Send]:
     ]
 
 
-def send_solves(state: PaperState) -> Union[List[Send], str]:
-    solutions = state.get("solutions") or {}
-    if all(sp["id"] in solutions for sp in state["analysis"]["subproblems"]):
-        return "reconcile"
-    sends = []
-    for sp in ready_subproblems(state):
-        sends.append(Send("solve", {
-            "subproblem": sp,
-            "analysis": state["analysis"],
-            "data_profile": state.get("data_profile", ""),
-            "design": (state.get("designs") or {}).get(sp["id"]),
-            "dependencies": {dep: solutions[dep] for dep in sp.get("depends_on") or [] if dep in solutions},
-        }))
-    if state.get("design_ahead") and not state.get("plan_ahead"):
-        sends += send_predesigns(state, {s.arg["subproblem"]["id"] for s in sends})
-    return sends
-
-
-def send_predesigns(state: PaperState, starting: set) -> List[Send]:
-    """还在等前序结论、尚未设计的计算类子问题，和这一批求解同时设计"""
-    solutions = state.get("solutions") or {}
-    designs = state.get("designs") or {}
-    return [
-        Send("predesign", {
-            "subproblem": sp,
-            "analysis": state["analysis"],
-            "data_profile": state.get("data_profile", ""),
-            "feedback": state.get("feedback", ""),
-        })
-        for sp in state["analysis"]["subproblems"]
-        if sp["id"] not in solutions and sp["id"] not in designs and sp["id"] not in starting
-        and sp.get("kind") != "writing"
-    ]
-
-
 def route_after_analyze(state: PaperState) -> Union[List[Send], str]:
-    return send_designs(state) if state.get("plan_ahead") else send_solves(state)
+    return send_designs(state) if state.get("plan_ahead") else "observe"
 
 
 def route_after_confirm(state: PaperState) -> Union[List[Send], str]:
-    if not state.get("approved", True):
-        return send_designs(state)
-    return send_solves(state)
+    return send_designs(state) if not state.get("approved", True) else "observe"
 
 
-async def solve_join(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
-    """并行求解的汇合点，保证路由只算一次；按需设计时，所有子问题都设计过后标记设计阶段完成"""
-    designs = state.get("designs") or {}
-    if not state.get("plan_ahead") and all(sp["id"] in designs for sp in state["analysis"]["subproblems"]):
-        await runtime.context.set_stage("design", "completed")
+def solve_join(state: PaperState) -> dict:
+    """Barrier for parallel workers; recovery also resumes at this boundary."""
     return {}
 
 
-def build_graph(engine_version="legacy"):
-    from ..research import ENGINE_VERSION
-    if engine_version not in ("legacy", ENGINE_VERSION):
-        raise ValueError("不支持的研究引擎版本")
+def build_graph():
+    from ..research.control import observe, dispatch, execute
+
     graph = StateGraph(PaperState, context_schema=GraphContext)
-    graph.add_node("analyze", analyze)
-    graph.add_node("design", design)
-    graph.add_node("confirm", confirm)
-    if engine_version != "legacy":
-        from ..research.control import observe, dispatch, execute
-        graph.add_node("observe", observe)
-    graph.add_node("solve", solve if engine_version == "legacy" else execute)
-    graph.add_node("predesign", predesign)
-    graph.add_node("solve_join", solve_join)
-    graph.add_node("reconcile", reconcile)
-    graph.add_node("write", write)
-    graph.add_node("validate", validate)
-    graph.add_node("repair", repair)
-    graph.add_node("render", render)
-    graph.add_node("export", export)
+    for name, node in (
+        ("analyze", analyze), ("design", design), ("confirm", confirm),
+        ("observe", observe), ("solve", execute), ("solve_join", solve_join),
+        ("reconcile", reconcile), ("write", write), ("validate", validate),
+        ("repair", repair), ("render", render), ("export", export),
+    ):
+        graph.add_node(name, node)
 
     graph.add_edge(START, "analyze")
-    if engine_version == "legacy":
-        graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "predesign", "reconcile"])
-    else:
-        graph.add_conditional_edges("analyze", lambda state: send_designs(state) if state.get("plan_ahead") else "observe", ["design", "observe"])
-        graph.add_conditional_edges("observe", dispatch, ["solve", "reconcile", END])
+    graph.add_conditional_edges("analyze", route_after_analyze, ["design", "observe"])
     graph.add_edge("design", "confirm")
-    if engine_version == "legacy":
-        graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "predesign", "reconcile"])
-    else:
-        graph.add_conditional_edges("confirm", lambda state: send_designs(state) if not state.get("approved", True) else "observe", ["design", "observe"])
+    graph.add_conditional_edges("confirm", route_after_confirm, ["design", "observe"])
+    graph.add_conditional_edges("observe", dispatch, ["solve", "reconcile", END])
     graph.add_edge("solve", "solve_join")
-    graph.add_edge("predesign", "solve_join")
-    if engine_version == "legacy":
-        graph.add_conditional_edges("solve_join", send_solves, ["solve", "predesign", "reconcile"])
-    else:
-        graph.add_edge("solve_join", "observe")
+    graph.add_edge("solve_join", "observe")
     graph.add_edge("reconcile", "write")
     graph.add_edge("write", "validate")
     graph.add_conditional_edges("validate", route_after_validate, ["repair", "render"])
     graph.add_edge("repair", "validate")
-    graph.add_conditional_edges("render", route_after_render, ["export", END] + (["observe"] if engine_version != "legacy" else []))
+    graph.add_conditional_edges("render", route_after_render, ["export", "observe", END])
     graph.add_edge("export", END)
     return graph
 
 
-def compile_graph(checkpointer=None, engine_version="legacy"):
-    return build_graph(engine_version).compile(checkpointer=checkpointer)
+def compile_graph(checkpointer=None):
+    return build_graph().compile(checkpointer=checkpointer)

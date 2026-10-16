@@ -1,8 +1,8 @@
 # Versioned research control
 
-New `PaperGraphAgent` research runs use `research-v1`. Threads without an engine
-version retain the legacy graph, registry behaviour and checkpoint recovery.
-`engine_version="legacy"` explicitly selects the old engine for comparisons.
+`PaperGraphAgent` uses one engine, `research-v1`. Unversioned research records
+cannot be resumed or revised; start a new research run. Existing files remain
+available for read-only inspection.
 
 ## State and execution
 
@@ -63,10 +63,11 @@ outside this implementation. Existing Jev scoring and validation remain reusable
 `test_research_control.py` covers idempotence, late submissions, dependency changes,
 concurrent claims, acceptance, budgets, data corrections and manual edits.
 `test_research_engine.py` exercises real checkpoints and Python kernels for
-selective recomputation, restart and legacy compatibility using offline model
-replies. Frontend tests cover revision transport and explicit progress statuses.
+selective recomputation, restart and rejection of unsupported checkpoints using
+offline model replies. Frontend tests cover revision transport and explicit progress statuses.
 
-The evaluation CLI keeps `--pipeline v2` and existing ablations on the legacy
-engine, and adds `--pipeline research` and `--pipeline research-no-planner`.
+The evaluation CLI defaults to `--pipeline research`. Its `research-no-explore`,
+`research-no-review`, `research-no-consistency` and `research-no-planner` variants
+all use the same versioned engine.
 No paid model benchmark is required for the offline regression suite; quality
 or cost improvements must be established separately on held-out research tasks.
