@@ -1,4 +1,5 @@
 import { apiClient } from '@/utils/apiClient'
+import type { ResearchAction, ResearchSnapshot } from '@/types/research'
 
 export interface ChatSessionResponse {
   id: number
@@ -48,6 +49,10 @@ export const chatAPI = {
     return response
   },
 
+  async getResearchSnapshot(workId: string): Promise<ResearchSnapshot> {
+    return apiClient.request(`/api/chat/work/${workId}/research`, { method: 'GET' })
+  },
+
   async pauseWork(workId: string): Promise<{ work_status: string }> {
     return apiClient.request(`/api/chat/work/${workId}/pause`, { method: 'POST' })
   },
@@ -63,6 +68,7 @@ export const chatAPI = {
     message?: string
     started_at?: number
     output_count?: number
+    action?: ResearchAction
   }> {
     const response = await apiClient.request<any>(`/api/chat/work/${workId}/task-status`, {
       method: 'GET',
@@ -236,8 +242,13 @@ export class WebSocketChatHandler {
   }
 
   // 发送消息
-  sendMessage(content: string, model?: string) {
-    const message = { problem: content, model }
+  sendMessage(
+    content: string,
+    model?: string,
+    action: ResearchAction = 'auto',
+    subproblemId?: string,
+  ) {
+    const message = { problem: content, model, action, subproblem_id: subproblemId }
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // 如果连接未建立，将消息加入队列

@@ -27,28 +27,44 @@
                 :superseded="index < messages.length - 1"
               />
 
+              <div
+                v-for="context in getResearchContexts(message)"
+                :key="context.research_id || 'context'"
+                class="answer-sources"
+              >
+                <span
+                  >{{ context.subproblem_id ? context.subproblem_id + ' · ' : '' }}参考材料</span
+                >
+                <button
+                  v-for="path in context.files"
+                  :key="path"
+                  :title="path"
+                  @click="$emit('open-file', path)"
+                >
+                  {{ researchSourceLabel(path, context.files) }}
+                </button>
+                <span v-if="context.result_ids?.length">{{ context.result_ids.join(' · ') }}</span>
+              </div>
+
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
-              <template v-else>
+              <template v-if="!isPipelineMessage(getJsonBlocks(message))">
                 <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
                   <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
-                    <div 
-                      class="json-block-header" 
+                    <div
+                      class="json-block-header"
                       @click="toggleBlock(message.id, bIndex)"
-                      :class="{ 'collapsed': isBlockCollapsed(message.id, bIndex) }"
+                      :class="{ collapsed: isBlockCollapsed(message.id, bIndex) }"
                     >
                       <span class="header-text">Type: {{ block.type || 'unknown' }}</span>
                       <span class="content-preview" v-if="isBlockCollapsed(message.id, bIndex)">
                         {{ getContentPreview(block.content) }}
                       </span>
-                      <t-icon 
-                        :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'" 
+                      <t-icon
+                        :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'"
                         class="toggle-icon"
                       />
                     </div>
-                    <div 
-                      class="json-block-content" 
-                      v-show="!isBlockCollapsed(message.id, bIndex)"
-                    >
+                    <div class="json-block-content" v-show="!isBlockCollapsed(message.id, bIndex)">
                       <MarkdownRenderer :content="String(block.content || '')" />
                     </div>
                   </div>
@@ -76,6 +92,7 @@
           </div>
         </div>
       </div>
+      <slot />
     </div>
   </div>
 </template>
@@ -107,6 +124,16 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+defineEmits<{ 'open-file': [path: string] }>()
+const researchSourceLabel = (path: string, files: string[]) => {
+  if (path === '.system/validation.json') return '校验问题'
+  if (path === '.system/consistency.json') return '结论审查'
+  if (path.startsWith('runs/'))
+    return '执行输出 ' + (files.filter((p) => p.startsWith('runs/')).indexOf(path) + 1)
+  return path.split('/').pop()
+}
+const getResearchContexts = (message: ChatMessage) =>
+  (message.json_blocks || []).filter((b) => b.type === 'research_context').map((b) => b.content)
 const { isMobile } = useBreakpoint()
 
 // 分割线悬停状态
@@ -260,7 +287,12 @@ const getTextContent = (message: ChatMessage) => {
 }
 
 // 进度与文件变更事件由右侧面板展示，不进聊天卡片（历史记录里也会保存这些块）
-const HIDDEN_BLOCK_TYPES = new Set(['plan_updated', 'file_changed'])
+const HIDDEN_BLOCK_TYPES = new Set([
+  'plan_updated',
+  'file_changed',
+  'research_context',
+  'research_snapshot',
+])
 
 // 提取 JSON 块数组
 const getJsonBlocks = (message: ChatMessage) => {
@@ -613,5 +645,24 @@ const copyMessage = (content: string) => {
   .divider-icon {
     opacity: 0.45;
   }
+}
+
+.answer-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: #727a74;
+  font-size: 12px;
+}
+.answer-sources button {
+  border: 1px solid #e4e7e4;
+  border-radius: 6px;
+  padding: 3px 7px;
+  color: var(--td-brand-color);
+  background: white;
+  font: inherit;
+  cursor: pointer;
 }
 </style>

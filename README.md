@@ -8,6 +8,8 @@
 
 PaperAgent 是一个基于人工智能技术的学术论文写作助手，旨在显著提升研究人员、学生和学术写作者的论文撰写效率和质量。通过集成先进的AI模型和智能工具，PaperAgent 能够协助用户完成从研究、数据分析到论文写作的全流程工作。
 
+当前架构见 [状态图流水线](docs/paper_graph.md)，评测入口见 [评测文档](docs/evaluation.md)，项目设计、提交追溯与求职讲稿见 [项目手册](docs/project-story-and-resume.md)。
+
 ## 部分问题QA（建议阅读）
 
 ### 一句话概括你们的项目
@@ -38,7 +40,7 @@ AI写作论文，我们项目支持 输入问题->AI自动写作论文（支持�
 
 ### 手机上怎么用工作区？
 
-手机（宽度 ≤768px）上，工作区改为底部三个 Tab：对话、文件、预览，同一时间只显示一个面板。在文件页点选文件会自动跳到预览。侧栏以抽屉形式打开，点遮罩即可关闭。桌面端仍是聊天与预览并排。
+每个工作内通过标签查看对话、文件、图表和报告。拖动标签到边缘可形成双窗格，窄屏下窗格上下排列；侧栏在手机上以抽屉打开。研究结果卡片可以回查对应执行代码和输出。
 
 ## 核心功能
 
@@ -78,38 +80,38 @@ Vue 3 + TypeScript + TDesign
 
 ### 后端技术栈
 ```
-FastAPI + Python 3.10+
+FastAPI + Python 3.14+
 ├── 🚀 高性能异步API框架
 ├── 🗄️ PostgreSQL数据库 + SQLAlchemy ORM
 ├── 🔌 WebSocket实时通信
-├── 🤖 LiteLLM多模型接入
+├── 🤖 LangChain 多模型接入
 ├── 🛠️ 模块化工具系统
 └── 🔒 JWT用户认证
 ```
 
 ### AI系统架构
+
+```text
+PaperGraphAgent（LangGraph）
+├── 分析与按依赖设计 → 条件触发候选试跑 → 持久 Python 内核求解
+├── 结果登记 → 结论一致性审查 → 引用驱动写作
+├── 确定性校验与定向修复 → Markdown / Word / LaTeX / PDF
+└── SQLite Checkpoint：确认点继续、失败子问题恢复
+
+FastAPI 任务与对话
+├── 显式动作：追问、执行、确认、修改方案、恢复、暂停
+├── 只读追问：已有结果与报告上下文，不调用求解图
+└── WebSocket：task_id / seq、增量回放、研究快照
 ```
-多模型协同系统
-├── 🧠 MainAgent (主控AI)
-│   ├── 任务分析和规划
-│   ├── 模型调度协调
-│   └── 上下文管理
-├── 💻 CodeAgent (代码AI)
-│   ├── Python代码执行
-│   ├── 数据分析处理
-│   └── 可视化图表生成
-└── 🛠️ Tools Framework
-    ├── 文件操作工具
-    ├── 模板处理工具
-    └── 代码执行工具
-```
+
+只读追问通过 `AI_RESEARCH_CONTEXT_ENABLED=1` 启用，当前允许的模型目标为 HTTPS DeepSeek 官方 API。发送范围是当前工作的登记结果、报告与输出节选、校验摘要和近期对话；未启用时仍可在本地查看研究结果与来源。
 
 ## 🎯 独特优势
 
 ### 1. 🔄 多AI模型协同
 - **专业化分工**：每个AI模型专注特定领域，提高专业性
-- **智能调度**：主控AI根据任务特点选择最适合的模型
-- **无缝协作**：模型间共享上下文，保证内容连贯性
+- **按角色配置**：分析、编码和写作分别使用配置的模型
+- **证据与结论协作**：通过登记结果和一致性审查发现内容冲突
 
 ### 2. 📝 全流程写作支持
 - **从构思到成文**：覆盖论文写作的每个环节
@@ -131,7 +133,7 @@ FastAPI + Python 3.10+
 ### 环境要求
 ```bash
 # 基础环境
-Python 3.10+
+Python 3.14+
 Node.js 20.19.0+ || 22.12.0+
 PostgreSQL 12+
 Git
@@ -155,8 +157,7 @@ cd backend
 pip install uv
 
 # 创建虚拟环境并安装依赖
-uv venv
-uv pip install -r pyproject.toml
+uv sync --frozen
 
 # 配置环境变量
 cp .env.example .env
@@ -171,7 +172,7 @@ cp .env.example .env
 source .venv/bin/activate
 
 # 启动后端服务
-uv run main.py
+uv run --frozen uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
 #### 3️⃣ 前端部署

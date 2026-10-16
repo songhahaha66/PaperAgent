@@ -25,7 +25,7 @@ Q2 轮到时 Q1 已经求解完，候选方案的生成请求里带着 Q1 的实
 |---|---|---|
 | analyze | 固定代码读取 `data/`、`attachment/` 下的表格生成数据概览；模型拆出子问题 Q1…Qn 及依赖关系；再用确定性规则补齐模型漏填的字段（问题描述里提到的前序子问题算依赖，标题是备忘录/信函的记为写作类，写作类没有依赖时依赖全部计算类） | 数据概览不经过模型，每题一致；依赖不靠模型自觉填写 |
 | design | 每个子问题并行：从方法库（`methods.py`，25 种常用数模方法）挑 2~4 种 → 生成 n 个候选方案 → 判分器按"贴题 / 可行 / 数据利用 / 严谨"四项打分，选期望分最高的 | actor-critic；每个候选一次请求评完四项、候选之间并行（有 Jev key 用 Jev，否则用 LLM 结构化打分）。所有候选塞进一次请求时，模型会给各候选打出相同分数 |
-| confirm | 可选的人工确认点（`AI_CONFIRM_MODELS=1`）：`interrupt` 把方案发给用户，回复"确认"继续，其他回复作为修改意见重新设计 | checkpoint 落盘，用户隔多久回复都能接着跑 |
+| confirm | 可选的人工确认点（`AI_CONFIRM_MODELS=1`）：`interrupt` 把方案发给用户，使用确认动作继续，使用修改方案动作重新设计；已有研究的普通消息默认只读追问 | checkpoint 落盘，用户隔多久回复都能接着跑 |
 | solve · explore | 前两名评审总分差距不超过 2 分、不是假设检验类子问题（"是否随机""是否存在"，不同检验的统计量不能比高低）、且能定出统一数值指标时，评分最高的 k 个候选（默认 2）先在数据上试跑（否则直接按评审选择求解，省下试跑成本）：先定统一验证协议（同一指标、同一划分、同一基线），各候选开独立内核并行跑一个短循环（默认 12 步），按协议汇报指标；指标要通过与结果登记相同的核对才参与比较。有可比指标按指标选（1% 内打平用评审分），没有统一指标时按 critic 对执行证据的评分选 | 借鉴 AIDE / MLE-bench 的执行驱动搜索；胜出分支的内核和对话历史整体晋升为正式求解，探索的计算不浪费；记录在 `designs[Qn].exploration` |
 | solve | 写作类子问题（备忘录、建议信等，analyze 标为 `kind=writing`）不设计方案、不开内核，写作时直接依据前序结论和登记结果撰写；计算类按依赖关系分批并行，每个子问题一个 CodeAct 循环 + 独立的持久 Python 内核；交报告后由审查模型检查数据范围、泄漏、过拟合、指标选择、结论是否被支持，必须修正的问题交回同一循环返工（默认 1 轮） | 变量跨步保留；早期代码和输出按 10 步一块压缩（`compaction.py`），至少保留最近 6 步原文，块内前缀不变以命中缓存 |
 | reconcile | 各子问题报告的主要结论登记为结论节点（陈述 + 证据强度 显著/倾向/不显著 + 指向登记结果的证据）；审查模型通读结论表，找出跨子问题矛盾和强度与证据不符的结论，给出统一口径 | 结论图：登记表从"数字可追溯"扩展到"结论可追溯"；统一口径写进 `.system/consistency.json` |
@@ -194,3 +194,13 @@ analyze → Q1（设计、探索、求解、审查返工）→ Q2（依赖 Q1）
 
 `backend/tests/test_paper_graph.py` 用假模型离线跑完整条图（含 interrupt 恢复、sqlite checkpoint、登记拒绝编造值、校验后修复），
 `backend/tests/test_kernel.py` 覆盖持久内核。
+
+## 对话与研究证据
+
+聊天 WebSocket 接受 action：auto / ask / run / resume / confirm / revise。已有研究的普通消息默认 ask，等待确认时的明确同意仍可进入 confirm，失败任务的明确继续可进入 resume。run 显式开始新线程；revise 需要处于等待确认。
+
+只读追问不构造 PaperGraphAgent，不改变研究状态或产物。通过 AI_RESEARCH_CONTEXT_ENABLED=1 启用，当前仅允许 HTTPS DeepSeek 官方 API；问答材料包括有界结果、报告节选、校验摘要及近期对话。核心实现见 services/chat_services/research_session.py。
+
+GET /api/chat/work/{work_id}/research 在校验所属权限后返回 schema_version=1 的研究快照。research_snapshot 用于刷新工作台结果卡片，research_context 记录一次追问所提供的结果编号与文件材料。输出块带 work_id / task_id，增量序号继续由任务输出管理。快照由现有登记文件和 manifest 投影，未新增持久事件队列。
+
+前端研究结果卡片支持子问题筛选、限定范围追问与执行代码／输出／图表跳转；旧 paper_* 文字事件继续兼容。离线测试见 backend/tests/test_research_session.py 与 frontend/tests/researchEvidence.test.cjs。

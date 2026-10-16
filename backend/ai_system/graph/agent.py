@@ -118,7 +118,7 @@ class PaperGraphAgent:
 
     # ------------------------------------------------------------------
 
-    async def run(self, user_input: str) -> str:
+    async def run(self, user_input: str, *, new_run: bool = False) -> str:
         ctx = self._context()
         checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
@@ -126,7 +126,7 @@ class PaperGraphAgent:
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
                 graph = compile_graph(saver)
-                graph_input, thread_id = await self._prepare(graph, user_input)
+                graph_input, thread_id = ({"task": user_input}, uuid.uuid4().hex) if new_run else await self._prepare(graph, user_input)
                 if isinstance(graph_input, dict):
                     ctx.registry.reset()
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}

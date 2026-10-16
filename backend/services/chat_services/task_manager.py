@@ -43,6 +43,7 @@ class AITask:
     completed_at: Optional[float] = None
     error: Optional[str] = None
     cancel_reason: Optional[str] = None
+    action: str = "run"
     # 累积的输出（用于断线重连恢复）。不设上限：长任务的早期事件（题目分析、阶段）也要能恢复；
     # 体积最大的 plan_updated 只保留最新一条
     outputs: list = field(default_factory=list)
@@ -76,7 +77,7 @@ class TaskManager:
         self._completed_retention = 60  # 1分钟
         logger.info("TaskManager 初始化完成")
     
-    def create_task(self, work_id: str, user_id: int, message: str) -> AITask:
+    def create_task(self, work_id: str, user_id: int, message: str, action: str = "run") -> AITask:
         """创建新任务"""
         # 如果已有进行中的任务，先取消
         if work_id in self._tasks:
@@ -89,7 +90,8 @@ class TaskManager:
             task_id=task_id,
             work_id=work_id,
             user_id=user_id,
-            message=message
+            message=message,
+            action=action,
         )
         self._tasks[work_id] = task
         logger.info(f"创建任务: {task_id}, work_id: {work_id}")
@@ -201,6 +203,7 @@ class TaskManager:
         return {
             "has_task": True,
             "task_id": task.task_id,
+            "action": task.action,
             "status": task.status.value,
             "message": task.message,
             "created_at": task.created_at,

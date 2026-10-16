@@ -20,6 +20,10 @@ from ai_system.graph import PaperGraphAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
 from config.paths import get_workspace_path
+from services.chat_services.research_session import (
+    research_snapshot, resolve_action, scoped_snapshot, infer_question_scope, answer_research_question,
+    ResearchContextPermissionError,
+)
 from ..utils import route_guard
 
 logger = logging.getLogger(__name__)
@@ -112,7 +116,7 @@ class ConnectionManager:
             await self._send_locked(work_id, {
                 'type': 'reconnect',
                 'message': '检测到正在进行的AI任务，正在恢复...',
-                'task_id': task.task_id,
+                'task_id': task.task_id, 'action': task.action,
             })
             outputs = task_manager.get_outputs_after(work_id, after_seq)
             logger.info(f"[RECONNECT] {task.task_id} 从 seq {after_seq} 补发 {len(outputs)} 条输出")
@@ -122,7 +126,7 @@ class ConnectionManager:
             await self._send_locked(work_id, {
                 'type': 'reconnect_complete',
                 'message': '历史输出恢复完成，继续接收新输出...',
-                'task_id': task.task_id,
+                'task_id': task.task_id, 'action': task.action,
             })
 
     def is_connected(self, work_id: str) -> bool:
@@ -140,7 +144,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # 只用于刷新右侧面板的事件，不写进聊天记录
-TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed'}
+TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot'}
 
 
 @router.get("/work/{work_id}/history")
@@ -240,6 +244,22 @@ async def get_task_status(
     return task_manager.get_task_status(work_id)
 
 
+@router.get("/work/{work_id}/research")
+async def get_research_snapshot(
+    work_id: str,
+    current_user_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from services.data_services.crud import get_work
+    work = get_work(db, work_id)
+    if not work or work.created_by != current_user_id:
+        raise HTTPException(status_code=403, detail="无权限访问")
+    try:
+        return await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, work.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/work/{work_id}/pause")
 @route_guard
 async def pause_work(
@@ -260,7 +280,7 @@ async def pause_work(
             await asyncio.shield(task._async_task)
         except asyncio.CancelledError:
             pass
-    return {"work_status": "paused"}
+    return {"work_status": work.status if task.action == "ask" else "paused"}
 
 
 @router.websocket("/ws/{work_id}")
@@ -371,6 +391,29 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 }))
                 continue
 
+            # Resolve before constructing a graph or changing the work status.
+            try:
+                problem = message_data["problem"]
+                if not isinstance(problem, str) or not problem.strip() or len(problem) > 20000:
+                    raise ValueError("请输入有效消息（最多 20000 字符）")
+                work = await loop.run_in_executor(None, verify_work_permission)
+                if not work or work.created_by != user_id:
+                    raise ValueError("无权限访问此工作")
+                original_status = work.status
+                snapshot = await asyncio.to_thread(
+                    research_snapshot, get_workspace_path(work_id), work_id, original_status,
+                )
+                action = resolve_action(message_data.get("action", "auto"), problem, snapshot)
+                subproblem_id = message_data.get("subproblem_id")
+                if subproblem_id is not None and not isinstance(subproblem_id, str):
+                    raise ValueError("子问题编号无效")
+                if action == "ask":
+                    subproblem_id = subproblem_id or infer_question_scope(problem, snapshot)
+                    scoped_snapshot(snapshot, subproblem_id)
+            except ValueError as exc:
+                await manager.send(work_id, {"type": "error", "message": str(exc)})
+                continue
+
             # 为每次消息处理创建新的数据库会话，避免长连接问题
             def init_message_processing():
                 db = next(get_db())
@@ -413,11 +456,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
                 async def on_json_block(self, block: dict):
                     """处理JSON格式的数据块"""
-                    # 计划和文件变更只用于刷新右侧面板（计划以 plan.json 为准），不存进聊天记录
+                    active_task = task_manager.get_task(self.work_id)
+                    block = {**block, "schema_version": 1, "work_id": self.work_id,
+                             "task_id": active_task.task_id if active_task else None}
                     if block.get('type') not in TRANSIENT_BLOCK_TYPES:
                         self.json_blocks.append(block)
-
-                    # 记录到任务管理器（用于断线重连恢复），带序号发给当前连接
+                    # Stable identifiers travel with both live events and replay.
                     seq = task_manager.add_output(self.work_id, 'json_block', block)
                     try:
                         await manager.send(self.work_id, {'type': 'json_block', 'block': block}, seq)
@@ -432,8 +476,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             env_manager = setup_environment_from_db(db, workspace_dir)
             workspace_dir = env_manager.get_workspace_dir()
             model_config = env_manager.config_manager.get_model_config("brain", user_id)
-            codeagent_model_config = env_manager.config_manager.get_model_config("code", user_id)
-            writer_model_config = env_manager.config_manager.get_model_config("writing", user_id)
+            codeagent_model_config = None if action == "ask" else env_manager.config_manager.get_model_config("code", user_id)
+            writer_model_config = None if action == "ask" else env_manager.config_manager.get_model_config("writing", user_id)
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(work_id, chat_service)
@@ -444,20 +488,23 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             )
             
             # 创建任务记录；task_id 告诉前端，断线重连时据此续传
-            task = task_manager.create_task(work_id, user_id, message_data['problem'])
-            await loop.run_in_executor(None, set_work_status, work_id, 'in_progress')
-            await manager.send(work_id, {'type': 'start', 'message': '开始AI分析...', 'task_id': task.task_id,
-                                         'work_status': 'in_progress'})
+            task = task_manager.create_task(work_id, user_id, problem, action=action)
+            start_status = original_status if action == "ask" else "in_progress"
+            if action != "ask":
+                await loop.run_in_executor(None, set_work_status, work_id, start_status)
+            await manager.send(work_id, {'type': 'start', 'message': '正在回答...' if action == "ask" else '开始研究...',
+                                         'task_id': task.task_id, 'action': action, 'work_status': start_status})
 
             # 创建支持多AI提供商的LLM处理器
             llm_handler = LLMHandler(
                 model_config=model_config,
-                stream_manager=stream_manager
+                stream_manager=stream_manager,
+                **({"max_tokens": 3000} if action == "ask" else {}),
             )
 
             # 求解阶段的模型（"code" 配置）
             codeagent_llm = None
-            if codeagent_model_config:
+            if codeagent_model_config and action != "ask":
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     codeagent_llm = create_llm_from_model_config(codeagent_model_config)
@@ -471,7 +518,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             # 获取writer的LLM实例（从"writing"配置加载）
             writer_llm = None
-            if writer_model_config:
+            if writer_model_config and action != "ask":
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     writer_llm = create_llm_from_model_config(writer_model_config)
@@ -500,7 +547,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 logger.warning(f"获取工作配置失败: {e}")
 
             logger.info(f"工作 {work_id} 使用状态图流水线，输出 {output_mode}")
-            main_agent = PaperGraphAgent(
+            main_agent = None if action == "ask" else PaperGraphAgent(
                 llm_handler.get_llm_instance(), 
                 stream_manager, 
                 workspace_dir, 
@@ -523,7 +570,23 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 # 定义AI任务执行函数
                 async def run_ai_task():
                     try:
-                        await main_agent.run(message_data['problem'])
+                        if action == "ask":
+                            history = await loop.run_in_executor(
+                                None, chat_service.get_work_chat_history, work_id, 8,
+                            )
+                            await answer_research_question(
+                                llm_handler.get_llm_instance(), stream_manager, snapshot, workspace_dir,
+                                problem, history, subproblem_id,
+                                destination_url=getattr(model_config, "base_url", "") or "",
+                            )
+                        elif action == "resume":
+                            await main_agent.resume_failed()
+                        else:
+                            graph_input = "确认" if action == "confirm" else problem
+                            if action == "run" and snapshot.has_research:
+                                await main_agent.run(graph_input, new_run=True)
+                            else:
+                                await main_agent.run(graph_input)
                         
                         # AI处理完成后，保存最终的AI消息
                         # 使用新的数据库连接，避免长时间运行后连接断开的问题
@@ -559,8 +622,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
                         solutions = (getattr(main_agent, 'last_result', None) or {}).get('solutions') or {}
                         incomplete = any(solution.get('status') != 'completed' for solution in solutions.values())
-                        work_status = ('failed' if failed_blocks else 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'paused' if incomplete else 'completed')
-                        await loop.run_in_executor(None, set_work_status, work_id, work_status)
+                        work_status = original_status if action == "ask" else ('failed' if failed_blocks else 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'paused' if incomplete else 'completed')
+                        if action != "ask":
+                            await loop.run_in_executor(None, set_work_status, work_id, work_status)
+                            try:
+                                evidence = await asyncio.to_thread(research_snapshot, workspace_dir, work_id, work_status)
+                                await stream_manager.send_json_block("research_snapshot", evidence.model_dump())
+                            except ValueError:
+                                logger.warning("研究快照暂不可读，保留任务完成状态: %s", work_id)
 
                         # 标记任务完成
                         task_manager.complete_task(work_id)
@@ -578,7 +647,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         logger.info(f"AI任务被取消: {work_id}")
                         
                         task = task_manager.get_task(work_id)
-                        interrupted_status = 'paused' if task and task.cancel_reason == 'paused' else 'failed' if task and task.error else 'cancelled'
+                        interrupted_status = original_status if action == "ask" else ('paused' if task and task.cancel_reason == 'paused' else 'failed' if task and task.error else 'cancelled')
                         # 取消时也保存已生成的内容
                         partial_content = ws_callback.content.strip()
                         partial_json_blocks = ws_callback.json_blocks
@@ -595,7 +664,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                         'failed': "任务意外中断，已有结果已保存。可从断点继续。",
                                         'cancelled': "任务已取消，已有结果已保存。可从断点继续。",
                                     }
-                                    cancel_notice = "\n\n---\n" + notices[interrupted_status]
+                                    cancel_notice = "\n\n---\n" + ("回复已停止。" if action == "ask" else notices[interrupted_status])
                                     final_content = partial_content + cancel_notice
                                     
                                     if partial_json_blocks:
@@ -616,7 +685,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             
                             await loop.run_in_executor(None, save_cancelled_message)
                         
-                        await loop.run_in_executor(None, set_work_status, work_id, interrupted_status)
+                        if action != "ask":
+                            await loop.run_in_executor(None, set_work_status, work_id, interrupted_status)
                         try:
                             await manager.send(work_id, {'type': 'complete', 'work_status': interrupted_status, 'reload_history': True})
                         except Exception:
@@ -636,19 +706,19 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 save_db = next(get_db())
                                 try:
                                     save_chat_service = ChatService(save_db)
-                                    error_notice = f"\n\n---\n⚠️ *任务执行失败: {str(e)[:100]}*"
+                                    error_notice = "\n\n---\n回答失败，请重试。" if action == "ask" else f"\n\n---\n⚠️ *任务执行失败: {str(e)[:100]}*"
                                     final_content = partial_content + error_notice
                                     
                                     if partial_json_blocks:
                                         save_chat_service.add_json_card_message(
                                             work_id, "assistant", final_content,
                                             partial_json_blocks,
-                                            {"system_type": "brain", "status": "failed", "error": str(e)}
+                                            {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
                                         )
                                     else:
                                         save_chat_service.add_message(
                                             work_id, "assistant", final_content,
-                                            {"system_type": "brain", "status": "failed", "error": str(e)}
+                                            {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
                                         )
                                 except Exception as save_error:
                                     logger.error(f"[FAILED] 保存部分内容失败: {save_error}")
@@ -657,11 +727,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             
                             await loop.run_in_executor(None, save_failed_message)
                         
-                        await loop.run_in_executor(None, set_work_status, work_id, 'failed')
+                        if action != "ask":
+                            await loop.run_in_executor(None, set_work_status, work_id, 'failed')
                         task_manager.fail_task(work_id, str(e))
                         
                         # 通知前端（之前这里调用了不存在的方法，失败时前端会一直停在"生成中"）
-                        await manager.send(work_id, {'type': 'error', 'message': f'AI处理失败: {str(e)}', 'work_status': 'failed'})
+                        await manager.send(work_id, {'type': 'error', 'message': (str(e) if isinstance(e, ResearchContextPermissionError) else '回答失败，请重试') if action == 'ask' else f'AI处理失败: {str(e)}', 'work_status': original_status if action == 'ask' else 'failed'})
                         raise
 
                 ai_task = asyncio.create_task(run_ai_task())

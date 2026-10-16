@@ -19,7 +19,8 @@
             variant="outline"
             :loading="pausing"
             @click="pauseTask"
-            ><template #icon><t-icon name="pause" /></template>{{ ui.pause }}</t-button
+            ><template #icon><t-icon name="pause" /></template
+            >{{ runningAction === 'ask' ? (isZh ? '停止回复' : 'Stop reply') : ui.pause }}</t-button
           >
           <t-button
             v-if="primaryArtifact"
@@ -92,7 +93,7 @@
           <strong>{{ currentWork?.status === 'failed' ? ui.failedTitle : ui.pausedTitle }}</strong>
           <p>{{ currentWork?.status === 'failed' ? ui.failedHint : ui.pausedHint }}</p>
         </div>
-        <t-button theme="primary" size="small" @click="sendMessage('继续')"
+        <t-button theme="primary" size="small" @click="sendMessage('继续', 'resume')"
           >{{ ui.resume }}<template #suffix><t-icon name="arrow-right" /></template
         ></t-button>
       </div>
@@ -111,7 +112,7 @@
             }}
           </p>
         </div>
-        <t-button theme="primary" size="small" @click="sendMessage('确认')">{{
+        <t-button theme="primary" size="small" @click="sendMessage('确认', 'confirm')">{{
           isZh ? '确认并执行' : 'Confirm & run'
         }}</t-button>
       </div>
@@ -135,11 +136,18 @@
                 <div v-if="loading && !chatMessages.length" class="chat-loading">
                   <t-loading :text="ui.loading" />
                 </div>
-                <JsonChatRenderer v-else :messages="chatMessages" /><button
-                  v-if="!atBottom && isStreaming"
-                  class="jump-latest"
-                  @click="jumpToLatest"
+                <JsonChatRenderer
+                  v-else
+                  :messages="chatMessages"
+                  @open-file="handleWorkspaceFileSelect"
                 >
+                  <ResearchEvidence
+                    :snapshot="researchSnapshot"
+                    @open-file="handleWorkspaceFileSelect"
+                    @ask="askSubproblem"
+                  />
+                </JsonChatRenderer>
+                <button v-if="!atBottom && isStreaming" class="jump-latest" @click="jumpToLatest">
                   <t-icon name="arrow-down" />{{ isZh ? '查看最新进展' : 'Latest progress' }}
                 </button>
               </div>
@@ -155,6 +163,23 @@
                     @keydown="handleComposerKeydown"
                   />
                   <div class="composer-controls">
+                    <t-dropdown :options="messageActionOptions" trigger="click">
+                      <button
+                        type="button"
+                        class="message-action-select"
+                        :disabled="isStreaming || loading"
+                      >
+                        {{ messageActionLabel }}<t-icon name="chevron-down" />
+                      </button>
+                    </t-dropdown>
+                    <button
+                      v-if="questionScope"
+                      type="button"
+                      class="question-scope"
+                      @click="questionScope = null"
+                    >
+                      {{ questionScope }}<t-icon name="close" />
+                    </button>
                     <input
                       ref="chatFileInput"
                       type="file"
@@ -290,6 +315,8 @@ import { useBreakpoint } from '@/composables/useBreakpoint'
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
+import ResearchEvidence from '@/components/ResearchEvidence.vue'
+import type { ResearchAction, ResearchSnapshot } from '@/types/research'
 import {
   useWorkPanelsStore,
   type WorkPanel,
@@ -299,7 +326,13 @@ import {
 
 import { useStudioCopy } from '@/lang/studio'
 import { formatWorkDate } from '@/utils/dates'
-import { asText, derivePhases, deriveSubproblems, type PipelineBlock } from '@/utils/paperPipeline'
+import {
+  asText,
+  derivePhases,
+  deriveSubproblems,
+  isPaperEvent,
+  type PipelineBlock,
+} from '@/utils/paperPipeline'
 const { ui, isZh } = useStudioCopy()
 const route = useRoute()
 const router = useRouter()
@@ -355,6 +388,75 @@ const workspaceFiles = ref<FileInfo[]>([])
 
 // 聊天相关状态
 const isStreaming = ref(false)
+const researchSnapshot = ref<ResearchSnapshot | null>(null)
+const messageAction = ref<ResearchAction>('auto')
+const runningAction = ref<ResearchAction>('auto')
+const questionScope = ref<string | null>(null)
+const messageActionLabel = computed(() =>
+  messageAction.value === 'run'
+    ? isZh.value
+      ? '重新研究'
+      : 'Run research'
+    : messageAction.value === 'revise'
+      ? isZh.value
+        ? '修改方案'
+        : 'Revise plan'
+      : researchSnapshot.value?.has_research || currentWork.value?.status !== 'created'
+        ? isZh.value
+          ? '追问结果'
+          : 'Ask about results'
+        : isZh.value
+          ? '开始研究'
+          : 'Start research',
+)
+const messageActionOptions = computed(() => [
+  {
+    content: isZh.value ? '追问已有结果' : 'Ask about existing results',
+    value: 'ask',
+    onClick: () => {
+      messageAction.value = 'ask'
+    },
+  },
+  {
+    content: isZh.value ? '重新研究' : 'Run research again',
+    value: 'run',
+    onClick: () => {
+      messageAction.value = 'run'
+      questionScope.value = null
+    },
+  },
+  ...(currentWork.value?.status === 'waiting'
+    ? [
+        {
+          content: isZh.value ? '修改建模方案' : 'Revise modeling plan',
+          value: 'revise',
+          onClick: () => {
+            messageAction.value = 'revise'
+            questionScope.value = null
+          },
+        },
+      ]
+    : []),
+])
+function askSubproblem(id: string) {
+  questionScope.value = id
+  messageAction.value = 'ask'
+  panelStore.activate(workId.value, 'chat')
+  nextTick(() =>
+    document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
+  )
+}
+let evidenceRequest = 0
+async function loadResearchSnapshot() {
+  const request = ++evidenceRequest
+  try {
+    const snapshot = await chatAPI.getResearchSnapshot(workId.value)
+    if (!disposed && request === evidenceRequest && snapshot.work_id === workId.value)
+      researchSnapshot.value = snapshot
+  } catch {
+    // Do not blank existing evidence on transient read/network failures.
+  }
+}
 const webSocketHandler = ref<WebSocketChatHandler | null>(null)
 const isFileRefreshing = ref(false) // 防止重复刷新文件列表
 
@@ -372,7 +474,10 @@ const atBottom = ref(panelSession.value.followChat),
   clockNow = ref(Date.now())
 let elapsedTimer: ReturnType<typeof setInterval> | undefined
 const latestBlocks = computed<PipelineBlock[]>(
-  () => [...chatMessages.value].reverse().find((m) => m.role === 'assistant')?.json_blocks || [],
+  () =>
+    [...chatMessages.value]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.json_blocks?.some(isPaperEvent))?.json_blocks || [],
 )
 const latestSubproblems = computed(() => deriveSubproblems(latestBlocks.value))
 const canResume = computed(
@@ -388,6 +493,8 @@ const visiblePhases = computed(() =>
   }),
 )
 const stageText = computed(() => {
+  if (isStreaming.value && runningAction.value === 'ask')
+    return isZh.value ? '正在分析已有结果' : 'Reviewing existing results'
   if (canResume.value) return ui.value.needsAttention
   if (currentWork.value?.status === 'waiting')
     return isZh.value ? '等待确认建模方案' : 'Waiting for plan approval'
@@ -647,7 +754,7 @@ const loadWork = async () => {
     historyStore.upsert(work)
 
     // 加载工作空间文件
-    await Promise.all([loadWorkspaceFiles(), loadPlanContent()])
+    await Promise.all([loadWorkspaceFiles(), loadPlanContent(), loadResearchSnapshot()])
     if (disposed) return
     await loadChatHistory()
     if (disposed) return
@@ -678,6 +785,7 @@ const checkAndResumeRunningTask = async () => {
 
       // 设置流式状态
       isStreaming.value = true
+      runningAction.value = taskStatus.action || 'run'
 
       // 创建AI回复消息框架
       const aiMessageId = `reconnect_${Date.now()}`
@@ -718,8 +826,10 @@ async function connectWorkSocket(messageId: string) {
   })
   handler.onMessage((data) => {
     if (disposed) return
-    if (data.type === 'start' || data.type === 'auth_success') applyWorkStatus(data.work_status)
-    else handleStreamMessage(data, messageId)
+    if (data.type === 'start' || data.type === 'auth_success') {
+      applyWorkStatus(data.work_status)
+      if (data.action) runningAction.value = data.action
+    } else handleStreamMessage(data, messageId)
   })
   await handler.connect()
   if (disposed) {
@@ -793,7 +903,12 @@ const handleStreamMessage = (data: any, messageId: string) => {
     case 'json_block':
       const block = data.block
 
-      if (block?.type === 'file_changed') {
+      if (block?.type === 'research_snapshot') {
+        if (block.content?.schema_version === 1 && block.content.work_id === workId.value) {
+          ++evidenceRequest
+          researchSnapshot.value = block.content as ResearchSnapshot
+        }
+      } else if (block?.type === 'file_changed') {
         setTimeout(() => loadWorkspaceFiles(), 500)
       } else if (block?.type === 'plan_updated') {
         if (block.content && typeof block.content === 'object') {
@@ -819,7 +934,8 @@ const handleStreamMessage = (data: any, messageId: string) => {
       reconnectMessageId.value = null
       if (data.reload_history) loadChatHistory()
       connectionState.value = 'idle'
-      // 刷新文件列表
+      // Refresh the authoritative evidence after research and after reconnect.
+      loadResearchSnapshot()
       loadWorkspaceFiles()
       break
 
@@ -1159,7 +1275,10 @@ const getAvatarByRole = (role: string) => {
 }
 
 // 发送消息
-const sendMessage = async (messageContent?: string) => {
+const sendMessage = async (
+  messageContent?: string,
+  action: ResearchAction = messageAction.value,
+) => {
   const content = messageContent || inputValue.value.trim()
   if (!content || isStreaming.value || disposed || !authStore.token) return
 
@@ -1177,14 +1296,19 @@ const sendMessage = async (messageContent?: string) => {
   inputValue.value = ''
 
   panelStore.activate(workId.value, 'chat')
-  await sendRealMessage(content)
+  const resolvedAction = action === 'auto' && questionScope.value ? 'ask' : action
+  const scope = resolvedAction === 'ask' ? questionScope.value || undefined : undefined
+  if (resolvedAction !== 'ask') questionScope.value = null
+  messageAction.value = 'auto'
+  await sendRealMessage(content, resolvedAction, scope)
 }
 
 // 发送真实消息（WebSocket）
-const sendRealMessage = async (message: string) => {
+const sendRealMessage = async (message: string, action: ResearchAction, subproblemId?: string) => {
   if (!authStore.token || disposed) return
 
   isStreaming.value = true
+  runningAction.value = action
   connectionState.value = 'reconnecting'
   taskStartedAt.value = Date.now()
   clockNow.value = Date.now()
@@ -1204,7 +1328,7 @@ const sendRealMessage = async (message: string) => {
 
   try {
     // 使用WebSocket发送消息
-    await sendMessageViaWebSocket(message, aiMessageId)
+    await sendMessageViaWebSocket(message, aiMessageId, action, subproblemId)
   } catch (error) {
     console.error('发送消息失败:', error)
     const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
@@ -1220,9 +1344,14 @@ const sendRealMessage = async (message: string) => {
   }
 }
 
-const sendMessageViaWebSocket = async (message: string, messageId: string) => {
+const sendMessageViaWebSocket = async (
+  message: string,
+  messageId: string,
+  action: ResearchAction,
+  subproblemId?: string,
+) => {
   const handler = await connectWorkSocket(messageId)
-  handler?.sendMessage(message)
+  handler?.sendMessage(message, undefined, action, subproblemId)
 }
 
 // 切换侧边栏折叠状态
@@ -1317,7 +1446,7 @@ const checkAndAutoSendFirstMessage = async () => {
       generateWorkTitle(pendingQuestion).catch((err: Error) =>
         console.error('后台生成标题失败:', err),
       )
-      await sendMessage(pendingQuestion)
+      await sendMessage(pendingQuestion, 'run')
     } catch (error) {
       console.error('自动发送第一句话失败:', error)
     }
@@ -1842,5 +1971,32 @@ const generateWorkTitle = async (question: string) => {
   .phase-track {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.message-action-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: #535c55;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 5px 3px;
+  white-space: nowrap;
+}
+.question-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: #eef4ef;
+  color: #286345;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 </style>

@@ -27,8 +27,8 @@ async function environment() {
       connect() {
         return deferred ? new Promise((resolve) => connected.push(resolve)) : Promise.resolve()
       }
-      sendMessage(message) {
-        sent.push({ workId: this.workId, message })
+      sendMessage(message, _model, action, subproblemId) {
+        sent.push({ workId: this.workId, message, action, subproblemId })
       }
       disconnect() {
         this.closed = true
@@ -54,6 +54,20 @@ async function environment() {
         '@/api/chat': {
           WebSocketChatHandler: Socket,
           chatAPI: {
+            getResearchSnapshot: async () => ({
+              schema_version: 1,
+              work_id: id,
+              work_status: 'completed',
+              has_research: true,
+              research_id: 'research-1',
+              graph_status: 'done',
+              results: [],
+              runs: [],
+              claims: [],
+              artifacts: ['paper.pdf'],
+              validation_count: 0,
+              truncated: false,
+            }),
             getWorkChatHistory: async () => ({
               messages: [
                 {
@@ -150,7 +164,9 @@ async function environment() {
   assert.equal(restored.sent.length, 0, 'newlines and IME confirmation do not submit')
   restored.state.handleComposerKeydown('', { e: keyEvent() })
   await flush()
-  assert.deepEqual(restored.sent, [{ workId: 'first', message: 'Unsent draft' }])
+  assert.deepEqual(restored.sent, [
+    { workId: 'first', message: 'Unsent draft', action: 'auto', subproblemId: undefined },
+  ])
   assert.equal(restored.state.inputValue.value, '')
   assert.equal(restored.state.isStreaming.value, true)
   assert.equal(restored.state.panelSession.value.activeId, 'chat')
@@ -163,8 +179,31 @@ async function environment() {
   restored.sockets[0].message({ type: 'complete', work_status: 'completed' })
   assert.equal(restored.state.isStreaming.value, false)
   assert.equal(restored.state.panelSession.value.secondaryActiveId, 'files')
+  assert.equal(restored.state.researchSnapshot.value.work_id, 'first')
+  restored.state.askSubproblem('Q2')
+  await restored.state.sendMessage('解释这些结果')
+  assert.equal(restored.sent.at(-1).action, 'ask')
+  assert.equal(restored.sent.at(-1).subproblemId, 'Q2')
+  const replyId = restored.state.chatMessages.value.at(-1).id
+  restored.state.handleStreamMessage(
+    {
+      type: 'json_block',
+      block: { type: 'research_snapshot', content: { schema_version: 1, work_id: 'another-work' } },
+    },
+    replyId,
+  )
+  assert.equal(
+    restored.state.researchSnapshot.value.work_id,
+    'first',
+    'other work evidence is ignored',
+  )
+  restored.state.handleStreamMessage({ type: 'complete', work_status: 'completed' }, replyId)
+  restored.state.messageAction.value = 'run'
+  await restored.state.sendMessage('重新研究这个问题')
+  assert.equal(restored.sent.at(-1).action, 'run')
   restored.stop()
   console.log('PASS: one-line submission respects IME and streaming continues across split tabs')
+  console.log('PASS: scoped follow-up and explicit research send different backend actions')
 
   const leaving = await env.work('leaving', true)
   const send = leaving.state.sendMessage('Do not send after leaving')

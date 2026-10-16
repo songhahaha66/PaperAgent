@@ -1238,3 +1238,14 @@ def test_dependency_handoff_includes_solution_code(tmp_path):
     # 没有成功执行过的代码时不写文件
     export_solution_code(ctx, "Q3", [{"run_id": "r4", "code": "x", "ok": False}])
     assert not (tmp_path / solution_code_path("Q3")).exists()
+
+
+def test_explicit_new_run_does_not_resume_an_interrupted_plan(tmp_path):
+    ws = _make_workspace(tmp_path)
+    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge(), confirm_models=True)
+    asyncio.run(agent.run(TASK))
+    first_thread = agent._load_thread()
+    assert agent.waiting_confirm
+    asyncio.run(agent.run("另一项研究", new_run=True))
+    assert agent.waiting_confirm
+    assert agent._load_thread() != first_thread
