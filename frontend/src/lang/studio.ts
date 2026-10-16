@@ -99,6 +99,9 @@ const zh = {
   viewResults: '查看论文',
   pausedTitle: '进度已保存，可以继续。',
   pausedHint: '已完成的计算会保留。继续后会先补跑未完成的子问题，再完成论文。',
+  incompleteTitle: '这份研究尚未完整完成',
+  restartHint: '这条研究记录不支持继续执行。已有论文可以查看；如需补齐结果，请重新发起研究。',
+  restartResearch: '重新发起研究',
   failedTitle: '本次生成遇到问题',
   failedHint: '已有结果和断点已保留。可从断点继续，或查看技术详情了解原因。',
   working: '研究正在进行',
@@ -234,6 +237,10 @@ const en: typeof zh = {
   pausedTitle: 'Your progress is saved.',
   pausedHint:
     'Completed computations are retained. Continue to retry unfinished questions and finish the paper.',
+  incompleteTitle: 'This research is incomplete',
+  restartHint:
+    'This research record cannot be resumed. You can read the existing paper or start research again to complete the results.',
+  restartResearch: 'Start research again',
   failedTitle: 'Generation needs your attention',
   failedHint:
     'Your results and checkpoint are saved. Continue from the checkpoint or inspect technical details.',

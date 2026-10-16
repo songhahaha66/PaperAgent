@@ -47,7 +47,17 @@ async function environment() {
         '@/stores/auth': { useAuthStore: () => auth },
         '@/stores/workPanels': { useWorkPanelsStore: () => store },
         '@/stores/workHistory': { useWorkHistoryStore: () => ({ upsert() {} }) },
-        '@/lang/studio': { useStudioCopy: () => ({ isZh: vue.ref(true), ui: vue.ref({}) }) },
+        '@/lang/studio': {
+          useStudioCopy: () => ({
+            isZh: vue.ref(true),
+            ui: vue.ref({
+              incompleteTitle: 'This research is incomplete',
+              restartHint: 'Start research again',
+              pausedTitle: 'Progress saved',
+              pausedHint: 'Continue unfinished tasks',
+            }),
+          }),
+        },
         '@/composables/useBreakpoint': {
           useBreakpoint: () => ({ isMobile: vue.ref(false), width: vue.ref(1400) }),
         },
@@ -204,6 +214,64 @@ async function environment() {
   restored.stop()
   console.log('PASS: one-line submission respects IME and streaming continues across split tabs')
   console.log('PASS: scoped follow-up and explicit research send different backend actions')
+
+  const recovery = await env.work('recovery')
+  await recovery.state.loadWork()
+  recovery.state.chatMessages.value = [
+    {
+      id: 'old-failure',
+      role: 'assistant',
+      content: '',
+      json_blocks: [{ type: 'paper_solved', content: 'Q1 未完成，登记结果 0 项' }],
+    },
+  ]
+  assert.equal(
+    recovery.state.needsRecovery.value,
+    false,
+    'historical failure cannot override a completed work',
+  )
+  assert.equal(recovery.state.canResume.value, false)
+  recovery.state.currentWork.value.status = 'paused'
+  recovery.state.researchSnapshot.value = {
+    ...recovery.state.researchSnapshot.value,
+    engine_version: null,
+    graph_status: 'done',
+    work_status: 'paused',
+    validation_count: 6,
+  }
+  assert.equal(
+    recovery.state.needsRecovery.value,
+    true,
+    'exporting a paper does not make incomplete work successful',
+  )
+  assert.equal(recovery.state.recoveryUnavailable.value, true)
+  assert.equal(recovery.state.recoveryTitle.value, 'This research is incomplete')
+  assert.equal(recovery.state.recoveryHint.value, 'Start research again')
+  assert.equal(
+    recovery.state.canResume.value,
+    false,
+    'unsupported records must not offer an action the backend rejects',
+  )
+  recovery.state.questionScope.value = 'Q1'
+  recovery.state.prepareNewResearch()
+  assert.equal(recovery.state.messageAction.value, 'run')
+  assert.equal(recovery.state.questionScope.value, null)
+  assert.equal(
+    recovery.sent.length,
+    0,
+    'preparing a new research must not submit or overwrite anything',
+  )
+  recovery.state.researchSnapshot.value.engine_version = 'research-v3'
+  assert.equal(recovery.state.canResume.value, true, 'current protocol work remains resumable')
+  assert.equal(recovery.state.recoveryTitle.value, 'Progress saved')
+  recovery.state.researchSnapshot.value.research_id = null
+  assert.equal(recovery.state.canResume.value, false, 'a missing execution record is not resumable')
+  assert.equal(recovery.state.recoveryUnavailable.value, true)
+  recovery.state.researchSnapshot.value.research_id = 'research-1'
+  recovery.state.isStreaming.value = true
+  assert.equal(recovery.state.canResume.value, false, 'active work cannot be resumed concurrently')
+  recovery.stop()
+  console.log('PASS: recovery controls honor current work state and supported research protocol')
 
   const leaving = await env.work('leaving', true)
   const send = leaving.state.sendMessage('Do not send after leaving')

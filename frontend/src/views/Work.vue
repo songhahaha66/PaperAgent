@@ -42,8 +42,8 @@
               'live-dot',
               {
                 running: isStreaming,
-                attention: canResume,
-                complete: currentWork?.status === 'completed' && !canResume,
+                attention: needsRecovery,
+                complete: currentWork?.status === 'completed',
               },
             ]"
           /><strong>{{ stageText }}</strong
@@ -87,15 +87,34 @@
           >
         </div>
       </section>
-      <div v-if="canResume" class="recovery-banner" role="status">
+      <div v-if="needsRecovery" class="recovery-banner" role="status">
         <t-icon name="pause-circle" />
         <div>
-          <strong>{{ currentWork?.status === 'failed' ? ui.failedTitle : ui.pausedTitle }}</strong>
-          <p>{{ currentWork?.status === 'failed' ? ui.failedHint : ui.pausedHint }}</p>
+          <strong>{{ recoveryTitle }}</strong>
+          <p>{{ recoveryHint }}</p>
+          <p v-if="researchSnapshot?.validation_count">
+            {{
+              isZh
+                ? `仍有 ${researchSnapshot.validation_count} 项校验问题，可在研究结果中查看。`
+                : `${researchSnapshot.validation_count} validation issues remain. Review them in Research results.`
+            }}
+          </p>
         </div>
-        <t-button theme="primary" size="small" @click="sendMessage('继续', 'resume')"
+        <t-button
+          v-if="canResume"
+          theme="primary"
+          size="small"
+          @click="sendMessage('继续', 'resume')"
           >{{ ui.resume }}<template #suffix><t-icon name="arrow-right" /></template
         ></t-button>
+        <t-button
+          v-else-if="recoveryUnavailable"
+          theme="primary"
+          size="small"
+          @click="prepareNewResearch"
+        >
+          {{ ui.restartResearch }}
+        </t-button>
       </div>
       <div
         v-else-if="currentWork?.status === 'waiting' && !isStreaming"
@@ -327,13 +346,7 @@ import {
 
 import { useStudioCopy } from '@/lang/studio'
 import { formatWorkDate } from '@/utils/dates'
-import {
-  asText,
-  derivePhases,
-  deriveSubproblems,
-  isPaperEvent,
-  type PipelineBlock,
-} from '@/utils/paperPipeline'
+import { asText, derivePhases, isPaperEvent, type PipelineBlock } from '@/utils/paperPipeline'
 const { ui, isZh } = useStudioCopy()
 const route = useRoute()
 const router = useRouter()
@@ -502,23 +515,52 @@ const latestBlocks = computed<PipelineBlock[]>(
       .reverse()
       .find((m) => m.role === 'assistant' && m.json_blocks?.some(isPaperEvent))?.json_blocks || [],
 )
-const latestSubproblems = computed(() => deriveSubproblems(latestBlocks.value))
-const canResume = computed(
+const needsRecovery = computed(
   () =>
     !isStreaming.value &&
-    ((!!currentWork.value &&
-      ['paused', 'cancelled', 'failed'].includes(currentWork.value.status)) ||
-      latestSubproblems.value.some((s) => s.status === 'failed')),
+    !!currentWork.value &&
+    ['paused', 'cancelled', 'failed'].includes(currentWork.value.status),
 )
+const recoveryUnavailable = computed(
+  () =>
+    !!researchSnapshot.value &&
+    (researchSnapshot.value.engine_version !== 'research-v3' ||
+      !researchSnapshot.value.research_id),
+)
+const canResume = computed(
+  () => needsRecovery.value && !!researchSnapshot.value?.research_id && !recoveryUnavailable.value,
+)
+const recoveryTitle = computed(() =>
+  recoveryUnavailable.value
+    ? ui.value.incompleteTitle
+    : currentWork.value?.status === 'failed'
+      ? ui.value.failedTitle
+      : ui.value.pausedTitle,
+)
+const recoveryHint = computed(() =>
+  recoveryUnavailable.value
+    ? ui.value.restartHint
+    : currentWork.value?.status === 'failed'
+      ? ui.value.failedHint
+      : ui.value.pausedHint,
+)
+function prepareNewResearch() {
+  messageAction.value = 'run'
+  questionScope.value = null
+  panelStore.activate(workId.value, 'chat')
+  nextTick(() =>
+    document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
+  )
+}
 const visiblePhases = computed(() =>
   derivePhases(latestBlocks.value, {
-    done: currentWork.value?.status === 'completed' && !canResume.value,
+    done: currentWork.value?.status === 'completed',
   }),
 )
 const stageText = computed(() => {
   if (isStreaming.value && runningAction.value === 'ask')
     return isZh.value ? '正在分析已有结果' : 'Reviewing existing results'
-  if (canResume.value) return ui.value.needsAttention
+  if (needsRecovery.value) return ui.value.needsAttention
   if (currentWork.value?.status === 'waiting')
     return isZh.value ? '等待确认建模方案' : 'Waiting for plan approval'
   if (!isStreaming.value)
