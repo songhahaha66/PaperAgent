@@ -107,34 +107,20 @@ class WorkspaceFileService:
                 files.sort(key=lambda x: x["name"].lower())
                 result[category_name] = files
 
-            # 特殊处理papers分类：扫描根目录的paper.md和paper.docx文件
+            # papers 分类：根目录的论文正文和导出结果（paper.docx / paper.tex / paper.pdf）
             papers_files = []
-            paper_md = workspace_path / 'paper.md'
-            if paper_md.exists():
-                file_info = {
-                    "name": paper_md.name,
-                    "type": "file",
-                    "size": paper_md.stat().st_size,
-                    "modified": paper_md.stat().st_mtime,
-                    "path": "paper.md",
-                    "category_path": "paper.md",
-                    "category": "papers"
-                }
-                papers_files.append(file_info)
-            
-            # 添加paper.docx文件（如果存在）
-            paper_docx = workspace_path / 'paper.docx'
-            if paper_docx.exists():
-                file_info = {
-                    "name": paper_docx.name,
-                    "type": "file",
-                    "size": paper_docx.stat().st_size,
-                    "modified": paper_docx.stat().st_mtime,
-                    "path": "paper.docx",
-                    "category_path": "paper.docx",
-                    "category": "papers"
-                }
-                papers_files.append(file_info)
+            for name in ("paper.md", "paper.docx", "paper.tex", "paper.pdf"):
+                paper_file = workspace_path / name
+                if paper_file.exists():
+                    papers_files.append({
+                        "name": name,
+                        "type": "file",
+                        "size": paper_file.stat().st_size,
+                        "modified": paper_file.stat().st_mtime,
+                        "path": name,
+                        "category_path": name,
+                        "category": "papers"
+                    })
 
             result["papers"] = papers_files
 

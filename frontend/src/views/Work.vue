@@ -21,7 +21,7 @@
             <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
               {{ getStatusText(currentWork.status) }}
             </t-tag>
-            <p v-if="!isMobile">生成过程中请耐心等待！</p>
+            <p v-if="!isMobile && (isStreaming || currentWork.status === 'in_progress')">生成过程中请耐心等待！</p>
           </div>
           <p v-if="!isMobile">创建于 {{ formatDate(currentWork.created_at) }}</p>
         </div>
@@ -202,7 +202,15 @@
             <t-card title="工作信息">
               <div class="work-details">
                 <p><strong>标题：</strong>{{ currentWork.title }}</p>
-                <p><strong>描述：</strong>{{ currentWork.description || '暂无描述' }}</p>
+                <p :class="['work-description', { expanded: descriptionExpanded }]">
+                  <strong>描述：</strong>{{ currentWork.description || '暂无描述' }}
+                </p>
+                <t-link
+                  v-if="(currentWork.description || '').length > 200"
+                  theme="primary"
+                  size="small"
+                  @click="descriptionExpanded = !descriptionExpanded"
+                >{{ descriptionExpanded ? '收起' : '展开全部' }}</t-link>
                 <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
                 <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
                 <p>
@@ -276,7 +284,7 @@ import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
 
 import { useAuthStore } from '@/stores/auth';
 import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
-import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
+import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse } from '@/api/chat';
 import Sidebar from '@/components/Sidebar.vue';
 import FileManager from '@/components/FileManager.vue';
 import { useBreakpoint } from '@/composables/useBreakpoint';
@@ -294,6 +302,7 @@ const workId = computed(() => route.params.work_id as string);
 const { isMobile } = useBreakpoint()
 
 // 侧边栏折叠状态 - 手机端默认收起
+const descriptionExpanded = ref(false)
 const isSidebarCollapsed = ref(isMobile.value)
 
 type MobilePanel = 'chat' | 'files' | 'preview'
@@ -467,7 +476,7 @@ const checkAndResumeRunningTask = async () => {
         role: 'assistant' as const,
         content: '',
         datetime: new Date().toLocaleString(),
-        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
+        avatar: ASSISTANT_AVATAR,
         isStreaming: true,
         json_blocks: [],
         message_type: 'json_card' as const,
@@ -510,11 +519,8 @@ const setupWebSocketForReconnect = async () => {
       }
     })
     
-    // 设置断开回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接断开')
-      // 不立即重置 isStreaming，可能是临时断开
-    })
+    // 设置断开回调（重连用尽或被关闭）
+    webSocketHandler.value.onDisconnect(() => handleConnectionLost())
     
     // 连接WebSocket
     await webSocketHandler.value.connect()
@@ -528,8 +534,37 @@ const setupWebSocketForReconnect = async () => {
   }
 }
 
+// 连接断开且自动重连用尽：问后端任务还在不在。任务已结束就以服务器保存的记录为准，不让界面一直停在"生成中"
+const handleConnectionLost = async () => {
+  if (!isStreaming.value || !authStore.token || !workId.value) return
+  try {
+    const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
+    if (taskStatus.has_task && taskStatus.status === 'running') {
+      MessagePlugin.warning('与服务器的连接已断开，任务仍在后台运行，刷新页面可继续查看进度')
+      return
+    }
+  } catch (error) {
+    MessagePlugin.error('与服务器的连接已断开，请检查网络后刷新页面')
+    return
+  }
+  isStreaming.value = false
+  reconnectMessageId.value = null
+  await loadChatHistory()
+  loadWorkspaceFiles()
+}
+
 // 统一的流式消息处理函数
+// 后端在开始、完成、失败时带上工作状态，页头和侧边栏随之更新
+const applyWorkStatus = (status?: string) => {
+  if (!status || !currentWork.value || currentWork.value.status === status) return
+  currentWork.value.status = status
+  window.dispatchEvent(
+    new CustomEvent('work-status-updated', { detail: { workId: workId.value, status } }),
+  )
+}
+
 const handleStreamMessage = (data: any, messageId: string) => {
+  applyWorkStatus(data.work_status)
   const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
   if (messageIndex === -1) return
   
@@ -869,7 +904,7 @@ const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
       role: 'user' as const,
       content: `已上传文件: ${result.attachment.original_filename} (${(result.attachment.file_size / 1024).toFixed(2)} KB)`,
       datetime: new Date().toLocaleString(),
-      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+      avatar: USER_AVATAR,
     }
 
     chatMessages.value.push(uploadMessage)
@@ -1040,12 +1075,14 @@ const hideDivider = () => {
   hoveredDivider.value = null
 }
 
-// 根据角色获取头像
+// 根据角色获取头像（用站内图片，不依赖外部头像服务）
+const USER_AVATAR = '/avatar-user.svg'
+const ASSISTANT_AVATAR = '/logo.png'
 const getAvatarByRole = (role: string) => {
   const avatars = {
-    user: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    assistant: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-    system: 'https://api.dicebear.com/7.x/bottts/svg?seed=system&backgroundColor=ed7b2f',
+    user: USER_AVATAR,
+    assistant: ASSISTANT_AVATAR,
+    system: ASSISTANT_AVATAR,
   }
   return avatars[role as keyof typeof avatars] || avatars.assistant
 }
@@ -1061,7 +1098,7 @@ const sendMessage = async (messageContent?: string) => {
     role: 'user' as const,
     content: content,
     datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
+    avatar: USER_AVATAR,
   }
 
   chatMessages.value.push(userMessage)
@@ -1088,7 +1125,7 @@ const sendRealMessage = async (message: string) => {
     role: 'assistant' as const,
     content: '',
     datetime: new Date().toLocaleString(),
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
+    avatar: ASSISTANT_AVATAR,
     isStreaming: true,
   }
 
@@ -1129,16 +1166,14 @@ const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => 
     // 创建WebSocket处理器
     webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
 
-    // 设置断开连接回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接已断开')
-    })
+    // 设置断开连接回调（重连用尽或被关闭）
+    webSocketHandler.value.onDisconnect(() => handleConnectionLost())
 
     // 设置消息监听器 - 使用统一的处理函数
     webSocketHandler.value.onMessage((data) => {
       // 忽略 start 和 auth_success 消息
       if (data.type === 'start' || data.type === 'auth_success') {
-        console.log('收到消息:', data.type)
+        applyWorkStatus(data.work_status)
         return
       }
       handleStreamMessage(data, aiMessageId)
@@ -1192,9 +1227,12 @@ const getStatusTheme = (status: string) => {
   const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
     created: 'default',
     in_progress: 'primary',
+    running: 'primary',
     completed: 'success',
     paused: 'warning',
+    waiting: 'warning',
     cancelled: 'danger',
+    failed: 'danger',
   }
   return themes[status] || 'default'
 }
@@ -1204,9 +1242,12 @@ const getStatusText = (status: string) => {
   const texts: Record<string, string> = {
     created: '已创建',
     in_progress: '进行中',
+    running: '进行中',
     completed: '已完成',
     paused: '已暂停',
+    waiting: '待确认',
     cancelled: '已取消',
+    failed: '失败',
   }
   return texts[status] || status
 }
@@ -1380,6 +1421,18 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+}
+
+.work-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.work-description.expanded {
+  display: block;
 }
 </style>
 

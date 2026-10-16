@@ -90,7 +90,8 @@ import {
   type PipelineBlock,
 } from '@/utils/paperPipeline'
 
-const props = defineProps<{ blocks: PipelineBlock[]; streaming?: boolean }>()
+// superseded：这条消息之后已经有新消息（例如用户已回复确认），卡片不再提示等待确认
+const props = defineProps<{ blocks: PipelineBlock[]; streaming?: boolean; superseded?: boolean }>()
 
 const showRaw = ref(false)
 
@@ -110,6 +111,7 @@ const confirm = computed(() => asText(lastOf('paper_confirm')?.content))
 
 // 方案确认是这次运行的最后一个事件时，说明图停在 interrupt 等用户回复
 const waitingConfirm = computed(() => {
+  if (props.superseded) return false
   const last = [...props.blocks]
     .reverse()
     .find((b) => b.type !== 'plan_updated' && b.type !== 'file_changed')

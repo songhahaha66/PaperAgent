@@ -8,7 +8,7 @@ from typing import Dict, List
 
 from langgraph.runtime import Runtime
 
-from ..context import GraphContext, list_data_files
+from ..context import EXPORT_STAGE_TITLES, GraphContext, list_data_files
 from ..llm_utils import as_messages, call_structured, clip
 from ..state import PaperState, ProblemAnalysis
 
@@ -116,6 +116,9 @@ def normalize_plan(subproblems: List[Dict]) -> List[Dict]:
 async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("analyze", "in_progress")
+    if ctx.output_mode in EXPORT_STAGE_TITLES:
+        # 让前端一开始就显示"排版导出"这一步
+        await ctx.events.emit("paper_phase", {"stage": "export", "status": "pending", "note": ""})
     await ctx.events.stage("正在分析题目并读取数据")
 
     data_profile = await profile_data(ctx)

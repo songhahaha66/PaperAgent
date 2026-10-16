@@ -102,7 +102,9 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path):
     assert (ws / "paper.md").exists() and (ws / "paper.tex").exists()
     assert (ws / "paper.pdf").read_bytes().startswith(b"%PDF")
     assert "paper.pdf" in output
-    assert any(t == "paper_phase" and c["stage"] == "export" and c["status"] == "completed" for t, c in events)
+    export_phases = [c["status"] for t, c in events if t == "paper_phase" and c["stage"] == "export"]
+    # 一开始就告诉前端有排版导出这一步，最后完成
+    assert export_phases[0] == "pending" and export_phases[-1] == "completed"
     assert any(t == "paper_export" and "paper.pdf" in c for t, c in events)
     assert "LaTeX 排版" in (ws / "plan.md").read_text(encoding="utf-8")
 
@@ -196,3 +198,16 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     texts = [p.text for p in Document(str(ws / "paper.docx")).paragraphs]
     assert "4 结论与建议" in texts
     assert "Word" in (ws / "plan.md").read_text(encoding="utf-8")
+
+
+def test_file_panel_lists_exported_paper_files(tmp_path):
+    """导出的 paper.pdf / paper.tex / paper.docx 要出现在"论文文档"里，用户才能点开"""
+    from services.file_services.workspace_files import WorkspaceFileService
+    service = WorkspaceFileService()
+    service.base_path = tmp_path
+    (tmp_path / "w1").mkdir()
+    for name in ("paper.md", "paper.tex", "paper.pdf"):
+        (tmp_path / "w1" / name).write_bytes(b"x")
+    papers = service.list_files_by_category("w1")["papers"]
+    assert [f["name"] for f in papers] == ["paper.md", "paper.tex", "paper.pdf"]
+    assert all(f["category"] == "papers" and f["path"] == f["name"] for f in papers)

@@ -272,3 +272,15 @@ def test_cannot_delete_another_users_passkey():
     assert deleted.status_code == 200
     listed = client.get("/auth/passkey/credentials", headers=_auth_headers(owner_token))
     assert listed.json() == []
+
+
+def test_register_works_on_fresh_database_without_system_config():
+    """新部署的数据库里还没有 system_config 行时，注册按默认允许"""
+    db = TestingSessionLocal()
+    try:
+        db.query(SystemConfig).delete()
+        db.commit()
+    finally:
+        db.close()
+    response = client.post("/auth/register", json={"email": "fresh@example.com", "username": "fresh", "password": "Demo-pass-2026"})
+    assert response.status_code == 200, response.text

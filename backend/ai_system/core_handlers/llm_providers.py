@@ -6,6 +6,7 @@ AI提供商抽象层
 import logging
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Mapping, cast
+from urllib.parse import urlparse
 from langchain_core.language_models import BaseLanguageModel
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
@@ -103,6 +104,13 @@ class OpenAIProvider(BaseLLMProvider):
         if not self.validate_config():
             raise ValueError(f"OpenAI提供商配置无效: {self.get_model_info()}")
 
+        extra_body = kwargs.get('extra_body')
+        # 官方 Flash 默认开启思考，但流水线的结构化输出需要强制工具选择。
+        # DeepSeek 不允许在思考模式下强制工具，因此默认关闭；显式参数仍优先。
+        if (extra_body is None and self.model_id == "deepseek-flash"
+                and urlparse(self.base_url).hostname == "api.deepseek.com"):
+            extra_body = {"thinking": {"type": "disabled"}}
+
         return ChatOpenAI(
             model=self.model_id,
             api_key=self.api_key,
@@ -116,7 +124,7 @@ class OpenAIProvider(BaseLLMProvider):
             # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
             timeout=kwargs.get('timeout', 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
-            extra_body=kwargs.get('extra_body'),
+            extra_body=extra_body,
         )
 
     def validate_config(self) -> bool:
@@ -266,5 +274,8 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
         'base_url': model_config.base_url,
         'is_active': getattr(model_config, 'is_active', True)
     }
+    extra_body = getattr(model_config, 'extra_body', None)
+    if extra_body:
+        kwargs.setdefault('extra_body', extra_body)
 
     return LLMProviderFactory.create_llm_instance(config, **kwargs)

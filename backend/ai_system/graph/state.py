@@ -80,7 +80,7 @@ STRENGTHS = ("显著", "倾向", "不显著")
 
 class ResultItem(BaseModel):
     name: str = Field(description="结果名称")
-    value: str = Field(description="结果值，必须出现在 run_id 那次执行的输出里")
+    value: str = Field(description="单个数值或一小段文字，必须出现在 run_id 那次执行的输出里；不要把整行输出或多个量写在一起，每个量单独一条")
     run_id: str = Field(description="打印该值的那次执行的 run_id")
     unit: str = Field(default="", description="只填物理或计数单位（如 点、秒、米、万元、%），p 值、AUC、系数、比例这类无量纲量留空")
     description: str = Field(default="", description="一句话说明")

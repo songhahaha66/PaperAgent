@@ -24,6 +24,7 @@
                 v-if="isPipelineMessage(getJsonBlocks(message))"
                 :blocks="getJsonBlocks(message)"
                 :streaming="message.isStreaming"
+                :superseded="index < messages.length - 1"
               />
 
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
@@ -154,7 +155,7 @@ const getContentPreview = (content: any) => {
 // 获取系统头像
 const getSystemAvatar = (message: ChatMessage) => {
   // 直接使用消息中的头像
-  return message.avatar || 'https://tdesign.gtimg.com/site/avatar.jpg'
+  return message.avatar || (message.role === 'user' ? '/avatar-user.svg' : '/logo.png')
 }
 
 // 格式化时间为人类可读格式
