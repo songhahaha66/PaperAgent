@@ -12,13 +12,6 @@
         <div class="work-heading">
           <div class="work-title-row">
             <h1>{{ currentWork?.title?.trim() || ui.untitled }}</h1>
-            <t-tag
-              v-if="currentWork"
-              :theme="getStatusTheme(currentWork.status)"
-              variant="light"
-              size="small"
-              >{{ getStatusText(currentWork.status) }}</t-tag
-            >
           </div>
         </div>
         <div class="work-actions">
@@ -36,9 +29,17 @@
       </header>
       <section class="progress-strip" aria-label="研究进度">
         <div class="progress-summary" aria-live="polite">
-          <span :class="['live-dot', { running: isStreaming, attention: canResume }]" /><strong>{{
-            stageText
-          }}</strong
+          <span class="progress-label">{{ isZh ? '研究进度' : 'Progress' }}</span>
+          <span
+            :class="[
+              'live-dot',
+              {
+                running: isStreaming,
+                attention: canResume,
+                complete: currentWork?.status === 'completed' && !canResume,
+              },
+            ]"
+          /><strong>{{ stageText }}</strong
           ><span v-if="elapsedText" class="elapsed">{{ ui.elapsed }} {{ elapsedText }}</span
           ><span
             v-if="isStreaming"
@@ -53,8 +54,20 @@
           ><button v-if="connectionState === 'lost'" class="text-action" @click="reconnectTask">
             {{ ui.reconnect }}
           </button>
+          <button
+            class="phase-toggle"
+            :aria-expanded="phasesExpanded"
+            aria-controls="work-phases"
+            @click="phasesExpanded = !phasesExpanded"
+          >
+            <span
+              >{{ completedPhaseCount }}/{{ visiblePhases.length }}
+              {{ isZh ? '阶段' : 'stages' }}</span
+            >
+            <t-icon :name="phasesExpanded ? 'chevron-up' : 'chevron-down'" />
+          </button>
         </div>
-        <div class="phase-track">
+        <div v-show="phasesExpanded" id="work-phases" class="phase-track">
           <span
             v-for="(phase, index) in visiblePhases"
             :key="phase.key"
@@ -63,8 +76,8 @@
               ><t-icon v-if="phase.status === 'completed'" name="check" /><template v-else>{{
                 index + 1
               }}</template></span
-            >{{ phase.label }}<span v-if="index < visiblePhases.length - 1" class="phase-connector"
-          /></span>
+            >{{ phase.label }}</span
+          >
         </div>
       </section>
       <div v-if="canResume" class="recovery-banner" role="status">
@@ -187,14 +200,6 @@
                 ></template
               >
             </t-tab-panel>
-            <template #action
-              ><t-button
-                shape="square"
-                variant="text"
-                :aria-label="ui.details"
-                @click="detailsOpen = true"
-                ><t-icon name="info-circle" /></t-button
-            ></template>
           </t-tabs>
           <div v-if="resourceTab === 'files'" class="resource-files">
             <FileManager
@@ -232,7 +237,10 @@
             </div>
           </div>
           <div v-else class="preview-body">
-            <div v-if="showMainPaper && mainPaperContent" class="paper-preview">
+            <div v-if="mainPaperLoading" class="preview-loading" role="status">
+              <t-loading :text="isZh ? '正在打开论文' : 'Opening paper'" />
+            </div>
+            <div v-else-if="showMainPaper && mainPaperContent" class="paper-preview">
               <div class="document-caption">
                 <span>{{ isZh ? '正文预览 · paper.md' : 'Text preview · paper.md' }}</span>
                 <div class="document-actions">
@@ -265,7 +273,14 @@
                   <t-icon name="close" />
                 </button>
               </div>
-              <div v-if="!currentFileData" class="studio-empty">
+              <div v-if="previewError" class="studio-empty">
+                <t-icon name="file-1" size="32px" />
+                <h2>{{ isZh ? '文件暂时无法打开' : 'Could not open file' }}</h2>
+                <t-button theme="default" @click="handleWorkspaceFileSelect(selectedFile!)">{{
+                  isZh ? '重试' : 'Retry'
+                }}</t-button>
+              </div>
+              <div v-else-if="!currentFileData" class="studio-empty">
                 <t-loading :text="ui.loading" />
               </div>
               <div
@@ -425,6 +440,10 @@ const activeMobilePanel = ref<MobilePanel>('chat')
 watch(isMobile, (mobile) => {
   if (mobile) {
     isSidebarCollapsed.value = true
+    if (resourceTab.value === 'files') {
+      resourceTab.value = 'paper'
+      activeMobilePanel.value = 'files'
+    }
   }
 })
 
@@ -460,6 +479,9 @@ const imageUrls = ref<Record<string, string>>({})
 // 主要论文内容
 const mainPaperContent = ref<string>('')
 const showMainPaper = ref(false)
+const mainPaperLoading = ref(false)
+const previewError = ref(false)
+let previewRequestId = 0
 
 const planData = ref<PlanData | null>(null)
 
@@ -480,6 +502,10 @@ const isFileRefreshing = ref(false) // 防止重复刷新文件列表
 
 // Stable controls stay outside the scrolling transcript.
 const resourceTab = ref<'paper' | 'figures' | 'files'>('paper')
+const phasesExpanded = ref(false)
+const completedPhaseCount = computed(
+  () => visiblePhases.value.filter((phase) => phase.status === 'completed').length,
+)
 const detailsOpen = ref(false),
   pausing = ref(false),
   downloadLoading = ref(false)
@@ -586,6 +612,8 @@ async function handleAttachmentChange(event: Event) {
 function closeFilePreview() {
   selectedFile.value = null
   currentFileData.value = null
+  previewError.value = false
+  previewRequestId++
 }
 function openFiles() {
   if (isMobile.value) activeMobilePanel.value = 'files'
@@ -671,6 +699,18 @@ function jumpToLatest() {
   atBottom.value = true
   scrollToBottom(true)
 }
+watch([activeMobilePanel, resourceTab, paperAvailable], () => {
+  if (
+    isMobile.value &&
+    activeMobilePanel.value === 'preview' &&
+    resourceTab.value === 'paper' &&
+    paperAvailable.value &&
+    !selectedFile.value &&
+    !mainPaperLoading.value
+  ) {
+    void handleMainPaperClick()
+  }
+})
 watch(resourceTab, async (tab) => {
   if (tab !== 'figures') return
   const currentId = workId.value
@@ -1029,27 +1069,30 @@ const loadWorkspaceFiles = async () => {
 
 // 处理主要论文点击
 const handleMainPaperClick = async () => {
+  if (!workId.value || !authStore.token || mainPaperLoading.value) return
   resourceTab.value = 'paper'
-  if (!workId.value || !authStore.token) return
-  // The reading view uses the paper text; the header downloads the typeset PDF/Word.
+  if (isMobile.value) activeMobilePanel.value = 'preview'
+  const currentId = workId.value
+  const requestId = ++previewRequestId
+  mainPaperLoading.value = true
+  previewError.value = false
+  // Read the paper text; the header downloads the typeset PDF/Word.
   try {
-    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.md')
+    const response = await workspaceFileAPI.readFile(authStore.token, currentId, 'paper.md')
+    if (requestId !== previewRequestId || currentId !== workId.value) return
     if (response.content?.trim()) {
       mainPaperContent.value = response.content
       showMainPaper.value = true
       selectedFile.value = 'paper.md'
-      if (isMobile.value) activeMobilePanel.value = 'preview'
       return
     }
   } catch {
-    /* Try the formatted document when there is no Markdown source. */
+    // Fall back to the formatted document when Markdown isn't available.
+  } finally {
+    if (requestId === previewRequestId) mainPaperLoading.value = false
   }
+  if (requestId !== previewRequestId || currentId !== workId.value) return
   if (primaryArtifact.value) await handleWorkspaceFileSelect(primaryArtifact.value.path)
-  else {
-    selectedFile.value = null
-    showMainPaper.value = false
-    if (isMobile.value) activeMobilePanel.value = 'preview'
-  }
 }
 
 const loadPlanContent = async () => {
@@ -1273,6 +1316,10 @@ const handleFileSelect = async (fileInfo: { files: FileList; name: string }) => 
 const handleWorkspaceFileSelect = async (filePath: string) => {
   console.log('文件被选中:', filePath)
   resourceTab.value = 'paper'
+  const currentId = workId.value
+  const requestId = ++previewRequestId
+  mainPaperLoading.value = false
+  previewError.value = false
   currentFileData.value = null
   currentFileName.value = filePath
   selectedFile.value = filePath // 设置选中的文件
@@ -1284,8 +1331,8 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
   // 每次都从服务器重新获取文件内容，避免缓存问题
   try {
     console.log('从服务器获取文件内容:', filePath)
-    const fileData = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
-    console.log('API返回的文件数据:', fileData)
+    const fileData = await workspaceFileAPI.readFile(authStore.token!, currentId, filePath)
+    if (requestId !== previewRequestId || currentId !== workId.value) return
 
     // 存储完整的文件数据
     currentFileData.value = fileData
@@ -1310,8 +1357,10 @@ const handleWorkspaceFileSelect = async (filePath: string) => {
       console.log('二进制文件信息:', fileData)
     }
   } catch (error) {
+    if (requestId !== previewRequestId || currentId !== workId.value) return
     console.error('获取文件内容失败:', error)
-    currentFileContent.value = '文件读取失败'
+    previewError.value = true
+    currentFileContent.value = ''
     currentFileData.value = null
     MessagePlugin.error('加载文件失败')
   }
@@ -1779,6 +1828,13 @@ watch(
         webSocketHandler.value = null
       }
 
+      // Invalidate reads from the previous work before resetting its preview.
+      previewRequestId++
+      mainPaperLoading.value = false
+      previewError.value = false
+      phasesExpanded.value = false
+      activeMobilePanel.value = 'chat'
+      lastFileUpdateTime = 0
       // 清理文件内容，避免不同work的文件内容混淆
       currentFileContent.value = ''
       selectedFile.value = null
@@ -1895,7 +1951,6 @@ const generateWorkTitle = async (question: string) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px;
   gap: 20px;
   flex-shrink: 0;
   background: #fff;
@@ -1930,7 +1985,6 @@ const generateWorkTitle = async (question: string) => {
   flex-shrink: 0;
 }
 .progress-strip {
-  padding: 14px 24px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--td-component-stroke);
 }
@@ -1976,10 +2030,7 @@ const generateWorkTitle = async (question: string) => {
   color: var(--td-error-color);
 }
 .phase-track {
-  display: flex;
   align-items: center;
-  gap: 0;
-  margin-top: 14px;
   overflow-x: auto;
   padding-bottom: 2px;
   scrollbar-width: thin;
@@ -2005,13 +2056,6 @@ const generateWorkTitle = async (question: string) => {
 }
 .phase-number > .t-icon {
   font-size: 12px;
-}
-.phase-connector {
-  height: 1px;
-  background: var(--td-component-stroke);
-  min-width: 10px;
-  flex: 1;
-  margin: 0 10px;
 }
 .phase-step:last-child {
   flex: 0;
@@ -2041,7 +2085,6 @@ const generateWorkTitle = async (question: string) => {
   gap: 12px;
   border: 1px solid #eadbbd;
   background: var(--td-warning-color-light);
-  border-radius: 6px;
   padding: 14px 16px;
   flex-shrink: 0;
 }
@@ -2087,12 +2130,10 @@ const generateWorkTitle = async (question: string) => {
   border-right: 1px solid var(--td-component-stroke);
 }
 .panel-header {
-  padding: 16px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--td-component-stroke);
-  min-height: 52px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
@@ -2156,8 +2197,6 @@ const generateWorkTitle = async (question: string) => {
   font-size: 16px;
 }
 .chat-input {
-  padding: 14px 16px 0;
-  border-top: 1px solid var(--td-component-stroke);
   background: #fff;
   flex-shrink: 0;
 }
@@ -2183,7 +2222,6 @@ const generateWorkTitle = async (question: string) => {
   align-items: center;
   gap: 6px;
   border: 1px solid var(--td-component-border);
-  border-radius: 4px;
   background: #fff;
   box-shadow: var(--td-shadow-1);
   color: var(--td-text-color-secondary);
@@ -2200,51 +2238,10 @@ const generateWorkTitle = async (question: string) => {
   background: #fff;
   overflow: hidden;
 }
-.resource-tabs {
-  height: 53px;
-  display: flex;
-  align-items: stretch;
-  border-bottom: 1px solid var(--td-component-stroke);
-  padding: 0 20px;
-  gap: 24px;
-  flex-shrink: 0;
-}
-.resource-tabs > button:not(.t-button) {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  padding: 0 2px;
-  cursor: pointer;
-  color: var(--td-text-color-secondary);
-  font-size: 14px;
-  white-space: nowrap;
-}
-.resource-tabs > button.active {
-  border-bottom-color: var(--td-brand-color);
-  color: var(--td-brand-color);
-}
-.resource-tabs > button > .t-icon {
-  font-size: 16px;
-}
-.resource-tabs > button > span {
-  font-size: 11px;
-  margin-left: 2px;
-  color: var(--td-text-color-placeholder);
-}
-.resource-tabs > .details-button {
-  margin-left: auto;
-  align-self: center;
-  color: var(--td-text-color-placeholder);
-}
 .preview-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  background: #fff;
-  padding: 24px;
 }
 .paper-preview,
 .selected-preview {
@@ -2258,10 +2255,7 @@ const generateWorkTitle = async (question: string) => {
   justify-content: space-between;
   gap: 14px;
   font-size: 12px;
-  color: var(--td-text-color-placeholder);
   border-bottom: 1px solid var(--td-component-stroke);
-  padding-bottom: 14px;
-  margin-bottom: 24px;
 }
 .document-caption > span {
   white-space: nowrap;
@@ -2324,14 +2318,9 @@ const generateWorkTitle = async (question: string) => {
   gap: 12px;
   border: 1px solid var(--td-component-stroke);
   background: #fff;
-  border-radius: 4px;
-  padding: 12px;
   cursor: pointer;
   text-align: left;
   overflow: hidden;
-}
-.figure-card:hover {
-  border-color: var(--td-component-border);
 }
 .figure-card img {
   width: 100%;
@@ -2395,7 +2384,6 @@ const generateWorkTitle = async (question: string) => {
 .preview-placeholder {
   height: 100%;
   display: flex;
-  align-items: center;
   justify-content: center;
 }
 .preview-placeholder h2 {
@@ -2412,37 +2400,15 @@ const generateWorkTitle = async (question: string) => {
     flex: none;
     font-size: 11px;
   }
-  .phase-connector {
-    width: 16px;
-    min-width: 16px;
-    margin: 0 6px;
-  }
-  .resource-tabs {
-    gap: 18px;
-    padding: 0 16px;
-  }
-  .resource-tabs > button:not(.t-button) {
-    font-size: 13px;
-  }
-  .preview-body {
-    padding: 20px;
-  }
   .recovery-banner {
     margin: 12px 16px 0;
   }
 }
 @media (max-width: 768px) {
-  .workspace-header {
-    padding: 16px 14px;
-    min-height: 64px;
-    box-sizing: border-box;
-    gap: 8px;
-  }
   .work-title-row {
     gap: 7px;
   }
   .work-title-row h1 {
-    font-size: 15px;
     max-width: 100%;
   }
   .work-title-row .t-tag {
@@ -2450,20 +2416,11 @@ const generateWorkTitle = async (question: string) => {
     height: 20px;
     padding: 0 5px;
   }
-  .work-actions {
-    gap: 5px;
-  }
   .work-actions .t-button {
-    font-size: 12px;
-    height: 30px;
     padding: 0 8px;
   }
   .work-actions .t-button--shape-square {
-    width: 28px;
     padding: 0;
-  }
-  .progress-strip {
-    padding: 12px 16px;
   }
   .progress-summary {
     gap: 7px;
@@ -2478,17 +2435,8 @@ const generateWorkTitle = async (question: string) => {
   .elapsed {
     display: none;
   }
-  .phase-track {
-    margin-top: 12px;
-  }
   .phase-step {
-    font-size: 11px;
-    gap: 5px;
     flex: none;
-  }
-  .phase-connector {
-    width: 12px;
-    min-width: 12px;
   }
   .phase-number {
     width: 18px;
@@ -2512,18 +2460,11 @@ const generateWorkTitle = async (question: string) => {
   .chat-messages-container :deep(.markdown-body) {
     font-size: 14px;
   }
-  .panel-header {
-    padding: 12px 16px;
-    min-height: 46px;
-  }
   .panel-header > span:first-child {
     font-size: 13px;
   }
   .panel-hint {
     font-size: 11px;
-  }
-  .chat-input {
-    padding: 12px 12px 0;
   }
   .input-note {
     min-height: 32px;
@@ -2560,11 +2501,8 @@ const generateWorkTitle = async (question: string) => {
     flex-shrink: 0;
     justify-content: space-around;
     align-items: center;
-    padding: 6px 8px max(7px, env(safe-area-inset-bottom));
     background: #fff;
     border-top: 1px solid var(--td-component-stroke);
-    gap: 12px;
-    min-height: 54px;
   }
   .mobile-tab-bar button {
     background: transparent;
@@ -2572,30 +2510,9 @@ const generateWorkTitle = async (question: string) => {
     cursor: pointer;
     color: var(--td-text-color-secondary);
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    padding: 4px 12px;
     flex: 1;
     white-space: nowrap;
-  }
-  .mobile-tab-bar button > .t-icon {
-    font-size: 20px;
-  }
-  .mobile-tab-bar button.active {
-    color: var(--td-brand-color);
-  }
-  .resource-tabs {
-    height: 46px;
-    gap: 20px;
-    padding: 0 16px;
-  }
-  .resource-tabs > button:not(.t-button) {
-    font-size: 13px;
-  }
-  .preview-body {
-    padding: 16px;
   }
   .figure-grid {
     gap: 12px;
@@ -2611,64 +2528,10 @@ const generateWorkTitle = async (question: string) => {
     font-size: 14px;
   }
   .preview-placeholder {
-    align-items: start;
     padding-top: 40px;
   }
   .studio-empty {
     padding: 24px 12px;
-  }
-  .resource-tabs .details-button {
-    width: 28px;
-  }
-  .work-title-row {
-    flex-wrap: wrap;
-  }
-}
-.resource-tabs {
-  display: block;
-  height: auto;
-  padding: 0 16px;
-  min-height: 53px;
-  border: 0;
-}
-.resource-tabs :deep(.t-tabs__nav-item) {
-  font-size: 14px;
-}
-.resource-tabs :deep(.t-tabs__nav-container) {
-  border-bottom: 1px solid var(--td-component-stroke);
-}
-.resource-tabs :deep(.t-tabs__content) {
-  display: none;
-}
-.resource-tabs :deep(.t-tabs__actions) {
-  padding-right: 4px;
-}
-.resource-tab-label {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-}
-.resource-tab-label > span {
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-}
-.chat-input :deep(.t-chat__sender__textarea) {
-  border-radius: 24px;
-}
-.chat-input :deep(.t-chat__sender__suffix) {
-  gap: 8px;
-}
-@media (max-width: 768px) {
-  .resource-tabs {
-    padding: 0 12px;
-    min-height: 46px;
-  }
-  .resource-tabs :deep(.t-tabs__nav-item) {
-    font-size: 13px;
-    padding: 0 12px;
-  }
-  .resource-tabs :deep(.t-tabs__nav) {
-    height: 46px;
   }
 }
 .document-actions {
@@ -2694,7 +2557,7 @@ const generateWorkTitle = async (question: string) => {
 .workspace-header,
 .progress-strip,
 .panel-header,
-.resource-tabs :deep(.t-tabs__nav-container) {
+.resource-tabs {
   border-color: #ededed;
 }
 .chat-input {
@@ -2734,10 +2597,6 @@ const generateWorkTitle = async (question: string) => {
 .recovery-banner {
   border-radius: 13px;
 }
-.figure-card {
-  border-radius: 12px;
-  border-color: #ededed;
-}
 .jump-latest {
   border-radius: 18px;
 }
@@ -2753,6 +2612,257 @@ const generateWorkTitle = async (question: string) => {
   }
   .chat-input :deep(.t-chat__sender__textarea textarea::placeholder) {
     font-size: 13px;
+  }
+}
+/* Shared workspace geometry: a single 52px toolbar baseline on both panes. */
+.workspace-header {
+  min-height: 76px;
+  padding: 18px 24px;
+  box-sizing: border-box;
+}
+.work-actions .t-button {
+  height: 36px;
+}
+.work-actions .t-button--shape-square {
+  width: 36px;
+}
+.progress-strip {
+  padding: 10px 24px;
+}
+.progress-label {
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+.live-dot.complete {
+  background: var(--td-brand-color);
+}
+.phase-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: var(--td-text-color-secondary);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.phase-toggle:hover {
+  background: #f2f4f2;
+  color: var(--td-text-color-primary);
+}
+.phase-track {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+  gap: 14px 12px;
+  overflow: visible;
+  padding: 10px 0 6px;
+  margin-top: 8px;
+  border-top: 1px solid #ededed;
+}
+.phase-step,
+.phase-step:last-child {
+  font-size: 12px;
+  gap: 8px;
+}
+.panel-header {
+  height: 52px;
+  min-height: 52px;
+  padding: 0 20px;
+}
+.resource-tabs {
+  flex-shrink: 0;
+  height: 52px;
+  padding: 0 20px;
+  border-bottom: 1px solid #ededed;
+  box-sizing: border-box;
+}
+.resource-tabs :deep(.t-tabs__header),
+.resource-tabs :deep(.t-tabs__nav),
+.resource-tabs :deep(.t-tabs__nav-container),
+.resource-tabs :deep(.t-tabs__nav-scroll) {
+  height: 51px;
+  min-width: 0;
+}
+.resource-tabs :deep(.t-tabs__nav-container.t-is-top::after) {
+  display: none;
+}
+.resource-tabs :deep(.t-tabs__nav-item) {
+  height: 51px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+.resource-tabs :deep(.t-tabs__nav-item-wrapper) {
+  margin: 0;
+  padding: 0;
+}
+.resource-tabs :deep(.t-tabs__nav-item:first-child) {
+  padding-left: 0;
+}
+.resource-tabs :deep(.t-tabs__content) {
+  display: none;
+}
+.resource-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.resource-tab-label > span {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: #f0f2f0;
+  color: var(--td-text-color-secondary);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  box-sizing: border-box;
+}
+.preview-body {
+  background: #fff;
+  padding: 24px;
+}
+.paper-preview,
+.selected-preview {
+  max-width: 840px;
+  margin: 0 auto;
+  border: 1px solid #e3e6e3;
+  border-radius: 12px;
+  padding: 24px 28px 36px;
+}
+.document-caption {
+  min-height: 32px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  color: var(--td-text-color-secondary);
+}
+.preview-loading {
+  min-height: 200px;
+  display: grid;
+  place-items: center;
+}
+.preview-placeholder {
+  min-height: 240px;
+  align-items: center;
+  padding: 0;
+}
+.preview-placeholder .studio-empty {
+  min-height: 0;
+  max-width: 360px;
+}
+.preview-placeholder .studio-empty > .t-icon {
+  font-size: 32px;
+  color: #727b75;
+}
+.figure-card {
+  border-radius: 10px;
+  border-color: #e3e6e3;
+  padding: 14px;
+}
+.figure-card:hover {
+  border-color: #b8c3bc;
+  background: #fcfdfc;
+}
+@media (max-width: 768px) {
+  .workspace-header {
+    min-height: 64px;
+    padding: 14px 16px;
+    gap: 12px;
+  }
+  .work-title-row {
+    flex-wrap: nowrap;
+  }
+  .work-title-row h1 {
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .work-actions {
+    gap: 8px;
+  }
+  .work-actions .t-button {
+    height: 32px;
+    font-size: 12px;
+  }
+  .work-actions .t-button--shape-square {
+    width: 32px;
+  }
+  .progress-strip {
+    padding: 8px 16px;
+  }
+  .progress-label {
+    display: none;
+  }
+  .phase-track {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px 8px;
+  }
+  .phase-step {
+    font-size: 11px;
+    gap: 6px;
+  }
+  .panel-header,
+  .resource-tabs {
+    padding: 0 16px;
+  }
+  .resource-tabs :deep(.t-tabs__nav-item) {
+    font-size: 13px;
+  }
+  .preview-body {
+    padding: 16px;
+  }
+  .paper-preview,
+  .selected-preview {
+    padding: 16px 18px 24px;
+    border-radius: 10px;
+  }
+  .document-caption {
+    margin-bottom: 20px;
+  }
+  .mobile-tab-bar {
+    gap: 8px;
+    padding: 8px 16px max(8px, env(safe-area-inset-bottom));
+    min-height: 56px;
+    box-sizing: border-box;
+    border-color: #e3e6e3;
+  }
+  .mobile-tab-bar button {
+    flex-direction: row;
+    justify-content: center;
+    gap: 7px;
+    min-height: 40px;
+    font-size: 12px;
+    border-radius: 9px;
+    padding: 8px 10px;
+  }
+  .mobile-tab-bar button.active {
+    background: #eef3ef;
+    color: var(--td-brand-color);
+    font-weight: 500;
+  }
+  .mobile-tab-bar button > .t-icon {
+    font-size: 18px;
+  }
+}
+@media (max-width: 380px) {
+  .phase-track {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .mobile-tab-bar {
+    padding-inline: 8px;
+    gap: 2px;
+  }
+  .mobile-tab-bar button {
+    font-size: 11px;
+    padding-inline: 4px;
   }
 }
 </style>

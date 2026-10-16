@@ -48,11 +48,11 @@
     <div v-show="!isCollapsed" class="fm-body">
       <div v-if="activeTab === 'files'" class="tab-content">
         <div class="file-tree">
-          <div v-if="isLoading" class="loading-state">
+          <div v-if="isLoading && !fileTreeData?.length" class="loading-state">
             <t-loading size="small" text="加载文件中..." />
           </div>
           <div v-else-if="!fileTreeData || fileTreeData.length === 0" class="empty-state">
-            <div class="empty-icon">📁</div>
+            <t-icon name="folder-open" class="empty-icon" />
             <div class="empty-text">暂无文件</div>
           </div>
           <t-tree
@@ -63,14 +63,13 @@
             @select="handleFileSelect"
           />
         </div>
-        <div class="file-manager-info">
-          <span v-if="selectedFile" class="selected-file-info">{{ selectedFile }}</span>
-          <span v-else class="no-file-selected">点击文件查看</span>
+        <div v-if="selectedFile" class="file-manager-info">
+          <span class="selected-file-info">{{ selectedFile }}</span>
         </div>
       </div>
       <div v-else-if="activeTab === 'plan'" class="tab-content plan-tab">
         <div v-if="!planData || planData.items.length === 0" class="empty-state">
-          <div class="empty-icon">📋</div>
+          <t-icon name="task" class="empty-icon" />
           <div class="empty-text">等待AI制定写作计划...</div>
         </div>
         <div v-else class="plan-board">
@@ -596,9 +595,13 @@ defineExpose({
 
 .fm-header {
   display: flex;
-  align-items: stretch;
-  min-height: 40px;
-  padding: 0 4px;
+  align-items: center;
+  min-height: 52px;
+  padding: 0 16px;
+  border-bottom: 1px solid #ededed;
+  gap: 12px;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .file-manager.collapsed .fm-header {
@@ -627,10 +630,23 @@ defineExpose({
 
 .fm-tabs :deep(.t-tabs__header) {
   padding: 0;
-  border-bottom: 1px solid #e7e7e7;
-  height: 100%;
+  height: 51px;
 }
 
+.fm-tabs :deep(.t-tabs__nav-item) {
+  height: 51px;
+  padding: 0 16px;
+}
+.fm-tabs :deep(.t-tabs__nav-item-wrapper) {
+  margin: 0;
+  padding: 0;
+}
+.fm-tabs :deep(.t-tabs__nav-item:first-child) {
+  padding-left: 0;
+}
+.fm-tabs :deep(.t-tabs__nav-container.t-is-top::after) {
+  display: none;
+}
 .fm-tabs :deep(.t-tabs__content) {
   display: none;
 }
@@ -655,15 +671,15 @@ defineExpose({
 }
 
 .tab-content {
-  padding: 8px 12px 12px;
+  padding: 16px;
 }
 
 .loading-state {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 80px;
-  color: #7f8c8d;
+  min-height: 160px;
+  color: var(--td-text-color-secondary);
 }
 
 .empty-state {
@@ -671,8 +687,8 @@ defineExpose({
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  height: 80px;
-  color: #7f8c8d;
+  min-height: 160px;
+  color: var(--td-text-color-secondary);
 }
 
 .empty-icon {
@@ -685,21 +701,21 @@ defineExpose({
   color: #999;
 }
 
-.file-tree .t-tree-node {
+.file-tree :deep(.t-tree-node) {
   font-size: 13px;
 }
 
-.file-tree .t-tree-node__label {
-  color: #2c3e50;
+.file-tree :deep(.t-tree-node__label) {
+  color: var(--td-text-color-primary);
 }
 
-.file-tree .t-tree-node--leaf .t-tree-node__label {
-  color: #0052d9;
+.file-tree :deep(.t-tree-node--leaf .t-tree-node__label) {
+  color: var(--td-brand-color);
   cursor: pointer;
 }
 
-.file-tree .t-tree-node--leaf .t-tree-node__label:hover {
-  color: #003cab;
+.file-tree :deep(.t-tree-node--leaf .t-tree-node__label:hover) {
+  color: var(--td-brand-color-hover);
   text-decoration: underline;
 }
 
@@ -714,10 +730,10 @@ defineExpose({
 }
 
 .selected-file-info {
-  color: #0052d9;
+  color: var(--td-brand-color);
   font-weight: 500;
   padding: 2px 6px;
-  background-color: #e8f3ff;
+  background-color: var(--td-brand-color-light);
   border-radius: 3px;
   font-size: 11px;
 }
@@ -730,6 +746,9 @@ defineExpose({
 .plan-tab {
   max-height: 320px;
   overflow-y: auto;
+}
+.file-manager.fill-height .plan-tab {
+  max-height: none;
 }
 
 .plan-board {
@@ -753,7 +772,7 @@ defineExpose({
 }
 
 .plan-title {
-  color: #2c3e50;
+  color: var(--td-text-color-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
@@ -793,7 +812,7 @@ defineExpose({
 
 .plan-progress-bar {
   height: 100%;
-  background: #595959;
+  background: var(--td-brand-color);
   border-radius: 2px;
   transition: width 0.2s ease;
 }
@@ -943,7 +962,7 @@ defineExpose({
 }
 
 .plan-item-title {
-  color: #2c3e50;
+  color: var(--td-text-color-primary);
   font-weight: 600;
   overflow-wrap: anywhere;
 }

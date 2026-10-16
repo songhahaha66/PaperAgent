@@ -13,7 +13,8 @@
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
     "format": "prettier --write src/",
-    "test:history": "node --experimental-vm-modules tests/workHistory.test.cjs"
+    "test:history": "node --experimental-vm-modules tests/workHistory.test.cjs",
+    "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",
