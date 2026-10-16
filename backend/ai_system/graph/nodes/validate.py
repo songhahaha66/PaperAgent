@@ -15,6 +15,7 @@ import re
 from typing import Dict, List
 
 from langgraph.runtime import Runtime
+from langgraph.graph import END
 
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
@@ -111,17 +112,26 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         flagged = {issue.section for issue in reports}
         reports += [i for i in await audit_sections(state, ctx) if i.section not in flagged]
     issues = ctx.research.report_issues(reports, "sections")
-    research_restart = any(i["blocking"] for i in issues)
+    research_restart = any(i["blocking"] and i["action"] != "rewrite" for i in issues)
+    blocked = bool(issues) and not research_restart and state.get("repair_round", 0) >= ctx.max_repair_rounds
+    ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"))
+    if blocked:
+        await ctx.set_stage("validate", "blocked", "章节修复次数已用尽，保留草稿，禁止交付")
+    from ...research.control import public_snapshot
+    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
     ctx.write_json(".system/validation.json", {"round": state.get("repair_round", 0), "issues": issues})
     note = f"第 {state.get('repair_round', 0)} 轮：{len(issues)} 个问题"
     await ctx.events.emit("paper_validation", note if issues else "校验通过")
-    return {"issues": issues, "research_restart": research_restart, "log": [f"validate: {len(issues)} issues"]}
+    return {"issues": issues, "research_restart": research_restart, "research_blocked": blocked,
+            "log": [f"validate: {len(issues)} issues"]}
 
 
 def route_after_validate(state: PaperState, runtime: Runtime[GraphContext]) -> str:
+    if state.get("research_blocked"):
+        return END
     if state.get("research_restart"):
         return "observe"
-    if state.get("issues") and state.get("repair_round", 0) < runtime.context.max_repair_rounds:
+    if state.get("issues"):
         return "repair"
     return "render"
 

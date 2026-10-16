@@ -57,7 +57,10 @@ async def observe(state, runtime):
     sections = {key: section["text"] if section["validity"] == "current" else None
                 for key, section in snapshot["sections"].items()}
     sections.update({key: None for key in (state.get("sections") or {}) if key not in sections})
-    unresolved = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}]
+    # Section-only repairs are retried by write/validate on an explicit resume;
+    # they still block publication, without rerunning accepted computations.
+    unresolved = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}
+                  and not (i["source"] == "sections" and i["action"] == "rewrite")]
     complete = not unresolved and all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in tasks.values())
     blocked = not complete and not ready_tasks(snapshot)
     store.set_outcome("blocked" if blocked else "running")

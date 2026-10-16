@@ -63,7 +63,11 @@ check IDs, repair targets and lifecycle status. Deterministic acceptance failure
 are confirmed; solver, consistency and final-section semantic findings start as
 suspicions. The controller creates an independent CodeAct investigation against
 the frozen checks. A reproduced failure confirms the issue and invalidates its
-scope and descendants. Passing checks dismiss the suspicion; investigation evidence
+scope and descendants. Checks must be explicitly named and applicable; for a
+cited result, their operands must match the disputed metrics unless a named
+assumption links them. Passing checks dismiss the suspicion only when the
+independently recomputed values also agree with the original evidence within
+the check tolerance. Investigation evidence
 stays in history rather than the paper registry. Missing checks or metrics remain
 inconclusive and block delivery. Failed investigations can retry on explicit resume.
 
@@ -97,6 +101,12 @@ Generated paper versions are retained. If `paper.md` changed manually since its
 last publication, the human edit is preserved and the generated revision is saved
 separately for merging; exporting the conflicting active paper is skipped.
 
+Section reference and consistency failures block publication too. Repairs stay
+within the writing loop; exhausting its budget preserves versioned drafts and
+stops the run. Explicit resume can retry those repairs without rerunning accepted
+computations. Structured-output retries include the concrete validation errors
+and keep a bounded request count instead of repeating an invalid request blindly.
+
 One work coordinator owns a research run, as enforced by the existing TaskManager.
 Business commands and attempt claims are additionally serialized by SQLite.
 Cross-process coordinator failover/heartbeat leases, Jev decision calibration,
@@ -125,6 +135,11 @@ countercheck confirmation/dismissal, retained historical evidence, adopted desig
 and solve premises, idempotence, inherited consumers and rejection of stale work.
 The former `sound`/string `must_fix` output protocol has been removed, with no
 adapter or old-checkpoint migration.
+
+`test_live_regressions.py` covers structured retry feedback, unrelated/unknown
+check rejection, independent metric disagreement, publication gates after writing
+repair exhaustion, frontend state events, and draft-preserving resume without
+recomputing accepted tasks.
 
 The evaluation CLI defaults to `--pipeline research`. Its `research-no-explore`,
 `research-no-review`, `research-no-consistency` and `research-no-planner` variants

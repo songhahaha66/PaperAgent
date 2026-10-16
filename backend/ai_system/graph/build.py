@@ -65,7 +65,7 @@ def build_graph():
     graph.add_edge("solve_join", "observe")
     graph.add_conditional_edges("reconcile", lambda state: "observe" if state.get("research_restart") else "write", ["observe", "write"])
     graph.add_edge("write", "validate")
-    graph.add_conditional_edges("validate", route_after_validate, ["repair", "render", "observe"])
+    graph.add_conditional_edges("validate", route_after_validate, ["repair", "render", "observe", END])
     graph.add_edge("repair", "validate")
     graph.add_conditional_edges("render", route_after_render, ["export", "observe", END])
     graph.add_edge("export", END)

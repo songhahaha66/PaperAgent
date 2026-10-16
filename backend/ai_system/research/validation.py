@@ -99,6 +99,17 @@ def evaluate(state, task_id, results):
                     "gt": lambda: left > right, "eq": lambda: left == right,
                     "approx": lambda: abs(left - right) <= check.tolerance,
                 }[check.operator]()
+            if passed and task.get("verifies_issue"):
+                original = select(check.left)
+                if check.operator == "exists":
+                    agrees = str(raw).strip() == str(original).strip()
+                else:
+                    agrees = math.isclose(_number(raw), _number(original), rel_tol=1e-9, abs_tol=check.tolerance)
+                if not agrees:
+                    checks.append(CheckResult(check_id=check.id, outcome="failed", evidence_refs=evidence,
+                        message=f"{check.description}：独立复算值 {raw} 与原登记值 {original} 不一致",
+                        **{key: rule[key] for key in ("owner_kind", "owner_id", "owner_revision")}))
+                    continue
             outcome = "passed" if passed else "failed"
             message = f"{check.description}：{'通过' if passed else '违反验收条件'}"
         except (ValueError, TypeError, OverflowError) as exc:

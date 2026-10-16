@@ -25,15 +25,32 @@ def structured_model(llm: Any, schema: Type[T]):
         return llm.with_structured_output(schema)
 
 
-async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage]) -> T | None:
+async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage], error: Exception | None = None) -> T:
     from ..judge.llm import parse_verdict
 
     instruction = (
         "不要调用工具，也不要写其他内容，只输出一个符合下面 JSON Schema 的 JSON 对象：\n"
         + json.dumps(schema.model_json_schema(), ensure_ascii=False)
     )
+    if error is not None:
+        instruction += "\n\n上一次输出未通过校验，请针对以下错误修正，保留原题要求：\n" + str(error)[:2000]
     reply = await llm.ainvoke(list(messages) + [HumanMessage(content=instruction)])
-    return parse_verdict(message_text(reply), schema)
+    text = message_text(reply)
+    parsed = parse_verdict(text, schema)
+    if parsed is not None:
+        return parsed
+    # Keep the actual field errors; parse_verdict deliberately swallows these
+    # for judge responses, but retries here need actionable feedback.
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            data, _ = decoder.raw_decode(text[index:])
+        except ValueError:
+            continue
+        return schema.model_validate(data)
+    raise ValueError("没有完整的 JSON 对象；请输出简洁、闭合的对象，不要重复扩展列表")
 
 
 def cap_output(llm: Any, max_tokens: int) -> Any:
@@ -58,17 +75,15 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
         try:
             # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
             # 重试改走纯文本 JSON
-            result = await model.ainvoke(messages) if attempt == 0 else None
-            if result is None:
-                # step-5-preview 等模型偶尔无视强制工具调用、直接写文字，改要纯文本 JSON 再解析
-                result = await _ask_json(llm, schema, messages)
+            result = await model.ainvoke(messages) if attempt == 0 else await _ask_json(llm, schema, messages, last_error)
             if result is None:
                 raise ValueError("模型没有返回结构化结果")
             return result if isinstance(result, schema) else schema.model_validate(result)
         except Exception as exc:  # 网关偶发错误或模型输出不合 schema
             last_error = exc
             logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, exc)
-            await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+            if attempt < RETRIES:
+                await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"结构化输出 {schema.__name__} 失败: {last_error}") from last_error
 
 

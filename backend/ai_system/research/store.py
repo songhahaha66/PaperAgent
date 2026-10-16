@@ -446,7 +446,7 @@ class ResearchStore:
             producer_attempt=producer_attempt, status=status, source=source,
             assumption_revision=state["assumptions"][report.assumption_id]["revision"] if report.assumption_id else None,
             action="retry" if report.category in {"execution", "service"} else "rewrite" if report.category == "writing" else "verify",
-            blocking=report.category != "writing").model_dump()
+            blocking=report.category != "writing" or report.section != "paper").model_dump()
         state["issues"].append(issue)
         return issue
 
@@ -500,7 +500,7 @@ class ResearchStore:
             for issue in state["issues"]:
                 if issue["status"] != "suspected" or any(t.get("verifies_issue") == issue["id"] for t in state["tasks"].values()):
                     continue
-                if issue["source"] == "local_review" and not issue["check_ids"]:
+                if not issue["check_ids"]:
                     issue["status"] = "inconclusive"
                     changed = True
                     continue
@@ -511,9 +511,17 @@ class ResearchStore:
                     for rule in protocol(state, key):
                         related = (rule["owner_kind"] == "assumption" and rule["owner_id"] == issue["assumption_id"] and
                                    issue["task_id"] in state["assumptions"][rule["owner_id"]]["task_ids"]) if issue["assumption_id"] else rule["check"]["left"]["task_id"] == issue["task_id"]
-                        if related and (not issue["check_ids"] or rule["check"]["id"] in issue["check_ids"]):
+                        if related and rule["check"]["id"] in issue["check_ids"]:
                             candidates.append(rule)
-                if not candidates:
+                # An omitted/unknown check must not silently become an unrelated
+                # task-wide acceptance test. Cited metrics must match the frozen
+                # operands, unless an explicitly named assumption binds them.
+                cited = {(state["evidence"][ref]["payload"]["subproblem"], state["evidence"][ref]["payload"]["name"])
+                         for ref in issue["evidence_refs"]}
+                linked = all(any((operand["task_id"], operand["name"]) in cited
+                                 for operand in (rule["check"]["left"], rule["check"].get("right")) if operand)
+                             for rule in candidates) if cited and not issue["assumption_id"] else True
+                if not candidates or {rule["check"]["id"] for rule in candidates} != set(issue["check_ids"]) or not linked:
                     issue["status"] = "inconclusive"
                     changed = True
                     continue
