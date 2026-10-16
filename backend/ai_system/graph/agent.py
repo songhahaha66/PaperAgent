@@ -3,7 +3,7 @@ PaperGraphAgent：状态图流水线的入口（构造参数 + async run），�
 
 - 每次运行对应 checkpoint 里的一个 thread，状态存在 <workspace>/.system/graph.sqlite；
 - 图在"确认建模方案"处 interrupt 时，run 返回待确认内容，用户下一条消息作为回复恢复运行；
-- 进程中断后，用户发"继续"会从最后一个完成的节点接着跑。
+- 进程中断后，用户发"继续"会先补跑失败子问题，再从断点完成写作和导出。
 """
 
 import json
@@ -130,6 +130,8 @@ class PaperGraphAgent:
                 if isinstance(graph_input, dict):
                     ctx.registry.reset()
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}
+                if graph_input is None:
+                    return await self._resume_graph(graph, config, thread_id, ctx)
                 return await self._invoke(graph, graph_input, config, thread_id, ctx)
         except Exception as exc:
             logger.error("PaperGraphAgent 执行失败: %s", exc, exc_info=True)
@@ -155,28 +157,32 @@ class PaperGraphAgent:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
                 graph = compile_graph(saver)
                 config = {"configurable": {"thread_id": thread_id}}
-                target = await graph.aget_state(config)
-                failed = [
-                    sid for sid, sol in (target.values.get("solutions") or {}).items()
-                    if sol.get("status") != "completed"
-                ]
-                if failed:
-                    target = None
-                    async for snapshot in graph.aget_state_history(config):
-                        solved = snapshot.values.get("solutions") or {}
-                        if snapshot.next and not any(sid in solved for sid in failed):
-                            target = snapshot
-                            break
-                    if target is None:
-                        raise RuntimeError(f"找不到 {', '.join(failed)} 求解之前的 checkpoint")
-                    for sid in failed:
-                        ctx.registry.drop_subproblem(sid)
-                logger.info("从 checkpoint 恢复，重跑 %s，下一步 %s", failed or "无", target.next)
-                await self._emit("paper_stage", f"从断点恢复：重新求解 {', '.join(failed)}" if failed else "从断点恢复")
-                resume_config = {**target.config, "recursion_limit": GRAPH_RECURSION_LIMIT}
-                return await self._invoke(graph, None, resume_config, thread_id, ctx)
+                return await self._resume_graph(graph, config, thread_id, ctx)
         finally:
             await ctx.kernels.close()
+
+    async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
+        """聊天继续和评测恢复共用：先补跑失败子问题，再完成后续阶段。"""
+        target = await graph.aget_state(config)
+        failed = [
+            sid for sid, sol in (target.values.get("solutions") or {}).items()
+            if sol.get("status") != "completed"
+        ]
+        if failed:
+            target = None
+            async for snapshot in graph.aget_state_history(config):
+                solved = snapshot.values.get("solutions") or {}
+                if snapshot.next and not any(sid in solved for sid in failed):
+                    target = snapshot
+                    break
+            if target is None:
+                raise RuntimeError(f"找不到 {', '.join(failed)} 求解之前的 checkpoint")
+            for sid in failed:
+                ctx.registry.drop_subproblem(sid)
+        logger.info("从 checkpoint 恢复，重跑 %s，下一步 %s", failed or "无", target.next)
+        await self._emit("paper_stage", f"从断点恢复：重新求解 {', '.join(failed)}" if failed else "从断点恢复")
+        resume_config = {**target.config, "recursion_limit": GRAPH_RECURSION_LIMIT}
+        return await self._invoke(graph, None, resume_config, thread_id, ctx)
 
     async def _invoke(self, graph, graph_input, config, thread_id: str, ctx: GraphContext) -> str:
         self._save_thread(thread_id, "running")
@@ -208,7 +214,11 @@ class PaperGraphAgent:
             if snapshot.interrupts:
                 logger.info("恢复等待确认的 thread %s", thread_id)
                 return Command(resume=user_input), thread_id
-            if snapshot.next and is_approval(user_input):
+            has_failed = any(
+                sol.get("status") != "completed"
+                for sol in (snapshot.values.get("solutions") or {}).values()
+            )
+            if is_approval(user_input) and (snapshot.next or has_failed):
                 logger.info("从断点继续 thread %s，下一步 %s", thread_id, snapshot.next)
                 return None, thread_id
         return {"task": user_input}, uuid.uuid4().hex

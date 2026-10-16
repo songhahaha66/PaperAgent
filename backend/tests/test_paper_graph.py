@@ -727,18 +727,38 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     assert "步数已用完" in seen[2][0][-1].content and seen[2][1] == []
 
 
-def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path):
+@pytest.mark.parametrize("resume_mode", ["direct", "chat"])
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path, monkeypatch, resume_mode, interrupted):
     _Structured.reviewed_q1 = True
     ws = _make_workspace(tmp_path)
     FAIL_ONCE.add("Q2")
     agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge())
-    first = asyncio.run(agent.run(TASK))
-    assert "Q2 政策评估：failed" in first
-    assert len(ResultRegistry.load(WorkspaceFS(str(ws))).for_subproblem("Q2")) == 1
+    if interrupted:
+        import ai_system.graph.build as build_module
+        write = build_module.write
 
-    second = asyncio.run(agent.resume_failed())
+        async def interrupt_writing(state, runtime):
+            raise asyncio.CancelledError()
+
+        monkeypatch.setattr(build_module, "write", interrupt_writing)
+        first = asyncio.run(agent.run(TASK))
+        assert "任务执行失败" in first
+        monkeypatch.setattr(build_module, "write", write)
+    else:
+        first = asyncio.run(agent.run(TASK))
+        assert "Q2 政策评估：failed" in first
+    before = ResultRegistry.load(WorkspaceFS(str(ws)))
+    assert len(before.for_subproblem("Q2")) == 1
+    preserved = [(r.id, r.run_id) for r in before.for_subproblem("Q1")]
+    thread = agent._load_thread()
+
+    second = asyncio.run(agent.run("继续") if resume_mode == "chat" else agent.resume_failed())
+    assert agent._load_thread() == thread
     assert "Q1 用电量预测：完成" in second and "Q2 政策评估：完成" in second
     registry = ResultRegistry.load(WorkspaceFS(str(ws)))
+    # 已完成的前序问题不重算，证据仍指向原来的执行记录。
+    assert [(r.id, r.run_id) for r in registry.for_subproblem("Q1")] == preserved
     # 失败时登记的结果被清掉，重跑后不重复
     assert sorted((r.subproblem, r.kind) for r in registry.results.values()) == [
         ("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")
