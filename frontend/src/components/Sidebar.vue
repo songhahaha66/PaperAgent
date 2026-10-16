@@ -48,6 +48,7 @@
           variant="text"
           block
           :class="{ 'nav-active': route.path === item.path }"
+          :aria-current="route.path === item.path ? 'page' : undefined"
           @click="navigate(item.path)"
           ><template #icon><t-icon :name="item.icon" /></template>{{ item.label }}</t-button
         >
@@ -391,7 +392,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: -14px 0 32px;
+  margin: -6px 0 32px;
 }
 .sidebar-nav .t-button {
   justify-content: flex-start;
@@ -409,9 +410,20 @@ onUnmounted(() => {
   background: #f7f7f7;
 }
 .sidebar-nav .nav-active {
-  background: var(--td-brand-color);
-  color: #fff;
+  position: relative;
+  background: #f3f4f2;
+  color: var(--td-brand-color);
   font-weight: 500;
+}
+.sidebar-nav .nav-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--td-brand-color);
 }
 .menu-title {
   display: flex;
@@ -447,8 +459,9 @@ onUnmounted(() => {
   background: #f7f7f7;
 }
 .history-item.active {
-  background: var(--td-brand-color);
-  color: #fff;
+  background: #f3f4f2;
+  color: var(--td-brand-color);
+  font-weight: 500;
 }
 .history-title {
   overflow: hidden;
@@ -632,15 +645,9 @@ onUnmounted(() => {
   height: 28px;
   font-size: 12px;
 }
-.sidebar-nav .nav-active:hover {
-  background: var(--td-brand-color-hover);
-  color: #fff;
-}
+.sidebar-nav .nav-active:hover,
 .history-item.active:hover {
-  background: var(--td-brand-color-hover);
-  color: #fff;
-}
-.history-item.active .running-dot {
-  background: #fff;
+  background: #ecefec;
+  color: var(--td-brand-color-hover);
 }
 </style>
