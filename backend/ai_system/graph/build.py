@@ -94,12 +94,18 @@ async def solve_join(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     return {}
 
 
-def build_graph():
+def build_graph(engine_version="legacy"):
+    from ..research import ENGINE_VERSION
+    if engine_version not in ("legacy", ENGINE_VERSION):
+        raise ValueError("不支持的研究引擎版本")
     graph = StateGraph(PaperState, context_schema=GraphContext)
     graph.add_node("analyze", analyze)
     graph.add_node("design", design)
     graph.add_node("confirm", confirm)
-    graph.add_node("solve", solve)
+    if engine_version != "legacy":
+        from ..research.control import observe, dispatch, execute
+        graph.add_node("observe", observe)
+    graph.add_node("solve", solve if engine_version == "legacy" else execute)
     graph.add_node("predesign", predesign)
     graph.add_node("solve_join", solve_join)
     graph.add_node("reconcile", reconcile)
@@ -110,20 +116,30 @@ def build_graph():
     graph.add_node("export", export)
 
     graph.add_edge(START, "analyze")
-    graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "predesign", "reconcile"])
+    if engine_version == "legacy":
+        graph.add_conditional_edges("analyze", route_after_analyze, ["design", "solve", "predesign", "reconcile"])
+    else:
+        graph.add_conditional_edges("analyze", lambda state: send_designs(state) if state.get("plan_ahead") else "observe", ["design", "observe"])
+        graph.add_conditional_edges("observe", dispatch, ["solve", "reconcile", END])
     graph.add_edge("design", "confirm")
-    graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "predesign", "reconcile"])
+    if engine_version == "legacy":
+        graph.add_conditional_edges("confirm", route_after_confirm, ["design", "solve", "predesign", "reconcile"])
+    else:
+        graph.add_conditional_edges("confirm", lambda state: send_designs(state) if not state.get("approved", True) else "observe", ["design", "observe"])
     graph.add_edge("solve", "solve_join")
     graph.add_edge("predesign", "solve_join")
-    graph.add_conditional_edges("solve_join", send_solves, ["solve", "predesign", "reconcile"])
+    if engine_version == "legacy":
+        graph.add_conditional_edges("solve_join", send_solves, ["solve", "predesign", "reconcile"])
+    else:
+        graph.add_edge("solve_join", "observe")
     graph.add_edge("reconcile", "write")
     graph.add_edge("write", "validate")
     graph.add_conditional_edges("validate", route_after_validate, ["repair", "render"])
     graph.add_edge("repair", "validate")
-    graph.add_conditional_edges("render", route_after_render, ["export", END])
+    graph.add_conditional_edges("render", route_after_render, ["export", END] + (["observe"] if engine_version != "legacy" else []))
     graph.add_edge("export", END)
     return graph
 
 
-def compile_graph(checkpointer=None):
-    return build_graph().compile(checkpointer=checkpointer)
+def compile_graph(checkpointer=None, engine_version="legacy"):
+    return build_graph(engine_version).compile(checkpointer=checkpointer)

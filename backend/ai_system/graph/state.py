@@ -14,7 +14,11 @@ from pydantic import BaseModel, Field, model_validator
 def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
     """并行分支各自写入自己的 key，合并时后写覆盖先写"""
     merged = dict(left or {})
-    merged.update(right or {})
+    for key, value in (right or {}).items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
     return merged
 
 
@@ -169,6 +173,9 @@ class ResultReview(BaseModel):
 
 
 class PaperState(TypedDict, total=False):
+    artifact_conflict: bool
+    research_restart: bool
+    research_blocked: bool
     task: str
     data_profile: str
     analysis: Dict[str, Any]
@@ -182,6 +189,7 @@ class PaperState(TypedDict, total=False):
     # 子问题编号 -> SolveReport dict + status
     solutions: Annotated[Dict[str, Dict[str, Any]], merge_dict]
     # 用户模板的最上层章节 [{"key", "title"}]，没有模板时为空（用默认数模结构）
+    section_contexts: Dict[str, str]
     outline: List[Dict[str, str]]
     # 章节 key -> 带引用的 markdown 正文
     sections: Annotated[Dict[str, str], merge_dict]

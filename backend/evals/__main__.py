@@ -81,7 +81,7 @@ async def main(args) -> None:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(prog="python -m evals", description="PaperAgent MM-Bench 评测")
     parser.add_argument("command", choices=["run", "score", "all", "report"])
-    parser.add_argument("--pipeline", choices=PIPELINES, default="v2", help="v2=状态图流水线，v2-no-*=消融版本")
+    parser.add_argument("--pipeline", choices=PIPELINES, default="v2", help="v2=旧状态图，research=版本化研究控制，*-no-*=消融版本")
     parser.add_argument("--bench", required=True, help="本地 MMBench 目录（含 problem/ 与 dataset/）")
     parser.add_argument("--out", required=True, help="本次评测的输出目录")
     parser.add_argument("--problems", default="", help="逗号分隔的题号，默认 10 题子集")

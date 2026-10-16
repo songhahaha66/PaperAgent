@@ -17,6 +17,10 @@ EXPORT_MODES = ("latex", "word")
 
 
 def route_after_render(state: PaperState, runtime: Runtime[GraphContext]) -> str:
+    if state.get("research_restart"):
+        return "observe"
+    if state.get("artifact_conflict"):
+        return "__end__"
     return "export" if runtime.context.output_mode in EXPORT_MODES else "__end__"
 
 
@@ -54,9 +58,12 @@ async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await ctx.events.stage("LaTeX 排版并编译 PDF" if ctx.output_mode == "latex" else "导出 Word 文档")
     markdown = (ctx.workspace / "paper.md").read_text(encoding="utf-8")
     try:
-        if ctx.output_mode == "latex":
-            return await _latex(ctx, markdown)
-        return await _word(ctx, markdown)
+        result = await _latex(ctx, markdown) if ctx.output_mode == "latex" else await _word(ctx, markdown)
+        if ctx.research:
+            message = " ".join(result.get("log") or [])
+            paths = (["paper.tex"] if "tex only" in message else ["paper.tex", "paper.pdf"]) if ctx.output_mode == "latex" else ["paper.docx"]
+            ctx.research.register_exports(paths)
+        return result
     except Exception as exc:
         await ctx.set_stage("export", "blocked", str(exc)[:80])
         await ctx.events.emit("paper_export", f"导出失败：{exc}")

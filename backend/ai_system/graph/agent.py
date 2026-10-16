@@ -17,6 +17,10 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from ..judge import JevJudge, LLMJudge, jev_available
+from ..research import ENGINE_VERSION
+from ..research.store import ResearchStore
+from ..research.control import refresh_registry
+from ..research.planner import propose_revision
 from .build import compile_graph
 from .context import GraphContext
 from .nodes.confirm import is_approval
@@ -77,6 +81,10 @@ class PaperGraphAgent:
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
         if "design_ahead" not in options and os.getenv("AI_DESIGN_AHEAD"):
             options["design_ahead"] = os.environ["AI_DESIGN_AHEAD"].lower() in ("1", "true", "yes")
+        self.engine_version = options.pop("engine_version", ENGINE_VERSION)
+        if self.engine_version not in ("legacy", ENGINE_VERSION):
+            raise ValueError("不支持的研究引擎版本")
+        self.new_engine_version = self.engine_version
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
@@ -95,7 +103,10 @@ class PaperGraphAgent:
     def _save_thread(self, thread_id: str, status: str) -> None:
         path = self._thread_file()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"thread_id": thread_id, "status": status}), encoding="utf-8")
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"thread_id": thread_id, "status": status,
+                                         "engine_version": self.engine_version}), encoding="utf-8")
+        temporary.replace(path)
 
     def _context(self) -> GraphContext:
         return GraphContext.create(
@@ -125,10 +136,18 @@ class PaperGraphAgent:
         await self._emit("main_agent_start", f"开始执行: {user_input[:100]}")
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
-                graph = compile_graph(saver)
+                if new_run:
+                    self.engine_version = self.new_engine_version
+                if not new_run and self._thread_file().exists():
+                    self.engine_version = json.loads(self._thread_file().read_text()).get("engine_version", "legacy")
+                graph = compile_graph(saver, engine_version=self.engine_version)
                 graph_input, thread_id = ({"task": user_input}, uuid.uuid4().hex) if new_run else await self._prepare(graph, user_input)
                 if isinstance(graph_input, dict):
+                    self.engine_version = self.new_engine_version
+                    graph = compile_graph(saver, engine_version=self.engine_version)
                     ctx.registry.reset()
+                if self.engine_version != "legacy":
+                    ctx.research = ResearchStore(self.workspace_dir, thread_id)
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}
                 if graph_input is None:
                     return await self._resume_graph(graph, config, thread_id, ctx)
@@ -140,6 +159,38 @@ class PaperGraphAgent:
             return error_msg
         finally:
             await ctx.kernels.close()
+
+    async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
+                              change: str, scope: list[str] | None = None) -> str:
+        """Apply an idempotent revision, then selectively resume this research."""
+        if research_id != self._load_thread():
+            raise ValueError("研究标识已改变，请刷新后重试")
+        metadata = json.loads(self._thread_file().read_text())
+        if metadata.get("engine_version", "legacy") != ENGINE_VERSION:
+            raise ValueError("旧研究不支持增量修订，请使用重新研究")
+        self.engine_version = ENGINE_VERSION
+        store = ResearchStore(self.workspace_dir, research_id)
+        snapshot = store.snapshot()
+        if not snapshot:
+            raise ValueError("研究尚未生成可修订任务")
+        # Stable command payload even when retrying after the revision committed.
+        patch = propose_revision(snapshot, command_id, base_revision, change, scope)
+        store.apply_revision_command(command_id, base_revision, change, scope, patch)
+        current = store.snapshot()
+        if current["commit_seq"] == snapshot["commit_seq"] and current["outcome"] in {"completed", "needs_attention"}:
+            # A delivered command retry must not republish the paper or rerun export.
+            checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
+            async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
+                graph = compile_graph(saver, engine_version=self.engine_version)
+                saved = await graph.aget_state({"configurable": {"thread_id": research_id}})
+            self.last_result = saved.values
+            ctx = self._context()
+            ctx.research = store
+            refresh_registry(ctx)
+            output = self._final_message(self.last_result, ctx)
+            await self._emit("main_agent_complete", output)
+            return output
+        return await self.resume_failed()
 
     async def resume_failed(self) -> str:
         """回到失败子问题求解之前的 checkpoint 接着跑
@@ -155,7 +206,10 @@ class PaperGraphAgent:
             raise RuntimeError("没有可恢复的运行记录")
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
-                graph = compile_graph(saver)
+                self.engine_version = json.loads(self._thread_file().read_text()).get("engine_version", "legacy")
+                graph = compile_graph(saver, engine_version=self.engine_version)
+                if self.engine_version != "legacy":
+                    ctx.research = ResearchStore(self.workspace_dir, thread_id)
                 config = {"configurable": {"thread_id": thread_id}}
                 return await self._resume_graph(graph, config, thread_id, ctx)
         finally:
@@ -164,6 +218,12 @@ class PaperGraphAgent:
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天继续和评测恢复共用：先补跑失败子问题，再完成后续阶段。"""
         target = await graph.aget_state(config)
+        if ctx.research is not None and ctx.research.snapshot() is not None:
+            ctx.research.recover()
+            refresh_registry(ctx)
+            # Jump forward from the latest checkpoint; never rewind committed evidence.
+            await graph.aupdate_state(config, {"research_blocked": False}, as_node="solve_join")
+            return await self._invoke(graph, None, {**config, "recursion_limit": GRAPH_RECURSION_LIMIT}, thread_id, ctx)
         failed = [
             sid for sid, sol in (target.values.get("solutions") or {}).items()
             if sol.get("status") != "completed"
@@ -187,6 +247,8 @@ class PaperGraphAgent:
     async def _invoke(self, graph, graph_input, config, thread_id: str, ctx: GraphContext) -> str:
         self._save_thread(thread_id, "running")
         trace = LLMCallTrace()
+        before = await graph.aget_state(config)
+        log_offset = len(before.values.get("log") or [])
         try:
             result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
         finally:
@@ -201,8 +263,9 @@ class PaperGraphAgent:
             await self._emit("paper_confirm", message)
             return message
 
-        self._save_thread(thread_id, "done")
-        output = self._final_message(result, ctx)
+        blocked = result.get("research_blocked", False)
+        self._save_thread(thread_id, "blocked" if blocked else "done")
+        output = self._final_message({**result, "log": (result.get("log") or [])[log_offset:]}, ctx)
         await self._emit("main_agent_complete", output)
         return output
 
@@ -218,17 +281,21 @@ class PaperGraphAgent:
                 sol.get("status") != "completed"
                 for sol in (snapshot.values.get("solutions") or {}).values()
             )
-            if is_approval(user_input) and (snapshot.next or has_failed):
+            if is_approval(user_input) and (snapshot.next or has_failed or snapshot.values.get("research_blocked")):
                 logger.info("从断点继续 thread %s，下一步 %s", thread_id, snapshot.next)
                 return None, thread_id
         return {"task": user_input}, uuid.uuid4().hex
 
     @staticmethod
     def _final_message(result: Dict[str, Any], ctx: GraphContext) -> str:
+        if result.get("research_blocked"):
+            return "研究已暂停：存在未通过验收的任务。已验收结果已保留，可修改要求或继续重试。"
         analysis = result.get("analysis") or {}
         solutions = result.get("solutions") or {}
         issues = result.get("issues") or []
-        lines = [f"论文《{analysis.get('title', '')}》已写入 paper.md。", ""]
+        lines = [f"论文《{analysis.get('title', '')}》已写入 {result.get('paper_path') or 'paper.md'}。", ""]
+        if result.get("artifact_conflict"):
+            lines.append("paper.md 存在人工修改，已保留人工稿和自动新稿，等待合并。")
         exported = [line for line in result.get("log") or [] if line.startswith("export:")]
         if exported:
             lines[0] += f"导出：{exported[-1].split(':', 1)[1].strip()}。"

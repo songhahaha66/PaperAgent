@@ -145,6 +145,7 @@
                     :snapshot="researchSnapshot"
                     @open-file="handleWorkspaceFileSelect"
                     @ask="askSubproblem"
+                    @revise="reviseSubproblem"
                   />
                 </JsonChatRenderer>
                 <button v-if="!atBottom && isStreaming" class="jump-latest" @click="jumpToLatest">
@@ -393,21 +394,25 @@ const messageAction = ref<ResearchAction>('auto')
 const runningAction = ref<ResearchAction>('auto')
 const questionScope = ref<string | null>(null)
 const messageActionLabel = computed(() =>
-  messageAction.value === 'run'
+  messageAction.value === 'revise_research'
     ? isZh.value
-      ? '重新研究'
-      : 'Run research'
-    : messageAction.value === 'revise'
+      ? '增量修改研究'
+      : 'Revise research'
+    : messageAction.value === 'run'
       ? isZh.value
-        ? '修改方案'
-        : 'Revise plan'
-      : researchSnapshot.value?.has_research || currentWork.value?.status !== 'created'
+        ? '重新研究'
+        : 'Run research'
+      : messageAction.value === 'revise'
         ? isZh.value
-          ? '追问结果'
-          : 'Ask about results'
-        : isZh.value
-          ? '开始研究'
-          : 'Start research',
+          ? '修改方案'
+          : 'Revise plan'
+        : researchSnapshot.value?.has_research || currentWork.value?.status !== 'created'
+          ? isZh.value
+            ? '追问结果'
+            : 'Ask about results'
+          : isZh.value
+            ? '开始研究'
+            : 'Start research',
 )
 const messageActionOptions = computed(() => [
   {
@@ -425,6 +430,19 @@ const messageActionOptions = computed(() => [
       questionScope.value = null
     },
   },
+  ...(researchSnapshot.value?.engine_version === 'research-v1' &&
+  researchSnapshot.value?.tasks?.length &&
+  currentWork.value?.status !== 'waiting'
+    ? [
+        {
+          content: isZh.value ? '增量修改研究' : 'Revise research',
+          value: 'revise_research',
+          onClick: () => {
+            messageAction.value = 'revise_research'
+          },
+        },
+      ]
+    : []),
   ...(currentWork.value?.status === 'waiting'
     ? [
         {
@@ -438,6 +456,11 @@ const messageActionOptions = computed(() => [
       ]
     : []),
 ])
+function reviseSubproblem(id: string) {
+  questionScope.value = id
+  messageAction.value = 'revise_research'
+  panelStore.activate(workId.value, 'chat')
+}
 function askSubproblem(id: string) {
   questionScope.value = id
   messageAction.value = 'ask'
@@ -903,7 +926,9 @@ const handleStreamMessage = (data: any, messageId: string) => {
     case 'json_block':
       const block = data.block
 
-      if (block?.type === 'research_snapshot') {
+      if (block?.type === 'research_state') {
+        loadResearchSnapshot()
+      } else if (block?.type === 'research_snapshot') {
         if (block.content?.schema_version === 1 && block.content.work_id === workId.value) {
           ++evidenceRequest
           researchSnapshot.value = block.content as ResearchSnapshot
@@ -1297,7 +1322,9 @@ const sendMessage = async (
 
   panelStore.activate(workId.value, 'chat')
   const resolvedAction = action === 'auto' && questionScope.value ? 'ask' : action
-  const scope = resolvedAction === 'ask' ? questionScope.value || undefined : undefined
+  const scope = ['ask', 'revise_research'].includes(resolvedAction)
+    ? questionScope.value || undefined
+    : undefined
   if (resolvedAction !== 'ask') questionScope.value = null
   messageAction.value = 'auto'
   await sendRealMessage(content, resolvedAction, scope)
@@ -1351,7 +1378,17 @@ const sendMessageViaWebSocket = async (
   subproblemId?: string,
 ) => {
   const handler = await connectWorkSocket(messageId)
-  handler?.sendMessage(message, undefined, action, subproblemId)
+  const snapshot = researchSnapshot.value
+  const revision =
+    action === 'revise_research' && snapshot?.research_id && snapshot.research_revision
+      ? {
+          command_id: crypto.randomUUID(),
+          research_id: snapshot.research_id,
+          base_revision: snapshot.research_revision,
+          scope: subproblemId ? [subproblemId] : undefined,
+        }
+      : undefined
+  handler?.sendMessage(message, undefined, action, subproblemId, revision)
 }
 
 // 切换侧边栏折叠状态

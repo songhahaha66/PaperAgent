@@ -21,7 +21,7 @@ from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
 from config.paths import get_workspace_path
 from services.chat_services.research_session import (
-    research_snapshot, resolve_action, scoped_snapshot, infer_question_scope, answer_research_question,
+    research_snapshot, resolve_action, scoped_snapshot, infer_question_scope, answer_research_question, ResearchRevisionCommand,
     ResearchContextPermissionError,
 )
 from ..utils import route_guard
@@ -144,7 +144,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # 只用于刷新右侧面板的事件，不写进聊天记录
-TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot'}
+TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot', 'research_state'}
 
 
 @router.get("/work/{work_id}/history")
@@ -407,6 +407,18 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 subproblem_id = message_data.get("subproblem_id")
                 if subproblem_id is not None and not isinstance(subproblem_id, str):
                     raise ValueError("子问题编号无效")
+                revision_command = None
+                if action == "revise_research":
+                    from pydantic import ValidationError
+                    try:
+                        revision_command = ResearchRevisionCommand.model_validate(message_data.get("revision"))
+                    except ValidationError:
+                        raise ValueError("增量修改需要有效的命令标识、研究标识和基础版本")
+                    if revision_command.scope is not None and (len(set(revision_command.scope)) != len(revision_command.scope) or
+                            not set(revision_command.scope) <= {t["task_id"] for t in snapshot.tasks}):
+                        raise ValueError("修改范围包含未知或重复任务")
+                    if revision_command.research_id != snapshot.research_id:
+                        raise ValueError("研究标识已改变，请刷新后重试")
                 if action == "ask":
                     subproblem_id = subproblem_id or infer_question_scope(problem, snapshot)
                     scoped_snapshot(snapshot, subproblem_id)
@@ -579,6 +591,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                                 problem, history, subproblem_id,
                                 destination_url=getattr(model_config, "base_url", "") or "",
                             )
+                        elif action == "revise_research":
+                            await main_agent.revise_research(change=problem, **revision_command.model_dump())
                         elif action == "resume":
                             await main_agent.resume_failed()
                         else:
@@ -622,7 +636,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
                         solutions = (getattr(main_agent, 'last_result', None) or {}).get('solutions') or {}
                         incomplete = any(solution.get('status') != 'completed' for solution in solutions.values())
-                        work_status = original_status if action == "ask" else ('failed' if failed_blocks else 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'paused' if incomplete else 'completed')
+                        work_status = original_status if action == "ask" else ('failed' if failed_blocks else 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'paused' if incomplete or (getattr(main_agent, 'last_result', None) or {}).get('research_blocked') else 'completed')
                         if action != "ask":
                             await loop.run_in_executor(None, set_work_status, work_id, work_status)
                             try:

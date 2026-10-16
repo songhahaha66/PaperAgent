@@ -88,15 +88,18 @@ V2_VARIANTS = {
     "v2-no-review": {"max_review_rounds": 0},
     "v2-no-consistency": {"check_claims": False},
 }
-PIPELINES = tuple(V2_VARIANTS)
+RESEARCH_VARIANTS = {"research": {}, "research-no-planner": {"max_planning_calls": 0}}
+PIPELINES = (*V2_VARIANTS, *RESEARCH_VARIANTS)
 
 
 def _build_agent(pipeline: str, llm, workspace: Path):
-    if pipeline in V2_VARIANTS:
+    if pipeline in V2_VARIANTS or pipeline in RESEARCH_VARIANTS:
         from ai_system.graph import PaperGraphAgent
 
         # 评测不需要人工确认建模方案
-        return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False, **V2_VARIANTS[pipeline])
+        options = V2_VARIANTS[pipeline] if pipeline in V2_VARIANTS else RESEARCH_VARIANTS[pipeline]
+        return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False,
+                               engine_version="legacy" if pipeline in V2_VARIANTS else "research-v1", **options)
     raise ValueError(f"未知 pipeline: {pipeline}")
 
 
@@ -124,6 +127,9 @@ async def run_problem(
                 record["final_message"] = await agent.resume_failed()
             else:
                 record["final_message"] = await agent.run(prompt)
+            record["engine_version"] = agent.engine_version
+            if agent.last_result.get("research_blocked"):
+                record["error"] = "研究被阻塞，未发布完整交付物"
             # 智能体自己捕获了异常、只返回失败说明时，也要记为出错，否则汇总里看不出来
             if str(record["final_message"] or "").startswith("任务执行失败"):
                 record["error"] = record["final_message"]

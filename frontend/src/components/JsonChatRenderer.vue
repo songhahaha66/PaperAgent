@@ -292,6 +292,7 @@ const HIDDEN_BLOCK_TYPES = new Set([
   'file_changed',
   'research_context',
   'research_snapshot',
+  'research_state',
 ])
 
 // 提取 JSON 块数组

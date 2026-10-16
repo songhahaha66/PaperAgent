@@ -205,12 +205,22 @@ def assemble(state: PaperState) -> str:
 
 async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
+    if ctx.research:
+        snapshot = ctx.research.refresh_inputs()
+        if any(t["acceptance"] != "accepted" or t["validity"] != "current" for t in snapshot["tasks"].values()):
+            return {"research_restart": True, "log": ["render: inputs changed, returning to research control"]}
+        ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
     raw = assemble(state)
     # 带引用的原稿留在 .system，方便追溯每个数字的来源
     ctx.fs.write_text(".system/paper_raw.md", raw)
-    ctx.fs.write_text("paper.md", ctx.registry.render(raw), kind="document", created_by="ai", visibility="user")
+    rendered = ctx.registry.render(raw)
+    path, conflict = ctx.research.publish_paper(rendered) if ctx.research else ("paper.md", False)
+    if ctx.research:
+        ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")
+    else:
+        ctx.fs.write_text(path, rendered, kind="document", created_by="ai", visibility="user")
     remaining = len(state.get("issues") or [])
     await ctx.set_stage("validate", "completed", f"剩余 {remaining} 个问题" if remaining else "全部通过")
     await ctx.set_stage("render", "completed", f"登记结果 {len(ctx.registry.results)} 项")
-    await ctx.events.file_changed("paper.md")
-    return {"paper_path": "paper.md", "log": ["render: paper.md"]}
+    await ctx.events.file_changed(path)
+    return {"paper_path": path, "artifact_conflict": conflict, "research_restart": False, "log": [f"render: {path}"]}

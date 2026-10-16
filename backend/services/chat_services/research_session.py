@@ -11,12 +11,20 @@ from urllib.parse import urlsplit
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai_system.graph.nodes.confirm import is_approval
 
-ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise"]
-ACTIONS = {"auto", "ask", "run", "resume", "confirm", "revise"}
+ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "revise_research"]
+ACTIONS = {"auto", "ask", "run", "resume", "confirm", "revise", "revise_research"}
+
+
+class ResearchRevisionCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    command_id: str = Field(min_length=1, max_length=200)
+    research_id: str
+    base_revision: int = Field(ge=1)
+    scope: list[str] | None = Field(default=None, min_length=1)
 
 
 class ResearchContextPermissionError(PermissionError):
@@ -51,6 +59,12 @@ class ResearchClaim(BaseModel):
 
 class ResearchSnapshot(BaseModel):
     schema_version: int = 1
+    engine_version: str = "legacy"
+    research_revision: int = 0
+    commit_seq: int = 0
+    outcome: str | None = None
+    tasks: list[dict] = Field(default_factory=list)
+    blocking_issues: list[dict] = Field(default_factory=list)
     work_id: str
     work_status: str
     research_id: str | None = None
@@ -93,7 +107,15 @@ def _file(root: Path, path: str | None, prefix: str = "") -> str | None:
 def research_snapshot(workspace: str | Path, work_id: str, status: str) -> ResearchSnapshot:
     root = Path(workspace).resolve()
     thread = _read_json(root, ".system/graph_thread.json")
-    registry = _read_json(root, ".system/results.json")
+    business = None
+    if thread.get("engine_version") == "research-v1" and (root / ".system/research.sqlite").exists():
+        from ai_system.research.store import ResearchStore
+        from ai_system.research.control import public_snapshot
+        store = ResearchStore(root, thread["thread_id"], read_only=True)
+        business = store.snapshot()
+        registry = store.registry_payload(snapshot=business)
+    else:
+        registry = _read_json(root, ".system/results.json")
     manifest = _read_json(root, "manifest.json")
     validation = _read_json(root, ".system/validation.json")
     raw_results = registry.get("results") or []
@@ -136,7 +158,20 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         ))
     artifacts = [p for p in ("paper.md", "paper.pdf", "paper.docx", "paper.tex") if _file(root, p)]
     issues = validation.get("issues") or []
+    if business:
+        current = business.get("paper_hash") and all(t["acceptance"] == "accepted" and t["validity"] == "current"
+                    for t in business["tasks"].values()) and all(s["validity"] == "current" for s in business["sections"].values())
+        artifacts = [p for p in artifacts if p in {"paper.md", *business.get("exports", [])}] if current else []
+        if current and business.get("paper_conflict"):
+            artifacts = [business["paper_version"]] if _file(root, business.get("paper_version")) else []
+        if not current:
+            issues = []
+    control = public_snapshot(business) if business else {}
     return ResearchSnapshot(
+        engine_version=thread.get("engine_version", "legacy"),
+        research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
+        outcome=control.get("outcome"), tasks=control.get("tasks", []),
+        blocking_issues=control.get("issues", []),
         work_id=work_id, work_status=status, research_id=thread.get("thread_id"),
         graph_status=thread.get("status"),
         has_research=bool(thread or registry or artifacts),
@@ -160,6 +195,8 @@ def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot) -> 
         raise ValueError("当前没有等待确认的建模方案")
     if requested == "resume" and (not snapshot.research_id or snapshot.work_status == "completed"):
         raise ValueError("当前没有可恢复的研究任务")
+    if requested == "revise_research" and (snapshot.engine_version != "research-v1" or not snapshot.tasks or waiting):
+        raise ValueError("当前研究不支持增量修改，请先完成方案确认")
     return requested
 
 

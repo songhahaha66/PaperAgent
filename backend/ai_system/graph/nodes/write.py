@@ -121,7 +121,23 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
     """每一节都带上全文结论表和统一口径，各节结论口径一致"""
     request = _section_body(key, title, state, ctx)
-    shared = consistency_text(ctx, state.get("consistency") or [])
+    shared_ctx = ctx
+    conflicts = state.get("consistency") or []
+    if ctx.research and key.startswith("solve:"):
+        from dataclasses import replace
+        from ..registry import ResultRegistry
+        sid = key.split(":", 1)[1]
+        subproblem = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
+        source_ids = {sid, *(subproblem.get("depends_on") or [])}
+        own_claims = {c.id for c in ctx.registry.claims.values() if c.subproblem in source_ids}
+        conflicts = [c for c in conflicts if own_claims & set(c["claims"])]
+        related = own_claims | {cid for c in conflicts for cid in c["claims"]}
+        claims = {cid: c for cid, c in ctx.registry.claims.items() if cid in related}
+        result_ids = {rid for c in claims.values() for rid in c.evidence}
+        registry = ResultRegistry(ctx.fs,
+            results={rid: r for rid, r in ctx.registry.results.items() if rid in result_ids}, claims=claims)
+        shared_ctx = replace(ctx, registry=registry)
+    shared = consistency_text(shared_ctx, conflicts)
     if shared:
         request = f"{request}\n\n{shared}"
     if ctx.template_requirements:
@@ -215,14 +231,22 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     state = {**state, "outline": outline}
     plan = section_plan(state)
     solve_items = [(key, title) for key, title, _ in plan if key.startswith("solve:")]
-    sections: Dict[str, str] = {}
-    sections.update(await write_many(ctx, state, solve_items))
+    sections: Dict[str, str] = dict(state.get("sections") or {}) if ctx.research else {}
+    contexts = {}
+    if ctx.research:
+        from ...research.store import digest
+        previous = ctx.research.snapshot()["sections"]
+        for key, title in solve_items:
+            contexts[key] = digest(section_request(key, title, state, ctx))
+            if previous.get(key, {}).get("context_hash") != contexts[key]:
+                sections.pop(key, None)
+    sections.update(await write_many(ctx, state, [(k, t) for k, t in solve_items if k not in sections]))
 
     # 摘要只依据各问的求解报告和登记结果，不读其他章节，和其余章节一起并行写，少一轮串行等待
     await ctx.set_stage("write", "in_progress", "撰写其余章节和摘要")
     with_solved = {**state, "sections": sections}
     rest = [(key, title) for key, title, _ in plan if key != "solve_heading" and not key.startswith("solve:")]
-    sections.update(await write_many(ctx, with_solved, rest))
+    sections.update(await write_many(ctx, with_solved, [(k, t) for k, t in rest if k not in sections]))
     await ctx.set_stage("write", "completed", f"{len(sections)} 个章节")
     log = f"write: {len(sections)} sections" + (f" (template outline: {len(outline)})" if outline else "")
-    return {"sections": sections, "outline": outline, "log": [log]}
+    return {"sections": sections, "section_contexts": contexts, "outline": outline, "log": [log]}

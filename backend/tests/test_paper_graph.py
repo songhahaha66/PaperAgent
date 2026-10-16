@@ -733,7 +733,7 @@ def test_resume_failed_rewinds_to_checkpoint_before_failed_subproblem(tmp_path, 
     _Structured.reviewed_q1 = True
     ws = _make_workspace(tmp_path)
     FAIL_ONCE.add("Q2")
-    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge())
+    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge(), engine_version="legacy")
     if interrupted:
         import ai_system.graph.build as build_module
         write = build_module.write

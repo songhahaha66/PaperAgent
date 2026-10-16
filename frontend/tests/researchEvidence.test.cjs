@@ -110,6 +110,29 @@ const { hostRenderer } = require('./vueHost.cjs')
     { problem: '继续', action: 'resume' },
   ])
   console.log('PASS: websocket transport preserves typed action and question scope')
+  socket.sendMessage('修正 Q2', undefined, 'revise_research', 'Q2', {
+    command_id: 'revision-one',
+    research_id: 'research-one',
+    base_revision: 2,
+    scope: ['Q2'],
+  })
+  assert.equal(messages.at(-1).revision.base_revision, 2)
+  assert.equal(messages.at(-1).revision.scope[0], 'Q2')
+  const phases = await loadModule('src/utils/paperPipeline.ts', {})
+  const updates = [
+    { type: 'paper_phase', content: { stage: 'solve', status: 'blocked' } },
+    { type: 'paper_phase', content: { stage: 'write', status: 'in_progress' } },
+  ]
+  assert.equal(phases.derivePhases(updates).find((p) => p.key === 'solve').status, 'blocked')
+  assert.equal(phases.derivePhases(updates).find((p) => p.key === 'design').status, 'pending')
+  assert.equal(
+    phases.deriveSubproblems([
+      { type: 'paper_solved', content: 'Q2 求解完成' },
+      { type: 'paper_stage', content: 'Q2：重新求解' },
+    ])[0].status,
+    'in_progress',
+  )
+  console.log('PASS: revisions carry scope/version and retries preserve explicit phase status')
 })().catch((error) => {
   console.error(error)
   process.exitCode = 1

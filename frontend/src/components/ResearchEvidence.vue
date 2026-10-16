@@ -11,6 +11,23 @@
       </span>
     </summary>
     <div class="evidence-body">
+      <div v-if="snapshot.tasks?.length" class="research-tasks">
+        <p v-for="task in snapshot.tasks" :key="task.task_id">
+          <strong>{{ task.task_id }} · v{{ task.revision }}</strong>
+          {{ taskLabel(task.execution_status, task.acceptance, task.validity) }}
+          <small v-if="task.reason"> · {{ task.reason }}</small>
+          <button
+            v-if="snapshot.work_status !== 'in_progress' && snapshot.work_status !== 'waiting'"
+            class="evidence-link"
+            @click="$emit('revise', task.task_id)"
+          >
+            {{ isZh ? '修改这部分' : 'Revise this task' }}
+          </button>
+        </p>
+        <p v-for="(issue, index) in snapshot.blocking_issues" :key="index">
+          {{ issue.task_id }}：{{ issue.message }}
+        </p>
+      </div>
       <div class="evidence-toolbar">
         <div
           class="evidence-scopes"
@@ -104,8 +121,21 @@ import { computed, ref, watch } from 'vue'
 import { useStudioCopy } from '@/lang/studio'
 import type { ResearchSnapshot, ResearchResult } from '@/types/research'
 const props = defineProps<{ snapshot: ResearchSnapshot | null }>()
-defineEmits<{ 'open-file': [path: string]; ask: [subproblemId: string] }>()
+defineEmits<{
+  'open-file': [path: string]
+  ask: [subproblemId: string]
+  revise: [subproblemId: string]
+}>()
 const { isZh } = useStudioCopy()
+const taskLabel = (execution: string, acceptance: string, validity: string) => {
+  if (validity === 'stale')
+    return isZh.value ? '结果已失效，等待重算' : 'Stale, awaiting recomputation'
+  if (acceptance === 'rejected' || acceptance === 'inconclusive')
+    return isZh.value ? '尚未通过验收' : 'Awaiting acceptance'
+  if (acceptance === 'accepted') return isZh.value ? '已验收' : 'Accepted'
+  if (execution === 'running') return isZh.value ? '执行中' : 'Running'
+  return isZh.value ? '等待执行' : 'Pending'
+}
 const scope = ref('')
 const expanded = ref('')
 const subproblems = computed(() => [

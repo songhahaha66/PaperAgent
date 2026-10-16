@@ -1,5 +1,5 @@
 import { apiClient } from '@/utils/apiClient'
-import type { ResearchAction, ResearchSnapshot } from '@/types/research'
+import type { ResearchAction, ResearchSnapshot, ResearchRevisionCommand } from '@/types/research'
 
 export interface ChatSessionResponse {
   id: number
@@ -247,8 +247,9 @@ export class WebSocketChatHandler {
     model?: string,
     action: ResearchAction = 'auto',
     subproblemId?: string,
+    revision?: ResearchRevisionCommand,
   ) {
-    const message = { problem: content, model, action, subproblem_id: subproblemId }
+    const message = { problem: content, model, action, subproblem_id: subproblemId, revision }
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // 如果连接未建立，将消息加入队列

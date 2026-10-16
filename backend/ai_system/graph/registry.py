@@ -13,7 +13,7 @@ import json
 import math
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from services.file_services.workspace_fs import WorkspaceFS
 
@@ -120,6 +120,10 @@ class ResultRegistry:
     results: Dict[str, Result] = field(default_factory=dict)
     claims: Dict[str, Claim] = field(default_factory=dict)
 
+    allocate_id: Optional[Callable] = field(default=None, repr=False)
+    immutable: bool = False
+    staged_history: List[Result] = field(default_factory=list, repr=False)
+
     @classmethod
     def load(cls, fs: WorkspaceFS) -> "ResultRegistry":
         registry = cls(fs)
@@ -134,6 +138,8 @@ class ResultRegistry:
             "results": [asdict(r) for r in self.results.values()],
             "claims": [asdict(c) for c in self.claims.values()],
         }
+        if self.immutable:
+            payload["staged_history"] = [asdict(r) for r in self.staged_history]
         self.fs.write_text(REGISTRY_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
 
     def reset(self) -> None:
@@ -143,7 +149,9 @@ class ResultRegistry:
         self.save()
 
     def _next_id(self, prefix: str) -> str:
-        used = [int(rid[1:]) for rid in [*self.results, *self.claims] if rid.startswith(prefix)]
+        if self.allocate_id:
+            return self.allocate_id(prefix)
+        used = [int(rid[1:]) for rid in [*self.results, *self.claims, *(r.id for r in self.staged_history)] if rid.startswith(prefix)]
         return f"{prefix}{max(used, default=0) + 1}"
 
     def _run_output(self, run_id: str) -> str:
@@ -186,6 +194,9 @@ class ResultRegistry:
             (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip()),
             None,
         )
+        if self.immutable and same and (same.value, same.run_id, same.unit, same.description) != (value, run_id, unit.strip(), description.strip()):
+            self.staged_history.append(self.results.pop(same.id))
+            same = None
         result = Result(
             id=same.id if same else self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
             value=value, run_id=run_id, unit=unit.strip(), description=description.strip(),

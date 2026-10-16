@@ -101,6 +101,7 @@ class GraphContext:
     planner_llm: Any
     coder_llm: Any
     writer_llm: Any
+    research: Any = None
     judge: Any = None
     n_candidates: int = 3
     confirm_models: bool = False
@@ -115,6 +116,7 @@ class GraphContext:
     output_mode: str = "markdown"  # latex / word 时 render 之后导出 paper.pdf / paper.docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
+    max_planning_calls: int = 2
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)
