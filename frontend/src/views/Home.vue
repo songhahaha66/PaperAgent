@@ -7,7 +7,7 @@
       @create-new-task="resetDraft"
     />
     <main class="home-main">
-      <header class="home-header"><span>PaperAgent</span></header>
+      <header v-if="!isMobile" class="home-header"><span>PaperAgent</span></header>
       <section class="home-content" :aria-label="ui.newPaper">
         <h1>{{ isZh ? '想研究什么？' : 'What would you like to research?' }}</h1>
         <div class="research-composer" :class="{ 'is-busy': creating }">
@@ -622,7 +622,7 @@ onMounted(async () => {
 @media (max-width: 768px) {
   .home-header {
     min-height: 64px;
-    padding: 14px 18px 14px 60px;
+    padding: 14px 18px;
   }
   .home-header > span {
     font-size: 16px;

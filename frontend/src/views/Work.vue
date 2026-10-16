@@ -2433,7 +2433,7 @@ const generateWorkTitle = async (question: string) => {
 }
 @media (max-width: 768px) {
   .workspace-header {
-    padding: 16px 12px 16px 60px;
+    padding: 16px 14px;
     min-height: 64px;
     box-sizing: border-box;
     gap: 8px;

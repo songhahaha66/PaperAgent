@@ -1113,7 +1113,7 @@ onMounted(() => {
 }
 @media (max-width: 768px) {
   .workspace-header {
-    padding: 20px 16px 20px 60px;
+    padding: 24px 20px;
   }
   .workspace-header h1 {
     font-size: 22px;

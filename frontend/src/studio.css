@@ -116,3 +116,20 @@ select {
 .language-switcher {
   border-radius: 12px;
 }
+
+@media (max-width: 768px) {
+  .home-page,
+  .models-page,
+  .work-page,
+  .template-page,
+  .passkey-page {
+    flex-direction: column;
+  }
+  .home-main,
+  .models-main,
+  .workspace-container,
+  .template-page > .main-content,
+  .passkey-page > .main-content {
+    min-height: 0;
+  }
+}

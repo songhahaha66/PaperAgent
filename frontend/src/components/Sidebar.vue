@@ -132,19 +132,22 @@
   <!-- 手机端侧边栏遮罩 -->
   <div v-if="isMobile && !isSidebarCollapsed" class="sidebar-backdrop" @click="toggleSidebar" />
 
-  <!-- 手机端侧边栏收起时的浮动展开按钮 -->
-  <div v-if="isSidebarCollapsed" class="mobile-expand-btn-container">
-    <t-button
-      theme="default"
-      variant="outline"
+  <header v-if="isMobile" class="mobile-pagebar">
+    <button
+      class="mobile-navigation-button"
       :aria-label="isZh ? '打开导航' : 'Open navigation'"
-      shape="square"
+      :aria-expanded="!isSidebarCollapsed"
       @click="toggleSidebar"
-      class="mobile-expand-btn"
     >
-      <img src="/logo.png" alt="" class="mobile-logo-toggle" />
-    </t-button>
-  </div>
+      <SidebarToggleIcon />
+    </button>
+    <router-link to="/home" class="mobile-brand"
+      ><img src="/logo.png" alt="" /><span>PaperAgent</span></router-link
+    >
+    <div class="mobile-account">
+      <AccountMenu :collapsed="true" placement="bottom-right" @navigate="closeSidebarOnMobile" />
+    </div>
+  </header>
 </template>
 
 <script setup lang="ts">
@@ -489,25 +492,8 @@ onUnmounted(() => {
   display: flex;
   justify-content: center;
 }
-.sidebar-backdrop,
-.mobile-expand-btn-container {
+.sidebar-backdrop {
   display: none;
-}
-.mobile-expand-btn-container {
-  position: fixed;
-  top: 15px;
-  left: 14px;
-  z-index: 1080;
-}
-.mobile-expand-btn {
-  width: 32px;
-  height: 32px;
-  border: 0;
-  border-radius: 9px;
-  box-shadow: none;
-  background: #fff;
-  color: #555;
-  font-size: 21px;
 }
 .loading-state {
   text-align: center;
@@ -556,9 +542,6 @@ onUnmounted(() => {
     background: #0005;
     z-index: 1090;
   }
-  .mobile-expand-btn-container {
-    display: block;
-  }
   .sidebar-header {
     height: 68px;
     min-height: 68px;
@@ -597,9 +580,63 @@ onUnmounted(() => {
 .sidebar-footer-collapsed {
   padding: 12px 10px;
 }
-.mobile-logo-toggle {
-  width: 22px;
-  height: 26px;
+
+.mobile-pagebar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 58px;
+  min-height: 58px;
+  width: 100%;
+  padding: 0 14px;
+  background: #fff;
+  border-bottom: 1px solid #e8e9e7;
+  box-sizing: border-box;
+}
+.mobile-navigation-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: #444;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 22px;
+}
+.mobile-navigation-button:hover {
+  background: #f4f5f3;
+}
+.mobile-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #333;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+}
+.mobile-brand img {
+  width: 19px;
+  height: 23px;
   object-fit: contain;
+}
+.mobile-account {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+.mobile-account :deep(.account-trigger.compact) {
+  width: 34px;
+  height: 34px;
+  padding: 3px;
+}
+.mobile-account :deep(.account-avatar) {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
 }
 </style>

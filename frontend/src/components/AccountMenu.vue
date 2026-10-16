@@ -2,7 +2,7 @@
   <t-popup
     v-model:visible="visible"
     trigger="click"
-    placement="top-left"
+    :placement="placement"
     :show-arrow="false"
     overlay-inner-class-name="account-menu-popup"
     :overlay-inner-style="popupStyle"
@@ -77,7 +77,9 @@ import { computed, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-defineProps<{ collapsed: boolean }>()
+withDefaults(defineProps<{ collapsed: boolean; placement?: 'top-left' | 'bottom-right' }>(), {
+  placement: 'top-left',
+})
 const emit = defineEmits<{ (event: 'navigate'): void }>()
 const { t, locale } = useI18n()
 const auth = useAuthStore(),

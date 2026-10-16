@@ -7,29 +7,30 @@
     />
     <main class="models-main">
       <header class="models-header">
-        <div>
-          <h1>{{ ui.modelTitle }}</h1>
-          <p>{{ ui.modelSubtitle }}</p>
-        </div>
+        <h1>{{ ui.modelTitle }}</h1>
       </header>
       <div class="models-body">
-        <t-card :title="ui.defaultConnection" class="connection-card"
-          ><template #actions
+        <t-card :title="ui.defaultConnection" class="connection-card">
+          <template #actions
             ><t-tag :theme="forms.brain.id ? 'success' : 'default'" variant="light" size="small">{{
               forms.brain.id ? ui.configured : ui.unconfigured
             }}</t-tag></template
           >
-          <p class="field-hint">{{ ui.connectionHint }}</p>
-          <div class="provider-options">
-            <t-radio-group :value="isDeepSeek ? 'deepseek' : 'custom'" @change="selectProvider"
+          <div class="provider-row">
+            <label>{{ isZh ? '服务商' : 'Provider' }}</label
+            ><t-radio-group
+              :value="isDeepSeek ? 'deepseek' : 'custom'"
+              :disabled="saving || loading"
+              @change="selectProvider"
               ><t-radio-button value="deepseek">DeepSeek</t-radio-button
               ><t-radio-button value="custom">{{ ui.custom }}</t-radio-button></t-radio-group
             >
           </div>
           <ConnectionFields :form="forms.brain" :disabled="loading || saving" :ui="ui" />
           <div class="apply-option">
-            <t-checkbox v-model="applyAll" :disabled="saving">{{ ui.applyAll }}</t-checkbox>
-            <p>{{ ui.applyHint }}</p>
+            <t-checkbox v-model="applyAll" :disabled="saving">{{
+              isZh ? '计算和写作使用同一连接' : 'Use this connection for computation and writing'
+            }}</t-checkbox>
           </div>
           <t-alert
             v-if="feedback"
@@ -51,53 +52,54 @@
               :disabled="!valid(forms.brain) || saving || loading"
               @click="testConnection"
               >{{ testing ? ui.testing : ui.test }}</t-button
-            ><span v-if="forms.brain.id" class="key-note"
-              ><t-icon name="secured" />{{ ui.keepKey }}</span
             >
           </div>
         </t-card>
-        <t-collapse class="advanced-config"
-          ><t-collapse-panel value="roles" :header="ui.advanced"
-            ><template #header-right-content
-              ><span class="advanced-hint">{{ ui.advancedHint }}</span></template
-            >
-            <div class="advanced-content">
-              <section v-for="role in roles.slice(1)" :key="role.type" class="role-form">
-                <div class="advanced-role-title">
-                  <h3>{{ role.label }}</h3>
-                  <t-tag
-                    :theme="forms[role.type].id ? 'success' : 'default'"
-                    variant="light"
-                    size="small"
-                    >{{ forms[role.type].id ? ui.configured : ui.unconfigured }}</t-tag
-                  >
-                </div>
-                <p class="field-hint">{{ role.hint }}</p>
-                <ConnectionFields
-                  :form="forms[role.type]"
-                  :disabled="saving || !!savingRole"
-                  :ui="ui"
-                />
-                <div class="role-actions">
-                  <t-button
-                    theme="primary"
-                    variant="outline"
-                    :disabled="!valid(forms[role.type]) || !!savingRole"
-                    :loading="savingRole === role.type"
-                    @click="saveRole(role.type)"
-                    >{{ ui.save }}</t-button
-                  ><t-button
-                    v-if="forms[role.type].id"
-                    theme="danger"
-                    variant="text"
-                    @click="confirmDelete(role.type)"
-                    >{{ ui.delete }}</t-button
-                  >
-                </div>
-              </section>
-            </div></t-collapse-panel
-          ></t-collapse
-        >
+        <section class="advanced-config">
+          <button
+            class="advanced-toggle"
+            :aria-expanded="advancedOpen"
+            aria-controls="stage-connections"
+            @click="advancedOpen = !advancedOpen"
+          >
+            <h2>{{ ui.advanced }}</h2>
+            <t-icon :name="advancedOpen ? 'chevron-up' : 'chevron-down'" />
+          </button>
+          <div id="stage-connections" v-show="advancedOpen" class="advanced-content">
+            <section v-for="role in roles.slice(1)" :key="role.type" class="role-form">
+              <div class="advanced-role-title">
+                <h3>{{ role.label }}</h3>
+                <t-tag
+                  :theme="forms[role.type].id ? 'success' : 'default'"
+                  variant="light"
+                  size="small"
+                  >{{ forms[role.type].id ? ui.configured : ui.unconfigured }}</t-tag
+                >
+              </div>
+              <ConnectionFields
+                :form="forms[role.type]"
+                :disabled="loading || saving || !!savingRole"
+                :ui="ui"
+              />
+              <div class="role-actions">
+                <t-button
+                  theme="primary"
+                  variant="outline"
+                  :disabled="!valid(forms[role.type]) || !!savingRole"
+                  :loading="savingRole === role.type"
+                  @click="saveRole(role.type)"
+                  >{{ ui.save }}</t-button
+                ><t-button
+                  v-if="forms[role.type].id"
+                  theme="danger"
+                  variant="text"
+                  @click="confirmDelete(role.type)"
+                  >{{ ui.delete }}</t-button
+                >
+              </div>
+            </section>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -119,6 +121,7 @@ interface Form {
 }
 const { ui, isZh } = useStudioCopy(),
   { isMobile } = useBreakpoint()
+const advancedOpen = ref(false)
 const collapsed = ref(isMobile.value)
 watch(isMobile, (m) => {
   if (m) collapsed.value = true
@@ -156,7 +159,16 @@ const ConnectionFields = defineComponent({
         'div',
         { class: 'connection-fields' },
         [
-          ['apiKey', 'key', props.form.id ? props.ui.keepKey : props.ui.enterKey, 'password'],
+          [
+            'apiKey',
+            'key',
+            props.form.id
+              ? props.ui.key === 'API 密钥'
+                ? '输入新密钥以更换'
+                : 'Enter a new key to replace'
+              : props.ui.enterKey,
+            'password',
+          ],
           ['baseUrl', 'endpoint', 'https://api.deepseek.com/v1', 'text'],
           ['modelId', 'modelId', 'deepseek-flash', 'text'],
         ].map(([key, label, placeholder, type]) =>
@@ -312,192 +324,296 @@ onMounted(async () => {
 .models-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: auto;
-  padding: 36px 40px;
+  padding: 38px 40px 56px;
+  --td-component-stroke: #e1e3e1;
+  --td-component-border: #d5d8d5;
 }
 .models-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: start;
-  gap: 24px;
-  max-width: 900px;
-  margin: 0 auto 28px;
+  max-width: 760px;
+  margin: 0 auto 26px;
 }
 .models-header h1 {
   font-family: var(--td-font-family);
   font-size: 26px;
   font-weight: 600;
-  margin: 0 0 10px;
-}
-.models-header p {
-  color: var(--td-text-color-secondary);
-  font-size: 14px;
-  line-height: 1.8;
   margin: 0;
+  color: #252525;
+  line-height: 1.4;
 }
 .models-body {
-  max-width: 900px;
+  max-width: 760px;
   margin: 0 auto;
+}
+.connection-card {
+  border-color: #dedfde;
+  border-radius: 14px;
+  box-shadow: none;
+}
+.connection-card :deep(.t-card__header) {
+  padding: 22px 26px;
+  border-bottom: 1px solid #eeeeed;
 }
 .connection-card :deep(.t-card__title) {
   font-family: var(--td-font-family);
   font-size: 16px;
+  font-weight: 600;
+  color: #333;
 }
-.field-hint {
+.connection-card :deep(.t-card__body) {
+  padding: 26px;
+}
+.connection-card :deep(.t-tag),
+.advanced-role-title :deep(.t-tag) {
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.provider-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.provider-row > label {
   font-size: 13px;
-  line-height: 1.8;
-  color: var(--td-text-color-secondary);
-  margin: 0 0 20px;
+  font-weight: 500;
+  color: #424242;
 }
-.provider-options {
-  margin: 0 0 24px;
+.provider-row > .t-radio-group {
+  justify-self: start;
+}
+.provider-row :deep(.t-radio-button) {
+  font-size: 13px;
+  padding: 0 18px;
+}
+.provider-row :deep(.t-radio-group) {
+  border-radius: 9px;
+  overflow: hidden;
 }
 :deep(.connection-fields) {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 24px;
 }
 :deep(.connection-field) {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 14px;
-  font-weight: 400;
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+:deep(.connection-field > span) {
+  font-size: 13px;
+  font-weight: 500;
+  color: #424242;
 }
 :deep(.connection-field .t-input) {
-  height: 36px;
+  height: 40px;
+  border-color: #d8dcd8;
+  border-radius: 9px;
+  background: #fcfcfc;
+  box-shadow: none;
+}
+:deep(.connection-field .t-input:hover) {
+  border-color: #b5bdb7;
+}
+:deep(.connection-field .t-input:focus-within) {
+  border-color: var(--td-brand-color);
+  background: #fff;
+  box-shadow: 0 0 0 2px #16865d0a;
 }
 :deep(.connection-field .t-input__inner) {
   font-size: 14px;
+  color: #333;
+}
+:deep(.connection-field .t-input__inner::placeholder) {
+  font-size: 13px;
+  color: #929792;
 }
 .apply-option {
-  margin-top: 28px;
+  margin: 24px 0 0 126px;
 }
-.apply-option p {
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-  line-height: 1.8;
-  margin: 7px 0 0 24px;
+.apply-option :deep(.t-checkbox__label) {
+  font-size: 13px;
+  color: #505650;
 }
 .connection-actions {
   display: flex;
+  align-items: center;
   gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin-top: 28px;
+  border-top: 1px solid #eeeeed;
+  margin: 26px -26px -26px;
+  padding: 18px 26px 18px 152px;
 }
-.key-note {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-  margin-left: auto;
-}
-.key-note > .t-icon {
-  flex-shrink: 0;
+.connection-actions .t-button {
+  font-size: 13px;
+  height: 36px;
+  border-radius: 9px;
+  padding: 0 18px;
 }
 .connection-feedback {
-  margin-top: 20px;
+  margin: 22px 0 0 126px;
+  border-radius: 8px;
+  font-size: 13px;
 }
 .advanced-config {
-  margin-top: 24px;
+  margin-top: 20px;
+  border: 1px solid #dedfde;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
 }
-.advanced-hint {
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-  font-weight: 400;
+.advanced-toggle {
+  border: 0;
+  background: #fff;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 21px 26px;
+  text-align: left;
+  cursor: pointer;
+  color: #333;
+}
+.advanced-toggle:hover {
+  background: #fafbfa;
+}
+.advanced-toggle h2 {
+  font-family: var(--td-font-family);
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.5;
+}
+.advanced-toggle > .t-icon {
+  font-size: 16px;
+  color: #777;
+  flex-shrink: 0;
 }
 .advanced-content {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 32px;
-  padding: 10px 0;
-}
-.role-form + .role-form {
-  padding-left: 32px;
-  border-left: 1px solid var(--td-component-stroke);
+  padding: 26px;
+  border-top: 1px solid #eeeeed;
+  background: #fff;
 }
 .advanced-role-title {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
 }
 .advanced-role-title h3 {
   font-family: var(--td-font-family);
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 600;
   margin: 0;
+  color: #444;
+}
+.role-form + .role-form {
+  border-top: 1px solid #eeeeed;
+  margin-top: 30px;
+  padding-top: 28px;
 }
 .role-actions {
   display: flex;
-  gap: 16px;
   align-items: center;
-  margin-top: 24px;
+  gap: 14px;
+  margin: 24px 0 0 126px;
+}
+.role-actions .t-button {
+  font-size: 13px;
+  height: 34px;
+  border-radius: 8px;
 }
 @media (max-width: 1100px) {
   .models-main {
-    padding: 30px;
-  }
-  .key-note {
-    margin-left: 0;
-    width: 100%;
-  }
-}
-@media (max-width: 950px) {
-  .advanced-content {
-    grid-template-columns: 1fr;
-  }
-  .role-form + .role-form {
-    padding: 28px 0 0;
-    border-left: 0;
-    border-top: 1px solid var(--td-component-stroke);
+    padding: 30px 28px 44px;
   }
 }
 @media (max-width: 768px) {
   .models-main {
-    padding: 20px 16px;
+    padding: 26px 20px 36px;
   }
   .models-header {
-    padding-left: 44px;
-    gap: 12px;
-    margin-bottom: 24px;
+    margin-bottom: 22px;
   }
   .models-header h1 {
-    font-size: 22px;
+    font-size: 23px;
   }
-  .models-header p {
-    font-size: 12px;
+  .connection-card :deep(.t-card__header) {
+    padding: 20px;
   }
-  .connection-card :deep(.t-card__header),
   .connection-card :deep(.t-card__body) {
-    padding: 16px;
+    padding: 22px 20px;
   }
-  .connection-card :deep(.t-card__title) {
-    font-size: 15px;
+  .provider-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 24px;
   }
-  .advanced-hint {
-    display: none;
+  .provider-row > label {
+    min-width: 58px;
   }
-  .key-note {
-    font-size: 11px;
-    line-height: 1.8;
+  .provider-row :deep(.t-radio-button) {
+    padding: 0 17px;
   }
-  .apply-option :deep(.t-checkbox__label) {
+  :deep(.connection-field) {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  :deep(.connection-fields) {
+    gap: 22px;
+  }
+  :deep(.connection-field > span) {
     font-size: 13px;
   }
-  .apply-option p {
-    font-size: 11px;
+  :deep(.connection-field .t-input) {
+    height: 41px;
   }
-  .advanced-config :deep(.t-collapse-panel__content) {
-    padding: 16px;
+  .apply-option {
+    margin: 24px 0 0;
+  }
+  .apply-option :deep(.t-checkbox__label) {
+    font-size: 12px;
   }
   .connection-actions {
-    margin-top: 24px;
+    margin: 24px -20px -22px;
+    padding: 18px 20px;
   }
-  .field-hint {
-    font-size: 12px;
+  .connection-feedback {
+    margin: 20px 0 0;
+  }
+  .advanced-toggle {
+    padding: 20px;
+  }
+  .advanced-content {
+    padding: 22px 20px;
+  }
+  .advanced-role-title {
+    margin-bottom: 22px;
+  }
+  .role-actions {
+    margin: 22px 0 0;
+  }
+  .role-form + .role-form {
+    margin-top: 28px;
+    padding-top: 26px;
+  }
+}
+@media (max-width: 360px) {
+  .models-main {
+    padding: 22px 14px 32px;
+  }
+  .provider-row {
+    gap: 12px;
+  }
+  .provider-row :deep(.t-radio-button) {
+    padding: 0 12px;
   }
 }
 </style>
