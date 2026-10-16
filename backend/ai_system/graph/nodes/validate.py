@@ -19,6 +19,7 @@ from langgraph.runtime import Runtime
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
 from ..registry import MATH_PATTERN, REF_PATTERN, find_refs
+from ...research.models import IssueReport
 from ..state import PaperState
 from ..tracing import labelled
 from .consistency import audit_sections
@@ -104,18 +105,22 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
 async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("validate", "in_progress")
-    issues = check_sections(state, ctx)
+    reports = [IssueReport(task_id=i["section"].split(":", 1)[1] if i["section"].startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
+        category="writing", section=i["section"], message=i["message"]) for i in check_sections(state, ctx)]
     if ctx.check_claims:
-        flagged = {issue["section"] for issue in issues}
-        # 已有数字问题的章节会整体重写，这一轮先不查口径
-        issues += [i for i in await audit_sections(state, ctx) if i["section"] not in flagged]
+        flagged = {issue.section for issue in reports}
+        reports += [i for i in await audit_sections(state, ctx) if i.section not in flagged]
+    issues = ctx.research.report_issues(reports, "sections")
+    research_restart = any(i["blocking"] for i in issues)
     ctx.write_json(".system/validation.json", {"round": state.get("repair_round", 0), "issues": issues})
     note = f"第 {state.get('repair_round', 0)} 轮：{len(issues)} 个问题"
     await ctx.events.emit("paper_validation", note if issues else "校验通过")
-    return {"issues": issues, "log": [f"validate: {len(issues)} issues"]}
+    return {"issues": issues, "research_restart": research_restart, "log": [f"validate: {len(issues)} issues"]}
 
 
 def route_after_validate(state: PaperState, runtime: Runtime[GraphContext]) -> str:
+    if state.get("research_restart"):
+        return "observe"
     if state.get("issues") and state.get("repair_round", 0) < runtime.context.max_repair_rounds:
         return "repair"
     return "render"
@@ -207,7 +212,7 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     if ctx.research:
         snapshot = ctx.research.refresh_inputs()
-        if any(t["acceptance"] != "accepted" or t["validity"] != "current" for t in snapshot["tasks"].values()):
+        if not ctx.research.delivery_ready(snapshot):
             return {"research_restart": True, "log": ["render: inputs changed, returning to research control"]}
         ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
     raw = assemble(state)

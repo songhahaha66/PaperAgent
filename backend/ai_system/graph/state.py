@@ -9,6 +9,7 @@ import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, Field, model_validator
+from ..research.models import Requirement, Assumption, IssueReport
 
 
 def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
@@ -29,7 +30,7 @@ def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
 
 class Subproblem(BaseModel):
     id: str = Field(description="子问题编号，如 Q1、Q2")
-    kind: Literal["compute", "writing"] = Field(
+    kind: Literal["compute", "writing", "verify"] = Field(
         default="compute",
         description="compute=需要用数据建模计算；writing=只需基于前序结论写成文书（如给教练的备忘录、建议信、政策建议），不需要新的计算",
     )
@@ -45,7 +46,8 @@ class ProblemAnalysis(BaseModel):
     overall_analysis: str = Field(description="整体思路：各子问题之间的关系、数据如何使用")
     # 空列表能通过类型校验，DeepSeek 偶尔这样返回；要求至少一个，校验失败会进入重试
     subproblems: List[Subproblem] = Field(min_length=1)
-    assumptions: List[str] = Field(description="全局建模假设，每条说明理由")
+    requirements: List[Requirement] = Field(min_length=1, description="逐条提取原题目标、交付物、硬约束，写明原文摘录、承担任务与可执行验收条件")
+    assumptions: List[Assumption] = Field(description="有编号、任务范围和可证伪检查的建模假设；不要把用户给定事实写成假设")
 
 
 class MethodPick(BaseModel):
@@ -110,12 +112,19 @@ class NegativeControl(BaseModel):
     baseline_run_id: str = Field(default="", description="打印 baseline_value 的那次执行的 run_id")
 
 
+class RequirementEvidence(BaseModel):
+    requirement_id: str
+    evidence_refs: List[str] = Field(min_length=1)
+
+
 class SolveReport(BaseModel):
     summary: str = Field(description="求解过程和结论的概要，结论中的数值用 {{R:Rn}} 引用")
     approach: str = Field(description="实际采用的模型与算法，与计划不同时说明原因")
     key_findings: List[Finding] = Field(description="主要结论，每条写明依据的登记结果和证据强度")
     sensitivity: str = Field(default="", description="灵敏度分析或检验的做法与结论")
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
+    requirement_evidence: List[RequirementEvidence] = Field(default_factory=list, description="每项本任务要求的证据引用；必须使用自己或前序任务的实际登记编号")
+    research_issues: List[IssueReport] = Field(default_factory=list, description="发现上游模型、数据或假设可能有错时提交带证据的疑点；不要擅自沿用错误前提")
     controls: List[NegativeControl] = Field(
         default_factory=list, description="标签置换对照：报告了预测效果（AUC、准确率、LogLoss、RMSE 等）时每个指标一条"
     )
@@ -145,6 +154,7 @@ class Conflict(BaseModel):
     claims: List[str] = Field(description="涉及的结论编号，如 [\"C2\", \"C7\"]；结论与自身证据不符时只填一个")
     issue: str = Field(description="哪里矛盾，引用结论原文说明")
     resolution: str = Field(description="写作时统一采用的口径：怎样表述才与全部证据一致")
+    research_issue: IssueReport | None = Field(default=None, description="涉及数据、模型或假设错误时提交研究问题，进入独立核验与重规划")
 
 
 class ConsistencyReview(BaseModel):
@@ -155,6 +165,7 @@ class ClaimIssue(BaseModel):
     contradicts: bool = Field(default=True, description="这句话是否确实与结论表矛盾；一致、或只是没有提到的，填 false")
     section: str = Field(description="有问题的章节 key")
     problem: str = Field(description="本节哪句话与哪条结论（编号）不一致，应怎样改")
+    research_issue: IssueReport | None = Field(default=None, description="若根因是数据、模型或假设错误，提交研究问题而非只改措辞")
 
 
 class ClaimAudit(BaseModel):
@@ -203,6 +214,7 @@ class PaperState(TypedDict, total=False):
 class BranchInput(TypedDict, total=False):
     """Send 给单个子问题分支的输入"""
 
+    research_contract: Dict[str, Any]
     subproblem: Dict[str, Any]
     analysis: Dict[str, Any]
     data_profile: str

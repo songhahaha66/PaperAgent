@@ -59,13 +59,17 @@ class ResearchClaim(BaseModel):
 
 
 class ResearchSnapshot(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     engine_version: str | None = None
     research_revision: int = 0
     commit_seq: int = 0
     outcome: str | None = None
+    requirements: list[dict] = Field(default_factory=list)
+    assumptions: list[dict] = Field(default_factory=list)
+    validations: list[dict] = Field(default_factory=list)
     tasks: list[dict] = Field(default_factory=list)
-    blocking_issues: list[dict] = Field(default_factory=list)
+    issues: list[dict] = Field(default_factory=list)
+    issue_evidence: list[ResearchResult] = Field(default_factory=list)
     work_id: str
     work_status: str
     research_id: str | None = None
@@ -133,6 +137,12 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         )
         for item in raw_results[:500] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
+    issue_refs = {ref for issue in business["issues"][-30:] for ref in issue["evidence_refs"]} if business else set()
+    historical = [entry["payload"] for rid, entry in business["evidence"].items() if rid in issue_refs] if business else []
+    issue_evidence = [ResearchResult(id=str(item["id"]), subproblem_id=str(item["subproblem"]),
+        name=str(item.get("name", "")), value=str(item.get("value", "")), unit=str(item.get("unit", "")),
+        kind=str(item.get("kind", "number")), run_id=str(item.get("run_id", "")), figure_path=_file(root, item.get("path"), "outputs/"))
+        for item in historical[:200]]
     result_ids = {r.id for r in results}
     claims = [
         ResearchClaim(
@@ -142,7 +152,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         )
         for item in raw_claims[:200] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
-    used_runs = {r.run_id for r in results}
+    used_runs = {r.run_id for r in [*results, *issue_evidence]}
     runs = []
     for run_id in sorted(used_runs):
         # Only expose source files within the exact run, never arbitrary manifest paths.
@@ -160,8 +170,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     artifacts = [p for p in ("paper.md", "paper.pdf", "paper.docx", "paper.tex") if _file(root, p)]
     issues = validation.get("issues") or []
     if business:
-        current = business.get("paper_hash") and all(t["acceptance"] == "accepted" and t["validity"] == "current"
-                    for t in business["tasks"].values()) and all(s["validity"] == "current" for s in business["sections"].values())
+        current = business.get("paper_hash") and store.delivery_ready(business) and all(s["validity"] == "current" for s in business["sections"].values())
         artifacts = [p for p in artifacts if p in {"paper.md", *business.get("exports", [])}] if current else []
         if current and business.get("paper_conflict"):
             artifacts = [business["paper_version"]] if _file(root, business.get("paper_version")) else []
@@ -172,7 +181,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
         outcome=control.get("outcome"), tasks=control.get("tasks", []),
-        blocking_issues=control.get("issues", []),
+        requirements=control.get("requirements", []), assumptions=control.get("assumptions", []),
+        validations=business["validations"][-20:] if business else [],
+        issues=business["issues"][-30:] if business else [], issue_evidence=issue_evidence,
         work_id=work_id, work_status=status, research_id=thread.get("thread_id"),
         graph_status=thread.get("status"),
         has_research=bool(thread or registry or artifacts),

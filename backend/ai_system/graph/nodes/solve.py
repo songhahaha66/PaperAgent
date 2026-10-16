@@ -9,6 +9,7 @@
 胜出分支的内核和对话历史直接接着做正式求解。
 """
 
+import json
 import logging
 import re
 from typing import Any, Dict, List, NamedTuple, Optional
@@ -250,6 +251,7 @@ def build_task(
         + f"\n检验：{chosen['validation']}",
         f"# 方法参考\n{describe(chosen.get('method_keys') or [])}",
         _dependency_text(branch.get("dependencies") or {}, ctx),
+        "# 研究契约（不得放宽验收；按指定名称登记检查指标，并填写 requirement_evidence）\n" + json.dumps(branch["research_contract"], ensure_ascii=False) if branch.get("research_contract") else "",
         extra,
         ending,
     ]))

@@ -32,6 +32,9 @@ from ai_system.graph.state import (
     Subproblem,
     ValidationProtocol,
 )
+from ai_system.research import ENGINE_VERSION
+from ai_system.research.models import Requirement, Assumption
+from ai_system.research.planner import AmendmentSpec
 from ai_system.research.store import ResearchStore
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
@@ -54,7 +57,10 @@ def _analysis() -> ProblemAnalysis:
             Subproblem(id="Q2", title="政策评估", question="评估节能政策", depends_on=["Q1"]),
             Subproblem(id="Q3", title="致市长的建议信", question="给市长写一封建议信", kind="writing", depends_on=["Q1", "Q2"]),
         ],
-        assumptions=["数据真实可靠"],
+        requirements=[Requirement(id="RQ1", statement="预测用电量", source_quote="预测 2025 年用电量", kind="goal", task_ids=["Q1"]),
+                      Requirement(id="RQ2", statement="评估政策效果", source_quote="评估节能政策效果", kind="goal", task_ids=["Q2"]),
+                      Requirement(id="RQ3", statement="形成政策建议", source_quote="评估节能政策效果", kind="deliverable", task_ids=["Q3"])],
+        assumptions=[Assumption(id="A1", statement="数据真实可靠", task_ids=["Q1", "Q2"])],
     )
 
 
@@ -74,7 +80,17 @@ class _Structured:
 
     async def ainvoke(self, messages):
         if self.schema is ProblemAnalysis:
-            return _analysis()
+            analysis = _analysis()
+            source = messages[-1].content.split("# 题目\n", 1)[1].split("\n\n# 数据概览", 1)[0]
+            for requirement in analysis.requirements:
+                if requirement.source_quote not in source:
+                    requirement.source_quote = source
+            return analysis
+        if self.schema is AmendmentSpec:
+            data = json.loads(messages[-1].content)
+            number = max(int(r[2:]) for r in data["used_requirement_ids"]) + 1
+            return AmendmentSpec(requirements=[Requirement(id=f"RQ{number}", statement=data["change"], source_quote=data["change"],
+                kind="goal", task_ids=data["scope"])])
         if self.schema is MethodPick:
             return MethodPick(method_keys=["arima", "not_a_method", "regression"], reason="r")
         if self.schema is CandidateSet:
@@ -178,6 +194,13 @@ class FakeModel(BaseChatModel):
             }),
         ]
         name, args = script[min(step, len(script) - 1)]
+        if name == "SolveReport":
+            source = task.split("# 研究契约", 1)[-1]
+            if "# 研究契约" in task:
+                contract, _ = json.JSONDecoder().raw_decode(source[source.index("{"):])
+                refs = [ref for message in tool_results for ref in re.findall(r"\{\{R:(R[0-9]+)\}\}", str(message.content))]
+                args["requirement_evidence"] = [{"requirement_id": r["id"], "evidence_refs": [refs[-1]]}
+                                                for r in contract["requirements"]] if refs else []
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{sid}_{step}"}])
 
     def _probe_step(self, task: str, messages: List[BaseMessage]) -> AIMessage:

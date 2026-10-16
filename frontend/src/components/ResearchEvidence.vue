@@ -17,17 +17,66 @@
           {{ taskLabel(task.execution_status, task.acceptance, task.validity) }}
           <small v-if="task.reason"> · {{ task.reason }}</small>
           <button
-            v-if="snapshot.work_status !== 'in_progress' && snapshot.work_status !== 'waiting'"
+            v-if="
+              task.kind !== 'verify' &&
+              snapshot.work_status !== 'in_progress' &&
+              snapshot.work_status !== 'waiting'
+            "
             class="evidence-link"
             @click="$emit('revise', task.task_id)"
           >
             {{ isZh ? '修改这部分' : 'Revise this task' }}
           </button>
         </p>
-        <p v-for="(issue, index) in snapshot.blocking_issues" :key="index">
-          {{ issue.task_id }}：{{ issue.message }}
-        </p>
       </div>
+      <details v-if="snapshot.requirements?.length" class="research-contract">
+        <summary>{{ isZh ? '要求覆盖与假设' : 'Requirements and assumptions' }}</summary>
+        <p v-for="requirement in snapshot.requirements" :key="requirement.id">
+          <strong>{{ requirement.id }}</strong> · {{ requirement.task_ids.join(', ') }} ·
+          {{
+            requirement.status === 'accepted'
+              ? isZh
+                ? '已有验收证据'
+                : 'Evidence accepted'
+              : isZh
+                ? '待完成验收'
+                : 'Pending acceptance'
+          }}
+          <br />{{ requirement.statement }}
+          <small class="source-quote"
+            >{{ isZh ? '原文：' : 'Source: ' }}{{ requirement.source_quote }}</small
+          >
+        </p>
+        <p v-for="assumption in snapshot.assumptions" :key="assumption.id">
+          <strong>{{ assumption.id }} · v{{ assumption.revision }}</strong> ·
+          {{ assumptionLabel(assumption.status) }} <br />{{ assumption.statement }}
+        </p>
+      </details>
+      <details v-if="snapshot.issues?.length" class="research-contract">
+        <summary>{{ isZh ? '研究问题与修复记录' : 'Issues and repairs' }}</summary>
+        <p v-for="issue in snapshot.issues" :key="issue.id">
+          <strong
+            >{{ issue.task_id }} · v{{ issue.task_revision }} ·
+            {{ issueLabel(issue.status) }}</strong
+          >
+          <span v-if="issue.assumption_id"> · {{ issue.assumption_id }}</span
+          ><br />{{ issue.message }}
+          <small
+            v-for="evidence in evidenceFor(issue.evidence_refs)"
+            :key="evidence.id"
+            class="source-quote"
+          >
+            {{ evidence.id }} · {{ evidence.name }}：{{ evidence.value }} {{ evidence.unit }}
+            <button
+              v-if="runFor(evidence)?.stdout_path"
+              class="evidence-link"
+              @click="$emit('open-file', runFor(evidence)!.stdout_path!)"
+            >
+              {{ isZh ? '查看核验输出' : 'Check output' }}
+            </button>
+          </small>
+        </p>
+      </details>
       <div class="evidence-toolbar">
         <div
           class="evidence-scopes"
@@ -136,6 +185,23 @@ const taskLabel = (execution: string, acceptance: string, validity: string) => {
   if (execution === 'running') return isZh.value ? '执行中' : 'Running'
   return isZh.value ? '等待执行' : 'Pending'
 }
+const assumptionLabel = (status: string) =>
+  ({
+    active: isZh.value ? '采用中，仍可被检验' : 'In use, testable',
+    refuted: isZh.value ? '已被反证' : 'Refuted',
+    retired: isZh.value ? '已停用' : 'Retired',
+  })[status] || status
+const issueLabel = (status: string) =>
+  ({
+    suspected: isZh.value ? '待独立核验' : 'Awaiting verification',
+    confirmed: isZh.value ? '问题已确认' : 'Confirmed',
+    repairing: isZh.value ? '计划修复中' : 'Repairing',
+    resolved: isZh.value ? '已重算并通过验收' : 'Resolved and accepted',
+    dismissed: isZh.value ? '核验未支持疑点' : 'Dismissed by verification',
+    inconclusive: isZh.value ? '证据不足，交付受阻' : 'Inconclusive, delivery blocked',
+  })[status] || status
+const evidenceFor = (refs: string[]) =>
+  (props.snapshot?.issue_evidence || []).filter((r) => refs.includes(r.id))
 const scope = ref('')
 const expanded = ref('')
 const subproblems = computed(() => [
@@ -180,6 +246,24 @@ summary > span {
   color: #666e68;
   font-weight: 400;
   font-size: 13px;
+}
+.source-quote {
+  display: block;
+  color: #69716b;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.research-contract {
+  border-bottom: 1px solid #eceeec;
+  margin-bottom: 10px;
+}
+.research-contract summary {
+  padding: 8px 0;
+  font-size: 13px;
+}
+.research-contract p {
+  font-size: 13px;
+  line-height: 1.6;
 }
 .evidence-body {
   border-top: 1px solid #eceeec;

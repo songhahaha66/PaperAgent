@@ -6,16 +6,21 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_system.research.models import PlanPatch, TaskChange, WorkerResult, ResearchConflict
+from ai_system.research import ENGINE_VERSION
+from ai_system.research.models import PlanPatch, TaskChange, WorkerResult, ResearchConflict, IssueReport, Requirement
 from ai_system.research.store import ResearchStore
 from ai_system.research.planner import ready_tasks
 
 
-def make_store(tmp_path):
+def make_store(tmp_path, limit=None):
     store = ResearchStore(tmp_path, "research")
     store.initialize("Answer every original question; preserve capacity constraints", {
         "subproblems": [{"id": key, "title": key, "question": key, "depends_on": deps}
-                        for key, deps in [("Q1", []), ("Q2", ["Q1"]), ("Q3", [])]], "assumptions": ["A1"]})
+                        for key, deps in [("Q1", []), ("Q2", ["Q1"]), ("Q3", [])]],
+        "requirements": [{"id": f"RQ{i}", "statement": key, "source_quote": "preserve capacity constraints", "kind": "goal", "task_ids": [key],
+            "checks": [{"id": "capacity", "description": "capacity", "left": {"task_id": "Q1", "name": "value"}, "operator": "le", "expected": limit}] if limit is not None and key == "Q1" else []}
+            for i, key in enumerate(("Q1", "Q2", "Q3"), 1)],
+        "assumptions": [{"id": "A1", "statement": "stable input", "task_ids": ["Q1", "Q2"], "checks": []}]})
     return store
 
 
@@ -23,9 +28,10 @@ def finish(store, key, *, acceptance="accepted", order=None):
     order = order or store.claim(key)
     ref = store.allocate_ref("R")
     result = WorkerResult(order=order, execution_status="succeeded", acceptance=acceptance,
-        report={"status": "completed", "summary": key},
+        report={"status": "completed", "summary": key, "requirement_evidence":
+            [{"requirement_id": rid, "evidence_refs": [ref]} for rid in store.snapshot()["tasks"][key]["requirement_ids"]]},
         results=[{"id": ref, "subproblem": key, "kind": "number", "name": "value", "value": "42", "run_id": "run_test"}],
-        issues=["capacity violated"] if acceptance == "rejected" else [])
+        issues=[IssueReport(task_id=key, category="execution", message="temporary execution failure")] if acceptance == "rejected" else [])
     return result, store.commit(result)
 
 
@@ -159,6 +165,8 @@ def test_data_correction_after_commit_invalidates_all_coarse_file_consumers(tmp_
 
 def test_manual_edit_preserves_both_paper_versions(tmp_path):
     store = make_store(tmp_path)
+    for key in ("Q1", "Q2", "Q3"):
+        finish(store, key)
     assert store.publish_paper("generated one") == ("paper.md", False)
     (tmp_path / "paper.md").write_text("human edits")
     path, conflict = store.publish_paper("generated two")
@@ -170,7 +178,7 @@ def test_manual_edit_preserves_both_paper_versions(tmp_path):
 def test_planner_can_add_validation_task_without_losing_requirements(tmp_path):
     store = make_store(tmp_path)
     store.apply_patch(PlanPatch(command_id="verification", base_revision=1, reason="need baseline",
-        changes=[TaskChange(action="add", task_id="Q4", title="baseline", objective="validate baseline"),
+        changes=[TaskChange(action="add", task_id="Q4", title="baseline", objective="validate baseline", requirement_ids=["RQ1"]),
                  TaskChange(task_id="Q1", objective="compare against Q4", dependencies=["Q4"])]))
     assert set(store.snapshot()["tasks"]) == {"Q1", "Q2", "Q3", "Q4"}
     assert "Q4" in ready_tasks(store.snapshot()) and "Q1" not in ready_tasks(store.snapshot())
@@ -181,7 +189,7 @@ def test_snapshot_is_read_only_and_uses_authoritative_database(tmp_path):
     store = make_store(tmp_path)
     finish(store, "Q1")
     thread = tmp_path / ".system" / "graph_thread.json"
-    thread.write_text(json.dumps({"engine_version": "research-v1", "thread_id": "research", "status": "blocked"}))
+    thread.write_text(json.dumps({"engine_version": ENGINE_VERSION, "thread_id": "research", "status": "blocked"}))
     (thread.parent / "results.json").write_text('{broken projection')
     before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     snapshot = research_snapshot(tmp_path, "work", "paused")
@@ -208,9 +216,10 @@ def test_duplicate_revision_command_reuses_original_objective(tmp_path):
     from ai_system.research.planner import propose_revision
     store = make_store(tmp_path)
     command = dict(command_id="human", base_revision=1, change="use corrected assumption", scope=["Q1"])
-    patch = propose_revision(store.snapshot(), **command)
+    requirements = [Requirement(id="RQ4", statement=command["change"], source_quote=command["change"], kind="goal", task_ids=["Q1"])]
+    patch = propose_revision(store.snapshot(), **command, requirements=requirements)
     first = store.apply_revision_command(**command, patch=patch)
-    retried = propose_revision(store.snapshot(), **command)
+    retried = propose_revision(store.snapshot(), **command, requirements=requirements)
     assert store.apply_revision_command(**command, patch=retried) == first
     assert store.snapshot()["tasks"]["Q1"]["objective"].count("补充要求") == 1
 
@@ -219,7 +228,7 @@ def test_added_task_invalidates_existing_global_summaries(tmp_path):
     store = make_store(tmp_path)
     store.save_sections({"abstract": "original three questions", "solve:Q3": "unrelated"}, [])
     store.apply_patch(PlanPatch(command_id="add", base_revision=1, reason="new verification",
-        changes=[TaskChange(action="add", task_id="Q4", objective="new verification")]))
+        changes=[TaskChange(action="add", task_id="Q4", objective="new verification", requirement_ids=["RQ1"])]))
     assert store.snapshot()["sections"]["abstract"]["validity"] == "stale"
     assert store.snapshot()["sections"]["solve:Q3"]["validity"] == "current"
 
@@ -231,11 +240,11 @@ def test_observe_uses_confirmed_failure_to_commit_planner_proposal(tmp_path, mon
     from ai_system.research.models import PlanProposal
     from ai_system.research.planner import Planner
     from ai_system.graph.context import GraphContext
-    store = make_store(tmp_path)
-    finish(store, "Q1", acceptance="rejected")
+    store = make_store(tmp_path, limit=40)
+    finish(store, "Q1")
 
     async def propose(self, snapshot):
-        return PlanProposal(reason="add capacity check", evidence_refs=["Q1"],
+        return PlanProposal(reason="add capacity check", issue_ids=[i["id"] for i in snapshot["issues"] if i["status"] == "confirmed"],
                             changes=[TaskChange(task_id="Q1", objective="enforce capacity before publishing")])
 
     monkeypatch.setattr(Planner, "propose", propose)

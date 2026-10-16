@@ -125,7 +125,7 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     prompt = (
         f"# 题目\n{state['task']}\n\n"
         f"# 数据概览（由程序自动生成）\n{data_profile}\n\n"
-        "请给出：论文标题、题目重述、整体分析思路、子问题列表（编号 Q1、Q2…，写清每一问要交付什么、依赖哪一问的结果）、全局假设。"
+        "请给出：论文标题、题目重述、整体分析思路、子问题列表（编号 Q1、Q2…，写清每一问要交付什么、依赖哪一问的结果）。另给出结构化 requirements 与 assumptions：每项要求包含原题逐字摘录、任务范围；硬约束必须编制可执行检查（如容量、非负性、守恒、误差界，使用明确登记名称和数值阈值）。假设必须写适用任务和可证伪条件。检查引用其他任务结果时，把它声明为依赖；不要添加原题没有的硬约束。"
     )
     analysis = await call_structured(ctx.planner_llm, ProblemAnalysis, as_messages(SYSTEM, prompt))
     if not analysis.subproblems:
@@ -133,6 +133,8 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
 
     plan = analysis.model_dump()
     plan["subproblems"] = normalize_plan(plan["subproblems"])
+    from ...research.validation import validate_spec
+    validate_spec(state["task"], plan)
     ids = [sp["id"] for sp in plan["subproblems"]]
     await ctx.set_stage("analyze", "completed", f"{len(ids)} 个子问题：{'、'.join(ids)}")
     if not ctx.confirm_models:

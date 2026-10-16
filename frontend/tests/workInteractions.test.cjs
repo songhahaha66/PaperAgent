@@ -55,7 +55,7 @@ async function environment() {
           WebSocketChatHandler: Socket,
           chatAPI: {
             getResearchSnapshot: async () => ({
-              schema_version: 1,
+              schema_version: 2,
               work_id: id,
               work_status: 'completed',
               has_research: true,
@@ -188,7 +188,7 @@ async function environment() {
   restored.state.handleStreamMessage(
     {
       type: 'json_block',
-      block: { type: 'research_snapshot', content: { schema_version: 1, work_id: 'another-work' } },
+      block: { type: 'research_snapshot', content: { schema_version: 2, work_id: 'another-work' } },
     },
     replyId,
   )

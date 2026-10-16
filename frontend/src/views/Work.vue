@@ -430,7 +430,7 @@ const messageActionOptions = computed(() => [
       questionScope.value = null
     },
   },
-  ...(researchSnapshot.value?.engine_version === 'research-v1' &&
+  ...(researchSnapshot.value?.engine_version === 'research-v2' &&
   researchSnapshot.value?.tasks?.length &&
   currentWork.value?.status !== 'waiting'
     ? [
@@ -929,7 +929,7 @@ const handleStreamMessage = (data: any, messageId: string) => {
       if (block?.type === 'research_state') {
         loadResearchSnapshot()
       } else if (block?.type === 'research_snapshot') {
-        if (block.content?.schema_version === 1 && block.content.work_id === workId.value) {
+        if (block.content?.schema_version === 2 && block.content.work_id === workId.value) {
           ++evidenceRequest
           researchSnapshot.value = block.content as ResearchSnapshot
         }

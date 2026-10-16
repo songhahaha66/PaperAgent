@@ -20,7 +20,7 @@ from ..judge import JevJudge, LLMJudge, jev_available
 from ..research import ENGINE_VERSION
 from ..research.store import ResearchStore
 from ..research.control import refresh_registry
-from ..research.planner import propose_revision
+from ..research.planner import propose_revision, Planner
 from .build import compile_graph
 from .context import GraphContext
 from .nodes.confirm import is_approval
@@ -167,7 +167,12 @@ class PaperGraphAgent:
         if not snapshot:
             raise ValueError("研究尚未生成可修订任务")
         # Stable command payload even when retrying after the revision committed.
-        patch = propose_revision(snapshot, command_id, base_revision, change, scope)
+        patch = store.load_revision_command(command_id, base_revision, change, scope)
+        if patch is None:
+            if snapshot["revision"] != base_revision:
+                raise ValueError("研究版本已改变，请刷新后重试")
+            requirements = await Planner(self.llm).amendment(snapshot, change, scope)
+            patch = propose_revision(snapshot, command_id, base_revision, change, scope, requirements)
         store.apply_revision_command(command_id, base_revision, change, scope, patch)
         current = store.snapshot()
         if current["commit_seq"] == snapshot["commit_seq"] and current["outcome"] in {"completed", "needs_attention"}:

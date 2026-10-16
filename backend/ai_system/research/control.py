@@ -9,7 +9,7 @@ from langgraph.types import Send
 
 from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
-from .models import WorkerResult, ResearchConflict, PlanPatch
+from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
 from .planner import ready_tasks, Planner
 
 
@@ -27,22 +27,26 @@ async def observe(state, runtime):
     snapshot = store.refresh_inputs()
     refresh_registry(ctx)
     tasks = snapshot["tasks"]
-    # Only deterministic validation failures trigger automatic replanning.
-    # Execution/service failures require an explicit resume and fresh lease.
-    rejected = {key for key, t in tasks.items() if t["execution_status"] == "succeeded" and t["acceptance"] == "rejected"}
-    if rejected and snapshot["planning_calls"] < ctx.max_planning_calls and store.reserve_planning_call():
+    store.schedule_investigations()
+    snapshot = store.snapshot()
+    tasks = snapshot["tasks"]
+    confirmed = {i["id"] for i in snapshot["issues"] if i["status"] == "confirmed" and i["action"] == "recompute"}
+    if confirmed and snapshot["planning_calls"] < ctx.max_planning_calls and store.reserve_planning_call():
         try:
             proposal = await Planner(ctx.planner_llm).propose(snapshot)
-            if proposal.changes and set(proposal.evidence_refs) & rejected and store.record_proposal(proposal.model_dump()):
+            if (proposal.changes or proposal.assumptions) and set(proposal.issue_ids) & confirmed and store.record_proposal(
+                {"changes": [c.model_dump() for c in proposal.changes], "assumptions": [a.model_dump() for a in proposal.assumptions],
+                 "issue_ids": sorted(proposal.issue_ids)}):
                 changes = [change.model_copy(update={"objective": tasks[change.task_id]["objective"] +
                            "\n\n补充研究策略：" + change.objective}) if change.action == "revise" and change.task_id in tasks
                            else change for change in proposal.changes]
                 store.apply_patch(PlanPatch(command_id=f"planner:{snapshot['commit_seq']}",
-                    base_revision=snapshot["revision"], reason=proposal.reason or "补充验证", changes=changes))
-                snapshot = store.snapshot()
-                tasks = snapshot["tasks"]
+                    base_revision=snapshot["revision"], reason=proposal.reason or "修复研究问题", changes=changes,
+                    assumptions=proposal.assumptions, issue_ids=proposal.issue_ids))
         except Exception as exc:
             await ctx.events.stage(f"规划未提交，保留已验收证据：{exc}")
+    snapshot = store.snapshot()
+    tasks = snapshot["tasks"]
     refresh_registry(ctx)
     # Explicit tombstones remove stale entries via the existing parallel reducer.
     solutions = {key: (task["report"] if task["acceptance"] == "accepted" and task["validity"] == "current" else None)
@@ -53,7 +57,8 @@ async def observe(state, runtime):
     sections = {key: section["text"] if section["validity"] == "current" else None
                 for key, section in snapshot["sections"].items()}
     sections.update({key: None for key in (state.get("sections") or {}) if key not in sections})
-    complete = all(t["acceptance"] == "accepted" and t["validity"] == "current" for t in tasks.values())
+    unresolved = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}]
+    complete = not unresolved and all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in tasks.values())
     blocked = not complete and not ready_tasks(snapshot)
     store.set_outcome("blocked" if blocked else "running")
     snapshot = store.snapshot()
@@ -62,9 +67,11 @@ async def observe(state, runtime):
         await ctx.set_stage("design", "completed")
     if blocked:
         await ctx.set_stage("solve", "blocked", "存在未通过验收的任务或尝试预算已耗尽")
-    analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values()]}
+    analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values() if t["kind"] != "verify"],
+                "requirements": snapshot["spec"]["requirements"],
+                "assumptions": [a for a in snapshot["assumptions"].values() if a["status"] != "retired"]}
     return {"analysis": analysis, "solutions": solutions, "designs": designs,
-            "sections": sections, "research_blocked": blocked,
+            "sections": sections, "research_blocked": blocked, "research_restart": False,
             "issues": [], "repair_round": 0, "log": [f"observe: commit {snapshot['commit_seq']}"]}
 
 
@@ -76,10 +83,13 @@ def dispatch(state, runtime):
     if not ready:
         return "reconcile"
     sends = []
+    from .validation import protocol
     for key in ready:
         task = snapshot["tasks"][key]
         sends.append(Send("solve", {"subproblem": task["subproblem"], "analysis": state["analysis"],
             "data_profile": state.get("data_profile", ""),
+            "research_contract": {"requirements": [r for r in snapshot["spec"]["requirements"] if r["id"] in task["requirement_ids"]],
+                "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},
             "design": (state.get("designs") or {}).get(key),
             "dependencies": {dep: snapshot["tasks"][dep]["report"] for dep in task["dependencies"]}}))
     return sends
@@ -88,8 +98,12 @@ def dispatch(state, runtime):
 def public_snapshot(snapshot):
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
         "tasks": [{key: task.get(key) for key in ("task_id", "revision", "objective", "dependencies",
-                   "execution_status", "acceptance", "validity", "reason")} for task in snapshot["tasks"].values()],
-        "issues": snapshot["issues"],
+                   "execution_status", "acceptance", "validity", "reason", "kind")} for task in snapshot["tasks"].values() if not task["retired"]],
+        "issues": [i for i in snapshot["issues"] if i["status"] not in {"resolved", "dismissed"}],
+        "requirements": [{**r, "status": "accepted" if all(snapshot["tasks"][key]["acceptance"] == "accepted" and
+            snapshot["tasks"][key]["validity"] == "current" and (snapshot["tasks"][key]["kind"] != "writing" or
+            snapshot["sections"].get(f"solve:{key}", {}).get("validity") == "current") for key in r["task_ids"]) else "pending"}
+            for r in snapshot["spec"]["requirements"]], "assumptions": list(snapshot["assumptions"].values()),
     }
 
 
@@ -159,7 +173,7 @@ async def execute(branch, runtime):
         local = worker_context(ctx, order)
         update = await solve(branch, SimpleNamespace(context=local))
         report = update["solutions"][key]
-        checks = [] if branch["subproblem"].get("kind") == "writing" else report_issues(
+        checks = [] if branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
             local, report, key, branch["subproblem"].get("depends_on") or [],
             hypothesis=is_hypothesis_test(branch["subproblem"]), figure_required=needs_figure(branch["subproblem"]))
         if report["status"] != "completed":
@@ -183,7 +197,8 @@ async def execute(branch, runtime):
             execution_status="succeeded" if report["status"] == "completed" else "failed",
             acceptance="rejected" if checks else "accepted", report=report,
             design=(update.get("designs") or {}).get(key) or branch.get("design"),
-            results=results, claims=[asdict(c) for c in local.registry.claims.values() if c.subproblem == key], issues=checks)
+            results=results, claims=[asdict(c) for c in local.registry.claims.values() if c.subproblem == key], issues=[IssueReport(task_id=key, category="evidence", message=message, evidence_refs=[r["id"] for r in results]) for message in checks]
+                + [IssueReport.model_validate(i) for i in report.get("research_issues", [])])
         receipt = ctx.research.commit(result)
         refresh_registry(ctx)
         if receipt["published"] and not checks:
@@ -198,10 +213,10 @@ async def execute(branch, runtime):
         raise  # Recovery records cancellation and acquires a new lease.
     except Exception as exc:
         if receipt is not None:
-            await ctx.events.stage(f"{key} 已提交，兼容视图更新失败，将在恢复时重建：{exc}")
+            await ctx.events.stage(f"{key} 已提交，结果视图更新失败，将在恢复时重建：{exc}")
             return {"log": [f"projection {key} failed after commit: {exc}"]}
         ctx.research.commit(WorkerResult(order=order, execution_status="failed", acceptance="inconclusive",
-            report={"status": "failed", "error": str(exc)}, issues=[str(exc)]))
+            report={"status": "failed", "error": str(exc)}, issues=[IssueReport(task_id=key, category="execution", message=str(exc))]))
         await ctx.events.stage(f"{key} 执行失败：{exc}")
         return {"log": [f"attempt {key} failed: {exc}"]}
     finally:

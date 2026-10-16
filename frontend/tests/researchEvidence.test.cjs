@@ -3,7 +3,7 @@ const { loadModule, vue, flush } = require('./moduleHarness.cjs')
 const { hostRenderer } = require('./vueHost.cjs')
 ;(async () => {
   const snapshot = vue.ref({
-    schema_version: 1,
+    schema_version: 2,
     work_id: 'one',
     has_research: true,
     work_status: 'completed',
@@ -88,6 +88,23 @@ const { hostRenderer } = require('./vueHost.cjs')
   console.log(
     'PASS: mounted evidence card filters actual results and opens their exact execution sources',
   )
+  snapshot.value = {
+    ...snapshot.value,
+    tasks: [{ task_id: 'Q4', kind: 'verify', revision: 1, execution_status: 'running', acceptance: 'pending', validity: 'current' }],
+    requirements: [{ id: 'RQ1', task_ids: ['Q1'], status: 'pending', statement: '满足容量约束', source_quote: '容量不超过10' }],
+    assumptions: [{ id: 'A1', revision: 1, status: 'refuted', statement: '均值具有代表性' }],
+    issues: [{ id: 'issue-one', task_id: 'Q1', task_revision: 1, assumption_id: 'A1', status: 'repairing', message: '独立核验发现反例', evidence_refs: ['R7'] }],
+    issue_evidence: [{ id: 'R7', name: 'residual', value: '4', unit: '', run_id: 'run_one' }],
+  }
+  await flush()
+  assert.match(text(host.root), /容量不超过10/)
+  assert.match(text(host.root), /已被反证/)
+  assert.match(text(host.root), /计划修复中/)
+  assert.match(text(host.root), /R7 · residual：4/)
+  assert.equal(button('修改这部分'), undefined, 'verification tasks are controlled by the issue protocol')
+  button('查看核验输出').props.onClick()
+  assert.equal(opened.at(-1), 'runs/run_one/stdout.log', 'historical counterexamples retain their own output source')
+  console.log('PASS: contracts, refutations and historical counterexample sources render together')
   snapshot.value = { ...snapshot.value, results: [], runs: [], validation_count: 0 }
   await flush()
   assert.ok(host.find((node) => node.props?.class === 'evidence-empty'))
