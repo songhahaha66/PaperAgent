@@ -253,10 +253,16 @@ const { hostRenderer } = require('./vueHost.cjs')
   )
   assert.equal(
     phases.deriveSubproblems([
-      { type: 'paper_solved', content: 'Q2 求解完成' },
+      { type: 'paper_solved', content: 'Q2 已通过验收，登记 5 项结果' },
       { type: 'paper_stage', content: 'Q2：重新求解' },
     ])[0].status,
     'in_progress',
+  )
+  const stagedPremise = [{ type: 'paper_stage', content: 'Q1 已提交，关键假设已登记，按冻结契约重新执行' }]
+  assert.equal(phases.deriveSubproblems(stagedPremise)[0].status, 'in_progress')
+  assert.equal(
+    phases.deriveSubproblems([...stagedPremise, { type: 'paper_solved', content: 'Q1 已通过验收，登记 7 项结果' }])[0].status,
+    'completed',
   )
   console.log('PASS: revisions carry scope/version and retries preserve explicit phase status')
 })().catch((error) => {
