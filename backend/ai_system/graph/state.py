@@ -123,7 +123,7 @@ class SolveReport(BaseModel):
     key_findings: List[Finding] = Field(description="主要结论，每条写明依据的登记结果和证据强度")
     sensitivity: str = Field(default="", description="灵敏度分析或检验的做法与结论")
     limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
-    assumptions: List[AssumptionDraft] = Field(default_factory=list, description="求解中新发现且实际采用的关键前提；先登记冻结后重算，不能把未登记前提当已验证事实")
+    assumptions: List[AssumptionDraft] = Field(default_factory=list, description="仅提交本次新发现、改变方法或结论的关键前提；没有新增必须为[]。不是论文假设汇总：原题给定数据、已经计算验证的数据长度/完整性、契约中的已有前提均不填。不要换key、改写或合并已有前提来重复声明；真正的新前提登记冻结后须重算")
     requirement_evidence: List[RequirementEvidence] = Field(default_factory=list, description="每项本任务要求的证据引用；必须使用自己或前序任务的实际登记编号")
     research_issues: List[IssueReport] = Field(default_factory=list, description="发现上游模型、数据或假设可能有错时提交带证据的疑点；不要擅自沿用错误前提")
     controls: List[NegativeControl] = Field(

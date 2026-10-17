@@ -42,6 +42,10 @@ separate. Only accepted current results reach the writing registry.
 Local `ResultReview` returns typed `IssueReport` findings. Each audit records the
 exact report hash and cited evidence; local repairs must receive a fresh final
 audit. Open findings, missing/stale audits and audit service errors block delivery.
+Only the coordinator emits task-completion events and publishes user-facing code
+and figures, after the current commit passes acceptance with no open blocking
+task findings. Premise-staging submissions and unaccepted attempts emit progress
+instead; worker self-reports cannot make the UI show a completed task prematurely.
 Historical audit evidence survives replacement in the worker registry but cannot
 enter active results, claims or numeric acceptance checks. Closed findings retain
 their resolution attempt. Resume freezes the old open findings into the next work

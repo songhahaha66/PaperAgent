@@ -84,7 +84,10 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 至少完成方案中的检验或灵敏度分析，并登记相应结果。
 
 完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。
-若求解中发现必须新增的关键前提，填入assumptions，使用稳定key、statement和可证伪checks；已有契约前提不要重复创建或静默改写。
+SolveReport.assumptions不是论文假设汇总，没有新增时必须留空[]。只提交求解中新发现、实际改变方法或结论的关键前提。
+原题给定的观测值等事实、已计算验证的数据长度/完整性、契约中已有的前提都直接使用，不再次声明。
+不要通过换key、改写或合并已有前提制造“新假设”；已有A:任务:key的key就是该任务稳定键，通常无需再次填入。
+确有新增时填入assumptions，使用稳定key、statement和可证伪checks；已有契约前提不能静默改写。
 新前提会先登记版本再按冻结契约重算；它不是原题事实，也不因代码跑通而被验证。
 每条主要结论都要写出依据的登记结果，并如实标注证据强度：检验不显著的就标「不显著」，不要把不显著的结果写成有效应。
 这些结论会和其他子问题的结论放在一起做一致性审查。"""
@@ -354,7 +357,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     await ctx.set_stage("solve", "in_progress")
     if branch["subproblem"].get("kind") == "writing":
         # 写作类子问题不开内核、不跑编码循环，写作阶段直接依据前序结论撰写
-        await ctx.events.emit("paper_solved", f"{subproblem_id} 为写作类交付物，写作阶段依据前序结论撰写")
+        await ctx.events.stage(f"{subproblem_id} 为写作类交付物，写作阶段依据前序结论撰写")
         report = SolveReport(
             summary="本问为文书类交付物，依据前序各问的结论撰写。",
             approach=WRITING_APPROACH,
@@ -432,7 +435,6 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         ctx.registry.set_claims(subproblem_id, report.get("key_findings") or [])
 
     count = len(ctx.registry.for_subproblem(subproblem_id))
-    await ctx.events.emit("paper_solved", f"{subproblem_id} 求解{'完成' if status == 'completed' else '未完成'}，登记 {count} 项结果")
     update = {
         "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
         "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],

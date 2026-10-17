@@ -193,6 +193,9 @@ def worker_context(ctx, order):
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref
+    # Attempt-relative paths do not exist in the user's root workspace. Publish
+    # their final paths only after the coordinator accepts the commit below.
+    local.events.publish_files = False
     # Progress belongs to the coordinator. Attempts only emit local messages.
     local.set_stage = ctx.set_stage
     return local
@@ -254,13 +257,23 @@ async def execute(branch, runtime):
                 ("solve", report.get("assumptions", []))) for a in drafts])
         receipt = ctx.research.commit(result)
         refresh_registry(ctx)
-        if receipt["published"] and not checks:
+        snapshot = ctx.research.snapshot()
+        committed = snapshot["tasks"][key]
+        accepted = (receipt["published"] and committed["acceptance"] == "accepted"
+                    and committed["validity"] == "current" and not any(
+                        i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed"}
+                        for i in snapshot["issues"]))
+        if accepted:
             for item in results:
                 if item["path"]:
                     ctx.fs.register_file(item["path"], kind="image", source_run=item["run_id"], visibility="user")
+                    await ctx.events.file_changed(item["path"])
             code = local.workspace / "code" / f"{key}_solution.py"
             if code.exists():
                 ctx.fs.write_text(f"code/{key}_solution.py", code.read_text(encoding="utf-8"))
+            await ctx.events.emit("paper_solved", f"{key} 已通过验收，登记 {len(results)} 项结果")
+        else:
+            await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '仍需验收或修复，请查看研究问题'}")
         return {"log": update.get("log", []) + [f"commit {key}: {receipt}"]}
     except asyncio.CancelledError:
         raise  # Recovery records cancellation and acquires a new lease.

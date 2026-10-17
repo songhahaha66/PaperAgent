@@ -1,5 +1,6 @@
 """Local audit findings and newly adopted premises share committed research state."""
 import asyncio
+import json
 import re
 import sys
 from pathlib import Path
@@ -84,7 +85,10 @@ def run_agent(tmp_path, monkeypatch, model, **options):
 
 
 def test_unresolved_local_review_blocks_delivery_without_unrelated_check_dismissing_it(tmp_path, monkeypatch):
-    agent, store = run_agent(tmp_path, monkeypatch, AuditModel(mode="stuck", loose_number_once=False))
+    events=[]
+    class Stream:
+        async def send_json_block(self,kind,content):events.append((kind,content))
+    agent, store = run_agent(tmp_path, monkeypatch, AuditModel(mode="stuck", loose_number_once=False),stream_manager=Stream())
     state = store.snapshot()
     findings = [i for i in state["issues"] if i["source"] == "local_review"]
     assert findings and all(i["status"] == "inconclusive" for i in findings)
@@ -92,6 +96,8 @@ def test_unresolved_local_review_blocks_delivery_without_unrelated_check_dismiss
     assert not (tmp_path / "paper.md").exists()
     assert agent.last_result["research_blocked"]
     assert len(state["tasks"]) == 3, "a generic numeric check cannot dismiss a data-scope finding"
+    assert not any(kind=='paper_solved' and content.startswith('Q1 ') for kind,content in events)
+    assert not (tmp_path/'code/Q1_solution.py').exists(), 'unaccepted solution code must remain in attempt history'
     with pytest.raises(ResearchConflict):
         store.publish_paper("ignore reviewer")
 
@@ -136,7 +142,20 @@ def test_resume_rechecks_local_findings_instead_of_clearing_them_at_recovery(tmp
 
 @pytest.mark.parametrize("source", ["design", "solve"])
 def test_adopted_premises_are_versioned_before_publishing_and_frozen_on_rerun(tmp_path, monkeypatch, source):
-    _, store = run_agent(tmp_path, monkeypatch, AuditModel(draft_source=source, loose_number_once=False))
+    events=[]
+    published=[]
+    class Stream:
+        async def send_json_block(self,kind,content):
+            if kind=='file_changed' and content.startswith('outputs/'):
+                published.append((content,(tmp_path/content).is_file()))
+            if kind=='paper_solved' and content.startswith('Q1 '):
+                thread=json.loads((tmp_path/'.system/graph_thread.json').read_text())['thread_id']
+                current=ResearchStore(tmp_path,thread,read_only=True).snapshot()
+                task=current['tasks']['Q1']
+                assert task['acceptance']=='accepted' and task['validity']=='current'
+                assert current['attempts'][task['active_attempt']]['input_refs']['assumption:A:Q1:representative']=='1'
+                events.append(content)
+    _, store = run_agent(tmp_path, monkeypatch, AuditModel(draft_source=source, loose_number_once=False),stream_manager=Stream())
     state = store.snapshot()
     aid = assumption_id("Q1", "representative")
     premise = state["assumptions"][aid]
@@ -151,6 +170,8 @@ def test_adopted_premises_are_versioned_before_publishing_and_frozen_on_rerun(tm
     assert all(c["assumption_refs"][aid] == 1 for c in state["claims"].values() if c["producer_attempt"] == active["attempt_id"])
     assert all(e["producer_attempt"] != attempts[0]["attempt_id"] for e in state["evidence"].values() if e["payload"]["id"] in {r["id"] for r in store.registry_payload()["results"]})
     assert store.delivery_ready(state)
+    assert len(events)==1 and '已通过验收' in events[0]
+    assert all(exists for _,exists in published), 'published file events must point to existing root-workspace artifacts'
 
 
 def test_review_contract_has_no_legacy_sound_or_must_fix_fields():

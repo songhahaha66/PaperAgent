@@ -52,8 +52,9 @@ class KernelPool:
 class EventSink:
     """把阶段进度推给前端（复用 stream_manager.send_json_block），没有 stream_manager 时只写日志"""
 
-    def __init__(self, stream_manager=None):
+    def __init__(self, stream_manager=None, *, publish_files=True):
         self.stream_manager = stream_manager
+        self.publish_files = publish_files
 
     async def emit(self, block_type: str, content: Any) -> None:
         logger.info("[paper-graph] %s: %s", block_type, str(content)[:200])
@@ -68,7 +69,8 @@ class EventSink:
         await self.emit("paper_stage", text)
 
     async def file_changed(self, path: str) -> None:
-        await self.emit("file_changed", path)
+        if self.publish_files:
+            await self.emit("file_changed", path)
 
 
 STAGES = [
