@@ -683,7 +683,7 @@ def test_claims_ground_literal_numbers(tmp_path):
     )
     assert statement == (
         f"R²={{{{R:{r2.id}}}}}，系数 {{{{R:{coef.id}}}}}（p={{{{R:{p.id}}}}}），成本 {{{{R:{cost.id}}}}}，"
-        f"两组都是 0.5，样本 15082，$x=0.883$，0.8830，已有 {{{{R:{other.id}}}}}"
+        f"两组都是 0.5，样本 15082，$x=0.883$，{{{{R:{r2.id}}}}}，已有 {{{{R:{other.id}}}}}"
     )
     # "数（引用）"合并成一个引用；已引用过的结果不再重复替换
     assert registry.ground_statement("Q1", f"r=0.883（{{{{R:{r2.id}}}}}），再写 -0.0079 ({{{{R:{coef.id}}}}})，-0.0079") == (

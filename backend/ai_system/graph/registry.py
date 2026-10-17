@@ -28,7 +28,7 @@ SERIES_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 SERIES_BLOCK = re.compile(r"\[[^\[\]]*\]", re.DOTALL)
 SERIES_BODY = re.compile(rf"\s*{SERIES_NUMBER}(?:(?:\s*,\s*|\s+){SERIES_NUMBER})*\s*,?\s*")
 # 结论里手写的小数或科学计数（整数常是个数、年份，不自动换）
-LITERAL_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+(?:[eE][-+]?\d+)?|[eE][-+]?\d+)%?(?![\w.])")
+LITERAL_NUMBER = re.compile(r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+(?:[eE][-+]?\d+)?%?|[eE][-+]?\d+%?|%)(?![A-Za-z0-9_.])")
 
 
 class GroundingError(ValueError):
@@ -294,6 +294,14 @@ class ResultRegistry:
 
         def replace(match: re.Match) -> str:
             found = by_value.get(match.group())
+            if not found:
+                # Formatting changes (0.30 vs 0.3, 50% vs 50.0 %) do not
+                # create new evidence. Percent units must match explicitly.
+                literal = match.group()
+                target = _parse_number(literal)
+                found = [r for rows in by_value.values() for r in rows
+                         if literal.endswith("%") == (r.value.endswith("%") or r.unit == "%")
+                         and _parse_number(r.value) == target]
             # 已经引用过的结果不再替换：多半是"数（引用）"里数与值的写法不同，换了会重复
             if not found or len(found) != 1 or found[0].id in cited:
                 return match.group(0)

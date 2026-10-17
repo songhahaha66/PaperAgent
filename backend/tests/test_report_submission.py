@@ -132,6 +132,44 @@ def test_check_threshold_failure_is_not_hidden_by_the_submission_gate(tmp_path):
     assert submission_schema(ctx, task, runs).model_validate(report(own.id)).summary
 
 
+def test_submission_grounds_summary_and_equivalent_numeric_formatting(tmp_path):
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None)
+    runs = []
+    own = seed(ctx, runs)
+    rid = own.run_id
+    ctx.fs.save_run_stdout(rid, "6\n0.3\n50.0")
+    limit = ctx.registry.record_value("Q1", "grid lower bound", "0.3", rid)
+    pct = ctx.registry.record_value("Q1", "comparison threshold", "50.0", rid, "%")
+    payload = report(own.id)
+    payload["summary"] = "网格下限0.30，阈值50%。"
+    accepted = submission_schema(ctx, branch(), runs).model_validate(payload)
+    assert f"{{{{R:{limit.id}}}}}" in accepted.summary
+    assert f"{{{{R:{pct.id}}}}}" in accepted.summary
+    # A genuinely different value, ambiguous metric or incompatible unit must
+    # still require the model to choose an explicit, grounded reference.
+    assert "0.31" in ctx.registry.ground_statement("Q1", "下限 0.31")
+    ctx.registry.record_value("Q1", "other bound", "0.30", rid)
+    assert "0.300" in ctx.registry.ground_statement("Q1", "下限 0.300")
+    assert "50.00" in ctx.registry.ground_statement("Q1", "下限 50.00")
+
+
+def test_review_retains_original_computation_and_its_output_after_formatting_retries(tmp_path):
+    from ai_system.graph.nodes.review import review_prompt
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None)
+    runs = []
+    for index in range(10):
+        rid = ctx.fs.create_run()
+        code = "values = [1, 2, 3]\nanswer = sum(values)\nprint(answer)" if index == 0 else f"print('format retry {index}')"
+        ctx.fs.save_run_input(rid, code)
+        ctx.fs.save_run_stdout(rid, "actual_sum 6" if index == 0 else str(index))
+        ctx.fs.finish_run(rid, "success")
+        runs.append({"run_id": rid, "code": code, "ok": True})
+    prompt = review_prompt(branch(), {}, ctx, runs)
+    assert runs[0]["code"] in prompt and "actual_sum 6" in prompt
+    assert runs[-1]["code"] in prompt
+    assert "标量均值不能代替序列" in prompt and "超参数" in prompt
+
+
 def test_optional_controls_do_not_bypass_an_explicit_frozen_experiment(tmp_path):
     ctx = GraphContext.create(str(tmp_path), planner_llm=None)
     runs = []

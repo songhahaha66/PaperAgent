@@ -315,6 +315,7 @@ def submission_schema(ctx: GraphContext, branch: BranchInput, runs: List[Dict]):
         # A new premise is staged centrally, never accepted as a solved task.
         if unbound_assumptions(sid, report.assumptions, branch.get("research_contract", {})):
             return report
+        report.summary = ctx.registry.ground_statement(sid, report.summary)
         for finding in report.key_findings:
             finding.statement = ctx.registry.ground_statement(sid, finding.statement)
         issues = report_submission_issues(ctx, branch, report.model_dump(), runs)

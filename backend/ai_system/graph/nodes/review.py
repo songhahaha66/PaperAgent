@@ -33,10 +33,11 @@ SYSTEM = (
 CHECKLIST = """逐项检查：
 1. 数据范围：是否用了题目给出的全部相关数据（例如全部比赛、全部年份）；只用了子集时理由是否充分。
 2. 数据泄漏与前视偏差：特征或标签是否用到了预测时刻之后的信息；标签是否由同一时刻的特征直接算出（如用动量变号定义转折、又把当期动量当特征）；训练/测试划分是否合理。
+   窗口长度等超参数的选择也只能用训练数据；比较方法必须采用一致的固定起点或滚动更新协议。
 3. 样本量与过拟合：样本是否太少；训练集与验证集指标差距是否过大。
 4. 指标是否合适：类别不平衡时是否报告了 AUC、基准率或对照基线；回归是否有残差诊断。
-5. 结论是否被结果支持：主要结论与登记的数值是否一致，是否夸大。
-6. 交付物是否齐全：题目要求的每一项是否都有对应结果。"""
+5. 结论是否被结果支持：逐个核对引用编号对应的名称、值和单位，不能只因编号存在就通过；同值也不能拿无关指标作证据。
+6. 交付物是否齐全：题目要求的每一项是否都有对应结果；要求完整序列时，标量均值不能代替序列。"""
 
 
 # 打乱标签后仍保留的提升占真实提升的比例，超过就判定为泄漏
@@ -187,7 +188,7 @@ def baseline_check(ctx: GraphContext, control: Dict, real: float, higher: bool) 
 # 显著性水平、置信水平这类约定常数可以直接写
 CONVENTIONS = {"0.05", "0.01", "0.001", "0.1", "0.10", "5%", "1%", "10%", "90%", "95%", "99%"}
 # 报告里直接写的小数或百分数（整数是场次、阶数这类计数，不查）
-LOOSE_NUMBER = re.compile(r"(?<![\w.])-?\d+\.\d+%?|(?<![\w.])\d+%")
+LOOSE_NUMBER = re.compile(r"(?<![A-Za-z0-9_.])-?\d+\.\d+%?|(?<![A-Za-z0-9_.])\d+%")
 
 
 def ungrounded_findings(report: Dict) -> List[str]:
@@ -370,9 +371,12 @@ def report_issues(
 def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: List[Dict]) -> str:
     subproblem = branch["subproblem"]
     code = "\n\n".join(
-        f"## {r['run_id']}（{'成功' if r['ok'] else '失败'}）\n```python\n{clip(r['code'], 1500)}\n```"
-        for r in runs[-8:]
+        f"## {r['run_id']}（{'成功' if r['ok'] else '失败'}）\n```python\n{r['code']}\n```\n"
+        + ("执行输出：\n" + clip(ctx.fs.read_text(info['stdout']), 1500) if (info := ctx.fs.get_run_info(r['run_id'])) and info.get('stdout') else "")
+        for r in runs
     )
+    if len(code) > 48000:
+        code = code[:30000] + "\n[中间执行记录因上下文预算省略；不能据未展示的计算确认正确]\n" + code[-18000:]
     return (
         f"# 原题（含题内数据）\n{branch['source']}\n\n"
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n"
@@ -381,7 +385,7 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
         f"# 选定方案\n{branch['design']['chosen']['name']}：{branch['design']['chosen']['idea']}\n\n"
         f"# 求解报告\n{report}\n\n"
         f"# 登记结果\n{ctx.registry.to_prompt_table(subproblem['id'])}\n\n"
-        f"# 最近的代码\n{code or '（无）'}\n\n{CHECKLIST}\n\n"
+        f"# 本次执行代码与输出（按时间顺序，含最初建模计算）\n{code or '（无）'}\n\n{CHECKLIST}\n\n"
         f"# 研究契约\n{branch.get('research_contract', {})}\n"
         f"# 必须逐项重新核对的先前意见\n{branch.get('review_findings', [])}\n"
         "只返回仍未解决的问题，填写目标任务、实际证据引用、适用的check_ids和assumption_id。"
