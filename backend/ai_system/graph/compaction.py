@@ -14,7 +14,7 @@ CodeAct 循环每一步都把完整历史重新发给模型，输入随步数增
 import logging
 from typing import Any, Awaitable, Callable, List
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
@@ -199,6 +199,40 @@ class HistoryRecorder(AgentMiddleware):
     ) -> Any:
         self.messages = list(request.messages)
         return await handler(request)
+
+
+class ReportOrderingMiddleware(AgentMiddleware):
+    """A final report cannot commit alongside still-unexecuted operations.
+
+    ToolStrategy handles report validation before normal tools run. A mixed
+    response can therefore terminate the agent even when that report failed.
+    Keep the proposed operations, defer the report, and let the ordinary tool
+    loop return actual execution/registration results before the next submission.
+    """
+
+    def __init__(self, report_tool: str):
+        super().__init__()
+        self.report_tool = report_tool
+
+    async def awrap_model_call(self, request, handler):
+        response = await handler(request)
+        messages = getattr(response, "result", None) or [response]
+        reply = next((m for m in messages if isinstance(m, AIMessage)), None)
+        if reply is None:
+            return response
+        calls = reply.tool_calls
+        operations = [call for call in calls if call["name"] != self.report_tool]
+        if not operations or len(operations) == len(calls):
+            return response
+        feedback = "\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage))
+        note = ("本轮报告未提交：先执行本轮计算/登记，阅读工具返回的真实编号，再单独调用"
+                f" {self.report_tool}。报告不能与其他工具同时调用。\n" + feedback)
+        reply = reply.model_copy(update={"tool_calls": operations,
+            "content": str(reply.content or "") + "\n" + note,
+            "additional_kwargs": {k: v for k, v in reply.additional_kwargs.items() if k != "tool_calls"}})
+        if hasattr(response, "result"):
+            return ModelResponse(result=[reply], structured_response=None)
+        return reply
 
 
 TRUNCATED_NOTE = "[系统提醒] 你上一次输出太长，在中途被截断，没有执行。请把代码拆成更短的一段，只写这一步需要的部分。"

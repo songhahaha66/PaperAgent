@@ -193,6 +193,53 @@ class FillGapsModel(FakeModel):
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}"}])
 
 
+class MixedReportModel(FakeModel):
+    valid_mixed: bool = False
+    deferred: bool = False
+    def _solver_step(self, task, messages):
+        tools = [m for m in messages if isinstance(m, ToolMessage)]
+        refs = [ref for m in tools if m.name == "record_results" for ref in re.findall(r"\{\{R:(R\d+)\}\}", str(m.content))]
+        if not tools:
+            calls = [("run_python", {"code": "print(sum([1, 2, 3]))"})]
+        elif not refs:
+            run_id = re.search(r"\[run_id: (\S+)\]", tools[0].content)[1]
+            calls = [("record_results", {"items": [{"name": "answer", "value": "6", "run_id": run_id}]})]
+            if not self.valid_mixed:
+                calls.append(("SolveReport", report("R999")))
+        elif self.valid_mixed and sum(m.name == "run_python" for m in tools) == 1:
+            calls = [("run_python", {"code": "print('independent audit', 6)"}), ("SolveReport", report(refs[-1]))]
+        else:
+            deferred = [m for m in messages if isinstance(m, AIMessage) and "本轮报告未提交" in str(m.content)]
+            assert deferred, "mixed submissions must not terminate or bypass the producing loop"
+            if not self.valid_mixed:
+                assert "RQ1" in deferred[-1].content, "preserve concrete submission gaps for repair"
+            self.deferred = True
+            calls = [("SolveReport", report(refs[-1]))]
+        return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}_{i}"}
+                                                 for i, (name, args) in enumerate(calls)])
+
+
+@pytest.mark.parametrize("valid_mixed", [False, True])
+def test_mixed_operations_and_report_finish_operations_before_retrying_submission(tmp_path, valid_mixed):
+    model = MixedReportModel(valid_mixed=valid_mixed, loose_number_once=False)
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=12, max_review_rounds=0)
+    task, runs = branch(), []
+    async def go():
+        try:
+            return await _solve_loop(ctx, task, runs, [HumanMessage(content=build_task(task, ctx))])
+        finally:
+            await ctx.kernels.close()
+    status, error, submitted, _ = asyncio.run(go())
+    assert status == "completed" and error is None and model.deferred
+    assert len(runs) == (2 if valid_mixed else 1)
+    own = next(r for r in ctx.registry.results.values() if r.name == "answer")
+    assert submitted["requirement_evidence"] == [{"requirement_id": "RQ1", "evidence_refs": [own.id]}]
+    transcript = json.loads((tmp_path / ".system/transcripts/Q1.json").read_text())
+    for message in transcript:
+        calls = message["data"].get("tool_calls", [])
+        assert not (len(calls) > 1 and any(c["name"] == "SolveReport" for c in calls))
+
+
 @pytest.mark.parametrize("mode", ["missing_registration", "missing_metric", "bad_mapping"])
 def test_real_tool_loop_rejects_report_fills_gaps_and_submits_without_rerunning_code(tmp_path, mode):
     model = FillGapsModel(mode=mode, loose_number_once=False)

@@ -28,6 +28,7 @@ from ..compaction import (
     CompactHistoryMiddleware,
     DropRefusedStepsMiddleware,
     HistoryRecorder,
+    ReportOrderingMiddleware,
     StepBudgetMiddleware,
     TruncationGuardMiddleware,
     compact_messages,
@@ -79,11 +80,13 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 结果登记（非常重要）：
 - 论文里会用到的每个关键数字（参数估计、预测值、指标、最优解等），先 print 出来，再用 record_results 登记，run_id 填打印它的那次执行。
 - 把一批结果放进一次 record_results 调用里登记，不要一个结果调用一次。
+- 执行、登记完成并拿到工具返回的真实编号之后，单独调用 SolveReport；不能与计算或登记工具同时调用报告。
 - 登记的值要和输出一致（可以四舍五入到合理的位数，百分数写成 87.3%）。没出现在输出里的值会被拒绝。
 - 论文要用的图用 record_figure 登记，并写清图题。
 - 至少完成方案中的检验或灵敏度分析，并登记相应结果。
 
 完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。
+requirement_evidence的evidence_refs填原始编号数组（例如["R3","F2"]），不要填正文引用模板。
 SolveReport.assumptions不是论文假设汇总，没有新增时必须留空[]。只提交求解中新发现、实际改变方法或结论的关键前提。
 原题给定的观测值等事实、已计算验证的数据长度/完整性、契约中已有的前提都直接使用，不再次声明。
 不要通过换key、改写或合并已有前提制造“新假设”；已有A:任务:key的key就是该任务稳定键，通常无需再次填入。
@@ -459,7 +462,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         response_format=ToolStrategy(schema),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
                         report_ready=lambda: not submission_inventory_issues(ctx, branch, run_log)),
-                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware()],
+                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(), ReportOrderingMiddleware(schema.__name__)],
     )
     limit = ctx.max_solver_steps * 2 + 1
     fallback = ReportFallback(ctx.coder_llm, schema, SYSTEM, recorder,

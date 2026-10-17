@@ -115,6 +115,13 @@ evidence bindings, all report references, successful current-attempt execution
 sources and required figure files. Invalid submissions return the specific gaps,
 actual result IDs and successful run IDs as tool feedback; the solver can register
 existing output or compute a missing metric in the same kernel before resubmitting.
+Reports must be submitted separately from execution or registration calls. If a
+model mixes them, the ordering middleware defers only the unsubmitted report,
+preserves any validation feedback and lets the ordinary tool loop finish the
+operations before resubmission. This also prevents a ToolStrategy validation
+error from terminating the loop after mixed tool execution. Exploration uses the
+same ordering rule. Requirement bindings use raw result IDs, while prose uses
+renderable reference templates.
 No extra model reviewer or independent repair loop is added. The submission and
 central commit share requirement-evidence checks; numeric threshold failures stay
 with central domain acceptance and causal replanning, so a counterexample can still

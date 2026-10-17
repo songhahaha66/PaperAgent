@@ -28,6 +28,7 @@ from ..compaction import (
     CompactHistoryMiddleware,
     DropRefusedStepsMiddleware,
     HistoryRecorder,
+    ReportOrderingMiddleware,
     StepBudgetMiddleware,
     TruncationGuardMiddleware,
 )
@@ -216,7 +217,7 @@ async def run_probe(ctx: GraphContext, branch: BranchInput, probe: Probe, protoc
         system_prompt=system,
         response_format=ToolStrategy(ProbeReport),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.explore_steps, 3, PROBE_NUDGE),
-                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware()],
+                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(), ReportOrderingMiddleware("ProbeReport")],
     )
     task = build_task(branch, ctx, candidate=probe.candidate, extra=protocol_text(protocol), ending="开始探索。")
     try:

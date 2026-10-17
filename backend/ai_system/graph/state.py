@@ -114,7 +114,7 @@ class NegativeControl(BaseModel):
 
 class RequirementEvidence(BaseModel):
     requirement_id: str
-    evidence_refs: List[str] = Field(min_length=1)
+    evidence_refs: List[str] = Field(min_length=1, description="实际登记的原始编号数组，例如['R3','F2']；这里不能使用正文模板{{R:R3}}或{{F:F2}}")
 
 
 class SolveReport(BaseModel):
