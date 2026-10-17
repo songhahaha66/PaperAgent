@@ -94,3 +94,20 @@ def test_dispatched_premise_scope_matches_central_dependency_scope(tmp_path):
     assert scopes["Q1"]["assumption_task_ids"] == ["Q1", "Q2"]
     assert scopes["Q3"]["assumption_task_ids"] == ["Q3"]
     assert set(scopes["Q1"]["task_ids"]) == {"Q1", "Q2", "Q3"}
+
+
+def test_default_design_executes_one_route_without_judging_or_probing(tmp_path):
+    from ai_system.graph.nodes.design import make_design
+    from ai_system.graph.nodes.explore import explore
+    from test_paper_graph import FakeModel
+    class UnexpectedJudge:
+        async def ask(self, *args, **kwargs):
+            raise AssertionError("a direct route must not launch candidate scoring")
+    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), judge=UnexpectedJudge())
+    task = {**branch(), "analysis": _analysis().model_dump(), "design": None}
+    async def go():
+        design, _ = await make_design(ctx, task)
+        assert len(design["candidates"]) == 1 and design["scores"] == [{"total": None}]
+        assert await explore(ctx, {**task, "design": design}) is None
+    asyncio.run(go())
+    assert ctx.n_candidates == ctx.explore_top_k == 1

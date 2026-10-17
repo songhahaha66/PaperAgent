@@ -105,12 +105,12 @@ class GraphContext:
     writer_llm: Any
     research: Any = None
     judge: Any = None
-    n_candidates: int = 3
+    n_candidates: int = 1
     confirm_models: bool = False
     max_solver_steps: int = 40
     max_repair_rounds: int = 2
     max_review_rounds: int = 1
-    explore_top_k: int = 2
+    explore_top_k: int = 1
     explore_steps: int = 12
     explore_margin: float = 2.0  # 前两名评审总分（满分 16）差距超过它就不试跑
     output_mode: str = "markdown"  # latex / word 时 render 之后导出 paper.pdf / paper.docx

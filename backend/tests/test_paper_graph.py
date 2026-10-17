@@ -250,7 +250,9 @@ def _make_workspace(tmp_path: Path) -> Path:
 
 
 def _context(ws: Path, model: FakeModel, **options) -> GraphContext:
-    return GraphContext.create(str(ws), planner_llm=model, judge=FixedJudge(), **options)
+    # These fixtures exercise multi-route comparison explicitly.
+    return GraphContext.create(str(ws), planner_llm=model, judge=FixedJudge(),
+                               **({"n_candidates": 2, "explore_top_k": 2} | options))
 
 
 # ----------------------------------------------------------------------

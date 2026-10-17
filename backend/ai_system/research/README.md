@@ -27,6 +27,12 @@ data. Method selection, candidate design/critique, exploration protocols, CodeAc
 and local review all read this same source. A restatement or a subset of requirement
 quotes is insufficient to replace source data. Pre-confirmation design reads the
 original graph task; resumed workers read the authoritative committed requirement.
+The default is one direct design with no exploratory competition. Multiple
+candidates and probe runs remain explicit `n_candidates` / `explore_top_k` options
+for an actual open method choice. Analysis and execution stay within the current
+task's deliverables; data preparation must not expand into downstream prediction
+or unnecessary significance experiments. User-requested method comparisons stay
+inside the required experiment rather than being eliminated by route selection.
 Exploration promotion requires successful execution and a grounded comparison
 metric, including its existing shuffle check. Self-reported success or a textual
 critic score cannot replace that evidence. Without a valid candidate, all probe

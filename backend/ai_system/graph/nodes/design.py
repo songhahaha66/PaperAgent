@@ -69,6 +69,8 @@ ACTOR_SYSTEM = (
     "你是数学建模竞赛的建模手。请为给定子问题设计几种不同思路的建模方案，"
     "方案要能用 Python 在给定数据上实现，步骤具体到用哪些数据、算什么量。"
     "不同候选之间要有实质差异（不同方法或不同建模角度），不要只换说法。"
+    "严格限于当前子问题的交付，不提前完成下游问，也不为数据整理附加预测、ANOVA或其他假设检验。"
+    "用户已指定方法时按指定方法设计；只有存在真实未定路线时才需要多方案，不能为了候选数量扩大研究范围。"
 )
 
 
@@ -107,7 +109,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         f"# 参考方法\n{describe(method_keys) or '（自行选择）'}\n\n"
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
-        + f"请给出 {ctx.n_candidates} 个候选方案。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
+        + f"请给出最多 {ctx.n_candidates} 个候选方案，直接执行已明确的方法即可，不凑数。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
     )
     def validate_candidates(result):
         for candidate in result.candidates:
