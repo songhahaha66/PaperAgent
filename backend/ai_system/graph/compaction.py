@@ -82,11 +82,12 @@ class StepBudgetMiddleware(AgentMiddleware):
     这里在剩余步数不多时，在请求末尾追加一条提醒；只追加在末尾，不影响前缀缓存。最后一步只给报告工具，强制收尾。
     """
 
-    def __init__(self, budget: int, reserve: int, message: str):
+    def __init__(self, budget: int, reserve: int, message: str, report_ready: Callable[[], bool] | None = None):
         super().__init__()
         self.budget = budget
         self.reserve = reserve
         self.message = message
+        self.report_ready = report_ready
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
@@ -98,6 +99,9 @@ class StepBudgetMiddleware(AgentMiddleware):
             # Failed structured submissions return directly to the model without
             # a tools node, so recursion_limit alone is not a tool-step budget.
             raise GraphRecursionError(f"工具调用步数已达到预算 {self.budget}")
+        if self.report_ready and repeated_execution(request.messages[last_human + 1:]) and self.report_ready():
+            note = HumanMessage(content="[系统提醒] 必需登记证据已齐，相同代码和输出已连续重复三次。请现在提交SolveReport，按已有登记引用填写要求证据映射；不得声称未做的分析。")
+            return await handler(request.override(messages=[*request.messages, note], tools=[]))
         if steps >= self.budget - 1:
             # 最后一步只留报告工具（ToolStrategy 下 tool_choice=any，模型只能交报告），不会撞 recursion_limit。
             # 官方 API 的 deepseek-flash 一步只要几秒、步子很碎，v2l 的 Q1 三分钟用完 40 步没交报告，对话和报告全丢
@@ -108,6 +112,24 @@ class StepBudgetMiddleware(AgentMiddleware):
             note = HumanMessage(content=f"[系统提醒] 还剩约 {left} 步。{self.message}")
             request = request.override(messages=[*request.messages, note])
         return await handler(request)
+
+
+def repeated_execution(messages: List[BaseMessage]) -> bool:
+    """Detect a stalled tool loop, without caching or skipping any execution."""
+    steps = [m for m in messages if isinstance(m, AIMessage) and m.tool_calls][-3:]
+    if len(steps) != 3 or any(len(m.tool_calls) != 1 or m.tool_calls[0]["name"] != "run_python" for m in steps):
+        return False
+    calls = [m.tool_calls[0] for m in steps]
+    if any(c["args"] != calls[0]["args"] for c in calls[1:]):
+        return False
+    replies = {m.tool_call_id: m.content for m in messages if isinstance(m, ToolMessage)}
+    outputs = []
+    for call in calls:
+        reply = replies.get(call["id"], "")
+        if not isinstance(reply, str) or not reply.startswith("[run_id: ") or "Traceback (most recent call last)" in reply or "执行超时" in reply:
+            return False
+        outputs.append(reply.partition("\n")[2])
+    return outputs[0] == outputs[1] == outputs[2]
 
 
 def drop_refused_steps(messages: List[BaseMessage], refusal: str) -> List[BaseMessage]:

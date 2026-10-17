@@ -42,6 +42,34 @@ def seed(ctx, runs, sid="Q1", name="answer", value="6"):
     return ctx.registry.record_value(sid, name, value, rid)
 
 
+def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_complete(tmp_path):
+    from langchain.agents.middleware import ModelRequest
+    from langchain_core.messages import AIMessage,ToolMessage
+    from ai_system.graph.compaction import StepBudgetMiddleware
+    from ai_system.graph.nodes.review import submission_inventory_issues
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
+    task=branch();runs=[]
+    messages=[HumanMessage(content='solve')]
+    for i in range(3):
+        messages.extend([AIMessage(content='',tool_calls=[{'id':str(i),'name':'run_python','args':{'code':"print('saved')"}}]),
+                         ToolMessage(content=f'[run_id: run_{i}]\nsaved',tool_call_id=str(i))])
+    middleware=StepBudgetMiddleware(40,4,'submit',report_ready=lambda: not submission_inventory_issues(ctx,task,runs))
+    seen=[]
+    async def handler(request):seen.append(request);return None
+    def invoke(history):asyncio.run(middleware.awrap_model_call(ModelRequest(model=None,messages=history,tools=['run_python']),handler))
+    invoke(messages)
+    assert seen[-1].tools==['run_python']  # Missing actual answer still allows computation.
+    seed(ctx,runs)
+    invoke(messages)
+    assert seen[-1].tools==[] and '必需登记证据已齐' in seen[-1].messages[-1].content
+    changed=[*messages[:-1],messages[-1].model_copy(update={'content':'[run_id: run_2]\nchanged'})]
+    invoke(changed)
+    assert seen[-1].tools==['run_python']  # Identical code with changing results is not a stall.
+    failed=[*messages[:-1],messages[-1].model_copy(update={'content':'[run_id: run_2]\nTraceback (most recent call last): failure'})]
+    invoke(failed)
+    assert seen[-1].tools==['run_python']
+
+
 def report(ref, *, requirement="RQ1"):
     return {"summary": f"已完成整数求和，结果为 {{{{R:{ref}}}}}", "approach": "Python直接求和",
             "key_findings": [{"statement": f"求和结果为 {{{{R:{ref}}}}}", "strength": "显著"}],

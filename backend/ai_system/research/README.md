@@ -109,6 +109,10 @@ be submitted truthfully. Newly declared premises still stage before frozen rerun
 Invalid submissions count against the existing hard tool-step budget. Once it is
 exhausted, missing evidence stops the run instead of requesting a tool-free report
 that cannot fill those gaps; transcripts and execution output are retained.
+The same middleware requests a report early if mandatory inventory is complete
+and the last three executions repeat identical code and output. Changing results,
+execution failures and missing evidence keep the compute tools available. This
+neither caches executions nor skips report, review or central acceptance checks.
 
 All findings use `IssueReport` / `Issue`, with evidence, task/assumption revisions,
 check IDs, repair targets and lifecycle status. Deterministic acceptance failures

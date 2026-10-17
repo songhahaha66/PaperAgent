@@ -455,7 +455,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         tools=build_tools(ctx, subproblem_id, run_log),
         system_prompt=SYSTEM,
         response_format=ToolStrategy(schema),
-        middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE),
+        middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
+                        report_ready=lambda: not submission_inventory_issues(ctx, branch, run_log)),
                     DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware()],
     )
     limit = ctx.max_solver_steps * 2 + 1
