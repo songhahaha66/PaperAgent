@@ -67,10 +67,22 @@ def _make_workspace(root: Path) -> Path:
     run.mkdir(parents=True)
     (run / "stdout.log").write_text("accuracy=0.87312\nauc 0.912512\ncoef [1.73205 0.04511]\n", encoding="utf-8")
     (ws / "manifest.json").write_text(json.dumps({"runs": {
-        "run_1": {"status": "success"},
+        "run_1": {"status": "success", "stdout": "runs/run_1/stdout.log"},
         "run_2": {"status": "error"},
         "run_3": {"status": "success"},
     }}), encoding="utf-8")
+    from ai_system.research import ENGINE_VERSION
+    from ai_system.research.store import ResearchStore
+    from ai_system.research.models import WorkerResult
+    store = ResearchStore(ws, "eval")
+    store.initialize("Model momentum", {"subproblems": [{"id": "Q1", "question": "Model momentum"}],
+        "requirements": [{"id": "RQ1", "statement": "Model momentum", "source_quote": "Model momentum", "kind": "goal", "task_ids": ["Q1"]}],
+        "assumptions": []})
+    results = [{"id": store.allocate_ref("R"), "kind": "number", "subproblem": "Q1", "name": name, "value": value, "run_id": "run_1"}
+               for name, value in {"accuracy": "0.87312", "auc": "0.912512", "coef": "1.73205", "residual": "0.04511"}.items()]
+    store.commit(WorkerResult(order=store.claim("Q1"), execution_status="succeeded", acceptance="accepted", results=results,
+        report={"requirement_evidence": [{"requirement_id": "RQ1", "evidence_refs": [results[0]["id"]]}]}))
+    (ws / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "eval", "engine_version": ENGINE_VERSION}))
     (ws / "paper.md").write_text(PAPER, encoding="utf-8")
     return ws
 
@@ -174,6 +186,48 @@ def test_number_traceability_excludes_numbers_from_problem(tmp_path):
     assert result == {"checked": 0, "traced": 0, "rate": None, "untraced_examples": []}
 
 
+def test_traceability_does_not_scan_failed_stale_or_unregistered_output(tmp_path):
+    ws = _make_workspace(tmp_path)
+    (ws / "runs/run_1/stdout.log").write_text("0.87312 0.912512 1.73205 0.04511 12.345")
+    failed = ws / "runs/run_2"
+    failed.mkdir()
+    (failed / "stderr.txt").write_text("0.8123")
+    assert number_traceability("0.8123 12.345", ws)["traced"] == 0
+    from ai_system.research.store import ResearchStore
+    from ai_system.research.models import PlanPatch, TaskChange
+    store = ResearchStore(ws, "eval", read_only=False)
+    store.apply_patch(PlanPatch(command_id="revise", base_revision=1, reason="correct method",
+                               changes=[TaskChange(task_id="Q1", objective="Recompute")]))
+    assert number_traceability("0.87312", ws)["rate"] == 0
+
+
+@pytest.mark.parametrize("source", ["failed", "changed", "outside"])
+def test_traceability_rechecks_the_exact_registered_successful_source(tmp_path, source):
+    ws = _make_workspace(tmp_path)
+    manifest = json.loads((ws / "manifest.json").read_text())
+    if source == "failed":
+        manifest["runs"]["run_1"]["status"] = "error"
+    elif source == "changed":
+        (ws / "runs/run_1/stdout.log").write_text("0.8123")
+    else:
+        (ws / "elsewhere.log").write_text("0.87312")
+        manifest["runs"]["run_1"]["stdout"] = "elsewhere.log"
+    (ws / "manifest.json").write_text(json.dumps(manifest))
+    assert number_traceability("0.87312", ws)["rate"] == 0
+
+
+def test_traceability_missing_business_state_is_unavailable_not_a_good_score(tmp_path):
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs/old.txt").write_text("0.8123")
+    result = number_traceability("0.8123", tmp_path)
+    assert result["rate"] is None and result["traced"] == 0 and result["error"]
+
+
+def test_plain_numbers_do_not_get_percentage_conversion(tmp_path):
+    ws = _make_workspace(tmp_path)
+    assert number_traceability("87.312 87.312%", ws)["traced"] == 1
+
+
 def test_select_sections_filters_and_truncates():
     long_paper = PAPER.replace("参数扰动 10% 时结果稳定。", "参数扰动结果稳定。" * 200)
     text = select_sections(long_paper, ("灵敏度",))
@@ -234,6 +288,18 @@ def test_score_problem_without_judge_keeps_deterministic_metrics(tmp_path):
     score = asyncio.run(score_problem(problem, out, judge=None))
     assert score["judge"] is None
     assert score["sections"]["coverage"] == 1.0
+
+
+def test_unavailable_evidence_is_visible_in_evaluation_summary(tmp_path):
+    bench = _make_bench(tmp_path)
+    out = tmp_path / "out"
+    ws = _make_workspace(out / "2024_C")
+    (ws / ".system/research.sqlite").unlink()
+    score = asyncio.run(score_problem(load_problem(bench, "2024_C"), out, judge=None))
+    assert score["numbers"]["rate"] is None and score["numbers"]["error"]
+    summary = summarize(out, ["2024_C"])
+    assert summary["number_trace_errors"] == 1
+    assert "数字来源评测不可用 1 题" in (out / "summary.md").read_text()
 
 
 def test_jev_judge_maps_sdk_response():

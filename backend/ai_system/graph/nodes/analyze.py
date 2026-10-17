@@ -126,6 +126,11 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         f"# 题目\n{state['task']}\n\n"
         f"# 数据概览（由程序自动生成）\n{data_profile}\n\n"
         "请给出：论文标题、题目重述、整体分析思路、子问题列表（编号 Q1、Q2…，写清每一问要交付什么、依赖哪一问的结果）。另给出结构化 requirements 与 assumptions：每项要求包含原题逐字摘录、任务范围；硬约束必须编制可执行检查（如容量、非负性、守恒、误差界，使用明确登记名称和数值阈值）。假设必须写适用任务和可证伪条件。检查引用其他任务结果时，把它声明为依赖；不要添加原题没有的硬约束。"
+        "仅当原题明确给出线性优化的目标、约束和变量条件时，使用linear_feasible检查，逐字摘录其来源，"
+        "按变量顺序填写系数，left选择目标值，每个变量使用独立登记名称；未给定的上下界填null，不得默认非负。"
+        "它只复算可行性与目标值，不证明最优。不要把需要自行建模的问题硬转成线性模型。"
+        "kind严格区分：数学/领域硬约束为constraint且checks非空；研究目标为goal；报告、语言、格式、引用规则为deliverable，"
+        "这些文书要求由后续章节校验处理，不要创建has_report、assumptions_count等自报指标。"
     )
     analysis = await call_structured(ctx.planner_llm, ProblemAnalysis, as_messages(SYSTEM, prompt))
     if not analysis.subproblems:

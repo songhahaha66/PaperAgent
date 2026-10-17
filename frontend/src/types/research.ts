@@ -22,6 +22,10 @@ export interface ResearchSnapshot {
   research_revision?: number
   commit_seq?: number
   outcome?: string | null
+  delivery?: {
+    ready: boolean
+    blockers: { task_id: string; message: string; action: string }[]
+  } | null
   tasks?: {
     task_id: string
     kind: string
@@ -32,6 +36,10 @@ export interface ResearchSnapshot {
     acceptance: string
     validity: string
     reason?: string
+    validation?: {
+      outcome: string
+      checks: { check_id: string; outcome: string; message: string }[]
+    } | null
   }[]
   requirements?: {
     id: string

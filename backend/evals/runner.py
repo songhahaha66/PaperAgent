@@ -209,6 +209,7 @@ def summarize(out_dir: Path, problem_ids: List[str]) -> Dict:
             "code_success_rate": (score.get("code_runs") or {}).get("success_rate"),
             "section_coverage": (score.get("sections") or {}).get("coverage"),
             "number_trace_rate": (score.get("numbers") or {}).get("rate"),
+            "number_trace_error": (score.get("numbers") or {}).get("error"),
             "overall": judge.get("overall"),
             **{f"dim_{d.key}": (judge.get("dimensions") or {}).get(d.key) for d in DIMENSIONS},
             "needs_review": judge.get("needs_review") or [],
@@ -223,6 +224,7 @@ def summarize(out_dir: Path, problem_ids: List[str]) -> Dict:
         "problems": len(rows),
         "papers_produced": sum(r["paper"] for r in rows),
         "errors": sum(r["error"] for r in rows),
+        "number_trace_errors": sum(bool(r["number_trace_error"]) for r in rows),
         "mean": {key: _mean([r[key] for r in rows]) for key in numeric},
         "rows": rows,
     }
@@ -246,7 +248,8 @@ def render_markdown(summary: Dict) -> str:
     headers = ["题目", "总分", *[d.name for d in DIMENSIONS], "代码成功率", "章节齐全", "数字可追溯", "耗时(s)", "tokens"]
     keys = ["overall", *dims, "code_success_rate", "section_coverage", "number_trace_rate", "seconds", "total_tokens"]
     lines = [
-        f"共 {summary['problems']} 题，产出论文 {summary['papers_produced']} 篇，出错 {summary['errors']} 次。",
+        f"共 {summary['problems']} 题，产出论文 {summary['papers_produced']} 篇，出错 {summary['errors']} 次。"
+        f"数字来源评测不可用 {summary['number_trace_errors']} 题（不计入该项平均）。",
         "",
         "| " + " | ".join(headers) + " |",
         "|" + "---|" * len(headers),
@@ -257,6 +260,9 @@ def render_markdown(summary: Dict) -> str:
     review = [f"{r['problem_id']}: {', '.join(r['needs_review'])}" for r in summary["rows"] if r["needs_review"]]
     if review:
         lines += ["", "低置信度、建议人工复核的子项：", *[f"- {item}" for item in review]]
+    unavailable = [f"{r['problem_id']}: {r['number_trace_error']}" for r in summary["rows"] if r["number_trace_error"]]
+    if unavailable:
+        lines += ["", "数字来源评测不可用：", *[f"- {item}" for item in unavailable]]
     return "\n".join(lines) + "\n"
 
 

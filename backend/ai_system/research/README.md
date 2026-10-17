@@ -58,6 +58,13 @@ Percentage values use ratios. Each compute task must map requirements to actual
 own/dependency evidence. The store evaluates checks again at commit; a worker's
 accepted flag cannot override failure or a missing/ambiguous metric.
 
+For explicit linear optimization problems, `linear_feasible` freezes source-quoted
+variables, bounds, integrality, coefficient rows and objective. The coordinator
+recomputes each constraint and the reported objective from separately registered
+decision variables; a solver-reported zero residual is insufficient. Missing values
+are inconclusive and violations enter the same causal repair lifecycle. This check
+does not certify optimality or validate a model invented for an open-ended problem.
+
 `SolveReport` has a task-scoped submission validator inside the existing CodeAct
 tool loop. It checks mandatory metric names from the frozen protocol, requirement
 evidence bindings, all report references, successful current-attempt execution
@@ -165,3 +172,20 @@ The evaluation CLI defaults to `--pipeline research`. Its `research-no-explore`,
 all use the same versioned engine.
 No paid model benchmark is required for the offline regression suite; quality
 or cost improvements must be established separately on held-out research tasks.
+
+Numeric traceability reads the authoritative current accepted registry and rechecks
+each value against its exact successful execution stdout. Historical/failed outputs,
+unregistered numbers and stale registry projections do not count. Missing research
+state makes the metric unavailable and is reported explicitly in the summary.
+This metric establishes numeric provenance, not semantic or methodological correctness.
+
+Writing receives actual section-scoped reference tables and only current adopted
+premises, including when a saved design contains older premise drafts. No fixed
+figure ID or minimum assumption count is suggested. The API and research-state
+events expose a delivery explanation derived from the existing gate, and the UI
+shows its concrete blockers and repair steps without implementing another scheduler.
+Each task exposes only its current revision's acceptance record; previous checks
+remain history rather than being displayed as validation of a new revision.
+Semantic section audits retain raw references and receive their registered values,
+including auxiliary results absent from the key-claim table. Writer-only reference
+instructions are not reused as audit criteria for rendered text.

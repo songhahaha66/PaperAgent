@@ -21,6 +21,7 @@ from langgraph.runtime import Runtime
 
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured, clip
+from ..registry import ResultRegistry, find_refs
 from ...research.models import IssueReport
 from ..state import ClaimAudit, ConsistencyReview, PaperState
 
@@ -36,9 +37,12 @@ RECONCILE_SYSTEM = (
 
 AUDIT_SYSTEM = (
     "若根因是数据、模型或假设错误，填写research_issue并引用登记证据和检查编号，进入研究核验；仅写作错误只填section和problem。"
-    "正文漏引用、补写未登记的坐标、夸大结论或遗漏适用条件，都应先删除无依据的表述或按已有结论重写，不能为此重算原本正确的上游。"
+    "补写没有证据支持的数值、夸大结论或遗漏适用条件，应按已有证据重写，不能为此重算原本正确的上游。"
     "research_issue只用于已有上游结果本身可能错误的情况；检查必须直接验证疑点，不能用目标值有限或其他无关检查代替。"
-    "你是论文终审。下面给出全文统一的结论表和口径，以及几个汇总性章节的正文（引用已替换为数值）。"
+    "你是论文终审。下面给出主要结论、统一口径、已登记证据，以及保留原始引用的章节正文。"
+    "正文引用对应的数值和含义以登记证据表为准。主要结论表只是关键结论摘录，不是证据全集；"
+    "已登记的变量或辅助结果可以用于论证，不得因为它未被主要结论表列出就判为虚构。"
+    "引用格式和编号存在性由程序检查，本次只审查语义矛盾，不要要求增加内部编号、照抄数值或逐句标注证据强度。"
     "逐句检查这些章节是否与结论表一致：结论方向、显著与否、强弱程度、适用范围是否被改写或夸大。"
     "只报告与结论表或统一口径实际矛盾的句子；一致的、或只是没有提到某条结论的都不要列入，措辞风格问题也不要报告。"
 )
@@ -116,10 +120,13 @@ async def audit_sections(state: PaperState, ctx: GraphContext) -> List[IssueRepo
     if not ctx.registry.claims or not keys:
         return []
     body = "\n\n".join(
-        f"## 章节 key: {k}\n{clip(ctx.registry.render(sections[k]), AUDIT_SECTION_CHARS)}" for k in keys
+        f"## 章节 key: {k}\n{clip(sections[k], AUDIT_SECTION_CHARS)}" for k in keys
     )
+    refs = set(find_refs(body)) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
+    evidence = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items() if rid in refs})
     prompt = (
-        f"{consistency_text(ctx, state.get('consistency') or [])}\n\n# 待检查的章节\n{body}\n\n"
+        f"# 主要结论\n{ctx.registry.claims_table()}\n\n# 已登记证据（包含辅助结果）\n{evidence.to_prompt_table()}\n\n"
+        f"# 统一口径\n{json.dumps(state.get('consistency') or [], ensure_ascii=False)}\n\n# 待检查的章节\n{body}\n\n"
         f"section 只能填这些 key：{json.dumps(keys)}\n"
         f"# 研究契约\n{json.dumps({'requirements': state['analysis']['requirements'], 'assumptions': state['analysis']['assumptions']}, ensure_ascii=False)}"
     )

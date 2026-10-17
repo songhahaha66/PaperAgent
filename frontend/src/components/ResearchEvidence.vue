@@ -7,12 +7,34 @@
         <span v-if="snapshot.validation_count">
           · {{ snapshot.validation_count }} {{ isZh ? '项待复核' : 'to review' }}</span
         >
+        <span v-if="snapshot.delivery && !snapshot.delivery.ready">
+          · {{ isZh ? '交付待验收' : 'Delivery pending' }}
+        </span>
         <t-icon name="chevron-down" />
       </span>
     </summary>
     <div class="evidence-body">
+      <div v-if="snapshot.delivery" class="delivery-status" role="status">
+        <strong>{{
+          snapshot.delivery.ready
+            ? snapshot.artifacts.length
+              ? isZh
+                ? '已通过交付验收'
+                : 'Delivery checks passed'
+              : isZh
+                ? '研究验收通过，等待生成交付物'
+                : 'Research accepted, preparing deliverables'
+            : isZh
+              ? '交付条件尚未满足'
+              : 'Delivery checks pending'
+        }}</strong>
+        <p v-for="(blocker, index) in snapshot.delivery.blockers" :key="index">
+          <strong>{{ blocker.task_id }}</strong> · {{ blocker.message }}
+          <small class="source-quote">{{ actionHint(blocker.action) }}</small>
+        </p>
+      </div>
       <div v-if="snapshot.tasks?.length" class="research-tasks">
-        <p v-for="task in snapshot.tasks" :key="task.task_id">
+        <div v-for="task in snapshot.tasks" :key="task.task_id" class="research-task">
           <strong>{{ task.task_id }} · v{{ task.revision }}</strong>
           {{ taskLabel(task.execution_status, task.acceptance, task.validity) }}
           <small v-if="task.reason"> · {{ task.reason }}</small>
@@ -27,7 +49,13 @@
           >
             {{ isZh ? '修改这部分' : 'Revise this task' }}
           </button>
-        </p>
+          <details v-if="task.validation?.checks.length" class="research-contract">
+            <summary>{{ isZh ? '查看本次验收' : 'View current acceptance checks' }}</summary>
+            <p v-for="check in task.validation.checks" :key="check.check_id">
+              <strong>{{ checkLabel(check.outcome) }}</strong> · {{ check.message }}
+            </p>
+          </details>
+        </div>
       </div>
       <details v-if="snapshot.requirements?.length" class="research-contract">
         <summary>{{ isZh ? '要求覆盖与假设' : 'Requirements and assumptions' }}</summary>
@@ -181,6 +209,30 @@ defineEmits<{
   revise: [subproblemId: string]
 }>()
 const { isZh } = useStudioCopy()
+const checkLabel = (outcome: string) =>
+  ({
+    passed: isZh.value ? '通过' : 'Passed',
+    failed: isZh.value ? '未通过' : 'Failed',
+    inconclusive: isZh.value ? '证据不足' : 'Inconclusive',
+  })[outcome] || outcome
+const actionHint = (action: string) =>
+  ({
+    verify: isZh.value
+      ? '下一步：独立核验疑点，再决定是否修改计划。'
+      : 'Next: independently verify the finding before revising the plan.',
+    recompute: isZh.value
+      ? '下一步：修正研究计划或输入，重算受影响任务并重新验收。'
+      : 'Next: correct the plan or inputs, recompute affected tasks and validate again.',
+    retry: isZh.value
+      ? '下一步：处理执行或服务错误后，继续研究以重试。'
+      : 'Next: resolve the execution or service error, then resume.',
+    rewrite: isZh.value
+      ? '下一步：修复正文缺项或引用，再检查交付；已验收计算可保留。'
+      : 'Next: repair missing content or references and check delivery again; accepted computations are retained.',
+    wait: isZh.value
+      ? '下一步：等待当前任务或其依赖完成验收。'
+      : 'Next: wait for the task or its dependencies to pass acceptance.',
+  })[action] || action
 const premiseSource = (source: string) =>
   ({
     analysis: isZh.value ? '题目分析提出' : 'Analysis',
@@ -267,6 +319,18 @@ summary > span {
 .research-contract {
   border-bottom: 1px solid #eceeec;
   margin-bottom: 10px;
+}
+.research-task {
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.delivery-status {
+  border-bottom: 1px solid #eceeec;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  line-height: 1.6;
 }
 .research-contract summary {
   padding: 8px 0;

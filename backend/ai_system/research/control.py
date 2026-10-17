@@ -101,14 +101,54 @@ def dispatch(state, runtime):
 
 def public_snapshot(snapshot):
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
-        "tasks": [{key: task.get(key) for key in ("task_id", "revision", "objective", "dependencies",
-                   "execution_status", "acceptance", "validity", "reason", "kind")} for task in snapshot["tasks"].values() if not task["retired"]],
+        "delivery": delivery_status(snapshot),
+        "tasks": [public_task(snapshot, task) for task in snapshot["tasks"].values() if not task["retired"]],
         "issues": [i for i in snapshot["issues"] if i["status"] not in {"resolved", "dismissed"}],
         "requirements": [{**r, "status": "accepted" if all(snapshot["tasks"][key]["acceptance"] == "accepted" and
             snapshot["tasks"][key]["validity"] == "current" and (snapshot["tasks"][key]["kind"] != "writing" or
             snapshot["sections"].get(f"solve:{key}", {}).get("validity") == "current") for key in r["task_ids"]) else "pending"}
             for r in snapshot["spec"]["requirements"]], "assumptions": list(snapshot["assumptions"].values()),
     }
+
+
+def public_task(snapshot, task):
+    result = {key: task.get(key) for key in ("task_id", "revision", "objective", "dependencies",
+              "execution_status", "acceptance", "validity", "reason", "kind")}
+    result["validation"] = current_validation(snapshot, task)
+    return result
+
+
+def current_validation(snapshot, task):
+    # Rejected work is invalidated immediately; retain its verdict for this
+    # revision, but never label an older revision's checks as current.
+    attempt = next((a for a in reversed(snapshot["attempts"].values())
+                    if a["task_id"] == task["task_id"] and a["revision"] == task["revision"]), {})
+    return attempt.get("validation")
+
+
+def delivery_status(snapshot):
+    """Explain the existing delivery gate; this projection never changes scheduling."""
+    from .store import ResearchStore
+    issues = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}]
+    blockers = [{"task_id": i["task_id"], "message": i["message"], "action": i["action"]} for i in issues]
+    covered = {i["task_id"] for i in issues}
+    for key, task in snapshot["tasks"].items():
+        if task["retired"] or (task["acceptance"] == "accepted" and task["validity"] == "current"):
+            continue
+        checks = [c["message"] for c in (current_validation(snapshot, task) or {}).get("checks", []) if c["outcome"] != "passed"]
+        message = "; ".join(checks) or task.get("reason") or (task.get("report") or {}).get("error")
+        action = "retry" if task["execution_status"] in {"failed", "cancelled"} else "wait"
+        if task["validity"] == "stale":
+            action = "recompute"
+        exhausted = len(snapshot["attempts"]) >= snapshot["max_total_attempts"] or sum(
+            a["task_id"] == key and a["revision"] == task["revision"] for a in snapshot["attempts"].values()) >= snapshot["max_attempts"]
+        if key in covered and not exhausted:
+            continue
+        if exhausted and task["execution_status"] != "running":
+            message = (message + "；" if message else "") + "当前尝试预算已耗尽，需要调整研究计划"
+            action = "recompute"
+        blockers.append({"task_id": key, "message": message or ("任务正在执行" if task["execution_status"] == "running" else "任务等待执行或依赖验收"), "action": action})
+    return {"ready": ResearchStore.delivery_ready(snapshot), "blockers": blockers}
 
 
 def _copy_tree(source, target):

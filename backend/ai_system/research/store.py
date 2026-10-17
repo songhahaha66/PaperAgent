@@ -14,7 +14,7 @@ from contextlib import contextmanager, closing
 from pathlib import Path
 
 from . import ENGINE_VERSION
-from .models import Assumption, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
+from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
 from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps
 from .assumptions import assumption_id, premise_definition
 
@@ -513,7 +513,7 @@ class ResearchStore:
                 cited = {(state["evidence"][ref]["payload"]["subproblem"], state["evidence"][ref]["payload"]["name"])
                          for ref in issue["evidence_refs"]}
                 linked = all(any((operand["task_id"], operand["name"]) in cited
-                                 for operand in (rule["check"]["left"], rule["check"].get("right")) if operand)
+                                 for operand in [s.model_dump() for s in DomainCheck.model_validate(rule["check"]).selectors()])
                              for rule in candidates) if cited and not issue["assumption_id"] else True
                 if not candidates or {rule["check"]["id"] for rule in candidates} != set(issue["check_ids"]) or not linked:
                     issue["status"] = "inconclusive"

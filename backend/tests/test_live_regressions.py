@@ -32,7 +32,7 @@ def test_structured_retries_return_actual_field_errors_and_keep_call_budget(monk
             self.calls += 1
             if self.calls == 1:
                 return Requirement.model_validate(bad)
-            assert "硬约束必须有可执行检查" in messages[-1].content
+            assert "必须有可执行检查" in messages[-1].content
             # The plain JSON retry has the same error; it must not be discarded
             # as a generic missing response on the next attempt.
             data = bad if self.calls == 2 else {**bad, "kind": "goal"}

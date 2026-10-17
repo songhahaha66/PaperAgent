@@ -21,6 +21,7 @@ from ..llm_utils import as_messages, call_structured, clip
 from ..state import BranchInput, ResultReview
 from ..tracing import labelled
 from ...research.validation import requirement_evidence_gaps
+from ...research.models import DomainCheck
 
 SYSTEM = (
     "你是数学建模竞赛的评审老师，负责在写论文之前审查一个子问题的求解结果。"
@@ -360,10 +361,8 @@ def submission_inventory_issues(ctx: GraphContext, branch: BranchInput, runs: Li
             issues.append(f"登记结果 {result.id}「{result.name}」来源无效：{exc}；请重新执行并登记")
     for rule in (branch.get("research_contract") or {}).get("checks", []):
         check = rule["check"]
-        for key in ("left", "right"):
-            selector = check.get(key)
-            if not selector:
-                continue
+        for operand in DomainCheck.model_validate(check).selectors():
+            selector = operand.model_dump()
             target = selector["task_id"]
             if branch["subproblem"].get("kind") == "verify" and target == check["left"]["task_id"]:
                 target = sid

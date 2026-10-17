@@ -90,10 +90,47 @@ const { hostRenderer } = require('./vueHost.cjs')
   )
   snapshot.value = {
     ...snapshot.value,
-    tasks: [{ task_id: 'Q4', kind: 'verify', revision: 1, execution_status: 'running', acceptance: 'pending', validity: 'current' }],
-    requirements: [{ id: 'RQ1', task_ids: ['Q1'], status: 'pending', statement: '满足容量约束', source_quote: '容量不超过10' }],
-    assumptions: [{ id: 'A1', revision: 1, status: 'refuted', statement: '均值具有代表性', source: 'solve', task_ids: ['Q1', 'Q2'] }],
-    issues: [{ id: 'issue-one', task_id: 'Q1', task_revision: 1, assumption_id: 'A1', status: 'repairing', source: 'local_review', message: '独立核验发现反例', evidence_refs: ['R7'] }],
+    tasks: [
+      {
+        task_id: 'Q4',
+        kind: 'verify',
+        revision: 1,
+        execution_status: 'running',
+        acceptance: 'pending',
+        validity: 'current',
+      },
+    ],
+    requirements: [
+      {
+        id: 'RQ1',
+        task_ids: ['Q1'],
+        status: 'pending',
+        statement: '满足容量约束',
+        source_quote: '容量不超过10',
+      },
+    ],
+    assumptions: [
+      {
+        id: 'A1',
+        revision: 1,
+        status: 'refuted',
+        statement: '均值具有代表性',
+        source: 'solve',
+        task_ids: ['Q1', 'Q2'],
+      },
+    ],
+    issues: [
+      {
+        id: 'issue-one',
+        task_id: 'Q1',
+        task_revision: 1,
+        assumption_id: 'A1',
+        status: 'repairing',
+        source: 'local_review',
+        message: '独立核验发现反例',
+        evidence_refs: ['R7'],
+      },
+    ],
     issue_evidence: [{ id: 'R7', name: 'residual', value: '4', unit: '', run_id: 'run_one' }],
   }
   await flush()
@@ -103,10 +140,69 @@ const { hostRenderer } = require('./vueHost.cjs')
   assert.match(text(host.root), /求解中提出/)
   assert.match(text(host.root), /求解审查/)
   assert.match(text(host.root), /R7 · residual：4/)
-  assert.equal(button('修改这部分'), undefined, 'verification tasks are controlled by the issue protocol')
+  assert.equal(
+    button('修改这部分'),
+    undefined,
+    'verification tasks are controlled by the issue protocol',
+  )
   button('查看核验输出').props.onClick()
-  assert.equal(opened.at(-1), 'runs/run_one/stdout.log', 'historical counterexamples retain their own output source')
+  assert.equal(
+    opened.at(-1),
+    'runs/run_one/stdout.log',
+    'historical counterexamples retain their own output source',
+  )
   console.log('PASS: contracts, refutations and historical counterexample sources render together')
+  snapshot.value = {
+    ...snapshot.value,
+    delivery: {
+      ready: false,
+      blockers: [
+        { task_id: 'Q1', message: '约束复算左值12，不满足容量8', action: 'recompute' },
+        { task_id: 'Q2', message: '正文引用的图不存在', action: 'rewrite' },
+      ],
+    },
+  }
+  await flush()
+  assert.match(text(host.root), /交付条件尚未满足/)
+  assert.match(text(host.root), /约束复算左值12/)
+  assert.match(text(host.root), /重算受影响任务并重新验收/)
+  assert.match(text(host.root), /已验收计算可保留/)
+  snapshot.value = { ...snapshot.value, delivery: { ready: true, blockers: [] }, artifacts: [] }
+  await flush()
+  assert.match(text(host.root), /研究验收通过，等待生成交付物/)
+  assert.doesNotMatch(text(host.root), /约束复算左值12/)
+  snapshot.value = { ...snapshot.value, artifacts: ['paper.md'] }
+  await flush()
+  assert.match(text(host.root), /已通过交付验收/)
+  snapshot.value = {
+    ...snapshot.value,
+    tasks: [
+      {
+        task_id: 'Q1',
+        revision: 2,
+        kind: 'compute',
+        execution_status: 'succeeded',
+        acceptance: 'accepted',
+        validity: 'current',
+        validation: {
+          outcome: 'accepted',
+          checks: [
+            {
+              check_id: 'linear',
+              outcome: 'passed',
+              message: '约束和目标值复算通过；未验证最优性',
+            },
+          ],
+        },
+      },
+    ],
+  }
+  await flush()
+  assert.match(text(host.root), /查看本次验收/)
+  assert.match(text(host.root), /未验证最优性/)
+  console.log(
+    'PASS: delivery status and next steps follow authoritative backend checks, with no stale blockers',
+  )
   snapshot.value = { ...snapshot.value, results: [], runs: [], validation_count: 0 }
   await flush()
   assert.ok(host.find((node) => node.props?.class === 'evidence-empty'))

@@ -34,9 +34,9 @@ SOLVE_HEADING = "五、模型的建立与求解"
 STYLE = (
     "你是数学建模竞赛论文的执笔手，文风严谨、简洁，使用中文学术写作规范。\n"
     "硬性规则：\n"
-    "1. 正文中的任何计算结果数字必须写成登记表里的引用，例如「预测准确率为 {{R:R3}}」，不要自己写数字；"
+    "1. 正文中的任何计算结果数字必须使用本节可用引用表中的真实引用，不要自己写数字或猜测编号；"
     "题目给定的常数、年份、编号可以直接写。\n"
-    "2. 插图单独占一行写 {{F:F1}}，正文提到它时也写 {{F:F1}}，系统会编号。\n"
+    "2. 只有本节可用引用表中确有图表时才能插图。复制表中的图引用独占一行，正文指代同一图也使用该引用，系统会编号。没有图表时不得写图引用或声称见图。\n"
     "3. 公式用 LaTeX（行内 $...$，独立公式 $$...$$），公式中的符号可以写，但不要在公式里代入计算结果数字。\n"
     "4. 只输出本节正文，不要输出本节的标题，不要输出代码。小节标题用 ### 开头。\n"
     "5. 论文是给评委读的：不要出现代码里的变量名、列名和程序输出的原样字符串（如 word_length、valAUC、n_repeat），"
@@ -62,11 +62,16 @@ def section_plan(state: PaperState) -> List[Tuple[str, str, int]]:
     return plan
 
 
-def _design_text(design: Dict) -> str:
+def current_premises(state: PaperState, sid: str | None = None) -> List[Dict]:
+    return [a for a in state["analysis"]["assumptions"] if a.get("status", "active") == "active"
+            and (sid is None or sid in a["task_ids"])]
+
+
+def _design_text(design: Dict, premises: List[Dict]) -> str:
     chosen = design["chosen"]
     return (
         f"方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"
-        f"假设：{'；'.join(a['statement'] for a in chosen.get('assumptions') or [])}\n检验：{chosen['validation']}"
+        f"当前采用的假设：{'；'.join(a['statement'] for a in premises) or '无新增假设'}\n检验：{chosen['validation']}"
     )
 
 
@@ -113,7 +118,7 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
     report = (state.get("solutions") or {}).get(sid) or {}
     return (
         f"## {sid} {subproblem['title']}\n问题：{subproblem['question']}\n"
-        + (_design_text(design) + "\n" if design else "")
+        + (_design_text(design, current_premises(state, sid)) + "\n" if design else "")
         + f"求解报告：\n{_report_text(report)}\n登记结果：\n{ctx.registry.to_prompt_table(sid)}"
     )
 
@@ -121,11 +126,21 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
     """每一节都带上全文结论表和统一口径，各节结论口径一致"""
     request = _section_body(key, title, state, ctx)
+    from ..registry import ResultRegistry
+    allowed = None
+    if key.startswith("solve:"):
+        sid = key.split(":", 1)[1]
+        sp = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
+        allowed = {sid, *(sp.get("depends_on") or [])}
+    references = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items()
+                                               if allowed is None or r.subproblem in allowed})
+    request += "\n\n# 本节可用引用（仅可复制这里的编号）\n" + references.to_prompt_table()
+    if not any(r.kind == "figure" for r in references.results.values()):
+        request += "\n本节没有可用图表，只能用文字、公式或基于已登记结果的表格说明，不得引用图。"
     shared_ctx = ctx
     conflicts = state.get("consistency") or []
     if ctx.research and key.startswith("solve:"):
         from dataclasses import replace
-        from ..registry import ResultRegistry
         sid = key.split(":", 1)[1]
         subproblem = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
         source_ids = {sid, *(subproblem.get("depends_on") or [])}
@@ -170,13 +185,18 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         return (
             f"撰写「问题分析」，逐个子问题说明分析思路和选用模型的理由。\n\n整体思路：{analysis['overall_analysis']}\n\n"
             + "\n\n".join(
-                f"{sp['id']} {sp['title']}\n" + _design_text(state["designs"][sp["id"]])
+                f"{sp['id']} {sp['title']}\n" + _design_text(state["designs"][sp["id"]], current_premises(state, sp['id']))
                 for sp in subproblems if sp["id"] in (state.get("designs") or {})
             )
         )
     if key == "assumptions":
-        return "撰写「模型假设」，合并去重后只保留对建模最关键的 5~8 条，编号列出，每条附一句理由。\n\n" + "\n".join(
-            f"- {a}" for a in [a["statement"] for a in analysis["assumptions"]]
+        premises = current_premises(state)
+        return (
+            "撰写「模型假设」，仅使用下列当前采用的假设，合并去重并解释其作用和适用范围。"
+            "数量按实际需要，不得补凑、改写出新的前提或把题目给定事实当成假设。"
+            "没有假设时如实说明采用题目给定条件。不要把内部编号、版本或来源字段写进正文。\n\n"
+            + "\n".join(f"- {a['id']} v{a.get('revision', 1)}：{a['statement']}；适用任务：{', '.join(a['task_ids'])}"
+                        for a in premises)
         )
     solved_text = "\n\n".join(clip(sections.get(solve_key(sp["id"]), ""), 4000) for sp in subproblems)
     if key == "symbols":

@@ -64,6 +64,7 @@ class ResearchSnapshot(BaseModel):
     research_revision: int = 0
     commit_seq: int = 0
     outcome: str | None = None
+    delivery: dict | None = None
     requirements: list[dict] = Field(default_factory=list)
     assumptions: list[dict] = Field(default_factory=list)
     validations: list[dict] = Field(default_factory=list)
@@ -180,7 +181,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     return ResearchSnapshot(
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
-        outcome=control.get("outcome"), tasks=control.get("tasks", []),
+        outcome=control.get("outcome"), delivery=control.get("delivery"), tasks=control.get("tasks", []),
         requirements=control.get("requirements", []), assumptions=control.get("assumptions", []),
         validations=business["validations"][-20:] if business else [],
         issues=business["issues"][-30:] if business else [], issue_evidence=issue_evidence,

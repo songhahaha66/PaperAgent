@@ -37,6 +37,12 @@ def validate_spec(source, analysis):
                 raise ValueError("验收检查必须属于要求/假设的作用范围")
             if check.left.task_id not in tasks or (check.right and check.right.task_id not in tasks):
                 raise ValueError("验收检查指向未知任务")
+            if check.linear_model:
+                model = check.linear_model
+                quotes = [model.objective_quote, *(v.source_quote for v in model.variables),
+                          *(c.source_quote for c in model.constraints)]
+                if any(quote not in source for quote in quotes):
+                    raise ValueError("线性模型的目标、变量和约束必须逐字引用原题")
     if len(set(check_ids)) != len(check_ids):
         raise ValueError("验收检查编号必须全局唯一")
     return requirements, assumptions
@@ -101,7 +107,12 @@ def evaluate(state, task_id, results):
 
         try:
             raw = select(check.left, override=True)
-            if check.operator == "exists":
+            detail = ""
+            if check.operator == "linear_feasible":
+                from .linear import verify_linear
+                values = [_number(select(selector, override=True)) for selector in check.selectors()[1:]]
+                passed, detail = verify_linear(check.linear_model, values, _number(raw), check.tolerance)
+            elif check.operator == "exists":
                 passed = bool(str(raw).strip())
             else:
                 left = _number(raw)
@@ -118,13 +129,16 @@ def evaluate(state, task_id, results):
                     agrees = str(raw).strip() == str(original).strip()
                 else:
                     agrees = math.isclose(_number(raw), _number(original), rel_tol=1e-9, abs_tol=check.tolerance)
+                if check.linear_model:
+                    agrees = agrees and all(math.isclose(_number(select(s, override=True)), _number(select(s)),
+                                                        rel_tol=1e-9, abs_tol=check.tolerance) for s in check.selectors()[1:])
                 if not agrees:
                     checks.append(CheckResult(check_id=check.id, outcome="failed", evidence_refs=evidence,
                         message=f"{check.description}：独立复算值 {raw} 与原登记值 {original} 不一致",
                         **{key: rule[key] for key in ("owner_kind", "owner_id", "owner_revision")}))
                     continue
             outcome = "passed" if passed else "failed"
-            message = f"{check.description}：{'通过' if passed else '违反验收条件'}"
+            message = f"{check.description}：{detail or ('通过' if passed else '违反验收条件')}"
         except (ValueError, TypeError, OverflowError) as exc:
             outcome, message = "inconclusive", f"{check.description}：{exc}"
         checks.append(CheckResult(check_id=check.id, outcome=outcome, evidence_refs=evidence, message=message,

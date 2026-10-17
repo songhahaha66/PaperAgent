@@ -3,13 +3,18 @@
 
 - code_runs：代码执行次数与成功率（来自 manifest.json 的 runs 记录）
 - section_coverage：数模论文标准章节是否齐全
-- number_traceability：论文中的小数/百分数有多少能在代码输出里找到（防编造数字）
+- number_traceability：论文中的小数/百分数能否追溯到当前已验收、来源执行成功的登记值
 """
 
 import json
 import re
+import sqlite3
 from pathlib import Path
-from typing import Dict, Iterable, List, Set, Tuple
+from typing import Dict, List, Tuple
+
+from ai_system.graph.registry import Result, value_in_output
+from ai_system.research import ENGINE_VERSION
+from ai_system.research.store import ResearchStore
 
 # 数模论文的标准章节：(名称, 标题关键词)
 REQUIRED_SECTIONS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
@@ -27,11 +32,6 @@ _HEADING = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
 _CODE_FENCE = re.compile(r"```.*?```", re.DOTALL)
 # 带小数点的数（可带百分号或科学计数法）；纯整数太容易误匹配（年份、编号、计数），不计入
 _DECIMAL = re.compile(r"(?<![\w.])-?\d+\.\d+(?:[eE][-+]?\d+)?%?")
-_ANY_NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
-
-MAX_DECIMALS = 6
-MAX_CORPUS_NUMBERS = 200_000
-TEXT_SUFFIXES = {".txt", ".log", ".csv", ".json", ".md", ".tsv"}
 
 
 def code_runs(workspace: Path) -> Dict:
@@ -69,59 +69,56 @@ def _paper_numbers(paper: str) -> List[str]:
     return _DECIMAL.findall(_CODE_FENCE.sub("", paper))
 
 
-def _decimals(token: str) -> int:
-    mantissa = re.split(r"[eE]", token.rstrip("%"))[0]
-    return len(mantissa.split(".")[1]) if "." in mantissa else 0
-
-
-def _corpus_files(workspace: Path) -> Iterable[Path]:
-    workspace = Path(workspace)
-    for root in (workspace / "runs", workspace / "outputs"):
-        if root.exists():
-            for path in root.rglob("*"):
-                if path.is_file() and path.suffix.lower() in TEXT_SUFFIXES:
-                    yield path
-
-
-def _rounded_set(numbers: Iterable[float]) -> Set[Tuple[int, float]]:
-    """把每个数在 1..MAX_DECIMALS 位小数下的取值（及 ×100 后的百分数形式）放进集合"""
-    rounded = set()
-    for value in numbers:
-        for d in range(1, MAX_DECIMALS + 1):
-            rounded.add((d, round(value, d)))
-            rounded.add((d, round(value * 100, d)))
-    return rounded
+def _verified_values(workspace: Path) -> list[str]:
+    """Use the business store, never historical files or the registry projection."""
+    root = Path(workspace).resolve()
+    thread = json.loads((root / ".system/graph_thread.json").read_text())
+    if thread.get("engine_version") != ENGINE_VERSION:
+        raise ValueError("研究引擎版本不支持证据评测")
+    store = ResearchStore(root, thread["thread_id"], read_only=True)
+    state = store.snapshot()
+    if not state or state["engine_version"] != ENGINE_VERSION:
+        raise ValueError("缺少当前研究状态")
+    manifest = json.loads((root / "manifest.json").read_text())
+    values = []
+    for item in store.registry_payload(state)["results"]:
+        result = Result(**item)
+        if result.kind != "number" or not re.fullmatch(r"run_[A-Za-z0-9_]+", result.run_id):
+            continue
+        run = manifest.get("runs", {}).get(result.run_id, {})
+        if run.get("status") != "success" or not run.get("stdout"):
+            continue
+        output = (root / run["stdout"]).resolve()
+        if not output.is_relative_to(root / "runs" / result.run_id) or not output.is_file():
+            continue
+        if value_in_output(result.value, output.read_text(encoding="utf-8")):
+            # Normalize percentages, without letting digits in units become evidence.
+            raw = result.value.strip().replace(",", "")
+            value = float(raw.rstrip("%")) / (100 if raw.endswith("%") or result.unit == "%" else 1)
+            values.append(str(value))
+    return values
 
 
 def number_traceability(paper: str, workspace: Path, problem_text: str = "") -> Dict:
     """
-    论文中的小数能否在代码输出（runs/ 与 outputs/ 下的文本文件）中找到。
-    题目原文里已有的数字是已知条件，不计入分母。
+    仅匹配当前有效登记值，并再次核对其成功执行的 stdout。
+    这是数值来源指标，不证明正文语义或计算方法正确。原题数字不计入分母。
     """
     given = set(_DECIMAL.findall(problem_text))
     tokens = [t for t in _paper_numbers(paper) if t not in given]
     if not tokens:
         return {"checked": 0, "traced": 0, "rate": None, "untraced_examples": []}
 
-    corpus: List[float] = []
-    for path in _corpus_files(workspace):
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        for token in _ANY_NUMBER.findall(text):
-            try:
-                corpus.append(float(token))
-            except ValueError:
-                continue
-            if len(corpus) >= MAX_CORPUS_NUMBERS:
-                break
-        if len(corpus) >= MAX_CORPUS_NUMBERS:
-            break
-    known = _rounded_set(corpus)
+    try:
+        values = _verified_values(workspace)
+    except (OSError, ValueError, KeyError, sqlite3.Error) as exc:
+        return {"checked": len(tokens), "traced": 0, "rate": None,
+                "untraced_examples": tokens[:20], "error": f"有效证据不可用：{exc}"}
 
     traced, untraced = 0, []
     for token in tokens:
-        d = min(_decimals(token), MAX_DECIMALS)
-        value = float(token.rstrip("%"))
-        if d and (d, round(value, d)) in known:
+        # Percentage conversion is allowed only for percentage text, as in registration.
+        if any(value_in_output(token, value) for value in values):
             traced += 1
         else:
             untraced.append(token)
