@@ -14,10 +14,11 @@ from ai_system.research.planner import ready_tasks
 
 def make_store(tmp_path, limit=None):
     store = ResearchStore(tmp_path, "research")
-    store.initialize("Answer every original question; preserve capacity constraints", {
+    quote = "preserve capacity constraints" + (f" <= {limit}" if limit is not None else "")
+    store.initialize("Answer every original question; " + quote, {
         "subproblems": [{"id": key, "title": key, "question": key, "depends_on": deps}
                         for key, deps in [("Q1", []), ("Q2", ["Q1"]), ("Q3", [])]],
-        "requirements": [{"id": f"RQ{i}", "statement": key, "source_quote": "preserve capacity constraints", "kind": "goal", "task_ids": [key],
+        "requirements": [{"id": f"RQ{i}", "statement": key, "source_quote": quote, "kind": "goal", "task_ids": [key],
             "checks": [{"id": "capacity", "description": "capacity", "left": {"task_id": "Q1", "name": "value"}, "operator": "le", "expected": limit}] if limit is not None and key == "Q1" else []}
             for i, key in enumerate(("Q1", "Q2", "Q3"), 1)],
         "assumptions": [{"id": "A1", "statement": "stable input", "task_ids": ["Q1", "Q2"], "checks": []}]})

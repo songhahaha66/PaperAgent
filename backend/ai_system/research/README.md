@@ -70,6 +70,10 @@ own/dependency evidence. The store evaluates checks again at commit; a worker's
 accepted flag cannot override failure or a missing/ambiguous metric.
 Numeric checks select scalar metrics; a sequence's length or minimum must be
 computed and registered separately. Existence does not establish sequence length.
+Fixed requirement thresholds must occur as whole numbers (with percentage
+conversion) in that requirement's source excerpt. An arbitrary accuracy or profit
+target cannot become mandatory merely by citing a generic instruction to compare
+methods. This numeric anchor does not establish semantic equivalence of the check.
 
 Analysis validates coverage, source quotes, check scopes and the dependency DAG
 inside the existing bounded structured-output retry. Semantic feedback includes

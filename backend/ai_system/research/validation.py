@@ -58,6 +58,16 @@ def validate_spec(source, analysis):
             errors.append("要求/假设的作用范围无效")
         for check in owner.checks:
             check_ids.append(check.id)
+            if isinstance(owner, Requirement) and check.expected is not None:
+                # A source quote is not permission to invent an accuracy target.
+                # Match whole numeric tokens (including percentages), not digits
+                # elsewhere in the original question or arbitrary string subsets.
+                numbers = [float(m[0]) / (100 if m[1] else 1) for m in re.findall(
+                    r"(?<![A-Za-z0-9_.])([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*([%％]?)", owner.source_quote)]
+                explicit_zero = check.expected == 0 and re.search(r"非负|非正|大于零|小于零|non[- ]negative|non[- ]positive", owner.source_quote, re.I)
+                if not explicit_zero and check.expected not in numbers:
+                    errors.append(f"要求 {owner.id} 的检查 {check.id} 阈值 {check.expected:g} 缺少该要求原文中的数值依据；"
+                                  "不得为比较/评估任务添加原题没有的误差或收益门槛。使用finite检查真实指标，或把方法前提作为假设，不要改写原题要求")
             if check.left.task_id not in owner.task_ids:
                 errors.append(f"验收检查必须属于要求/假设的作用范围：{owner.id} 的任务为 {owner.task_ids}，"
                                  f"检查 {check.id} 却指向 {check.left.task_id}，请核对任务归属")

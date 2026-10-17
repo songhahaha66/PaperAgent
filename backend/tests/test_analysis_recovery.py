@@ -227,3 +227,24 @@ def test_failed_or_ungrounded_explorations_release_kernels_without_promoting_sta
     ctx.kernels=Kernels()
     assert asyncio.run(mod.explore(ctx,task)) is None
     assert sorted(released)==['Q1~c0','Q1~c1']
+
+
+@pytest.mark.parametrize('quote,expected,valid',[
+    ('比较两种方法，用最后 5 天验证误差',20,False),
+    ('误差不超过 15%',0.15,True),
+    ('误差不超过 15%',15,False),
+    ('容量不超过 100',10,False),
+    ('售价 15 元',15,True),
+    ('售价15元',15,True),
+    ('备餐量非负',0,True),
+])
+def test_requirement_thresholds_cannot_be_invented_or_borrowed_from_other_source_numbers(quote,expected,valid):
+    from ai_system.research.validation import validate_spec
+    from ai_system.research.models import Requirement
+    plan=_analysis().model_dump()
+    plan['requirements'][0]=Requirement(id='R1',kind='constraint',statement='numeric check',source_quote=quote,task_ids=['Q1'],
+        checks=[DomainCheck(id='bound',description='fixed bound',left={'task_id':'Q1','name':'metric'},operator='le',expected=expected)]).model_dump()
+    source=TASK+' 原题另有 20 个观测。'+quote
+    if valid:validate_spec(source,plan)
+    else:
+        with pytest.raises(ValueError,match='数值依据'):validate_spec(source,plan)

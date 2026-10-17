@@ -176,7 +176,11 @@ def test_numeric_domain_checks_use_fixed_thresholds_and_dependency_evidence(tmp_
         left=ResultSelector(task_id="Q2", name="allocation"), operator=operator, expected=expected,
         right=ResultSelector(task_id="Q1", name="demand") if right else None, tolerance=tolerance)]
     store = ResearchStore(tmp_path, "numeric")
-    store.initialize(TASK, analysis.model_dump())
+    source = TASK
+    if expected is not None:
+        analysis.requirements[1].source_quote = f"Fixed numeric threshold {expected}"
+        source += " " + analysis.requirements[1].source_quote
+    store.initialize(source, analysis.model_dump())
     _, original = submit(store, "Q1", {"demand": 8})
     submit(store, "Q2", {"allocation": value})
     validation = store.snapshot()["validations"][-1]
