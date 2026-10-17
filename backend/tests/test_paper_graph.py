@@ -1043,13 +1043,13 @@ def test_placeholder_runs_are_not_executed(tmp_path):
 
     async def go():
         try:
-            return [await run_python.ainvoke({"code": code}) for code in ("print('x')", "print('ok')\nprint('done')", "import pandas as pd, numpy as np\nprint('q3')", "print(1 + 1)")]
+            return [await run_python.ainvoke({"code": code}) for code in ("print('x')", "print('ok')\nprint('done')", "import pandas as pd, numpy as np\nprint('q3')", "pass", "# done\n...", "import numpy as np\npass", "print(1 + 1)", "x=42\npass\nprint(x)")]
         finally:
             await ctx.kernels.close()
 
     outputs = asyncio.run(go())
-    assert outputs[:3] == [PLACEHOLDER_REPLY] * 3
-    assert "2" in outputs[3] and len(run_log) == 1
+    assert outputs[:6] == [PLACEHOLDER_REPLY] * 6
+    assert "2" in outputs[6] and "42" in outputs[7] and len(run_log) == 2
 
 
 def test_refused_steps_dropped_from_request():

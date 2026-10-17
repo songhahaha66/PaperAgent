@@ -9,6 +9,7 @@
 胜出分支的内核和对话历史直接接着做正式求解。
 """
 
+import ast
 import json
 import logging
 import re
@@ -73,6 +74,7 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
   模型没有超过这个基线时，结论只能说预测信息来自基线已有的结构。
   假设检验（自相关、游程、卡方等）不需要这种对照：检验的零分布本身就是对照，controls 留空。
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
+- 内核已自动配置本机可用的中文字体，不要用未安装的SimHei等字体覆盖配置。
 
 结果登记（非常重要）：
 - 论文里会用到的每个关键数字（参数估计、预测值、指标、最优解等），先 print 出来，再用 record_results 登记，run_id 填打印它的那次执行。
@@ -105,9 +107,21 @@ PLACEHOLDER_CODE = re.compile(
     r"""^\s*(?:(?:import [\w., ]+|from [\w.]+ import [\w., ]+)\s*\n\s*)*(?:print\(\s*(['"])[\w\s.!-]{0,12}\1\s*\)\s*;?\s*)+$"""
 )
 PLACEHOLDER_REPLY = (
-    "这段代码只打印了一个固定字符串，没有执行。不需要用 run_python 占位或确认："
+    "这段代码只包含占位语句或固定字符串，没有执行。不需要用 run_python 占位或确认："
     "登记结果直接调用 record_results（run_id 填之前打印该值的那次执行），全部完成后直接提交 SolveReport。"
 )
+
+
+def is_placeholder(code: str) -> bool:
+    if PLACEHOLDER_CODE.match(code):
+        return True
+    try:
+        body = ast.parse(code).body
+    except SyntaxError:
+        return False  # Let execution return the real syntax error.
+    empty = lambda node: isinstance(node, ast.Pass) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+    return not body or (any(empty(node) for node in body) and all(
+        empty(node) or isinstance(node, (ast.Import, ast.ImportFrom)) for node in body))
 
 
 def strip_template_tokens(code: str) -> str:
@@ -126,7 +140,7 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
     每个子问题有自己的内核，后一问看不到前一问的函数和变量。2022_C 的 Q3 要"运行 Q2 选定的策略"，
     只拿到 Q2 的结论和数值，只好从读数据开始重写回测，日期解析又踩了一遍坑，171 条对话后交了空报告。
     """
-    runs = [r for r in run_log if r.get("ok") and not PLACEHOLDER_CODE.match(r.get("code") or "")]
+    runs = [r for r in run_log if r.get("ok") and not is_placeholder(r.get("code") or "")]
     if not runs:
         return
     body = "\n\n".join(f"# ---- {r['run_id']} ----\n{r['code'].rstrip()}" for r in runs)
@@ -189,7 +203,7 @@ def build_tools(
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
         code = strip_template_tokens(code)
-        if PLACEHOLDER_CODE.match(code):
+        if is_placeholder(code):
             return PLACEHOLDER_REPLY
         result = await kernel.execute(code)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})

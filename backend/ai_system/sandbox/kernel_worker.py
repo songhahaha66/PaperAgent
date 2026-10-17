@@ -54,6 +54,11 @@ def _save_figures(artifacts_dir: str, start_index: int):
     import matplotlib.pyplot as plt
 
     saved = []
+    # Model-generated style changes can replace the installed CJK font with
+    # unavailable Windows fonts. Restore the kernel's rendering defaults before
+    # drawing its figures; generic sans-serif text resolves at render time.
+    if plt.get_fignums():
+        _setup_matplotlib()
     os.makedirs(artifacts_dir, exist_ok=True)
     for offset, num in enumerate(plt.get_fignums()):
         path = os.path.join(artifacts_dir, f"figure_{start_index + offset + 1}.png")

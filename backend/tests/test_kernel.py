@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -62,6 +63,28 @@ def test_figures_are_saved_as_run_artifacts(tmp_path):
     assert (tmp_path / result.figures[0]).stat().st_size > 0
     assert _manifest(tmp_path)["runs"][result.run_id]["artifacts"] == result.figures
     assert "已保存图片" in result.to_observation()
+
+
+def test_intermediate_handoff_directory_exists_in_a_fresh_worker(tmp_path):
+    async def go():
+        async with PythonKernel(str(tmp_path)) as kernel:
+            return await kernel.execute("from pathlib import Path\nPath('outputs/intermediate/values.csv').write_text('value\\n42\\n')\nprint('saved')")
+    result=_run(go())
+    assert result.ok and (tmp_path/'outputs/intermediate/values.csv').read_text()=='value\n42\n'
+
+
+def test_figure_saving_restores_available_cjk_font_after_model_style_override(tmp_path):
+    from matplotlib.font_manager import fontManager
+    if not any(any(k in f.name.lower() for k in ('cjk','hei','song','yahei','pingfang','noto sans sc','source han')) for f in fontManager.ttflist):
+        pytest.skip('No system CJK font installed')
+    async def go():
+        async with PythonKernel(str(tmp_path)) as kernel:
+            image=await kernel.execute("import matplotlib,matplotlib.pyplot as plt\nmatplotlib.rcParams['font.sans-serif']=['DejaVu Sans']\nplt.plot([1,2])\nplt.title('中文销量预测')")
+            config=await kernel.execute("print(matplotlib.rcParams['font.sans-serif'][0])")
+            return image,config
+    image,config=_run(go())
+    assert image.ok and image.figures
+    assert config.stdout.strip()!='DejaVu Sans'
 
 
 def test_timeout_restarts_kernel(tmp_path):

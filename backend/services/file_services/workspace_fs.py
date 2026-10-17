@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 WORKSPACE_DIRECTORIES = [
     "code",
     "outputs",
+    "outputs/intermediate",
     "runs",
     ".system",
     ".system/temp",
