@@ -38,10 +38,12 @@
           sp.status === 'completed'
             ? '已完成'
             : sp.status === 'failed'
-              ? '需重试'
-              : running
-                ? '进行中'
-                : '已保存'
+              ? '需处理'
+              : sp.status === 'pending'
+                ? '待执行'
+                : running
+                  ? '进行中'
+                  : '已保存'
         }}</span>
       </div>
     </div>

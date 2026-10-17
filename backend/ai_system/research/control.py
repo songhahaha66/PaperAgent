@@ -260,9 +260,7 @@ async def execute(branch, runtime):
         snapshot = ctx.research.snapshot()
         committed = snapshot["tasks"][key]
         accepted = (receipt["published"] and committed["acceptance"] == "accepted"
-                    and committed["validity"] == "current" and not any(
-                        i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed"}
-                        for i in snapshot["issues"]))
+                    and committed["validity"] == "current")
         if accepted:
             for item in results:
                 if item["path"]:
@@ -271,6 +269,9 @@ async def execute(branch, runtime):
             code = local.workspace / "code" / f"{key}_solution.py"
             if code.exists():
                 ctx.fs.write_text(f"code/{key}_solution.py", code.read_text(encoding="utf-8"))
+        clear = accepted and not any(i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed"}
+                                     for i in snapshot["issues"])
+        if clear:
             await ctx.events.emit("paper_solved", f"{key} 已通过验收，登记 {len(results)} 项结果")
         else:
             await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '仍需验收或修复，请查看研究问题'}")

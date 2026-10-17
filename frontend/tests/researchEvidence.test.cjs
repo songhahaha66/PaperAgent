@@ -258,10 +258,49 @@ const { hostRenderer } = require('./vueHost.cjs')
     ])[0].status,
     'in_progress',
   )
-  const stagedPremise = [{ type: 'paper_stage', content: 'Q1 已提交，关键假设已登记，按冻结契约重新执行' }]
+  const stagedPremise = [
+    { type: 'paper_stage', content: 'Q1 已提交，关键假设已登记，按冻结契约重新执行' },
+  ]
   assert.equal(phases.deriveSubproblems(stagedPremise)[0].status, 'in_progress')
   assert.equal(
-    phases.deriveSubproblems([...stagedPremise, { type: 'paper_solved', content: 'Q1 已通过验收，登记 7 项结果' }])[0].status,
+    phases.deriveSubproblems([
+      ...stagedPremise,
+      { type: 'paper_solved', content: 'Q1 已通过验收，登记 7 项结果' },
+    ])[0].status,
+    'completed',
+  )
+  const oldCompletion = { type: 'paper_solved', content: 'Q1 求解完成' }
+  const currentTask = {
+    task_id: 'Q1',
+    objective: '实际研究',
+    execution_status: 'pending',
+    acceptance: 'pending',
+    validity: 'stale',
+  }
+  const researchState = (task, issues = []) => ({
+    type: 'research_state',
+    content: { tasks: [task], issues },
+  })
+  assert.equal(
+    phases.deriveSubproblems([oldCompletion, researchState(currentTask)])[0].status,
+    'pending',
+  )
+  const acceptedTask = {
+    ...currentTask,
+    execution_status: 'succeeded',
+    acceptance: 'accepted',
+    validity: 'current',
+  }
+  const openReview = [{ task_id: 'Q1', status: 'suspected', blocking: true }]
+  assert.equal(
+    phases.deriveSubproblems([oldCompletion, researchState(acceptedTask, openReview)])[0].status,
+    'failed',
+  )
+  assert.equal(
+    phases.deriveSubproblems([
+      researchState(acceptedTask, openReview),
+      researchState(acceptedTask),
+    ])[0].status,
     'completed',
   )
   console.log('PASS: revisions carry scope/version and retries preserve explicit phase status')

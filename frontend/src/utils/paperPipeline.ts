@@ -1,5 +1,6 @@
 // 状态图流水线（AI_PIPELINE=v2）推送的 paper_* 事件 → 聊天里的阶段卡片
 // 后端事件定义见 backend/ai_system/graph（EventSink.emit / GraphContext.set_stage）
+import type { ResearchSnapshot } from '@/types/research'
 
 export interface PipelineBlock {
   type: string
@@ -15,7 +16,7 @@ export interface Phase {
   note?: string
 }
 
-export type SubproblemStatus = 'in_progress' | 'completed' | 'failed'
+export type SubproblemStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
 
 export interface SubproblemProgress {
   id: string
@@ -173,6 +174,34 @@ export const deriveSubproblems = (blocks: PipelineBlock[]): SubproblemProgress[]
       item.status = text.includes('未完成') ? 'failed' : 'completed'
     } else {
       item.status = 'in_progress'
+    }
+  }
+  const current = [...blocks].reverse().find((b) => b.type === 'research_state')?.content
+  if (current && typeof current === 'object') {
+    const snapshot = current as Pick<ResearchSnapshot, 'tasks' | 'issues'>
+    for (const task of snapshot.tasks || []) {
+      const item: SubproblemProgress = byId.get(task.task_id) ?? {
+        id: task.task_id,
+        text: task.objective,
+        status: 'pending',
+        runs: 0,
+        fails: 0,
+      }
+      const blocked = snapshot.issues?.some(
+        (i) =>
+          i.task_id === task.task_id && i.blocking && !['resolved', 'dismissed'].includes(i.status),
+      )
+      item.status =
+        blocked ||
+        task.execution_status === 'failed' ||
+        ['rejected', 'inconclusive'].includes(task.acceptance)
+          ? 'failed'
+          : task.acceptance === 'accepted' && task.validity === 'current'
+            ? 'completed'
+            : task.execution_status === 'running'
+              ? 'in_progress'
+              : 'pending'
+      byId.set(task.task_id, item)
     }
   }
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))

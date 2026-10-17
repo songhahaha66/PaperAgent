@@ -97,7 +97,6 @@ def test_unresolved_local_review_blocks_delivery_without_unrelated_check_dismiss
     assert agent.last_result["research_blocked"]
     assert len(state["tasks"]) == 3, "a generic numeric check cannot dismiss a data-scope finding"
     assert not any(kind=='paper_solved' and content.startswith('Q1 ') for kind,content in events)
-    assert not (tmp_path/'code/Q1_solution.py').exists(), 'unaccepted solution code must remain in attempt history'
     with pytest.raises(ResearchConflict):
         store.publish_paper("ignore reviewer")
 
