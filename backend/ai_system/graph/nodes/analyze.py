@@ -134,10 +134,21 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         "预测中的线性趋势、线性回归不等于线性规划。只有销量数据、经济参数而没有明确线性优化目标和约束时，"
         "不得编造linear_model；按具体预测指标、输入参数和交付要求设置检查。"
     )
-    from ...research.validation import validate_spec
+    from ...research.validation import validate_spec, source_excerpt
     from ...research.store import validate_dependencies
 
     def validate_analysis(candidate):
+        # Freeze original spans, not the model's typography. Unresolvable
+        # paraphrases remain invalid and enter the same bounded retry.
+        for requirement in candidate.requirements:
+            requirement.source_quote = source_excerpt(state["task"], requirement.source_quote) or requirement.source_quote
+        for owner in [*candidate.requirements, *candidate.assumptions]:
+            for check in owner.checks:
+                if check.linear_model:
+                    model = check.linear_model
+                    model.objective_quote = source_excerpt(state["task"], model.objective_quote) or model.objective_quote
+                    for item in [*model.variables, *model.constraints]:
+                        item.source_quote = source_excerpt(state["task"], item.source_quote) or item.source_quote
         plan = candidate.model_dump()
         plan["subproblems"] = normalize_plan(plan["subproblems"])
         errors = []

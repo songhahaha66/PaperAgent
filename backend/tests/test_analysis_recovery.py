@@ -100,3 +100,27 @@ def test_contract_feedback_reports_multiple_defects_together():
     with pytest.raises(ValueError) as error:
         validate_spec(TASK,data)
     assert all(text in str(error.value) for text in ['wrong_scope','Q9','来源摘录'])
+
+
+@pytest.mark.parametrize('source,quote,expected',[
+    ('最后 5 天验证误差，售价 15 元','最后5天验证误差','最后 5 天验证误差'),
+    ('售价 15 元','售价14元',None),
+    ('序列 1 5','序列15',None),
+    ('not possible','notpossible',None),
+    ('值 0 . 5','值0.5',None),
+])
+def test_source_excerpt_preserves_original_whitespace_without_merging_numbers_or_words(source,quote,expected):
+    from ai_system.research.validation import source_excerpt
+    assert source_excerpt(source,quote)==expected
+
+
+def test_analysis_freezes_original_spans_instead_of_rejecting_spacing(tmp_path):
+    class Model:
+        def with_structured_output(self,*args,**kwargs):return self
+        async def ainvoke(self,messages):
+            candidate=_analysis()
+            for r in candidate.requirements:r.source_quote=r.source_quote.replace(' ','')
+            return candidate
+    ctx=GraphContext.create(str(tmp_path),planner_llm=Model())
+    result=asyncio.run(analyze({'task':TASK},SimpleNamespace(context=ctx)))
+    assert all(r['source_quote'] in TASK for r in result['analysis']['requirements'])

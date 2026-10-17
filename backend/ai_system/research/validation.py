@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+import re
 
 from .models import Assumption, DomainCheck, Requirement, ValidationRecord, CheckResult
 
@@ -14,6 +15,27 @@ def report_fingerprint(report):
     return fingerprint({k: v for k, v in report.items() if k not in {"status", "error", "reviews"}})
 
 
+SOURCE_TOKEN = re.compile(r"[A-Za-z]+|\d+(?:\.\d+)?|[^\s]", re.UNICODE)
+
+
+def source_excerpt(source, quote):
+    """Resolve whitespace-only copying differences to an actual original span.
+
+    Numbers and Latin words remain whole tokens: '1 5' cannot become '15', nor
+    'not possible' become 'notpossible'. Stored contracts still use exact text.
+    """
+    if quote and quote in source:
+        return quote
+    spans = list(SOURCE_TOKEN.finditer(source))
+    tokens = [m.group() for m in spans]
+    wanted = SOURCE_TOKEN.findall(quote)
+    if wanted:
+        for index in range(len(tokens) - len(wanted) + 1):
+            if tokens[index:index + len(wanted)] == wanted:
+                return source[spans[index].start():spans[index + len(wanted) - 1].end()]
+    return None
+
+
 def validate_spec(source, analysis):
     tasks = {sp["id"] for sp in analysis["subproblems"]}
     requirements = [Requirement.model_validate(r) for r in analysis["requirements"]]
@@ -23,8 +45,9 @@ def validate_spec(source, analysis):
         errors.append("要求必须非空且编号唯一")
     if len({a.id for a in assumptions}) != len(assumptions):
         errors.append("假设编号重复")
-    if any(r.source_quote not in source for r in requirements):
-        errors.append("要求的来源摘录不在原题中")
+    missing_quotes = [(r.id, r.source_quote) for r in requirements if r.source_quote not in source]
+    if missing_quotes:
+        errors.append(f"要求的来源摘录不在原题中：{missing_quotes}；请逐字摘录原题，不要概述或改动数值")
     covered = {key for r in requirements for key in r.task_ids}
     if covered != tasks:
         errors.append(f"每个研究任务都必须对应原题要求，要求不能指向未知任务；未覆盖任务={sorted(tasks-covered)}，"

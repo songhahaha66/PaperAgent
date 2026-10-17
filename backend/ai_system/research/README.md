@@ -61,8 +61,11 @@ accepted flag cannot override failure or a missing/ambiguous metric.
 Analysis validates coverage, source quotes, check scopes and the dependency DAG
 inside the existing bounded structured-output retry. Semantic feedback includes
 all detected contract defects and the actual rejected candidate, so the model can
-repair that plan without weakening requirements. Prediction methods named linear
-do not imply a source-provided linear optimization problem. Exhausted analysis
+repair that plan without weakening requirements. Analysis resolves
+whitespace-only quote differences to the exact original source span before
+validation; whole numeric and Latin-word tokens prevent merging distinct numbers
+or words. Paraphrases and changed values still fail validation. Prediction methods
+named linear do not imply a source-provided linear optimization problem. Exhausted analysis
 marks its phase blocked and its thread failed; resuming before business-state
 initialization retries the original checkpointed question rather than the word
 "continue". The UI also stops displaying a failed work's active phase as running.
