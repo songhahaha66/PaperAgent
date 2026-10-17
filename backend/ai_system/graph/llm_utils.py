@@ -5,9 +5,9 @@ LLM 调用小工具：结构化输出与纯文本输出，带有限次重试
 import asyncio
 import json
 import logging
-from typing import Any, List, Type, TypeVar
+from typing import Any, Callable, List, Type, TypeVar
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -68,19 +68,28 @@ def as_messages(system: str, user: str) -> List[BaseMessage]:
     return [SystemMessage(content=system), HumanMessage(content=user)]
 
 
-async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]) -> T:
+async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None) -> T:
     model = structured_model(llm, schema)
     last_error: Exception | None = None
+    retry_messages = messages
     for attempt in range(RETRIES + 1):
+        parsed = None
         try:
             # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
             # 重试改走纯文本 JSON
-            result = await model.ainvoke(messages) if attempt == 0 else await _ask_json(llm, schema, messages, last_error)
+            result = await model.ainvoke(messages) if attempt == 0 else await _ask_json(llm, schema, retry_messages, last_error)
             if result is None:
                 raise ValueError("模型没有返回结构化结果")
-            return result if isinstance(result, schema) else schema.model_validate(result)
+            parsed = result if isinstance(result, schema) else schema.model_validate(result)
+            if validate is not None:
+                validate(parsed)
+            return parsed
         except Exception as exc:  # 网关偶发错误或模型输出不合 schema
             last_error = exc
+            if parsed is not None:
+                # Repair this candidate, rather than guessing a different plan
+                # from an error message with no associated task/check IDs.
+                retry_messages = [*messages, AIMessage(content=parsed.model_dump_json())]
             logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, exc)
             if attempt < RETRIES:
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))

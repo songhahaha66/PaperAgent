@@ -131,15 +131,31 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         "它只复算可行性与目标值，不证明最优。不要把需要自行建模的问题硬转成线性模型。"
         "kind严格区分：数学/领域硬约束为constraint且checks非空；研究目标为goal；报告、语言、格式、引用规则为deliverable，"
         "这些文书要求由后续章节校验处理，不要创建has_report、assumptions_count等自报指标。"
+        "预测中的线性趋势、线性回归不等于线性规划。只有销量数据、经济参数而没有明确线性优化目标和约束时，"
+        "不得编造linear_model；按具体预测指标、输入参数和交付要求设置检查。"
     )
-    analysis = await call_structured(ctx.planner_llm, ProblemAnalysis, as_messages(SYSTEM, prompt))
-    if not analysis.subproblems:
-        raise RuntimeError("题目分析没有得到任何子问题")
+    from ...research.validation import validate_spec
+    from ...research.store import validate_dependencies
+
+    def validate_analysis(candidate):
+        plan = candidate.model_dump()
+        plan["subproblems"] = normalize_plan(plan["subproblems"])
+        errors = []
+        try:
+            validate_spec(state["task"], plan)
+        except ValueError as exc:
+            errors.append(str(exc))
+        try:
+            validate_dependencies({sp["id"]: {"dependencies": sp["depends_on"]} for sp in plan["subproblems"]})
+        except ValueError as exc:
+            errors.append(str(exc))
+        if errors:
+            raise ValueError("\n".join(errors))
+
+    analysis = await call_structured(ctx.planner_llm, ProblemAnalysis, as_messages(SYSTEM, prompt), validate=validate_analysis)
 
     plan = analysis.model_dump()
     plan["subproblems"] = normalize_plan(plan["subproblems"])
-    from ...research.validation import validate_spec
-    validate_spec(state["task"], plan)
     ids = [sp["id"] for sp in plan["subproblems"]]
     await ctx.set_stage("analyze", "completed", f"{len(ids)} 个子问题：{'、'.join(ids)}")
     if not ctx.confirm_models:

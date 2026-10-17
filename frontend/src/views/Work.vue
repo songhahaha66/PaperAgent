@@ -555,6 +555,7 @@ function prepareNewResearch() {
 const visiblePhases = computed(() =>
   derivePhases(latestBlocks.value, {
     done: currentWork.value?.status === 'completed',
+    failed: currentWork.value?.status === 'failed',
   }),
 )
 const stageText = computed(() => {

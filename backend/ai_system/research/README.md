@@ -58,6 +58,15 @@ Percentage values use ratios. Each compute task must map requirements to actual
 own/dependency evidence. The store evaluates checks again at commit; a worker's
 accepted flag cannot override failure or a missing/ambiguous metric.
 
+Analysis validates coverage, source quotes, check scopes and the dependency DAG
+inside the existing bounded structured-output retry. Semantic feedback includes
+all detected contract defects and the actual rejected candidate, so the model can
+repair that plan without weakening requirements. Prediction methods named linear
+do not imply a source-provided linear optimization problem. Exhausted analysis
+marks its phase blocked and its thread failed; resuming before business-state
+initialization retries the original checkpointed question rather than the word
+"continue". The UI also stops displaying a failed work's active phase as running.
+
 For explicit linear optimization problems, `linear_feasible` freezes source-quoted
 variables, bounds, integrality, coefficient rows and objective. The coordinator
 recomputes each constraint and the reported objective from separately registered

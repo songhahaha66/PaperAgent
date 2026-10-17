@@ -240,6 +240,17 @@ const { hostRenderer } = require('./vueHost.cjs')
   ]
   assert.equal(phases.derivePhases(updates).find((p) => p.key === 'solve').status, 'blocked')
   assert.equal(phases.derivePhases(updates).find((p) => p.key === 'design').status, 'pending')
+  const failedAnalysis = [
+    { type: 'paper_phase', content: { stage: 'analyze', status: 'in_progress' } },
+  ]
+  assert.equal(
+    phases.derivePhases(failedAnalysis, { failed: true }).find((p) => p.key === 'analyze').status,
+    'blocked',
+  )
+  assert.equal(
+    phases.derivePhases(failedAnalysis).find((p) => p.key === 'analyze').status,
+    'in_progress',
+  )
   assert.equal(
     phases.deriveSubproblems([
       { type: 'paper_solved', content: 'Q2 求解完成' },

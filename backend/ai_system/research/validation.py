@@ -18,33 +18,40 @@ def validate_spec(source, analysis):
     tasks = {sp["id"] for sp in analysis["subproblems"]}
     requirements = [Requirement.model_validate(r) for r in analysis["requirements"]]
     assumptions = [Assumption.model_validate(a) for a in analysis["assumptions"]]
+    errors = []
     if not requirements or len({r.id for r in requirements}) != len(requirements):
-        raise ValueError("要求必须非空且编号唯一")
+        errors.append("要求必须非空且编号唯一")
     if len({a.id for a in assumptions}) != len(assumptions):
-        raise ValueError("假设编号重复")
+        errors.append("假设编号重复")
     if any(r.source_quote not in source for r in requirements):
-        raise ValueError("要求的来源摘录不在原题中")
+        errors.append("要求的来源摘录不在原题中")
     covered = {key for r in requirements for key in r.task_ids}
     if covered != tasks:
-        raise ValueError("每个研究任务都必须对应原题要求，要求不能指向未知任务")
+        errors.append(f"每个研究任务都必须对应原题要求，要求不能指向未知任务；未覆盖任务={sorted(tasks-covered)}，"
+                         f"未知任务={sorted(covered-tasks)}，实际任务={sorted(tasks)}。完整论文由流水线生成，不要为其添加虚构子问题")
     check_ids = []
     for owner in [*requirements, *assumptions]:
         if len(set(owner.task_ids)) != len(owner.task_ids) or not set(owner.task_ids) <= tasks:
-            raise ValueError("要求/假设的作用范围无效")
+            errors.append("要求/假设的作用范围无效")
         for check in owner.checks:
             check_ids.append(check.id)
             if check.left.task_id not in owner.task_ids:
-                raise ValueError("验收检查必须属于要求/假设的作用范围")
+                errors.append(f"验收检查必须属于要求/假设的作用范围：{owner.id} 的任务为 {owner.task_ids}，"
+                                 f"检查 {check.id} 却指向 {check.left.task_id}，请核对任务归属")
             if check.left.task_id not in tasks or (check.right and check.right.task_id not in tasks):
-                raise ValueError("验收检查指向未知任务")
+                errors.append("验收检查指向未知任务")
             if check.linear_model:
                 model = check.linear_model
                 quotes = [model.objective_quote, *(v.source_quote for v in model.variables),
                           *(c.source_quote for c in model.constraints)]
                 if any(quote not in source for quote in quotes):
-                    raise ValueError("线性模型的目标、变量和约束必须逐字引用原题")
+                    missing = [quote for quote in quotes if quote not in source]
+                    errors.append(f"线性模型的目标、变量和约束必须逐字引用原题：检查 {check.id} 的以下摘录不存在：{missing}。"
+                                     "线性趋势/回归等方法名称不代表原题给出了线性规划合同；不能编造目标及约束，请使用适用的验收检查")
     if len(set(check_ids)) != len(check_ids):
-        raise ValueError("验收检查编号必须全局唯一")
+        errors.append("验收检查编号必须全局唯一")
+    if errors:
+        raise ValueError("\n".join(errors))
     return requirements, assumptions
 
 

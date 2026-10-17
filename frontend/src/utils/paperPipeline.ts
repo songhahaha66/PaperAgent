@@ -103,7 +103,10 @@ const parsePhaseUpdate = (content: unknown): PhaseUpdate | null => {
   return { stage, status: status as PhaseStatus, note: typeof note === 'string' ? note : undefined }
 }
 
-export const derivePhases = (blocks: PipelineBlock[], opts: { done?: boolean } = {}): Phase[] => {
+export const derivePhases = (
+  blocks: PipelineBlock[],
+  opts: { done?: boolean; failed?: boolean } = {},
+): Phase[] => {
   const status: Record<string, PhaseStatus> = {}
   const notes: Record<string, string> = {}
   const updates = blocks
@@ -134,7 +137,10 @@ export const derivePhases = (blocks: PipelineBlock[], opts: { done?: boolean } =
   const shown = PHASES.filter((p) => !OPTIONAL_PHASES.has(p.key) || status[p.key])
   return shown.map((p) => ({
     ...p,
-    status: status[p.key] ?? 'pending',
+    status:
+      opts.failed && !opts.done && status[p.key] === 'in_progress'
+        ? 'blocked'
+        : (status[p.key] ?? 'pending'),
     note: notes[p.key],
   }))
 }

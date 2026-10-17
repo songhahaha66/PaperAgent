@@ -129,7 +129,9 @@ const running = computed(
   () => !!props.streaming && !result.value && !error.value && !waitingConfirm.value,
 )
 
-const phases = computed(() => derivePhases(props.blocks, { done: !!result.value }))
+const phases = computed(() =>
+  derivePhases(props.blocks, { done: !!result.value, failed: !!error.value }),
+)
 const subproblems = computed(() => deriveSubproblems(props.blocks))
 
 const MILESTONE_TYPES = new Set(['paper_consistency', 'paper_validation', 'paper_export'])

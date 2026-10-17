@@ -222,6 +222,15 @@ class PaperGraphAgent:
         log_offset = len(before.values.get("log") or [])
         try:
             result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
+        except Exception as exc:
+            self._save_thread(thread_id, "failed")
+            for stage, status in list(ctx.stage_status.items()):
+                if status == "in_progress":
+                    try:
+                        await ctx.set_stage(stage, "blocked", f"执行失败：{exc}")
+                    except Exception:
+                        logger.warning("更新失败阶段状态失败", exc_info=True)
+            raise
         finally:
             trace.dump(Path(self.workspace_dir) / CALLS_PATH)
         self.last_result = result
