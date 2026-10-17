@@ -105,7 +105,7 @@ class NegativeControl(BaseModel):
     run_id: str = Field(description="打印 value 的那次执行的 run_id")
     shuffled_value: str = Field(description="把原始结果列在构造任何特征和标签之前随机打乱、其余流程完全不变时同一指标的值（只打乱训练集标签不算）")
     shuffled_run_id: str = Field(description="打印 shuffled_value 的那次执行的 run_id")
-    chance: str = Field(description="无信息时的水平，如 AUC 0.5、多数类准确率、常数预测的 LogLoss 或 RMSE")
+    chance: float = Field(allow_inf_nan=False, description="同一指标的无信息水平，必须是有限数值，如AUC为0.5或常数预测实际算出的MAE/RMSE；不能填文字说明，百分数使用0到1的比例")
     higher_is_better: bool = Field(description="指标是否越大越好")
     baseline_name: str = Field(default="", description="最简单的有信息基线，只用显而易见的结构，如“只用发球方先验胜率”“只用上一期值”")
     baseline_value: str = Field(default="", description="该基线在同一划分上的同一指标值，必须是 baseline_run_id 那次执行 print 出的数")

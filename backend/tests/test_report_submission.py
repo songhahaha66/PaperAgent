@@ -13,7 +13,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph.context import GraphContext
 from ai_system.graph.nodes.solve import _solve_loop, build_task, submission_schema
+from ai_system.graph.state import NegativeControl
 from test_paper_graph import FakeModel
+
+
+@pytest.mark.parametrize("chance", ["见RMSE行", float("nan"), float("inf")])
+def test_control_baseline_requires_a_real_scalar_at_submission(chance):
+    row = dict(metric="MAE", value="5", run_id="run_real", shuffled_value="8", shuffled_run_id="run_shuffle",
+               chance=chance, higher_is_better=False)
+    with pytest.raises(ValidationError, match="chance"):
+        NegativeControl.model_validate(row)
+    row["chance"] = 10.5
+    assert NegativeControl.model_validate(row).chance == 10.5
 
 
 def branch(sid="Q1", *, kind="compute", figure=False):

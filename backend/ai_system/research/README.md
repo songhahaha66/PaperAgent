@@ -122,6 +122,8 @@ operations before resubmission. This also prevents a ToolStrategy validation
 error from terminating the loop after mixed tool execution. Exploration uses the
 same ordering rule. Requirement bindings use raw result IDs, while prose uses
 renderable reference templates.
+Negative-control chance levels are finite numeric fields in the submission
+schema; prose or non-finite baselines return to the same tool loop for correction.
 No extra model reviewer or independent repair loop is added. The submission and
 central commit share requirement-evidence checks; numeric threshold failures stay
 with central domain acceptance and causal replanning, so a counterexample can still
