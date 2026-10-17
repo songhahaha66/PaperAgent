@@ -45,6 +45,12 @@ Repeated identical submissions return the original receipt; stale attempts remai
 in history but cannot become active. Failed execution and failed acceptance are
 separate. Only accepted current results reach the writing registry.
 
+Results include scalars, text, figures and numeric series. A series is one complete
+finite numeric JSON vector grounded to a single printed array from a successful
+run, with length and order preserved. It can satisfy an `exists` check; numeric
+comparisons still require separately registered scalar metrics. The evidence UI
+shows the vector and opens that same execution's code and output.
+
 Local `ResultReview` returns typed `IssueReport` findings. Each audit records the
 exact report hash and cited evidence; local repairs must receive a fresh final
 audit. Open findings, missing/stale audits and audit service errors block delivery.

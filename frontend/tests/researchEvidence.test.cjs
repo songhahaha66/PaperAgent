@@ -83,6 +83,11 @@ const { hostRenderer } = require('./vueHost.cjs')
   button('追问这部分').props.onClick()
   assert.deepEqual(opened, ['runs/run_two/input.py', 'runs/run_two/stdout.log'])
   assert.deepEqual(asked, ['Q2'])
+  snapshot.value = { ...snapshot.value, results: [{ ...snapshot.value.results[1], kind: 'series', value: '[469.2,471.8,475.2,477.6,481]' }] }
+  await flush()
+  assert.match(text(host.root), /数值序列.*\[469.2,471.8,475.2,477.6,481\]/)
+  button('执行输出').props.onClick()
+  assert.equal(opened.at(-1), 'runs/run_two/stdout.log')
   button('查看校验问题').props.onClick()
   assert.equal(opened.at(-1), '.system/validation.json')
   console.log(

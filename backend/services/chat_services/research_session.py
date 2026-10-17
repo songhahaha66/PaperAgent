@@ -38,7 +38,7 @@ class ResearchResult(BaseModel):
     name: str
     value: str
     unit: str = ""
-    kind: str
+    kind: Literal["number", "series", "text", "figure"]
     run_id: str
     figure_path: str | None = None
 

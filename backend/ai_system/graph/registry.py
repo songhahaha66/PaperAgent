@@ -24,6 +24,9 @@ FIGURE_LINE = re.compile(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", re.MULTILIN
 # 图名里自带的编号（"图3 遗忘因子……"），渲染时统一重新编号，留着会变成"图2 图3 ……"
 FIGURE_NAME_NUMBER = re.compile(r"^\s*(图|Figure|Fig\.?)\s*\d+\s*[:：.、]?\s*", re.IGNORECASE)
 NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+SERIES_NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+SERIES_BLOCK = re.compile(r"\[[^\[\]]*\]", re.DOTALL)
+SERIES_BODY = re.compile(rf"\s*{SERIES_NUMBER}(?:(?:\s*,\s*|\s+){SERIES_NUMBER})*\s*,?\s*")
 # 结论里手写的小数或科学计数（整数常是个数、年份，不自动换）
 LITERAL_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+(?:[eE][-+]?\d+)?|[eE][-+]?\d+)%?(?![\w.])")
 
@@ -32,7 +35,7 @@ class GroundingError(ValueError):
     """登记的值在 run 输出中找不到"""
 
 
-# 一条结果只能是一个数或一小段文字。整行输出（"ATTR word_length coef -0.0377 p 0 valAUC 0.500"、
+# 一条结果是一个数、同一变量的数值序列或一小段文字。整行输出（"ATTR word_length coef -0.0377 p 0 valAUC 0.500"、
 # "lag7 p=0.3261 lag14 p=0.8776"）登记成一条结果后，正文一引用就把原始输出原样贴进论文
 COMPOSITE_MAX_LEN = 24
 
@@ -48,7 +51,7 @@ def composite_value(value: str) -> bool:
 @dataclass
 class Result:
     id: str
-    kind: str  # number | text | figure
+    kind: str  # number | series | text | figure
     subproblem: str
     name: str
     value: str
@@ -83,8 +86,33 @@ def _significant_digits(text: str) -> int:
     return len(mantissa.replace("-", "").replace(".", "").lstrip("0"))
 
 
+def numeric_series(value: str) -> Optional[list]:
+    """One nonempty finite numeric vector, serialized as JSON."""
+    try:
+        items = json.loads(value)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(items, list) or not items:
+        return None
+    if not all(type(item) in (int, float) and math.isfinite(item) for item in items):
+        return None
+    return items
+
+
 def value_in_output(value: str, output: str) -> bool:
     """value 是否能由 output 中的某个数（四舍五入到同样位数，或换算成百分数）得到"""
+    series = numeric_series(value)
+    if series is not None:
+        # Match one complete printed vector, including NumPy's whitespace format.
+        # Values scattered across output or reordered/partial vectors are not evidence.
+        for block in SERIES_BLOCK.finditer(output):
+            body = block.group()[1:-1]
+            if not SERIES_BODY.fullmatch(body):
+                continue
+            tokens = re.findall(SERIES_NUMBER, body)
+            if len(tokens) == len(series) and all(value_in_output(str(item), str(float(token))) for item, token in zip(series, tokens)):
+                return True
+        return False
     target = _parse_number(value)
     if target is None:
         return value.strip() != "" and value.strip() in output
@@ -182,13 +210,18 @@ class ResultRegistry:
         description: str = "",
     ) -> Result:
         value = str(value).strip()
-        if composite_value(value):
+        series = numeric_series(value)
+        if value.startswith("[") and series is None:
+            raise GroundingError("序列必须是非空的一维有限数值 JSON 数组；不能含布尔值、文字、NaN 或嵌套数组。")
+        if series is None and composite_value(value):
             raise GroundingError(
                 f"值「{value}」把多个量写在了一起。每个数单独登记一条（名称写清是什么量），"
                 "例如 lag7 的 p 值、lag14 的 p 值各登记一条；区间写成上下限两条。"
             )
         self.verify(value, run_id)
-        kind = "number" if _parse_number(value) is not None else "text"
+        kind = "series" if series is not None else "number" if _parse_number(value) is not None else "text"
+        if series is not None:
+            value = json.dumps(series, ensure_ascii=False, separators=(",", ":"))
         # 完全相同的登记复用编号；值或来源改变时保留历史，并分配新引用。
         same = next(
             (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip()),

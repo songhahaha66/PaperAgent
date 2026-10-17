@@ -145,7 +145,7 @@
             <span class="result-id">{{ result.subproblem_id }} · {{ result.id }}</span>
             <span class="result-name">{{ result.name }}</span>
             <strong
-              >{{ result.kind === 'figure' ? (isZh ? '图表' : 'Figure') : result.value
+              ><small v-if="result.kind === 'series'">{{ isZh ? '数值序列 ' : 'Series ' }}</small>{{ result.kind === 'figure' ? (isZh ? '图表' : 'Figure') : result.value
               }}<template v-if="result.unit && !result.value.endsWith(result.unit)">
                 {{ result.unit }}</template
               ></strong

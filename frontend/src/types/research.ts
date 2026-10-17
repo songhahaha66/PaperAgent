@@ -12,7 +12,7 @@ export interface ResearchResult {
   name: string
   value: string
   unit: string
-  kind: string
+  kind: 'number' | 'series' | 'text' | 'figure'
   run_id: string
   figure_path: string | null
 }
