@@ -9,7 +9,7 @@ design 阶段的 critic 只能在动手前判断方案"看起来"好不好。202
 2. design 评分最高的 k 个候选各开一个内核，并行跑一个短的探索循环，只实现核心模型并按协议给出指标；
 3. 指标必须出现在探索时某次成功执行的输出里（与结果登记同一套核对），编造的指标不参与比较；
 4. 有可比指标时按指标选，差距在容差内用 design 评分打破平局；没有统一指标的子问题（优化、评价、描述类），
-   在跑通的候选里按 critic 对执行证据的评分选；
+   跳过试跑，直接按设计评审选择；
 5. 胜出分支的内核和对话历史整体晋升为正式求解，探索阶段的计算不浪费；其余内核释放。
 """
 
@@ -24,7 +24,6 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
-from ...judge import Score
 from ..compaction import (
     CompactHistoryMiddleware,
     DropRefusedStepsMiddleware,
@@ -76,18 +75,6 @@ PROBE_SYSTEM = """你是数学建模竞赛的编程手，现在处于方案探�
 
 PROBE_NUDGE = "探索步数有限，请现在调用 ProbeReport 提交探索结果（没跑通就如实写 works=false）。"
 
-EVIDENCE = Score(
-    instructions="根据探索阶段的执行结果，这个方案在真实数据上的表现是否可靠、是否值得完整求解？",
-    criteria=[
-        "没有跑通或结果明显不合理",
-        "勉强跑通，问题较多",
-        "跑通，结果基本合理",
-        "跑通，结果合理且有检验",
-        "跑通，结果合理、检验充分，明显优于直观基线",
-    ],
-)
-
-
 @dataclass
 class Probe:
     candidate_index: int
@@ -97,14 +84,13 @@ class Probe:
     report: Optional[Dict[str, Any]] = None
     metric: Optional[float] = None  # 只有核对通过的指标才记数值
     grounding_error: str = ""
-    evidence: Optional[float] = None
     error: str = ""
     messages: List[BaseMessage] = field(default_factory=list)
     run_log: List[Dict] = field(default_factory=list)
 
     @property
     def works(self) -> bool:
-        return bool(self.report and self.report.get("works"))
+        return bool(self.report and self.report.get("works") and any(run["ok"] for run in self.run_log))
 
     def to_record(self) -> Dict[str, Any]:
         report = self.report or {}
@@ -117,7 +103,6 @@ class Probe:
             "metric_grounded": self.metric is not None,
             "grounding_error": self.grounding_error,
             "baseline_value": report.get("baseline_value", ""),
-            "evidence": self.evidence,
             "summary": report.get("summary", ""),
             "problems": report.get("problems", []),
             "error": self.error,
@@ -166,33 +151,22 @@ def _prior(probe: Probe) -> float:
     return probe.prior if probe.prior is not None else -1.0
 
 
-def select_probe(probes: List[Probe], protocol: Dict[str, Any]) -> Tuple[Probe, str]:
-    """按执行结果选出胜出的分支，返回 (分支, 理由)"""
-    runnable = [p for p in probes if p.works]
-    if not runnable:
-        best = max(probes, key=_prior)
-        return best, "探索阶段没有方案跑通，沿用方案评审的选择"
-
-    measured = [p for p in runnable if p.metric is not None] if protocol.get("applicable") else []
-    if measured:
-        higher = protocol.get("higher_is_better", True)
-        best = measured[0]
-        for probe in measured[1:]:
-            if _tied(probe.metric, best.metric):
-                if _prior(probe) > _prior(best):
-                    best = probe
-            elif _better(probe.metric, best.metric, higher):
+def select_probe(probes: List[Probe], protocol: Dict[str, Any]) -> Tuple[Optional[Probe], str]:
+    """Only executed, grounded measurements can select an exploratory winner."""
+    measured = [p for p in probes if p.works and p.metric is not None] if protocol.get("applicable") else []
+    if not measured:
+        return None, "探索未产生可核对的成功指标，沿用方案评审并从新内核正式求解"
+    higher = protocol.get("higher_is_better", True)
+    best = measured[0]
+    for probe in measured[1:]:
+        if _tied(probe.metric, best.metric):
+            if _prior(probe) > _prior(best):
                 best = probe
-        others = "，".join(f"「{p.candidate['name']}」{p.report['metric_value']}" for p in measured if p is not best)
-        reason = f"按{protocol.get('metric') or '验证指标'}选择：{best.report['metric_value']}"
-        return best, reason + (f"（对比 {others}）" if others else "")
-
-    best = max(runnable, key=lambda p: (p.evidence if p.evidence is not None else -1.0, _prior(p)))
-    if len(runnable) == 1:
-        return best, "只有这个方案在数据上跑通"
-    if best.evidence is not None:
-        return best, f"没有统一指标，按执行证据评分选择（{best.evidence:.1f}/4）"
-    return best, "没有统一指标，在跑通的方案中沿用方案评审的排序"
+        elif _better(probe.metric, best.metric, higher):
+            best = probe
+    others = "，".join(f"「{p.candidate['name']}」{p.report['metric_value']}" for p in measured if p is not best)
+    reason = f"按{protocol.get('metric') or '验证指标'}选择：{best.report['metric_value']}"
+    return best, reason + (f"（对比 {others}）" if others else "")
 
 
 def _subproblem_text(subproblem: Dict[str, Any]) -> str:
@@ -290,36 +264,6 @@ def shuffle_check(ctx: GraphContext, report: Dict[str, Any], protocol: Dict[str,
     return ""
 
 
-async def score_evidence(ctx: GraphContext, branch: BranchInput, probes: List[Probe]) -> None:
-    """没有统一指标时，让 critic 对各分支的执行证据打分"""
-    runnable = [p for p in probes if p.works]
-    if ctx.judge is None or len(runnable) < 2:
-        return
-    state = {
-        "原题": branch["source"],
-        "子问题": _subproblem_text(branch["subproblem"]),
-        "探索结果": {
-            f"方案{i + 1}": {"方案": p.candidate["name"], "思路": p.candidate["idea"], **{
-                k: p.report.get(k) for k in ("summary", "problems", "baseline_value")
-            }}
-            for i, p in enumerate(runnable)
-        },
-    }
-    # 每个分支单独一次请求，所有分支放进一次请求时模型容易给出相同分数
-    async def judge_one(i: int) -> float:
-        question = Score(instructions=f"只评价「方案{i + 1}」。{EVIDENCE.instructions}", criteria=EVIDENCE.criteria)
-        answers = await ctx.judge.ask(state, {"evidence": question})
-        return answers.scores["evidence"].score
-
-    try:
-        scores = await asyncio.gather(*(judge_one(i) for i in range(len(runnable))))
-    except Exception as exc:  # 打分失败就退回 design 评分
-        logger.warning("执行证据评分失败: %s", exc)
-        return
-    for probe, score in zip(runnable, scores):
-        probe.evidence = score
-
-
 async def explore(ctx: GraphContext, branch: BranchInput) -> Optional[Exploration]:
     """跑探索并把胜出分支的内核晋升到子问题名下；候选不足时返回 None（直接按原方案求解）"""
     design = branch["design"]
@@ -347,9 +291,10 @@ async def explore(ctx: GraphContext, branch: BranchInput) -> Optional[Exploratio
     ]
     try:
         await asyncio.gather(*(run_probe(ctx, branch, p, protocol) for p in probes))
-        if not protocol.get("applicable") or not any(p.metric is not None for p in probes):
-            await score_evidence(ctx, branch, probes)
         winner, reason = select_probe(probes, protocol)
+        if winner is None:
+            await ctx.events.emit("paper_explore", f"{subproblem_id}：{reason}")
+            return None
         ctx.kernels.promote(winner.kernel_key, subproblem_id)
     finally:
         await asyncio.gather(*(ctx.kernels.release(p.kernel_key) for p in probes))

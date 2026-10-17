@@ -606,9 +606,10 @@ def test_compact_messages_keeps_recent_steps_and_stable_prefix():
 def test_select_probe_metric_direction_ties_and_fallbacks():
     from ai_system.graph.nodes.explore import Probe, select_probe, shortlist
 
-    def probe(i, prior, works=True, metric=None, evidence=None):
-        p = Probe(candidate_index=i, candidate={"name": f"方案{i}"}, kernel_key=f"Q1~c{i}", prior=prior, evidence=evidence)
+    def probe(i, prior, works=True, metric=None):
+        p = Probe(candidate_index=i, candidate={"name": f"方案{i}"}, kernel_key=f"Q1~c{i}", prior=prior)
         p.report = {"works": works, "metric_value": str(metric) if metric is not None else ""}
+        p.run_log = [{"ok": works}]
         p.metric = metric
         return p
 
@@ -617,16 +618,16 @@ def test_select_probe_metric_direction_ties_and_fallbacks():
     assert select_probe([probe(0, 10, metric=3.2), probe(1, 8, metric=2.1)], rmse)[0].candidate_index == 1
     # 相差 1% 以内视为打平，用评审分打破平局
     assert select_probe([probe(0, 8, metric=2.000), probe(1, 10, metric=2.010)], rmse)[0].candidate_index == 1
-    # 没跑通的不参与；指标没核对通过的只能按证据/评审分
+    # 没跑通或指标没核对通过的均不能晋升到正式求解
     assert select_probe([probe(0, 12, works=False, metric=1.0), probe(1, 5, metric=9.0)], rmse)[0].candidate_index == 1
-    assert select_probe([probe(0, 12), probe(1, 5)], rmse)[0].candidate_index == 0
-    # 没有统一指标时按执行证据评分
+    assert select_probe([probe(0, 12), probe(1, 5)], rmse)[0] is None
+    # 没有统一指标时直接正式求解，不用文字评分替代执行验收
     none = {"applicable": False}
-    winner, reason = select_probe([probe(0, 12, evidence=1.0), probe(1, 5, evidence=3.0)], none)
-    assert winner.candidate_index == 1 and "执行证据" in reason
+    winner, reason = select_probe([probe(0, 12), probe(1, 5)], none)
+    assert winner is None and "新内核" in reason
     # 都没跑通就沿用评审选择
     winner, reason = select_probe([probe(0, 5, works=False), probe(1, 9, works=False)], none)
-    assert winner.candidate_index == 1 and "沿用" in reason
+    assert winner is None and "沿用" in reason
 
     design = {"candidates": [{}, {}, {}], "scores": [{"total": 5}, {"total": 9}, {"total": None}], "chosen_index": 1}
     assert shortlist(design, 2) == [1, 0]

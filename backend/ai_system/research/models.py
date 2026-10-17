@@ -11,7 +11,7 @@ class Contract(BaseModel):
 
 class ResultSelector(Contract):
     task_id: str
-    name: str = Field(min_length=1, description="必须登记的单个结果名称，求解和验证使用相同名称")
+    name: str = Field(min_length=1, description="必须登记的单个结果名称，求解和验证使用相同名称。数值比较只接受标量；序列长度/非负性应分别命名长度/最小值等标量指标，不能引用整组数组")
 
 
 class LinearVariable(Contract):

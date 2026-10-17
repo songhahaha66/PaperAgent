@@ -27,6 +27,11 @@ data. Method selection, candidate design/critique, exploration protocols, CodeAc
 and local review all read this same source. A restatement or a subset of requirement
 quotes is insufficient to replace source data. Pre-confirmation design reads the
 original graph task; resumed workers read the authoritative committed requirement.
+Exploration promotion requires successful execution and a grounded comparison
+metric, including its existing shuffle check. Self-reported success or a textual
+critic score cannot replace that evidence. Without a valid candidate, all probe
+kernels are released and formal solving starts with the selected design in a
+fresh kernel. Failed variables and transcripts cannot be promoted.
 
 A SQLite transaction checks the task revision, actual inputs, protocol and lease before
 publishing evidence. A change to an unrelated task does not reject the result.
@@ -63,6 +68,8 @@ or absolute tolerance, optionally comparing an accepted dependency's result.
 Percentage values use ratios. Each compute task must map requirements to actual
 own/dependency evidence. The store evaluates checks again at commit; a worker's
 accepted flag cannot override failure or a missing/ambiguous metric.
+Numeric checks select scalar metrics; a sequence's length or minimum must be
+computed and registered separately. Existence does not establish sequence length.
 
 Analysis validates coverage, source quotes, check scopes and the dependency DAG
 inside the existing bounded structured-output retry. Semantic feedback includes
