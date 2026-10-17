@@ -5,7 +5,28 @@
       :active-history-id="currentWork?.id || null"
       @toggle-sidebar="toggleSidebar"
     />
-    <main class="workspace-container">
+    <main v-if="loadError" class="workspace-container">
+      <section class="work-load-error" role="alert">
+        <t-icon name="error-circle" />
+        <h1>{{ loadErrorText }}</h1>
+        <p>
+          {{
+            isZh
+              ? '请返回工作列表，选择有权访问的研究。'
+              : 'Return to your work list and choose an accessible research.'
+          }}
+        </p>
+        <div>
+          <t-button theme="primary" @click="router.push('/home')">{{
+            isZh ? '返回工作列表' : 'Back to work list'
+          }}</t-button>
+          <t-button v-if="loadError === 'failed'" theme="default" @click="loadWork">{{
+            isZh ? '重试' : 'Retry'
+          }}</t-button>
+        </div>
+      </section>
+    </main>
+    <main v-else class="workspace-container">
       <header class="workspace-header">
         <div class="work-heading">
           <div class="work-title-row">
@@ -376,6 +397,14 @@ const currentWork = ref<Work | null>(null)
 
 // 加载状态
 const loading = ref(false)
+const loadError = ref<'forbidden' | 'missing' | 'failed' | null>(null)
+const loadErrorText = computed(() => {
+  if (loadError.value === 'forbidden')
+    return isZh.value ? '当前账号无权查看这项研究' : 'Your account cannot access this research'
+  if (loadError.value === 'missing')
+    return isZh.value ? '这项研究不存在' : 'This research does not exist'
+  return isZh.value ? '研究加载失败，请稍后重试' : 'Research could not be loaded. Please retry.'
+})
 
 // 定义聊天消息类型（使用API中的类型）
 interface ChatMessageDisplay extends ChatMessage {}
@@ -813,6 +842,7 @@ const loadWork = async () => {
   if (!workId.value || !authStore.token) return
 
   loading.value = true
+  loadError.value = null
   try {
     const work = await workspaceAPI.getWork(authStore.token, workId.value)
     if (disposed) return
@@ -828,7 +858,12 @@ const loadWork = async () => {
     if (!disposed) await checkAndAutoSendFirstMessage()
   } catch (error) {
     console.error('加载工作信息失败:', error)
-    if (!disposed) MessagePlugin.error('加载工作信息失败')
+    if (!disposed) {
+      if (!currentWork.value) {
+        const status = (error as { response?: { status?: number } })?.response?.status
+        loadError.value = status === 403 ? 'forbidden' : status === 404 ? 'missing' : 'failed'
+      } else MessagePlugin.error('加载工作信息失败')
+    }
   } finally {
     loading.value = false
   }
@@ -1575,6 +1610,24 @@ const generateWorkTitle = async (question: string) => {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+}
+.work-load-error {
+  margin: auto;
+  padding: 32px;
+  max-width: 560px;
+  text-align: center;
+}
+.work-load-error h1 {
+  font-size: 20px;
+}
+.work-load-error p {
+  color: var(--td-text-color-secondary);
+  margin-bottom: 24px;
+}
+.work-load-error > div {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
 }
 .workspace-header {
   display: flex;

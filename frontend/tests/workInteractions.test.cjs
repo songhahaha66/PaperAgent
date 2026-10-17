@@ -8,7 +8,7 @@ async function environment() {
     '@/stores/auth': { useAuthStore: () => auth },
   })
   const store = storeModule.useWorkPanelsStore(pinia.createPinia())
-  async function work(id, deferred = false) {
+  async function work(id, deferred = false, loadFailures = []) {
     const cleanup = [],
       sockets = [],
       sent = [],
@@ -93,13 +93,16 @@ async function environment() {
         },
         '@/api/workspace': {
           workspaceAPI: {
-            getWork: async () => ({
-              id: 1,
-              work_id: id,
-              title: 'Research',
-              status: 'completed',
-              output_mode: 'latex',
-            }),
+            getWork: async () => {
+              if (loadFailures.length) throw loadFailures.shift()
+              return {
+                id: 1,
+                work_id: id,
+                title: 'Research',
+                status: 'completed',
+                output_mode: 'latex',
+              }
+            },
           },
           attachmentAPI: {},
           workspaceFileAPI: {
@@ -139,6 +142,29 @@ async function environment() {
 }
 ;(async () => {
   const env = await environment()
+  for (const [status, expected] of [
+    [403, 'forbidden'],
+    [404, 'missing'],
+    [503, 'failed'],
+  ]) {
+    const inaccessible = await env.work(`error-${status}`, false, [{ response: { status } }])
+    await inaccessible.state.loadWork()
+    assert.equal(inaccessible.state.loadError.value, expected)
+    assert.equal(inaccessible.state.loading.value, false)
+    assert.equal(inaccessible.state.currentWork.value, null)
+    assert.equal(inaccessible.sockets.length, 0, 'failed work loading never attaches a task socket')
+    await inaccessible.state.loadWork()
+    assert.equal(
+      inaccessible.state.loadError.value,
+      null,
+      'successful retry clears the error state',
+    )
+    assert.equal(inaccessible.state.currentWork.value.title, 'Research')
+    inaccessible.stop()
+  }
+  console.log(
+    'PASS: forbidden, missing and unavailable research leave loading and recover on retry',
+  )
   const first = await env.work('first')
   await first.state.loadWork()
   assert.equal(
