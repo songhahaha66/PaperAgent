@@ -102,11 +102,18 @@ class BrokenWriter(FakeModel):
         return text + " 见 {{F:F999}}。" if self.broken else text
 
 
-def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputing(tmp_path, monkeypatch):
+class MathLeakWriter(BrokenWriter):
+    def _write(self, request):
+        text = FakeModel._write(self, request)
+        return text + r" 降幅约为 $23.1\%$。" if self.broken else text
+
+
+@pytest.mark.parametrize("writer", [BrokenWriter, MathLeakWriter])
+def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputing(tmp_path, monkeypatch, writer):
     monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     monkeypatch.setattr(_Structured, "reviewed_q1", True)
     monkeypatch.setattr(_Structured, "audits", 10)
-    model = BrokenWriter(loose_number_once=False)
+    model = writer(loose_number_once=False)
     events = []
 
     class Recorder:
@@ -133,3 +140,4 @@ def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputin
     assert all(i["status"] in {"resolved", "dismissed"} for i in after["issues"])
     assert store.delivery_ready(after) and (tmp_path / "paper.md").exists()
     assert "F999" not in (tmp_path / "paper.md").read_text()
+    assert "23.1" not in (tmp_path / "paper.md").read_text()

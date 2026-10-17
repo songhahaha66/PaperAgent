@@ -189,3 +189,5 @@ remain history rather than being displayed as validation of a new revision.
 Semantic section audits retain raw references and receive their registered values,
 including auxiliary results absent from the key-claim table. Writer-only reference
 instructions are not reused as audit criteria for rendered text.
+Final numeric checks also cover standalone math scalars and escaped percentages
+such as `$23.1\%$`, while preserving formula coefficients and code examples.

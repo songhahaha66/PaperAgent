@@ -30,11 +30,10 @@ from .write import STYLE, section_plan, section_request, solve_key
 MIN_SECTION_CHARS = 80
 # 小数或百分数；整数（年份、编号、个数）不检查
 DECIMAL_PATTERN = re.compile(r"(?<![\w.])-?\d+\.\d+%?|(?<![\w.])\d+%")
+CODE_PATTERN = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
 STRIP_PATTERNS = [
     re.compile(r"\$\$.*?\$\$", re.DOTALL),
     re.compile(r"\$[^$\n]+\$"),
-    re.compile(r"```.*?```", re.DOTALL),
-    re.compile(r"`[^`\n]+`"),
     REF_PATTERN,
     # 小标题编号（"### 4.1 整体思路"）不是结果；v2m 的问题分析因此被报了 5 个"未引用的数字"
     re.compile(r"^[ \t]*#{1,6}[ \t]*[A-Za-z]*\d+(?:\.\d+)+", re.MULTILINE),
@@ -47,7 +46,16 @@ MATH_RESULT = re.compile(r"(?:=|≈|\\approx)\s*(-?\d+\.\d+%?)(?![\w.(\\])")
 
 
 def _prose(text: str) -> str:
-    assigned = [m.group(1) for span in MATH_PATTERN.findall(REF_PATTERN.sub(" ", text)) for m in MATH_RESULT.finditer(span)]
+    text = CODE_PATTERN.sub(" ", text)
+    assigned = []
+    for span in MATH_PATTERN.findall(REF_PATTERN.sub(" ", text)):
+        scalar = span.strip("$").strip().replace(r"\%", "%")
+        # A standalone scalar is still a result when wrapped in math delimiters.
+        # Keep coefficients in expressions such as 0.5x outside this check.
+        if re.fullmatch(r"-?(?:\d+\.\d+(?:[eE][-+]?\d+)?%?|\d+%)", scalar):
+            assigned.append(scalar)
+        else:
+            assigned.extend(m.group(1) for m in MATH_RESULT.finditer(scalar))
     for pattern in STRIP_PATTERNS:
         text = pattern.sub(" ", text)
     return text + " " + " ".join(assigned)

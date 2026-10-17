@@ -505,6 +505,9 @@ def test_untracked_numbers_ignores_refs_formulas_and_allowed():
     assert untracked_numbers("### 4.1 整体思路\n#### Q1.2 求解\n正文 4.5", "") == ["4.5"]
     # 公式里单独等于一个数的是结果（Q2 把没登记的检验统计量写成 $z = 4.05$）
     assert untracked_numbers("真实序列 $z = 4.05$，$\\hat p \\approx 0.673$，$x = {{R:R1}}$", "") == ["4.05", "0.673"]
+    assert untracked_numbers(r"降幅 $23.1\%$，近似 $r \approx 24.2\%$，比例 $0.231$，整数比例 $23\%$", "") == ["23.1%", "24.2%", "0.231", "23%"]
+    assert untracked_numbers(r"已知 $23.1\%$，真实值 ${{R:R1}}$，系数 $y=0.5x$", "23.1%") == []
+    assert untracked_numbers("```python\n# $3.14$\n``` 与 `$2.34$`", "") == []
 
 
 def test_ungrounded_findings_flags_numbers_outside_refs():
