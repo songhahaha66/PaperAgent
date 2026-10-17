@@ -124,3 +124,32 @@ def test_analysis_freezes_original_spans_instead_of_rejecting_spacing(tmp_path):
     ctx=GraphContext.create(str(tmp_path),planner_llm=Model())
     result=asyncio.run(analyze({'task':TASK},SimpleNamespace(context=ctx)))
     assert all(r['source_quote'] in TASK for r in result['analysis']['requirements'])
+
+
+def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(monkeypatch):
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    first=_analysis().model_dump()
+    first['requirements'][0].update(kind='constraint',checks=[])
+    second=invalid_plan('linear')
+    second['requirements'][0]['checks'][0]['linear_model']['objective']=[]
+    class Model:
+        calls=0
+        def with_structured_output(self,schema,**kwargs):
+            assert kwargs['include_raw'] is True
+            return self
+        async def ainvoke(self,messages):
+            self.calls+=1
+            if self.calls==1:
+                try:ProblemAnalysis.model_validate(first)
+                except ValueError as error:
+                    raw=AIMessage(content='',tool_calls=[{'id':'analysis','name':'ProblemAnalysis','args':first}])
+                    return {'raw':raw,'parsed':None,'parsing_error':error}
+            candidate=messages[-2]
+            assert isinstance(candidate,AIMessage) and not candidate.tool_calls
+            assert len(messages)==3
+            assert json.loads(candidate.content)==(first if self.calls==2 else second)
+            assert ('必须有可执行检查' if self.calls==2 else '数量一致') in messages[-1].content
+            return AIMessage(content=json.dumps(second) if self.calls==2 else _analysis().model_dump_json())
+    model=Model()
+    result=asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[AIMessage(content='plan')]))
+    assert model.calls==3 and result==_analysis()

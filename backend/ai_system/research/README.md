@@ -61,7 +61,9 @@ accepted flag cannot override failure or a missing/ambiguous metric.
 Analysis validates coverage, source quotes, check scopes and the dependency DAG
 inside the existing bounded structured-output retry. Semantic feedback includes
 all detected contract defects and the actual rejected candidate, so the model can
-repair that plan without weakening requirements. Analysis resolves
+repair that plan without weakening requirements. Schema parsing failures retain
+the raw tool arguments or JSON reply as the next repair candidate too; each retry
+replaces the previous candidate rather than accumulating invalid plans. Analysis resolves
 whitespace-only quote differences to the exact original source span before
 validation; whole numeric and Latin-word tokens prevent merging distinct numbers
 or words. Paraphrases and changed values still fail validation. Prediction methods

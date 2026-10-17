@@ -17,12 +17,20 @@ RETRIES = 2
 RETRY_DELAY = 1.5  # 秒，第 n 次失败后等 n 倍
 
 
-def structured_model(llm: Any, schema: Type[T]):
+def structured_model(llm: Any, schema: Type[T], *, include_raw: bool = False):
     """OpenAI 兼容网关普遍支持工具调用，但不一定支持 json_schema，所以优先用 function_calling"""
     try:
-        return llm.with_structured_output(schema, method="function_calling")
+        return llm.with_structured_output(schema, method="function_calling", include_raw=include_raw)
     except (TypeError, ValueError, NotImplementedError):
         return llm.with_structured_output(schema)
+
+
+class InvalidStructuredReply(ValueError):
+    def __init__(self, error: Exception, reply: BaseMessage):
+        super().__init__(str(error))
+        calls = getattr(reply, "tool_calls", [])
+        content = json.dumps(calls[0]["args"], ensure_ascii=False) if calls else message_text(reply)
+        self.candidate = AIMessage(content=content)
 
 
 async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage], error: Exception | None = None) -> T:
@@ -49,8 +57,11 @@ async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage], erro
             data, _ = decoder.raw_decode(text[index:])
         except ValueError:
             continue
-        return schema.model_validate(data)
-    raise ValueError("没有完整的 JSON 对象；请输出简洁、闭合的对象，不要重复扩展列表")
+        try:
+            return schema.model_validate(data)
+        except ValueError as exc:
+            raise InvalidStructuredReply(exc, reply) from exc
+    raise InvalidStructuredReply(ValueError("没有完整的 JSON 对象；请输出简洁、闭合的对象，不要重复扩展列表"), reply)
 
 
 def cap_output(llm: Any, max_tokens: int) -> Any:
@@ -69,7 +80,7 @@ def as_messages(system: str, user: str) -> List[BaseMessage]:
 
 
 async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None) -> T:
-    model = structured_model(llm, schema)
+    model = structured_model(llm, schema, include_raw=True)
     last_error: Exception | None = None
     retry_messages = messages
     for attempt in range(RETRIES + 1):
@@ -78,6 +89,10 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
             # 重试改走纯文本 JSON
             result = await model.ainvoke(messages) if attempt == 0 else await _ask_json(llm, schema, retry_messages, last_error)
+            if isinstance(result, dict) and "raw" in result and "parsed" in result:
+                if result.get("parsing_error"):
+                    raise InvalidStructuredReply(result["parsing_error"], result["raw"])
+                result = result["parsed"]
             if result is None:
                 raise ValueError("模型没有返回结构化结果")
             parsed = result if isinstance(result, schema) else schema.model_validate(result)
@@ -90,6 +105,8 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
                 # Repair this candidate, rather than guessing a different plan
                 # from an error message with no associated task/check IDs.
                 retry_messages = [*messages, AIMessage(content=parsed.model_dump_json())]
+            elif isinstance(exc, InvalidStructuredReply):
+                retry_messages = [*messages, exc.candidate]
             logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, exc)
             if attempt < RETRIES:
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
