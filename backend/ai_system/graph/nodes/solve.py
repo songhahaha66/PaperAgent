@@ -145,11 +145,34 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
     每个子问题有自己的内核，后一问看不到前一问的函数和变量。2022_C 的 Q3 要"运行 Q2 选定的策略"，
     只拿到 Q2 的结论和数值，只好从读数据开始重写回测，日期解析又踩了一遍坑，171 条对话后交了空报告。
     """
-    runs = [r for r in run_log if r.get("ok") and not is_placeholder(r.get("code") or "")]
+    runs = []
+    for run in run_log:
+        code = run.get("code") or ""
+        if is_placeholder(code):
+            continue
+        if not run.get("ok"):
+            # A failed cell can already have imported modules or defined values
+            # subsequently used by successful cells. Retain only complete
+            # top-level statements before the actual failing statement.
+            info = ctx.fs.get_run_info(run["run_id"])
+            if not info or not info.get("stdout"):
+                continue
+            trace = ctx.fs.read_text(info["stdout"]).rsplit("Traceback (most recent call last):\n", 1)[-1]
+            frame = re.search(r'File "<cell>", line (\d+), in <module>', trace)
+            if not frame:
+                continue
+            try:
+                nodes = ast.parse(code).body
+            except SyntaxError:
+                continue
+            prefix = [node for node in nodes if node.end_lineno < int(frame[1])]
+            code = "\n".join(code.splitlines()[:prefix[-1].end_lineno]) if prefix else ""
+        if code.strip():
+            runs.append({**run, "code": code})
     if not runs:
         return
     body = "\n\n".join(f"# ---- {r['run_id']} ----\n{r['code'].rstrip()}" for r in runs)
-    header = f"# {subproblem_id} 成功执行过的代码（按执行顺序，含探索过程）。复用时复制需要的函数和处理步骤，不必整体运行。\n\n"
+    header = f"# {subproblem_id} 已执行代码（按顺序，含探索及出错语句之前的完整前缀）。复用时复制需要的函数和处理步骤。\n\n"
     try:
         ctx.fs.write_text(solution_code_path(subproblem_id), header + body)
     except Exception as exc:  # 只是给后续子问题的参考，失败不影响本问
