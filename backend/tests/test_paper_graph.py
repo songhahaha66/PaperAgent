@@ -881,23 +881,27 @@ def test_label_shuffle_control_flags_leakage(tmp_path):
     # 打乱后回到无信息水平、且优于简单基线：通过
     auc = dict(metric="AUC", value="0.71", shuffled_value="0.502", chance="0.5", higher_is_better=True, baseline_run_id=run_id)
     assert control_issues(ctx, report(**auc, baseline_value="0.6")) == []
-    # 没给简单基线：要补
-    assert "最简单的有信息基线" in control_issues(ctx, report(**{**auc, "baseline_run_id": ""}))[0]
+    # 未提供有信息基线限制结论强度，不凭空增加原题的验收门槛。
+    no_baseline = report(**{**auc, "baseline_run_id": ""})
+    assert control_issues(ctx, no_baseline) == []
+    assert "不能宣称" in baseline_gaps(ctx, no_baseline)[0]
     # 没超过简单基线（Q1 的滤波势头只是复现了发球方先验）：不是返工能消掉的问题，记为基线差距
     flat = report(**auc, baseline_value="0.71")
     assert control_issues(ctx, flat) == [] and "没有优于基线" in baseline_gaps(ctx, flat)[0]
-    # 拿无信息水平充当基线：要换
-    assert "就是无信息水平" in control_issues(ctx, report(**auc, baseline_value="0.502"))[0]
+    # 无信息基线可如实报告，但不能作为额外预测增益的证据。
+    null_baseline = report(**auc, baseline_value="0.502")
+    assert control_issues(ctx, null_baseline) == []
+    assert "不能据此宣称" in baseline_gaps(ctx, null_baseline)[0]
     # 打乱后的值不在输出里：不能通过
     assert "无法核对" in control_issues(ctx, report(value="0.4934", shuffled_value="0.6801", chance="0.6778"))[0]
-    # 报告了 AUC 却没做对照
+    # 指标名本身不构成强制置换实验的需求。
     missing = control_issues(ctx, {"summary": "测试集 AUC 0.71", "key_findings": [], "controls": []})
-    assert "没有做标签置换对照" in missing[0]
+    assert missing == []
+    assert control_issues(ctx, {"summary": "验证集 MAE 24.6，RMSE 30.2", "controls": []}) == []
     assert control_issues(ctx, {"summary": "检验 p 值 0.03", "key_findings": [], "controls": []}) == []
-    # 假设检验类子问题不要求置换对照
-    assert control_issues(ctx, {"summary": "检验功效 AUC 0.71", "key_findings": [], "controls": []}, hypothesis=True) == []
-    # 打乱后的值恰好等于无信息水平：像是填的理论值
-    assert "恰好等于无信息水平" in control_issues(ctx, report(**{**auc, "shuffled_value": "0.6", "chance": "0.6"}, baseline_value="0.71"))[0]
+    assert control_issues(ctx, {"summary": "检验功效 AUC 0.71", "key_findings": [], "controls": []}) == []
+    # 实际执行的置换值可用于估计无信息水平；相等不能作为伪造的证明。
+    assert control_issues(ctx, report(**{**auc, "shuffled_value": "0.6", "chance": "0.6"}, baseline_value="0.71")) == []
 
 
 def test_leaky_metric_downgrades_findings(tmp_path):

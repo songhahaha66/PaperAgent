@@ -127,7 +127,7 @@ class SolveReport(BaseModel):
     requirement_evidence: List[RequirementEvidence] = Field(default_factory=list, description="每项本任务要求的证据引用；必须使用自己或前序任务的实际登记编号")
     research_issues: List[IssueReport] = Field(default_factory=list, description="发现上游模型、数据或假设可能有错时提交带证据的疑点；不要擅自沿用错误前提")
     controls: List[NegativeControl] = Field(
-        default_factory=list, description="标签置换对照：报告了预测效果（AUC、准确率、LogLoss、RMSE 等）时每个指标一条"
+        default_factory=list, description="仅填实际执行且适用于本问题的标签置换对照；普通样本外预测不强制附加此实验，未做时留空，不编造"
     )
 
 

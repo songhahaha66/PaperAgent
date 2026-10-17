@@ -206,7 +206,6 @@ def worker_context(ctx, order):
 async def execute(branch, runtime):
     from ..graph.nodes.solve import solve
     from ..graph.nodes.review import report_issues, needs_figure
-    from ..graph.nodes.explore import is_hypothesis_test
     from types import SimpleNamespace
 
     ctx = runtime.context
@@ -224,7 +223,7 @@ async def execute(branch, runtime):
         report = update["solutions"][key]
         checks = [] if report["status"] == "prepared" or branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
             local, report, key, branch["subproblem"].get("depends_on") or [],
-            hypothesis=is_hypothesis_test(branch["subproblem"]), figure_required=needs_figure(branch["subproblem"]))
+            figure_required=needs_figure(branch["subproblem"]))
         if report["status"] not in {"completed", "prepared"}:
             checks.append(report.get("error") or "求解未完成")
         results = [asdict(r) for r in local.registry.for_subproblem(key)]

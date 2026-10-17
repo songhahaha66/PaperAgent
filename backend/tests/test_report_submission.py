@@ -12,7 +12,7 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.solve import _solve_loop, build_task, submission_schema
+from ai_system.graph.nodes.solve import _solve_loop, build_task, build_tools, submission_schema
 from ai_system.graph.state import NegativeControl
 from test_paper_graph import FakeModel
 
@@ -130,6 +130,38 @@ def test_check_threshold_failure_is_not_hidden_by_the_submission_gate(tmp_path):
     # A truthful counterexample is a valid report; the central acceptance layer
     # will reject the threshold and replan, rather than asking for a nicer number.
     assert submission_schema(ctx, task, runs).model_validate(report(own.id)).summary
+
+
+def test_optional_controls_do_not_bypass_an_explicit_frozen_experiment(tmp_path):
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None)
+    runs = []
+    own = seed(ctx, runs)
+    task = branch()
+    task["research_contract"]["checks"][0]["check"]["left"]["name"] = "required_shuffle_metric"
+    payload = report(own.id)
+    payload["controls"] = []
+    with pytest.raises(ValidationError, match="required_shuffle_metric"):
+        submission_schema(ctx, task, runs).model_validate(payload)
+
+
+def test_registration_returns_current_inventory_without_waiting_for_a_failed_report(tmp_path):
+    from ai_system.graph.nodes.review import submission_inventory_issues
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None)
+    task, runs = branch(), []
+    tools = {tool.name: tool for tool in build_tools(ctx, "Q1", runs,
+        submission_gaps=lambda: submission_inventory_issues(ctx, task, runs))}
+    async def go():
+        try:
+            await tools["run_python"].ainvoke({"code": "print(sum([1, 2, 3]))"})
+            item = {"name": "wrong_name", "value": "6", "run_id": runs[0]["run_id"]}
+            missing = await tools["record_results"].ainvoke({"items": [item]})
+            assert "answer_finite" in missing and "缺少唯一登记指标" in missing
+            complete = await tools["record_results"].ainvoke({"items": [{**item, "name": "answer"}]})
+            assert "必需登记指标已齐" in complete and "缺少唯一登记指标" not in complete
+            assert len(runs) == 1
+        finally:
+            await ctx.kernels.close()
+    asyncio.run(go())
 
 
 def test_countercheck_uses_its_own_metric_and_allows_frozen_dependency_references(tmp_path):

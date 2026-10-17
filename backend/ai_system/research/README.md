@@ -121,6 +121,9 @@ evidence bindings, all report references, successful current-attempt execution
 sources and required figure files. Invalid submissions return the specific gaps,
 actual result IDs and successful run IDs as tool feedback; the solver can register
 existing output or compute a missing metric in the same kernel before resubmitting.
+Registration replies expose the current mandatory inventory immediately, using
+the same checker as submission, stall handling and final fallback. Missing metric
+names reach the solver before it spends more steps repeating existing outputs.
 Reports must be submitted separately from execution or registration calls. If a
 model mixes them, the ordering middleware defers only the unsubmitted report,
 preserves any validation feedback and lets the ordinary tool loop finish the
@@ -130,6 +133,13 @@ same ordering rule. Requirement bindings use raw result IDs, while prose uses
 renderable reference templates.
 Negative-control chance levels are finite numeric fields in the submission
 schema; prose or non-finite baselines return to the same tool loop for correction.
+Prediction metric names do not create a global permutation-test requirement.
+The original question and frozen protocol define required experiments; supplied
+optional controls still require actual execution evidence. A permutation estimate
+may itself define the chance level, so equality is not evidence of fabrication.
+Missing informative baselines limit claims of incremental predictive gain rather
+than inventing a new delivery requirement. Explicit protocol metrics remain
+mandatory through the same inventory and central acceptance checks.
 No extra model reviewer or independent repair loop is added. The submission and
 central commit share requirement-evidence checks; numeric threshold failures stay
 with central domain acceptance and causal replanning, so a counterexample can still

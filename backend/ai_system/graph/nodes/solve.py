@@ -43,7 +43,7 @@ from ..tracing import labelled, set_label
 from ...research.assumptions import unbound_assumptions
 from ...research.models import IssueReport, ReviewRecord
 from ...research.validation import report_fingerprint
-from .explore import explore, is_hypothesis_test, promotion_message
+from .explore import explore, promotion_message
 from .review import (
     baseline_gaps,
     control_issues,
@@ -69,11 +69,9 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 需要传给后续子问题的中间数据，保存到 outputs/intermediate/ 下（csv），并在报告里说明文件名。
 - 默认使用题目给出的全部相关数据（例如全部比赛、全部年份），只用子集时要在报告里说明理由。
 - 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
-- 报告预测效果（AUC、准确率、LogLoss、RMSE 等）时必须做标签置换对照：把原始结果列（如每一分的胜者）在构造任何特征和标签之前随机打乱，
-  其余流程完全不变，重新算一遍同一指标；只打乱训练集标签不算，print 并登记真实值和打乱后的值，填进报告的 controls。打乱后指标仍明显好于无信息水平，说明存在泄漏。
-  同一划分上还要算一个最简单的有信息基线（如按发球方区分的先验胜率、只用上一期值；常数预测是无信息水平，不算），一并登记填进 controls；
-  模型没有超过这个基线时，结论只能说预测信息来自基线已有的结构。
-  假设检验（自相关、游程、卡方等）不需要这种对照：检验的零分布本身就是对照，controls 留空。
+- 按原题与冻结契约完成样本外评估和所需方法比较。普通预测不因报告MAE/RMSE就额外强制标签置换；时序数据不应硬套独立同分布的标签置换。
+  只有确需检验额外预测增益或契约明确要求时才做适用的对照。主动提交controls时必须真实重算、登记数值与run_id；未做就留空，不能编造。
+  是否优于基线、各误差指标排序是否一致，应如实报告；效果不足是研究结果，不得为通过验收伪造更好的值。
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 - 内核已自动配置本机可用的中文字体，不要用未安装的SimHei等字体覆盖配置。
 
@@ -201,10 +199,18 @@ def build_tools(
     run_log: Optional[List[Dict]] = None,
     kernel_key: Optional[str] = None,
     record: bool = True,
+    submission_gaps: Optional[Callable[[], List[str]]] = None,
 ) -> List[StructuredTool]:
     """record=False 时只给 run_python（探索阶段不登记结果）"""
     kernel = ctx.kernels.get(kernel_key or subproblem_id)
     run_log = run_log if run_log is not None else []
+
+    def submission_feedback(text):
+        if submission_gaps is None:
+            return text
+        gaps = submission_gaps()
+        return text + ("\n[提交检查] 尚缺：\n" + "\n".join(f"- {gap}" for gap in gaps)
+                       if gaps else "\n[提交检查] 必需登记指标已齐。请单独提交 SolveReport，requirement_evidence 使用已返回的原始编号。")
 
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
@@ -241,7 +247,7 @@ def build_tools(
                     continue
                 note = f"（{item.run_id} 核对不上，已按输出里含这个值的 {result.run_id} 登记）"
             lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}{note}")
-        return "\n".join(lines) or "没有要登记的结果"
+        return submission_feedback("\n".join(lines) or "没有要登记的结果")
 
     async def record_figure(run_id: str, figure: str, caption: str) -> str:
         """登记一张论文要用的图。figure 是执行结果里给出的图片文件名，caption 是图题"""
@@ -250,7 +256,7 @@ def build_tools(
         except (GroundingError, FileNotFoundError, KeyError) as exc:
             return f"登记失败：{exc}"
         await ctx.events.file_changed(result.path)
-        return f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）"
+        return submission_feedback(f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）")
 
     tools = [StructuredTool.from_function(coroutine=run_python, name="run_python")]
     if record:
@@ -455,18 +461,19 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     subproblem_id = branch["subproblem"]["id"]
     recorder = HistoryRecorder()
     schema = submission_schema(ctx, branch, run_log)
+    def inventory():
+        return submission_inventory_issues(ctx, branch, run_log)
     agent = create_agent(
         model=ctx.coder_llm,
-        tools=build_tools(ctx, subproblem_id, run_log),
+        tools=build_tools(ctx, subproblem_id, run_log, submission_gaps=inventory),
         system_prompt=SYSTEM,
         response_format=ToolStrategy(schema),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
-                        report_ready=lambda: not submission_inventory_issues(ctx, branch, run_log)),
+                        report_ready=lambda: not inventory()),
                     DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(), ReportOrderingMiddleware(schema.__name__)],
     )
     limit = ctx.max_solver_steps * 2 + 1
-    fallback = ReportFallback(ctx.coder_llm, schema, SYSTEM, recorder,
-        lambda: submission_inventory_issues(ctx, branch, run_log))
+    fallback = ReportFallback(ctx.coder_llm, schema, SYSTEM, recorder, inventory)
     status, error = "completed", None
     report: Dict = {}
     reviews: List[Dict] = []
@@ -494,7 +501,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             subproblem = branch["subproblem"]
             fixes = [] if subproblem.get("kind") == "verify" else report_issues(
                 ctx, report, subproblem_id, subproblem.get("depends_on") or [],
-                hypothesis=is_hypothesis_test(subproblem), figure_required=needs_figure(subproblem))
+                figure_required=needs_figure(subproblem))
             prior = branch.get("review_findings", []) + [issue for r in reviews for issue in r["issues"]]
             try:
                 review = await review_solution(ctx, {**branch, "review_findings": prior}, report, run_log)

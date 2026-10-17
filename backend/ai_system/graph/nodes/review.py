@@ -6,10 +6,8 @@
 这里让审查模型对照代码和登记结果逐项检查，有必须修正的问题就把意见交回同一个求解循环
 （内核还在，变量不用重算），最多 max_review_rounds 轮。
 
-模型审查抓不住所有泄漏：2024_C 的 Q1 用卡尔曼滤波"预测"当前这一分时，滤波值已经吸收了这一分的结果，
-LogLoss 从 0.68 降到 0.49，审查模型没有发现。所以预测效果另加一道确定性检查——标签置换对照（negative control）：
-在构造特征之前把目标列打乱、流程不变再算一遍指标。没有泄漏时打乱后应回到无信息水平；
-打乱后仍保留真实提升的一半以上，就判定为泄漏，作为必须修正的问题交回求解循环。
+模型主动提交标签置换对照时核对其执行来源和数值；是否需要这类实验取决于问题与冻结契约，
+不能仅因报告出现 MAE、RMSE 等指标就给时序预测增加置换实验的硬性门槛。
 """
 
 import re
@@ -27,6 +25,9 @@ SYSTEM = (
     "你是数学建模竞赛的评审老师，负责在写论文之前审查一个子问题的求解结果。"
     "只依据给出的代码、输出和登记结果判断，不要臆测。只把真正影响结论可信度的问题列为必须修正，"
     "措辞风格、可有可无的扩展不要列入。"
+    "以原题和冻结研究契约为验收边界，不增加题外实验或效果门槛。预测方法的局限、"
+    "不同误差指标排序不同、按预先说明的规则选法、逐日预测碰巧同值，本身都不是交付缺失。"
+    "检查真实的数据划分、预测时可用信息、代码计算与证据，以及结论是否如实说明局限。"
 )
 
 CHECKLIST = """逐项检查：
@@ -38,8 +39,6 @@ CHECKLIST = """逐项检查：
 6. 交付物是否齐全：题目要求的每一项是否都有对应结果。"""
 
 
-# 报告里出现这些预测效果指标时，必须附带标签置换对照
-PREDICTIVE = re.compile(r"AUC|准确率|精确率|召回率|F1|LogLoss|对数损失|Brier|RMSE|MAE|MAPE|R²|R\^2|决定系数|命中率", re.IGNORECASE)
 # 打乱标签后仍保留的提升占真实提升的比例，超过就判定为泄漏
 LEAK_RATIO = 0.5
 # 相对简单基线的提升不到基线值的这个比例，就算没有提升
@@ -84,9 +83,9 @@ def leaked(real: float, shuffled: float, chance: float, higher_is_better: bool) 
     return gain > 0 and kept >= LEAK_RATIO * gain
 
 
-def control_issues(ctx: GraphContext, report: Dict, hypothesis: bool = False) -> List[str]:
+def control_issues(ctx: GraphContext, report: Dict) -> List[str]:
     """标签置换对照的确定性检查，返回必须修正的问题"""
-    return control_findings(ctx, report, hypothesis)[0]
+    return control_findings(ctx, report)[0]
 
 
 def downgrade_findings(ctx: GraphContext, report: Dict) -> None:
@@ -123,20 +122,10 @@ def baseline_gaps(ctx: GraphContext, report: Dict) -> List[str]:
     return control_findings(ctx, report)[1]
 
 
-def control_findings(ctx: GraphContext, report: Dict, hypothesis: bool = False) -> Tuple[List[str], List[str]]:
-    """返回 (必须修正的问题, 没有超过基线的指标)
-
-    hypothesis=True（假设检验类子问题）时不要求置换对照：检验的零分布本身就是对照。
-    v2h 的 Q2 报告里出现了"检验功效""95%"等字样，被当成预测效果要求做置换对照，与求解提示矛盾。
-    """
+def control_findings(ctx: GraphContext, report: Dict) -> Tuple[List[str], List[str]]:
+    """Validate supplied controls and return evidence errors plus limits on claims."""
     controls = predictive_controls(report)
-    text = " ".join([report.get("summary", ""), *(f.get("statement", "") for f in report.get("key_findings") or [])])
     if not controls:
-        if not hypothesis and PREDICTIVE.search(ctx.registry.render(text)):
-            return [
-                "报告了预测效果但没有做标签置换对照：在构造特征之前把目标列随机打乱、其余流程完全不变，"
-                "重新计算同一指标，print 并登记真实值和打乱后的值，填进报告的 controls。"
-            ], []
         return [], []
     issues: List[str] = []
     gaps: List[str] = []
@@ -150,13 +139,6 @@ def control_findings(ctx: GraphContext, report: Dict, hypothesis: bool = False) 
         real, shuffled, chance = (_as_float(c[k]) for k in ("value", "shuffled_value", "chance"))
         if None in (real, shuffled, chance):
             issues.append(f"{c['metric']} 的置换对照里有不是数值的字段，请填写数值")
-            continue
-        if shuffled == chance:
-            # v2h 的 Q3 填了 shuffled_value=0.5、chance=0.5：实际重算的 AUC 几乎不可能恰好是 0.5，像是填的理论值
-            issues.append(
-                f"{c['metric']} 打乱后的值 {c['shuffled_value']} 恰好等于无信息水平，看起来是理论值而不是实际重算的结果。"
-                "请真的把原始结果列打乱、重跑同一流程，print 实际得到的指标值再填写。"
-            )
             continue
         direction = metric_direction(c.get("metric", ""))
         higher = c.get("higher_is_better", True) if direction is None else direction
@@ -181,10 +163,7 @@ def baseline_check(ctx: GraphContext, control: Dict, real: float, higher: bool) 
     """
     metric = control.get("metric", "")
     if not str(control.get("baseline_value") or "").strip():
-        return [
-            f"{metric} 没有和最简单的有信息基线比较：请在同一划分上算一个只用显而易见结构的基线（如只用发球方先验胜率、只用上一期值），"
-            "print 并登记，填进 controls 的 baseline_name / baseline_value / baseline_run_id。"
-        ], []
+        return [], [f"{metric} 未提供有信息基线，只能讨论相对已提供无信息对照的表现，不能宣称超出已有结构的额外预测增益。"]
     try:
         ctx.registry.verify(control["baseline_value"], control.get("baseline_run_id", ""))
     except GroundingError as exc:
@@ -195,10 +174,7 @@ def baseline_check(ctx: GraphContext, control: Dict, real: float, higher: bool) 
     chance = _as_float(control.get("chance", ""))
     if chance is not None and abs(baseline - chance) <= MIN_LIFT * max(abs(chance), 1e-9) * 2:
         # v2h 的 Q1 拿"常数先验胜率"当基线，它就是无信息水平，绕过了和发球方先验的比较
-        return [
-            f"{metric} 的基线 {control['baseline_value']} 就是无信息水平 {control['chance']}，不算有信息的基线。"
-            "请换成只用显而易见结构的基线（如按发球方区分的先验胜率），重新算出并登记。"
-        ], []
+        return [], [f"{metric} 的基线 {control['baseline_value']} 与无信息水平 {control['chance']} 相当，不能据此宣称超过有信息基线。"]
     lift = (real - baseline) if higher else (baseline - real)
     if lift > MIN_LIFT * max(abs(baseline), 1e-9):
         return [], []
@@ -386,9 +362,9 @@ def report_submission_issues(ctx: GraphContext, branch: BranchInput, report: Dic
 
 def report_issues(
     ctx: GraphContext, report: Dict, subproblem_id: str, dependencies: Optional[List[str]] = None,
-    hypothesis: bool = False, figure_required: bool = False,
+    figure_required: bool = False,
 ) -> List[str]:
-    return submission_issues(ctx, report, subproblem_id, dependencies, figure_required=figure_required) + control_issues(ctx, report, hypothesis)
+    return submission_issues(ctx, report, subproblem_id, dependencies, figure_required=figure_required) + control_issues(ctx, report)
 
 
 def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: List[Dict]) -> str:
