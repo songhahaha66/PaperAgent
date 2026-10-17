@@ -213,6 +213,7 @@ class PaperState(TypedDict, total=False):
 class BranchInput(TypedDict, total=False):
     """Send 给单个子问题分支的输入"""
 
+    source: str
     research_contract: Dict[str, Any]
     review_findings: List[Dict[str, Any]]
     subproblem: Dict[str, Any]

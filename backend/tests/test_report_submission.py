@@ -18,6 +18,7 @@ from test_paper_graph import FakeModel
 
 def branch(sid="Q1", *, kind="compute", figure=False):
     return {
+        "source": "计算 1、2、3 的整数和，并保留代码与结果。",
         "subproblem": {"id": sid, "title": "整数求和", "question": "计算整数和" + ("，绘制结果图" if figure else ""),
                        "kind": kind, "depends_on": [], "deliverables": []},
         "data_profile": "无需外部数据", "dependencies": {}, "analysis": {},

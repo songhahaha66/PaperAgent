@@ -252,6 +252,7 @@ def build_task(
     chosen = candidate or branch["design"]["chosen"]
     files = "\n".join(f"- {f}" for f in list_data_files(ctx.workspace)) or "（无）"
     return "\n\n".join(filter(None, [
+        f"# 原题（含题内数据；不得用模拟数据替代）\n{branch['source']}",
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n交付物：{'；'.join(subproblem.get('deliverables') or [])}",
         f"# 数据文件\n{files}\n\n# 数据概览\n{branch['data_profile']}",
         f"# 选定的建模方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"

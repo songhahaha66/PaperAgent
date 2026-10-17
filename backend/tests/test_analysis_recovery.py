@@ -153,3 +153,55 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
     model=Model()
     result=asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[AIMessage(content='plan')]))
     assert model.calls==3 and result==_analysis()
+
+
+def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
+    from ai_system.research.control import dispatch
+    from ai_system.graph.build import send_designs
+    from test_research_p2 import store_for,problem,TASK as original
+    store=store_for(tmp_path)
+    runtime=SimpleNamespace(context=SimpleNamespace(research=store))
+    state={'task':'shortened summary without source data','analysis':problem().model_dump()}
+    for sends in [dispatch(state,runtime)]:
+        assert sends and all(s.arg['source']==original for s in sends)
+    store.claim('Q1')
+    store.recover()
+    assert all(s.arg['source']==original for s in dispatch(state,runtime))
+    assert all(s.arg['source']==original for s in send_designs({**state,'task':original}))
+
+
+def test_inline_source_data_reaches_design_exploration_solver_and_local_review(tmp_path):
+    from ai_system.graph.nodes.design import pick_methods,propose,critique
+    from ai_system.graph.nodes.explore import make_protocol,score_evidence,Probe
+    from ai_system.graph.nodes.solve import build_task
+    from ai_system.graph.nodes.review import review_prompt
+    from test_report_submission import branch
+    from test_paper_graph import _Structured,_candidate
+    source='销量依次为：420、435、410、460、475。售价 15 元、成本 8 元、剩余残值 2 元。'
+    observed=[]
+    class Model:
+        def with_structured_output(self,schema,**kwargs):
+            async def invoke(messages):
+                assert source in messages[-1].content
+                observed.append(schema.__name__)
+                return await _Structured(schema).ainvoke(messages)
+            return SimpleNamespace(ainvoke=invoke)
+    class Judge(FixedJudge):
+        async def ask(self,state,questions):
+            assert state['原题']==source
+            observed.append('judge')
+            return await super().ask(state,questions)
+    ctx=GraphContext.create(str(tmp_path),planner_llm=Model(),judge=Judge())
+    task={**branch(),'source':source,'analysis':_analysis().model_dump()}
+    candidates=[_candidate('one').model_dump(),_candidate('two').model_dump()]
+    async def run():
+        await pick_methods(ctx,task)
+        await propose(ctx,task,['regression'])
+        await critique(ctx,task,candidates)
+        await make_protocol(ctx,task,candidates)
+        probes=[Probe(i,c,str(i),1,report={'works':True}) for i,c in enumerate(candidates)]
+        await score_evidence(ctx,task,probes)
+    asyncio.run(run())
+    assert {'MethodPick','CandidateSet','ValidationProtocol','judge'}<=set(observed)
+    assert source in build_task(task,ctx)
+    assert source in review_prompt(task,{},ctx,[])

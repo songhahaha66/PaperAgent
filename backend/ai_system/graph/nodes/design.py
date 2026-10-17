@@ -78,6 +78,7 @@ def _subproblem_text(subproblem: Dict) -> str:
 
 async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
     prompt = (
+        f"# 原题\n{branch['source']}\n\n"
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
         f"# 已登记的要求与假设\n{json.dumps(branch.get('research_contract', {}), ensure_ascii=False)}\n\n"
@@ -97,6 +98,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
     # 按需设计时前序子问题已经求解完，方案可以建立在它们的实际结论上
     dependency_text = _dependency_text(branch.get("dependencies") or {}, ctx)
     prompt = (
+        f"# 原题（含题内数据）\n{branch['source']}\n\n"
         f"# 题目整体分析\n{analysis['overall_analysis']}\n\n"
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
@@ -118,6 +120,7 @@ async def critique(ctx: GraphContext, branch: BranchInput, candidates: List[Dict
         return [{"total": None} for _ in candidates]
     # 状态只放判断需要的内容，过滤掉无关字段，减少判分噪声
     state = {
+        "原题": branch["source"],
         "子问题": _subproblem_text(branch["subproblem"]),
         "数据概览": branch["data_profile"][:6000],
         "候选方案": {f"方案{i + 1}": c for i, c in enumerate(candidates)},

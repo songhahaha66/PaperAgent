@@ -203,6 +203,7 @@ def _subproblem_text(subproblem: Dict[str, Any]) -> str:
 async def make_protocol(ctx: GraphContext, branch: BranchInput, candidates: List[Dict]) -> Dict[str, Any]:
     names = "\n".join(f"- {c['name']}：{c['idea']}" for c in candidates)
     prompt = (
+        f"# 原题（含题内数据）\n{branch['source']}\n\n"
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile'][:6000]}\n\n"
         f"# 待比较的候选方案\n{names}"
@@ -295,6 +296,7 @@ async def score_evidence(ctx: GraphContext, branch: BranchInput, probes: List[Pr
     if ctx.judge is None or len(runnable) < 2:
         return
     state = {
+        "原题": branch["source"],
         "子问题": _subproblem_text(branch["subproblem"]),
         "探索结果": {
             f"方案{i + 1}": {"方案": p.candidate["name"], "思路": p.candidate["idea"], **{

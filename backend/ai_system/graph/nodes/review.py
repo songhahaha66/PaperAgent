@@ -398,6 +398,7 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
         for r in runs[-8:]
     )
     return (
+        f"# 原题（含题内数据）\n{branch['source']}\n\n"
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n"
         f"交付物：{'；'.join(subproblem.get('deliverables') or [])}\n\n"
         f"# 数据概览\n{clip(branch['data_profile'], 4000)}\n\n"

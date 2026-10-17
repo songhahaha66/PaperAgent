@@ -22,6 +22,12 @@ exploration and CodeAct capabilities in `.system/attempts/<id>/workspace` using
 copied data and predecessor handoffs. This changes the kernel's working directory;
 it is not an OS security sandbox for arbitrary Python code.
 
+Workers also receive the complete committed original question, including inline
+data. Method selection, candidate design/critique, exploration protocols, CodeAct
+and local review all read this same source. A restatement or a subset of requirement
+quotes is insufficient to replace source data. Pre-confirmation design reads the
+original graph task; resumed workers read the authoritative committed requirement.
+
 A SQLite transaction checks the task revision, actual inputs, protocol and lease before
 publishing evidence. A change to an unrelated task does not reject the result.
 Repeated identical submissions return the original receipt; stale attempts remain

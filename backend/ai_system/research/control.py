@@ -89,7 +89,7 @@ def dispatch(state, runtime):
     from .validation import protocol
     for key in ready:
         task = snapshot["tasks"][key]
-        sends.append(Send("solve", {"subproblem": task["subproblem"], "analysis": state["analysis"],
+        sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": state["analysis"],
             "data_profile": state.get("data_profile", ""),
             "research_contract": {"requirements": [r for r in snapshot["spec"]["requirements"] if r["id"] in task["requirement_ids"]],
                 "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},

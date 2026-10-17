@@ -22,6 +22,7 @@ from .state import PaperState
 def send_designs(state: PaperState) -> List[Send]:
     return [
         Send("design", {
+            "source": state["task"],
             "subproblem": sp,
             "analysis": state["analysis"],
             "data_profile": state.get("data_profile", ""),
