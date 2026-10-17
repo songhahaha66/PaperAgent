@@ -16,7 +16,7 @@ from pathlib import Path
 from . import ENGINE_VERSION
 from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
 from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps
-from .assumptions import assumption_id, premise_definition
+from .assumptions import assumption_id, premise_definition, assumption_scope
 
 DB_PATH = ".system/research.sqlite"
 
@@ -351,12 +351,7 @@ class ResearchStore:
         root = result.order.task_id
         if state["tasks"][root]["kind"] != "compute":
             raise ValueError("验证和写作任务不能引入新的建模前提")
-        scope = {root}
-        while True:
-            more = {k for k, t in state["tasks"].items() if t["kind"] != "verify" and set(t["dependencies"]) & scope}
-            if more <= scope:
-                break
-            scope |= more
+        scope = assumption_scope(state["tasks"], root)
         introduced, seen = [], {}
         for proposal in result.assumptions:
             aid = assumption_id(root, proposal.key)
@@ -373,7 +368,7 @@ class ResearchStore:
                 if any(known[k] != v for k, v in definition.items()) or known["status"] != "active":
                     raise ResearchConflict("不能静默覆盖或复活已有假设，必须通过问题与计划修订")
                 continue
-            state["assumptions"][aid] = {"id": aid, **definition, "task_ids": [root, *sorted(scope - {root})],
+            state["assumptions"][aid] = {"id": aid, **definition, "task_ids": scope,
                 "revision": 1, "status": "active", "source": proposal.source, "producer_attempt": result.order.attempt_id}
             introduced.append(aid)
         if not introduced:

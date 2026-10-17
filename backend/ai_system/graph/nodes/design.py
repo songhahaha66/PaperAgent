@@ -20,6 +20,7 @@ from ..llm_utils import as_messages, call_structured
 from ..methods import METHOD_INDEX, describe, methods_catalog
 from ..state import BranchInput, CandidateSet, MethodPick
 from ..tracing import labelled
+from ...research.assumptions import unbound_assumptions
 
 CRITERIA = {
     "fit": Score(
@@ -102,12 +103,17 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         f"# 题目整体分析\n{analysis['overall_analysis']}\n\n"
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
+        f"# 已登记的要求、假设及任务作用范围\n{json.dumps(branch.get('research_contract', {}), ensure_ascii=False)}\n\n"
         f"# 参考方法\n{describe(method_keys) or '（自行选择）'}\n\n"
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
         + f"请给出 {ctx.n_candidates} 个候选方案。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
     )
-    result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt))
+    def validate_candidates(result):
+        for candidate in result.candidates:
+            unbound_assumptions(branch["subproblem"]["id"], candidate.assumptions, branch.get("research_contract", {}))
+
+    result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt), validate=validate_candidates)
     candidates = [c.model_dump() for c in result.candidates][: ctx.n_candidates]
     if not candidates:
         raise RuntimeError(f"{branch['subproblem']['id']} 没有生成任何候选方案")

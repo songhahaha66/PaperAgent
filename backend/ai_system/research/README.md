@@ -67,6 +67,10 @@ revival is rejected. Later consumers inherit premise versions through their
 dependencies. Refutation and explicit plan revisions use the same version/history
 and selective invalidation mechanisms as initial assumptions. Writing reads only
 the registered current premises, including their design/solve provenance.
+Design generation and report submission validate new premise check IDs and task
+selectors before staging. The coordinator supplies the actual task IDs and the
+same dependency scope it uses for registration, so invalid selectors return to
+the producing model for correction instead of failing after computation.
 
 Requirements preserve exact user source quotes and task coverage. Hard constraints
 must specify executable checks: existence, finite numbers, inequalities, equality
@@ -86,8 +90,11 @@ inside the existing bounded structured-output retry. Semantic feedback includes
 all detected contract defects and the actual rejected candidate, so the model can
 repair that plan without weakening requirements. Schema parsing failures retain
 the raw tool arguments or JSON reply as the next repair candidate too; each retry
-replaces the previous candidate rather than accumulating invalid plans. Analysis resolves
-whitespace-only quote differences to the exact original source span before
+replaces the previous candidate rather than accumulating invalid plans.
+Structural responses share a 6000-token output ceiling; truncated tool arguments
+or JSON retain their partial text and explicitly request a shorter complete
+object. Inner fragments of truncated JSON are never treated as complete plans.
+Analysis resolves whitespace-only quote differences to the exact original source span before
 validation; whole numeric and Latin-word tokens prevent merging distinct numbers
 or words. Paraphrases and changed values still fail validation. Prediction methods
 named linear do not imply a source-provided linear optimization problem. Exhausted analysis

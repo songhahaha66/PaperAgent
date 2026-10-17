@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 RETRIES = 2
 RETRY_DELAY = 1.5  # 秒，第 n 次失败后等 n 倍
+STRUCTURED_MAX_TOKENS = 6000
 
 
 def structured_model(llm: Any, schema: Type[T], *, include_raw: bool = False):
@@ -27,9 +28,13 @@ def structured_model(llm: Any, schema: Type[T], *, include_raw: bool = False):
 
 class InvalidStructuredReply(ValueError):
     def __init__(self, error: Exception, reply: BaseMessage):
+        if (getattr(reply, "response_metadata", {}) or {}).get("finish_reason") == "length":
+            error = ValueError("输出达到长度上限被截断；请缩短描述和候选方案，返回完整闭合对象，保留全部原题要求，不要反复扩展假设和检查列表")
         super().__init__(str(error))
         calls = getattr(reply, "tool_calls", [])
-        content = json.dumps(calls[0]["args"], ensure_ascii=False) if calls else message_text(reply)
+        invalid = getattr(reply, "invalid_tool_calls", [])
+        content = (json.dumps(calls[0]["args"], ensure_ascii=False) if calls else
+                   str(invalid[0].get("args") or "") if invalid else message_text(reply))
         self.candidate = AIMessage(content=content)
 
 
@@ -43,6 +48,8 @@ async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage], erro
     if error is not None:
         instruction += "\n\n上一次输出未通过校验，请针对以下错误修正，保留原题要求：\n" + str(error)[:2000]
     reply = await llm.ainvoke(list(messages) + [HumanMessage(content=instruction)])
+    if (getattr(reply, "response_metadata", {}) or {}).get("finish_reason") == "length":
+        raise InvalidStructuredReply(ValueError("被截断"), reply)
     text = message_text(reply)
     parsed = parse_verdict(text, schema)
     if parsed is not None:
@@ -80,6 +87,7 @@ def as_messages(system: str, user: str) -> List[BaseMessage]:
 
 
 async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None) -> T:
+    llm = cap_output(llm, STRUCTURED_MAX_TOKENS)
     model = structured_model(llm, schema, include_raw=True)
     last_error: Exception | None = None
     retry_messages = messages
@@ -90,6 +98,8 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             # 重试改走纯文本 JSON
             result = await model.ainvoke(messages) if attempt == 0 else await _ask_json(llm, schema, retry_messages, last_error)
             if isinstance(result, dict) and "raw" in result and "parsed" in result:
+                if (getattr(result["raw"], "response_metadata", {}) or {}).get("finish_reason") == "length":
+                    raise InvalidStructuredReply(ValueError("被截断"), result["raw"])
                 if result.get("parsing_error"):
                     raise InvalidStructuredReply(result["parsing_error"], result["raw"])
                 result = result["parsed"]

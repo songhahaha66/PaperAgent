@@ -11,6 +11,7 @@ from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
 from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
 from .planner import ready_tasks, Planner
+from .assumptions import assumption_scope
 
 
 def refresh_registry(ctx):
@@ -92,6 +93,7 @@ def dispatch(state, runtime):
         sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": state["analysis"],
             "data_profile": state.get("data_profile", ""),
             "research_contract": {"requirements": [r for r in snapshot["spec"]["requirements"] if r["id"] in task["requirement_ids"]],
+                "task_ids": list(snapshot["tasks"]), "assumption_task_ids": assumption_scope(snapshot["tasks"], key),
                 "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},
             "design": (state.get("designs") or {}).get(key),
             "review_findings": [i for i in snapshot["issues"] if i["source"] == "local_review" and i["task_id"] == key and i["status"] not in {"resolved", "dismissed"}],

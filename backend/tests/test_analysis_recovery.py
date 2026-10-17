@@ -248,3 +248,46 @@ def test_requirement_thresholds_cannot_be_invented_or_borrowed_from_other_source
     if valid:validate_spec(source,plan)
     else:
         with pytest.raises(ValueError,match='数值依据'):validate_spec(source,plan)
+
+
+def test_structured_output_and_its_json_retry_share_a_bounded_output_limit(monkeypatch):
+    from langchain_openai import ChatOpenAI
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    original=ChatOpenAI(model='test',api_key='local-test',max_tokens=16000)
+    seen=[]
+    class Structured:
+        async def ainvoke(self,messages):return None
+    def bind(llm,schema,**kwargs):
+        seen.append(llm.max_tokens)
+        return Structured()
+    async def repair(llm,schema,messages,error=None):
+        seen.append(llm.max_tokens)
+        return _analysis()
+    monkeypatch.setattr(llm_utils,'structured_model',bind)
+    monkeypatch.setattr(llm_utils,'_ask_json',repair)
+    result=asyncio.run(llm_utils.call_structured(original,ProblemAnalysis,[]))
+    assert result==_analysis() and seen==[6000,6000] and original.max_tokens==16000
+
+
+@pytest.mark.parametrize('raw_tool',[True,False])
+def test_truncated_structured_outputs_keep_partial_candidate_and_request_shorter_complete_json(monkeypatch,raw_tool):
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    partial='{"title":"unfinished","requirements":[{"id":"R1"}]'
+    class Model:
+        calls=0
+        def with_structured_output(self,*args,**kwargs):return self
+        async def ainvoke(self,messages):
+            self.calls+=1
+            if self.calls==1:
+                if not raw_tool:return None
+                reply=AIMessage(content='',response_metadata={'finish_reason':'length'},invalid_tool_calls=[
+                    {'name':'ProblemAnalysis','args':partial,'id':'bad','error':'truncated'}])
+                return {'raw':reply,'parsed':None,'parsing_error':ValueError('missing fields')}
+            if not raw_tool and self.calls==2:
+                return AIMessage(content=partial,response_metadata={'finish_reason':'length'})
+            assert messages[-2].content==partial
+            assert '被截断' in messages[-1].content and '缩短' in messages[-1].content
+            return AIMessage(content=_analysis().model_dump_json())
+    model=Model()
+    assert asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[]))==_analysis()
+    assert model.calls==(2 if raw_tool else 3)
