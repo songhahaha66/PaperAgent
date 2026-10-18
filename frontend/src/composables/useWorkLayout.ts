@@ -6,7 +6,7 @@ import {
   type PanelGroup,
   type PanelKind,
 } from '@/stores/workPanels'
-import { isImageFile } from '@/utils/workFiles'
+import { isImageFile, paperLabel } from '@/utils/workFiles'
 import { useStudioCopy } from '@/lang/studio'
 
 export function useWorkLayout(workId: Ref<string>) {
@@ -45,7 +45,7 @@ export function useWorkLayout(workId: Ref<string>) {
   function panelPresentation(panel: Pick<WorkPanel, 'kind' | 'path'>) {
     if (panel.kind === 'file')
       return {
-        label: panel.path!.split('/').pop()!,
+        label: paperLabel(panel.path!, isZh.value) || panel.path!.split('/').pop()!,
         icon:
           panel.path!.endsWith('.py') || panel.path!.endsWith('.tex')
             ? 'code'

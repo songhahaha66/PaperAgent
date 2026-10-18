@@ -180,7 +180,7 @@
       </div>
       <div class="evidence-footer">
         <button v-for="path in snapshot.artifacts" :key="path" @click="$emit('open-file', path)">
-          <t-icon name="file" />{{ path }}
+          <t-icon name="file" />{{ paperLabel(path, isZh) || path }}
         </button>
         <button
           v-if="snapshot.validation_count"
@@ -196,6 +196,7 @@
   </details>
 </template>
 <script setup lang="ts">
+import { paperLabel } from '@/utils/workFiles'
 import { taskState, taskLabel } from '@/utils/researchProgress'
 import { computed, ref, watch } from 'vue'
 import { useStudioCopy } from '@/lang/studio'

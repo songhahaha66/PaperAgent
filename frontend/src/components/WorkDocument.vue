@@ -16,7 +16,7 @@
     </div>
     <article v-else class="document-sheet">
       <header class="document-toolbar">
-        <span :title="loadedPath">{{ loadedPath }}</span>
+        <span :title="loadedPath">{{ paperLabel(loadedPath, isZh) || loadedPath }}</span>
         <div>
           <t-button
             v-if="paper && latexSource"
@@ -83,6 +83,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { workspaceFileAPI, type FileContent } from '@/api/workspace'
 import { useAuthStore } from '@/stores/auth'
 import { useStudioCopy } from '@/lang/studio'
+import { paperLabel } from '@/utils/workFiles'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import CodeHighlight from '@/components/CodeHighlight.vue'
 import DocxViewer from '@/components/DocxViewer.vue'

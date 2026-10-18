@@ -46,7 +46,7 @@
           />
         </div>
         <div v-if="selectedFile" class="file-manager-info">
-          <span class="selected-file-info">{{ selectedFile }}</span>
+          <span class="selected-file-info">{{ paperLabel(selectedFile) || selectedFile }}</span>
         </div>
       </div>
     </div>
@@ -55,6 +55,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { paperLabel } from '@/utils/workFiles'
 
 interface Props {
   fileTreeData:
@@ -170,7 +171,7 @@ const processedFileTreeData = computed(() => {
         const category = file.category || 'outputs' // 默认归类到outputs
         const fileItem = {
           value: file.path,
-          label: file.name || file.path.split('/').pop() || 'Unknown',
+          label: paperLabel(file.path) || file.name || file.path.split('/').pop() || 'Unknown',
           isLeaf: true,
           category: category,
           category_path: file.category_path,
@@ -328,19 +329,19 @@ const processedFileTreeData = computed(() => {
       if (file.path && file.path.endsWith('.py')) {
         pythonFiles.push({
           value: file.path,
-          label: file.name || file.path.split('/').pop() || 'Unknown',
+          label: paperLabel(file.path) || file.name || file.path.split('/').pop() || 'Unknown',
           isLeaf: true,
         })
       } else if (file.path && file.path.endsWith('.md')) {
         markdownFiles.push({
           value: file.path,
-          label: file.name || file.path.split('/').pop() || 'Unknown',
+          label: paperLabel(file.path) || file.name || file.path.split('/').pop() || 'Unknown',
           isLeaf: true,
         })
       } else if (file.path && isImageFile(file.path)) {
         imageFiles.push({
           value: file.path,
-          label: file.name || file.path.split('/').pop() || 'Unknown',
+          label: paperLabel(file.path) || file.name || file.path.split('/').pop() || 'Unknown',
           isLeaf: true,
         })
       }

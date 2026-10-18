@@ -97,7 +97,8 @@
         }}<span v-if="stage.note"> · {{ stage.note }}</span>
       </p>
       <p v-if="snapshot.artifacts.length">
-        {{ isZh ? '已发布：' : 'Published: ' }}{{ snapshot.artifacts.join('、') }}
+        {{ isZh ? '已发布：' : 'Published: '
+        }}{{ snapshot.artifacts.map((path) => paperLabel(path, isZh) || path).join('、') }}
       </p>
       <details v-if="writingBlockers.length" class="task-details">
         <summary>
@@ -114,6 +115,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useStudioCopy } from '@/lang/studio'
+import { paperLabel } from '@/utils/workFiles'
 import type { ResearchSnapshot } from '@/types/research'
 import {
   taskState,

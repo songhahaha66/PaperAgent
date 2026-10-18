@@ -250,6 +250,14 @@ async function environment() {
     'completed work still opens its conversation by default',
   )
   first.state.inputValue.value = 'Unsent draft'
+  first.state.handleWorkspaceFileSelect('paper.tex')
+  assert.equal(first.state.panelSession.value.activeId, 'file:paper.tex')
+  assert.equal(first.state.displayPanels.value.find((p) => p.id === 'file:paper.tex').label, '论文')
+  first.state.handleWorkspaceFileSelect('paper.pdf')
+  assert.equal(
+    first.state.displayPanels.value.find((p) => p.id === 'file:paper.pdf').label,
+    '论文（PDF）',
+  )
   first.state.handleWorkspaceFileSelect('code/model.py')
   first.state.panelSession.value.scroll['file:code/model.py'] = 460
   first.stop()

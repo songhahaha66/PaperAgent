@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict')
 const { loadModule, vue, flush } = require('./moduleHarness.cjs')
+const { hostRenderer } = require('./vueHost.cjs')
 
 function deferred() {
   let resolve
@@ -107,6 +108,78 @@ function deferred() {
   assert.equal(fileReads, 2, 'disposed work never starts another file request')
   console.log(
     'PASS: artifact selection, lazy figures, forced refresh and late blob cleanup remain isolated',
+  )
+
+  const fileManager = await loadModule('src/components/FileManager.vue', { vue }, {}, true)
+  const host = hostRenderer(),
+    selected = []
+  const app = host.renderer.createApp({
+    render: () =>
+      vue.h(fileManager.default, {
+        loading: false,
+        fillHeight: true,
+        fileTreeData: [
+          ...['paper.tex', 'paper.pdf', 'paper.docx', 'paper.md'].map((path) => ({
+            path,
+            name: path,
+            type: 'file',
+            category: 'papers',
+            modified: 0,
+          })),
+          {
+            path: 'attachment/paper.tex',
+            name: 'paper.tex',
+            type: 'file',
+            category: 'attachments',
+            modified: 0,
+          },
+        ],
+        onFileSelect: (path) => selected.push(path),
+      }),
+  })
+  app.component('t-tree', {
+    props: ['data'],
+    emits: ['click'],
+    setup:
+      (props, { emit }) =>
+      () =>
+        vue.h(
+          'div',
+          props.data.flatMap((group) =>
+            group.children.map((node) =>
+              vue.h(
+                'button',
+                {
+                  onClick: () => emit('click', { node }),
+                  'data-path': node.value,
+                },
+                node.label,
+              ),
+            ),
+          ),
+        ),
+  })
+  app.component('t-button', { render: () => null })
+  app.component('t-icon', { render: () => null })
+  app.component('t-loading', { render: () => null })
+  app.mount(host.root)
+  await flush()
+  for (const [path, label] of [
+    ['paper.tex', '论文'],
+    ['paper.md', '论文'],
+    ['paper.pdf', '论文（PDF）'],
+    ['paper.docx', '论文（Word）'],
+    ['attachment/paper.tex', 'paper.tex'],
+  ]) {
+    const node = host.find((n) => n.props?.['data-path'] === path)
+    assert.equal(node.text, label)
+    node.props.onClick()
+    await flush()
+    assert.equal(selected.at(-1), path, 'display labels must never replace real API paths')
+  }
+  app.unmount()
+  console.log(
+    'PASS: paper labels distinguish exports, preserve attachment names and open exact files',
   )
 
   const upload = deferred(),
