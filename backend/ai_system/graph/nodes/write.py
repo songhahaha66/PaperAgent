@@ -51,6 +51,7 @@ def writing_style(ctx: GraphContext) -> str:
             "只输出本节正文，不要代码围栏、Markdown 标题、加粗或管道表格；"
             "不要输出导言区、本节标题、document 环境、自定义宏或文件操作。"
             "小节使用 \\subsubsection，列表使用 itemize/enumerate，表格使用 tabular/booktabs。"
+            "表格包含长段文字时使用 tabularx，宽度设为 \\linewidth，长文本列使用 X 自动换行，避免超出页边。"
             "行内公式使用 $...$，独立公式使用 \\[...\\] 或 equation/align 环境。"
             "文本中的特殊字符要正确转义（例如百分号写为 \\%）。"
             "登记的数值引用仍使用 {{R:Rn}}；登记图引用 {{F:Fn}} 独占一行插图，"
@@ -277,7 +278,14 @@ def reference_section(state: PaperState, ctx: GraphContext) -> str:
     note = "以下来源由用户在题目或书目附件中提供，书目信息按原文保留，尚未独立核验。待完善：核对作者、题名、年份、出版信息和正文对应关系；原文缺少的字段仍为缺口，系统未补造。"
     if ctx.output_mode == "latex":
         from ...export.latex import escape_plain
-        return note + "\n\\begin{itemize}\n" + "\n".join("\\item " + escape_plain(item) for item in entries) + "\n\\end{itemize}"
+        def reference_text(item):
+            # Plain escaped URLs form unbreakable lines and can leave the page.
+            # hyperref already loads url; its verbatim argument keeps query
+            # characters intact while permitting line breaks within the link.
+            parts = re.split(r"(https?://[^\s{}\\]+)", item)
+            return ''.join(r'\url{' + part + '}' if index % 2 else escape_plain(part)
+                           for index, part in enumerate(parts))
+        return note + "\n\\begin{itemize}\n" + "\n".join("\\item " + reference_text(item) for item in entries) + "\n\\end{itemize}"
     return note + "\n\n" + "\n\n".join("- " + item for item in entries)
 
 

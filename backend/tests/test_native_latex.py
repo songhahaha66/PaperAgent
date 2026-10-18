@@ -204,7 +204,7 @@ def test_supplied_bibliography_is_preserved_without_invented_metadata(tmp_path):
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), output_mode='latex')
     state = {'task': '研究任务\n参考文献：\n作者甲. 用户提供的题名. 2024. https://example.test/a?x=1&y=2\n# 其他要求\n不要把这行当参考文献'}
     text = writing.reference_section(state, ctx)
-    assert '用户提供的题名' in text and r'\&' in text
+    assert '用户提供的题名' in text and r'\url{https://example.test/a?x=1&y=2}' in text
     assert '不要把这行' not in text and '尚未独立核验' in text
     assert '尚未登记' not in text
     attachment = tmp_path / 'attachment'

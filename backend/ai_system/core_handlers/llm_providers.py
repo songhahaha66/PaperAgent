@@ -8,6 +8,8 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Mapping, cast
 from urllib.parse import urlparse
 from langchain_core.language_models import BaseLanguageModel
+from langchain_core.messages import AIMessageChunk
+from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -61,6 +63,40 @@ def _patch_reasoning_content():
 _patch_reasoning_content()
 
 
+class AIGWChatOpenAI(ChatOpenAI):
+    """Normalize this gateway's cumulative counters per request, including tools."""
+
+    def _get_request_payload(self, *args, **kwargs):
+        payload = super()._get_request_payload(*args, **kwargs)
+        # Use Step's documented budget field rather than the OpenAI-specific
+        # max_completion_tokens alias emitted by langchain-openai.
+        if self.model_name == 'step-5-preview' and 'max_completion_tokens' in payload:
+            payload['max_tokens'] = payload.pop('max_completion_tokens')
+        return payload
+
+    async def _astream(self, *args, **kwargs):
+        final_usage = None
+        async for chunk in super()._astream(*args, **kwargs):
+            usage = getattr(chunk.message, 'usage_metadata', None)
+            if usage:
+                final_usage = usage
+                chunk.message.usage_metadata = None
+            yield chunk
+        if final_usage is not None:
+            yield ChatGenerationChunk(message=AIMessageChunk(content='', usage_metadata=final_usage))
+
+    def _stream(self, *args, **kwargs):
+        final_usage = None
+        for chunk in super()._stream(*args, **kwargs):
+            usage = getattr(chunk.message, 'usage_metadata', None)
+            if usage:
+                final_usage = usage
+                chunk.message.usage_metadata = None
+            yield chunk
+        if final_usage is not None:
+            yield ChatGenerationChunk(message=AIMessageChunk(content='', usage_metadata=final_usage))
+
+
 class BaseLLMProvider(ABC):
     """AI提供商抽象基类"""
 
@@ -111,7 +147,8 @@ class OpenAIProvider(BaseLLMProvider):
                 and urlparse(self.base_url).hostname == "api.deepseek.com"):
             extra_body = {"thinking": {"type": "disabled"}}
 
-        return ChatOpenAI(
+        model_class = AIGWChatOpenAI if urlparse(self.base_url).hostname == 'aigw.saurlax.com' else ChatOpenAI
+        return model_class(
             model=self.model_id,
             api_key=self.api_key,
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else None,
