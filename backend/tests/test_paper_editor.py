@@ -4,6 +4,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import asyncio
 import json
+import shutil
 from types import SimpleNamespace
 
 import pytest
@@ -83,6 +84,22 @@ def test_parallel_candidates_conflict(paper):
 def test_wording_cannot_change_numeric_evidence_or_math(after):
     with pytest.raises(ValueError):
         editor.guard_wording('结果 8 {{R:R1}}', after, False)
+
+
+@pytest.mark.skipif(not shutil.which('pandoc'), reason='Pandoc is required for native preview conversion')
+def test_native_preview_preserves_inline_commands_and_isolates_display_math(paper):
+    store, state = paper
+    text = r'条件 $x+y\leq 4$，目标为 \[z=3x+2y\]，不改变原始约束。'
+    state['sections']['solve:Q1'] = text
+    store.save_sections(state['sections'], [])
+    store.publish_paper(assemble_latex(state), filename='paper.tex')
+    before = (store.root / 'paper.tex').read_bytes()
+    document = asyncio.run(editor.document(store))
+    section = next(s for s in document['sections'] if s['key']=='solve:Q1')
+    assert '$x+y\\leq 4$' in section['readable']
+    assert '\n\n$$\nz=3x+2y\n$$\n\n' in section['readable']
+    assert section['text'] == text
+    assert (store.root / 'paper.tex').read_bytes() == before
 
 
 def test_compile_failure_preserves_source_and_candidate(paper, monkeypatch):

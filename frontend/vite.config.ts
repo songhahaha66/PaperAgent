@@ -11,9 +11,12 @@ export default defineConfig({
     vueDevTools(),
   ],
   resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
-    },
+    alias: [
+      { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
+      // Keep the math plugin on KaTeX's browser ESM build. The optimized CJS
+      // bundle corrupts its command lexer (e.g. \\le becomes an unknown \\l).
+      { find: /^katex$/, replacement: fileURLToPath(new URL('./node_modules/katex/dist/katex.mjs', import.meta.url)) },
+    ],
   },
   server: {
     host: '0.0.0.0', // 允许局域网访问

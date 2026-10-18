@@ -128,11 +128,15 @@ async def document(store):
     for key, section in snapshot['sections'].items():
         text = publication_text(ctx.registry.render(section['text'], latex=native))
         if native and shutil.which('pandoc'):
-            process = await asyncio.create_subprocess_exec('pandoc', '--sandbox', '-f', 'latex', '-t', 'gfm+tex_math_dollars', stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            process = await asyncio.create_subprocess_exec('pandoc', '--sandbox', '-f', 'latex', '-t', 'gfm+tex_math_dollars', '--wrap=none', stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             try:
                 out, _ = await asyncio.wait_for(process.communicate(text.encode()), timeout=15)
                 if process.returncode == 0:
-                    text = out.decode()
+                    # markdown-it-katex expects display math on its own block;
+                    # Pandoc can place $$...$$ inside a prose paragraph.
+                    text = re.sub(r'(?<!\\)\$\$(.*?)(?<!\\)\$\$',
+                                  lambda m: '\n\n$$\n' + m.group(1).strip() + '\n$$\n\n',
+                                  out.decode(), flags=re.S)
             except TimeoutError:
                 process.kill()
                 await process.wait()

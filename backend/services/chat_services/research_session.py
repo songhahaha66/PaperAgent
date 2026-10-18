@@ -255,9 +255,9 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
     if os.getenv("AI_RESEARCH_CONTEXT_ENABLED") != "1":
         raise ResearchContextPermissionError("研究追问未启用，请设置 AI_RESEARCH_CONTEXT_ENABLED=1")
     destination = urlsplit(destination_url)
-    if (destination.scheme != "https" or destination.hostname != "api.deepseek.com"
+    if (destination.scheme != "https" or destination.hostname not in {"api.deepseek.com", "aigw.saurlax.com"}
             or destination.username or destination.password or destination.port not in (None, 443)):
-        raise ResearchContextPermissionError("当前仅授权将研究材料发送到 DeepSeek 官方 API")
+        raise ResearchContextPermissionError("当前仅授权将研究材料发送到 DeepSeek 官方 API 或 AIGW 网关")
     root = Path(workspace).resolve()
     snapshot = scoped_snapshot(snapshot, subproblem_id)
     # Bounded context, with an explicit record of exactly which evidence was included.

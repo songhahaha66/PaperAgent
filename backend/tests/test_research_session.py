@@ -95,7 +95,8 @@ def test_corrupt_registry_is_not_treated_as_an_empty_new_work(tmp_path):
         research_snapshot(tmp_path, "work", "completed")
 
 
-def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize('destination', ['https://api.deepseek.com/v1', 'https://aigw.saurlax.com/v1'])
+def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp_path, monkeypatch, destination):
     monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
     original = seed(tmp_path)
     requests, blocks, output = [], [], []
@@ -108,7 +109,7 @@ def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp
         async def _output(self, content): output.append(content)
     asyncio.run(answer_research_question(
         Model(), Stream(), research_snapshot(tmp_path, "work", "completed"), tmp_path,
-        "解释 Q1", [{"role": "user", "content": "这个模型怎么样"}], "Q1", destination_url="https://api.deepseek.com/v1",
+        "解释 Q1", [{"role": "user", "content": "这个模型怎么样"}], "Q1", destination_url=destination,
     ))
     assert output == ["AUC 为 0.82 [R1]"]
     assert blocks[0][0] == "research_context"
@@ -254,7 +255,7 @@ def test_question_data_sending_is_disabled_by_default(tmp_path, monkeypatch):
             research_snapshot(tmp_path, "work", "completed"), tmp_path, "解释结果", []))
 
 
-@pytest.mark.parametrize("destination", ["https://example.test/v1", "https://api.deepseek.com.evil.test", "http://api.deepseek.com", "https://api.deepseek.com@evil.test", ""])
+@pytest.mark.parametrize("destination", ["https://example.test/v1", "https://api.deepseek.com.evil.test", "http://api.deepseek.com", "https://api.deepseek.com@evil.test", "", "http://aigw.saurlax.com/v1", "https://aigw.saurlax.com.evil.test/v1", "https://aigw.saurlax.com:444/v1", "https://aigw.saurlax.com@evil.test/v1"])
 def test_approval_does_not_extend_to_other_model_destinations(tmp_path, monkeypatch, destination):
     monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
     seed(tmp_path)
