@@ -117,8 +117,8 @@ async function handleKey(event: KeyboardEvent, index: number) {
   min-height: 48px;
   padding: 6px 16px 0;
   flex-shrink: 0;
-  background: #f6f7f5;
-  border-bottom: 1px solid #e4e7e3;
+  background: var(--pa-surface-muted);
+  border-bottom: 1px solid var(--pa-line);
   box-sizing: border-box;
 }
 .work-tab-list {
@@ -138,20 +138,20 @@ async function handleKey(event: KeyboardEvent, index: number) {
   flex-shrink: 0;
   border: 1px solid transparent;
   border-bottom: 0;
-  border-radius: 10px 10px 0 0;
-  color: #6b716c;
+  border-radius: var(--pa-radius-control) var(--pa-radius-control) 0 0;
+  color: var(--pa-muted);
   position: relative;
 }
 .work-tab.active {
-  background: #fff;
-  border-color: #e4e7e3;
-  color: #242824;
+  background: var(--pa-surface);
+  border-color: var(--pa-line);
+  color: var(--pa-ink);
 }
 .work-tab.active::after {
   content: '';
   position: absolute;
   height: 1px;
-  background: #fff;
+  background: var(--pa-surface);
   bottom: -1px;
   left: 0;
   right: 0;
@@ -164,7 +164,7 @@ async function handleKey(event: KeyboardEvent, index: number) {
   max-width: 210px;
   padding: 0 14px;
   border: 0;
-  border-radius: 9px 9px 0 0;
+  border-radius: var(--pa-radius-control) var(--pa-radius-control) 0 0;
   background: transparent;
   color: inherit;
   cursor: pointer;
@@ -180,19 +180,19 @@ async function handleKey(event: KeyboardEvent, index: number) {
   font-size: 16px;
 }
 .work-tab:not(.active):hover {
-  background: #ecefec;
+  background: var(--pa-surface-hover);
 }
 .work-tab-close,
 .add-panel {
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: var(--pa-control-height-sm);
+  height: var(--pa-control-height-sm);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-inline);
   background: transparent;
-  color: #777e78;
+  color: var(--pa-muted);
   cursor: pointer;
   font-size: 15px;
 }
@@ -201,8 +201,8 @@ async function handleKey(event: KeyboardEvent, index: number) {
 }
 .work-tab-close:hover,
 .add-panel:hover {
-  background: #e9ede9;
-  color: #333;
+  background: var(--pa-surface-hover);
+  color: var(--pa-ink);
 }
 .add-panel {
   margin: 0 0 6px;

@@ -1,0 +1,205 @@
+import { ref, computed, watch, onUnmounted, type Ref } from 'vue'
+import { MessagePlugin } from 'tdesign-vue-next'
+import { useAuthStore } from '@/stores/auth'
+import { workspaceFileAPI, type FileInfo, type Work } from '@/api/workspace'
+import { isImageFile } from '@/utils/workFiles'
+import { useStudioCopy } from '@/lang/studio'
+
+export function useArtifactPreview(options: {
+  workId: Ref<string>
+  currentWork: Ref<Work | null>
+  figuresVisible: Readonly<Ref<boolean>>
+}) {
+  const { workId, currentWork, figuresVisible } = options
+  const authStore = useAuthStore()
+  const { ui, isZh } = useStudioCopy()
+  let disposed = false
+  const workspaceFiles = ref<FileInfo[]>([])
+  const imageUrls = ref<Record<string, string>>({})
+  const isFileRefreshing = ref(false)
+  const downloadLoading = ref(false)
+  const exportLoading = ref(false)
+  const primaryArtifact = computed(() => {
+    const names =
+      currentWork.value?.output_mode === 'latex'
+        ? ['paper.pdf', 'paper.md']
+        : currentWork.value?.output_mode === 'word'
+          ? ['paper.docx', 'paper.md']
+          : ['paper.md']
+    for (const name of names) {
+      const file = workspaceFiles.value.find(
+        (f) => f.type === 'file' && f.path === name && (f.size || 0) > 0,
+      )
+      if (file) return file
+    }
+    return null
+  })
+  const paperAvailable = computed(() => !!primaryArtifact.value)
+  const downloadLabel = computed(() =>
+    primaryArtifact.value?.name.endsWith('.pdf')
+      ? ui.value.downloadPdf
+      : primaryArtifact.value?.name.endsWith('.docx')
+        ? ui.value.downloadWord
+        : ui.value.downloadMd,
+  )
+  const figureFiles = computed(() =>
+    workspaceFiles.value.filter(
+      (f) => f.type === 'file' && isImageFile(f.path) && f.category !== 'attachments',
+    ),
+  )
+  async function downloadArtifact() {
+    if (!primaryArtifact.value || !authStore.token || disposed) return
+    downloadLoading.value = true
+    try {
+      const data = await workspaceFileAPI.readFile(
+        authStore.token,
+        workId.value,
+        primaryArtifact.value.path,
+      )
+      let blob: Blob
+      if (data.type === 'text')
+        blob = new Blob([data.content || ''], { type: 'text/markdown;charset=utf-8' })
+      else {
+        const response = await fetch(
+          `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${data.download_url}`,
+          { headers: { Authorization: `Bearer ${authStore.token}` } },
+        )
+        if (!response.ok) throw new Error('download')
+        blob = await response.blob()
+      }
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = data.filename
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch {
+      MessagePlugin.error(isZh.value ? '下载失败，请重试' : 'Download failed. Please retry.')
+    } finally {
+      downloadLoading.value = false
+    }
+  }
+  // 加载工作空间文件（带防抖）
+  let lastFileUpdateTime = 0
+  const loadWorkspaceFiles = async (force = false) => {
+    if (!workId.value || !authStore.token || disposed) return
+
+    const now = Date.now()
+    if (isFileRefreshing.value || (!force && now - lastFileUpdateTime < 1000)) {
+      return
+    }
+
+    try {
+      isFileRefreshing.value = true
+      lastFileUpdateTime = now
+
+      const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
+      if (!disposed) workspaceFiles.value = files
+    } catch (error) {
+      console.error('加载工作空间文件失败:', error)
+      if (!disposed) MessagePlugin.error('加载工作空间文件失败')
+    } finally {
+      isFileRefreshing.value = false
+    }
+  }
+
+  // 导出工作空间
+  const exportWorkspace = async () => {
+    if (!workId.value || !authStore.token || !currentWork.value || disposed) return
+
+    try {
+      exportLoading.value = true
+
+      // 调用导出API
+      const blob = await workspaceFileAPI.exportWorkspace(authStore.token, workId.value)
+
+      // 创建下载链接
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `workspace_${workId.value}.zip`
+
+      // 触发下载
+      document.body.appendChild(link)
+      link.click()
+
+      // 清理
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      MessagePlugin.success('工作空间导出成功')
+    } catch (error) {
+      console.error('导出工作空间失败:', error)
+      MessagePlugin.error('导出工作空间失败')
+    } finally {
+      exportLoading.value = false
+    }
+  }
+
+  // 获取图片的blob URL（带认证）
+  const getImageBlobUrl = async (filePath: string): Promise<string> => {
+    try {
+      const token = authStore.token
+      if (!token) {
+        throw new Error('未登录')
+      }
+
+      const url = workspaceFileAPI.getImageUrl(token, workId.value, filePath)
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const blob = await response.blob()
+      return URL.createObjectURL(blob)
+    } catch (error) {
+      console.error('获取图片失败:', error)
+      throw error
+    }
+  }
+
+  const pendingFigures = new Set<string>()
+  watch([figuresVisible, figureFiles], async ([visible]) => {
+    if (!visible) return
+    await Promise.allSettled(
+      figureFiles.value
+        .filter((file) => !imageUrls.value[file.path] && !pendingFigures.has(file.path))
+        .map(async (file) => {
+          pendingFigures.add(file.path)
+          try {
+            const url = await getImageBlobUrl(file.path)
+            if (disposed) URL.revokeObjectURL(url)
+            else imageUrls.value[file.path] = url
+          } finally {
+            pendingFigures.delete(file.path)
+          }
+        }),
+    )
+  })
+  onUnmounted(() => {
+    disposed = true
+    Object.values(imageUrls.value).forEach((url) => URL.revokeObjectURL(url))
+    imageUrls.value = {}
+  })
+
+  return {
+    workspaceFiles,
+    imageUrls,
+    isFileRefreshing,
+    downloadLoading,
+    exportLoading,
+    primaryArtifact,
+    paperAvailable,
+    downloadLabel,
+    figureFiles,
+    loadWorkspaceFiles,
+    downloadArtifact,
+    exportWorkspace,
+  }
+}

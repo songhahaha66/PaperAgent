@@ -91,9 +91,9 @@ const popupStyle = {
   width: '272px',
   maxWidth: 'calc(100vw - 24px)',
   padding: '6px',
-  borderRadius: '16px',
-  border: '1px solid #e9e9e9',
-  boxShadow: '0 6px 28px #00000012, 0 1px 4px #00000005',
+  borderRadius: 'var(--pa-radius-overlay)',
+  border: '1px solid var(--pa-line)',
+  boxShadow: 'var(--pa-shadow-overlay)',
 }
 function closeAndFocus() {
   visible.value = false
@@ -121,15 +121,15 @@ function logout() {
   gap: 10px;
   border: 0;
   background: transparent;
-  border-radius: 12px;
+  border-radius: var(--pa-radius-control);
   text-align: left;
   padding: 10px 11px;
   cursor: pointer;
-  color: #444;
+  color: var(--pa-ink);
 }
 .account-trigger:hover,
 .account-trigger[aria-expanded='true'] {
-  background: #f5f5f5;
+  background: var(--pa-surface-hover);
 }
 .account-avatar {
   display: flex;
@@ -138,9 +138,9 @@ function logout() {
   width: 32px;
   height: 32px;
   flex-shrink: 0;
-  border-radius: 50%;
-  background: #eee;
-  color: #666;
+  border-radius: var(--pa-radius-circle);
+  background: var(--pa-surface-hover);
+  color: var(--pa-muted);
   font-size: 13px;
   font-weight: 500;
 }
@@ -165,19 +165,19 @@ function logout() {
 }
 .account-trigger-chevron {
   font-size: 14px;
-  color: #aaa;
+  color: var(--pa-placeholder);
   margin-left: auto;
 }
 .account-trigger.compact {
-  width: 44px;
-  height: 44px;
+  width: var(--pa-control-height-lg);
+  height: var(--pa-control-height-lg);
   padding: 6px;
   justify-content: center;
-  border-radius: 13px;
+  border-radius: var(--pa-radius-control);
 }
 .account-panel {
   font-family: var(--td-font-family);
-  color: #444;
+  color: var(--pa-ink);
   max-height: calc(100dvh - 36px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -208,14 +208,14 @@ function logout() {
 }
 .account-summary > div > span {
   font-size: 13px;
-  color: #999;
+  color: var(--pa-placeholder);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .account-divider {
   height: 1px;
-  background: #f0f0f0;
+  background: var(--pa-surface-hover);
   margin: 4px 6px;
 }
 .account-panel nav {
@@ -232,19 +232,19 @@ function logout() {
   padding: 11px 12px;
   border: 0;
   background: transparent;
-  border-radius: 10px;
+  border-radius: var(--pa-radius-control);
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  color: #555;
+  color: var(--pa-ink);
   line-height: 1.6;
 }
 .account-action:hover {
-  background: #f5f5f5;
+  background: var(--pa-surface-hover);
 }
 .account-action > .t-icon {
   font-size: 17px;
-  color: #777;
+  color: var(--pa-muted);
   flex-shrink: 0;
 }
 .account-action > span {
@@ -254,7 +254,7 @@ function logout() {
 }
 .account-action > .action-chevron {
   font-size: 12px;
-  color: #bbb;
+  color: var(--pa-disabled);
 }
 .account-language {
   display: flex;
@@ -268,7 +268,7 @@ function logout() {
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  color: #777;
+  color: var(--pa-muted);
 }
 .language-label > .t-icon {
   font-size: 16px;
@@ -276,17 +276,17 @@ function logout() {
 .language-options {
   display: flex;
   align-items: center;
-  border-radius: 9px;
+  border-radius: var(--pa-radius-control);
   padding: 3px;
-  background: #f4f4f4;
+  background: var(--pa-surface-muted);
   gap: 2px;
 }
 .language-options button {
   border: 0;
   background: transparent;
   cursor: pointer;
-  color: #999;
-  border-radius: 7px;
+  color: var(--pa-placeholder);
+  border-radius: var(--pa-radius-control);
   font-size: 11px;
   padding: 5px 7px;
   line-height: 1.4;
@@ -294,14 +294,14 @@ function logout() {
 .language-options button.selected {
   background: var(--td-brand-color);
   box-shadow: none;
-  color: #fff;
+  color: var(--pa-on-accent);
 }
 .logout-action {
   margin-top: 4px;
-  color: #777;
+  color: var(--pa-muted);
 }
 .logout-action > .t-icon {
-  color: #999;
+  color: var(--pa-placeholder);
 }
 @media (prefers-reduced-motion: no-preference) {
   .account-trigger {

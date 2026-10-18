@@ -249,7 +249,7 @@ onMounted(async () => {
   display: flex;
   height: 100vh;
   width: 100vw;
-  background: #f5f7fa;
+  background: var(--pa-surface-muted);
   overflow: hidden;
 }
 
@@ -262,19 +262,19 @@ onMounted(async () => {
 
 .workspace-header {
   padding: 15px 30px;
-  background: white;
-  border-bottom: 1px solid #eee;
+  background: var(--pa-surface);
+  border-bottom: 1px solid var(--pa-line);
 }
 
 .workspace-header h1 {
   margin: 0 0 8px 0;
-  color: #2c3e50;
+  color: var(--pa-ink);
   font-size: 1.5em;
 }
 
 .workspace-header p {
   margin: 0;
-  color: #7f8c8d;
+  color: var(--pa-muted);
   font-size: 0.9em;
 }
 
@@ -286,47 +286,47 @@ onMounted(async () => {
 
 .dialog-hint {
   margin: 8px 0 0;
-  color: #7f8c8d;
+  color: var(--pa-muted);
   font-size: 13px;
 }
 
 .passkey-page {
-  background: #fff;
+  background: var(--pa-page);
 }
 .main-content {
   min-width: 0;
 }
 .workspace-header {
   padding: 30px 32px 24px;
-  border-color: #eceeeb;
+  border-color: var(--pa-line);
 }
 .workspace-header h1 {
   font-family: var(--td-font-family);
   font-size: 26px;
   line-height: 1.4;
   font-weight: 600;
-  color: #252525;
+  color: var(--pa-ink);
   margin: 0 0 10px;
 }
 .workspace-header p {
   font-size: 13px;
-  color: #6c726b;
+  color: var(--pa-muted);
   line-height: 1.8;
 }
 .passkey-content {
   padding: 24px 32px;
-  background: #fff;
+  background: var(--pa-surface);
 }
 .passkey-content :deep(.t-card) {
-  border-color: #dedfde;
-  border-radius: 14px;
+  border-color: var(--pa-line);
+  border-radius: var(--pa-radius-card);
   box-shadow: none;
 }
 .passkey-content :deep(.t-card__title) {
   font-family: var(--td-font-family);
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--pa-ink);
 }
 @media (max-width: 768px) {
   .workspace-header {

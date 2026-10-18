@@ -274,10 +274,10 @@ watch(subproblems, (ids) => {
 <style scoped>
 .research-evidence {
   margin: 12px 0 4px;
-  border: 1px solid #e3e5e3;
-  border-radius: 14px;
-  background: #fff;
-  color: #252a27;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
+  color: var(--pa-ink);
 }
 summary {
   display: flex;
@@ -299,18 +299,18 @@ summary > span {
   gap: 7px;
 }
 .evidence-count {
-  color: #666e68;
+  color: var(--pa-muted);
   font-weight: 400;
   font-size: 13px;
 }
 .source-quote {
   display: block;
-  color: #69716b;
+  color: var(--pa-muted);
   margin-top: 5px;
   overflow-wrap: anywhere;
 }
 .research-contract {
-  border-bottom: 1px solid #eceeec;
+  border-bottom: 1px solid var(--pa-line);
   margin-bottom: 10px;
 }
 .research-task {
@@ -319,7 +319,7 @@ summary > span {
   line-height: 1.6;
 }
 .delivery-status {
-  border-bottom: 1px solid #eceeec;
+  border-bottom: 1px solid var(--pa-line);
   padding-bottom: 10px;
   margin-bottom: 10px;
   font-size: 13px;
@@ -334,7 +334,7 @@ summary > span {
   line-height: 1.6;
 }
 .evidence-body {
-  border-top: 1px solid #eceeec;
+  border-top: 1px solid var(--pa-line);
   padding: 12px 16px;
 }
 .evidence-toolbar {
@@ -356,14 +356,14 @@ button {
 .evidence-scopes button {
   border: 0;
   background: transparent;
-  color: #626963;
+  color: var(--pa-muted);
   padding: 5px 9px;
-  border-radius: 7px;
+  border-radius: var(--pa-radius-control);
   font-size: 13px;
 }
 .evidence-scopes button.selected {
-  color: white;
-  background: var(--td-brand-color, #12845c);
+  color: var(--pa-on-accent);
+  background: var(--td-brand-color);
 }
 .evidence-link {
   display: flex;
@@ -379,7 +379,7 @@ button {
   overflow: auto;
 }
 .evidence-item + .evidence-item {
-  border-top: 1px solid #eff0ef;
+  border-top: 1px solid var(--pa-line);
 }
 .result-row {
   width: 100%;
@@ -395,10 +395,10 @@ button {
   font-size: 14px;
 }
 .result-row:hover {
-  background: #fafbf9;
+  background: var(--pa-surface-hover);
 }
 .result-id {
-  color: #777d78;
+  color: var(--pa-muted);
   font-size: 12px;
 }
 .result-name {
@@ -417,7 +417,7 @@ button {
   display: block;
   margin-bottom: 9px;
   font-size: 12px;
-  color: #69716b;
+  color: var(--pa-muted);
   overflow-wrap: anywhere;
 }
 .result-sources div,
@@ -431,13 +431,13 @@ button {
   border: 0;
   padding: 0;
   background: transparent;
-  color: var(--td-brand-color, #12845c);
+  color: var(--td-brand-color);
   font-size: 13px;
 }
 .evidence-footer {
   padding-top: 12px;
   align-items: center;
-  color: #737a74;
+  color: var(--pa-muted);
   font-size: 12px;
 }
 .evidence-footer button {
@@ -447,7 +447,7 @@ button {
 }
 .evidence-empty {
   padding: 16px 0;
-  color: #737a74;
+  color: var(--pa-muted);
   font-size: 14px;
 }
 @media (max-width: 480px) {

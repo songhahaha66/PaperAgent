@@ -9,7 +9,6 @@ import { computed } from 'vue'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
 import latex from 'highlight.js/lib/languages/latex'
-import 'highlight.js/styles/github.css'
 
 // Register the Python language
 hljs.registerLanguage('python', python)
@@ -41,8 +40,8 @@ const languageClass = computed(() => `language-${props.language}`)
 
 <style scoped>
 .code-highlight {
-  background-color: #f6f8fa;
-  border-radius: 6px;
+  background-color: var(--pa-surface-muted);
+  border-radius: var(--pa-radius-inline);
   padding: 16px;
   overflow-x: auto;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;

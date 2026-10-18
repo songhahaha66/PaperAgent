@@ -303,8 +303,8 @@ onUnmounted(() => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background: #fff;
-  border-right: 1px solid #ededed;
+  background: var(--pa-surface);
+  border-right: 1px solid var(--pa-line);
   overflow: hidden;
   transition: width 0.2s;
 }
@@ -332,7 +332,7 @@ onUnmounted(() => {
   font-weight: 600;
   letter-spacing: -0.4px;
   margin: 0;
-  color: #262626;
+  color: var(--pa-ink);
 }
 .header-logo {
   width: 30px;
@@ -344,10 +344,10 @@ onUnmounted(() => {
   margin-left: auto;
 }
 .sidebar-toggle-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  color: #888;
+  width: var(--pa-control-height-sm);
+  height: var(--pa-control-height-sm);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-muted);
 }
 .collapsed-logo-section {
   display: flex;
@@ -378,11 +378,11 @@ onUnmounted(() => {
 }
 .new-task-button {
   width: 100%;
-  height: 39px;
-  border-radius: 10px;
+  height: var(--pa-control-height-lg);
+  border-radius: var(--pa-radius-control);
   justify-content: flex-start;
   font-size: 13px;
-  color: #fff;
+  color: var(--pa-on-accent);
 }
 .new-task-button :deep(.t-button__text) {
   text-align: left;
@@ -396,9 +396,9 @@ onUnmounted(() => {
 }
 .sidebar-nav .t-button {
   justify-content: flex-start;
-  height: 37px;
-  border-radius: 10px;
-  color: #555;
+  height: var(--pa-control-height-md);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-ink);
   font-size: 13px;
   padding: 0 12px;
 }
@@ -407,11 +407,11 @@ onUnmounted(() => {
   text-align: left;
 }
 .sidebar-nav .t-button:hover {
-  background: #f7f7f7;
+  background: var(--pa-surface-hover);
 }
 .sidebar-nav .nav-active {
   position: relative;
-  background: #f3f4f2;
+  background: var(--pa-surface-muted);
   color: var(--td-brand-color);
   font-weight: 500;
 }
@@ -422,7 +422,7 @@ onUnmounted(() => {
   top: 11px;
   bottom: 11px;
   width: 2px;
-  border-radius: 2px;
+  border-radius: var(--pa-radius-inline);
   background: var(--td-brand-color);
 }
 .menu-title {
@@ -433,7 +433,7 @@ onUnmounted(() => {
   margin: 0 0 12px;
   font-size: 12px;
   font-weight: 500;
-  color: #7a7a7a;
+  color: var(--pa-muted);
   font-family: var(--td-font-family);
 }
 .menu-title > .t-icon {
@@ -448,18 +448,18 @@ onUnmounted(() => {
   padding: 11px 13px;
   border: 0;
   background: transparent;
-  border-radius: 9px;
+  border-radius: var(--pa-radius-control);
   cursor: pointer;
-  color: #555;
+  color: var(--pa-ink);
   font-size: 13px;
   line-height: 1.6;
   margin-bottom: 2px;
 }
 .history-item:hover {
-  background: #f7f7f7;
+  background: var(--pa-surface-hover);
 }
 .history-item.active {
-  background: #f3f4f2;
+  background: var(--pa-surface-muted);
   color: var(--td-brand-color);
   font-weight: 500;
 }
@@ -472,7 +472,7 @@ onUnmounted(() => {
 .running-dot {
   width: 5px;
   height: 5px;
-  border-radius: 50%;
+  border-radius: var(--pa-radius-circle);
   background: var(--td-success-color);
   flex-shrink: 0;
 }
@@ -487,10 +487,10 @@ onUnmounted(() => {
   padding: 5px 0;
 }
 .sidebar-create-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
-  color: #fff;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-on-accent);
 }
 .sidebar-footer-collapsed {
   padding: 12px 10px;
@@ -504,18 +504,18 @@ onUnmounted(() => {
 .loading-state {
   text-align: center;
   padding: 30px 16px;
-  color: #999;
+  color: var(--pa-placeholder);
   font-size: 12px;
 }
 .empty-history {
   padding: 22px 12px;
-  color: #999;
+  color: var(--pa-placeholder);
   font-size: 12px;
   line-height: 1.8;
 }
 .empty-icon {
   font-size: 24px;
-  color: #bbb;
+  color: var(--pa-disabled);
 }
 .empty-text {
   margin: 12px 0 6px;
@@ -524,7 +524,7 @@ onUnmounted(() => {
 }
 .empty-hint {
   font-size: 11px;
-  color: #aaa;
+  color: var(--pa-placeholder);
   margin: 0;
 }
 @media (max-width: 768px) {
@@ -545,7 +545,7 @@ onUnmounted(() => {
     display: block;
     position: fixed;
     inset: 0;
-    background: #0005;
+    background: var(--pa-mask);
     z-index: 1090;
   }
   .sidebar-header {
@@ -558,21 +558,21 @@ onUnmounted(() => {
   position: relative;
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: var(--pa-control-height-lg);
+  height: var(--pa-control-height-lg);
   border: 0;
   background: transparent;
-  border-radius: 11px;
+  border-radius: var(--pa-radius-control);
   cursor: pointer;
 }
 .logo-toggle:hover,
 .logo-toggle:focus-visible {
-  background: #f5f5f5;
+  background: var(--pa-surface-hover);
 }
 .logo-toggle-icon {
   position: absolute;
   font-size: 21px;
-  color: #666;
+  color: var(--pa-muted);
   opacity: 0;
 }
 .logo-toggle:hover .header-logo-small,
@@ -596,31 +596,31 @@ onUnmounted(() => {
   min-height: 58px;
   width: 100%;
   padding: 0 14px;
-  background: #fff;
-  border-bottom: 1px solid #e8e9e7;
+  background: var(--pa-surface);
+  border-bottom: 1px solid var(--pa-line);
   box-sizing: border-box;
 }
 .mobile-navigation-button {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
   flex-shrink: 0;
   border: 0;
   background: transparent;
-  color: #444;
-  border-radius: 8px;
+  color: var(--pa-ink);
+  border-radius: var(--pa-radius-control);
   cursor: pointer;
   font-size: 22px;
 }
 .mobile-navigation-button:hover {
-  background: #f4f5f3;
+  background: var(--pa-surface-hover);
 }
 .mobile-brand {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #333;
+  color: var(--pa-ink);
   text-decoration: none;
   font-size: 18px;
   font-weight: 600;
@@ -636,8 +636,8 @@ onUnmounted(() => {
   align-items: center;
 }
 .mobile-account :deep(.account-trigger.compact) {
-  width: 34px;
-  height: 34px;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
   padding: 3px;
 }
 .mobile-account :deep(.account-avatar) {
@@ -647,7 +647,7 @@ onUnmounted(() => {
 }
 .sidebar-nav .nav-active:hover,
 .history-item.active:hover {
-  background: #ecefec;
+  background: var(--pa-surface-hover);
   color: var(--td-brand-color-hover);
 }
 </style>

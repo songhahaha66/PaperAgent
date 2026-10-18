@@ -320,7 +320,7 @@ onMounted(async () => {
   display: flex;
   height: 100dvh;
   overflow: hidden;
-  background: #fff;
+  background: var(--pa-page);
 }
 .models-main {
   flex: 1;
@@ -328,8 +328,6 @@ onMounted(async () => {
   min-height: 0;
   overflow: auto;
   padding: 38px 40px 56px;
-  --td-component-stroke: #e1e3e1;
-  --td-component-border: #d5d8d5;
 }
 .models-header {
   max-width: 760px;
@@ -340,7 +338,7 @@ onMounted(async () => {
   font-size: 26px;
   font-weight: 600;
   margin: 0;
-  color: #252525;
+  color: var(--pa-ink);
   line-height: 1.4;
 }
 .models-body {
@@ -348,26 +346,26 @@ onMounted(async () => {
   margin: 0 auto;
 }
 .connection-card {
-  border-color: #dedfde;
-  border-radius: 14px;
+  border-color: var(--pa-line);
+  border-radius: var(--pa-radius-card);
   box-shadow: none;
 }
 .connection-card :deep(.t-card__header) {
   padding: 22px 26px;
-  border-bottom: 1px solid #eeeeed;
+  border-bottom: 1px solid var(--pa-line);
 }
 .connection-card :deep(.t-card__title) {
   font-family: var(--td-font-family);
   font-size: 16px;
   font-weight: 600;
-  color: #333;
+  color: var(--pa-ink);
 }
 .connection-card :deep(.t-card__body) {
   padding: 26px;
 }
 .connection-card :deep(.t-tag),
 .advanced-role-title :deep(.t-tag) {
-  border-radius: 6px;
+  border-radius: var(--pa-radius-inline);
   font-size: 11px;
   font-weight: 500;
 }
@@ -381,7 +379,7 @@ onMounted(async () => {
 .provider-row > label {
   font-size: 13px;
   font-weight: 500;
-  color: #424242;
+  color: var(--pa-ink);
 }
 .provider-row > .t-radio-group {
   justify-self: start;
@@ -391,7 +389,7 @@ onMounted(async () => {
   padding: 0 18px;
 }
 .provider-row :deep(.t-radio-group) {
-  border-radius: 9px;
+  border-radius: var(--pa-radius-control);
   overflow: hidden;
 }
 :deep(.connection-fields) {
@@ -408,67 +406,67 @@ onMounted(async () => {
 :deep(.connection-field > span) {
   font-size: 13px;
   font-weight: 500;
-  color: #424242;
+  color: var(--pa-ink);
 }
 :deep(.connection-field .t-input) {
-  height: 40px;
-  border-color: #d8dcd8;
-  border-radius: 9px;
-  background: #fcfcfc;
+  height: var(--pa-control-height-lg);
+  border-color: var(--pa-line-strong);
+  border-radius: var(--pa-radius-control);
+  background: var(--pa-surface);
   box-shadow: none;
 }
 :deep(.connection-field .t-input:hover) {
-  border-color: #b5bdb7;
+  border-color: var(--pa-line-strong);
 }
 :deep(.connection-field .t-input:focus-within) {
   border-color: var(--td-brand-color);
-  background: #fff;
-  box-shadow: 0 0 0 2px #16865d0a;
+  background: var(--pa-surface);
+  box-shadow: var(--pa-focus-ring);
 }
 :deep(.connection-field .t-input__inner) {
   font-size: 14px;
-  color: #333;
+  color: var(--pa-ink);
 }
 :deep(.connection-field .t-input__inner::placeholder) {
   font-size: 13px;
-  color: #929792;
+  color: var(--pa-placeholder);
 }
 .apply-option {
   margin: 24px 0 0 126px;
 }
 .apply-option :deep(.t-checkbox__label) {
   font-size: 13px;
-  color: #505650;
+  color: var(--pa-ink);
 }
 .connection-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-  border-top: 1px solid #eeeeed;
+  border-top: 1px solid var(--pa-line);
   margin: 26px -26px -26px;
   padding: 18px 26px 18px 152px;
 }
 .connection-actions .t-button {
   font-size: 13px;
-  height: 36px;
-  border-radius: 9px;
+  height: var(--pa-control-height-md);
+  border-radius: var(--pa-radius-control);
   padding: 0 18px;
 }
 .connection-feedback {
   margin: 22px 0 0 126px;
-  border-radius: 8px;
+  border-radius: var(--pa-radius-control);
   font-size: 13px;
 }
 .advanced-config {
   margin-top: 20px;
-  border: 1px solid #dedfde;
-  border-radius: 14px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-card);
   overflow: hidden;
-  background: #fff;
+  background: var(--pa-surface);
 }
 .advanced-toggle {
   border: 0;
-  background: #fff;
+  background: var(--pa-surface);
   width: 100%;
   display: flex;
   align-items: center;
@@ -476,10 +474,10 @@ onMounted(async () => {
   padding: 21px 26px;
   text-align: left;
   cursor: pointer;
-  color: #333;
+  color: var(--pa-ink);
 }
 .advanced-toggle:hover {
-  background: #fafbfa;
+  background: var(--pa-surface-hover);
 }
 .advanced-toggle h2 {
   font-family: var(--td-font-family);
@@ -490,13 +488,13 @@ onMounted(async () => {
 }
 .advanced-toggle > .t-icon {
   font-size: 16px;
-  color: #777;
+  color: var(--pa-muted);
   flex-shrink: 0;
 }
 .advanced-content {
   padding: 26px;
-  border-top: 1px solid #eeeeed;
-  background: #fff;
+  border-top: 1px solid var(--pa-line);
+  background: var(--pa-surface);
 }
 .advanced-role-title {
   display: flex;
@@ -510,10 +508,10 @@ onMounted(async () => {
   font-size: 15px;
   font-weight: 600;
   margin: 0;
-  color: #444;
+  color: var(--pa-ink);
 }
 .role-form + .role-form {
-  border-top: 1px solid #eeeeed;
+  border-top: 1px solid var(--pa-line);
   margin-top: 30px;
   padding-top: 28px;
 }
@@ -525,8 +523,8 @@ onMounted(async () => {
 }
 .role-actions .t-button {
   font-size: 13px;
-  height: 34px;
-  border-radius: 8px;
+  height: var(--pa-control-height-md);
+  border-radius: var(--pa-radius-control);
 }
 @media (max-width: 1100px) {
   .models-main {

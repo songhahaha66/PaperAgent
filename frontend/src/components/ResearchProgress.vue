@@ -148,14 +148,14 @@ const stageLabel = (state: string) =>
 <style scoped>
 .research-progress {
   padding: 0 24px 28px;
-  color: #29352e;
+  color: var(--pa-ink);
 }
 .progress-overview {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 20px 0 26px;
-  border-top: 1px solid #e8ede9;
+  border-top: 1px solid var(--pa-line);
   gap: 16px;
 }
 .progress-overview > div {
@@ -173,12 +173,12 @@ const stageLabel = (state: string) =>
   margin-left: 4px;
   font-size: 16px;
   font-weight: 400;
-  color: #a1aaa4;
+  color: var(--pa-placeholder);
 }
 .accepted-caption,
 .revision {
   font-size: 12px;
-  color: #7a857e;
+  color: var(--pa-muted);
 }
 .research-task-list {
   list-style: none;
@@ -199,34 +199,34 @@ li:not(:last-child)::before {
   top: 23px;
   bottom: 1px;
   left: 10px;
-  border-left: 1px solid #e4eae5;
+  border-left: 1px solid var(--pa-line);
 }
 .task-node {
   display: grid;
   place-items: center;
   width: 20px;
   height: 20px;
-  border: 1px solid #d9e0db;
-  border-radius: 50%;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-circle);
   font-size: 11px;
-  color: #7d8980;
-  background: #fff;
+  color: var(--pa-muted);
+  background: var(--pa-surface);
 }
 li[data-state='accepted'] .task-node {
-  background: #e9f5ee;
-  color: #16865d;
-  border-color: #cfe9da;
+  background: var(--pa-accent-soft);
+  color: var(--pa-accent);
+  border-color: var(--pa-accent-border);
 }
 li[data-state='running'] .task-node {
-  border: 5px solid #d9eee3;
-  background: #16865d;
+  border: 5px solid var(--pa-accent-border);
+  background: var(--pa-accent);
   box-sizing: border-box;
 }
 li[data-state='failed'] .task-node,
 li[data-state='needs_plan'] .task-node,
 li[data-state='review'] .task-node {
-  border-color: #e2c5a4;
-  background: #fff9f0;
+  border-color: var(--pa-warning-border);
+  background: var(--pa-warning-soft);
 }
 .task-heading {
   display: flex;
@@ -241,30 +241,30 @@ li[data-state='review'] .task-node {
 }
 .task-version {
   font-size: 11px;
-  color: #9aa49d;
+  color: var(--pa-placeholder);
 }
 .task-state {
   margin-left: auto;
   font-size: 11px;
   padding: 3px 7px;
-  border-radius: 5px;
-  background: #f1f4f1;
-  color: #748078;
+  border-radius: var(--pa-radius-inline);
+  background: var(--pa-surface-muted);
+  color: var(--pa-muted);
   line-height: 1.4;
 }
 li[data-state='accepted'] .task-state {
-  background: #edf6f0;
-  color: #16865d;
+  background: var(--pa-accent-soft);
+  color: var(--pa-accent);
 }
 li[data-state='running'] .task-state {
-  color: #16865d;
-  background: #edf6f0;
+  color: var(--pa-accent);
+  background: var(--pa-accent-soft);
 }
 li[data-state='failed'] .task-state,
 li[data-state='needs_plan'] .task-state,
 li[data-state='review'] .task-state {
-  color: #a66b29;
-  background: #fcf5e9;
+  color: var(--pa-warning);
+  background: var(--pa-warning-soft);
 }
 p {
   margin: 8px 0;
@@ -272,14 +272,14 @@ p {
   line-height: 1.7;
 }
 .task-objective {
-  color: #49554d;
+  color: var(--pa-ink);
 }
 .task-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
   font-size: 11px;
-  color: #758078;
+  color: var(--pa-muted);
   line-height: 1.6;
 }
 .task-details {
@@ -292,19 +292,19 @@ summary {
   gap: 8px;
   cursor: pointer;
   font-size: 12px;
-  color: #7a897e;
+  color: var(--pa-muted);
 }
 summary::-webkit-details-marker {
   display: none;
 }
 summary > span {
-  color: #9ca69e;
+  color: var(--pa-placeholder);
 }
 .task-detail-body {
   margin-top: 10px;
   padding: 4px 12px;
-  border-left: 2px solid #e5ebe6;
-  color: #768077;
+  border-left: 2px solid var(--pa-line);
+  color: var(--pa-muted);
 }
 .task-detail-body p {
   font-size: 12px;
@@ -312,13 +312,13 @@ summary > span {
 }
 .task-finding {
   padding: 8px 0;
-  border-bottom: 1px solid #eef1ed;
+  border-bottom: 1px solid var(--pa-line);
 }
 .task-finding:last-child {
   border: 0;
 }
 .delivery-progress {
-  border-top: 1px solid #e8ede9;
+  border-top: 1px solid var(--pa-line);
   padding-top: 20px;
   overflow-wrap: anywhere;
 }
@@ -329,15 +329,15 @@ summary > span {
   font-size: 13px;
 }
 .delivery-symbol {
-  color: #94a298;
+  color: var(--pa-placeholder);
 }
 .delivery-state {
   margin-left: auto;
-  color: #9aa49c;
+  color: var(--pa-placeholder);
   font-size: 11px;
 }
 .empty-progress {
   padding-bottom: 24px;
-  color: #758078;
+  color: var(--pa-muted);
 }
 </style>

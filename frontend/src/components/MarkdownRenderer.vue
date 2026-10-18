@@ -131,7 +131,7 @@ onBeforeUnmount(() => {
 .markdown-content :deep(h5),
 .markdown-content :deep(h6) {
   margin: 16px 0 8px 0;
-  color: #2c3e50;
+  color: var(--pa-ink);
 }
 
 /* 段落样式 */
@@ -142,17 +142,17 @@ onBeforeUnmount(() => {
 
 /* 行内代码样式 */
 .markdown-content :deep(code) {
-  background-color: #f0f0f0;
+  background-color: var(--pa-surface-hover);
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--pa-radius-inline);
   font-family: 'Courier New', monospace;
 }
 
 /* 代码块样式：去除横向滚动，改为自动换行 */
 .markdown-content :deep(pre) {
-  background-color: #f5f5f5;
+  background-color: var(--pa-surface-muted);
   padding: 12px;
-  border-radius: 4px;
+  border-radius: var(--pa-radius-inline);
   margin: 8px 0;
   white-space: pre-wrap; /* 换行 */
   word-break: break-word;
@@ -182,12 +182,12 @@ onBeforeUnmount(() => {
 
 /* 链接样式 */
 .markdown-content :deep(a) {
-  color: #1976d2;
+  color: var(--pa-info);
   text-decoration: underline;
 }
 
 .markdown-content :deep(a:hover) {
-  color: #1565c0;
+  color: var(--pa-accent-hover);
 }
 
 /* 强调样式 */

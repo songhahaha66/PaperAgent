@@ -459,8 +459,8 @@ defineExpose({
 
 <style scoped>
 .file-manager {
-  border-top: 1px solid #e7e7e7;
-  background: #fff;
+  border-top: 1px solid var(--pa-line);
+  background: var(--pa-surface);
 }
 
 .file-manager.fill-height {
@@ -481,7 +481,7 @@ defineExpose({
   align-items: center;
   min-height: 52px;
   padding: 0 16px;
-  border-bottom: 1px solid #ededed;
+  border-bottom: 1px solid var(--pa-line);
   gap: 12px;
   flex-shrink: 0;
   box-sizing: border-box;
@@ -494,8 +494,8 @@ defineExpose({
 
 .fm-btn {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
   align-self: center;
 }
 
@@ -513,7 +513,7 @@ defineExpose({
   flex: 1;
   font-size: 13px;
   font-weight: 500;
-  color: #637369;
+  color: var(--pa-muted);
 }
 
 .fm-body {
@@ -548,7 +548,7 @@ defineExpose({
 
 .empty-text {
   font-size: 13px;
-  color: #999;
+  color: var(--pa-placeholder);
 }
 
 .file-tree :deep(.t-tree-node) {
@@ -572,7 +572,7 @@ defineExpose({
 .file-manager-info {
   margin-top: 8px;
   padding: 6px 0;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--pa-line);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -584,12 +584,12 @@ defineExpose({
   font-weight: 500;
   padding: 2px 6px;
   background-color: var(--td-brand-color-light);
-  border-radius: 3px;
+  border-radius: var(--pa-radius-inline);
   font-size: 11px;
 }
 
 .no-file-selected {
-  color: #b0b0b0;
+  color: var(--pa-disabled);
   font-style: italic;
 }
 </style>

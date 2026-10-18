@@ -44,7 +44,8 @@ async function loadModule(relativePath, imports, globals = {}, inlineTemplate = 
           },
           { context },
         )
-      if (id.startsWith('@/utils/')) return sourceModule(`src/${id.slice(2)}.ts`)
+      if (id.startsWith('@/utils/') || id.startsWith('@/composables/'))
+        return sourceModule(`src/${id.slice(2)}.ts`)
       assert.fail(`Unexpected import ${id}`)
     })
     return module

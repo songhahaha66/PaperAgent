@@ -326,7 +326,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
+  background: var(--pa-page);
   padding: 20px;
 }
 
@@ -334,9 +334,9 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   width: 100%;
   max-width: 400px;
   padding: 40px 30px;
-  background: white;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  background: var(--pa-surface);
+  border-radius: var(--pa-radius-card);
+  box-shadow: var(--pa-shadow-overlay);
   text-align: center;
 }
 
@@ -356,13 +356,13 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 
 .login-header h1 {
   font-size: 2rem;
-  color: #2c3e50;
+  color: var(--pa-ink);
   margin: 0;
   line-height: 1;
 }
 
 .login-header p {
-  color: #7f8c8d;
+  color: var(--pa-muted);
   margin-top: 0;
 }
 
@@ -387,7 +387,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 
 .form-footer p {
   margin: 0;
-  color: #7f8c8d;
+  color: var(--pa-muted);
 }
 
 .passkey-section {
@@ -397,7 +397,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 .divider {
   display: flex;
   align-items: center;
-  color: #b0b8bf;
+  color: var(--pa-placeholder);
   font-size: 13px;
   margin-bottom: 16px;
 }
@@ -407,7 +407,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   content: '';
   flex: 1;
   height: 1px;
-  background: #e8edf2;
+  background: var(--pa-surface-hover);
 }
 
 .divider span {
@@ -417,10 +417,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 .passkey-hint {
   margin-top: 12px !important;
   font-size: 12px;
-  color: #95a5a6;
-}
-.login-page {
-  background: #fff;
+  color: var(--pa-placeholder);
 }
 .passkey-help {
   font-size: 12px;

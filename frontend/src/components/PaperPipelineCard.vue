@@ -154,10 +154,10 @@ const currentText = computed(() => {
   gap: 8px;
   width: fit-content;
   padding: 9px 12px;
-  border: 1px solid #e8ede8;
-  border-radius: 8px;
-  background: #fafcf9;
-  color: #718075;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-control);
+  background: var(--pa-surface-muted);
+  color: var(--pa-muted);
   font-size: 12px;
   cursor: pointer;
   list-style: none;
@@ -166,12 +166,12 @@ const currentText = computed(() => {
   display: none;
 }
 .record-summary small {
-  color: #a0aaa1;
+  color: var(--pa-placeholder);
   margin-left: 4px;
   font-size: 11px;
 }
 .record-caret {
-  color: #a0aaa1;
+  color: var(--pa-placeholder);
 }
 .record-content {
   display: flex;
@@ -179,20 +179,20 @@ const currentText = computed(() => {
   gap: 14px;
   padding: 16px 0 4px 16px;
   margin-left: 8px;
-  border-left: 1px solid #e5ece5;
+  border-left: 1px solid var(--pa-line);
 }
 .pipeline-current {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--td-text-color-secondary, #666);
+  color: var(--td-text-color-secondary);
 }
 
 .section-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--td-text-color-secondary, #666);
+  color: var(--td-text-color-secondary);
   margin-bottom: 4px;
 }
 
@@ -202,7 +202,7 @@ const currentText = computed(() => {
   gap: 8px;
   padding: 4px 0;
   font-size: 13px;
-  border-bottom: 1px solid var(--td-component-stroke, #eee);
+  border-bottom: 1px solid var(--td-component-stroke);
 }
 
 .subproblem-row:last-child {
@@ -224,15 +224,15 @@ const currentText = computed(() => {
 .sp-runs {
   flex: none;
   font-size: 12px;
-  color: var(--td-text-color-placeholder, #999);
+  color: var(--td-text-color-placeholder);
 }
 
 .subproblem-row.is-completed .sp-id {
-  color: var(--td-success-color, #2ba471);
+  color: var(--td-success-color);
 }
 
 .subproblem-row.is-failed .sp-id {
-  color: var(--td-error-color, #d54941);
+  color: var(--td-error-color);
 }
 
 .milestones {
@@ -255,7 +255,7 @@ const currentText = computed(() => {
   padding-left: 18px;
   max-height: 240px;
   overflow-y: auto;
-  color: var(--td-text-color-secondary, #666);
+  color: var(--td-text-color-secondary);
 }
 
 .raw-list code {

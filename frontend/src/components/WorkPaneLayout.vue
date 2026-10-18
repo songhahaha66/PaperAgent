@@ -218,20 +218,20 @@ function resizeByKey(event: KeyboardEvent) {
 .pane-separator {
   z-index: 2;
   flex: 0 0 5px;
-  background: #f0f3ed;
-  border-inline: 1px solid #e5eae2;
+  background: var(--pa-surface-hover);
+  border-inline: 1px solid var(--pa-line);
   cursor: col-resize;
   outline-offset: -2px;
 }
 .pane-separator:hover,
 .pane-separator:focus-visible,
 .resizing .pane-separator {
-  background: #b5d8c6;
+  background: var(--pa-accent-border);
 }
 .stacked .pane-separator {
   cursor: row-resize;
   border-inline: 0;
-  border-block: 1px solid #e5eae2;
+  border-block: 1px solid var(--pa-line);
 }
 .resizing {
   user-select: none;
@@ -245,9 +245,9 @@ function resizeByKey(event: KeyboardEvent) {
   justify-content: center;
   flex-direction: column;
   gap: 12px;
-  background: #edf5ede8;
-  border: 2px dashed #77a48c;
-  color: #386b4c;
+  background: var(--pa-accent-soft);
+  border: 2px dashed var(--pa-accent-border);
+  color: var(--pa-accent);
   font-size: 13px;
   box-sizing: border-box;
 }

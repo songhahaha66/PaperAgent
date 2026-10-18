@@ -209,7 +209,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow: auto;
   padding: 28px;
-  background: #fff;
+  background: var(--pa-surface);
 }
 .document-sheet {
   max-width: 880px;
@@ -224,8 +224,8 @@ onUnmounted(() => {
   min-height: 40px;
   padding-bottom: 16px;
   margin-bottom: 28px;
-  border-bottom: 1px solid #eceeeb;
-  color: #6f7770;
+  border-bottom: 1px solid var(--pa-line);
+  color: var(--pa-muted);
   font-size: 12px;
 }
 .document-toolbar > span {
@@ -247,13 +247,13 @@ onUnmounted(() => {
   align-items: center;
   gap: 16px;
   text-align: center;
-  color: #717a72;
+  color: var(--pa-muted);
 }
 .document-empty > .t-icon {
   font-size: 32px;
 }
 .document-empty h2 {
-  color: #303630;
+  color: var(--pa-ink);
   font-size: 17px;
   font-weight: 500;
   margin: 0;

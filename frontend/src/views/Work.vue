@@ -303,333 +303,128 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
-
+import { workspaceAPI } from '@/api/workspace'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkHistoryStore } from '@/stores/workHistory'
-import {
-  workspaceAPI,
-  workspaceFileAPI,
-  attachmentAPI,
-  type Work,
-  type FileInfo,
-} from '@/api/workspace'
-import { chatAPI, WebSocketChatHandler, type ChatMessage } from '@/api/chat'
 import Sidebar from '@/components/Sidebar.vue'
 import FileManager from '@/components/FileManager.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import ResearchEvidence from '@/components/ResearchEvidence.vue'
 import ResearchProgress from '@/components/ResearchProgress.vue'
-import { researchHeadline } from '@/utils/researchProgress'
-import type { ResearchAction, ResearchSnapshot } from '@/types/research'
-import {
-  useWorkPanelsStore,
-  type WorkPanel,
-  type PanelGroup,
-  type PanelKind,
-} from '@/stores/workPanels'
-
+import { useWorkSession } from '@/composables/useWorkSession'
+import { useWorkStream } from '@/composables/useWorkStream'
+import { useArtifactPreview } from '@/composables/useArtifactPreview'
+import { useWorkLayout } from '@/composables/useWorkLayout'
+import { useWorkAttachments } from '@/composables/useWorkAttachments'
 import { useStudioCopy } from '@/lang/studio'
 import { formatWorkDate } from '@/utils/dates'
+
 const { ui, isZh } = useStudioCopy()
-const route = useRoute()
-const router = useRouter()
-const authStore = useAuthStore()
-const historyStore = useWorkHistoryStore()
+const route = useRoute(),
+  router = useRouter()
+const authStore = useAuthStore(),
+  historyStore = useWorkHistoryStore()
 // The keyed route gives each work its own lifetime, including in-flight requests.
 const workId = ref(route.params.work_id as string)
-const panelStore = useWorkPanelsStore()
-const panelSession = computed(() => panelStore.session(workId.value))
-const isPanelVisible = (id: string) =>
-  panelSession.value.activeId === id || panelSession.value.secondaryActiveId === id
-let disposed = false
-
-const { isMobile, width } = useBreakpoint()
-
-// 侧边栏折叠状态 - 手机端默认收起
-const isSidebarCollapsed = ref(isMobile.value)
-const stackedPanes = computed(
-  () => width.value - (isMobile.value ? 0 : isSidebarCollapsed.value ? 64 : 248) < 760,
-)
-watch(isMobile, (mobile) => {
-  if (mobile) isSidebarCollapsed.value = true
-})
-
-// 当前工作信息
-const currentWork = ref<Work | null>(null)
-
-// 加载状态
-const loading = ref(false)
-const loadError = ref<'forbidden' | 'missing' | 'failed' | null>(null)
-const loadErrorText = computed(() => {
-  if (loadError.value === 'forbidden')
-    return isZh.value ? '当前账号无权查看这项研究' : 'Your account cannot access this research'
-  if (loadError.value === 'missing')
-    return isZh.value ? '这项研究不存在' : 'This research does not exist'
-  return isZh.value ? '研究加载失败，请稍后重试' : 'Research could not be loaded. Please retry.'
-})
-
-// 定义聊天消息类型（使用API中的类型）
-interface ChatMessageDisplay extends ChatMessage {}
-
-// 聊天消息数据
-const chatMessages = ref<ChatMessageDisplay[]>([])
-
-const inputValue = computed({
-  get: () => panelSession.value.draft,
-  set: (value) => {
-    panelSession.value.draft = value
+const session = useWorkSession(workId)
+const {
+  currentWork,
+  loading,
+  loadError,
+  loadErrorText,
+  researchSnapshot,
+  applyResearchSnapshot,
+  loadResearchSnapshot,
+} = session
+const layout = useWorkLayout(workId)
+const {
+  panelStore,
+  panelSession,
+  isMobile,
+  stackedPanes,
+  isSidebarCollapsed,
+  toggleSidebar,
+  inputValue,
+  atBottom,
+  figureScroller,
+  displayPanels,
+  panelOptions,
+  openProgress,
+  openPanel,
+  rememberPanelScroll,
+  openFiles,
+  handleMainPaperClick,
+  handleWorkspaceFileSelect,
+  trackChatScroll,
+  jumpToLatest,
+} = layout
+const artifacts = useArtifactPreview({ workId, currentWork, figuresVisible: layout.figuresVisible })
+const {
+  workspaceFiles,
+  imageUrls,
+  isFileRefreshing,
+  downloadLoading,
+  primaryArtifact,
+  paperAvailable,
+  downloadLabel,
+  figureFiles,
+  downloadArtifact,
+  exportWorkspace,
+} = artifacts
+// Metadata arrives after cached panes mount; restore scroll once their content is rendered.
+watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
+const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
+const {
+  chatMessages,
+  isStreaming,
+  messageAction,
+  runningAction,
+  questionScope,
+  messageActionLabel,
+  messageActionOptions,
+  reviseSubproblem,
+  askSubproblem,
+  pausing,
+  connectionState,
+  needsRecovery,
+  recoveryUnavailable,
+  canResume,
+  recoveryHint,
+  prepareNewResearch,
+  stageText,
+  elapsedText,
+  pauseTask,
+  reconnectTask,
+  sendMessage,
+  handleStreamMessage,
+} = stream
+const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
+  workId,
+  onUploaded: async (filename, size) => {
+    await artifacts.loadWorkspaceFiles(true)
+    stream.appendAttachment(filename, size)
   },
 })
-const imageUrls = ref<Record<string, string>>({})
-const figureScroller = ref<HTMLElement | null>(null)
-
-// 导出状态
-const exportLoading = ref(false)
-
-// 工作空间文件列表
-const workspaceFiles = ref<FileInfo[]>([])
-
-// 聊天相关状态
-const isStreaming = ref(false)
-const researchSnapshot = ref<ResearchSnapshot | null>(null)
-const messageAction = ref<ResearchAction>('auto')
-const runningAction = ref<ResearchAction>('auto')
-const questionScope = ref<string | null>(null)
-const messageActionLabel = computed(() =>
-  messageAction.value === 'revise_research'
-    ? isZh.value
-      ? '增量修改研究'
-      : 'Revise research'
-    : messageAction.value === 'run'
-      ? isZh.value
-        ? '重新研究'
-        : 'Run research'
-      : messageAction.value === 'revise'
-        ? isZh.value
-          ? '修改方案'
-          : 'Revise plan'
-        : researchSnapshot.value?.has_research || currentWork.value?.status !== 'created'
-          ? isZh.value
-            ? '追问结果'
-            : 'Ask about results'
-          : isZh.value
-            ? '开始研究'
-            : 'Start research',
-)
-const messageActionOptions = computed(() => [
-  {
-    content: isZh.value ? '追问已有结果' : 'Ask about existing results',
-    value: 'ask',
-    onClick: () => {
-      messageAction.value = 'ask'
-    },
-  },
-  {
-    content: isZh.value ? '重新研究' : 'Run research again',
-    value: 'run',
-    onClick: () => {
-      messageAction.value = 'run'
-      questionScope.value = null
-    },
-  },
-  ...(researchSnapshot.value?.engine_version === 'research-v3' &&
-  researchSnapshot.value?.tasks?.length &&
-  currentWork.value?.status !== 'waiting'
-    ? [
-        {
-          content: isZh.value ? '增量修改研究' : 'Revise research',
-          value: 'revise_research',
-          onClick: () => {
-            messageAction.value = 'revise_research'
-          },
-        },
-      ]
-    : []),
-  ...(currentWork.value?.status === 'waiting'
-    ? [
-        {
-          content: isZh.value ? '修改建模方案' : 'Revise modeling plan',
-          value: 'revise',
-          onClick: () => {
-            messageAction.value = 'revise'
-            questionScope.value = null
-          },
-        },
-      ]
-    : []),
-])
-function reviseSubproblem(id: string) {
-  questionScope.value = id
-  messageAction.value = 'revise_research'
-  panelStore.activate(workId.value, 'chat')
-}
-function askSubproblem(id: string) {
-  questionScope.value = id
-  messageAction.value = 'ask'
-  panelStore.activate(workId.value, 'chat')
-  nextTick(() =>
-    document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
-  )
-}
-let evidenceRequest = 0
-function applyResearchSnapshot(snapshot: ResearchSnapshot) {
-  if (disposed || snapshot.work_id !== workId.value) return
-  const previous = researchSnapshot.value
-  if (
-    previous?.research_id === snapshot.research_id &&
-    (snapshot.commit_seq || 0) < (previous?.commit_seq || 0)
-  )
-    return
-  researchSnapshot.value = snapshot
-  applyWorkStatus(snapshot.work_status)
-}
-async function loadResearchSnapshot() {
-  const request = ++evidenceRequest
-  try {
-    const snapshot = await chatAPI.getResearchSnapshot(workId.value)
-    if (request === evidenceRequest) applyResearchSnapshot(snapshot)
-  } catch {
-    // Do not blank existing evidence on transient read/network failures.
-  }
-}
-const webSocketHandler = ref<WebSocketChatHandler | null>(null)
-const isFileRefreshing = ref(false) // 防止重复刷新文件列表
-
-// Stable controls stay outside the scrolling transcript.
-const detailsOpen = ref(false),
-  pausing = ref(false),
-  downloadLoading = ref(false)
-const connectionState = ref<'idle' | 'live' | 'reconnecting' | 'lost'>('idle')
-const atBottom = ref(panelSession.value.followChat),
-  taskStartedAt = ref<number | null>(null),
-  clockNow = ref(Date.now())
-let elapsedTimer: ReturnType<typeof setInterval> | undefined
-const needsRecovery = computed(
-  () =>
-    !isStreaming.value &&
-    !!currentWork.value &&
-    ['paused', 'cancelled', 'failed'].includes(currentWork.value.status),
-)
-const recoveryUnavailable = computed(
-  () =>
-    !!researchSnapshot.value &&
-    (researchSnapshot.value.engine_version !== 'research-v3' ||
-      !researchSnapshot.value.research_id),
-)
-const canResume = computed(
-  () => needsRecovery.value && !!researchSnapshot.value?.research_id && !recoveryUnavailable.value,
-)
-const recoveryHint = computed(() =>
-  recoveryUnavailable.value
-    ? ui.value.restartHint
-    : currentWork.value?.status === 'failed'
-      ? ui.value.failedHint
-      : ui.value.pausedHint,
-)
-function prepareNewResearch() {
-  messageAction.value = 'run'
-  questionScope.value = null
-  panelStore.activate(workId.value, 'chat')
-  nextTick(() =>
-    document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
-  )
-}
-const stageText = computed(() =>
-  isStreaming.value && runningAction.value === 'ask'
-    ? isZh.value
-      ? '正在分析已有结果'
-      : 'Reviewing existing results'
-    : researchHeadline(researchSnapshot.value, currentWork.value?.status || 'created', isZh.value),
-)
-const elapsedText = computed(() => {
-  if (!isStreaming.value || !taskStartedAt.value) return ''
-  const seconds = Math.max(0, Math.floor((clockNow.value - taskStartedAt.value) / 1000))
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-})
-const primaryArtifact = computed(() => {
-  const names =
-    currentWork.value?.output_mode === 'latex'
-      ? ['paper.pdf', 'paper.md']
-      : currentWork.value?.output_mode === 'word'
-        ? ['paper.docx', 'paper.md']
-        : ['paper.md']
-  for (const name of names) {
-    const file = workspaceFiles.value.find(
-      (f) => f.type === 'file' && f.path === name && (f.size || 0) > 0,
-    )
-    if (file) return file
-  }
-  return null
-})
-const paperAvailable = computed(() => !!primaryArtifact.value)
-const downloadLabel = computed(() =>
-  primaryArtifact.value?.name.endsWith('.pdf')
-    ? ui.value.downloadPdf
-    : primaryArtifact.value?.name.endsWith('.docx')
-      ? ui.value.downloadWord
-      : ui.value.downloadMd,
-)
-const figureFiles = computed(() =>
-  workspaceFiles.value.filter(
-    (f) => f.type === 'file' && isImageFile(f.path) && f.category !== 'attachments',
-  ),
-)
-const displayPanels = computed(() =>
-  panelSession.value.panels.map((panel) => ({ ...panel, ...panelPresentation(panel) })),
-)
-function panelPresentation(panel: Pick<WorkPanel, 'kind' | 'path'>) {
-  if (panel.kind === 'file')
-    return {
-      label: panel.path!.split('/').pop()!,
-      icon:
-        panel.path!.endsWith('.py') || panel.path!.endsWith('.tex')
-          ? 'code'
-          : isImageFile(panel.path!)
-            ? 'image'
-            : 'file-1',
-    }
-  return {
-    chat: { label: ui.value.conversation, icon: 'chat' },
-    paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
-    figures: { label: ui.value.figures, icon: 'chart-line' },
-    files: { label: ui.value.files, icon: 'folder-open' },
-    progress: { label: isZh.value ? '任务进度' : 'Progress', icon: 'task' },
-  }[panel.kind]
-}
-const panelOptions = computed(() =>
-  (['progress', 'paper', 'figures', 'files'] as const).map((kind) => ({
-    content: panelPresentation({ kind }).label,
-    value: kind,
-  })),
-)
+const detailsOpen = ref(false)
 const acceptedTaskCount = computed(
   () =>
     researchSnapshot.value?.tasks?.filter((task) => task.progress.state === 'accepted').length || 0,
 )
-function openProgress() {
-  const state = panelSession.value
-  const side = !stackedPanes.value
-  const hadSecondary = !!state.secondaryActiveId
-  panelStore.open(workId.value, 'progress', undefined, side ? 'secondary' : 'main')
-  if (side && !hadSecondary) {
-    state.splitAxis = 'horizontal'
-    state.secondaryFirst = false
-    state.splitRatio = 0.64
-  }
+async function loadWork() {
+  await session.loadWork({
+    loadFiles: artifacts.loadWorkspaceFiles,
+    loadHistory: stream.loadChatHistory,
+    resume: stream.checkAndResumeRunningTask,
+    sendMessage,
+  })
 }
-function openPanel(kind: string, group: PanelGroup) {
-  panelStore.open(workId.value, kind as PanelKind, undefined, group)
-}
-function rememberPanelScroll(id: string, event: Event) {
-  const target = event.target as HTMLElement
-  if (id === 'files' && !target.classList.contains('fm-body')) return
-  if (isPanelVisible(id)) panelSession.value.scroll[id] = target.scrollTop
+async function handleFileRefresh() {
+  await Promise.all([artifacts.loadWorkspaceFiles(true), session.loadResearchSnapshot()])
 }
 const workActionOptions = computed(() => [
   { content: ui.value.archive, value: 'export', onClick: () => exportWorkspace() },
@@ -648,28 +443,11 @@ const workActionOptions = computed(() => [
     onClick: () => confirmDeleteWork(),
   },
 ])
-const chatFileInput = ref<HTMLInputElement | null>(null)
 function handleComposerKeydown(_value: string | number, { e }: { e: KeyboardEvent }) {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     if (!loading.value) void sendMessage()
   }
-}
-async function handleAttachmentChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (file) await uploadAttachment(file)
-}
-function openFiles() {
-  panelStore.open(workId.value, 'files')
-}
-function handleMainPaperClick() {
-  panelStore.open(workId.value, 'paper')
-}
-function handleWorkspaceFileSelect(path: string) {
-  if (path === 'paper.md') handleMainPaperClick()
-  else panelStore.open(workId.value, 'file', path)
 }
 function confirmDeleteWork() {
   if (isStreaming.value) return
@@ -684,420 +462,6 @@ function confirmDeleteWork() {
     },
   })
 }
-async function downloadArtifact() {
-  if (!primaryArtifact.value || !authStore.token) return
-  downloadLoading.value = true
-  try {
-    const data = await workspaceFileAPI.readFile(
-      authStore.token,
-      workId.value,
-      primaryArtifact.value.path,
-    )
-    let blob: Blob
-    if (data.type === 'text')
-      blob = new Blob([data.content || ''], { type: 'text/markdown;charset=utf-8' })
-    else {
-      const response = await fetch(
-        `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${data.download_url}`,
-        { headers: { Authorization: `Bearer ${authStore.token}` } },
-      )
-      if (!response.ok) throw new Error('download')
-      blob = await response.blob()
-    }
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = data.filename
-    link.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  } catch {
-    MessagePlugin.error(isZh.value ? '下载失败，请重试' : 'Download failed. Please retry.')
-  } finally {
-    downloadLoading.value = false
-  }
-}
-async function pauseTask() {
-  if (pausing.value || !authStore.token) return
-  pausing.value = true
-  try {
-    const result = await chatAPI.pauseWork(workId.value)
-    applyWorkStatus(result.work_status)
-    isStreaming.value = false
-    await loadChatHistory()
-    await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
-  } catch {
-    MessagePlugin.error(isZh.value ? '暂停失败，请重试' : 'Could not pause. Please retry.')
-  } finally {
-    pausing.value = false
-  }
-}
-async function reconnectTask() {
-  connectionState.value = 'reconnecting'
-  isStreaming.value = false
-  await checkAndResumeRunningTask()
-  if (!isStreaming.value) {
-    await loadChatHistory()
-    if (authStore.token)
-      currentWork.value = await workspaceAPI.getWork(authStore.token, workId.value)
-    connectionState.value = 'idle'
-  }
-  await loadResearchSnapshot()
-}
-function trackChatScroll(event: Event) {
-  const target = event.target as HTMLElement
-  if (!target.classList.contains('chat-messages') || disposed || !isPanelVisible('chat')) return
-  atBottom.value = target.scrollHeight - target.scrollTop - target.clientHeight < 100
-  panelSession.value.followChat = atBottom.value
-  panelSession.value.scroll.chat = target.scrollTop
-}
-function jumpToLatest() {
-  atBottom.value = true
-  panelSession.value.followChat = true
-  scrollToBottom(true)
-}
-async function restorePanelScroll() {
-  await nextTick()
-  if (disposed) return
-  if (isPanelVisible('chat')) {
-    const scroller = document.querySelector<HTMLElement>('.chat-messages')
-    if (scroller)
-      scroller.scrollTop = panelSession.value.followChat
-        ? scroller.scrollHeight
-        : panelSession.value.scroll.chat || 0
-  }
-  if (isPanelVisible('figures') && figureScroller.value)
-    figureScroller.value.scrollTop = panelSession.value.scroll.figures || 0
-  if (isPanelVisible('progress')) {
-    const scroller = document.querySelector<HTMLElement>('.progress-panel')
-    if (scroller) scroller.scrollTop = panelSession.value.scroll.progress || 0
-  }
-  if (isPanelVisible('files')) {
-    const scroller = document.querySelector<HTMLElement>('.files-section .fm-body')
-    if (scroller) scroller.scrollTop = panelSession.value.scroll.files || 0
-  }
-}
-const pendingFigures = new Set<string>()
-watch([() => isPanelVisible('figures'), figureFiles], async ([visible]) => {
-  await restorePanelScroll()
-  if (!visible) return
-  await Promise.allSettled(
-    figureFiles.value
-      .filter((file) => !imageUrls.value[file.path] && !pendingFigures.has(file.path))
-      .map(async (file) => {
-        pendingFigures.add(file.path)
-        try {
-          const url = await getImageBlobUrl(file.path)
-          if (disposed) URL.revokeObjectURL(url)
-          else imageUrls.value[file.path] = url
-        } finally {
-          pendingFigures.delete(file.path)
-        }
-      }),
-  )
-})
-watch(() => [panelSession.value.activeId, panelSession.value.secondaryActiveId], restorePanelScroll)
-onMounted(() => {
-  elapsedTimer = setInterval(() => {
-    clockNow.value = Date.now()
-  }, 1000)
-})
-onUnmounted(() => {
-  if (elapsedTimer) clearInterval(elapsedTimer)
-})
-
-// 加载工作信息
-const loadWork = async () => {
-  if (!workId.value || !authStore.token) return
-
-  loading.value = true
-  loadError.value = null
-  try {
-    const work = await workspaceAPI.getWork(authStore.token, workId.value)
-    if (disposed) return
-    currentWork.value = work
-    historyStore.upsert(work)
-
-    // 加载工作空间文件
-    await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
-    if (disposed) return
-    await loadChatHistory()
-    if (disposed) return
-    await checkAndResumeRunningTask()
-    if (!disposed) await checkAndAutoSendFirstMessage()
-  } catch (error) {
-    console.error('加载工作信息失败:', error)
-    if (!disposed) {
-      if (!currentWork.value) {
-        const status = (error as { response?: { status?: number } })?.response?.status
-        loadError.value = status === 403 ? 'forbidden' : status === 404 ? 'missing' : 'failed'
-      } else MessagePlugin.error('加载工作信息失败')
-    }
-  } finally {
-    loading.value = false
-  }
-}
-
-// 当前恢复任务的消息ID
-const reconnectMessageId = ref<string | null>(null)
-
-// 检查并恢复正在进行的AI任务
-const checkAndResumeRunningTask = async () => {
-  if (!authStore.token || !workId.value) return
-
-  try {
-    // 查询任务状态
-    const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
-    if (disposed) return
-
-    if (taskStatus.has_task && taskStatus.status === 'running') {
-      taskStartedAt.value = taskStatus.started_at ? taskStatus.started_at * 1000 : null
-
-      // 设置流式状态
-      isStreaming.value = true
-      runningAction.value = taskStatus.action || 'run'
-
-      // 创建AI回复消息框架
-      const aiMessageId = `reconnect_${Date.now()}`
-      reconnectMessageId.value = aiMessageId
-
-      const aiMessage: ChatMessageDisplay = {
-        id: aiMessageId,
-        role: 'assistant' as const,
-        content: '',
-        datetime: taskStatus.started_at
-          ? new Date(taskStatus.started_at * 1000).toLocaleString()
-          : '',
-        avatar: ASSISTANT_AVATAR,
-        isStreaming: true,
-        json_blocks: [],
-        message_type: 'json_card' as const,
-      }
-      chatMessages.value.push(aiMessage)
-
-      // 建立WebSocket连接恢复流式输出
-      await setupWebSocketForReconnect()
-    }
-  } catch (error) {
-    console.error('检查任务状态失败:', error)
-  }
-}
-
-async function connectWorkSocket(messageId: string) {
-  webSocketHandler.value?.disconnect()
-  const handler = new WebSocketChatHandler(workId.value, authStore.token!)
-  webSocketHandler.value = handler
-  handler.onDisconnect(() => {
-    if (!disposed) void handleConnectionLost()
-  })
-  handler.onReconnect((data) => {
-    if (!disposed)
-      connectionState.value = data.type === 'reconnect_complete' ? 'live' : 'reconnecting'
-  })
-  handler.onMessage((data) => {
-    if (disposed) return
-    if (data.type === 'start' || data.type === 'auth_success') {
-      applyWorkStatus(data.work_status)
-      if (data.action) runningAction.value = data.action
-      if (data.type === 'start') {
-        ++evidenceRequest
-        if (data.action === 'run') researchSnapshot.value = null
-      }
-    } else handleStreamMessage(data, messageId)
-  })
-  await handler.connect()
-  if (disposed) {
-    handler.disconnect()
-    return null
-  }
-  connectionState.value = 'live'
-  return handler
-}
-const setupWebSocketForReconnect = async () => {
-  try {
-    if (reconnectMessageId.value) await connectWorkSocket(reconnectMessageId.value)
-  } catch (error) {
-    if (disposed) return
-    console.error('恢复WebSocket连接失败:', error)
-    isStreaming.value = false
-    reconnectMessageId.value = null
-    MessagePlugin.error('恢复AI任务失败')
-  }
-}
-
-// 连接断开且自动重连用尽：问后端任务还在不在。任务已结束就以服务器保存的记录为准，不让界面一直停在"生成中"
-const handleConnectionLost = async () => {
-  if (disposed) return
-  connectionState.value = 'lost'
-  if (!isStreaming.value || !authStore.token || !workId.value) return
-  try {
-    const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
-    if (taskStatus.has_task && taskStatus.status === 'running') {
-      MessagePlugin.warning('与服务器的连接已断开，任务仍在后台运行，刷新页面可继续查看进度')
-      return
-    }
-  } catch (error) {
-    MessagePlugin.error('与服务器的连接已断开，请检查网络后刷新页面')
-    return
-  }
-  isStreaming.value = false
-  reconnectMessageId.value = null
-  await loadChatHistory()
-  currentWork.value = await workspaceAPI.getWork(authStore.token, workId.value)
-  await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
-}
-
-// 统一的流式消息处理函数
-// 后端在开始、完成、失败时带上工作状态，页头和侧边栏随之更新
-const applyWorkStatus = (status?: string) => {
-  if (!status || !currentWork.value || currentWork.value.status === status) return
-  currentWork.value.status = status
-  window.dispatchEvent(
-    new CustomEvent('work-status-updated', { detail: { workId: workId.value, status } }),
-  )
-}
-
-const handleStreamMessage = (data: any, messageId: string) => {
-  if (disposed) return
-  applyWorkStatus(data.work_status)
-  const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-  if (messageIndex === -1) return
-
-  const currentMessage = chatMessages.value[messageIndex]
-  if (!currentMessage) return
-
-  switch (data.type) {
-    case 'content':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content + data.content,
-      }
-      break
-
-    case 'json_block':
-      const block = data.block
-
-      if (block?.type === 'research_state') {
-        loadResearchSnapshot()
-      } else if (block?.type === 'research_snapshot') {
-        if (block.content?.schema_version === 2 && block.content.work_id === workId.value) {
-          ++evidenceRequest
-          applyResearchSnapshot(block.content as ResearchSnapshot)
-        }
-      } else if (block?.type === 'file_changed') {
-        setTimeout(() => loadWorkspaceFiles(), 500)
-      } else if (block?.type === 'plan_updated') {
-        // Plans are projected from the research snapshot, never phase events.
-      } else {
-        chatMessages.value[messageIndex] = {
-          ...currentMessage,
-          json_blocks: [...(currentMessage.json_blocks || []), block],
-          message_type: 'json_card' as const,
-        }
-      }
-      break
-
-    case 'complete':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        isStreaming: false,
-      }
-      isStreaming.value = false
-      reconnectMessageId.value = null
-      if (data.reload_history) loadChatHistory()
-      connectionState.value = 'idle'
-      // Refresh the authoritative evidence after research and after reconnect.
-      loadResearchSnapshot()
-      loadWorkspaceFiles()
-      break
-
-    case 'error':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content || `错误: ${data.message}`,
-        isStreaming: false,
-      }
-      isStreaming.value = false
-      reconnectMessageId.value = null
-      loadResearchSnapshot()
-      break
-  }
-
-  // 自动滚动
-  scrollToBottom()
-}
-
-// 自动滚动到底部
-const scrollToBottom = (force = false) => {
-  if (!force && !atBottom.value) return
-  nextTick(() => {
-    const chatContainer = document.querySelector('.chat-messages')
-    if (chatContainer && !disposed && isPanelVisible('chat')) {
-      chatContainer.scrollTop = chatContainer.scrollHeight
-    }
-  })
-}
-
-// 加载聊天历史（使用新API）
-const loadChatHistory = async () => {
-  if (!authStore.token || !workId.value) return
-
-  try {
-    // 使用新的work聊天历史API
-    const historyData = await chatAPI.getWorkChatHistory(authStore.token, workId.value)
-
-    if (disposed) return
-    // 转换消息格式
-    chatMessages.value = historyData.messages.map((msg, index) => {
-      return {
-        id: msg.id || `msg_${index}`,
-        role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
-        content: msg.content,
-        datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
-        avatar: getAvatarByRole(msg.role),
-        json_blocks: msg.json_blocks || [],
-        message_type: msg.message_type || 'text',
-        isStreaming: false,
-      }
-    })
-
-    atBottom.value = panelSession.value.followChat
-    await restorePanelScroll()
-  } catch (error) {
-    console.error('加载聊天历史失败:', error)
-    if (!disposed) chatMessages.value = []
-  }
-}
-
-// 加载工作空间文件（带防抖）
-let lastFileUpdateTime = 0
-const loadWorkspaceFiles = async () => {
-  if (!workId.value || !authStore.token || disposed) return
-
-  const now = Date.now()
-  if (isFileRefreshing.value || now - lastFileUpdateTime < 1000) {
-    return
-  }
-
-  try {
-    isFileRefreshing.value = true
-    lastFileUpdateTime = now
-
-    const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
-    if (!disposed) workspaceFiles.value = files
-  } catch (error) {
-    console.error('加载工作空间文件失败:', error)
-    if (!disposed) MessagePlugin.error('加载工作空间文件失败')
-  } finally {
-    isFileRefreshing.value = false
-  }
-}
-
-// 处理文件刷新
-const handleFileRefresh = async () => {
-  console.log('手动刷新文件列表')
-  await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
-}
-
 // 删除工作
 const deleteWork = async () => {
   if (!workId.value || !authStore.token || !currentWork.value) return
@@ -1114,220 +478,6 @@ const deleteWork = async () => {
     console.error('删除工作失败:', error)
     MessagePlugin.error('删除工作失败')
   }
-}
-
-// 导出工作空间
-const exportWorkspace = async () => {
-  if (!workId.value || !authStore.token || !currentWork.value) return
-
-  try {
-    exportLoading.value = true
-
-    // 调用导出API
-    const blob = await workspaceFileAPI.exportWorkspace(authStore.token, workId.value)
-
-    // 创建下载链接
-    const url = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `workspace_${workId.value}.zip`
-
-    // 触发下载
-    document.body.appendChild(link)
-    link.click()
-
-    // 清理
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
-
-    MessagePlugin.success('工作空间导出成功')
-  } catch (error) {
-    console.error('导出工作空间失败:', error)
-    MessagePlugin.error('导出工作空间失败')
-  } finally {
-    exportLoading.value = false
-  }
-}
-
-// Upload a selected attachment, then refresh the shared file list.
-const uploadAttachment = async (file: File) => {
-  if (!authStore.token || !workId.value) {
-    MessagePlugin.error('请先登录并选择工作空间')
-    return
-  }
-
-  try {
-    MessagePlugin.info(`正在上传文件: ${file.name}`)
-
-    // 使用attachmentAPI上传，保持与Home.vue一致
-    const result = await attachmentAPI.uploadAttachment(authStore.token, workId.value, file)
-
-    MessagePlugin.success(`文件上传成功: ${result.attachment.original_filename}`)
-
-    // 刷新文件列表
-    await loadWorkspaceFiles()
-
-    // 添加上传成功的消息到聊天
-    const uploadMessage: ChatMessageDisplay = {
-      id: Date.now().toString(),
-      role: 'user' as const,
-      content: `已上传文件: ${result.attachment.original_filename} (${(result.attachment.file_size / 1024).toFixed(2)} KB)`,
-      datetime: new Date().toLocaleString(),
-      avatar: USER_AVATAR,
-    }
-
-    chatMessages.value.push(uploadMessage)
-
-    // 自动滚动到底部
-    scrollToBottom()
-  } catch (error) {
-    console.error('文件上传失败:', error)
-    MessagePlugin.error(`文件上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
-  }
-}
-
-// 判断是否为图片文件
-const isImageFile = (filePath: string): boolean => {
-  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
-  const lowerPath = filePath.toLowerCase()
-  return imageExtensions.some((ext) => lowerPath.endsWith(ext))
-}
-
-// 获取图片的blob URL（带认证）
-const getImageBlobUrl = async (filePath: string): Promise<string> => {
-  try {
-    const token = authStore.token
-    if (!token) {
-      throw new Error('未登录')
-    }
-
-    const url = workspaceFileAPI.getImageUrl(token, workId.value, filePath)
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-
-    const blob = await response.blob()
-    return URL.createObjectURL(blob)
-  } catch (error) {
-    console.error('获取图片失败:', error)
-    throw error
-  }
-}
-
-// 根据角色获取头像（用站内图片，不依赖外部头像服务）
-const USER_AVATAR = '/avatar-user.svg'
-const ASSISTANT_AVATAR = '/logo.png'
-const getAvatarByRole = (role: string) => {
-  const avatars = {
-    user: USER_AVATAR,
-    assistant: ASSISTANT_AVATAR,
-    system: ASSISTANT_AVATAR,
-  }
-  return avatars[role as keyof typeof avatars] || avatars.assistant
-}
-
-// 发送消息
-const sendMessage = async (
-  messageContent?: string,
-  action: ResearchAction = messageAction.value,
-) => {
-  const content = messageContent || inputValue.value.trim()
-  if (!content || isStreaming.value || disposed || !authStore.token) return
-
-  // 添加用户消息
-  const userMessage: ChatMessageDisplay = {
-    id: Date.now().toString(),
-    role: 'user' as const,
-    content: content,
-    datetime: new Date().toLocaleString(),
-    avatar: USER_AVATAR,
-  }
-
-  atBottom.value = true
-  chatMessages.value.push(userMessage)
-  inputValue.value = ''
-
-  panelStore.activate(workId.value, 'chat')
-  const resolvedAction = action === 'auto' && questionScope.value ? 'ask' : action
-  const scope = ['ask', 'revise_research'].includes(resolvedAction)
-    ? questionScope.value || undefined
-    : undefined
-  if (resolvedAction !== 'ask') questionScope.value = null
-  messageAction.value = 'auto'
-  await sendRealMessage(content, resolvedAction, scope)
-}
-
-// 发送真实消息（WebSocket）
-const sendRealMessage = async (message: string, action: ResearchAction, subproblemId?: string) => {
-  if (!authStore.token || disposed) return
-
-  isStreaming.value = true
-  runningAction.value = action
-  connectionState.value = 'reconnecting'
-  taskStartedAt.value = Date.now()
-  clockNow.value = Date.now()
-
-  // 创建AI回复消息
-  const aiMessageId = (Date.now() + 1).toString()
-  const aiMessage: ChatMessageDisplay = {
-    id: aiMessageId,
-    role: 'assistant' as const,
-    content: '',
-    datetime: new Date().toLocaleString(),
-    avatar: ASSISTANT_AVATAR,
-    isStreaming: true,
-  }
-
-  chatMessages.value.push(aiMessage)
-
-  try {
-    // 使用WebSocket发送消息
-    await sendMessageViaWebSocket(message, aiMessageId, action, subproblemId)
-  } catch (error) {
-    console.error('发送消息失败:', error)
-    const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
-    if (messageIndex > -1) {
-      const msg = chatMessages.value[messageIndex]
-      if (msg) {
-        msg.content = '发送消息失败，请稍后重试'
-        msg.isStreaming = false
-      }
-    }
-    isStreaming.value = false
-    if (!disposed) MessagePlugin.error('发送消息失败')
-  }
-}
-
-const sendMessageViaWebSocket = async (
-  message: string,
-  messageId: string,
-  action: ResearchAction,
-  subproblemId?: string,
-) => {
-  const handler = await connectWorkSocket(messageId)
-  const snapshot = researchSnapshot.value
-  const revision =
-    action === 'revise_research' && snapshot?.research_id && snapshot.research_revision
-      ? {
-          command_id: crypto.randomUUID(),
-          research_id: snapshot.research_id,
-          base_revision: snapshot.research_revision,
-          scope: subproblemId ? [subproblemId] : undefined,
-        }
-      : undefined
-  handler?.sendMessage(message, undefined, action, subproblemId, revision)
-}
-
-// 切换侧边栏折叠状态
-const toggleSidebar = () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value
 }
 
 // 格式化日期
@@ -1360,104 +510,16 @@ const getOutputModeText = (mode?: string) => {
   return texts[mode || 'markdown'] || 'Markdown'
 }
 
-// 组件卸载时清理资源
-onUnmounted(() => {
-  disposed = true
-  if (webSocketHandler.value) {
-    webSocketHandler.value.disconnect()
-    webSocketHandler.value = null
-  }
-
-  // 重置流式状态，确保输入框不被禁用
-  isStreaming.value = false
-
-  // 清理blob URLs以释放内存
-  Object.values(imageUrls.value).forEach((url) => {
-    if (url.startsWith('blob:')) {
-      URL.revokeObjectURL(url)
-    }
-  })
-  imageUrls.value = {}
-})
-
-// 监听聊天消息变化，自动滚动到底部
-watch(
-  chatMessages,
-  (newMessages) => {
-    if (newMessages.length > 0) {
-      scrollToBottom()
-    }
-  },
-  { deep: true },
-)
-
-// 组件挂载时加载工作信息
 onMounted(() => {
-  if (workId.value) {
-    loadWork()
-  }
-
-  // 组件挂载完成后，如果有聊天消息，自动滚动到底部
-  nextTick(() => {
-    if (chatMessages.value.length > 0) {
-      scrollToBottom()
-    }
-  })
+  void loadWork()
 })
-
-// 检查并自动发送第一句话
-const checkAndAutoSendFirstMessage = async () => {
-  const pendingKey = `pendingQuestion:${workId.value}`
-  const pendingQuestion =
-    localStorage.getItem(pendingKey) || localStorage.getItem('pendingQuestion')
-  if (pendingQuestion && currentWork.value?.title?.trim() === '') {
-    localStorage.removeItem(pendingKey)
-    localStorage.removeItem('pendingQuestion')
-    try {
-      generateWorkTitle(pendingQuestion).catch((err: Error) =>
-        console.error('后台生成标题失败:', err),
-      )
-      await sendMessage(pendingQuestion, 'run')
-    } catch (error) {
-      console.error('自动发送第一句话失败:', error)
-    }
-  }
-}
-
-const generateWorkTitle = async (question: string) => {
-  try {
-    // 调用标题生成API，会自动更新数据库
-    const response = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
-
-    if (disposed) return
-    // 更新本地状态
-    if (currentWork.value) {
-      currentWork.value.title = response.title
-    }
-
-    // 通知侧边栏刷新工作列表
-    // 通过触发一个自定义事件来通知父组件或侧边栏
-    window.dispatchEvent(
-      new CustomEvent('work-title-updated', {
-        detail: {
-          workId: workId.value,
-          newTitle: response.title,
-        },
-      }),
-    )
-
-    console.log('标题已更新:', response.title)
-  } catch (error) {
-    console.error('生成标题失败:', error)
-  }
-}
 </script>
 <style scoped>
 .work-page {
   display: flex;
   height: 100dvh;
   width: 100%;
-  background: #fff;
+  background: var(--pa-page);
   overflow: hidden;
 }
 .workspace-container {
@@ -1494,7 +556,7 @@ const generateWorkTitle = async (question: string) => {
   min-height: 88px;
   box-sizing: border-box;
   flex-shrink: 0;
-  border-bottom: 1px solid #e8ede8;
+  border-bottom: 1px solid var(--pa-line);
 }
 .work-heading,
 .work-title-row {
@@ -1518,7 +580,7 @@ const generateWorkTitle = async (question: string) => {
   margin-top: 6px;
   min-width: 0;
   font-size: 11px;
-  color: #879189;
+  color: var(--pa-muted);
 }
 .work-context-text {
   white-space: nowrap;
@@ -1528,8 +590,8 @@ const generateWorkTitle = async (question: string) => {
 .live-dot {
   width: 5px;
   height: 5px;
-  border-radius: 50%;
-  background: #bdc6be;
+  border-radius: var(--pa-radius-circle);
+  background: var(--pa-surface-active);
   flex-shrink: 0;
 }
 .live-dot.running,
@@ -1537,7 +599,7 @@ const generateWorkTitle = async (question: string) => {
   background: var(--td-brand-color);
 }
 .live-dot.attention {
-  background: #c48d49;
+  background: var(--pa-warning);
 }
 .elapsed {
   font-variant-numeric: tabular-nums;
@@ -1550,36 +612,36 @@ const generateWorkTitle = async (question: string) => {
   flex-shrink: 0;
 }
 .work-actions .t-button {
-  height: 34px;
+  height: var(--pa-control-height-md);
   font-size: 12px;
-  border-radius: 8px;
+  border-radius: var(--pa-radius-control);
 }
 .work-actions .t-button--shape-square {
   width: 32px;
-  border-color: #e6ebe6;
+  border-color: var(--pa-line);
 }
 .progress-trigger {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 34px;
+  height: var(--pa-control-height-md);
   padding: 0 10px;
-  border: 1px solid #e5ebe5;
-  background: #fff;
-  border-radius: 8px;
-  color: #68766c;
+  border: 1px solid var(--pa-line);
+  background: var(--pa-surface);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-muted);
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
 }
 .progress-trigger:hover {
-  background: #f6f9f6;
-  border-color: #d4dfd6;
+  background: var(--pa-surface-hover);
+  border-color: var(--pa-line-strong);
 }
 .progress-count {
-  color: #16865d;
+  color: var(--pa-accent);
   padding-left: 8px;
-  border-left: 1px solid #e3ebe4;
+  border-left: 1px solid var(--pa-line);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -1587,14 +649,14 @@ const generateWorkTitle = async (question: string) => {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background: #fcfdfb;
+  background: var(--pa-surface);
 }
 .progress-panel-heading {
   padding: 28px 24px 0;
 }
 .eyebrow {
   font-size: 10px;
-  color: #a0aca1;
+  color: var(--pa-placeholder);
   letter-spacing: 1.5px;
 }
 .progress-panel-heading h2 {
@@ -1602,12 +664,12 @@ const generateWorkTitle = async (question: string) => {
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.5px;
-  color: #2d3d31;
+  color: var(--pa-ink);
 }
 .progress-panel-heading p {
   font-size: 12px;
   line-height: 1.8;
-  color: #748179;
+  color: var(--pa-muted);
   margin: 0 0 22px;
 }
 .chat-section,
@@ -1619,7 +681,7 @@ const generateWorkTitle = async (question: string) => {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: #fff;
+  background: var(--pa-surface);
 }
 .chat-container {
   display: flex;
@@ -1682,13 +744,13 @@ const generateWorkTitle = async (question: string) => {
   align-items: flex-end;
   gap: 6px;
   padding: 8px;
-  border: 1px solid #d9dfd9;
-  border-radius: 26px;
-  background: #fff;
-  box-shadow: 0 2px 8px #00000004;
+  border: 1px solid var(--pa-line-strong);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
+  box-shadow: var(--pa-shadow-card);
 }
 .work-composer:focus-within {
-  border-color: #a1b4a6;
+  border-color: var(--pa-line-strong);
 }
 .work-message-input {
   flex: 1;
@@ -1714,9 +776,9 @@ const generateWorkTitle = async (question: string) => {
   flex-shrink: 0;
 }
 .composer-controls .t-button {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  min-width: var(--pa-control-height-md);
 }
 .jump-latest {
   position: absolute;
@@ -1727,10 +789,10 @@ const generateWorkTitle = async (question: string) => {
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
-  border: 1px solid #dce2dc;
-  border-radius: 18px;
-  background: #fff;
-  color: #5f6c62;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-pill);
+  background: var(--pa-surface);
+  color: var(--pa-muted);
   box-shadow: var(--td-shadow-1);
   font-size: 12px;
   cursor: pointer;
@@ -1763,16 +825,16 @@ const generateWorkTitle = async (question: string) => {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  border: 1px solid #e3e8e2;
-  border-radius: 10px;
-  background: #fff;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
   cursor: pointer;
   text-align: left;
   overflow: hidden;
 }
 .figure-card:hover {
-  border-color: #afc1b2;
-  background: #fcfdfb;
+  border-color: var(--pa-line-strong);
+  background: var(--pa-surface);
 }
 .figure-card img,
 .figure-placeholder {
@@ -1783,13 +845,13 @@ const generateWorkTitle = async (question: string) => {
 .figure-placeholder {
   display: grid;
   place-items: center;
-  background: #f7f9f6;
-  color: #8b968c;
+  background: var(--pa-surface-muted);
+  color: var(--pa-muted);
   font-size: 30px;
 }
 .figure-card > span {
   font-size: 12px;
-  color: #687469;
+  color: var(--pa-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1807,7 +869,7 @@ const generateWorkTitle = async (question: string) => {
 }
 .work-details dl {
   margin-top: 24px;
-  border-top: 1px solid #e4e8e2;
+  border-top: 1px solid var(--pa-line);
   padding-top: 16px;
 }
 .work-details dt {
@@ -1867,7 +929,7 @@ const generateWorkTitle = async (question: string) => {
   gap: 4px;
   border: 0;
   background: transparent;
-  color: #535c55;
+  color: var(--pa-ink);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
@@ -1879,10 +941,10 @@ const generateWorkTitle = async (question: string) => {
   align-items: center;
   gap: 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-inline);
   padding: 4px 7px;
-  background: #eef4ef;
-  color: #286345;
+  background: var(--pa-accent-soft);
+  color: var(--pa-accent);
   font: inherit;
   font-size: 12px;
   cursor: pointer;

@@ -10,7 +10,7 @@ async function environment() {
     '@/stores/auth': { useAuthStore: () => auth },
   })
   const store = storeModule.useWorkPanelsStore(pinia.createPinia())
-  async function work(id, deferred = false, loadFailures = []) {
+  async function work(id, deferred = false, loadFailures = [], taskAPI = {}) {
     const cleanup = [],
       sockets = [],
       sent = [],
@@ -24,8 +24,12 @@ async function environment() {
       onMessage(callback) {
         this.message = callback
       }
-      onReconnect() {}
-      onDisconnect() {}
+      onReconnect(callback) {
+        this.reconnect = callback
+      }
+      onDisconnect(callback) {
+        this.disconnected = callback
+      }
       connect() {
         return deferred ? new Promise((resolve) => connected.push(resolve)) : Promise.resolve()
       }
@@ -44,7 +48,7 @@ async function environment() {
         'vue-router': { useRoute: () => route, useRouter: () => ({ push() {} }) },
         'tdesign-vue-next': {
           DialogPlugin: {},
-          MessagePlugin: { error() {}, success() {}, info() {} },
+          MessagePlugin: { error() {}, success() {}, info() {}, warning() {} },
         },
         '@/stores/auth': { useAuthStore: () => auth },
         '@/stores/workPanels': { useWorkPanelsStore: () => store },
@@ -91,6 +95,7 @@ async function environment() {
               ],
             }),
             getTaskStatus: async () => ({ has_task: false }),
+            ...taskAPI,
           },
         },
         '@/api/workspace': {
@@ -377,6 +382,47 @@ async function environment() {
   assert.equal(leaving.sent.length, 0)
   assert.equal(leaving.sockets[0].closed, true)
   console.log('PASS: a late socket connection cannot submit into an unmounted work')
+
+  const running = await env.work('running', false, [], {
+    getTaskStatus: async () => ({
+      has_task: true,
+      status: 'running',
+      action: 'ask',
+      started_at: 1,
+    }),
+    pauseWork: async () => ({ work_status: 'paused' }),
+  })
+  await running.state.loadWork()
+  assert.equal(running.sockets.length, 1, 'restoring a running task creates one stream')
+  assert.equal(running.state.runningAction.value, 'ask')
+  running.sockets[0].reconnect({ type: 'reconnect' })
+  assert.equal(running.state.connectionState.value, 'reconnecting')
+  running.sockets[0].message({ type: 'content', content: 'Recovered output' })
+  assert.equal(running.state.chatMessages.value.at(-1).content, 'Recovered output')
+  running.sockets[0].reconnect({ type: 'reconnect_complete' })
+  assert.equal(running.state.connectionState.value, 'live')
+  await running.state.pauseTask()
+  assert.equal(running.state.isStreaming.value, false)
+  assert.equal(running.state.chatMessages.value[0].id, 'saved', 'pausing reloads saved history')
+  const count = running.state.chatMessages.value.length
+  running.stop()
+  running.sockets[0].message({ type: 'content', content: 'Late output' })
+  assert.equal(running.state.chatMessages.value.length, count)
+  assert.equal(running.sockets[0].closed, true)
+  console.log('PASS: task recovery, connection indicators and pause stay independent of pane state')
+
+  let resolveTask
+  const delayedTask = new Promise((resolve) => {
+    resolveTask = resolve
+  })
+  const lost = await env.work('lost', false, [], { getTaskStatus: () => delayedTask })
+  const reconnect = lost.state.reconnectTask()
+  lost.stop()
+  resolveTask({ has_task: true, status: 'running' })
+  await reconnect
+  assert.equal(lost.sockets.length, 0, 'late recovery cannot attach a socket after navigation')
+  assert.equal(lost.state.chatMessages.value.length, 0)
+  console.log('PASS: late recovery status cannot revive an unmounted work')
 })().catch((error) => {
   console.error(error)
   process.exitCode = 1

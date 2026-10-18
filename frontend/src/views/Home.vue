@@ -311,14 +311,14 @@ onMounted(async () => {
   display: flex;
   height: 100dvh;
   overflow: hidden;
-  background: #fff;
+  background: var(--pa-page);
 }
 .home-main {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
   position: relative;
-  background: #fff;
+  background: var(--pa-page);
 }
 .home-header {
   display: flex;
@@ -349,10 +349,10 @@ onMounted(async () => {
   letter-spacing: -0.4px;
 }
 .research-composer {
-  border: 1px solid #daddda;
-  border-radius: 22px;
-  background: #fff;
-  box-shadow: 0 2px 8px #00000005;
+  border: 1px solid var(--pa-line-strong);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
+  box-shadow: var(--pa-shadow-card);
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
@@ -360,8 +360,8 @@ onMounted(async () => {
   padding: 8px 12px 12px;
 }
 .research-composer:focus-within {
-  border-color: #9daf9f;
-  box-shadow: 0 0 0 2px #16865d0a;
+  border-color: var(--pa-line-strong);
+  box-shadow: var(--pa-focus-ring);
 }
 .research-input {
   width: 100%;
@@ -377,7 +377,7 @@ onMounted(async () => {
   resize: none;
 }
 .research-input :deep(.t-textarea__inner::placeholder) {
-  color: #858a86;
+  color: var(--pa-muted);
   font-size: 15px;
 }
 .research-input :deep(.t-textarea__inner:focus-visible) {
@@ -391,17 +391,17 @@ onMounted(async () => {
   min-height: 40px;
 }
 .composer-toolbar .attach-button {
-  width: 36px;
-  height: 36px;
-  color: #333;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  color: var(--pa-ink);
   font-size: 20px;
   flex-shrink: 0;
 }
 .composer-toolbar .layout-button {
   font-size: 13px;
   font-weight: 400;
-  color: #555b56;
-  height: 36px;
+  color: var(--pa-ink);
+  height: var(--pa-control-height-md);
   padding: 0 10px;
 }
 .layout-button :deep(.t-button__text) {
@@ -424,31 +424,31 @@ onMounted(async () => {
 }
 .format-select :deep(.t-input) {
   background: transparent !important;
-  border-radius: 18px;
-  color: #555b56;
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-ink);
   font-size: 13px;
   font-weight: 400;
-  height: 36px;
-  min-height: 36px;
+  height: var(--pa-control-height-md);
+  min-height: var(--pa-control-height-md);
 }
 .format-select :deep(.t-input:hover) {
-  background: #f6f6f6 !important;
+  background: var(--pa-surface-muted) !important;
 }
 .format-select :deep(.t-input__suffix) {
-  color: #999;
+  color: var(--pa-placeholder);
 }
 .composer-toolbar .start-button {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  min-width: var(--pa-control-height-md);
   flex-shrink: 0;
   margin: 0 0 0 2px;
   font-size: 20px;
 }
 .composer-toolbar .start-button.t-is-disabled {
-  background: #edf0ed;
-  color: #a0a7a1;
-  border-color: #edf0ed;
+  background: var(--pa-surface-hover);
+  color: var(--pa-placeholder);
+  border-color: var(--pa-line);
 }
 .attachment-chips {
   display: flex;
@@ -460,16 +460,16 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid #e9e9e9;
-  border-radius: 14px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-control);
   padding: 7px 7px 7px 12px;
   max-width: 250px;
   font-size: 12px;
-  color: #666;
+  color: var(--pa-muted);
 }
 .attachment-chip > .t-icon {
   font-size: 19px;
-  color: #737373;
+  color: var(--pa-muted);
   flex-shrink: 0;
 }
 .attachment-chip > span {
@@ -478,8 +478,8 @@ onMounted(async () => {
   text-overflow: ellipsis;
 }
 .attachment-chip .t-button {
-  width: 22px;
-  height: 22px;
+  width: var(--pa-control-height-sm);
+  height: var(--pa-control-height-sm);
   flex-shrink: 0;
   font-size: 12px;
 }
@@ -493,7 +493,7 @@ onMounted(async () => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #636b65;
+  color: var(--pa-muted);
   text-decoration: none;
 }
 .composer-meta a:hover {
@@ -512,10 +512,10 @@ onMounted(async () => {
   gap: 13px;
   border: 0;
   background: transparent;
-  border-radius: 12px;
+  border-radius: var(--pa-radius-control);
   padding: 13px 12px;
   text-align: left;
-  color: #636363;
+  color: var(--pa-muted);
   font-size: 14px;
   cursor: pointer;
   width: 100%;
@@ -525,17 +525,17 @@ onMounted(async () => {
     color 0.15s;
 }
 .suggestions > button:hover {
-  background: #f7f7f7;
-  color: #555;
+  background: var(--pa-surface-hover);
+  color: var(--pa-ink);
 }
 .suggestions > button > .t-icon {
   font-size: 19px;
-  color: #737373;
+  color: var(--pa-muted);
   flex-shrink: 0;
 }
 .suggestions > button > .t-icon:last-child {
   font-size: 14px;
-  color: #aaa;
+  color: var(--pa-placeholder);
   margin-left: auto;
   opacity: 0;
 }
@@ -549,7 +549,7 @@ onMounted(async () => {
   text-overflow: ellipsis;
 }
 .layout-settings {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--pa-line);
   display: flex;
   align-items: center;
   gap: 16px;
@@ -565,7 +565,7 @@ onMounted(async () => {
 }
 .layout-settings label {
   font-size: 12px;
-  color: #777;
+  color: var(--pa-muted);
   white-space: nowrap;
 }
 .layout-settings :deep(.t-select__wrap) {
@@ -573,20 +573,20 @@ onMounted(async () => {
   min-width: 0;
 }
 .layout-settings :deep(.t-input) {
-  border-radius: 10px;
+  border-radius: var(--pa-radius-control);
 }
 .layout-settings > a {
   display: flex;
   gap: 4px;
   align-items: center;
   text-decoration: none;
-  color: #888;
+  color: var(--pa-muted);
   font-size: 12px;
   white-space: nowrap;
 }
 .creation-error {
   margin-top: 16px;
-  border-radius: 12px;
+  border-radius: var(--pa-radius-card);
 }
 @media (min-width: 1700px) {
   .home-content {
@@ -619,7 +619,7 @@ onMounted(async () => {
     margin-bottom: 26px;
   }
   .research-composer {
-    border-radius: 20px;
+    border-radius: var(--pa-radius-card);
     padding: 8px 10px 10px;
   }
   .research-input :deep(.t-textarea__inner) {
@@ -643,9 +643,9 @@ onMounted(async () => {
     width: 108px;
   }
   .composer-toolbar .start-button {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
+    width: var(--pa-control-height-md);
+    min-width: var(--pa-control-height-md);
+    height: var(--pa-control-height-md);
     margin-left: 2px;
   }
   .composer-meta {
@@ -700,7 +700,7 @@ onMounted(async () => {
 }
 .suggestions > button:disabled {
   cursor: not-allowed;
-  color: #bbb;
+  color: var(--pa-disabled);
   background: transparent;
 }
 </style>

@@ -149,9 +149,9 @@ const downloadFile = async () => {
   flex-direction: column;
   gap: 16px;
   padding: 20px;
-  background: #f5f7fa;
-  border-radius: 8px;
-  border: 1px solid #e0e6ed;
+  background: var(--pa-surface-muted);
+  border-radius: var(--pa-radius-card);
+  border: 1px solid var(--pa-line);
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -173,7 +173,7 @@ const downloadFile = async () => {
 }
 
 .file-icon {
-  color: #0052d9;
+  color: var(--pa-info);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -187,7 +187,7 @@ const downloadFile = async () => {
   margin: 0 0 8px 0;
   font-size: 16px;
   font-weight: 600;
-  color: #2c3e50;
+  color: var(--pa-ink);
   word-break: break-all;
 }
 
@@ -200,7 +200,7 @@ const downloadFile = async () => {
 .file-size,
 .file-type {
   font-size: 14px;
-  color: #7f8c8d;
+  color: var(--pa-muted);
 }
 
 .file-actions {
@@ -219,9 +219,9 @@ const downloadFile = async () => {
 .pdf-frame {
   width: 100%;
   height: 75vh;
-  border: 1px solid #e0e6ed;
-  border-radius: 4px;
-  background: #fff;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-inline);
+  background: var(--pa-surface);
 }
 
 @media (max-width: 768px) {

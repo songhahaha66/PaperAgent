@@ -1,39 +1,4 @@
-/* Small layout and accessibility adjustments on top of the existing TDesign theme. */
-:root,
-:root[theme-mode='light'] {
-  --td-brand-color-1: #eef7f2;
-  --td-brand-color-2: #d7eee2;
-  --td-brand-color-3: #b5d8c6;
-  --td-brand-color-4: #89c3a8;
-  --td-brand-color-5: #56aa85;
-  --td-brand-color-6: #16865d;
-  --td-brand-color-7: #12734f;
-  --td-brand-color-8: #0f6042;
-  --td-brand-color-9: #0c5038;
-  --td-brand-color-10: #083b2a;
-  --td-brand-color: #16865d;
-  --td-success-color: #16865d;
-  --td-success-color-hover: #12734f;
-  --td-font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial,
-    sans-serif;
-  --td-font-family-medium: var(--td-font-family);
-  --td-font-family-heading: var(--td-font-family);
-  --td-radius-default: 8px;
-  --td-radius-medium: 12px;
-  --td-radius-large: 16px;
-  --td-brand-color-hover: #12734f;
-  --td-brand-color-active: #0f6042;
-  --td-brand-color-focus: #d7eee2;
-  --td-brand-color-light: #eef7f2;
-  --td-brand-color-disabled: #b5d8c6;
-  --pa-ink: var(--td-text-color-primary);
-  --pa-muted: var(--td-text-color-secondary);
-  --pa-accent: var(--td-brand-color);
-  --pa-page: #fff;
-  --pa-line: var(--td-component-stroke);
-  --pa-paper: #fff;
-}
+/* Shared layout, accessibility and component rules. Values live in theme.css. */
 body {
   margin: 0;
 }
@@ -101,7 +66,7 @@ select {
   }
   .t-dialog__footer {
     flex-shrink: 0;
-    background: white;
+    background: var(--pa-surface);
     padding-bottom: max(16px, env(safe-area-inset-bottom));
   }
 }
@@ -115,24 +80,24 @@ select {
   }
 }
 
-/* White TDesign surfaces with softer form and card geometry. */
+/* Shared geometry consumes the theme; no palette overrides belong here. */
 .t-card {
-  border-radius: 14px;
+  border-radius: var(--pa-radius-card);
   box-shadow: none;
-  border-color: #ededed;
+  border-color: var(--pa-line);
 }
 .t-button:not(.t-button--shape-circle):not(.t-button--shape-round) {
-  border-radius: 9px;
+  border-radius: var(--pa-radius-control);
 }
 .t-input,
 .t-textarea__inner {
-  border-radius: 10px;
+  border-radius: var(--pa-radius-control);
 }
 .t-dialog {
-  border-radius: 18px;
+  border-radius: var(--pa-radius-overlay);
 }
 .language-switcher {
-  border-radius: 12px;
+  border-radius: var(--pa-radius-control);
 }
 
 @media (max-width: 768px) {
@@ -155,5 +120,33 @@ select {
 /* Positive status badges use the same solid accent as primary actions. */
 .t-tag--success.t-tag--light {
   background: var(--td-brand-color);
-  color: #fff;
+  color: var(--pa-on-accent);
+}
+
+/* Syntax highlighting follows the active palette instead of importing a light-only theme. */
+.code-highlight code {
+  color: var(--pa-ink);
+}
+.code-highlight :is(.hljs-comment, .hljs-quote) {
+  color: var(--pa-placeholder);
+}
+.code-highlight :is(.hljs-keyword, .hljs-selector-tag, .hljs-type, .hljs-meta) {
+  color: var(--pa-note);
+}
+.code-highlight :is(.hljs-string, .hljs-regexp, .hljs-addition) {
+  color: var(--pa-accent);
+}
+.code-highlight :is(.hljs-number, .hljs-literal, .hljs-variable, .hljs-attr) {
+  color: var(--pa-warning);
+}
+.code-highlight :is(.hljs-title, .hljs-built_in, .hljs-symbol) {
+  color: var(--pa-info);
+}
+.code-highlight .hljs-deletion {
+  color: var(--pa-danger);
+}
+
+/* The monochrome mark must remain legible on either surface palette. */
+img[src='/logo.png'] {
+  filter: var(--pa-logo-filter);
 }

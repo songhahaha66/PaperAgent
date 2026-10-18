@@ -282,7 +282,7 @@ const getJsonBlocks = (message: ChatMessage) => {
   height: 28px;
 }
 :deep(.t-chat__datetime) {
-  color: #8a958e;
+  color: var(--pa-muted);
   font-size: 11px;
   margin-bottom: 8px;
 }
@@ -316,20 +316,20 @@ const getJsonBlocks = (message: ChatMessage) => {
 :deep(.json-block) {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-card);
   margin: 8px 0;
   overflow: hidden;
-  background-color: #fafafa;
+  background-color: var(--pa-surface-muted);
 }
 
 :deep(.json-block-header) {
-  background-color: #f0f0f0;
+  background-color: var(--pa-surface-hover);
   padding: 8px 12px;
   font-weight: 600;
   font-size: 14px;
-  border-bottom: 1px solid #e0e0e0;
-  color: #333;
+  border-bottom: 1px solid var(--pa-line);
+  color: var(--pa-ink);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -339,7 +339,7 @@ const getJsonBlocks = (message: ChatMessage) => {
 }
 
 :deep(.json-block-header:hover) {
-  background-color: #e8e8e8;
+  background-color: var(--pa-surface-hover);
 }
 
 :deep(.json-block-header.collapsed) {
@@ -354,7 +354,7 @@ const getJsonBlocks = (message: ChatMessage) => {
   flex: 1;
   font-weight: 400;
   font-size: 13px;
-  color: #666;
+  color: var(--pa-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -373,7 +373,7 @@ const getJsonBlocks = (message: ChatMessage) => {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  background-color: white;
+  background-color: var(--pa-surface);
   overflow: visible;
 }
 
@@ -390,111 +390,111 @@ const getJsonBlocks = (message: ChatMessage) => {
 
 /* 不同type的JSON块样式 */
 :deep(.json-block-main) {
-  border-left: 4px solid #0052d9;
+  border-left: 4px solid var(--pa-info);
 }
 
 :deep(.json-block-main .json-block-header) {
-  background-color: #e6f3ff;
-  color: #0052d9;
+  background-color: var(--pa-info-soft);
+  color: var(--pa-info);
 }
 
 :deep(.json-block-call_code_agent) {
-  border-left: 4px solid #00a870;
+  border-left: 4px solid var(--pa-accent);
 }
 
 :deep(.json-block-call_code_agent .json-block-header) {
-  background-color: #e6fff2;
-  color: #00a870;
+  background-color: var(--pa-accent-soft);
+  color: var(--pa-accent);
 }
 
 :deep(.json-block-code_agent) {
-  border-left: 4px solid #00a870;
+  border-left: 4px solid var(--pa-accent);
 }
 
 :deep(.json-block-code_agent .json-block-header) {
-  background-color: #e6fff2;
-  color: #00a870;
+  background-color: var(--pa-accent-soft);
+  color: var(--pa-accent);
 }
 
 :deep(.json-block-call_exec_py) {
-  border-left: 4px solid #ff6b35;
+  border-left: 4px solid var(--pa-warning);
 }
 
 :deep(.json-block-call_exec_py .json-block-header) {
-  background-color: #fff2e6;
-  color: #ff6b35;
+  background-color: var(--pa-warning-soft);
+  color: var(--pa-warning);
 }
 
 :deep(.json-block-exec_py) {
-  border-left: 4px solid #ff6b35;
+  border-left: 4px solid var(--pa-warning);
 }
 
 :deep(.json-block-exec_py .json-block-header) {
-  background-color: #fff2e6;
-  color: #ff6b35;
+  background-color: var(--pa-warning-soft);
+  color: var(--pa-warning);
 }
 
 :deep(.json-block-call_writing_agent) {
-  border-left: 4px solid #ed7b2f;
+  border-left: 4px solid var(--pa-warning);
 }
 
 :deep(.json-block-call_writing_agent .json-block-header) {
-  background-color: #fff2e6;
-  color: #ed7b2f;
+  background-color: var(--pa-warning-soft);
+  color: var(--pa-warning);
 }
 
 :deep(.json-block-writing_agent) {
-  border-left: 4px solid #ed7b2f;
+  border-left: 4px solid var(--pa-warning);
 }
 
 :deep(.json-block-writing_agent .json-block-header) {
-  background-color: #fff2e6;
-  color: #ed7b2f;
+  background-color: var(--pa-warning-soft);
+  color: var(--pa-warning);
 }
 
 :deep(.json-block-writemd_result) {
-  border-left: 4px solid #8e44ad;
+  border-left: 4px solid var(--pa-note);
 }
 
 :deep(.json-block-writemd_result .json-block-header) {
-  background-color: #f4e6ff;
-  color: #8e44ad;
+  background-color: var(--pa-note-soft);
+  color: var(--pa-note);
 }
 
 :deep(.json-block-tree_result) {
-  border-left: 4px solid #27ae60;
+  border-left: 4px solid var(--pa-accent);
 }
 
 :deep(.json-block-tree_result .json-block-header) {
-  background-color: #e6fff2;
-  color: #27ae60;
+  background-color: var(--pa-accent-soft);
+  color: var(--pa-accent);
 }
 
 :deep(.json-block-word_tool_call) {
-  border-left: 4px solid #2980b9;
+  border-left: 4px solid var(--pa-info);
 }
 
 :deep(.json-block-word_tool_call .json-block-header) {
-  background-color: #e8f4f8;
-  color: #2980b9;
+  background-color: var(--pa-info-soft);
+  color: var(--pa-info);
 }
 
 :deep(.json-block-word_tool_result) {
-  border-left: 4px solid #2980b9;
+  border-left: 4px solid var(--pa-info);
 }
 
 :deep(.json-block-word_tool_result .json-block-header) {
-  background-color: #e8f4f8;
-  color: #2980b9;
+  background-color: var(--pa-info-soft);
+  color: var(--pa-info);
 }
 
 :deep(.json-block-word_tool_error) {
-  border-left: 4px solid #e74c3c;
+  border-left: 4px solid var(--pa-danger);
 }
 
 :deep(.json-block-word_tool_error .json-block-header) {
-  background-color: #fdecea;
-  color: #e74c3c;
+  background-color: var(--pa-danger-soft);
+  color: var(--pa-danger);
 }
 
 /* 代码块样式 */
@@ -503,18 +503,18 @@ const getJsonBlocks = (message: ChatMessage) => {
 }
 
 :deep(.t-chat__message-content pre) {
-  background-color: #f8f9fa;
-  border: 1px solid #e9ecef;
-  border-radius: 6px;
+  background-color: var(--pa-surface-muted);
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-inline);
   padding: 12px;
   margin: 8px 0;
   overflow-x: auto;
 }
 
 :deep(.t-chat__message-content code) {
-  background-color: #f1f3f4;
+  background-color: var(--pa-surface-muted);
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--pa-radius-inline);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
 }
@@ -552,15 +552,15 @@ const getJsonBlocks = (message: ChatMessage) => {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
-  color: #727a74;
+  color: var(--pa-muted);
   font-size: 12px;
 }
 .answer-sources button {
-  border: 1px solid #e4e7e4;
-  border-radius: 6px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-inline);
   padding: 3px 7px;
   color: var(--td-brand-color);
-  background: white;
+  background: var(--pa-surface);
   font: inherit;
   cursor: pointer;
 }
