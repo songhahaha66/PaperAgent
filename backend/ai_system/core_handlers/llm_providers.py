@@ -141,13 +141,19 @@ class OpenAIProvider(BaseLLMProvider):
             raise ValueError(f"OpenAI提供商配置无效: {self.get_model_info()}")
 
         extra_body = kwargs.get('extra_body')
+        gateway_host = urlparse(self.base_url).hostname == 'aigw.saurlax.com'
+        step_gateway = gateway_host and self.model_id == 'step-5-preview'
+        if step_gateway:
+            # Reuse the bounded settings validated by the live research run.
+            # Copy the body so saved settings are untouched; explicit effort wins.
+            extra_body = {'reasoning_effort': 'low', **(extra_body or {})}
         # 官方 Flash 默认开启思考，但流水线的结构化输出需要强制工具选择。
         # DeepSeek 不允许在思考模式下强制工具，因此默认关闭；显式参数仍优先。
         if (extra_body is None and self.model_id == "deepseek-flash"
                 and urlparse(self.base_url).hostname == "api.deepseek.com"):
             extra_body = {"thinking": {"type": "disabled"}}
 
-        model_class = AIGWChatOpenAI if urlparse(self.base_url).hostname == 'aigw.saurlax.com' else ChatOpenAI
+        model_class = AIGWChatOpenAI if gateway_host else ChatOpenAI
         return model_class(
             model=self.model_id,
             api_key=self.api_key,
@@ -156,10 +162,10 @@ class OpenAIProvider(BaseLLMProvider):
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
             # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
-            max_retries=kwargs.get('max_retries', 6),
+            max_retries=kwargs.get('max_retries', 0 if step_gateway else 6),
             # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
             # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
-            timeout=kwargs.get('timeout', 600),
+            timeout=kwargs.get('timeout', 120 if step_gateway else 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
             extra_body=extra_body,
         )

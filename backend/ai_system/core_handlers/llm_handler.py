@@ -45,6 +45,9 @@ class LLMHandler:
             'max_tokens': llm_kwargs.get('max_tokens', 16000),
             'streaming': llm_kwargs.get('streaming', True)
         }
+        for key in ('extra_body', 'timeout', 'max_retries'):
+            if key in llm_kwargs:
+                self.llm_kwargs[key] = llm_kwargs[key]
 
         # 构建配置字典并创建LLM实例
         if model_config:

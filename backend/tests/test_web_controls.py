@@ -64,6 +64,46 @@ def test_update_without_new_key_preserves_saved_key_and_checks_owner(config_clie
         assert db.query(ModelConfig).filter_by(id=2).one().model_id == 'other'
 
 
+def test_browser_saved_step_connection_reaches_all_roles_with_live_defaults(config_client):
+    from ai_system.config.environment import DatabaseConfigManager
+    from ai_system.core_handlers.llm_handler import LLMHandler
+    from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+    client, sessions = config_client
+    assert client.put('/model-configs/1', json={'model_id':'step-5-preview',
+        'base_url':'https://aigw.saurlax.com/v1'}).status_code == 200
+    assert client.post('/model-configs/apply-default').status_code == 200
+    with sessions() as db:
+        for role in ('brain', 'code', 'writing'):
+            config = DatabaseConfigManager(db).get_model_config(role, 7)
+            llm = (LLMHandler(model_config=config).get_llm_instance() if role == 'brain'
+                   else create_llm_from_model_config(config))
+            assert llm.extra_body == {'reasoning_effort':'low'}
+            assert llm.request_timeout == 120 and llm.max_retries == 0
+
+
+def test_step_connection_route_preserves_its_explicit_probe_budget(config_client, monkeypatch):
+    from langchain_core.messages import AIMessage
+    from ai_system.core_handlers import llm_providers
+    client, _ = config_client
+    captured = []
+    original = llm_providers.create_llm_from_model_config
+    def factory(config, **kwargs):
+        llm = original(config, **kwargs)
+        captured.append(llm)
+        return llm
+    monkeypatch.setattr(llm_providers, 'create_llm_from_model_config', factory)
+    invoke = AsyncMock(return_value=AIMessage(content='OK'))
+    monkeypatch.setattr(llm_providers.AIGWChatOpenAI, 'ainvoke', invoke)
+    response = client.post('/model-configs/test', json={'model_id':'step-5-preview',
+        'base_url':'https://aigw.saurlax.com/v1'})
+    assert response.status_code == 200 and response.json() == {'ok':True}
+    llm = captured[0]
+    assert llm.extra_body == {'reasoning_effort':'low'}
+    assert llm.request_timeout == 20 and llm.max_retries == 0 and llm.max_tokens == 32
+    assert llm.streaming is False
+    invoke.assert_awaited_once()
+
+
 def test_connection_test_uses_owned_saved_key_and_makes_a_real_adapter_call(config_client,monkeypatch):
     client, _ = config_client
     captured = []

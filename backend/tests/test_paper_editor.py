@@ -123,6 +123,46 @@ def test_api_review_flow_and_ownership(paper, monkeypatch):
         assert client.post('/api/workspace/work/paper/proposals', json=request).status_code == 403
 
 
+def test_ai_proposal_route_uses_saved_step_model_with_bounded_defaults(paper, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from models.models import Base, ModelConfig, Work
+    from routers.work_routes import workspace
+    from auth.auth import get_current_user
+    from database.database import get_db
+    store, _ = paper
+    engine = create_engine('sqlite://', connect_args={'check_same_thread':False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    with sessions() as db:
+        db.add(Work(work_id='step-route', title='Paper', created_by=7, output_mode='markdown'))
+        db.add(ModelConfig(type='writing', model_id='step-5-preview', api_key='fixture',
+                           base_url='https://aigw.saurlax.com/v1', created_by=7))
+        db.commit()
+    def database():
+        with sessions() as db:
+            yield db
+    captured = []
+    async def propose(store, section, instruction, content, llm):
+        captured.append(llm)
+        return {'id':'parameters-checked'}
+    monkeypatch.setattr(editor, 'propose', propose)
+    monkeypatch.setattr(workspace.workspace_file_service, 'get_workspace_path', lambda _: store.root)
+    app = FastAPI(); app.include_router(workspace.router)
+    app.dependency_overrides[get_current_user] = lambda: 7
+    app.dependency_overrides[get_db] = database
+    with TestClient(app) as client:
+        response = client.post('/api/workspace/step-route/paper/proposals', json={
+            'research_id':store.research_id, 'base_commit':store.snapshot()['commit_seq'],
+            'section':'solve:Q1', 'instruction':'简洁表述'})
+        assert response.status_code == 200, response.text
+    llm = captured[0]
+    assert llm.extra_body == {'reasoning_effort':'low'}
+    assert llm.request_timeout == 120 and llm.max_retries == 0
+    engine.dispose()
+
+
 def test_data_change_invalidates_pending_wording_candidate(paper):
     store, _ = paper
     proposal = candidate(store)

@@ -45,3 +45,11 @@
 未覆盖浏览器点击、WebSocket 全链路及生产部署。完整研究从后端入口运行，HTTP 检查仅覆盖上述 workspace 边界；不将其称为浏览器 E2E。
 
 Cloud 环境原有 XeLaTeX 缺少中文包。采用 Debian 官方兼容包与 CTAN Fandol 字体，在临时 TEXMF 树补齐并验证；本次编译设置 `TEXMFHOME=/tmp/paperagent-texmf`、`TEXMFVAR=/tmp/paperagent-texmf-var`。仓库 Dockerfile 已包含中文 TeX 依赖，本轮未部署或修改系统级凭据。
+
+## 正常配置入口的复现收尾
+
+核对后发现，先前成功参数仅在联调脚本指定。现已仅针对 `aigw.saurlax.com` 的 `step-5-preview` 默认使用 `reasoning_effort=low`、120 秒请求 timeout、0 次 SDK 重试。浏览器保存的普通数据库模型连接及“应用默认模型”会让 brain/code/writing 角色直接获得这些默认值，章节 AI 润色路由也使用同一构造入口，无需添加数据库字段或重新录入凭据。
+
+已有 `extra_body.reasoning_effort` 可显式覆盖推理强度；调用方的 `timeout`、`max_retries` 和 `extra_body` 会经过 LLMHandler 保留，且不修改保存的参数对象。其他模型和其他网关的默认设置保持不变。连接测试路由自身的 20 秒、32-token 探针预算仍优先于模型默认。
+
+此次收尾只运行构造及路由参数相关测试，共 33 项通过；覆盖浏览器保存并应用到各角色、AI 章节候选路由、短连接探针覆盖及显式参数覆盖。没有新增真实模型调用、重跑论文或向外部存储上传产物。
