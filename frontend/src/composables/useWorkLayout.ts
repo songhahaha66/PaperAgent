@@ -23,6 +23,13 @@ export function useWorkLayout(workId: Ref<string>) {
 
   // 侧边栏折叠状态 - 手机端默认收起
   const isSidebarCollapsed = ref(isMobile.value)
+  // Establish the initial workspace once; subsequent user tab arrangements survive.
+  const initial = panelSession.value
+  if (!isMobile.value && initial.panels.length === 1) {
+    panelStore.open(workId.value, 'paper', undefined, 'secondary')
+    initial.focusedGroup = 'main'
+    initial.splitRatio = 0.45
+  }
   const stackedPanes = computed(
     () => width.value - (isMobile.value ? 0 : isSidebarCollapsed.value ? 64 : 248) < 760,
   )
@@ -90,11 +97,11 @@ export function useWorkLayout(workId: Ref<string>) {
     panelStore.open(workId.value, 'files')
   }
   function handleMainPaperClick() {
-    panelStore.open(workId.value, 'paper')
+    panelStore.open(workId.value, 'paper', undefined, isMobile.value ? 'main' : 'secondary')
   }
   function handleWorkspaceFileSelect(path: string) {
     if (path === 'paper.md') handleMainPaperClick()
-    else panelStore.open(workId.value, 'file', path)
+    else panelStore.open(workId.value, 'file', path, isMobile.value ? 'main' : 'secondary')
   }
   function trackChatScroll(event: Event) {
     const target = event.target as HTMLElement

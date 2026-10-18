@@ -198,3 +198,17 @@ def test_default_outline_includes_honest_reference_gap(tmp_path):
     assert '来源缺口' in gap
     state['sections']['references'] = gap
     assert r'\section{参考文献}' in assemble_latex(state)
+
+
+def test_supplied_bibliography_is_preserved_without_invented_metadata(tmp_path):
+    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), output_mode='latex')
+    state = {'task': '研究任务\n参考文献：\n作者甲. 用户提供的题名. 2024. https://example.test/a?x=1&y=2\n# 其他要求\n不要把这行当参考文献'}
+    text = writing.reference_section(state, ctx)
+    assert '用户提供的题名' in text and r'\&' in text
+    assert '不要把这行' not in text and '尚未独立核验' in text
+    assert '尚未登记' not in text
+    attachment = tmp_path / 'attachment'
+    attachment.mkdir()
+    (attachment / 'sources.bib').write_text('@article{source, title={Provided title}}')
+    text = writing.reference_section({'task': '任务'}, ctx)
+    assert 'Provided title' in text and '未补造' in text

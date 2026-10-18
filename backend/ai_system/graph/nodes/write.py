@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import re
 from typing import Dict, List, Tuple
 
 from langgraph.runtime import Runtime
@@ -143,7 +144,7 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
     """每一节都带上全文结论表和统一口径，各节结论口径一致"""
     if key == "references":
-        return "只记录已提供且可核验的来源；缺少书目信息时明确标注缺口，不得编造作者、年份、题名或 DOI。"
+        return reference_section(state, ctx)
     request = _section_body(key, title, state, ctx)
     from ..registry import ResultRegistry
     allowed = None
@@ -250,9 +251,39 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
     raise KeyError(key)
 
 
+def reference_section(state: PaperState, ctx: GraphContext) -> str:
+    """Quote supplied bibliography only; never complete metadata from model memory."""
+    text = state.get("task", "")
+    entries = []
+    in_references = False
+    for line in text.splitlines():
+        if re.match(r"^\s*#*\s*(?:参考文献|参考资料|References|Bibliography)\s*[:：]?\s*$", line, re.I):
+            in_references = True
+            continue
+        if in_references and re.match(r"^#{1,6}\s+", line):
+            in_references = False
+        if line.strip() and (in_references or re.search(r"https?://|doi\s*:", line, re.I)):
+            entries.append(line.strip())
+    # Dedicated bibliography attachments are source material, not generated claims.
+    folder = ctx.workspace / "attachment"
+    if folder.exists():
+        for path in sorted(folder.iterdir()):
+            if path.is_file() and not path.is_symlink() and (path.suffix.lower() == ".bib" or
+                    (path.suffix.lower() in {".txt", ".md"} and any(word in path.stem.lower() for word in ("reference", "bibliograph", "参考文献")))):
+                entries.append("附件 " + path.name + "：\n" + path.read_text(encoding="utf-8", errors="replace")[:12000])
+    entries = list(dict.fromkeys(entries))[:30]
+    if not entries:
+        return "来源缺口：当前研究尚未登记可核验的书目来源。题目、上传数据与本研究计算记录仅作为研究材料，不冒充公开文献。正式提交前，请补充实际使用文献的作者、题名、出版信息及可核验链接，并逐项核对其与正文论述的对应关系。"
+    note = "以下来源由用户在题目或书目附件中提供，书目信息按原文保留，尚未独立核验。待完善：核对作者、题名、年份、出版信息和正文对应关系；原文缺少的字段仍为缺口，系统未补造。"
+    if ctx.output_mode == "latex":
+        from ...export.latex import escape_plain
+        return note + "\n\\begin{itemize}\n" + "\n".join("\\item " + escape_plain(item) for item in entries) + "\n\\end{itemize}"
+    return note + "\n\n" + "\n\n".join("- " + item for item in entries)
+
+
 async def write_section(ctx: GraphContext, state: PaperState, key: str, title: str) -> str:
     if key == "references":
-        return "来源缺口：当前研究尚未登记可核验的书目来源。题目、上传数据与本研究计算记录仅作为研究材料，不冒充公开文献。正式提交前，请补充实际使用文献的作者、题名、出版信息及可核验链接，并逐项核对其与正文论述的对应关系。"
+        return reference_section(state, ctx)
     request = section_request(key, title, state, ctx)
     with labelled(key):
         return await call_text(ctx.writer_llm, as_messages(writing_style(ctx), request))

@@ -261,3 +261,72 @@ async def export_workspace(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error: {str(e)}"
         )
+# Section candidates are separate from file writes: no publication before review.
+from pydantic import BaseModel, Field
+from typing import Literal
+from ai_system.research.models import ResearchConflict
+from services.chat_services import paper_editor
+from services.chat_services.task_manager import task_manager
+
+
+class PaperEditRequest(BaseModel):
+    research_id: str
+    base_commit: int
+    section: str
+    instruction: str = Field(default='', max_length=20000)
+    content: str | None = Field(default=None, max_length=100000)
+
+
+class PaperDecision(BaseModel):
+    research_id: str
+    decision: Literal['apply', 'reject']
+
+
+def _paper_store(db, work_id, user_id, *, mutation=False):
+    _require_workspace_access(db, work_id, user_id)
+    if mutation and task_manager.get_running_task(work_id):
+        raise HTTPException(409, '研究正在执行，请完成后再修改论文')
+    try:
+        return paper_editor.current_store(workspace_file_service.get_workspace_path(work_id))
+    except (OSError, ValueError, KeyError):
+        raise HTTPException(409, '尚无可编辑的 research-v3 论文')
+
+
+@router.get('/{work_id}/paper')
+async def get_paper_document(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store = _paper_store(db, work_id, current_user)
+    try:
+        return await paper_editor.document(store)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post('/{work_id}/paper/proposals')
+async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store = _paper_store(db, work_id, current_user, mutation=True)
+    if request.research_id != store.research_id or request.base_commit != store.snapshot()['commit_seq']:
+        raise HTTPException(409, '研究版本已改变，请刷新论文')
+    llm = None
+    if request.content is None:
+        from ai_system.config.environment import setup_environment_from_db
+        from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+        config = setup_environment_from_db(db).config_manager
+        model = config.get_model_config('writing', current_user) or config.get_model_config('brain', current_user)
+        if model is None:
+            raise HTTPException(409, '没有配置写作模型；可直接编辑候选正文')
+        llm = create_llm_from_model_config(model)
+    try:
+        return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
+    except (ValueError, ResearchConflict) as exc:
+        raise HTTPException(409, str(exc))
+
+
+@router.post('/{work_id}/paper/proposals/{proposal_id}')
+async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecision, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store = _paper_store(db, work_id, current_user, mutation=True)
+    if request.research_id != store.research_id:
+        raise HTTPException(409, '研究标识已改变，请刷新论文')
+    try:
+        return await paper_editor.decide(store, proposal_id, request.decision == 'apply', crud.get_work(db, work_id).output_mode or 'markdown')
+    except (ValueError, ResearchConflict) as exc:
+        raise HTTPException(409, str(exc))

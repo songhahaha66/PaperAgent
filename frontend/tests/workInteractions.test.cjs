@@ -181,10 +181,11 @@ async function environment() {
       { task_id: 'Q2', progress: { state: 'rework' } },
     ],
   }
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'paper', 'desktop starts with paper beside chat')
   progressWork.state.openProgress()
   assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
   assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress')
-  assert.equal(progressWork.state.panelSession.value.splitRatio, 0.64)
+  assert.equal(progressWork.state.panelSession.value.splitRatio, 0.45)
   assert.equal(progressWork.state.acceptedTaskCount.value, 1)
   progressWork.state.openProgress()
   assert.equal(
@@ -308,7 +309,7 @@ async function environment() {
   )
   first.state.inputValue.value = 'Unsent draft'
   first.state.handleWorkspaceFileSelect('paper.tex')
-  assert.equal(first.state.panelSession.value.activeId, 'file:paper.tex')
+  assert.equal(first.state.panelSession.value.secondaryActiveId, 'file:paper.tex')
   assert.equal(first.state.displayPanels.value.find((p) => p.id === 'file:paper.tex').label, '论文')
   first.state.handleWorkspaceFileSelect('paper.pdf')
   assert.equal(
@@ -325,7 +326,7 @@ async function environment() {
   const restored = await env.work('first')
   await restored.state.loadWork()
   assert.equal(restored.state.inputValue.value, 'Unsent draft')
-  assert.equal(restored.state.panelSession.value.activeId, 'file:code/model.py')
+  assert.equal(restored.state.panelSession.value.secondaryActiveId, 'file:code/model.py')
   assert.equal(restored.state.panelSession.value.scroll['file:code/model.py'], 460)
   console.log('PASS: keyed work instances restore their own draft, tabs and document position')
 

@@ -18,6 +18,9 @@
       <header class="document-toolbar">
         <span :title="loadedPath">{{ paperLabel(loadedPath, isZh) || loadedPath }}</span>
         <div>
+          <t-button v-if="paper" size="small" theme="default" @click="$emit('edit-paper')">{{
+            isZh ? '正文与修改' : 'Text and edits'
+          }}</t-button>
           <t-button
             v-if="paper && latexSource"
             size="small"
@@ -97,6 +100,7 @@ const props = withDefaults(
     fallbackPath?: string
     latexSource?: boolean
     active: boolean
+    refreshKey?: number
     scrollTop?: number
   }>(),
   { path: 'paper.md', available: true, scrollTop: 0 },
@@ -104,6 +108,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   'open-file': [path: string]
   'open-files': []
+  'edit-paper': []
   'scroll-position': [top: number]
 }>()
 const auth = useAuthStore()
@@ -190,7 +195,9 @@ async function load() {
     }
   }
 }
-watch(() => [props.workId, props.path, props.available], load, { immediate: true })
+watch(() => [props.workId, props.path, props.available, props.refreshKey], load, {
+  immediate: true,
+})
 watch(
   () => props.active,
   async (active) => {

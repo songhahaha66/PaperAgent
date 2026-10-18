@@ -174,5 +174,5 @@ The project is designed for deployment with:
 ## Important Notes
 
 - The project does not use HTTPS for the frontend due to backend hosting constraints in China
-- Each work uses one tabbed workspace on desktop and mobile. Chat stays pinned; paper, figures, files/plan, and individual files open from the tab bar or file list. Drag tabs to any content edge to form two adjustable panes; dragging them back to the other tab strip merges the panes. Narrow screens stack the panes. Per-work tabs, pane arrangement, drafts, and reading positions live in the user-scoped workPanels store.
+- Each work uses a tabbed workspace. Desktop initially opens chat and the paper side by side; mobile starts with chat. Chat stays pinned; paper, figures, files/plan, and individual files open from the tab bar or file list. Drag tabs to any content edge to form two adjustable panes; dragging them back to the other tab strip merges the panes. Narrow screens stack the panes. Per-work tabs, pane arrangement, drafts, and reading positions live in the user-scoped workPanels store.
 - Shared breakpoint logic lives in `frontend/src/composables/useBreakpoint.ts` and tracks viewport changes via `matchMedia`

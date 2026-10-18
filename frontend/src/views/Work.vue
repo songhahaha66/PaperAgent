@@ -227,9 +227,26 @@
                 />
                 <div v-else class="figure-placeholder"><t-icon name="image" /></div>
                 <span>{{ figure.name }}</span>
+                <button
+                  @click.stop="askPaper(`请解释图表 ${figure.path} 的数据、计算依据和局限。`)"
+                >
+                  {{ isZh ? '追问依据' : 'Ask about evidence' }}
+                </button>
               </button>
             </div>
           </section>
+          <PaperEditor
+            v-else-if="panel.kind === 'paper' && researchSnapshot?.has_research && !paperPreview"
+            :work-id="workId"
+            :latex="currentWork?.output_mode === 'latex'"
+            :refresh-key="researchSnapshot?.commit_seq"
+            :disabled="isStreaming"
+            @open-file="handleWorkspaceFileSelect"
+            @artifact="paperPreview = true"
+            @updated="refreshPaper"
+            @ask="askPaper"
+            @research="revisePaper"
+          />
           <WorkDocument
             v-else
             :key="`${workId}:${panel.id}`"
@@ -241,6 +258,8 @@
             :latex-source="workspaceFiles.some((file) => file.path === 'paper.tex')"
             :active="active"
             :scroll-top="panelSession.scroll[panel.id] || 0"
+            :refresh-key="researchSnapshot?.commit_seq"
+            @edit-paper="paperPreview = false"
             @scroll-position="(top) => (panelSession.scroll[panel.id] = top)"
             @open-file="handleWorkspaceFileSelect"
             @open-files="openFiles"
@@ -282,6 +301,7 @@ import FileManager from '@/components/FileManager.vue'
 import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
+import PaperEditor from '@/components/PaperEditor.vue'
 import ResearchEvidence from '@/components/ResearchEvidence.vue'
 import ResearchProgress from '@/components/ResearchProgress.vue'
 import { useWorkSession } from '@/composables/useWorkSession'
@@ -352,6 +372,21 @@ const {
 } = artifacts
 // Metadata arrives after cached panes mount; restore scroll once their content is rendered.
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
+const paperPreview = ref(false)
+async function refreshPaper() {
+  await loadResearchSnapshot()
+  await artifacts.loadWorkspaceFiles(true)
+}
+function askPaper(message: string, task?: string) {
+  questionScope.value = task || null
+  layout.activateChat()
+  sendMessage(message, 'ask')
+}
+function revisePaper(message: string, task?: string) {
+  questionScope.value = task || null
+  layout.activateChat()
+  sendMessage(message, 'revise_research')
+}
 const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
 const {
   chatMessages,
