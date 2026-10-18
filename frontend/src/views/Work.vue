@@ -66,42 +66,18 @@
             >
           </button>
           <t-button
-            v-if="canResume"
+            v-if="primaryAction"
+            class="work-primary-action"
             theme="primary"
-            :title="recoveryHint"
-            @click="sendMessage('继续', 'resume')"
+            :title="primaryAction.title"
+            :loading="pausing || downloadLoading"
+            :disabled="loading"
+            @click="handlePrimaryAction"
           >
-            <template #icon><t-icon name="play" /></template
-            >{{ isZh ? '继续研究' : 'Continue research' }}
+            <template #icon><t-icon :name="primaryAction.icon" /></template>
+            {{ primaryAction.label }}
           </t-button>
-          <t-button
-            v-else-if="needsRecovery && recoveryUnavailable"
-            theme="primary"
-            @click="prepareNewResearch"
-            >{{ ui.restartResearch }}</t-button
-          >
-          <t-button
-            v-else-if="currentWork?.status === 'waiting' && !isStreaming"
-            theme="primary"
-            @click="sendMessage('确认', 'confirm')"
-            >{{ isZh ? '确认方案' : 'Confirm plan' }}</t-button
-          >
-          <t-button
-            v-if="isStreaming"
-            theme="default"
-            variant="outline"
-            :loading="pausing"
-            @click="pauseTask"
-            ><template #icon><t-icon name="pause" /></template
-            >{{ runningAction === 'ask' ? (isZh ? '停止回复' : 'Stop reply') : ui.pause }}</t-button
-          >
-          <t-button
-            v-if="primaryArtifact"
-            theme="primary"
-            :loading="downloadLoading"
-            @click="downloadArtifact"
-            ><template #icon><t-icon name="download" /></template>{{ downloadLabel }}</t-button
-          ><t-dropdown :options="workActionOptions" trigger="click"
+          <t-dropdown :options="workActionOptions" trigger="click"
             ><t-button theme="default" variant="outline" shape="square" :aria-label="ui.more"
               ><t-icon name="more" /></t-button
           ></t-dropdown>
@@ -413,6 +389,48 @@ const acceptedTaskCount = computed(
   () =>
     researchSnapshot.value?.tasks?.filter((task) => task.progress.state === 'accepted').length || 0,
 )
+const primaryAction = computed(() => {
+  if (!currentWork.value) return null
+  if (isStreaming.value) {
+    const label =
+      runningAction.value === 'ask' ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
+    return { kind: 'pause', icon: 'pause', label, title: label } as const
+  }
+  if (currentWork.value.status === 'waiting') {
+    const label = isZh.value ? '确认方案' : 'Confirm plan'
+    return { kind: 'confirm', icon: 'check', label, title: label } as const
+  }
+  if (canResume.value) {
+    return {
+      kind: 'resume',
+      icon: 'play',
+      label: isZh.value ? '继续' : 'Continue',
+      title: recoveryHint.value,
+    } as const
+  }
+  if (primaryArtifact.value) {
+    return {
+      kind: 'download',
+      icon: 'download',
+      label: isZh.value ? '下载' : 'Download',
+      title: downloadLabel.value,
+    } as const
+  }
+  return null
+})
+async function handlePrimaryAction() {
+  if (loading.value || pausing.value || downloadLoading.value) return
+  switch (primaryAction.value?.kind) {
+    case 'pause':
+      return pauseTask()
+    case 'confirm':
+      return sendMessage('确认', 'confirm')
+    case 'resume':
+      return sendMessage('继续', 'resume')
+    case 'download':
+      return downloadArtifact()
+  }
+}
 async function loadWork() {
   await session.loadWork({
     loadFiles: artifacts.loadWorkspaceFiles,
@@ -425,6 +443,19 @@ async function handleFileRefresh() {
   await Promise.all([artifacts.loadWorkspaceFiles(true), session.loadResearchSnapshot()])
 }
 const workActionOptions = computed(() => [
+  ...(primaryArtifact.value && primaryAction.value?.kind !== 'download'
+    ? [
+        {
+          content: downloadLabel.value,
+          value: 'download',
+          disabled: downloadLoading.value,
+          onClick: () => downloadArtifact(),
+        },
+      ]
+    : []),
+  ...(needsRecovery.value && recoveryUnavailable.value
+    ? [{ content: ui.value.restartResearch, value: 'restart', onClick: () => prepareNewResearch() }]
+    : []),
   { content: ui.value.archive, value: 'export', onClick: () => exportWorkspace() },
   {
     content: ui.value.details,

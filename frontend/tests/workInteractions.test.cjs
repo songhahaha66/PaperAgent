@@ -61,6 +61,7 @@ async function environment() {
               restartHint: 'Start research again',
               pausedTitle: 'Progress saved',
               pausedHint: 'Continue unfinished tasks',
+              pause: '暂停',
             }),
           }),
         },
@@ -205,6 +206,62 @@ async function environment() {
   console.log(
     'PASS: progress opens beside chat on desktop, as a tab on narrow screens, without starting a run',
   )
+
+  let actionStatus = 'completed'
+  let pauseCount = 0
+  const primary = await env.work('primary-action', false, [], {
+    getResearchSnapshot: async () => ({
+      schema_version: 2, work_id: 'primary-action', work_status: actionStatus,
+      has_research: true, research_id: 'research-1', engine_version: 'research-v3',
+      artifacts: ['paper.pdf'], tasks: [], results: [], runs: [], claims: [],
+    }),
+    pauseWork: async () => {
+      pauseCount++
+      actionStatus = 'paused'
+      return { work_status: actionStatus }
+    },
+  })
+  await primary.state.loadWork()
+  assert.equal(primary.state.primaryAction.value.kind, 'download')
+  assert.equal(primary.state.primaryAction.value.label, '下载')
+  assert.ok(!primary.state.workActionOptions.value.some((option) => option.value === 'download'))
+  primary.state.currentWork.value.status = 'waiting'
+  assert.equal(primary.state.primaryAction.value.kind, 'confirm', 'an existing artifact cannot obscure plan confirmation')
+  assert.ok(primary.state.workActionOptions.value.some((option) => option.value === 'download'), 'existing output remains available in the secondary menu')
+  primary.state.loading.value = true
+  await primary.state.handlePrimaryAction()
+  assert.equal(primary.sent.length, 0, 'loading cannot submit an unready plan')
+  primary.state.loading.value = false
+  await primary.state.handlePrimaryAction()
+  assert.equal(primary.sent.at(-1).action, 'confirm')
+  assert.equal(primary.state.primaryAction.value.kind, 'pause', 'execution takes precedence over confirmation and existing output')
+  assert.equal(primary.state.primaryAction.value.label, '暂停')
+  primary.state.pausing.value = true
+  await primary.state.handlePrimaryAction()
+  assert.equal(pauseCount, 0, 'a pending pause cannot be submitted twice')
+  primary.state.pausing.value = false
+  await primary.state.handlePrimaryAction()
+  assert.equal(pauseCount, 1)
+  assert.equal(primary.state.primaryAction.value.kind, 'resume')
+  assert.equal(primary.state.primaryAction.value.label, '继续')
+  await primary.state.handlePrimaryAction()
+  assert.equal(primary.sent.at(-1).action, 'resume')
+  assert.equal(primary.state.primaryAction.value.kind, 'pause')
+  actionStatus = 'completed'
+  primary.state.handleStreamMessage({ type: 'complete', work_status: 'completed' }, primary.state.chatMessages.value.at(-1).id)
+  assert.equal(primary.state.primaryAction.value.kind, 'download')
+  primary.state.currentWork.value.status = 'paused'
+  primary.state.researchSnapshot.value.engine_version = 'legacy'
+  assert.notEqual(primary.state.primaryAction.value.kind, 'resume', 'unsupported research must never offer resume')
+  const restart = primary.state.workActionOptions.value.find((option) => option.value === 'restart')
+  const sentBeforeRestart = primary.sent.length
+  restart.onClick()
+  assert.equal(primary.state.messageAction.value, 'run')
+  assert.equal(primary.sent.length, sentBeforeRestart, 'secondary restart only prepares a new research')
+  primary.state.workspaceFiles.value = []
+  assert.equal(primary.state.primaryAction.value, null, 'missing output cannot offer a download')
+  primary.stop()
+  console.log('PASS: one primary action follows confirmation, execution, recovery and available output')
 
   const native = await env.work('native-latex')
   await native.state.loadWork()
