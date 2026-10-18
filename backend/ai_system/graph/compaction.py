@@ -131,7 +131,10 @@ def repeated_execution(messages: List[BaseMessage]) -> bool:
         reply = replies.get(call["id"], "")
         if not isinstance(reply, str) or not reply.startswith("[run_id: ") or "Traceback (most recent call last)" in reply or "执行超时" in reply:
             return False
-        outputs.append(reply.partition("\n")[2])
+        # Saved-figure paths are execution metadata: their run ID and sequence
+        # number change even when the same plotting code/output is repeated.
+        outputs.append("\n".join(line for line in reply.partition("\n")[2].splitlines()
+                                  if not line.startswith("已保存图片: ")))
     return outputs[0] == outputs[1] == outputs[2]
 
 

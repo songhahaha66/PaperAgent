@@ -53,7 +53,8 @@ def seed(ctx, runs, sid="Q1", name="answer", value="6"):
     return ctx.registry.record_value(sid, name, value, rid)
 
 
-def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_complete(tmp_path):
+@pytest.mark.parametrize("figures", [False, True])
+def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_complete(tmp_path, figures):
     from langchain.agents.middleware import ModelRequest
     from langchain_core.messages import AIMessage,ToolMessage
     from ai_system.graph.compaction import StepBudgetMiddleware
@@ -63,7 +64,8 @@ def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_c
     messages=[HumanMessage(content='solve')]
     for i in range(3):
         messages.extend([AIMessage(content='',tool_calls=[{'id':str(i),'name':'run_python','args':{'code':"print('saved')"}}]),
-                         ToolMessage(content=f'[run_id: run_{i}]\nsaved',tool_call_id=str(i))])
+                         ToolMessage(content=f'[run_id: run_{i}]\nsaved' +
+                             (f'\n已保存图片: runs/run_{i}/artifacts/figure_{i+1}.png' if figures else ''),tool_call_id=str(i))])
     middleware=StepBudgetMiddleware(40,4,'submit',report_ready=lambda: not submission_inventory_issues(ctx,task,runs))
     seen=[]
     async def handler(request):seen.append(request);return None
