@@ -462,5 +462,10 @@ class ResultRegistry:
         return "".join(parts)
 
 
+def publication_text(text: str) -> str:
+    """Remove prompt-only provenance annotations, never their surrounding prose."""
+    return re.sub(r"⟨[RCF]\d+(?:\s*[,，]\s*[RCF]\d+)*⟩", "", text)
+
+
 def find_refs(text: str) -> List[str]:
     return [m.group(2) for m in REF_PATTERN.finditer(text)]

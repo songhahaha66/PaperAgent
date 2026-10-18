@@ -74,6 +74,8 @@ def section_plan(state: PaperState) -> List[Tuple[str, str, int]]:
         if key == "solve_heading":
             for sp in state["analysis"]["subproblems"]:
                 plan.append((solve_key(sp["id"]), f"{sp['id']} {sp['title']}", 3))
+    if not any("参考文献" in title or "reference" in title.lower() for _, title, _ in plan):
+        plan.append(("references", "参考文献", 2))
     return plan
 
 
@@ -140,6 +142,8 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
 
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
     """每一节都带上全文结论表和统一口径，各节结论口径一致"""
+    if key == "references":
+        return "只记录已提供且可核验的来源；缺少书目信息时明确标注缺口，不得编造作者、年份、题名或 DOI。"
     request = _section_body(key, title, state, ctx)
     from ..registry import ResultRegistry
     allowed = None
@@ -247,6 +251,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
 
 
 async def write_section(ctx: GraphContext, state: PaperState, key: str, title: str) -> str:
+    if key == "references":
+        return "来源缺口：当前研究尚未登记可核验的书目来源。题目、上传数据与本研究计算记录仅作为研究材料，不冒充公开文献。正式提交前，请补充实际使用文献的作者、题名、出版信息及可核验链接，并逐项核对其与正文论述的对应关系。"
     request = section_request(key, title, state, ctx)
     with labelled(key):
         return await call_text(ctx.writer_llm, as_messages(writing_style(ctx), request))

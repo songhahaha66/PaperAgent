@@ -269,7 +269,10 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     raw = assemble_latex(state) if native else assemble(state)
     # 带引用的原稿留在 .system，方便追溯每个数字的来源
     ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
-    rendered = ctx.registry.render(raw, latex=native)
+    from ..registry import publication_text
+    rendered = publication_text(ctx.registry.render(raw, latex=native))
+    if REF_PATTERN.search(rendered):
+        raise ValueError("论文仍有未解析的登记引用，禁止发布")
     path, conflict = ctx.research.publish_paper(rendered, filename=filename) if ctx.research else (filename, False)
     if ctx.research:
         ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")

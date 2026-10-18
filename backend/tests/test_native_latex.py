@@ -182,3 +182,19 @@ def test_native_tables_cannot_invent_indexed_series_references(tmp_path):
     ctx.registry.results['R1'] = Result('R1', 'series', 'Q1', '预测', '[1,2,3]', 'run_test')
     state = {'analysis': problem().model_dump(), 'task': TASK, 'sections': {'symbols': r'{{R:R1}}[0]' + '此处应展示整组序列而不是使用未定义的索引。' * 10}}
     assert any('序列引用不支持' in issue['message'] for issue in check_sections(state, ctx))
+
+
+def test_publication_removes_prompt_annotations_without_losing_prose():
+    from ai_system.graph.registry import publication_text
+    assert publication_text('结果为 8⟨R1⟩，结论⟨C2⟩。') == '结果为 8，结论。'
+    assert publication_text('正常数学符号 ⟨x,y⟩') == '正常数学符号 ⟨x,y⟩'
+
+
+def test_default_outline_includes_honest_reference_gap(tmp_path):
+    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), output_mode='latex')
+    state = {'analysis': problem().model_dump(), 'task': TASK, 'sections': {}}
+    assert ('references', '参考文献', 2) in writing.section_plan(state)
+    gap = asyncio.run(writing.write_section(ctx, state, 'references', '参考文献'))
+    assert '来源缺口' in gap
+    state['sections']['references'] = gap
+    assert r'\section{参考文献}' in assemble_latex(state)
