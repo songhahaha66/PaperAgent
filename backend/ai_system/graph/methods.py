@@ -6,7 +6,8 @@
 比让模型凭空想方法更稳定，也方便评审时对照"方法是否用对"。
 """
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Dict, List, Tuple
 
 
@@ -88,10 +89,75 @@ METHODS: List[Method] = [
 METHOD_INDEX: Dict[str, Method] = {m.key: m for m in METHODS}
 
 
-def methods_catalog() -> str:
-    """一行一个方法的目录，用于让模型挑选"""
-    return "\n".join(f"- {m.key}: {m.name}（{m.category}）适用：{m.use_when}" for m in METHODS)
+SKILL_SOURCES = {
+    'regression': ('statsmodels 线性回归文档', 'https://www.statsmodels.org/stable/regression.html'),
+    'arima': ('statsmodels ARIMA 文档', 'https://www.statsmodels.org/stable/generated/statsmodels.tsa.arima.model.ARIMA.html'),
+    'linear_programming': ('SciPy linprog 文档', 'https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linprog.html'),
+    'monte_carlo': ('SciPy MonteCarloMethod 文档', 'https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.MonteCarloMethod.html'),
+    'pca': ('scikit-learn PCA 文档', 'https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html'),
+    'clustering': ('scikit-learn 聚类文档', 'https://scikit-learn.org/stable/modules/clustering.html#k-means'),
+}
+SKILL_VERSION = 1
+DEFAULT_SKILL_POLICY = {'mode': 'auto', 'selected': [], 'disabled': []}
 
 
-def describe(keys: List[str]) -> str:
-    return "\n".join(METHOD_INDEX[k].brief() for k in keys if k in METHOD_INDEX)
+def validate_skill_policy(policy):
+    if not isinstance(policy, dict) or set(policy) != {'mode', 'selected', 'disabled'} or policy['mode'] not in {'auto', 'selected'}:
+        raise ValueError('技能配置格式错误')
+    for field in ('selected', 'disabled'):
+        values = policy[field]
+        if not isinstance(values, list) or any(not isinstance(key, str) or key not in SKILL_SOURCES for key in values) or len(set(values)) != len(values):
+            raise ValueError('技能配置包含未知或重复编号')
+    if set(policy['selected']) & set(policy['disabled']):
+        raise ValueError('同一技能不能同时选用和禁用')
+    if policy['mode'] == 'selected' and not policy['selected']:
+        raise ValueError('请至少选择一个技能，或切换自动选择')
+    return {'mode': policy['mode'], 'selected': sorted(policy['selected']) if policy['mode'] == 'selected' else [],
+            'disabled': sorted(policy['disabled'])}
+
+
+def allowed_method_keys(policy=None):
+    policy = policy or DEFAULT_SKILL_POLICY
+    return set(policy['selected'] if policy['mode'] == 'selected' else METHOD_INDEX) - set(policy['disabled'])
+
+
+def skill_catalog():
+    # Metadata only. Full instructions are loaded on detail/proposal/solve requests.
+    return [{**asdict(METHOD_INDEX[key]), 'version': SKILL_VERSION,
+             'sources': [{'title': source[0], 'url': source[1]}], 'origin': 'project_curated'}
+            for key, source in SKILL_SOURCES.items()]
+
+
+def skill_detail(key):
+    if key not in SKILL_SOURCES:
+        raise ValueError('技能不存在')
+    item = next(item for item in skill_catalog() if item['key'] == key)
+    return {**item, 'instructions': (Path(__file__).with_name('skills') / (key + '.md')).read_text(encoding='utf-8')}
+
+
+def methods_catalog(policy=None) -> str:
+    allowed = allowed_method_keys(policy)
+    return "\n".join(f"- {m.key}: {m.name}（{m.category}）适用：{m.use_when}" for m in METHODS if m.key in allowed)
+
+
+def skill_policy_prompt(policy=None):
+    policy = policy or DEFAULT_SKILL_POLICY
+    if policy == DEFAULT_SKILL_POLICY:
+        return ''
+    return ('用户技能约束：' + ('仅允许选用 ' + ', '.join(policy['selected']) if policy['mode'] == 'selected' else '按适用条件自动检索')
+            + '；禁用：' + (', '.join(policy['disabled']) or '无')
+            + '。禁用技能不得在候选或求解中使用；若所选方法不适用，应说明数据或适用条件缺口，不可悄悄更换方法。')
+
+
+def describe(keys: List[str], policy=None) -> str:
+    allowed = allowed_method_keys(policy)
+    texts = []
+    for key in dict.fromkeys(keys):
+        if key not in allowed:
+            continue
+        texts.append(METHOD_INDEX[key].brief())
+        if key in SKILL_SOURCES:
+            skill = skill_detail(key)
+            texts.append(f"技能 {key} v{skill['version']}（项目整理，非本研究经验）\n" + skill['instructions']
+                         + '\n参考来源：' + SKILL_SOURCES[key][1])
+    return "\n\n".join(texts)

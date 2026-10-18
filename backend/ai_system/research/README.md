@@ -288,3 +288,47 @@ PDF compilation consumes that source directly without Pandoc. The writing format
 is part of every section context hash, so a resumed LaTeX run does not reuse
 Markdown sections. Failed compilation keeps the source, blocks PDF delivery and
 never promotes a partial PDF.
+
+## Static research skills
+
+The workspace's **科研技能 / Research skills** panel exposes six curated methods:
+regression, ARIMA, linear/integer programming, Monte Carlo, PCA and clustering.
+Metadata reuses `graph/methods.py`; full instructions live in `graph/skills/*.md`
+and load only when a user opens a detail or a design/solve prompt references it.
+Each skill has applicability, input requirements, steps, limitations, an explicit
+version and links to official library documentation. These are project-authored
+static instructions, not learned user experience or independently tested results.
+
+Users can retain automatic method retrieval while disabling skills, or allow only
+selected skills. Selection is owner-gated and version-checked in the existing
+`research.sqlite` commands table (`workspace-skills` / `policy`), including before
+the first research starts. No new database or external service is introduced.
+
+For an existing research, changed settings invalidate computational tasks and
+transitive dependents using the existing invalidation path. Frozen requirements
+and acceptance checks are unchanged; old attempts/evidence remain historical.
+A previously completed work with stale business tasks is projected as paused so
+its existing resume action can redesign and recompute. The panel provides a
+resume button after a change. Changing settings does not start a model request.
+
+Design retrieval filters the catalog, candidate validation rejects disallowed
+method IDs, and the selected skill instructions/sources reach both proposal and
+solver prompts. Worker contexts inherit the frozen policy; its fingerprint is
+part of execution input references. Designs record skill IDs and versions,
+including an exploration winner. These prompt and metadata constraints are not
+a claim that arbitrary generated Python code can be semantically sandboxed by
+method name.
+
+Validation for this stage: 97 existing graph/control/research tests passed; final
+focused skills, session, publication and workspace checks passed 85 tests.
+Frontend workspace suites produced 44 PASS checks; type checking and Vite build
+passed. Real Chromium with fixture authentication and real local FastAPI routes
+verified details/source links, select/disable, persistence after reload and
+invalidation of existing tasks. Stubbed model responses verified prompt flow and
+candidate guards; no real model generation or research recomputation was run.
+
+The new HTTPS gateway's unauthenticated `/v1/models` returned 401 `missing api key`
+with certificate verification enabled. The proposed base is
+`https://aigw.saurlax.com/v1`. The exact Step 5 Preview model ID and a real request
+remain unverified until supported secure configuration is provided. Do not use a
+display name as a model ID or obtain credentials from chat/files.

@@ -28,6 +28,7 @@ async def observe(state, runtime):
     store = ctx.research
     store.initialize(state["task"], state["analysis"])
     snapshot = store.refresh_inputs()
+    ctx.skill_policy = store.skill_preferences()['policy']
     refresh_registry(ctx)
     tasks = snapshot["tasks"]
     store.schedule_investigations()
@@ -198,7 +199,7 @@ def worker_context(ctx, order):
         n_candidates=ctx.n_candidates, max_solver_steps=ctx.max_solver_steps,
         max_review_rounds=ctx.max_review_rounds, explore_top_k=ctx.explore_top_k,
         explore_steps=ctx.explore_steps, explore_margin=ctx.explore_margin,
-        template_requirements=ctx.template_requirements, check_claims=ctx.check_claims)
+        template_requirements=ctx.template_requirements, check_claims=ctx.check_claims, skill_policy=ctx.skill_policy)
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref

@@ -151,8 +151,41 @@ class ResearchStore:
         with path.open("rb") as stream:
             return hashlib.file_digest(stream, "sha256").hexdigest()
 
+    def skill_preferences(self):
+        from ..graph.methods import DEFAULT_SKILL_POLICY
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT response FROM commands WHERE research_id='workspace-skills' AND id='policy'").fetchone()
+        return json.loads(row[0]) if row else {'version': 0, 'policy': dict(DEFAULT_SKILL_POLICY)}
+
+    def set_skill_preferences(self, policy, base_version):
+        from ..graph.methods import validate_skill_policy
+        policy = validate_skill_policy(policy)
+        with self._transaction() as db:
+            row = db.execute("SELECT response FROM commands WHERE research_id='workspace-skills' AND id='policy'").fetchone()
+            previous = json.loads(row[0]) if row else self.skill_preferences()
+            if previous['version'] != base_version:
+                raise ResearchConflict('技能配置已改变，请刷新后重试')
+            if previous['policy'] == policy:
+                return {**previous, 'affected': []}
+            state = self._read(db)
+            affected = []
+            if state:
+                roots = {key for key, task in state['tasks'].items() if not task['retired'] and task['kind'] != 'writing'}
+                affected = self._invalidate(state, roots, '科研技能配置已改变，使用当前选择重新设计和求解')
+                for key in affected:
+                    state['tasks'][key]['revision'] += 1
+                state['revision'] += 1
+                self._save(db, state, 'skills_changed', {'policy': policy, 'affected': affected})
+            response = {'version': base_version + 1, 'policy': policy}
+            db.execute('INSERT OR REPLACE INTO commands VALUES (?, ?, ?, ?)',
+                       ('workspace-skills', 'policy', digest(policy), json.dumps(response, ensure_ascii=False)))
+            return {**response, 'affected': affected}
+
     def file_inputs(self):
         refs = {}
+        preferences = self.skill_preferences()
+        if preferences['version']:
+            refs['skills:policy'] = digest(preferences['policy'])
         # Unknown file-level dependencies are tracked conservatively. Generated
         # handoff files are frozen in the attempt workspace by the worker adapter.
         for name in ("data", "attachment"):

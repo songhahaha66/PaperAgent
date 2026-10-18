@@ -330,3 +330,51 @@ async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecisi
         return await paper_editor.decide(store, proposal_id, request.decision == 'apply', crud.get_work(db, work_id).output_mode or 'markdown')
     except (ValueError, ResearchConflict) as exc:
         raise HTTPException(409, str(exc))
+
+
+class SkillSelection(BaseModel):
+    base_version: int = Field(ge=0)
+    policy: dict
+
+
+def _skill_store(db, work_id, user_id, *, mutation=False):
+    _require_workspace_access(db, work_id, user_id)
+    if mutation and task_manager.get_running_task(work_id):
+        raise HTTPException(409, '研究正在执行，请暂停后修改技能选择')
+    import json
+    from ai_system.research.store import ResearchStore
+    root = workspace_file_service.get_workspace_path(work_id)
+    thread = root / '.system/graph_thread.json'
+    info = json.loads(thread.read_text()) if thread.exists() else {}
+    research_id = info.get('thread_id') if info.get('engine_version') == 'research-v3' else None
+    return ResearchStore(root, research_id or 'workspace-skills')
+
+
+@router.get('/{work_id}/skills')
+async def get_research_skills(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    from ai_system.graph.methods import skill_catalog
+    store = _skill_store(db, work_id, current_user)
+    snapshot = store.snapshot()
+    usage = [{'task_id': key, 'skills': task.get('design', {}).get('skills', []), 'validity': task['validity']}
+             for key, task in (snapshot or {}).get('tasks', {}).items() if task.get('design') and not task['retired']]
+    return {**store.skill_preferences(), 'catalog': skill_catalog(), 'usage': usage,
+            'has_research': bool(snapshot)}
+
+
+@router.get('/{work_id}/skills/{skill_key}')
+async def get_research_skill_detail(work_id: str, skill_key: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    from ai_system.graph.methods import skill_detail
+    _require_workspace_access(db, work_id, current_user)
+    try:
+        return skill_detail(skill_key)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@router.put('/{work_id}/skills')
+async def save_research_skills(work_id: str, request: SkillSelection, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store = _skill_store(db, work_id, current_user, mutation=True)
+    try:
+        return store.set_skill_preferences(request.policy, request.base_version)
+    except (ValueError, ResearchConflict) as exc:
+        raise HTTPException(409, str(exc))

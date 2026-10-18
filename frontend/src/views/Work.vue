@@ -187,6 +187,13 @@
           >
             <ResearchProgress :snapshot="researchSnapshot" :work-status="currentWork?.status" />
           </section>
+          <ResearchSkills
+            v-else-if="panel.kind === 'skills'"
+            :work-id="workId"
+            :disabled="isStreaming"
+            @updated="loadResearchSnapshot"
+            @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
+          />
           <section
             v-else-if="panel.kind === 'files'"
             class="files-section"
@@ -299,6 +306,7 @@ import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
+import ResearchSkills from '@/components/ResearchSkills.vue'
 import ResearchEvidence from '@/components/ResearchEvidence.vue'
 import ResearchProgress from '@/components/ResearchProgress.vue'
 import { useWorkSession } from '@/composables/useWorkSession'

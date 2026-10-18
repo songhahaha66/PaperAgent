@@ -17,7 +17,7 @@ from langgraph.runtime import Runtime
 from ...judge import Score
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_structured
-from ..methods import METHOD_INDEX, describe, methods_catalog
+from ..methods import METHOD_INDEX, describe, methods_catalog, allowed_method_keys, skill_policy_prompt, SKILL_SOURCES, SKILL_VERSION
 from ..state import BranchInput, CandidateSet, MethodPick
 from ..tracing import labelled
 from ...research.assumptions import unbound_assumptions
@@ -85,11 +85,14 @@ async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
         f"# 已登记的要求与假设\n{json.dumps(branch.get('research_contract', {}), ensure_ascii=False)}\n\n"
-        f"# 方法库\n{methods_catalog()}\n\n"
+        f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}\n\n"
+        f"# 方法库\n{methods_catalog(ctx.skill_policy)}\n\n"
         "从方法库中挑选 2~4 个最适合这个子问题的方法 key（可以组合使用）。"
     )
     pick = await call_structured(ctx.planner_llm, MethodPick, as_messages(ACTOR_SYSTEM, prompt))
-    keys = [k for k in pick.method_keys if k in METHOD_INDEX]
+    keys = [k for k in dict.fromkeys(pick.method_keys) if k in allowed_method_keys(ctx.skill_policy)]
+    if not keys and ctx.skill_policy and ctx.skill_policy['mode'] == 'selected':
+        keys = sorted(allowed_method_keys(ctx.skill_policy))
     return keys[:4]
 
 
@@ -106,13 +109,18 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
         f"# 数据概览\n{branch['data_profile']}\n\n"
         f"# 已登记的要求、假设及任务作用范围\n{json.dumps(branch.get('research_contract', {}), ensure_ascii=False)}\n\n"
-        f"# 参考方法\n{describe(method_keys) or '（自行选择）'}\n\n"
+        f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}\n\n"
+        f"# 参考方法\n{describe(method_keys, ctx.skill_policy) or '（在允许范围内自行选择）'}\n\n"
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
         + f"请给出最多 {ctx.n_candidates} 个候选方案，直接执行已明确的方法即可，不凑数。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
     )
     def validate_candidates(result):
         for candidate in result.candidates:
+            if not set(candidate.method_keys) <= allowed_method_keys(ctx.skill_policy):
+                raise ValueError('候选方案使用了被禁用或未允许的方法')
+            if ctx.skill_policy and ctx.skill_policy['mode'] == 'selected' and not candidate.method_keys:
+                raise ValueError('候选方案必须明确标记所选技能；若不适用请说明缺口')
             unbound_assumptions(branch["subproblem"]["id"], candidate.assumptions, branch.get("research_contract", {}))
 
     result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt), validate=validate_candidates)
@@ -175,7 +183,10 @@ SELF_DESIGN = {
 async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str]:
     """为一个子问题产出方案记录，返回 (记录, 日志)"""
     with labelled(f"{branch['subproblem']['id']}:design"):
-        return await _make_design(ctx, branch)
+        record, log = await _make_design(ctx, branch)
+        keys = record['chosen'].get('method_keys') or []
+        record['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in keys if key in SKILL_SOURCES]
+        return record, log
 
 
 async def _make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str]:
@@ -190,13 +201,14 @@ async def _make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, st
     try:
         method_keys = await pick_methods(ctx, branch)
     except Exception:  # 方法检索失败时不给参考方法，候选方案照常生成
-        method_keys = []
+        method_keys = sorted(allowed_method_keys(ctx.skill_policy))[:4] if ctx.skill_policy and ctx.skill_policy['mode'] == 'selected' else []
     try:
         candidates = await propose(ctx, branch, method_keys)
     except Exception as exc:
         await ctx.events.emit("paper_design", f"{subproblem['id']} 候选方案生成失败，改由求解时自行设计")
-        record = {"methods": method_keys, "candidates": [SELF_DESIGN], "scores": [{"total": None}],
-                  "chosen": SELF_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
+        fallback = {**SELF_DESIGN, 'method_keys': method_keys}
+        record = {"methods": method_keys, "candidates": [fallback], "scores": [{"total": None}],
+                  "chosen": fallback, "chosen_index": 0, "critic": None, "critic_error": None,
                   "design_error": str(exc)}
         return record, f"design {subproblem['id']}: fallback ({exc})"
     try:

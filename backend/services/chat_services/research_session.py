@@ -181,6 +181,10 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             artifacts = [business["paper_version"]] if _file(root, business.get("paper_version")) else []
         if not current:
             issues = []
+    # Business invalidation can make a previously completed work resumable before
+    # the outer work metadata is updated (e.g. a saved skill selection).
+    if business and status == 'completed' and any(t['validity'] == 'stale' and not t['retired'] for t in business['tasks'].values()):
+        status = 'paused'
     control = public_snapshot(business, work_status=status) if business else {}
     return ResearchSnapshot(
         engine_version=thread.get("engine_version"),

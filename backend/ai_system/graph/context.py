@@ -92,6 +92,7 @@ class GraphContext:
     coder_llm: Any
     writer_llm: Any
     research: Any = None
+    skill_policy: Any = None
     judge: Any = None
     n_candidates: int = 1
     confirm_models: bool = False
@@ -126,6 +127,11 @@ class GraphContext:
         contract = workspace / TEMPLATE_CONTRACT
         if contract.exists() and "template_requirements" not in options:
             options["template_requirements"] = contract.read_text(encoding="utf-8")[:TEMPLATE_REQUIREMENTS_CHARS]
+        if 'skill_policy' not in options:
+            from ..research.store import ResearchStore, DB_PATH
+            from .methods import DEFAULT_SKILL_POLICY
+            options['skill_policy'] = (ResearchStore(workspace, 'workspace-skills', read_only=True).skill_preferences()['policy']
+                                       if (workspace / DB_PATH).exists() else dict(DEFAULT_SKILL_POLICY))
         return cls(
             workspace=workspace,
             fs=fs,

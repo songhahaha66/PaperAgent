@@ -36,7 +36,7 @@ from ..compaction import (
 )
 from ..context import GraphContext, list_data_files
 from ..llm_utils import call_structured, clip
-from ..methods import describe
+from ..methods import describe, skill_policy_prompt, allowed_method_keys, SKILL_SOURCES, SKILL_VERSION
 from ..registry import GroundingError
 from ..state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
 from ..tracing import labelled, set_label
@@ -306,6 +306,8 @@ def build_task(
 ) -> str:
     subproblem = branch["subproblem"]
     chosen = candidate or branch["design"]["chosen"]
+    if not set(chosen.get('method_keys') or []) <= allowed_method_keys(ctx.skill_policy):
+        raise ValueError('已有方案使用了当前禁用的技能，请重新设计')
     files = "\n".join(f"- {f}" for f in list_data_files(ctx.workspace)) or "（无）"
     return "\n\n".join(filter(None, [
         f"# 原题（含题内数据；不得用模拟数据替代）\n{branch['source']}",
@@ -314,7 +316,8 @@ def build_task(
         f"# 选定的建模方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"
         f"步骤：\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(chosen["steps"]))
         + f"\n检验：{chosen['validation']}",
-        f"# 方法参考\n{describe(chosen.get('method_keys') or [])}",
+        f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}",
+        f"# 方法参考\n{describe(chosen.get('method_keys') or [], ctx.skill_policy)}",
         _dependency_text(branch.get("dependencies") or {}, ctx),
         "# 研究契约（不得放宽验收；按指定名称登记检查指标，并填写 requirement_evidence）\n" + json.dumps(branch["research_contract"], ensure_ascii=False) if branch.get("research_contract") else "",
         "# 必须逐项复核的先前审查意见\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",
@@ -445,6 +448,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             winner = exploration.winner
             design = {**design, "chosen": winner.candidate, "chosen_index": winner.candidate_index,
                       "exploration": exploration.to_record()}
+            design['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in winner.candidate.get('method_keys', []) if key in SKILL_SOURCES]
             branch = {**branch, "design": design}
             run_log.extend(winner.run_log)
             if winner.report is not None:

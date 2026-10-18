@@ -65,11 +65,12 @@ export function useWorkLayout(workId: Ref<string>) {
       paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
       figures: { label: ui.value.figures, icon: 'chart-line' },
       files: { label: ui.value.files, icon: 'folder-open' },
+      skills: { label: isZh.value ? '科研技能' : 'Research skills', icon: 'books' },
       progress: { label: isZh.value ? '任务进度' : 'Progress', icon: 'task' },
     }[panel.kind]
   }
   const panelOptions = computed(() =>
-    (['progress', 'paper', 'figures', 'files'] as const).map((kind) => ({
+    (['progress', 'paper', 'skills', 'figures', 'files'] as const).map((kind) => ({
       content: panelPresentation({ kind }).label,
       value: kind,
     })),
