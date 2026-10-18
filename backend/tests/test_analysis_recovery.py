@@ -83,7 +83,7 @@ def test_exhausted_analysis_marks_failed_then_resumes_original_question_without_
     assert thread['status']=='failed' and model.calls==3
     assert ResearchStore(tmp_path,thread['thread_id'],read_only=True).snapshot() is None
     assert any(kind=='paper_phase' and c['stage']=='analyze' and c['status']=='blocked' for kind,c in events)
-    assert '阻塞' in (tmp_path/'plan.md').read_text()
+    assert not (tmp_path/'plan.md').exists(), "failed analysis must not invent a fixed task plan"
     model.recovered=True
     assert 'paper.md' in asyncio.run(agent.resume_failed())
     after=json.loads((tmp_path/'.system/graph_thread.json').read_text())

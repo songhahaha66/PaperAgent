@@ -22,6 +22,7 @@ export interface ResearchSnapshot {
   research_revision?: number
   commit_seq?: number
   outcome?: string | null
+  delivery_stages?: Record<string, { status: string; note: string }>
   delivery?: {
     ready: boolean
     blockers: { task_id: string; message: string; action: string }[]
@@ -36,6 +37,26 @@ export interface ResearchSnapshot {
     acceptance: string
     validity: string
     reason?: string
+    progress: {
+      state:
+        | 'accepted'
+        | 'running'
+        | 'interrupted'
+        | 'needs_plan'
+        | 'failed'
+        | 'waiting'
+        | 'blocked'
+        | 'rework'
+        | 'ready'
+        | 'review'
+        | 'pending'
+        | 'writing'
+      waiting_for: string[]
+      issue_ids: string[]
+      attempts: number
+      attempt_limit: number
+      rework: boolean
+    }
     validation?: {
       outcome: string
       checks: { check_id: string; outcome: string; message: string }[]

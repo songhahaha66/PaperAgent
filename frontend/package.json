@@ -17,7 +17,7 @@
     "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs",
     "test:panels": "node --experimental-vm-modules tests/workPanels.test.cjs && node --experimental-vm-modules tests/workPaneLayout.test.cjs && node --experimental-vm-modules tests/workInteractions.test.cjs",
     "test:workspace": "npm run test:panels && npm run test:preview && npm run test:history && npm run test:research",
-    "test:research": "node --experimental-vm-modules tests/researchEvidence.test.cjs"
+    "test:research": "node --experimental-vm-modules tests/researchEvidence.test.cjs && node --experimental-vm-modules tests/researchProgress.test.cjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

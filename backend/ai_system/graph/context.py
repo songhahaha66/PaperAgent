@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
-from services.file_services.plan_reconciler import PlanReconciler
 from services.file_services.workspace_fs import WorkspaceFS
 
 from ..sandbox import PythonKernel
@@ -73,16 +72,6 @@ class EventSink:
             await self.emit("file_changed", path)
 
 
-STAGES = [
-    ("analyze", "题目分析与数据概览"),
-    ("design", "建模方案：检索方法、生成候选、评审打分"),
-    ("confirm", "确认建模方案"),
-    ("solve", "分子问题编码求解并登记结果"),
-    ("write", "按登记结果撰写各章节"),
-    ("validate", "校验引用与数字，修复问题章节"),
-    ("render", "生成 paper.md"),
-    ("export", "导出最终格式"),
-]
 EXPORT_STAGE_TITLES = {"latex": "LaTeX 排版并编译 PDF", "word": "导出 Word 文档"}
 # 上传模板时由 services/file_services/template_contract.py 放进工作空间
 TEMPLATE_CONTRACT = ".system/template_contract.md"
@@ -90,7 +79,6 @@ TEMPLATE_DOCX = ".system/_template_original.docx"
 TEMPLATE_REQUIREMENTS_CHARS = 4000
 # 编码循环每步只写一段代码，4096 token 足够；不设上限时一次重复输出能把请求拖到网关 300 秒超时
 CODER_MAX_TOKENS = 4096
-STATUS_LABEL = {"pending": "⬜ 待写", "in_progress": "⏳ 进行中", "completed": "✅ 已完成", "blocked": "❌ 阻塞"}
 
 
 @dataclass
@@ -152,30 +140,15 @@ class GraphContext:
         )
 
     async def set_stage(self, key: str, status: str, note: str = "") -> None:
-        """更新进度并同步到 plan.md / plan.json（前端固定展示 plan.json）"""
+        """Publish live events; durable research snapshots own current progress."""
         self.stage_status[key] = status
         if note:
             self.stage_notes[key] = note
-        # 聊天里阶段卡片的进度条；plan_updated 由右侧计划面板消费，前端不放进消息
+        if self.research and key in {"write", "validate", "render", "export"}:
+            self.research.set_delivery_stage(key, status, note)
+            from ..research.control import public_snapshot
+            await self.events.emit("research_state", public_snapshot(self.research.snapshot()))
         await self.events.emit("paper_phase", {"stage": key, "status": status, "note": note})
-        lines = ["# 数模论文生成计划", "", "| 序号 | 章节/任务 | 状态 | 说明 |", "|------|-----------|------|------|"]
-        stages = [
-            (k, EXPORT_STAGE_TITLES.get(self.output_mode, t) if k == "export" else t)
-            for k, t in STAGES
-            if k != "export" or self.output_mode in EXPORT_STAGE_TITLES
-        ]
-        for order, (stage_key, title) in enumerate(stages, start=1):
-            label = STATUS_LABEL[self.stage_status.get(stage_key, "pending")]
-            lines.append(f"| {order} | {title} | {label} | {self.stage_notes.get(stage_key, '')} |")
-        markdown = "\n".join(lines) + "\n"
-        try:
-            reconciler = PlanReconciler(self.workspace)
-            plan = reconciler.build_from_markdown(markdown, source="paper_graph")
-            (self.workspace / "plan.md").write_text(markdown, encoding="utf-8")
-            reconciler.write_plan_json(plan)
-            await self.events.emit("plan_updated", plan)
-        except Exception as exc:
-            logger.warning("更新 plan.json 失败: %s", exc)
 
     def write_json(self, rel_path: str, data: Any) -> None:
         self.fs.write_text(rel_path, json.dumps(data, ensure_ascii=False, indent=2))

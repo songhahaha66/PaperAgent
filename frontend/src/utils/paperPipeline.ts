@@ -26,7 +26,7 @@ export interface SubproblemProgress {
   fails: number
 }
 
-// 与 backend/ai_system/graph/context.py 的 STAGES 顺序一致
+// Historical execution cards only. Current work progress comes from research snapshots.
 const PHASES: Array<{ key: string; label: string }> = [
   { key: 'analyze', label: '题目分析' },
   { key: 'design', label: '方案设计' },

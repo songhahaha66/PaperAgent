@@ -13,6 +13,7 @@ from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
 from .planner import ready_tasks, Planner
 from .assumptions import assumption_scope
 from .validation import needs_owner_review
+from .progress import task_progress
 
 
 def refresh_registry(ctx):
@@ -102,10 +103,14 @@ def dispatch(state, runtime):
     return sends
 
 
-def public_snapshot(snapshot):
+def public_snapshot(snapshot, *, work_status=None):
+    ready = set(ready_tasks(snapshot))
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
         "delivery": delivery_status(snapshot),
-        "tasks": [public_task(snapshot, task) for task in snapshot["tasks"].values() if not task["retired"]],
+        "delivery_stages": {key: {**stage, "status": "interrupted" if stage["status"] == "in_progress" and
+            work_status in {"paused", "cancelled", "failed"} else stage["status"]}
+            for key, stage in snapshot.get("delivery_stages", {}).items()},
+        "tasks": [public_task(snapshot, task, ready, work_status) for task in snapshot["tasks"].values() if not task["retired"]],
         "issues": [i for i in snapshot["issues"] if i["status"] not in {"resolved", "dismissed"}],
         "requirements": [{**r, "status": "accepted" if all(snapshot["tasks"][key]["acceptance"] == "accepted" and
             snapshot["tasks"][key]["validity"] == "current" and (snapshot["tasks"][key]["kind"] != "writing" or
@@ -114,10 +119,11 @@ def public_snapshot(snapshot):
     }
 
 
-def public_task(snapshot, task):
+def public_task(snapshot, task, ready=None, work_status=None):
     result = {key: task.get(key) for key in ("task_id", "revision", "objective", "dependencies",
               "execution_status", "acceptance", "validity", "reason", "kind")}
     result["validation"] = current_validation(snapshot, task)
+    result["progress"] = task_progress(snapshot, task, set(ready_tasks(snapshot)) if ready is None else ready, work_status)
     return result
 
 
@@ -216,6 +222,7 @@ async def execute(branch, runtime):
     except ResearchConflict as exc:
         await ctx.events.stage(str(exc))
         return {}
+    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
     local = None
     receipt = None
     try:
@@ -261,6 +268,7 @@ async def execute(branch, runtime):
         refresh_registry(ctx)
         snapshot = ctx.research.snapshot()
         committed = snapshot["tasks"][key]
+        await ctx.events.emit("research_state", public_snapshot(snapshot))
         accepted = (receipt["published"] and committed["acceptance"] == "accepted"
                     and committed["validity"] == "current")
         if accepted:
@@ -286,6 +294,7 @@ async def execute(branch, runtime):
             return {"log": [f"projection {key} failed after commit: {exc}"]}
         ctx.research.commit(WorkerResult(order=order, execution_status="failed", acceptance="inconclusive",
             report={"status": "failed", "error": str(exc)}, issues=[IssueReport(task_id=key, category="execution", message=str(exc))]))
+        await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
         await ctx.events.stage(f"{key} 执行失败：{exc}")
         return {"log": [f"attempt {key} failed: {exc}"]}
     finally:

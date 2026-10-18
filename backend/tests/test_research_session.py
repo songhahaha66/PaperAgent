@@ -226,6 +226,13 @@ def test_snapshot_api_checks_ownership_before_reading_files(web):
     assert response.status_code == 403 and "R1" not in response.text
 
 
+def test_snapshot_does_not_show_a_lost_coordinator_as_running(web):
+    client, work, *_ = web
+    work.status = "in_progress"
+    assert client.get("/api/chat/work/work/research").json()["work_status"] == "paused"
+    assert work.status == "in_progress", "progress projection must not mutate business records"
+
+
 def test_corrupt_records_reject_message_without_running_or_resetting(web):
     client, work, calls, statuses, saved, root = web
     (root / ".system/results.json").write_text("{")

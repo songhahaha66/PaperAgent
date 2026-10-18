@@ -129,7 +129,7 @@ class ResearchStore:
                      "assumptions": {a.id: {**a.model_dump(), "revision": 1, "status": "active", "source": "analysis", "producer_attempt": None} for a in assumptions},
                      "assumption_history": [], "validations": [],
                      "tasks": tasks, "attempts": {}, "evidence": {}, "claims": {},
-                     "sections": {}, "issues": [], "outcome": "running", "max_attempts": max_attempts,
+                     "sections": {}, "issues": [], "delivery_stages": {}, "outcome": "running", "max_attempts": max_attempts,
                      "planning_calls": 0, "proposal_hashes": [], "max_total_attempts": len(tasks) * max_attempts + 6}
             self._validate_contracts(state)
             self._bind_assumption_inputs(state)
@@ -547,6 +547,7 @@ class ResearchStore:
         affected = set(affected)
         if not affected:
             return []
+        state["delivery_stages"] = {}
         while True:
             more = {key for key, task in state["tasks"].items() if set(task["dependencies"]) & affected}
             if more <= affected:
@@ -735,6 +736,17 @@ class ResearchStore:
                 state["outcome"] = outcome
                 self._save(db, state, "outcome_changed", {"outcome": outcome})
 
+    def set_delivery_stage(self, stage, status, note):
+        if stage not in {"write", "validate", "render", "export"}:
+            return
+        with self._transaction() as db:
+            state = self._read(db)
+            value = {"status": status, "note": note}
+            if state.get("delivery_stages", {}).get(stage) == value:
+                return
+            state.setdefault("delivery_stages", {})[stage] = value
+            self._save(db, state, "delivery_stage", {"stage": stage, **value})
+
     def load_revision_command(self, command_id, base_revision, change, scope):
         with closing(self._connect()) as db:
             row = db.execute("SELECT digest, response FROM commands WHERE research_id=? AND id=?",
@@ -786,6 +798,9 @@ class ResearchStore:
                 if attempt["execution_status"] == "running":
                     attempt["execution_status"] = "cancelled"
             self._invalidate(state, pending, "从已提交业务状态恢复")
+            for stage in state.get("delivery_stages", {}).values():
+                if stage["status"] == "in_progress":
+                    stage.update(status="pending", note="")
             for issue in state["issues"]:
                 if issue["category"] == "service" and issue["source"] != "local_review":
                     issue["status"] = "resolved"  # The graph will rerun the failed audit before delivery.

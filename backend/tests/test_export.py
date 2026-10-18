@@ -106,7 +106,10 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path):
     # 一开始就告诉前端有排版导出这一步，最后完成
     assert export_phases[0] == "pending" and export_phases[-1] == "completed"
     assert any(t == "paper_export" and "paper.pdf" in c for t, c in events)
-    assert "LaTeX 排版" in (ws / "plan.md").read_text(encoding="utf-8")
+    from services.chat_services.research_session import research_snapshot
+    snapshot = research_snapshot(ws, "work", "completed")
+    assert snapshot.delivery_stages["export"]["status"] == "completed"
+    assert "paper.pdf" in snapshot.artifacts
 
 
 def test_expand_math_macros_only_inside_math():
@@ -197,7 +200,10 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     assert "paper.docx" in output
     texts = [p.text for p in Document(str(ws / "paper.docx")).paragraphs]
     assert "4 结论与建议" in texts
-    assert "Word" in (ws / "plan.md").read_text(encoding="utf-8")
+    from services.chat_services.research_session import research_snapshot
+    snapshot = research_snapshot(ws, "work", "completed")
+    assert snapshot.delivery_stages["export"]["status"] == "completed"
+    assert "paper.docx" in snapshot.artifacts
 
 
 def test_file_panel_lists_exported_paper_files(tmp_path):

@@ -36,7 +36,7 @@
       <div v-if="snapshot.tasks?.length" class="research-tasks">
         <div v-for="task in snapshot.tasks" :key="task.task_id" class="research-task">
           <strong>{{ task.task_id }} · v{{ task.revision }}</strong>
-          {{ taskLabel(task.execution_status, task.acceptance, task.validity) }}
+          {{ taskLabel(taskState(task, snapshot.work_status), isZh) }}
           <small v-if="task.reason"> · {{ task.reason }}</small>
           <button
             v-if="
@@ -145,7 +145,8 @@
             <span class="result-id">{{ result.subproblem_id }} · {{ result.id }}</span>
             <span class="result-name">{{ result.name }}</span>
             <strong
-              ><small v-if="result.kind === 'series'">{{ isZh ? '数值序列 ' : 'Series ' }}</small>{{ result.kind === 'figure' ? (isZh ? '图表' : 'Figure') : result.value
+              ><small v-if="result.kind === 'series'">{{ isZh ? '数值序列 ' : 'Series ' }}</small
+              >{{ result.kind === 'figure' ? (isZh ? '图表' : 'Figure') : result.value
               }}<template v-if="result.unit && !result.value.endsWith(result.unit)">
                 {{ result.unit }}</template
               ></strong
@@ -199,6 +200,7 @@
   </details>
 </template>
 <script setup lang="ts">
+import { taskState, taskLabel } from '@/utils/researchProgress'
 import { computed, ref, watch } from 'vue'
 import { useStudioCopy } from '@/lang/studio'
 import type { ResearchSnapshot, ResearchResult } from '@/types/research'
@@ -239,15 +241,6 @@ const premiseSource = (source: string) =>
     design: isZh.value ? '选定方案提出' : 'Selected design',
     solve: isZh.value ? '求解中提出' : 'Solving',
   })[source] || source
-const taskLabel = (execution: string, acceptance: string, validity: string) => {
-  if (validity === 'stale')
-    return isZh.value ? '结果已失效，等待重算' : 'Stale, awaiting recomputation'
-  if (acceptance === 'rejected' || acceptance === 'inconclusive')
-    return isZh.value ? '尚未通过验收' : 'Awaiting acceptance'
-  if (acceptance === 'accepted') return isZh.value ? '已验收' : 'Accepted'
-  if (execution === 'running') return isZh.value ? '执行中' : 'Running'
-  return isZh.value ? '等待执行' : 'Pending'
-}
 const assumptionLabel = (status: string) =>
   ({
     active: isZh.value ? '采用中，仍可被检验' : 'In use, testable',

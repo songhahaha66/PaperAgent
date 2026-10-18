@@ -82,31 +82,8 @@
           ><button v-if="connectionState === 'lost'" class="text-action" @click="reconnectTask">
             {{ ui.reconnect }}
           </button>
-          <button
-            class="phase-toggle"
-            :aria-expanded="phasesExpanded"
-            aria-controls="work-phases"
-            @click="phasesExpanded = !phasesExpanded"
-          >
-            <span
-              >{{ completedPhaseCount }}/{{ visiblePhases.length }}
-              {{ isZh ? '阶段' : 'stages' }}</span
-            >
-            <t-icon :name="phasesExpanded ? 'chevron-up' : 'chevron-down'" />
-          </button>
         </div>
-        <div v-show="phasesExpanded" id="work-phases" class="phase-track">
-          <span
-            v-for="(phase, index) in visiblePhases"
-            :key="phase.key"
-            :class="['phase-step', `is-${phase.status}`]"
-            ><span class="phase-number"
-              ><t-icon v-if="phase.status === 'completed'" name="check" /><template v-else>{{
-                index + 1
-              }}</template></span
-            >{{ phase.label }}</span
-          >
-        </div>
+        <ResearchProgress :snapshot="researchSnapshot" :work-status="currentWork?.status" />
       </section>
       <div v-if="needsRecovery" class="recovery-banner" role="status">
         <t-icon name="pause-circle" />
@@ -259,7 +236,7 @@
               :work-id="workId"
               :loading="loading || isFileRefreshing"
               :file-tree-data="workspaceFiles"
-              :plan-data="planData"
+              :research-snapshot="researchSnapshot"
               @file-select="handleWorkspaceFileSelect"
               @refresh="handleFileRefresh"
               @main-paper-click="handleMainPaperClick"
@@ -346,8 +323,6 @@ import {
   attachmentAPI,
   type Work,
   type FileInfo,
-  type PlanData,
-  type PlanItemStatus,
 } from '@/api/workspace'
 import { chatAPI, WebSocketChatHandler, type ChatMessage } from '@/api/chat'
 import Sidebar from '@/components/Sidebar.vue'
@@ -357,6 +332,8 @@ import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import ResearchEvidence from '@/components/ResearchEvidence.vue'
+import ResearchProgress from '@/components/ResearchProgress.vue'
+import { researchHeadline } from '@/utils/researchProgress'
 import type { ResearchAction, ResearchSnapshot } from '@/types/research'
 import {
   useWorkPanelsStore,
@@ -367,7 +344,6 @@ import {
 
 import { useStudioCopy } from '@/lang/studio'
 import { formatWorkDate } from '@/utils/dates'
-import { asText, derivePhases, isPaperEvent, type PipelineBlock } from '@/utils/paperPipeline'
 const { ui, isZh } = useStudioCopy()
 const route = useRoute()
 const router = useRouter()
@@ -420,8 +396,6 @@ const inputValue = computed({
 })
 const imageUrls = ref<Record<string, string>>({})
 const figureScroller = ref<HTMLElement | null>(null)
-
-const planData = ref<PlanData | null>(null)
 
 // 导出状态
 const exportLoading = ref(false)
@@ -512,12 +486,22 @@ function askSubproblem(id: string) {
   )
 }
 let evidenceRequest = 0
+function applyResearchSnapshot(snapshot: ResearchSnapshot) {
+  if (disposed || snapshot.work_id !== workId.value) return
+  const previous = researchSnapshot.value
+  if (
+    previous?.research_id === snapshot.research_id &&
+    (snapshot.commit_seq || 0) < (previous?.commit_seq || 0)
+  )
+    return
+  researchSnapshot.value = snapshot
+  applyWorkStatus(snapshot.work_status)
+}
 async function loadResearchSnapshot() {
   const request = ++evidenceRequest
   try {
     const snapshot = await chatAPI.getResearchSnapshot(workId.value)
-    if (!disposed && request === evidenceRequest && snapshot.work_id === workId.value)
-      researchSnapshot.value = snapshot
+    if (request === evidenceRequest) applyResearchSnapshot(snapshot)
   } catch {
     // Do not blank existing evidence on transient read/network failures.
   }
@@ -526,10 +510,6 @@ const webSocketHandler = ref<WebSocketChatHandler | null>(null)
 const isFileRefreshing = ref(false) // 防止重复刷新文件列表
 
 // Stable controls stay outside the scrolling transcript.
-const phasesExpanded = ref(false)
-const completedPhaseCount = computed(
-  () => visiblePhases.value.filter((phase) => phase.status === 'completed').length,
-)
 const detailsOpen = ref(false),
   pausing = ref(false),
   downloadLoading = ref(false)
@@ -538,12 +518,6 @@ const atBottom = ref(panelSession.value.followChat),
   taskStartedAt = ref<number | null>(null),
   clockNow = ref(Date.now())
 let elapsedTimer: ReturnType<typeof setInterval> | undefined
-const latestBlocks = computed<PipelineBlock[]>(
-  () =>
-    [...chatMessages.value]
-      .reverse()
-      .find((m) => m.role === 'assistant' && m.json_blocks?.some(isPaperEvent))?.json_blocks || [],
-)
 const needsRecovery = computed(
   () =>
     !isStreaming.value &&
@@ -581,25 +555,13 @@ function prepareNewResearch() {
     document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
   )
 }
-const visiblePhases = computed(() =>
-  derivePhases(latestBlocks.value, {
-    done: currentWork.value?.status === 'completed',
-    failed: currentWork.value?.status === 'failed',
-  }),
+const stageText = computed(() =>
+  isStreaming.value && runningAction.value === 'ask'
+    ? isZh.value
+      ? '正在分析已有结果'
+      : 'Reviewing existing results'
+    : researchHeadline(researchSnapshot.value, currentWork.value?.status || 'created', isZh.value),
 )
-const stageText = computed(() => {
-  if (isStreaming.value && runningAction.value === 'ask')
-    return isZh.value ? '正在分析已有结果' : 'Reviewing existing results'
-  if (needsRecovery.value) return ui.value.needsAttention
-  if (currentWork.value?.status === 'waiting')
-    return isZh.value ? '等待确认建模方案' : 'Waiting for plan approval'
-  if (!isStreaming.value)
-    return currentWork.value ? getStatusText(currentWork.value.status) : ui.value.loading
-  return (
-    asText([...latestBlocks.value].reverse().find((b) => b.type === 'paper_stage')?.content) ||
-    ui.value.working
-  )
-})
 const elapsedText = computed(() => {
   if (!isStreaming.value || !taskStartedAt.value) return ''
   const seconds = Math.max(0, Math.floor((clockNow.value - taskStartedAt.value) / 1000))
@@ -761,7 +723,7 @@ async function pauseTask() {
     applyWorkStatus(result.work_status)
     isStreaming.value = false
     await loadChatHistory()
-    await loadWorkspaceFiles()
+    await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
   } catch {
     MessagePlugin.error(isZh.value ? '暂停失败，请重试' : 'Could not pause. Please retry.')
   } finally {
@@ -778,6 +740,7 @@ async function reconnectTask() {
       currentWork.value = await workspaceAPI.getWork(authStore.token, workId.value)
     connectionState.value = 'idle'
   }
+  await loadResearchSnapshot()
 }
 function trackChatScroll(event: Event) {
   const target = event.target as HTMLElement
@@ -850,7 +813,7 @@ const loadWork = async () => {
     historyStore.upsert(work)
 
     // 加载工作空间文件
-    await Promise.all([loadWorkspaceFiles(), loadPlanContent(), loadResearchSnapshot()])
+    await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
     if (disposed) return
     await loadChatHistory()
     if (disposed) return
@@ -930,6 +893,10 @@ async function connectWorkSocket(messageId: string) {
     if (data.type === 'start' || data.type === 'auth_success') {
       applyWorkStatus(data.work_status)
       if (data.action) runningAction.value = data.action
+      if (data.type === 'start') {
+        ++evidenceRequest
+        if (data.action === 'run') researchSnapshot.value = null
+      }
     } else handleStreamMessage(data, messageId)
   })
   await handler.connect()
@@ -971,7 +938,7 @@ const handleConnectionLost = async () => {
   reconnectMessageId.value = null
   await loadChatHistory()
   currentWork.value = await workspaceAPI.getWork(authStore.token, workId.value)
-  loadWorkspaceFiles()
+  await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
 }
 
 // 统一的流式消息处理函数
@@ -1009,16 +976,12 @@ const handleStreamMessage = (data: any, messageId: string) => {
       } else if (block?.type === 'research_snapshot') {
         if (block.content?.schema_version === 2 && block.content.work_id === workId.value) {
           ++evidenceRequest
-          researchSnapshot.value = block.content as ResearchSnapshot
+          applyResearchSnapshot(block.content as ResearchSnapshot)
         }
       } else if (block?.type === 'file_changed') {
         setTimeout(() => loadWorkspaceFiles(), 500)
       } else if (block?.type === 'plan_updated') {
-        if (block.content && typeof block.content === 'object') {
-          planData.value = block.content as PlanData
-        } else {
-          planData.value = markdownPlanToData(String(block.content || ''))
-        }
+        // Plans are projected from the research snapshot, never phase events.
       } else {
         chatMessages.value[messageIndex] = {
           ...currentMessage,
@@ -1050,6 +1013,7 @@ const handleStreamMessage = (data: any, messageId: string) => {
       }
       isStreaming.value = false
       reconnectMessageId.value = null
+      loadResearchSnapshot()
       break
   }
 
@@ -1123,123 +1087,10 @@ const loadWorkspaceFiles = async () => {
   }
 }
 
-const loadPlanContent = async () => {
-  if (!workId.value || !authStore.token) return
-  try {
-    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.json')
-    if (!disposed) planData.value = response.content ? JSON.parse(response.content) : null
-  } catch {
-    try {
-      const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.md')
-      if (!disposed) planData.value = markdownPlanToData(response.content || '')
-    } catch {
-      if (!disposed) planData.value = null
-    }
-  }
-}
-
-const normalizePlanStatus = (rawStatus: string): PlanItemStatus => {
-  const text = rawStatus.toLowerCase()
-  if (
-    text.includes('❌') ||
-    text.includes('阻塞') ||
-    text.includes('blocked') ||
-    text.includes('失败')
-  )
-    return 'blocked'
-  if (
-    text.includes('⬜') ||
-    text.includes('待写') ||
-    text.includes('pending') ||
-    text.includes('todo')
-  )
-    return 'pending'
-  if (text.includes('⏳') || text.includes('进行') || text.includes('progress'))
-    return 'in_progress'
-  if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
-  return 'pending'
-}
-
-const markdownPlanToData = (content: string): PlanData | null => {
-  if (!content.trim()) return null
-  const title =
-    content
-      .split('\n')
-      .find((line) => line.trim().startsWith('#'))
-      ?.replace(/^#+/, '')
-      .trim() || '写作计划'
-  const rows = content
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('|') && !line.includes('---'))
-    .map((line) =>
-      line
-        .replace(/^\|/, '')
-        .replace(/\|$/, '')
-        .split('|')
-        .map((cell) => cell.trim()),
-    )
-  const items = rows.slice(1).map((row, index) => {
-    const order = Number.parseInt(row[0] || `${index + 1}`, 10) || index + 1
-    const status = normalizePlanStatus(row[2] || '')
-    return {
-      id: `task-${order}`,
-      order,
-      title: row[1] || `任务 ${order}`,
-      status,
-      status_label: row[2]?.replace(/[✅⏳⬜❌]/g, '').trim() || undefined,
-      description: row[3] || '',
-      phase: 'write',
-      depends_on: order > 1 ? [`task-${order - 1}`] : [],
-      raw_status: row[2] || '',
-    }
-  })
-  const stats = {
-    total: items.length,
-    completed: items.filter((item) => item.status === 'completed').length,
-    in_progress: items.filter((item) => item.status === 'in_progress').length,
-    blocked: items.filter((item) => item.status === 'blocked').length,
-    pending: items.filter((item) => item.status === 'pending').length,
-    progress_percent: items.length
-      ? Math.round(
-          (items.filter((item) => item.status === 'completed').length / items.length) * 100,
-        )
-      : 0,
-  }
-  const current_focus =
-    items.find((item) => item.status === 'in_progress') ||
-    items.find((item) => item.status === 'pending') ||
-    items.find((item) => item.status === 'blocked') ||
-    null
-  return {
-    version: 1,
-    revision: 0,
-    title,
-    methodology: 'spec-driven',
-    planning_mode: 'dynamic',
-    phases: [
-      { id: 'requirements', title: '需求澄清' },
-      { id: 'design', title: '方案设计' },
-      { id: 'tasks', title: '任务拆解' },
-      { id: 'implement', title: '执行生成' },
-      { id: 'verify', title: '验收检查' },
-    ],
-    items,
-    stats,
-    current_focus,
-    next_actions: items
-      .filter((item) => item.status === 'pending' || item.status === 'blocked')
-      .slice(0, 3)
-      .map((item) => ({ id: item.id, title: item.title })),
-    source: 'frontend_markdown_fallback',
-    source_markdown: content,
-  }
-}
-
 // 处理文件刷新
 const handleFileRefresh = async () => {
   console.log('手动刷新文件列表')
-  await loadWorkspaceFiles()
+  await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
 }
 
 // 删除工作
@@ -1718,72 +1569,6 @@ const generateWorkTitle = async (question: string) => {
 .connection-state.lost {
   color: var(--td-error-color);
 }
-.phase-toggle {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 0 6px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #747c75;
-  cursor: pointer;
-  font-size: 12px;
-  white-space: nowrap;
-}
-.phase-toggle:hover {
-  background: #f3f5f2;
-  color: #303830;
-}
-.phase-track {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
-  gap: 14px 12px;
-  border-top: 1px solid #eceeeb;
-  padding-top: 16px;
-  margin: 10px 0 6px;
-}
-.phase-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-  color: #8d958e;
-  font-size: 12px;
-}
-.phase-number {
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  border: 1px solid #d9dfd9;
-  border-radius: 50%;
-  font-size: 11px;
-  flex-shrink: 0;
-}
-.phase-number > .t-icon {
-  font-size: 12px;
-}
-.phase-step.is-completed {
-  color: var(--td-brand-color);
-}
-.phase-step.is-completed .phase-number {
-  border-color: var(--td-brand-color);
-}
-.phase-step.is-in_progress {
-  color: var(--td-brand-color);
-  font-weight: 500;
-}
-.phase-step.is-in_progress .phase-number {
-  background: var(--td-brand-color);
-  border-color: var(--td-brand-color);
-  color: white;
-}
-.phase-step.is-blocked {
-  color: var(--td-warning-color);
-}
 .recovery-banner {
   margin: 16px 24px 0;
   display: flex;
@@ -2055,14 +1840,6 @@ const generateWorkTitle = async (question: string) => {
   .elapsed {
     display: none;
   }
-  .phase-track {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px 8px;
-  }
-  .phase-step {
-    font-size: 11px;
-    gap: 6px;
-  }
   .recovery-banner {
     margin: 12px 16px 0;
     padding: 12px;
@@ -2098,11 +1875,6 @@ const generateWorkTitle = async (question: string) => {
   .figure-grid {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 14px;
-  }
-}
-@media (max-width: 380px) {
-  .phase-track {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

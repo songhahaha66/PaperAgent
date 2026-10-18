@@ -65,6 +65,7 @@ class ResearchSnapshot(BaseModel):
     commit_seq: int = 0
     outcome: str | None = None
     delivery: dict | None = None
+    delivery_stages: dict = Field(default_factory=dict)
     requirements: list[dict] = Field(default_factory=list)
     assumptions: list[dict] = Field(default_factory=list)
     validations: list[dict] = Field(default_factory=list)
@@ -138,7 +139,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         )
         for item in raw_results[:500] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
-    issue_refs = {ref for issue in business["issues"][-30:] for ref in issue["evidence_refs"]} if business else set()
+    visible_issues = [issue for index, issue in enumerate(business["issues"])
+                      if issue["status"] not in {"resolved", "dismissed"} or index >= len(business["issues"]) - 30] if business else []
+    issue_refs = {ref for issue in visible_issues for ref in issue["evidence_refs"]}
     historical = [entry["payload"] for rid, entry in business["evidence"].items() if rid in issue_refs] if business else []
     issue_evidence = [ResearchResult(id=str(item["id"]), subproblem_id=str(item["subproblem"]),
         name=str(item.get("name", "")), value=str(item.get("value", "")), unit=str(item.get("unit", "")),
@@ -177,14 +180,15 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             artifacts = [business["paper_version"]] if _file(root, business.get("paper_version")) else []
         if not current:
             issues = []
-    control = public_snapshot(business) if business else {}
+    control = public_snapshot(business, work_status=status) if business else {}
     return ResearchSnapshot(
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
         outcome=control.get("outcome"), delivery=control.get("delivery"), tasks=control.get("tasks", []),
+        delivery_stages=control.get("delivery_stages", {}),
         requirements=control.get("requirements", []), assumptions=control.get("assumptions", []),
         validations=business["validations"][-20:] if business else [],
-        issues=business["issues"][-30:] if business else [], issue_evidence=issue_evidence,
+        issues=visible_issues, issue_evidence=issue_evidence,
         work_id=work_id, work_status=status, research_id=thread.get("thread_id"),
         graph_status=thread.get("status"),
         has_research=bool(thread or registry or artifacts),

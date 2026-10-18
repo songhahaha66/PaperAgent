@@ -83,7 +83,12 @@ const { hostRenderer } = require('./vueHost.cjs')
   button('追问这部分').props.onClick()
   assert.deepEqual(opened, ['runs/run_two/input.py', 'runs/run_two/stdout.log'])
   assert.deepEqual(asked, ['Q2'])
-  snapshot.value = { ...snapshot.value, results: [{ ...snapshot.value.results[1], kind: 'series', value: '[469.2,471.8,475.2,477.6,481]' }] }
+  snapshot.value = {
+    ...snapshot.value,
+    results: [
+      { ...snapshot.value.results[1], kind: 'series', value: '[469.2,471.8,475.2,477.6,481]' },
+    ],
+  }
   await flush()
   assert.match(text(host.root), /数值序列.*\[469.2,471.8,475.2,477.6,481\]/)
   button('执行输出').props.onClick()
@@ -98,6 +103,14 @@ const { hostRenderer } = require('./vueHost.cjs')
     tasks: [
       {
         task_id: 'Q4',
+        progress: {
+          state: 'running',
+          waiting_for: [],
+          issue_ids: [],
+          attempts: 1,
+          attempt_limit: 3,
+          rework: false,
+        },
         kind: 'verify',
         revision: 1,
         execution_status: 'running',
@@ -184,6 +197,14 @@ const { hostRenderer } = require('./vueHost.cjs')
     tasks: [
       {
         task_id: 'Q1',
+        progress: {
+          state: 'accepted',
+          waiting_for: [],
+          issue_ids: [],
+          attempts: 1,
+          attempt_limit: 3,
+          rework: false,
+        },
         revision: 2,
         kind: 'compute',
         execution_status: 'succeeded',

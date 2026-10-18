@@ -299,6 +299,42 @@ async function environment() {
   recovery.stop()
   console.log('PASS: recovery controls honor current work state and supported research protocol')
 
+  const progress = await env.work('progress')
+  await progress.state.loadWork()
+  const snapshot = {
+    ...progress.state.researchSnapshot.value,
+    commit_seq: 10,
+    work_status: 'in_progress',
+    tasks: [{ task_id: 'Q2', progress: { state: 'running' } }],
+  }
+  progress.state.currentWork.value.status = 'in_progress'
+  progress.state.applyResearchSnapshot(snapshot)
+  assert.equal(progress.state.stageText.value, '正在执行 Q2')
+  progress.state.chatMessages.value = [
+    {
+      role: 'assistant',
+      json_blocks: [{ type: 'paper_phase', content: { stage: 'analyze', status: 'in_progress' } }],
+    },
+  ]
+  assert.equal(
+    progress.state.stageText.value,
+    '正在执行 Q2',
+    'old phase events cannot reset committed task progress',
+  )
+  progress.state.applyResearchSnapshot({ ...snapshot, commit_seq: 9, tasks: [] })
+  await progress.state.loadResearchSnapshot()
+  assert.equal(
+    progress.state.researchSnapshot.value.commit_seq,
+    10,
+    'older HTTP/stream snapshots cannot rewind progress',
+  )
+  progress.state.currentWork.value.status = 'paused'
+  assert.equal(progress.state.stageText.value, '研究已暂停，进度已保留')
+  progress.stop()
+  console.log(
+    'PASS: work progress uses committed tasks and rejects stale snapshots across recovery',
+  )
+
   const leaving = await env.work('leaving', true)
   const send = leaving.state.sendMessage('Do not send after leaving')
   leaving.stop()

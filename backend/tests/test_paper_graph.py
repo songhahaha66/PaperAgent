@@ -337,8 +337,11 @@ def test_graph_end_to_end_offline(tmp_path):
     q2_design = next(p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p)
     assert "前序子问题的结论" in q2_design and "## Q1" in q2_design
     # 依赖：Q2 的求解任务里带上了 Q1 的结论
-    plan = json.loads((ws / "plan.json").read_text(encoding="utf-8"))
-    assert plan["stats"]["completed"] == plan["stats"]["total"]
+    from ai_system.research.control import public_snapshot
+    progress = public_snapshot(ctx.research.snapshot())
+    assert all(t["progress"]["state"] == "accepted" for t in progress["tasks"])
+    assert progress["delivery_stages"]["render"]["status"] == "completed"
+    assert not (ws / "plan.json").exists(), "fixed phase plans must not compete with research tasks"
     manifest = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
     assert sum(r["status"] == "success" for r in manifest["runs"].values()) >= 5
 
@@ -374,12 +377,15 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     ws = _make_workspace(tmp_path)
     events = []
     phases = []
+    snapshots = []
 
     class Recorder:
         async def send_json_block(self, block_type, content):
             events.append(block_type)
             if block_type == "paper_phase":
                 phases.append((content["stage"], content["status"]))
+            if block_type == "research_state":
+                snapshots.append({t["task_id"]: t["progress"]["state"] for t in content["tasks"]})
 
     agent = PaperGraphAgent(FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), judge=FixedJudge())
     output = asyncio.run(agent.run(TASK))
@@ -388,7 +394,9 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     assert (ws / ".system" / "graph.sqlite").exists()
     assert json.loads((ws / ".system" / "graph_thread.json").read_text())["status"] == "done"
     assert events[0] == "main_agent_start" and events[-1] == "main_agent_complete"
-    assert "plan_updated" in events and "file_changed" in events
+    assert "research_state" in events and "file_changed" in events
+    assert any(s.get("Q1") == "running" for s in snapshots), "claim must publish progress before model execution"
+    assert any(s.get("Q1") == "accepted" and s.get("Q2") == "running" for s in snapshots)
     # 前端阶段卡片依赖的结构化阶段事件
     assert phases[0] == ("analyze", "in_progress") and ("render", "completed") in phases
     # markdown 输出不排版
