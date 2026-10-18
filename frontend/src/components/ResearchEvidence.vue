@@ -1,7 +1,7 @@
 <template>
   <details v-if="snapshot?.has_research" class="research-evidence">
     <summary>
-      <span><t-icon name="task-checked" />{{ isZh ? '研究结果' : 'Research results' }}</span>
+      <span><t-icon name="task-checked" />{{ isZh ? '研究依据' : 'Research evidence' }}</span>
       <span class="evidence-count">
         {{ snapshot.results.length }} {{ isZh ? '项结果' : 'results' }}
         <span v-if="snapshot.validation_count">
@@ -29,38 +29,34 @@
               : 'Delivery checks pending'
         }}</strong>
         <p v-for="(blocker, index) in snapshot.delivery.blockers" :key="index">
-          <strong>{{ blocker.task_id }}</strong> · {{ blocker.message }}
+          <strong>{{ taskTitle(blocker.task_id) }}</strong> · {{ blocker.message }}
           <small class="source-quote">{{ actionHint(blocker.action) }}</small>
         </p>
       </div>
-      <div v-if="snapshot.tasks?.length" class="research-tasks">
-        <div v-for="task in snapshot.tasks" :key="task.task_id" class="research-task">
-          <strong>{{ task.task_id }} · v{{ task.revision }}</strong>
-          {{ taskLabel(taskState(task, snapshot.work_status), isZh) }}
-          <small v-if="task.reason"> · {{ task.reason }}</small>
-          <button
-            v-if="
-              task.kind !== 'verify' &&
-              snapshot.work_status !== 'in_progress' &&
-              snapshot.work_status !== 'waiting'
-            "
-            class="evidence-link"
-            @click="$emit('revise', task.task_id)"
-          >
-            {{ isZh ? '修改这部分' : 'Revise this task' }}
-          </button>
-          <details v-if="task.validation?.checks.length" class="research-contract">
-            <summary>{{ isZh ? '查看本次验收' : 'View current acceptance checks' }}</summary>
-            <p v-for="check in task.validation.checks" :key="check.check_id">
-              <strong>{{ checkLabel(check.outcome) }}</strong> · {{ check.message }}
-            </p>
+      <details v-if="checkedTasks.length" class="research-contract">
+        <summary>{{ isZh ? '检查结果' : 'Check results' }}</summary>
+        <div v-for="task in checkedTasks" :key="task.task_id" class="research-task">
+          <strong>{{ taskName(task) }}</strong>
+          <p v-for="check in task.validation!.checks" :key="check.check_id">
+            <strong>{{ checkLabel(check.outcome) }}</strong> · {{ check.message }}
+          </p>
+          <details>
+            <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
+            <p>{{ task.task_id }} · v{{ task.revision }}</p>
           </details>
         </div>
-      </div>
-      <details v-if="snapshot.requirements?.length" class="research-contract">
+      </details>
+      <details
+        v-if="snapshot.requirements?.length || snapshot.assumptions?.length"
+        class="research-contract"
+      >
         <summary>{{ isZh ? '要求覆盖与假设' : 'Requirements and assumptions' }}</summary>
-        <p v-for="requirement in snapshot.requirements" :key="requirement.id">
-          <strong>{{ requirement.id }}</strong> · {{ requirement.task_ids.join(', ') }} ·
+        <div
+          class="contract-entry"
+          v-for="requirement in snapshot.requirements"
+          :key="requirement.id"
+        >
+          <strong>{{ requirement.task_ids.map(taskTitle).join('、') }}</strong> ·
           {{
             requirement.status === 'accepted'
               ? isZh
@@ -74,26 +70,37 @@
           <small class="source-quote"
             >{{ isZh ? '原文：' : 'Source: ' }}{{ requirement.source_quote }}</small
           >
-        </p>
-        <p v-for="assumption in snapshot.assumptions" :key="assumption.id">
-          <strong>{{ assumption.id }} · v{{ assumption.revision }}</strong> ·
+          <details>
+            <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
+            <p>{{ requirement.id }} · {{ requirement.task_ids.join(', ') }}</p>
+          </details>
+        </div>
+        <div class="contract-entry" v-for="assumption in snapshot.assumptions" :key="assumption.id">
+          <strong>{{ assumption.task_ids.map(taskTitle).join('、') }}</strong> ·
           {{ assumptionLabel(assumption.status) }} <br />{{ assumption.statement }}
           <small v-if="assumption.source" class="source-quote">
-            {{ premiseSource(assumption.source) }} · {{ assumption.task_ids.join(', ') }}
+            {{ premiseSource(assumption.source) }}
           </small>
-        </p>
+          <details>
+            <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
+            <p>{{ assumption.id }} · v{{ assumption.revision }}</p>
+          </details>
+        </div>
       </details>
       <details v-if="snapshot.issues?.length" class="research-contract">
         <summary>{{ isZh ? '研究问题与修复记录' : 'Issues and repairs' }}</summary>
-        <p v-for="issue in snapshot.issues" :key="issue.id">
-          <strong
-            >{{ issue.task_id }} · v{{ issue.task_revision }} ·
-            {{ issueLabel(issue.status) }}</strong
-          >
-          <span v-if="issue.assumption_id"> · {{ issue.assumption_id }}</span
-          ><span v-if="issue.source === 'local_review'">
+        <div class="contract-entry" v-for="issue in snapshot.issues" :key="issue.id">
+          <strong>{{ taskTitle(issue.task_id) }} · {{ issueLabel(issue.status) }}</strong>
+          <span v-if="issue.source === 'local_review'">
             · {{ isZh ? '求解审查' : 'Solution review' }}</span
           ><br />{{ issue.message }}
+          <details>
+            <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
+            <p>
+              {{ issue.task_id }} · v{{ issue.task_revision }} · {{ issue.id
+              }}<span v-if="issue.assumption_id"> · {{ issue.assumption_id }}</span>
+            </p>
+          </details>
           <small
             v-for="evidence in evidenceFor(issue.evidence_refs)"
             :key="evidence.id"
@@ -108,7 +115,7 @@
               {{ isZh ? '查看核验输出' : 'Check output' }}
             </button>
           </small>
-        </p>
+        </div>
       </details>
       <div class="evidence-toolbar">
         <div
@@ -125,9 +132,12 @@
             :class="{ selected: scope === id }"
             @click="scope = id"
           >
-            {{ id }}
+            {{ taskTitle(id) }}
           </button>
         </div>
+        <button v-if="scope && canRevise" class="evidence-link" @click="$emit('revise', scope)">
+          {{ isZh ? '修改这部分' : 'Revise this task' }}
+        </button>
         <button v-if="scope" class="evidence-link" @click="$emit('ask', scope)">
           {{ isZh ? '追问这部分' : 'Ask about this' }}<t-icon name="arrow-right" />
         </button>
@@ -142,7 +152,6 @@
             :aria-expanded="expanded === result.id"
             @click="expanded = expanded === result.id ? '' : result.id"
           >
-            <span class="result-id">{{ result.subproblem_id }} · {{ result.id }}</span>
             <span class="result-name">{{ result.name }}</span>
             <strong
               ><small v-if="result.kind === 'series'">{{ isZh ? '数值序列 ' : 'Series ' }}</small
@@ -154,11 +163,9 @@
             <t-icon :name="expanded === result.id ? 'chevron-up' : 'chevron-down'" />
           </button>
           <div v-if="expanded === result.id" class="result-sources">
-            <code>{{ result.run_id }}</code>
-            <div>
-              <button v-if="result.figure_path" @click="$emit('open-file', result.figure_path)">
-                {{ isZh ? '查看图表' : 'Figure' }}
-              </button>
+            <details>
+              <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
+              <code>{{ result.subproblem_id }} · {{ result.id }} · {{ result.run_id }}</code>
               <button
                 v-if="runFor(result)?.input_path"
                 @click="$emit('open-file', runFor(result)!.input_path!)"
@@ -170,6 +177,11 @@
                 @click="$emit('open-file', runFor(result)!.stdout_path!)"
               >
                 {{ isZh ? '执行输出' : 'Output' }}
+              </button>
+            </details>
+            <div>
+              <button v-if="result.figure_path" @click="$emit('open-file', result.figure_path)">
+                {{ isZh ? '查看图表' : 'Figure' }}
               </button>
               <button @click="$emit('ask', result.subproblem_id)">
                 {{ isZh ? '追问' : 'Ask' }}
@@ -197,7 +209,7 @@
 </template>
 <script setup lang="ts">
 import { paperLabel } from '@/utils/workFiles'
-import { taskState, taskLabel } from '@/utils/researchProgress'
+import { taskName } from '@/utils/researchProgress'
 import { computed, ref, watch } from 'vue'
 import { useStudioCopy } from '@/lang/studio'
 import type { ResearchSnapshot, ResearchResult } from '@/types/research'
@@ -208,6 +220,21 @@ defineEmits<{
   revise: [subproblemId: string]
 }>()
 const { isZh } = useStudioCopy()
+const taskTitle = (id: string) => {
+  const task = props.snapshot?.tasks?.find((t) => t.task_id === id)
+  return task ? taskName(task) : id
+}
+const checkedTasks = computed(
+  () => props.snapshot?.tasks?.filter((t) => t.validation?.checks.length) || [],
+)
+const canRevise = computed(() => {
+  const task = props.snapshot?.tasks?.find((t) => t.task_id === scope.value)
+  return (
+    !!task &&
+    task.kind !== 'verify' &&
+    !['in_progress', 'running', 'waiting'].includes(props.snapshot?.work_status || '')
+  )
+})
 const checkLabel = (outcome: string) =>
   ({
     passed: isZh.value ? '通过' : 'Passed',
@@ -258,7 +285,10 @@ const evidenceFor = (refs: string[]) =>
 const scope = ref('')
 const expanded = ref('')
 const subproblems = computed(() => [
-  ...new Set(props.snapshot?.results.map((r) => r.subproblem_id) || []),
+  ...new Set([
+    ...(props.snapshot?.tasks?.map((t) => t.task_id) || []),
+    ...(props.snapshot?.results.map((r) => r.subproblem_id) || []),
+  ]),
 ])
 const results = computed(() =>
   (props.snapshot?.results || []).filter((r) => !scope.value || r.subproblem_id === scope.value),
@@ -326,6 +356,11 @@ summary > span {
   padding: 8px 0;
   font-size: 13px;
 }
+.contract-entry {
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
 .research-contract p {
   font-size: 13px;
   line-height: 1.6;
@@ -381,7 +416,7 @@ button {
 .result-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr) minmax(50px, auto) 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(50px, auto) 16px;
   align-items: center;
   gap: 8px;
   padding: 11px 0;
@@ -408,7 +443,7 @@ button {
   font-variant-numeric: tabular-nums;
 }
 .result-sources {
-  padding: 0 0 12px 82px;
+  padding: 0 0 12px;
 }
 .result-sources code {
   display: block;
@@ -458,10 +493,10 @@ button {
     padding: 10px 12px;
   }
   .result-row {
-    grid-template-columns: 62px minmax(0, 1fr) minmax(45px, auto) 14px;
+    grid-template-columns: minmax(0, 1fr) minmax(45px, auto) 14px;
   }
   .result-sources {
-    padding-left: 70px;
+    padding-left: 0;
   }
 }
 </style>

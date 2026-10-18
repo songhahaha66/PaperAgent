@@ -8,7 +8,11 @@
     />
     <main class="home-main">
       <header v-if="!isMobile" class="home-header"><span>PaperAgent</span></header>
-      <section class="home-content" :aria-label="ui.newPaper">
+      <section
+        class="home-content"
+        :class="{ 'has-history': recentWorks.length }"
+        :aria-label="ui.newPaper"
+      >
         <h1>{{ isZh ? '想研究什么？' : 'What would you like to research?' }}</h1>
         <div class="research-composer" :class="{ 'is-busy': creating }">
           <div v-if="files.length" class="attachment-chips">
@@ -133,21 +137,68 @@
             <t-icon name="chevron-right" />
           </router-link>
         </div>
-        <div class="suggestions">
+        <section v-if="recentWorks.length" class="recent-research" :aria-label="ui.recent">
+          <h2>{{ ui.recent }}</h2>
+          <p v-if="historyStore.loadError" class="history-message" role="status">
+            {{
+              isZh
+                ? '最近记录更新失败，显示上次读取的结果。'
+                : 'Could not refresh. Showing the last loaded records.'
+            }}<t-button theme="default" variant="text" @click="historyStore.ensureLoaded(true)">{{
+              isZh ? '重试' : 'Retry'
+            }}</t-button>
+          </p>
+          <ul>
+            <li v-for="work in recentWorks" :key="work.work_id">
+              <div class="recent-info">
+                <h3>{{ work.title?.trim() || ui.untitled }}</h3>
+                <div class="recent-meta">
+                  <span v-if="workStatus(work.status)">{{ workStatus(work.status) }}</span>
+                  <time v-if="updatedTime(work.updated_at)" :datetime="work.updated_at"
+                    >{{ isZh ? '更新于 ' : 'Updated ' }}{{ updatedTime(work.updated_at) }}</time
+                  >
+                </div>
+              </div>
+              <t-button theme="default" variant="outline" @click="openWork(work)">{{
+                work.status === 'completed'
+                  ? isZh
+                    ? '查看论文'
+                    : 'View paper'
+                  : isZh
+                    ? '继续研究'
+                    : 'Continue research'
+              }}</t-button>
+            </li>
+          </ul>
+        </section>
+        <p
+          v-else-if="!historyStore.hasLoaded || historyStore.loading"
+          class="history-message"
+          role="status"
+        >
+          {{ isZh ? '正在读取最近研究…' : 'Loading recent research…' }}
+        </p>
+        <div v-else-if="historyStore.loadError" class="history-message" role="status">
+          {{ isZh ? '暂时无法读取最近研究。' : 'Could not load recent research.' }}
+          <t-button theme="default" variant="text" @click="historyStore.ensureLoaded(true)">{{
+            isZh ? '重试' : 'Retry'
+          }}</t-button>
+        </div>
+        <div v-else class="suggestions" :aria-label="isZh ? '研究示例' : 'Research examples'">
           <button :disabled="creating" @click="fillExample">
-            <t-icon name="lightbulb" /><span>{{
-              isZh ? '试试食堂需求预测示例' : 'Try a cafeteria forecasting example'
+            <t-icon name="chart-line" /><span>{{
+              isZh
+                ? '20 天食堂销量 → 需求预测、图表与分析论文'
+                : '20 days of cafeteria sales → Forecasts, charts and an analysis paper'
             }}</span
-            ><t-icon name="arrow-top-right" /></button
-          ><button :disabled="creating" @click="attachmentInput?.click()">
+            ><t-icon name="arrow-top-right" />
+          </button>
+          <button :disabled="creating" @click="fillDataExample">
             <t-icon name="attach" /><span>{{
-              isZh ? '添加题目与数据，开始分析' : 'Add your question and data for analysis'
+              isZh
+                ? '上传成本与产能数据 → 排产方案与计算结果'
+                : 'Upload costs and capacity → A production plan and calculations'
             }}</span
-            ><t-icon name="arrow-top-right" /></button
-          ><button v-if="recentWorks[0]" @click="router.push(`/work/${recentWorks[0].work_id}`)">
-            <t-icon name="history" /><span
-              >{{ isZh ? '继续研究：' : 'Continue: '
-              }}{{ recentWorks[0].title.trim() || ui.untitled }}</span
             ><t-icon name="arrow-top-right" />
           </button>
         </div>
@@ -165,6 +216,8 @@ import { attachmentAPI, workspaceAPI, type Work } from '@/api/workspace'
 import { modelConfigAPI } from '@/api/modelConfig'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkHistoryStore } from '@/stores/workHistory'
+import { useWorkPanelsStore } from '@/stores/workPanels'
+import { parseWorkDate, formatWorkDate } from '@/utils/dates'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import Sidebar from '@/components/Sidebar.vue'
@@ -182,7 +235,49 @@ const question = ref(''),
   templateId = ref(0)
 const files = ref<UploadFile[]>([]),
   templates = ref<PaperTemplate[]>([])
-const recentWorks = computed(() => historyStore.works.slice(0, 3))
+const panelStore = useWorkPanelsStore()
+const recentWorks = computed(() =>
+  [...historyStore.works]
+    .sort(
+      (a, b) =>
+        (workTimestamp(b.updated_at) ?? -Infinity) - (workTimestamp(a.updated_at) ?? -Infinity),
+    )
+    .slice(0, 5),
+)
+function workTimestamp(value?: string) {
+  if (!value) return null
+  const timestamp = parseWorkDate(value).getTime()
+  return Number.isNaN(timestamp) ? null : timestamp
+}
+function updatedTime(value?: string) {
+  return workTimestamp(value) === null ? '' : formatWorkDate(value!, isZh.value ? 'zh-CN' : 'en-US')
+}
+function workStatus(status: string) {
+  return (
+    {
+      created: ['待开始', 'Not started'],
+      in_progress: ['进行中', 'In progress'],
+      running: ['进行中', 'In progress'],
+      waiting: ['需要确认', 'Needs confirmation'],
+      completed: ['已完成', 'Completed'],
+      paused: ['中断', 'Interrupted'],
+      failed: ['中断', 'Interrupted'],
+      cancelled: ['中断', 'Interrupted'],
+    }[status]?.[isZh.value ? 0 : 1] || ''
+  )
+}
+function openWork(work: Work) {
+  panelStore.open(work.work_id, work.status === 'completed' ? 'paper' : 'chat', undefined, 'main')
+  router.push(`/work/${work.work_id}`)
+}
+function fillDataExample() {
+  if (creating.value) return
+  question.value = isZh.value
+    ? '请根据我上传的产品成本、产能和订单需求数据，建立排产模型，列出约束，计算可行的生产安排，并输出方案表、计算代码和说明假设与局限性的分析论文。缺少必要数据时先向我确认。'
+    : 'Use my uploaded product costs, capacity and order data to model a production plan. State constraints, compute a feasible schedule, and produce a plan table, reproducible code and an analysis paper explaining assumptions and limitations. Ask me to confirm missing inputs.'
+  questionInput.value?.focus()
+  attachmentInput.value?.click()
+}
 const loadingTemplates = ref(false),
   creating = ref(false),
   modelsReady = ref(false),
@@ -337,6 +432,56 @@ onMounted(async () => {
   width: calc(100% - 80px);
   max-width: 760px;
   margin: clamp(44px, 13vh, 140px) auto 64px;
+}
+.home-content.has-history {
+  margin-top: clamp(24px, 5vh, 56px);
+}
+.recent-research {
+  margin-top: 28px;
+}
+.recent-research h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--pa-muted);
+}
+.recent-research ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.recent-research li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--pa-line);
+}
+.recent-info {
+  min-width: 0;
+}
+.recent-info h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--pa-ink);
+  overflow-wrap: anywhere;
+}
+.recent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--pa-muted);
+}
+.recent-research .t-button {
+  flex-shrink: 0;
+}
+.history-message {
+  margin-top: 24px;
+  font-size: 14px;
+  color: var(--pa-muted);
 }
 .home-content h1 {
   font-family: var(--td-font-family);
@@ -544,9 +689,8 @@ onMounted(async () => {
   opacity: 1;
 }
 .suggestions > button > span {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .layout-settings {
   border-top: 1px solid var(--pa-line);

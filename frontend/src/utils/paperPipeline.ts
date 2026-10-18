@@ -7,11 +7,11 @@ export interface PipelineBlock {
   content: unknown
 }
 
-export type SubproblemStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
+export type SubproblemStatus = 'in_progress' | 'completed' | 'failed'
 
 export interface SubproblemProgress {
   id: string
-  text: string
+  name: string
   status: SubproblemStatus
   runs: number
   fails: number
@@ -29,8 +29,22 @@ const SUBPROBLEM_TYPES = new Set([
 // 子问题编号可以带字母后缀（Q1a、Q1b）
 const SUBPROBLEM_PREFIX = /^(Q\d+[a-z]?)\s*[：:·\s]\s*/
 
+const PAPER_EVENT_TYPES = new Set([
+  'paper_analysis',
+  'paper_design',
+  'paper_explore',
+  'paper_code',
+  'paper_review',
+  'paper_solved',
+  'paper_stage',
+  'paper_phase',
+  'paper_consistency',
+  'paper_validation',
+  'paper_export',
+  'paper_confirm',
+])
 export const isPaperEvent = (block: PipelineBlock | undefined): boolean =>
-  !!block && typeof block.type === 'string' && block.type.startsWith('paper_')
+  !!block && PAPER_EVENT_TYPES.has(block.type)
 
 export const isPipelineMessage = (blocks: PipelineBlock[] | undefined): boolean =>
   !!blocks && blocks.some(isPaperEvent)
@@ -45,8 +59,22 @@ export const asText = (content: unknown): string => {
   }
 }
 
-export const deriveSubproblems = (blocks: PipelineBlock[]): SubproblemProgress[] => {
+export const deriveSubproblems = (
+  blocks: PipelineBlock[],
+  tasks: Pick<NonNullable<ResearchSnapshot['tasks']>[number], 'task_id' | 'objective'>[] = [],
+): SubproblemProgress[] => {
   const byId = new Map<string, SubproblemProgress>()
+  const names = new Map(
+    tasks.filter((t) => t.objective?.trim()).map((t) => [t.task_id, t.objective.trim()]),
+  )
+  for (const block of blocks) {
+    if (block.type === 'paper_analysis') {
+      for (const line of asText(block.content).split('\n')) {
+        const match = /^-\s+(Q\d+[a-z]?)\s+(.+)$/.exec(line.trim())
+        if (match) names.set(match[1]!, match[2]!.trim())
+      }
+    }
+  }
   for (const block of blocks) {
     if (!SUBPROBLEM_TYPES.has(block.type)) continue
     const text = asText(block.content).trim()
@@ -55,7 +83,7 @@ export const deriveSubproblems = (blocks: PipelineBlock[]): SubproblemProgress[]
     const id = match[1] as string
     const item = byId.get(id) ?? {
       id,
-      text: '',
+      name: names.get(id) || id,
       status: 'in_progress' as SubproblemStatus,
       runs: 0,
       fails: 0,
@@ -68,39 +96,10 @@ export const deriveSubproblems = (blocks: PipelineBlock[]): SubproblemProgress[]
       if (text.endsWith('失败')) item.fails += 1
       continue
     }
-    item.text = text.slice(match[0].length)
     if (block.type === 'paper_solved') {
       item.status = text.includes('未完成') ? 'failed' : 'completed'
     } else {
       item.status = 'in_progress'
-    }
-  }
-  const current = [...blocks].reverse().find((b) => b.type === 'research_state')?.content
-  if (current && typeof current === 'object') {
-    const snapshot = current as Pick<ResearchSnapshot, 'tasks' | 'issues'>
-    for (const task of snapshot.tasks || []) {
-      const item: SubproblemProgress = byId.get(task.task_id) ?? {
-        id: task.task_id,
-        text: task.objective,
-        status: 'pending',
-        runs: 0,
-        fails: 0,
-      }
-      const blocked = snapshot.issues?.some(
-        (i) =>
-          i.task_id === task.task_id && i.blocking && !['resolved', 'dismissed'].includes(i.status),
-      )
-      item.status =
-        blocked ||
-        task.execution_status === 'failed' ||
-        ['rejected', 'inconclusive'].includes(task.acceptance)
-          ? 'failed'
-          : task.acceptance === 'accepted' && task.validity === 'current'
-            ? 'completed'
-            : task.execution_status === 'running'
-              ? 'in_progress'
-              : 'pending'
-      byId.set(task.task_id, item)
     }
   }
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))

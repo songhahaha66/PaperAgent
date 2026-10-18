@@ -224,7 +224,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     ],
   }
   await flush()
-  assert.match(text(host.root), /查看本次验收/)
+  assert.match(text(host.root), /检查结果/)
   assert.match(text(host.root), /未验证最优性/)
   console.log(
     'PASS: delivery status and next steps follow authoritative backend checks, with no stale blockers',
@@ -290,27 +290,17 @@ const { hostRenderer } = require('./vueHost.cjs')
     type: 'research_state',
     content: { tasks: [task], issues },
   })
+  const historical = pipeline.deriveSubproblems([oldCompletion], [currentTask])
   assert.equal(
-    pipeline.deriveSubproblems([oldCompletion, researchState(currentTask)])[0].status,
-    'pending',
-  )
-  const acceptedTask = {
-    ...currentTask,
-    execution_status: 'succeeded',
-    acceptance: 'accepted',
-    validity: 'current',
-  }
-  const openReview = [{ task_id: 'Q1', status: 'suspected', blocking: true }]
-  assert.equal(
-    pipeline.deriveSubproblems([oldCompletion, researchState(acceptedTask, openReview)])[0].status,
-    'failed',
-  )
-  assert.equal(
-    pipeline.deriveSubproblems([
-      researchState(acceptedTask, openReview),
-      researchState(acceptedTask),
-    ])[0].status,
+    historical[0].status,
     'completed',
+    'an operation record describes that operation, not the whole research',
+  )
+  assert.equal(historical[0].name, '实际研究', 'task descriptions enrich the per-operation title')
+  assert.equal(
+    pipeline.deriveSubproblems([researchState(currentTask)]).length,
+    0,
+    'global tasks are not repeated as operation records',
   )
   console.log('PASS: revisions carry scope/version and retries preserve task acceptance status')
 })().catch((error) => {

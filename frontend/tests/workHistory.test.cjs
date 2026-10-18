@@ -95,6 +95,7 @@ async function fixture() {
   f.pending.shift().reject(new Error('offline'))
   await refresh
   assert.equal(f.store.works.length, 1, 'failed background refresh preserves rows')
+  assert.equal(f.store.loadError, true)
   console.log('PASS: background refresh and network failure never clear visible rows')
   const stale = f.store.ensureLoaded(true)
   f.store.patch('one', { title: 'Live title', status: 'running' })
@@ -102,6 +103,7 @@ async function fixture() {
   f.store.remove('three')
   f.pending.shift().resolve({ works: [work('one', 'Old server title'), work('three')] })
   await stale
+  assert.equal(f.store.loadError, false, 'a successful retry clears the failure state')
   assert.equal(f.store.works.find((w) => w.work_id === 'one').title, 'Live title')
   assert.equal(f.store.works.find((w) => w.work_id === 'one').status, 'running')
   assert.ok(f.store.works.some((w) => w.work_id === 'two'))
@@ -112,6 +114,7 @@ async function fixture() {
   f.auth.token = null
   assert.equal(f.store.works.length, 0)
   assert.equal(f.store.hasLoaded, false)
+  assert.equal(f.store.loadError, false, 'error state cannot cross accounts')
   f.auth.currentUser = { id: 9 }
   f.auth.token = 'second-user'
   const fresh = f.store.ensureLoaded()

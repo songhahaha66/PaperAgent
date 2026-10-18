@@ -27,16 +27,16 @@ export function taskState(task: ResearchTask, workStatus: string) {
 
 export function taskLabel(state: ResearchTask['progress']['state'], zh: boolean) {
   const labels = {
-    accepted: ['已验收', 'Accepted'],
+    accepted: ['已完成检查', 'Checks passed'],
     running: ['执行中', 'Running'],
     interrupted: ['已中断，待恢复', 'Interrupted, resume needed'],
     needs_plan: ['需调整计划', 'Plan change needed'],
     failed: ['执行失败，待重试', 'Failed, retry needed'],
-    waiting: ['等待上游验收', 'Waiting for dependencies'],
-    blocked: ['前提待修订', 'Premise revision needed'],
+    waiting: ['等待前置任务检查', 'Waiting for prerequisite checks'],
+    blocked: ['需修正假设或输入', 'Assumptions or inputs need correction'],
     rework: ['待返工', 'Rework needed'],
     ready: ['可执行', 'Ready'],
-    review: ['待复核验收', 'Review needed'],
+    review: ['等待进一步检查', 'Further checks needed'],
     pending: ['待执行', 'Pending'],
     writing: ['等待论文撰写', 'Pending writing'],
   }
@@ -66,8 +66,7 @@ export function researchHeadline(
     return zh ? '等待建立研究任务' : 'Waiting for research tasks'
   }
   const running = snapshot.tasks.filter((t) => taskState(t, workStatus) === 'running')
-  if (running.length)
-    return `${zh ? '正在执行' : 'Running'} ${running.map((t) => t.task_id).join('、')}`
+  if (running.length) return `${zh ? '正在执行' : 'Running'} ${running.map(taskName).join('、')}`
   if (['paused', 'failed', 'cancelled'].includes(workStatus))
     return zh ? '研究已暂停，进度已保留' : 'Research paused, progress saved'
   for (const [key, label] of Object.entries(deliveryLabels)) {
@@ -80,4 +79,8 @@ export function researchHeadline(
   if (snapshot.artifacts.length)
     return zh ? '论文已发布，请查看交付物' : 'Paper published, review deliverables'
   return zh ? '研究验收通过，等待生成论文' : 'Research accepted, preparing paper'
+}
+
+export function taskName(task: Pick<ResearchTask, 'task_id' | 'objective'>) {
+  return task.objective?.trim() || task.task_id
 }

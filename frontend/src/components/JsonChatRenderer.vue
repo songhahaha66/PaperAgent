@@ -16,8 +16,14 @@
               <PaperPipelineCard
                 v-if="isPipelineMessage(getJsonBlocks(message))"
                 :blocks="getJsonBlocks(message)"
+                :tasks="tasks"
                 :streaming="message.isStreaming"
                 :superseded="index < messages.length - 1"
+                :can-confirm="
+                  index === messages.length - 1 && workStatus === 'waiting' && !message.isStreaming
+                "
+                @confirm-plan="$emit('confirm-plan')"
+                @open-progress="$emit('open-progress')"
               />
 
               <div
@@ -25,9 +31,7 @@
                 :key="context.research_id || 'context'"
                 class="answer-sources"
               >
-                <span
-                  >{{ context.subproblem_id ? context.subproblem_id + ' · ' : '' }}参考材料</span
-                >
+                <span>参考材料</span>
                 <button
                   v-for="path in context.files"
                   :key="path"
@@ -40,29 +44,57 @@
               </div>
 
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
-              <template v-if="!isPipelineMessage(getJsonBlocks(message))">
-                <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
-                  <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
-                    <div
-                      class="json-block-header"
-                      @click="toggleBlock(message.id, bIndex)"
-                      :class="{ collapsed: isBlockCollapsed(message.id, bIndex) }"
-                    >
-                      <span class="header-text">Type: {{ block.type || 'unknown' }}</span>
-                      <span class="content-preview" v-if="isBlockCollapsed(message.id, bIndex)">
-                        {{ getContentPreview(block.content) }}
-                      </span>
-                      <t-icon
-                        :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'"
-                        class="toggle-icon"
-                      />
-                    </div>
-                    <div class="json-block-content" v-show="!isBlockCollapsed(message.id, bIndex)">
-                      <MarkdownRenderer :content="String(block.content || '')" />
-                    </div>
-                  </div>
-                </template>
-              </template>
+              <div
+                v-for="{ block, index: bIndex } in getEventBlocks(message)"
+                :key="bIndex"
+                class="json-block"
+                :class="`event-${eventKind(block)}`"
+              >
+                <button
+                  type="button"
+                  class="json-block-header"
+                  :aria-expanded="!isBlockCollapsed(message.id, bIndex, block)"
+                  :aria-controls="`event-${message.id}-${bIndex}`"
+                  @click="toggleBlock(message.id, bIndex, block)"
+                >
+                  <span class="header-text"
+                    >{{ eventTitle(block)
+                    }}<span v-if="eventKind(block) === 'error'"> · 需要处理</span></span
+                  >
+                  <span class="content-preview">{{ eventSummary(block) }}</span>
+                  <t-icon
+                    :name="
+                      isBlockCollapsed(message.id, bIndex, block) ? 'chevron-down' : 'chevron-up'
+                    "
+                    class="toggle-icon"
+                  />
+                </button>
+                <div
+                  :id="`event-${message.id}-${bIndex}`"
+                  class="json-block-content"
+                  v-if="!isBlockCollapsed(message.id, bIndex, block)"
+                >
+                  <MarkdownRenderer v-if="knownEvent(block)" :content="asText(block.content)" />
+                  <pre v-else>{{ JSON.stringify(block, null, 2) }}</pre>
+                </div>
+                <div v-if="eventKind(block) !== 'normal'" class="event-actions">
+                  <button
+                    v-if="
+                      eventKind(block) === 'confirm' &&
+                      index === messages.length - 1 &&
+                      workStatus === 'waiting' &&
+                      !message.isStreaming
+                    "
+                    type="button"
+                    @click="$emit('confirm-plan')"
+                  >
+                    确认方案并继续
+                  </button>
+                  <button type="button" @click="$emit('open-progress')">
+                    查看任务进度与处理方式
+                  </button>
+                </div>
+              </div>
             </div>
           </template>
         </ChatItem>
@@ -74,10 +106,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import type { ResearchSnapshot } from '@/types/research'
 import { ChatItem } from '@tdesign-vue-next/chat'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import PaperPipelineCard from '@/components/PaperPipelineCard.vue'
-import { isPipelineMessage } from '@/utils/paperPipeline'
+import { isPipelineMessage, isPaperEvent, asText, type PipelineBlock } from '@/utils/paperPipeline'
 
 // 定义消息类型
 interface ChatMessage {
@@ -94,10 +127,12 @@ interface ChatMessage {
 // Props
 interface Props {
   messages: ChatMessage[]
+  workStatus?: string
+  tasks?: ResearchSnapshot['tasks']
 }
 
 const props = defineProps<Props>()
-defineEmits<{ 'open-file': [path: string] }>()
+defineEmits<{ 'open-file': [path: string]; 'open-progress': []; 'confirm-plan': [] }>()
 const researchSourceLabel = (path: string, files: string[]) => {
   if (path === '.system/validation.json') return '校验问题'
   if (path === '.system/consistency.json') return '结论审查'
@@ -107,30 +142,70 @@ const researchSourceLabel = (path: string, files: string[]) => {
 }
 const getResearchContexts = (message: ChatMessage) =>
   (message.json_blocks || []).filter((b) => b.type === 'research_context').map((b) => b.content)
-// JSON块折叠状态 (messageId-blockIndex -> collapsed)
+const eventLabels: Record<string, [string, string]> = {
+  main: ['研究说明', '本次研究的说明。'],
+  main_agent_start: ['开始研究', '已接收本次研究请求。'],
+  main_agent_complete: ['本次操作结果', '本次操作已返回结果。'],
+  main_agent_error: ['研究遇到问题', '请查看错误说明和任务进度。'],
+  call_code_agent: ['准备分析代码', '本次计算的输入与分析要求。'],
+  code_agent: ['编写分析代码', '本次分析代码的生成记录。'],
+  call_exec_py: ['执行分析代码', '本次分析代码的执行请求。'],
+  exec_py: ['分析代码执行结果', '本次计算返回的输出。'],
+  call_writing_agent: ['准备更新论文', '本次写作的要求与材料。'],
+  writing_agent: ['更新论文', '本次论文写作的记录。'],
+  writemd_result: ['论文更新结果', '本次正文的写入结果。'],
+  tree_result: ['查看工作文件', '本次读取的文件列表。'],
+  word_tool_call: ['编辑 Word 论文', '本次文档编辑请求。'],
+  word_tool_result: ['Word 编辑结果', '本次文档编辑的返回结果。'],
+  word_tool_error: ['Word 编辑遇到问题', '请查看错误说明。'],
+  generate_figure: ['生成图表', '本次图表生成记录。'],
+  confirm: ['需要确认方案', '核对方案后确认继续，或在输入框提出修改意见。'],
+}
+const knownEvent = (block: PipelineBlock) => Object.hasOwn(eventLabels, block.type)
+const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {
+  const content =
+    block.content && typeof block.content === 'object'
+      ? (block.content as Record<string, unknown>)
+      : null
+  if (
+    /error|failed/.test(block.type) ||
+    content?.ok === false ||
+    content?.success === false ||
+    ['failed', 'error', 'blocked'].includes(String(content?.status)) ||
+    content?.error
+  )
+    return 'error'
+  if (
+    block.type === 'confirm' ||
+    ['waiting', 'needs_confirmation'].includes(String(content?.status))
+  )
+    return 'confirm'
+  return 'normal'
+}
+const eventTitle = (block: PipelineBlock) => eventLabels[block.type]?.[0] || '其他执行记录'
+const eventSummary = (block: PipelineBlock) =>
+  eventLabels[block.type]?.[1] ||
+  (eventKind(block) === 'normal' ? '展开查看原始记录。' : '这条记录需要处理，请查看详情。')
+// Keep user choices keyed to message and event position while streaming appends content.
 const collapsedBlocks = ref<Map<string, boolean>>(new Map())
-
-// 切换JSON块的折叠状态
-const toggleBlock = (messageId: string, blockIndex: number) => {
-  const key = `${messageId}-${blockIndex}`
-  const currentState = collapsedBlocks.value.get(key) ?? false // 默认展开
-  collapsedBlocks.value.set(key, !currentState)
-}
-
-// 检查JSON块是否折叠
-const isBlockCollapsed = (messageId: string, blockIndex: number) => {
-  const key = `${messageId}-${blockIndex}`
-  return collapsedBlocks.value.get(key) ?? false // 默认展开
-}
-
-// 获取内容预览（前N个字符）
-const getContentPreview = (content: any) => {
-  const str = String(content || '')
-  const maxLength = 100
-  if (str.length <= maxLength) {
-    return str
-  }
-  return str.substring(0, maxLength) + '...'
+const isBlockCollapsed = (messageId: string, blockIndex: number, block: PipelineBlock) =>
+  collapsedBlocks.value.get(`${messageId}-${blockIndex}`) ?? eventKind(block) === 'normal'
+const toggleBlock = (messageId: string, blockIndex: number, block: PipelineBlock) =>
+  collapsedBlocks.value.set(
+    `${messageId}-${blockIndex}`,
+    !isBlockCollapsed(messageId, blockIndex, block),
+  )
+const getEventBlocks = (message: ChatMessage) => {
+  const blocks = getJsonBlocks(message)
+  const pipeline = isPipelineMessage(blocks)
+  return blocks
+    .map((block, index) => ({ block, index }))
+    .filter(
+      ({ block }) =>
+        !pipeline ||
+        (!isPaperEvent(block) &&
+          !['main_agent_start', 'main_agent_complete', 'main_agent_error'].includes(block.type)),
+    )
 }
 
 // 获取系统头像
@@ -256,7 +331,9 @@ const getJsonBlocks = (message: ChatMessage) => {
     message.json_blocks && message.json_blocks.length > 0
       ? message.json_blocks
       : parseJsonBlocks(message.content || '').blocks
-  return blocks.filter((block) => !HIDDEN_BLOCK_TYPES.has(block?.type))
+  return blocks.filter(
+    (block) => block && typeof block === 'object' && !HIDDEN_BLOCK_TYPES.has(block.type),
+  )
 }
 </script>
 
@@ -324,6 +401,10 @@ const getJsonBlocks = (message: ChatMessage) => {
 }
 
 :deep(.json-block-header) {
+  width: 100%;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
   background-color: var(--pa-surface-hover);
   padding: 8px 12px;
   font-weight: 600;
@@ -389,114 +470,30 @@ const getJsonBlocks = (message: ChatMessage) => {
 }
 
 /* 不同type的JSON块样式 */
-:deep(.json-block-main) {
-  border-left: 4px solid var(--pa-info);
+.event-error {
+  border-color: var(--pa-danger);
 }
-
-:deep(.json-block-main .json-block-header) {
-  background-color: var(--pa-info-soft);
-  color: var(--pa-info);
+.event-confirm {
+  border-color: var(--pa-warning);
 }
-
-:deep(.json-block-call_code_agent) {
-  border-left: 4px solid var(--pa-accent);
+.event-actions {
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-
-:deep(.json-block-call_code_agent .json-block-header) {
-  background-color: var(--pa-accent-soft);
+.event-actions button {
+  border: 0;
+  background: transparent;
   color: var(--pa-accent);
+  font: inherit;
+  cursor: pointer;
 }
-
-:deep(.json-block-code_agent) {
-  border-left: 4px solid var(--pa-accent);
+.json-block-header:focus-visible,
+.event-actions button:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: -2px;
 }
-
-:deep(.json-block-code_agent .json-block-header) {
-  background-color: var(--pa-accent-soft);
-  color: var(--pa-accent);
-}
-
-:deep(.json-block-call_exec_py) {
-  border-left: 4px solid var(--pa-warning);
-}
-
-:deep(.json-block-call_exec_py .json-block-header) {
-  background-color: var(--pa-warning-soft);
-  color: var(--pa-warning);
-}
-
-:deep(.json-block-exec_py) {
-  border-left: 4px solid var(--pa-warning);
-}
-
-:deep(.json-block-exec_py .json-block-header) {
-  background-color: var(--pa-warning-soft);
-  color: var(--pa-warning);
-}
-
-:deep(.json-block-call_writing_agent) {
-  border-left: 4px solid var(--pa-warning);
-}
-
-:deep(.json-block-call_writing_agent .json-block-header) {
-  background-color: var(--pa-warning-soft);
-  color: var(--pa-warning);
-}
-
-:deep(.json-block-writing_agent) {
-  border-left: 4px solid var(--pa-warning);
-}
-
-:deep(.json-block-writing_agent .json-block-header) {
-  background-color: var(--pa-warning-soft);
-  color: var(--pa-warning);
-}
-
-:deep(.json-block-writemd_result) {
-  border-left: 4px solid var(--pa-note);
-}
-
-:deep(.json-block-writemd_result .json-block-header) {
-  background-color: var(--pa-note-soft);
-  color: var(--pa-note);
-}
-
-:deep(.json-block-tree_result) {
-  border-left: 4px solid var(--pa-accent);
-}
-
-:deep(.json-block-tree_result .json-block-header) {
-  background-color: var(--pa-accent-soft);
-  color: var(--pa-accent);
-}
-
-:deep(.json-block-word_tool_call) {
-  border-left: 4px solid var(--pa-info);
-}
-
-:deep(.json-block-word_tool_call .json-block-header) {
-  background-color: var(--pa-info-soft);
-  color: var(--pa-info);
-}
-
-:deep(.json-block-word_tool_result) {
-  border-left: 4px solid var(--pa-info);
-}
-
-:deep(.json-block-word_tool_result .json-block-header) {
-  background-color: var(--pa-info-soft);
-  color: var(--pa-info);
-}
-
-:deep(.json-block-word_tool_error) {
-  border-left: 4px solid var(--pa-danger);
-}
-
-:deep(.json-block-word_tool_error .json-block-header) {
-  background-color: var(--pa-danger-soft);
-  color: var(--pa-danger);
-}
-
 /* 代码块样式 */
 :deep(.t-chat__message-content) {
   line-height: 1.7;

@@ -1,13 +1,9 @@
 <template>
   <section class="research-progress" aria-label="任务与验收">
     <header class="progress-overview">
-      <div>
-        <strong class="accepted-total"
-          >{{ accepted }}<span>/ {{ tasks.length }}</span></strong
-        ><span class="accepted-caption">{{ isZh ? '任务已验收' : 'tasks accepted' }}</span>
-      </div>
-      <span v-if="snapshot?.research_revision" class="revision"
-        >{{ isZh ? '研究版本' : 'Revision' }} {{ snapshot.research_revision }}</span
+      <strong>{{ isZh ? '研究任务' : 'Research tasks' }}</strong>
+      <span class="accepted-total"
+        >{{ accepted }}/{{ tasks.length }} {{ isZh ? '已完成检查' : 'checked' }}</span
       >
     </header>
     <p v-if="!tasks.length" class="empty-progress">
@@ -28,50 +24,39 @@
         :data-task="task.task_id"
         :data-state="taskState(task, status)"
       >
-        <span class="task-node" aria-hidden="true">{{
-          taskState(task, status) === 'accepted' ? '✓' : ''
-        }}</span>
         <div class="task-content">
           <div class="task-heading">
-            <strong>{{ task.task_id }}</strong
-            ><span class="task-version">v{{ task.revision }}</span
-            ><span class="task-state">{{ taskLabel(taskState(task, status), isZh) }}</span>
+            <strong>{{ taskName(task) }}</strong>
+            <span class="task-state">{{ taskStatus(task) }}</span>
           </div>
-          <p class="task-objective">{{ task.objective }}</p>
-          <div class="task-meta">
-            <span v-if="task.dependencies.length"
-              >{{ isZh ? '依赖 ' : 'Depends on ' }}{{ task.dependencies.join('、') }}</span
-            >
-            <span v-else>{{ isZh ? '独立任务' : 'Independent task' }}</span>
-            <span v-if="task.progress.waiting_for.length"
-              >{{ isZh ? '等待 ' : 'Waiting for ' }}{{ task.progress.waiting_for.join('、') }}
-              {{ isZh ? '验收' : 'acceptance' }}</span
-            >
-            <span v-if="task.kind === 'verify'">{{
-              isZh ? '独立核验任务' : 'Independent verification'
-            }}</span>
-            <span v-if="task.progress.rework">{{
-              isZh ? '返工后重新验收' : 'Fresh acceptance after rework'
-            }}</span>
-          </div>
-          <details v-if="task.progress.attempts || issuesFor(task).length" class="task-details">
+          <p class="task-reason">{{ taskNextStep(task) }}</p>
+          <details class="task-details">
             <summary>
-              {{
-                issuesFor(task).length
-                  ? `${issuesFor(task).length} ${isZh ? '项待处理' : 'findings to review'}`
-                  : isZh
-                    ? '执行记录'
-                    : 'Execution record'
-              }}<span aria-hidden="true">⌄</span>
+              {{ isZh ? '技术详情' : 'Technical details' }}<span aria-hidden="true">⌄</span>
             </summary>
             <div class="task-detail-body">
+              <p>{{ isZh ? '任务' : 'Task' }} {{ task.task_id }} · v{{ task.revision }}</p>
               <p>
                 {{ isZh ? '当前版本尝试' : 'Attempts in this revision' }}
                 {{ task.progress.attempts }} / {{ task.progress.attempt_limit }}
               </p>
-              <p v-if="task.reason && task.progress.state !== 'accepted'">{{ task.reason }}</p>
-              <p v-for="issue in issuesFor(task)" :key="issue.id" class="task-finding">
-                {{ issue.message }}
+              <p v-if="task.dependencies.length">
+                {{ isZh ? '依赖 ' : 'Depends on ' }}{{ task.dependencies.join('、') }}
+              </p>
+              <p v-if="task.progress.waiting_for.length">
+                {{ isZh ? '等待检查 ' : 'Awaiting checks for '
+                }}{{ task.progress.waiting_for.join('、') }}
+              </p>
+              <p v-if="task.kind === 'verify'">
+                {{ isZh ? '独立核验任务' : 'Independent verification' }}
+              </p>
+              <p v-if="issuesFor(task).length">
+                {{ isZh ? '问题记录 ' : 'Issue records '
+                }}{{
+                  issuesFor(task)
+                    .map((i) => i.id)
+                    .join('、')
+                }}
               </p>
             </div>
           </details>
@@ -80,8 +65,7 @@
     </ol>
     <section v-if="snapshot?.delivery" class="delivery-progress">
       <header>
-        <span class="delivery-symbol" aria-hidden="true">▤</span
-        ><strong>{{ isZh ? '论文交付' : 'Paper delivery' }}</strong
+        <strong>{{ isZh ? '论文交付' : 'Paper delivery' }}</strong
         ><span class="delivery-state">{{
           snapshot.delivery.ready
             ? isZh
@@ -100,16 +84,19 @@
         {{ isZh ? '已发布：' : 'Published: '
         }}{{ snapshot.artifacts.map((path) => paperLabel(path, isZh) || path).join('、') }}
       </p>
-      <details v-if="writingBlockers.length" class="task-details">
-        <summary>
-          {{ writingBlockers.length }} {{ isZh ? '项论文修订意见' : 'paper revision findings'
-          }}<span aria-hidden="true">⌄</span>
-        </summary>
-        <div class="task-detail-body">
-          <p v-for="(blocker, i) in writingBlockers" :key="i">{{ blocker.message }}</p>
-        </div>
-      </details>
+      <p v-if="writingBlockers.length">
+        {{ writingBlockers.length }}
+        {{
+          isZh
+            ? '项论文问题需要处理，检查结果见研究依据。'
+            : 'paper issues to address; see research evidence.'
+        }}
+      </p>
     </section>
+    <details v-if="snapshot?.research_revision" class="task-details">
+      <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
+      <p>{{ isZh ? '研究版本' : 'Research revision' }} {{ snapshot.research_revision }}</p>
+    </details>
   </section>
 </template>
 <script setup lang="ts">
@@ -119,6 +106,7 @@ import { paperLabel } from '@/utils/workFiles'
 import type { ResearchSnapshot } from '@/types/research'
 import {
   taskState,
+  taskName,
   taskLabel,
   deliveryLabels,
   orderedTasks,
@@ -135,7 +123,58 @@ const writingBlockers = computed(
   () => props.snapshot?.delivery?.blockers.filter((b) => b.action === 'rewrite') || [],
 )
 const issuesFor = (task: ResearchTask) =>
-  props.snapshot?.issues?.filter((i) => task.progress.issue_ids.includes(i.id)) || []
+  props.snapshot?.issues?.filter(
+    (i) => task.progress.issue_ids.includes(i.id) && !['resolved', 'dismissed'].includes(i.status),
+  ) || []
+const taskStatus = (task: ResearchTask) => {
+  const count = issuesFor(task).length
+  return count
+    ? isZh.value
+      ? `有 ${count} 项问题需要处理`
+      : `${count} issues to address`
+    : taskLabel(taskState(task, status.value), isZh.value)
+}
+const taskNextStep = (task: ResearchTask) => {
+  const state = taskState(task, status.value)
+  if (state === 'accepted') {
+    const count =
+      props.snapshot?.results.filter((r) => r.subproblem_id === task.task_id).length || 0
+    return count
+      ? isZh.value
+        ? `${count} 项结果已通过检查，可在研究依据中查看。`
+        : `${count} results passed checks; see research evidence.`
+      : isZh.value
+        ? '这部分已完成检查。'
+        : 'Checks for this task are complete.'
+  }
+  if (task.reason?.trim()) return task.reason
+  const next = {
+    running: ['正在计算与检查结果。', 'Calculations and checks are running.'],
+    interrupted: [
+      '进度已保存，继续研究后恢复这部分。',
+      'Progress saved. Continue research to resume this task.',
+    ],
+    waiting: [
+      '前置任务完成检查后，再继续这部分。',
+      'Waiting for prerequisite tasks to pass their checks.',
+    ],
+    rework: [
+      '根据检查意见重新计算，再检查结果。',
+      'Recompute using the findings, then check again.',
+    ],
+    failed: [
+      '查看研究依据中的问题，处理后重试。',
+      'Review the findings in research evidence before retrying.',
+    ],
+    needs_plan: ['先调整研究计划，再继续计算。', 'Revise the research plan before continuing.'],
+    blocked: ['先修正相关假设或输入。', 'Correct the related assumptions or inputs first.'],
+    review: ['结果已生成，等待进一步检查。', 'Results are ready for further checks.'],
+    writing: ['结果将用于论文撰写。', 'These results will be used in the paper.'],
+    ready: ['前置条件已满足，等待执行。', 'Prerequisites met; waiting to run.'],
+    pending: ['尚未开始，按研究计划推进。', 'Not started; following the research plan.'],
+  }
+  return next[state as keyof typeof next]?.[isZh.value ? 0 : 1] || ''
+}
 const stageName = (key: string) =>
   deliveryLabels[key as keyof typeof deliveryLabels]?.[isZh.value ? 0 : 1] || key
 const stageLabel = (state: string) =>
@@ -149,141 +188,98 @@ const stageLabel = (state: string) =>
 </script>
 <style scoped>
 .research-progress {
-  padding: 0 24px 28px;
-  color: var(--pa-ink);
+  padding: 16px;
+  color: var(--td-text-color-primary);
 }
 .progress-overview {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 0 26px;
-  border-top: 1px solid var(--pa-line);
-  gap: 16px;
-}
-.progress-overview > div {
-  display: flex;
-  align-items: baseline;
   gap: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 22px;
+}
+.progress-overview strong {
+  font-weight: 600;
 }
 .accepted-total {
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: -1px;
-  font-variant-numeric: tabular-nums;
-}
-.accepted-total span {
-  margin-left: 4px;
-  font-size: 16px;
-  font-weight: 400;
-  color: var(--pa-placeholder);
-}
-.accepted-caption,
-.revision {
   font-size: 12px;
-  color: var(--pa-muted);
+  color: var(--td-text-color-secondary);
+  font-variant-numeric: tabular-nums;
 }
 .research-task-list {
   list-style: none;
   margin: 0;
   padding: 0;
-}
-li {
-  position: relative;
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  padding: 0 0 26px;
-  overflow-wrap: anywhere;
 }
-li:not(:last-child)::before {
-  content: '';
-  position: absolute;
-  top: 23px;
-  bottom: 1px;
-  left: 10px;
-  border-left: 1px solid var(--pa-line);
-}
-.task-node {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
+.research-task-list > li {
+  padding: 14px;
   border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-circle);
-  font-size: 11px;
-  color: var(--pa-muted);
+  border-radius: var(--pa-radius-card);
   background: var(--pa-surface);
-}
-li[data-state='accepted'] .task-node {
-  background: var(--pa-accent-soft);
-  color: var(--pa-accent);
-  border-color: var(--pa-accent-border);
-}
-li[data-state='running'] .task-node {
-  border: 5px solid var(--pa-accent-border);
-  background: var(--pa-accent);
-  box-sizing: border-box;
-}
-li[data-state='failed'] .task-node,
-li[data-state='needs_plan'] .task-node,
-li[data-state='review'] .task-node {
-  border-color: var(--pa-warning-border);
-  background: var(--pa-warning-soft);
+  overflow-wrap: anywhere;
 }
 .task-heading {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
-  min-height: 22px;
   font-size: 13px;
+  line-height: 20px;
 }
 .task-heading strong {
   font-weight: 600;
 }
-.task-version {
-  font-size: 11px;
-  color: var(--pa-placeholder);
-}
 .task-state {
-  margin-left: auto;
-  font-size: 11px;
-  padding: 3px 7px;
-  border-radius: var(--pa-radius-inline);
-  background: var(--pa-surface-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
   color: var(--pa-muted);
-  line-height: 1.4;
 }
-li[data-state='accepted'] .task-state {
-  background: var(--pa-accent-soft);
-  color: var(--pa-accent);
+.task-state::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: var(--pa-radius-circle);
+  background: var(--pa-surface-active);
 }
+li[data-state='accepted'] .task-state,
 li[data-state='running'] .task-state {
   color: var(--pa-accent);
-  background: var(--pa-accent-soft);
+}
+li[data-state='accepted'] .task-state::before,
+li[data-state='running'] .task-state::before {
+  background: var(--pa-accent);
 }
 li[data-state='failed'] .task-state,
 li[data-state='needs_plan'] .task-state,
-li[data-state='review'] .task-state {
+li[data-state='review'] .task-state,
+li[data-state='rework'] .task-state {
   color: var(--pa-warning);
-  background: var(--pa-warning-soft);
+}
+li[data-state='failed'] .task-state::before,
+li[data-state='needs_plan'] .task-state::before,
+li[data-state='review'] .task-state::before,
+li[data-state='rework'] .task-state::before {
+  background: var(--pa-warning);
 }
 p {
   margin: 8px 0;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.65;
 }
-.task-objective {
-  color: var(--pa-ink);
+
+.task-reason {
+  color: var(--pa-warning);
+  font-size: 12px;
 }
-.task-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  font-size: 11px;
-  color: var(--pa-muted);
-  line-height: 1.6;
-}
+
 .task-details {
   margin-top: 10px;
 }
@@ -291,9 +287,10 @@ summary {
   list-style: none;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   cursor: pointer;
   font-size: 12px;
+  line-height: 20px;
   color: var(--pa-muted);
 }
 summary::-webkit-details-marker {
@@ -303,43 +300,43 @@ summary > span {
   color: var(--pa-placeholder);
 }
 .task-detail-body {
-  margin-top: 10px;
-  padding: 4px 12px;
-  border-left: 2px solid var(--pa-line);
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--pa-line);
   color: var(--pa-muted);
 }
 .task-detail-body p {
   font-size: 12px;
   white-space: pre-wrap;
 }
-.task-finding {
-  padding: 8px 0;
-  border-bottom: 1px solid var(--pa-line);
-}
-.task-finding:last-child {
-  border: 0;
-}
+
 .delivery-progress {
-  border-top: 1px solid var(--pa-line);
-  padding-top: 20px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
   overflow-wrap: anywhere;
 }
 .delivery-progress > header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 13px;
+  line-height: 20px;
 }
-.delivery-symbol {
-  color: var(--pa-placeholder);
+.delivery-progress > header strong {
+  font-weight: 600;
 }
 .delivery-state {
-  margin-left: auto;
-  color: var(--pa-placeholder);
-  font-size: 11px;
+  color: var(--pa-muted);
+  font-size: 12px;
 }
+
 .empty-progress {
-  padding-bottom: 24px;
+  padding: 12px 0;
   color: var(--pa-muted);
 }
 </style>

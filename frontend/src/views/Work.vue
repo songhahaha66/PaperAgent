@@ -130,6 +130,10 @@
                 <JsonChatRenderer
                   v-else
                   :messages="chatMessages"
+                  :tasks="researchSnapshot?.tasks"
+                  :work-status="currentWork?.status"
+                  @open-progress="openProgress"
+                  @confirm-plan="sendMessage('确认', 'confirm')"
                   @open-file="handleWorkspaceFileSelect"
                 >
                   <ResearchEvidence
@@ -205,18 +209,6 @@
             class="progress-panel"
             @scroll="rememberPanelScroll('progress', $event)"
           >
-            <header class="progress-panel-heading">
-              <span class="eyebrow">{{ isZh ? '研究工作流' : 'RESEARCH WORKFLOW' }}</span>
-              <h2>{{ isZh ? '任务与验收' : 'Tasks & acceptance' }}</h2>
-              <p v-if="needsRecovery">{{ recoveryHint }}</p>
-              <p v-else>
-                {{
-                  isZh
-                    ? '跟踪任务依赖、研究结果和需要处理的问题。'
-                    : 'Track dependencies, accepted results and findings that need attention.'
-                }}
-              </p>
-            </header>
             <ResearchProgress :snapshot="researchSnapshot" :work-status="currentWork?.status" />
           </section>
           <section
@@ -656,27 +648,6 @@ onMounted(() => {
   height: 100%;
   overflow: auto;
   background: var(--pa-surface);
-}
-.progress-panel-heading {
-  padding: 28px 24px 0;
-}
-.eyebrow {
-  font-size: 10px;
-  color: var(--pa-placeholder);
-  letter-spacing: 1.5px;
-}
-.progress-panel-heading h2 {
-  margin: 8px 0 10px;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-  color: var(--pa-ink);
-}
-.progress-panel-heading p {
-  font-size: 12px;
-  line-height: 1.8;
-  color: var(--pa-muted);
-  margin: 0 0 22px;
 }
 .chat-section,
 .files-section {
