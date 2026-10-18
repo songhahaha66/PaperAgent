@@ -34,8 +34,13 @@ def unbound_assumptions(task_id, drafts, contract):
         seen.add(aid)
         known = existing.get(aid)
         if known:
-            if any(known[k] != v for k, v in premise_definition(task_id, draft).items()):
-                raise ResearchConflict("不能静默替换已有关键假设，请报告带证据的问题并修订计划")
+            changed = [key for key, value in premise_definition(task_id, draft).items() if known[key] != value]
+            if changed:
+                raise ResearchConflict(
+                    f"假设 {aid} 不能静默替换已有关键假设；变化字段：{', '.join(changed)}。"
+                    f"已登记前提：{known['statement']}。沿用时直接使用研究契约，从assumptions中删除这条重复声明；"
+                    "确需改变前提时报告带证据的问题并修订计划，不要换key重复创建。"
+                )
         else:
             scope = contract.get("assumption_task_ids", [task_id])
             tasks = contract.get("task_ids", scope)

@@ -14,7 +14,8 @@ from ai_system.graph.context import GraphContext
 from ai_system.graph.nodes.design import propose
 from ai_system.graph.nodes.solve import submission_schema
 from ai_system.graph.state import CandidateSet
-from ai_system.research.assumptions import unbound_assumptions
+from ai_system.research.assumptions import unbound_assumptions, premise_definition
+from ai_system.research.models import AssumptionDraft
 from ai_system.research.control import dispatch
 from test_paper_graph import _analysis, _candidate
 from test_report_submission import branch, report
@@ -83,6 +84,39 @@ def test_design_retries_the_actual_bad_premise_before_any_execution(tmp_path, mo
     result = asyncio.run(propose(ctx, task, ["regression"]))
     assert model.calls == 2
     assert result[0]["assumptions"][0]["checks"][0]["left"]["task_id"] == "Q1"
+    assert not ctx.registry.results
+
+
+@pytest.mark.parametrize("field", ["statement", "checks"])
+def test_repeated_premise_feedback_identifies_key_and_repairs_without_new_staging(tmp_path, monkeypatch, field):
+    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
+    registered = draft()
+    existing = {"id": "A:Q1:linear_trend", **premise_definition("Q1", AssumptionDraft.model_validate(registered))}
+    repeated = draft()
+    if field == "statement":
+        repeated["statement"] = "重新改写同一趋势前提"
+    else:
+        repeated["checks"][0]["description"] = "改写原检查"
+    candidate = _candidate("线性趋势").model_dump()
+    candidate["assumptions"] = [repeated]
+    class Model:
+        calls = 0
+        def with_structured_output(self, *args, **kwargs):
+            return self
+        async def ainvoke(self, messages):
+            self.calls += 1
+            if self.calls == 1:
+                return CandidateSet.model_validate({"candidates": [candidate]})
+            feedback = messages[-1].content
+            assert "A:Q1:linear_trend" in feedback and field in feedback
+            assert existing["statement"] in feedback and "删除这条重复声明" in feedback
+            return AIMessage(content=json.dumps({"candidates": [{**candidate, "assumptions": []}]}))
+    model = Model()
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model)
+    task = {**branch(), "analysis": _analysis().model_dump()}
+    task["research_contract"].update({**contract(), "assumptions": [existing]})
+    result = asyncio.run(propose(ctx, task, ["regression"]))
+    assert model.calls == 2 and result[0]["assumptions"] == []
     assert not ctx.registry.results
 
 
