@@ -214,25 +214,22 @@
               <p>{{ ui.noFiguresHint }}</p>
             </div>
             <div v-else class="figure-grid">
-              <button
-                v-for="figure in figureFiles"
-                :key="figure.path"
-                class="figure-card"
-                @click="handleWorkspaceFileSelect(figure.path)"
-              >
-                <img
-                  v-if="imageUrls[figure.path]"
-                  :src="imageUrls[figure.path]"
-                  :alt="figure.name"
-                />
-                <div v-else class="figure-placeholder"><t-icon name="image" /></div>
-                <span>{{ figure.name }}</span>
+              <div v-for="figure in figureFiles" :key="figure.path" class="figure-card">
+                <button class="figure-open" @click="handleWorkspaceFileSelect(figure.path)">
+                  <img
+                    v-if="imageUrls[figure.path]"
+                    :src="imageUrls[figure.path]"
+                    :alt="figure.name"
+                  />
+                  <div v-else class="figure-placeholder"><t-icon name="image" /></div>
+                  <span>{{ figure.name }}</span>
+                </button>
                 <button
                   @click.stop="askPaper(`请解释图表 ${figure.path} 的数据、计算依据和局限。`)"
                 >
                   {{ isZh ? '追问依据' : 'Ask about evidence' }}
                 </button>
-              </button>
+              </div>
             </div>
           </section>
           <PaperEditor
@@ -875,6 +872,18 @@ onMounted(() => {
   text-align: left;
   overflow: hidden;
 }
+.figure-open {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .figure-card:hover {
   border-color: var(--pa-line-strong);
   background: var(--pa-surface);
@@ -892,7 +901,7 @@ onMounted(() => {
   color: var(--pa-muted);
   font-size: 30px;
 }
-.figure-card > span {
+.figure-open > span {
   font-size: 12px;
   color: var(--pa-muted);
   white-space: nowrap;

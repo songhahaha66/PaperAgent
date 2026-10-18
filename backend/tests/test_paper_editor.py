@@ -134,3 +134,55 @@ def test_data_change_invalidates_pending_wording_candidate(paper):
         asyncio.run(editor.decide(store, proposal['id'], True, 'markdown'))
     assert (store.root / 'paper.md').read_text() == source
     assert any(t['validity'] == 'stale' for t in store.snapshot()['tasks'].values())
+
+
+@pytest.mark.parametrize('failure', ['pdf_replace', 'save'])
+def test_partial_publication_failure_restores_all_files_and_database(paper, monkeypatch, failure):
+    store, state = paper
+    store.publish_paper(assemble_latex(state), filename='paper.tex')
+    (store.root / 'paper.pdf').write_bytes(b'previous PDF')
+    before = store.snapshot()
+    source = (store.root / 'paper.tex').read_bytes()
+    proposal = candidate(store)
+    async def compile_candidate(folder):
+        (folder / 'paper.pdf').write_bytes(b'candidate PDF')
+        return SimpleNamespace(pdf_path='paper.pdf')
+    monkeypatch.setattr(editor, 'compile_pdf', compile_candidate)
+    if failure == 'save':
+        save = store._save
+        def fail_save(db, snapshot, kind, payload):
+            if kind == 'section_edit_applied':
+                raise RuntimeError('injected journal failure')
+            return save(db, snapshot, kind, payload)
+        monkeypatch.setattr(store, '_save', fail_save)
+    else:
+        replace = Path.replace
+        def fail_replace(path, target):
+            if path.name == 'paper.pdf.edit-tmp':
+                raise RuntimeError('injected PDF replacement failure')
+            return replace(path, target)
+        monkeypatch.setattr(Path, 'replace', fail_replace)
+    with pytest.raises(RuntimeError, match='injected'):
+        asyncio.run(editor.decide(store, proposal['id'], True, 'latex'))
+    assert store.snapshot() == before
+    assert (store.root / 'paper.tex').read_bytes() == source
+    assert (store.root / 'paper.pdf').read_bytes() == b'previous PDF'
+    assert editor.get_proposal(store, proposal['id'])['status'] == 'pending'
+    assert not (store.root / editor.PUBLICATION_MARKER).exists()
+
+
+def test_interrupted_publication_recovers_on_next_paper_request(paper, tmp_path):
+    store, _ = paper
+    before = (store.root / 'paper.md').read_bytes()
+    proposal = candidate(store)
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    (staging / 'paper.md').write_text('uncommitted source')
+    (staging / 'paper.pdf').write_bytes(b'uncommitted PDF')
+    with store._transaction():
+        editor.prepare_publication(store, proposal['id'], staging, ['paper.md', 'paper.pdf'])
+    assert (store.root / 'paper.md').read_bytes() != before
+    editor.current_store(store.root)
+    assert (store.root / 'paper.md').read_bytes() == before
+    assert not (store.root / 'paper.pdf').exists()
+    assert editor.get_proposal(store, proposal['id'])['status'] == 'pending'

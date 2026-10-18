@@ -26,11 +26,75 @@ from ai_system.export.latex import compile_pdf, fragment_issues
 from ai_system.export import export_docx
 
 
+PUBLICATION_MARKER = '.system/paper-publication.json'
+
+
+def recover_publication(store):
+    """Resolve an interrupted file publication against the committed decision.
+
+    BEGIN IMMEDIATE waits for an in-flight publisher. A committed applied decision
+    keeps its files; a rolled-back decision restores every previous artifact.
+    Backups survive failed recovery so a later request can retry safely.
+    """
+    marker = store.root / PUBLICATION_MARKER
+    if not marker.exists():
+        return
+    with store._transaction() as db:
+        if not marker.exists():
+            return
+        record = json.loads(marker.read_text(encoding='utf-8'))
+        proposal_id = record['proposal_id']
+        if not re.fullmatch(r'[a-f0-9]{32}', proposal_id):
+            raise ValueError('论文发布恢复记录无效')
+        folder = marker.parent / 'paper-publication' / proposal_id
+        row = db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',
+                         (record['research_id'], 'paper-edit:' + proposal_id)).fetchone()
+        applied = row and json.loads(row[0])['status'] == 'applied'
+        if not applied:
+            for name, existed in record['files'].items():
+                if name not in {'paper.md', 'paper.tex', 'paper.pdf', 'paper.docx'}:
+                    raise ValueError('论文发布恢复路径无效')
+                target = store.root / name
+                if existed:
+                    temporary = target.with_suffix(target.suffix + '.restore-tmp')
+                    shutil.copyfile(folder / (name + '.before'), temporary)
+                    temporary.replace(target)
+                else:
+                    target.unlink(missing_ok=True)
+        marker.unlink()
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def prepare_publication(store, proposal_id, staging, names):
+    """Called under the SQLite writer lock, before replacing any active file."""
+    marker = store.root / PUBLICATION_MARKER
+    if marker.exists():
+        raise ResearchConflict('尚有待恢复的论文发布，请刷新后重试')
+    folder = marker.parent / 'paper-publication' / proposal_id
+    folder.mkdir(parents=True, exist_ok=True)
+    files = {}
+    for name in names:
+        target = store.root / name
+        files[name] = target.exists()
+        if target.exists():
+            shutil.copyfile(target, folder / (name + '.before'))
+        shutil.copyfile(staging / name, target.with_suffix(target.suffix + '.edit-tmp'))
+    temporary = marker.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'proposal_id': proposal_id, 'research_id': store.research_id,
+                                     'files': files}), encoding='utf-8')
+    temporary.replace(marker)
+    for name in names:
+        target = store.root / name
+        target.with_suffix(target.suffix + '.edit-tmp').replace(target)
+
+
 def current_store(root):
     thread = json.loads((Path(root) / '.system/graph_thread.json').read_text())
     if thread.get('engine_version') != 'research-v3':
         raise ValueError('当前研究不支持章节修改')
-    return ResearchStore(root, thread['thread_id'])
+    store = ResearchStore(root, thread['thread_id'])
+    recover_publication(store)
+    return store
 
 
 async def paper_state(store):
@@ -132,6 +196,7 @@ def get_proposal(store, proposal_id):
 
 
 async def decide(store, proposal_id, apply, output_mode):
+    recover_publication(store)
     proposal = get_proposal(store, proposal_id)
     if proposal['status'] != 'pending':
         return proposal
@@ -175,32 +240,33 @@ async def decide(store, proposal_id, apply, output_mode):
             result = await export_docx(staging, rendered, template_docx=template if template.exists() else None)
             exports = [result.docx_path]
         store.refresh_inputs()
-        with store._transaction() as db:
-            latest = json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?', (store.research_id, 'paper-edit:' + proposal_id)).fetchone()[0])
-            if latest['status'] != 'pending':
-                return latest
-            current = store._read(db)
-            _, active = source_info(store, current)
-            if current['commit_seq'] != proposal['base_commit'] or digest(active) != proposal['source_hash']:
-                raise ResearchConflict('编译期间论文发生变化，未覆盖最新版本，请刷新后重试')
-            # Persist both sides in the existing version journal and paper archive.
-            archive = store.root / '.system/research' / store.research_id / 'papers'
-            archive.mkdir(parents=True, exist_ok=True)
-            old_name = f'{current["commit_seq"]}-before-edit{Path(filename).suffix}'
-            (archive / old_name).write_text(source, encoding='utf-8')
-            version = archive / f'{current["commit_seq"] + 1}{Path(filename).suffix}'
-            version.write_text(rendered, encoding='utf-8')
-            section = current['sections'][proposal['section']]
-            section.update(text=proposal['after'], content_hash=digest(proposal['after']), revision=section['revision'] + 1)
-            current.update(paper_hash=digest(rendered), paper_version=version.relative_to(store.root).as_posix(), paper_conflict=False,
-                           exports=[filename] + exports)
-            for name in [filename] + exports:
-                target = store.root / name
-                temporary = target.with_suffix(target.suffix + '.edit-tmp')
-                shutil.copyfile(staging / name, temporary)
-                temporary.replace(target)
-            proposal.update(status='applied', applied_revision=section['revision'])
-            store._save(db, current, 'section_edit_applied', {'proposal': proposal, 'versions': {proposal['section']: section}})
-            db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
-                       (json.dumps(proposal, ensure_ascii=False), store.research_id, 'paper-edit:' + proposal_id))
+        try:
+            with store._transaction() as db:
+                latest = json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?', (store.research_id, 'paper-edit:' + proposal_id)).fetchone()[0])
+                if latest['status'] != 'pending':
+                    return latest
+                current = store._read(db)
+                _, active = source_info(store, current)
+                if current['commit_seq'] != proposal['base_commit'] or digest(active) != proposal['source_hash']:
+                    raise ResearchConflict('编译期间论文发生变化，未覆盖最新版本，请刷新后重试')
+                # Persist both sides in the existing version journal and paper archive.
+                archive = store.root / '.system/research' / store.research_id / 'papers'
+                archive.mkdir(parents=True, exist_ok=True)
+                old_name = f'{current["commit_seq"]}-before-edit{Path(filename).suffix}'
+                (archive / old_name).write_text(source, encoding='utf-8')
+                version = archive / f'{current["commit_seq"] + 1}{Path(filename).suffix}'
+                version.write_text(rendered, encoding='utf-8')
+                section = current['sections'][proposal['section']]
+                section.update(text=proposal['after'], content_hash=digest(proposal['after']), revision=section['revision'] + 1)
+                current.update(paper_hash=digest(rendered), paper_version=version.relative_to(store.root).as_posix(), paper_conflict=False,
+                               exports=[filename] + exports)
+                prepare_publication(store, proposal_id, staging, [filename] + exports)
+                proposal.update(status='applied', applied_revision=section['revision'])
+                store._save(db, current, 'section_edit_applied', {'proposal': proposal, 'versions': {proposal['section']: section}})
+                db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
+                           (json.dumps(proposal, ensure_ascii=False), store.research_id, 'paper-edit:' + proposal_id))
+        except BaseException:
+            recover_publication(store)
+            raise
+        recover_publication(store)
     return proposal

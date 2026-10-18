@@ -52,3 +52,16 @@ retrieval or independent bibliographic verification.
 The specified gateway currently has no HTTPS entry point. No credentials were
 sent and no live-model/browser research recomputation is claimed. Model-generated
 wording and real research calls still require a safely configured model provider.
+
+Publication now writes a recovery marker and artifact backups before replacement.
+A failed file replacement, SQLite write/commit, or interrupted process is resolved
+against the committed candidate decision: pending restores every old artifact;
+applied retains the committed files. Recovery runs when opening the paper and
+before another decision. Backups remain available if recovery itself fails.
+
+Gateway preparation (2026-10-18): TLS verification succeeded for
+`https://aigw.saurlax.com/v1/models`; the unauthenticated request returned HTTP 401
+with `missing api key`. Use `https://aigw.saurlax.com/v1` as the OpenAI-compatible
+base candidate. The model list and the exact Step 5 Preview model ID still need
+an authenticated models response through supported secure configuration. No
+credential was supplied, and no live-model success is claimed.
