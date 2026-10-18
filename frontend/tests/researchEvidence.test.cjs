@@ -182,6 +182,14 @@ const { hostRenderer } = require('./vueHost.cjs')
   }
   await flush()
   assert.match(text(host.root), /交付条件尚未满足/)
+  const delivery = host.find((node) => node.props?.class === 'delivery-status')
+  const findings = delivery.children.find((node) => node.kind === 'details')
+  assert.equal(
+    findings.props.open,
+    undefined,
+    'long delivery findings stay behind an accessible details control',
+  )
+  assert.match(text(findings), /查看 2 项交付检查问题.*约束复算左值12/)
   assert.match(text(host.root), /约束复算左值12/)
   assert.match(text(host.root), /重算受影响任务并重新验收/)
   assert.match(text(host.root), /已验收计算可保留/)

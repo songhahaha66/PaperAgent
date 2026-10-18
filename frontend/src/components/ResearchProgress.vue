@@ -276,7 +276,7 @@ p {
 }
 
 .task-reason {
-  color: var(--pa-warning);
+  color: var(--pa-muted);
   font-size: 12px;
 }
 

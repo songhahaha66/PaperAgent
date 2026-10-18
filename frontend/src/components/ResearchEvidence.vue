@@ -28,10 +28,19 @@
               ? '交付条件尚未满足'
               : 'Delivery checks pending'
         }}</strong>
-        <p v-for="(blocker, index) in snapshot.delivery.blockers" :key="index">
-          <strong>{{ taskTitle(blocker.task_id) }}</strong> · {{ blocker.message }}
-          <small class="source-quote">{{ actionHint(blocker.action) }}</small>
-        </p>
+        <details v-if="snapshot.delivery.blockers.length" class="research-contract">
+          <summary>
+            {{
+              isZh
+                ? `查看 ${snapshot.delivery.blockers.length} 项交付检查问题`
+                : `Review ${snapshot.delivery.blockers.length} delivery findings`
+            }}
+          </summary>
+          <p v-for="(blocker, index) in snapshot.delivery.blockers" :key="index">
+            <strong>{{ taskTitle(blocker.task_id) }}</strong> · {{ blocker.message }}
+            <small class="source-quote">{{ actionHint(blocker.action) }}</small>
+          </p>
+        </details>
       </div>
       <details v-if="checkedTasks.length" class="research-contract">
         <summary>{{ isZh ? '检查结果' : 'Check results' }}</summary>
