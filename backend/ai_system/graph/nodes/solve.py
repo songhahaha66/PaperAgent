@@ -63,6 +63,7 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 工作方式：
 - 用 run_python 执行代码。内核是持久的：前面定义的变量、读入的数据后面都能直接用，不要每次重新读数据。
 - 每次写一段完整的代码（读数据、计算、打印关键结果可以放在一起），看到输出再决定下一步；出错就读回溯修正。
+- run_python 只做读取、计算和绘图。record_results、record_figure、SolveReport 是外部工具，不能在 Python 代码里当函数调用；登记与报告分别通过工具提交，不在计算代码中编写整篇报告。
 - 只 print 需要看的汇总结果，不要打印整张表或长数组（输出超过约 6000 字会被截断）。
 - 数据文件路径相对于工作目录，例如 data/xxx.csv。
 - 画图用 matplotlib，画完不需要 savefig，系统会自动保存本次执行打开的图并告诉你文件名。
@@ -247,7 +248,12 @@ def build_tools(
             "paper_code",
             f"{subproblem_id} · {result.run_id} · {'成功' if result.ok else '失败'}",
         )
-        return clip(result.to_observation(), OBSERVATION_CHARS)
+        observation = clip(result.to_observation(), OBSERVATION_CHARS)
+        if not result.ok:
+            return observation + "\n[执行失败] 本次run不能作为登记来源。请先修复错误并成功执行，再使用实际返回的run_id登记。"
+        if submission_gaps is not None:
+            observation += "\n已有执行输出请直接按契约原名登记；不要为登记重复执行相同计算。"
+        return submission_feedback(observation)
 
     async def record_results(items: List[ResultItem]) -> str:
         """一次登记多个论文会用到的结果（同一次或多次执行的结果放在一起登记，减少往返）。

@@ -70,6 +70,8 @@ def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_c
     def invoke(history):asyncio.run(middleware.awrap_model_call(ModelRequest(model=None,messages=history,tools=['run_python']),handler))
     invoke(messages)
     assert seen[-1].tools==['run_python']  # Missing actual answer still allows computation.
+    assert "登记证据仍未齐" in seen[-1].messages[-1].content
+    assert "只补算缺项" in seen[-1].messages[-1].content
     seed(ctx,runs)
     invoke(messages)
     assert seen[-1].tools==[] and '必需登记证据已齐' in seen[-1].messages[-1].content
@@ -190,13 +192,31 @@ def test_registration_returns_current_inventory_without_waiting_for_a_failed_rep
         submission_gaps=lambda: submission_inventory_issues(ctx, task, runs))}
     async def go():
         try:
-            await tools["run_python"].ainvoke({"code": "print(sum([1, 2, 3]))"})
+            output = await tools["run_python"].ainvoke({"code": "print(sum([1, 2, 3]))"})
+            assert "answer_finite" in output and "按契约原名登记" in output
+            assert runs[0]["run_id"] in output
             item = {"name": "wrong_name", "value": "6", "run_id": runs[0]["run_id"]}
             missing = await tools["record_results"].ainvoke({"items": [item]})
             assert "answer_finite" in missing and "缺少唯一登记指标" in missing
             complete = await tools["record_results"].ainvoke({"items": [{**item, "name": "answer"}]})
             assert "必需登记指标已齐" in complete and "缺少唯一登记指标" not in complete
             assert len(runs) == 1
+        finally:
+            await ctx.kernels.close()
+    asyncio.run(go())
+
+
+def test_failed_execution_cannot_prompt_registration_of_nonexistent_results(tmp_path):
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None)
+    runs = []
+    tools = {tool.name: tool for tool in build_tools(ctx, "Q1", runs,
+        submission_gaps=lambda: ["answer_finite 缺少登记结果"])}
+    async def go():
+        try:
+            output = await tools["run_python"].ainvoke({"code": "raise ValueError('incomplete computation')"})
+            assert "执行失败" in output and "本次run不能作为登记来源" in output
+            assert "[提交检查]" not in output
+            assert len(runs) == 1 and not runs[0]["ok"] and not ctx.registry.results
         finally:
             await ctx.kernels.close()
     asyncio.run(go())
@@ -298,6 +318,34 @@ class MixedReportModel(FakeModel):
             calls = [("SolveReport", report(refs[-1]))]
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}_{i}"}
                                                  for i, (name, args) in enumerate(calls)])
+
+
+def test_compute_feedback_routes_stalled_solver_into_registration_before_report(tmp_path):
+    class InventoryModel(FakeModel):
+        def _solver_step(self, task, messages):
+            tools = [m for m in messages if isinstance(m, ToolMessage)]
+            recorded = [m for m in tools if m.name == "record_results"]
+            outputs = [m for m in tools if m.name == "run_python"]
+            if recorded:
+                ref = re.search(r"\{\{R:(R\d+)\}\}", str(recorded[-1].content))[1]
+                name, args = "SolveReport", report(ref)
+            elif outputs and "answer_finite" in outputs[-1].content and "按契约原名登记" in outputs[-1].content:
+                rid = re.search(r"\[run_id: (\S+)\]", outputs[-1].content)[1]
+                name, args = "record_results", {"items": [{"name": "answer", "value": "6", "run_id": rid}]}
+            else:
+                name, args = "run_python", {"code": "answer = sum([1, 2, 3])\nprint('answer', answer)"}
+            return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}"}])
+    model = InventoryModel(loose_number_once=False)
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=6, max_review_rounds=0)
+    task, runs = branch(), []
+    async def go():
+        try:
+            return await _solve_loop(ctx, task, runs, [HumanMessage(content=build_task(task, ctx))])
+        finally:
+            await ctx.kernels.close()
+    status, error, submitted, _ = asyncio.run(go())
+    assert status == "completed" and error is None and len(runs) == 1
+    assert submitted["requirement_evidence"][0]["evidence_refs"] == [next(iter(ctx.registry.results))]
 
 
 @pytest.mark.parametrize("valid_mixed", [False, True])
