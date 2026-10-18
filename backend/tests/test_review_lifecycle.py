@@ -139,6 +139,80 @@ def test_resume_rechecks_local_findings_instead_of_clearing_them_at_recovery(tmp
     assert retry["review_issue_ids"], "the new audit is bound to the previously open findings"
 
 
+def test_resume_routes_uncheckable_global_finding_to_owner_and_fresh_audit(tmp_path, monkeypatch):
+    _, store = run_agent(tmp_path, monkeypatch, AuditModel(loose_number_once=False))
+    original = store.snapshot()
+    finding = IssueReport(task_id="Q1", category="model", section="analysis", message="核对逐日序列，不能用单日值与全周平均比较")
+    [issue] = store.report_issues([finding], "sections")
+    store.schedule_investigations()
+    assert store.snapshot()["issues"][-1]["status"] == "inconclusive"
+    store.recover()
+    assert store.snapshot()["issues"][-1]["status"] == "inconclusive", "recovery itself is not a resolution"
+
+    class RecheckModel(AuditModel):
+        solver_saw_finding: bool = False
+        reviewer_saw_finding: bool = False
+
+        def _solver_step(self, task, messages):
+            self.solver_saw_finding |= finding.message in task
+            return super()._solver_step(task, messages)
+
+        def with_structured_output(self, schema, **kwargs):
+            bound = super().with_structured_output(schema, **kwargs)
+            owner = self
+            class Bound:
+                async def ainvoke(self, messages):
+                    if schema is ResultReview:
+                        owner.reviewer_saw_finding |= finding.message in messages[-1].content
+                    return await bound.ainvoke(messages)
+            return Bound()
+
+    model = RecheckModel(loose_number_once=False)
+    agent = PaperGraphAgent(model, workspace_dir=str(tmp_path), judge=FixedJudge(), explore_top_k=1, max_review_rounds=1)
+    asyncio.run(agent.resume_failed())
+    state = store.snapshot()
+    assert model.solver_saw_finding and model.reviewer_saw_finding
+    assert store.delivery_ready(state)
+    assert state["tasks"]["Q3"]["active_attempt"] == original["tasks"]["Q3"]["active_attempt"]
+    resolved = next(i for i in state["issues"] if i["id"] == issue["id"])
+    assert resolved["source"] == "sections" and resolved["status"] == "resolved"
+    attempt = state["attempts"][resolved["resolution_attempt"]]
+    assert issue["id"] in attempt["review_issue_ids"]
+    report = state["tasks"]["Q1"]["report"]
+    assert report["reviews"][-1]["report_hash"] == report_fingerprint(report)
+
+
+@pytest.mark.parametrize("audit", ["missing", "stale", "still_open"])
+def test_global_finding_cannot_close_without_fresh_clear_owner_review(tmp_path, audit):
+    store = store_for(tmp_path)
+    submit(store, "Q1", {"demand": 8})
+    finding = IssueReport(task_id="Q1", category="model", message="qualitative concern")
+    [issue] = store.report_issues([finding], "sections")
+    store.schedule_investigations()
+    store.recover()
+    order = store.claim("Q1", review_required=True)
+    assert order.review_issue_ids == [issue["id"]]
+    report = {"status": "completed", "summary": "computed", "requirement_evidence": [{"requirement_id": "RQ1", "evidence_refs": ["R99"]}]}
+    reviews = [] if audit == "missing" else [ReviewRecord(
+        report_hash="old" if audit == "stale" else report_fingerprint(report),
+        issues=[finding] if audit == "still_open" else [])]
+    store.commit(WorkerResult(order=order, execution_status="succeeded", acceptance="accepted", report=report,
+        results=[{"id": "R99", "subproblem": "Q1", "name": "demand", "value": "8", "run_id": "run_test"}], reviews=reviews))
+    assert next(i for i in store.snapshot()["issues"] if i["id"] == issue["id"])["status"] == "inconclusive"
+    assert not store.delivery_ready(store.snapshot())
+
+
+def test_global_finding_with_executable_check_keeps_independent_investigation(tmp_path):
+    store = store_for(tmp_path)
+    submit(store, "Q1", {"demand": 8})
+    submit(store, "Q2", {"allocation": 8, "residual": 0})
+    [issue] = store.report_issues([IssueReport(task_id="Q2", category="model", message="check capacity", check_ids=["capacity"])], "sections")
+    [verification] = store.schedule_investigations()
+    store.recover()
+    assert store.snapshot()["tasks"]["Q2"]["acceptance"] == "accepted"
+    assert issue["id"] not in store.claim(verification, review_required=True).review_issue_ids
+
+
 @pytest.mark.parametrize("source", ["design", "solve"])
 def test_adopted_premises_are_versioned_before_publishing_and_frozen_on_rerun(tmp_path, monkeypatch, source):
     events=[]

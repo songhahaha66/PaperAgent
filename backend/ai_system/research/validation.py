@@ -15,6 +15,17 @@ def report_fingerprint(report):
     return fingerprint({k: v for k, v in report.items() if k not in {"status", "error", "reviews"}})
 
 
+def needs_owner_review(issue):
+    """Freeze qualitative findings into a fresh audit of their owning task.
+
+    Global findings bound to executable checks keep their independent countercheck.
+    A confirmed recomputation likewise cannot be cleared by a local review.
+    """
+    return (issue["status"] not in {"resolved", "dismissed"} and issue["action"] != "recompute"
+            and (issue["source"] == "local_review" or
+                 issue["action"] == "verify" and issue["status"] == "inconclusive" and not issue["check_ids"]))
+
+
 SOURCE_TOKEN = re.compile(r"[A-Za-z]+|\d+(?:\.\d+)?|[^\s]", re.UNICODE)
 
 

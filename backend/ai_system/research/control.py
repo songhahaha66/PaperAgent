@@ -12,6 +12,7 @@ from ..graph.context import GraphContext
 from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
 from .planner import ready_tasks, Planner
 from .assumptions import assumption_scope
+from .validation import needs_owner_review
 
 
 def refresh_registry(ctx):
@@ -96,7 +97,7 @@ def dispatch(state, runtime):
                 "task_ids": list(snapshot["tasks"]), "assumption_task_ids": assumption_scope(snapshot["tasks"], key),
                 "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},
             "design": (state.get("designs") or {}).get(key),
-            "review_findings": [i for i in snapshot["issues"] if i["source"] == "local_review" and i["task_id"] == key and i["status"] not in {"resolved", "dismissed"}],
+            "review_findings": [i for i in snapshot["issues"] if needs_owner_review(i) and i["task_id"] == key],
             "dependencies": {dep: snapshot["tasks"][dep]["report"] for dep in task["dependencies"]}}))
     return sends
 

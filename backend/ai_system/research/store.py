@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import ENGINE_VERSION
 from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
-from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps
+from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps, needs_owner_review
 from .assumptions import assumption_id, premise_definition, assumption_scope
 
 DB_PATH = ".system/research.sqlite"
@@ -214,8 +214,7 @@ class ResearchStore:
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
                               protocol_hash=digest(protocol(state, task_id)), review_required=review_required,
-                              review_issue_ids=[i["id"] for i in state["issues"] if i["source"] == "local_review" and
-                                  i["task_id"] == task_id and i["status"] not in {"resolved", "dismissed"}])
+                              review_issue_ids=[i["id"] for i in state["issues"] if needs_owner_review(i) and i["task_id"] == task_id])
             state["attempts"][order.attempt_id] = {**order.model_dump(), "execution_status": "running", "started_at": time.time()}
             task.update(execution_status="running", active_attempt=order.attempt_id)
             self._save(db, state, "claimed", order.model_dump())
@@ -407,7 +406,7 @@ class ResearchStore:
             # only when the current report has been rechecked with no open issues.
             clear = not result.reviews[-1].issues
             for issue in [*recorded, *[i for i in state["issues"] if i["id"] in order.review_issue_ids]]:
-                if issue["source"] != "local_review" or issue["action"] == "recompute" or issue["task_id"] != order.task_id:
+                if not needs_owner_review(issue) or issue["task_id"] != order.task_id:
                     continue
                 if clear or issue["category"] == "service" and not any(r.category == "service" for r in result.reviews[-1].issues):
                     issue["status"] = "resolved"
@@ -782,8 +781,7 @@ class ResearchStore:
                         issue["status"] = "suspected"
             pending = {key for key, task in state["tasks"].items()
                        if not task["retired"] and (task["acceptance"] != "accepted" or task["validity"] != "current")}
-            pending |= {i["task_id"] for i in state["issues"] if i["source"] == "local_review" and
-                        i["status"] not in {"resolved", "dismissed"} and i["action"] != "recompute"}
+            pending |= {i["task_id"] for i in state["issues"] if needs_owner_review(i)}
             for attempt in state["attempts"].values():
                 if attempt["execution_status"] == "running":
                     attempt["execution_status"] = "cancelled"

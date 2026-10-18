@@ -317,6 +317,7 @@ def build_task(
         f"# 方法参考\n{describe(chosen.get('method_keys') or [])}",
         _dependency_text(branch.get("dependencies") or {}, ctx),
         "# 研究契约（不得放宽验收；按指定名称登记检查指标，并填写 requirement_evidence）\n" + json.dumps(branch["research_contract"], ensure_ascii=False) if branch.get("research_contract") else "",
+        "# 必须逐项复核的先前审查意见\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",
         extra,
         ending,
     ]))

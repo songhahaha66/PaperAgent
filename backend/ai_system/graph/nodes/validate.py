@@ -19,7 +19,7 @@ from langgraph.graph import END
 
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
-from ..registry import MATH_PATTERN, REF_PATTERN, find_refs
+from ..registry import MATH_PATTERN, REF_PATTERN, find_refs, value_in_output
 from ...research.models import IssueReport
 from ..state import PaperState
 from ..tracing import labelled
@@ -29,7 +29,7 @@ from .write import STYLE, section_plan, section_request, solve_key
 
 MIN_SECTION_CHARS = 80
 # 小数或百分数；整数（年份、编号、个数）不检查
-DECIMAL_PATTERN = re.compile(r"(?<![\w.])-?\d+\.\d+%?|(?<![\w.])\d+%")
+DECIMAL_PATTERN = re.compile(r"(?<![A-Za-z0-9_.])-?\d+\.\d+%?|(?<![A-Za-z0-9_.])\d+%")
 CODE_PATTERN = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
 STRIP_PATTERNS = [
     re.compile(r"\$\$.*?\$\$", re.DOTALL),
@@ -61,16 +61,15 @@ def _prose(text: str) -> str:
     return text + " " + " ".join(assigned)
 
 
-def _normalize(number: str) -> str:
-    return number.rstrip("%").lstrip("-").rstrip("0").rstrip(".") or "0"
-
-
 def untracked_numbers(text: str, allowed_text: str) -> List[str]:
-    allowed = {_normalize(m.group()) for m in DECIMAL_PATTERN.finditer(allowed_text)}
+    # Separate vector elements before matching; commas in compact JSON are not
+    # thousands separators. Reuse the registration rule for rounded displays.
+    numeric = " ".join(m.group() for m in DECIMAL_PATTERN.finditer(allowed_text))
     found = []
     for match in DECIMAL_PATTERN.finditer(_prose(text)):
         value = match.group()
-        if _normalize(value) not in allowed and value not in found and value not in CONVENTIONS:
+        if (not value_in_output(value, numeric)
+                and value not in found and value not in CONVENTIONS):
             found.append(value)
     return found
 

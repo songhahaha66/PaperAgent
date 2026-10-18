@@ -118,8 +118,8 @@ def value_in_output(value: str, output: str) -> bool:
         return value.strip() != "" and value.strip() in output
     places = _decimals(value)
     # 只有至少两位有效数字时才允许四舍五入匹配，否则 0.9 这类值几乎能对上任何输出
-    can_round = 0 < places < 15 and _significant_digits(value) >= 2
     is_percent = value.strip().endswith("%")
+    can_round = places < 15 and (places > 0 or is_percent) and _significant_digits(value) >= 2
     for match in NUMBER_PATTERN.finditer(output.replace(",", "")):
         number = float(match.group())
         candidates = [number, number * 100] if is_percent else [number]

@@ -504,6 +504,14 @@ def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
 def test_untracked_numbers_ignores_refs_formulas_and_allowed():
     text = "预测值 {{R:R1}}，公式 $y = 0.5x$，题目给定 0.65，另有 3.14 与 20%。整数 2025 不检查。"
     assert untracked_numbers(text, allowed_text="给定 0.65") == ["3.14", "20%"]
+
+
+def test_paper_accepts_rounded_registered_vectors_and_percentages():
+    allowed = "[487.51613299,505.41213299,502.896] 0.5385 [0.4605,0.4647]"
+    assert untracked_numbers("备餐量487.52、505.41，预测502.9，分位数53.85%，缺货率46%。", allowed) == []
+    assert untracked_numbers("备餐量487.53，预测502.8，分位数53.86%，缺货率48%。", allowed) == [
+        "487.53", "502.8", "53.86%", "48%"]
+    assert untracked_numbers("粗略值0.5、4%，符号错误-502.9。", allowed) == ["0.5", "4%", "-502.9"]
     assert untracked_numbers("### 4.1 整体思路\n#### Q1.2 求解\n正文 4.5", "") == ["4.5"]
     # 公式里单独等于一个数的是结果（Q2 把没登记的检验统计量写成 $z = 4.05$）
     assert untracked_numbers("真实序列 $z = 4.05$，$\\hat p \\approx 0.673$，$x = {{R:R1}}$", "") == ["4.05", "0.673"]
