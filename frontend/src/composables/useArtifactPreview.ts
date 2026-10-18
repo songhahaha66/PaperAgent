@@ -1,3 +1,4 @@
+import type { ResearchSnapshot } from '@/types/research'
 import { ref, computed, watch, onUnmounted, type Ref } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
@@ -8,9 +9,10 @@ import { useStudioCopy } from '@/lang/studio'
 export function useArtifactPreview(options: {
   workId: Ref<string>
   currentWork: Ref<Work | null>
+  researchSnapshot: Ref<ResearchSnapshot | null>
   figuresVisible: Readonly<Ref<boolean>>
 }) {
-  const { workId, currentWork, figuresVisible } = options
+  const { workId, currentWork, researchSnapshot, figuresVisible } = options
   const authStore = useAuthStore()
   const { ui, isZh } = useStudioCopy()
   let disposed = false
@@ -22,11 +24,13 @@ export function useArtifactPreview(options: {
   const primaryArtifact = computed(() => {
     const names =
       currentWork.value?.output_mode === 'latex'
-        ? ['paper.pdf', 'paper.md']
+        ? ['paper.pdf', 'paper.tex']
         : currentWork.value?.output_mode === 'word'
           ? ['paper.docx', 'paper.md']
           : ['paper.md']
     for (const name of names) {
+      if (researchSnapshot.value?.has_research && !researchSnapshot.value.artifacts.includes(name))
+        continue
       const file = workspaceFiles.value.find(
         (f) => f.type === 'file' && f.path === name && (f.size || 0) > 0,
       )
@@ -34,13 +38,20 @@ export function useArtifactPreview(options: {
     }
     return null
   })
+  const paperPath = computed(() =>
+    currentWork.value?.output_mode === 'latex'
+      ? primaryArtifact.value?.path || 'paper.tex'
+      : 'paper.md',
+  )
   const paperAvailable = computed(() => !!primaryArtifact.value)
   const downloadLabel = computed(() =>
     primaryArtifact.value?.name.endsWith('.pdf')
       ? ui.value.downloadPdf
       : primaryArtifact.value?.name.endsWith('.docx')
         ? ui.value.downloadWord
-        : ui.value.downloadMd,
+        : primaryArtifact.value?.name.endsWith('.tex')
+          ? ui.value.downloadTex
+          : ui.value.downloadMd,
   )
   const figureFiles = computed(() =>
     workspaceFiles.value.filter(
@@ -58,7 +69,11 @@ export function useArtifactPreview(options: {
       )
       let blob: Blob
       if (data.type === 'text')
-        blob = new Blob([data.content || ''], { type: 'text/markdown;charset=utf-8' })
+        blob = new Blob([data.content || ''], {
+          type: data.filename.endsWith('.tex')
+            ? 'application/x-tex;charset=utf-8'
+            : 'text/markdown;charset=utf-8',
+        })
       else {
         const response = await fetch(
           `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}${data.download_url}`,
@@ -196,6 +211,7 @@ export function useArtifactPreview(options: {
     exportLoading,
     primaryArtifact,
     paperAvailable,
+    paperPath,
     downloadLabel,
     figureFiles,
     loadWorkspaceFiles,

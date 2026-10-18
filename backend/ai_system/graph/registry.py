@@ -18,7 +18,14 @@ from typing import Callable, Dict, List, Optional
 from services.file_services.workspace_fs import WorkspaceFS
 
 REGISTRY_PATH = ".system/results.json"
-MATH_PATTERN = re.compile(r"\$\$.*?\$\$|\$[^$\n]+\$", re.DOTALL)
+MATH_PATTERN = re.compile(
+    r"\$\$.*?\$\$|\$[^$\n]+\$|\\\(.*?\\\)|\\\[.*?\\\]|"
+    r"\\begin\{(?:equation|align|gather|multline|displaymath)\*?\}.*?\\end\{(?:equation|align|gather|multline|displaymath)\*?\}", re.DOTALL)
+
+
+def math_body(text: str) -> str:
+    return re.sub(r"^\\begin\{[^{}]+\}|\\end\{[^{}]+\}$|^\\[\[(]|\\[\])]$|^\$+|\$+$", "", text).strip()
+
 REF_PATTERN = re.compile(r"\{\{\s*([RF]):\s*([RF]\d+)\s*\}\}")
 FIGURE_LINE = re.compile(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", re.MULTILINE)
 # 图名里自带的编号（"图3 遗忘因子……"），渲染时统一重新编号，留着会变成"图2 图3 ……"
@@ -356,6 +363,7 @@ class ResultRegistry:
             return "（没有登记的结果）"
         lines = [
             "引用渲染时会自动带上单位，正文在引用后不要再写单位。",
+            "数值序列引用代表整个序列，不支持在引用后追加 [0] 等索引或算术运算。没有逐项登记时，整组数据作为一个序列展示。",
             "",
             "| 引用 | 子问题 | 名称 | 值（含单位） | 说明 |",
             "|---|---|---|---|---|",
@@ -366,7 +374,7 @@ class ResultRegistry:
             lines.append(f"| {ref} | {r.subproblem} | {r.name} | {shown} | {r.description} |")
         return "\n".join(lines)
 
-    def render(self, text: str) -> str:
+    def render(self, text: str, *, latex: bool = False) -> str:
         """把正文中的引用替换成真实内容
 
         - 独占一行的 {{F:F1}} 渲染为图片和图题，按图片首次出现的顺序编号；同一张图再次独占一行时整行去掉；
@@ -374,6 +382,8 @@ class ResultRegistry:
         - {{R:R1}} 渲染为数值和单位；
         - 未知引用保留原样，由校验环节报告。
         """
+        from ..export.latex import escape_plain
+        encode = escape_plain if latex else str
         figure_numbers: Dict[str, int] = {}
         placed = [m.group(1) for m in FIGURE_LINE.finditer(text)]
         for ref in placed + find_refs(text):
@@ -391,6 +401,13 @@ class ResultRegistry:
             if result.id in shown:
                 return ""
             shown.add(result.id)
+            if latex:
+                if any(c in result.path for c in "{}%\\\r\n"):
+                    raise ValueError("登记图片路径不能用于 LaTeX")
+                caption = escape_plain(FIGURE_NAME_NUMBER.sub('', result.name))
+                return ("\\begin{figure}[H]\n\\centering\n"
+                        + r"\includegraphics[width=0.85\linewidth]{\detokenize{" + result.path + "}}\n"
+                        + r"\caption{" + caption + "}\n" + r"\label{fig:" + result.id + "}\n\\end{figure}")
             label = f"图{number} {FIGURE_NAME_NUMBER.sub('', result.name)}"
             return f"![{label}]({result.path})\n\n*{label}*"
 
@@ -409,11 +426,32 @@ class ResultRegistry:
             if result is None or result.id[0] != match.group(1):
                 parts.append(match.group(0))
             elif result.kind == "figure":
-                parts.append(f"图{figure_numbers[result.id]}")
+                prefix = "" if re.search(r"图\s*$", text[:match.start()]) else "图~"
+                parts.append(prefix + r"\ref{fig:" + result.id + "}" if latex else f"图{figure_numbers[result.id]}")
+            elif latex and result.kind == "series":
+                values = numeric_series(result.value)
+                # Bound presentation precision without changing registered evidence.
+                # Long vectors wrap as a single sequence, not a different matrix.
+                tokens = []
+                for value in values:
+                    shown = format(value, ".8g")
+                    if "e" in shown:
+                        mantissa, exponent = shown.split("e")
+                        shown = mantissa + r"\times10^{" + str(int(exponent)) + "}"
+                    tokens.append(shown)
+                in_math = any(start <= match.start() < end for start, end in math_spans)
+                if not in_math:
+                    series = "[" + r",\allowbreak ".join(r"\(" + token + r"\)" for token in tokens) + "]"
+                    parts.append(series + (" " + encode(result.unit) if result.unit else ""))
+                elif sum(map(len, tokens)) <= 40:
+                    parts.append("[" + ", ".join(tokens) + "]")
+                else:
+                    rows = [", ".join(tokens[index:index + 4]) for index in range(0, len(tokens), 4)]
+                    parts.append(r"\begin{gathered}[" + r",\\ ".join(rows) + r"]\end{gathered}")
             elif any(start <= match.start() < end for start, end in math_spans):
-                parts.append(result.display(with_unit=False))
+                parts.append(encode(result.display(with_unit=False)))
             else:
-                parts.append(result.display())
+                parts.append(encode(result.display()))
                 # 写作模型常在引用后再写一遍单位，去掉重复
                 unit = result.unit.strip()
                 rest = text[cursor:]

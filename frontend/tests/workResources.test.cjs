@@ -67,7 +67,12 @@ function deferred() {
   )
   const work = vue.ref({ output_mode: 'latex' })
   const preview = scope.run(() =>
-    useArtifactPreview({ workId: vue.ref('one'), currentWork: work, figuresVisible }),
+    useArtifactPreview({
+      workId: vue.ref('one'),
+      currentWork: work,
+      researchSnapshot: vue.ref(null),
+      figuresVisible,
+    }),
   )
   await preview.loadWorkspaceFiles()
   assert.equal(preview.primaryArtifact.value.path, 'paper.pdf')

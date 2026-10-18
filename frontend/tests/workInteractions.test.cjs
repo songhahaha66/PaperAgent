@@ -206,6 +206,42 @@ async function environment() {
     'PASS: progress opens beside chat on desktop, as a tab on narrow screens, without starting a run',
   )
 
+  const native = await env.work('native-latex')
+  await native.state.loadWork()
+  native.state.currentWork.value.output_mode = 'latex'
+  native.state.workspaceFiles.value = [
+    { type: 'file', path: 'paper.md', name: 'paper.md', size: 200 },
+    { type: 'file', path: 'paper.tex', name: 'paper.tex', size: 500 },
+    { type: 'file', path: 'paper.pdf', name: 'paper.pdf', size: 800 },
+  ]
+  native.state.researchSnapshot.value = { has_research: true, artifacts: ['paper.tex'] }
+  assert.equal(
+    native.state.primaryArtifact.value.path,
+    'paper.tex',
+    'unpublished old PDFs cannot replace current native source',
+  )
+  assert.equal(native.state.paperPath.value, 'paper.tex')
+  native.state.researchSnapshot.value.artifacts.push('paper.pdf')
+  assert.equal(
+    native.state.paperPath.value,
+    'paper.pdf',
+    'successful compilation promotes the PDF preview',
+  )
+  native.state.researchSnapshot.value.artifacts = []
+  assert.equal(native.state.primaryArtifact.value, null)
+  native.state.workspaceFiles.value = [
+    { type: 'file', path: 'paper.md', name: 'paper.md', size: 200 },
+  ]
+  assert.equal(
+    native.state.paperPath.value,
+    'paper.tex',
+    'LaTeX never silently falls back to Markdown',
+  )
+  native.stop()
+  console.log(
+    'PASS: native LaTeX previews published source/PDF and rejects Markdown or stale exports',
+  )
+
   const first = await env.work('first')
   await first.state.loadWork()
   assert.equal(

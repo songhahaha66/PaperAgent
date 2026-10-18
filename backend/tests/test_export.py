@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.export.docx import export_docx
-from ai_system.export.latex import markdown_to_tex, prepare_markdown
+from ai_system.export.latex import native_document, compile_pdf
 from ai_system.export.markdown_prep import expand_math_macros, fix_inline_math, split_paper
 from ai_system.graph import PaperGraphAgent
 from ai_system.graph.outline import template_outline
@@ -56,16 +56,6 @@ def test_split_paper_extracts_title_abstract_keywords():
     assert parts.body.startswith("## 一、问题重述") and "摘要" not in parts.body
 
 
-def test_prepare_markdown_leaves_numbering_to_latex():
-    body = prepare_markdown(split_paper(PAPER).body)
-    # 章节编号交给 ctex，同名小标题删掉
-    assert "## 问题重述" in body and "## 灵敏度分析" in body and "### 灵敏度分析" not in body
-    assert "### 问题背景" in body
-    # 图题编号交给 LaTeX，重复的斜体图题行删掉
-    assert "![年度用电量](outputs/figures/F1.png)" in body and "*图1" not in body
-    assert "$\\beta_1 = 0.8027$" in body and "$\\beta_0 = -0.3396$" in body
-
-
 def test_fix_inline_math_pairs_in_order():
     assert fix_inline_math("占比 $p = $ 62.6%") == "占比 $p = 62.6\\%$"
     # 按顺序配对：前一个公式的结束符不会和下一个公式的开始符配成一对
@@ -73,20 +63,21 @@ def test_fix_inline_math_pairs_in_order():
     assert fix_inline_math("$$x = 1 $$ 后 $ y$") == "$$x = 1 $$ 后 $y$"
 
 
-@needs_pandoc
-def test_markdown_to_tex_fills_template(tmp_path):
-    tex = asyncio.run(markdown_to_tex(PAPER, tmp_path))
-    assert "\\documentclass" in tex and "<<" not in tex
-    assert "用电量预测模型" in tex and "\\textbf{关键词：}时间序列；回归" in tex
-    assert "准确率为 92.5\\%" in tex
-    assert "\\section{问题重述}" in tex and "\\subsection{问题背景}" in tex
-    assert "\\caption{年度用电量}" in tex
-    assert tex.index("摘") < tex.index("\\section{问题重述}")
+def test_native_document_preserves_authored_tex():
+    abstract = r"准确率为 92.5\%。\par\textbf{关键词：}时间序列；回归"
+    body = r"\section{模型}原生公式 $\beta=0.8027$。"
+    tex = native_document("预测 & 优化", abstract, body)
+    assert r"预测 \& 优化" in tex and abstract in tex and body in tex
+    assert r"\documentclass" in tex and "<<" not in tex
+    assert "pandoc" not in tex
 
 
-@needs_pandoc
 @needs_xelatex
-def test_graph_agent_latex_mode_builds_pdf(tmp_path):
+def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
+    import ai_system.export.markdown_prep as prep
+    def no_pandoc(*args, **kwargs):
+        raise AssertionError("native LaTeX must not call pandoc")
+    monkeypatch.setattr(prep, "pandoc", no_pandoc)
     ws = _make_workspace(tmp_path)
     events = []
 
@@ -99,7 +90,9 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path):
     )
     output = asyncio.run(agent.run(TASK))
 
-    assert (ws / "paper.md").exists() and (ws / "paper.tex").exists()
+    assert not (ws / "paper.md").exists() and (ws / "paper.tex").exists()
+    assert (ws / ".system/paper_raw.tex").exists()
+    assert not (ws / ".system/paper_raw.md").exists()
     assert (ws / "paper.pdf").read_bytes().startswith(b"%PDF")
     assert "paper.pdf" in output
     export_phases = [c["status"] for t, c in events if t == "paper_phase" and c["stage"] == "export"]

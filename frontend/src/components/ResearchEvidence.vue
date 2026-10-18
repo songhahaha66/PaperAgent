@@ -179,11 +179,7 @@
         </div>
       </div>
       <div class="evidence-footer">
-        <button
-          v-for="path in snapshot.artifacts.filter((p) => p !== 'paper.tex')"
-          :key="path"
-          @click="$emit('open-file', path)"
-        >
+        <button v-for="path in snapshot.artifacts" :key="path" @click="$emit('open-file', path)">
           <t-icon name="file" />{{ path }}
         </button>
         <button

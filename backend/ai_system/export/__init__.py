@@ -1,7 +1,6 @@
-"""论文导出：渲染好的 paper.md → LaTeX（paper.tex / paper.pdf）或 Word（paper.docx）"""
-
+"""Native LaTeX compilation and Markdown-to-Word export."""
 from .docx import DocxResult, export_docx
-from .latex import LatexResult, markdown_to_tex, typeset
+from .latex import LatexResult, compile_pdf
 from .markdown_prep import PandocUnavailable
 
-__all__ = ["DocxResult", "LatexResult", "PandocUnavailable", "export_docx", "markdown_to_tex", "typeset"]
+__all__ = ["DocxResult", "LatexResult", "PandocUnavailable", "export_docx", "compile_pdf"]

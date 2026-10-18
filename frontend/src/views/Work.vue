@@ -266,7 +266,7 @@
             v-else
             :key="`${workId}:${panel.id}`"
             :work-id="workId"
-            :path="panel.path || 'paper.md'"
+            :path="panel.path || paperPath"
             :paper="panel.kind === 'paper'"
             :available="panel.kind !== 'paper' || paperAvailable"
             :fallback-path="primaryArtifact?.path"
@@ -363,7 +363,12 @@ const {
   trackChatScroll,
   jumpToLatest,
 } = layout
-const artifacts = useArtifactPreview({ workId, currentWork, figuresVisible: layout.figuresVisible })
+const artifacts = useArtifactPreview({
+  workId,
+  currentWork,
+  researchSnapshot,
+  figuresVisible: layout.figuresVisible,
+})
 const {
   workspaceFiles,
   imageUrls,
@@ -371,6 +376,7 @@ const {
   downloadLoading,
   primaryArtifact,
   paperAvailable,
+  paperPath,
   downloadLabel,
   figureFiles,
   downloadArtifact,

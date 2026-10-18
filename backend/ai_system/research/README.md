@@ -208,7 +208,7 @@ Data-file dependencies are deliberately conservative: every worker records all
 raw data and attachments. Assumption dependencies are explicit and scoped;
 fine-grained dataset dependencies are not implemented.
 
-Generated paper versions are retained. If `paper.md` changed manually since its
+Generated paper versions are retained. If the active source (`paper.md` or native `paper.tex`) changed manually since its
 last publication, the human edit is preserved and the generated revision is saved
 separately for merging; exporting the conflicting active paper is skipped.
 
@@ -281,3 +281,10 @@ including auxiliary results absent from the key-claim table. Writer-only referen
 instructions are not reused as audit criteria for rendered text.
 Final numeric checks also cover standalone math scalars and escaped percentages
 such as `$23.1\%$`, while preserving formula coefficients and code examples.
+
+LaTeX mode writes native TeX section fragments and resolves registered references
+into TeX values and figures. Source publication and archived revisions use `.tex`;
+PDF compilation consumes that source directly without Pandoc. The writing format
+is part of every section context hash, so a resumed LaTeX run does not reuse
+Markdown sections. Failed compilation keeps the source, blocks PDF delivery and
+never promotes a partial PDF.

@@ -19,21 +19,20 @@ from langgraph.graph import END
 
 from ..context import GraphContext
 from ..llm_utils import as_messages, call_text
-from ..registry import MATH_PATTERN, REF_PATTERN, find_refs, value_in_output
+from ..registry import MATH_PATTERN, REF_PATTERN, find_refs, value_in_output, math_body
 from ...research.models import IssueReport
 from ..state import PaperState
 from ..tracing import labelled
 from .consistency import audit_sections
 from .review import CONVENTIONS
-from .write import STYLE, section_plan, section_request, solve_key
+from .write import writing_style, section_plan, section_request, solve_key
 
 MIN_SECTION_CHARS = 80
 # 小数或百分数；整数（年份、编号、个数）不检查
 DECIMAL_PATTERN = re.compile(r"(?<![A-Za-z0-9_.])-?\d+\.\d+%?|(?<![A-Za-z0-9_.])\d+%")
 CODE_PATTERN = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
 STRIP_PATTERNS = [
-    re.compile(r"\$\$.*?\$\$", re.DOTALL),
-    re.compile(r"\$[^$\n]+\$"),
+    MATH_PATTERN,
     REF_PATTERN,
     # 小标题编号（"### 4.1 整体思路"）不是结果；v2m 的问题分析因此被报了 5 个"未引用的数字"
     re.compile(r"^[ \t]*#{1,6}[ \t]*[A-Za-z]*\d+(?:\.\d+)+", re.MULTILINE),
@@ -45,11 +44,14 @@ STRIP_PATTERNS = [
 MATH_RESULT = re.compile(r"(?:=|≈|\\approx)\s*(-?\d+\.\d+%?)(?![\w.(\\])")
 
 
-def _prose(text: str) -> str:
+def _prose(text: str, *, latex: bool = False) -> str:
+    if latex:
+        text = re.sub(r"(?<!\\)%[^\n]*", "", text)
+        text = re.sub(r"\\(?:label|ref|eqref|pageref|cite)\{[^{}]*\}", " ", text)
     text = CODE_PATTERN.sub(" ", text)
     assigned = []
     for span in MATH_PATTERN.findall(REF_PATTERN.sub(" ", text)):
-        scalar = span.strip("$").strip().replace(r"\%", "%")
+        scalar = math_body(span).replace(r"\%", "%")
         # A standalone scalar is still a result when wrapped in math delimiters.
         # Keep coefficients in expressions such as 0.5x outside this check.
         if re.fullmatch(r"-?(?:\d+\.\d+(?:[eE][-+]?\d+)?%?|\d+%)", scalar):
@@ -58,15 +60,15 @@ def _prose(text: str) -> str:
             assigned.extend(m.group(1) for m in MATH_RESULT.finditer(scalar))
     for pattern in STRIP_PATTERNS:
         text = pattern.sub(" ", text)
-    return text + " " + " ".join(assigned)
+    return text.replace(r"\%", "%") + " " + " ".join(assigned)
 
 
-def untracked_numbers(text: str, allowed_text: str) -> List[str]:
+def untracked_numbers(text: str, allowed_text: str, *, latex: bool = False) -> List[str]:
     # Separate vector elements before matching; commas in compact JSON are not
     # thousands separators. Reuse the registration rule for rounded displays.
     numeric = " ".join(m.group() for m in DECIMAL_PATTERN.finditer(allowed_text))
     found = []
-    for match in DECIMAL_PATTERN.finditer(_prose(text)):
+    for match in DECIMAL_PATTERN.finditer(_prose(text, latex=latex)):
         value = match.group()
         if (not value_in_output(value, numeric)
                 and value not in found and value not in CONVENTIONS):
@@ -78,6 +80,7 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
     sections = state.get("sections") or {}
     registry = ctx.registry
     issues: List[Dict[str, str]] = []
+    labels = {label for body in sections.values() for label in re.findall(r"\\label\{([^{}]+)\}", body)}
     # 题目原文中的数字可以直接写
     allowed_text = state["task"] + "\n" + "\n".join(r.value for r in registry.results.values())
 
@@ -88,10 +91,21 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
         if len(text.strip()) < MIN_SECTION_CHARS:
             issues.append({"section": key, "message": f"「{title}」缺失或过短"})
             continue
+        if ctx.output_mode == "latex":
+            from ...export.latex import fragment_issues
+            issues.extend({"section": key, "message": message} for message in fragment_issues(text))
+            unknown_labels = sorted(set(re.findall(r"\\(?:ref|eqref|pageref)\{([^{}]+)\}", text)) - labels)
+            if unknown_labels:
+                issues.append({"section": key, "message": "引用了未定义的 LaTeX 标签：" + ", ".join(unknown_labels) + "。图引用只能用本节登记的 {{F:Fn}}，公式引用需有对应 label。"})
         unknown = [ref for ref in find_refs(text) if registry.get(ref) is None]
         if unknown:
             issues.append({"section": key, "message": f"引用了不存在的结果：{', '.join(sorted(set(unknown)))}"})
-        loose = untracked_numbers(text, allowed_text)
+        for ref in re.finditer(r"\{\{\s*R:\s*(R\d+)\s*\}\}\s*\[\s*\d+\s*\]", text):
+            result = registry.get(ref.group(1))
+            if result and result.kind == "series":
+                issues.append({"section": key, "message": "数值序列引用不支持 [0] 等索引。引用代表完整序列，请整组展示，或使用已经逐项登记的真实引用；不要把同一个序列填到多个单值单元格。"})
+                break
+        loose = untracked_numbers(text, allowed_text, latex=ctx.output_mode == "latex")
         if loose:
             issues.append({
                 "section": key,
@@ -160,7 +174,7 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             + "\n\n请输出修正后的完整本节正文。"
         )
         with labelled(f"repair:{key}"):
-            return await call_text(ctx.writer_llm, as_messages(STYLE, prompt))
+            return await call_text(ctx.writer_llm, as_messages(writing_style(ctx), prompt))
 
     keys = list(by_section)
     texts = await asyncio.gather(*(fix(k, by_section[k]) for k in keys))
@@ -225,6 +239,24 @@ def assemble(state: PaperState) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def assemble_latex(state: PaperState) -> str:
+    from ...export.latex import escape_plain, native_document
+    sections = state.get("sections") or {}
+    body = []
+    solve_keys = {solve_key(sp["id"]) for sp in state["analysis"]["subproblems"]}
+    for key, title, level in section_plan(state):
+        if key == "abstract":
+            continue
+        title = re.sub(r"^[一二三四五六七八九十]+[、.．]\s*", "", title)
+        command = "section" if level == 2 else "subsection"
+        body.append("\\" + command + "{" + escape_plain(title) + "}\n")
+        if key != "solve_heading":
+            text = sections.get(key, "").strip()
+            body.append(place_figures(text) if key in solve_keys else FIGURE_LINE.sub(r"（见{{F:\1}}）", text))
+    abstract = FIGURE_LINE.sub(r"（见{{F:\1}}）", sections.get("abstract", ""))
+    return native_document(state["analysis"]["title"], abstract, "\n\n".join(body))
+
+
 async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     if ctx.research:
@@ -232,11 +264,13 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         if not ctx.research.delivery_ready(snapshot):
             return {"research_restart": True, "log": ["render: inputs changed, returning to research control"]}
         ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
-    raw = assemble(state)
+    native = ctx.output_mode == "latex"
+    filename = "paper.tex" if native else "paper.md"
+    raw = assemble_latex(state) if native else assemble(state)
     # 带引用的原稿留在 .system，方便追溯每个数字的来源
-    ctx.fs.write_text(".system/paper_raw.md", raw)
-    rendered = ctx.registry.render(raw)
-    path, conflict = ctx.research.publish_paper(rendered) if ctx.research else ("paper.md", False)
+    ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
+    rendered = ctx.registry.render(raw, latex=native)
+    path, conflict = ctx.research.publish_paper(rendered, filename=filename) if ctx.research else (filename, False)
     if ctx.research:
         ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")
     else:

@@ -65,6 +65,27 @@ const text = (content) => ({ type: 'text', content, filename: 'paper.md', size: 
   f.stop()
   console.log('PASS: a paper tab opens its result when generation finishes')
 
+  f = await fixture({ path: 'paper.tex', paper: true })
+  assert.equal(f.reads[0].path, 'paper.tex')
+  f.reads[0].resolve({
+    type: 'text',
+    content: '\\section{模型}正文',
+    filename: 'paper.tex',
+    size: 30,
+  })
+  await flush()
+  assert.equal(f.state.codeLanguage.value, 'latex')
+  f.props.path = 'paper.pdf'
+  await flush()
+  assert.equal(f.reads.at(-1).path, 'paper.pdf')
+  f.reads
+    .at(-1)
+    .resolve({ type: 'binary', filename: 'paper.pdf', size: 200, download_url: '/paper.pdf' })
+  await flush()
+  assert.equal(f.state.loadedPath.value, 'paper.pdf')
+  f.stop()
+  console.log('PASS: native source uses LaTeX highlighting and switches to the compiled PDF')
+
   f = await fixture({ fallbackPath: 'paper.pdf' })
   f.reads[0].reject(new Error('No Markdown source'))
   await flush()

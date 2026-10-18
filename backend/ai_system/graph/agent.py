@@ -266,13 +266,18 @@ class PaperGraphAgent:
     @staticmethod
     def _final_message(result: Dict[str, Any], ctx: GraphContext) -> str:
         if result.get("research_blocked"):
+            if ctx.stage_status.get("export") == "blocked":
+                source = "paper.tex" if ctx.output_mode == "latex" else "paper.md"
+                target = "PDF 编译" if ctx.output_mode == "latex" else "Word 导出"
+                return f"论文源码 {source} 已保存，{target}未完成：{ctx.stage_notes.get('export', '')}。修正源码或导出环境后可继续。"
             return "研究已暂停：存在未关闭的研究或审查问题，或任务尚未通过验收。已有结果已保留，可查看问题记录、修改要求或继续重试。"
         analysis = result.get("analysis") or {}
         solutions = result.get("solutions") or {}
         issues = result.get("issues") or []
-        lines = [f"论文《{analysis.get('title', '')}》已写入 {result.get('paper_path') or 'paper.md'}。", ""]
+        source = "paper.tex" if ctx.output_mode == "latex" else "paper.md"
+        lines = [f"论文《{analysis.get('title', '')}》已写入 {result.get('paper_path') or source}。", ""]
         if result.get("artifact_conflict"):
-            lines.append("paper.md 存在人工修改，已保留人工稿和自动新稿，等待合并。")
+            lines.append(f"{source} 存在人工修改，已保留人工稿和自动新稿，等待合并。")
         exported = [line for line in result.get("log") or [] if line.startswith("export:")]
         if exported:
             lines[0] += f"导出：{exported[-1].split(':', 1)[1].strip()}。"

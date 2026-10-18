@@ -1,15 +1,15 @@
 """
-阶段 8（output_mode 为 latex / word）：把 paper.md 导出成最终格式
+阶段 8：直接编译原生 paper.tex，或将 Markdown 导出为 Word
 
-- latex：paper.tex，有 xelatex 时编译出 paper.pdf；
+- latex：直接编译已发布的 paper.tex 为 paper.pdf；
 - word：paper.docx，用户上传了 Word 模板时沿用模板的样式。
 
-导出失败不影响论文本身：paper.md 已经写好，错误记进进度和事件，流程照常结束。
+编译或导出失败时保留源文件，并将交付阶段标记为阻塞。
 """
 
 from langgraph.runtime import Runtime
 
-from ...export import export_docx, typeset
+from ...export import export_docx, compile_pdf
 from ..context import TEMPLATE_DOCX, GraphContext
 from ..state import PaperState
 
@@ -24,8 +24,8 @@ def route_after_render(state: PaperState, runtime: Runtime[GraphContext]) -> str
     return "export" if runtime.context.output_mode in EXPORT_MODES else "__end__"
 
 
-async def _latex(ctx: GraphContext, markdown: str) -> dict:
-    result = await typeset(ctx.workspace, markdown)
+async def _latex(ctx: GraphContext) -> dict:
+    result = await compile_pdf(ctx.workspace)
     await ctx.events.file_changed(result.tex_path)
     if result.pdf_path:
         pages = f"（{result.pages} 页）" if result.pages else ""
@@ -37,9 +37,9 @@ async def _latex(ctx: GraphContext, markdown: str) -> dict:
         await ctx.events.emit("paper_export", note)
         return {"log": [f"export: {result.pdf_path}"]}
 
-    await ctx.set_stage("export", "blocked", "只生成了 paper.tex")
+    await ctx.set_stage("export", "blocked", result.error or "PDF 未生成")
     await ctx.events.emit("paper_export", f"已生成 {result.tex_path}，PDF 未生成：{result.error}")
-    return {"log": [f"export: tex only ({result.error})"]}
+    return {"research_blocked": True, "log": [f"export: tex only ({result.error})"]}
 
 
 async def _word(ctx: GraphContext, markdown: str) -> dict:
@@ -56,9 +56,8 @@ async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("export", "in_progress")
     await ctx.events.stage("LaTeX 排版并编译 PDF" if ctx.output_mode == "latex" else "导出 Word 文档")
-    markdown = (ctx.workspace / "paper.md").read_text(encoding="utf-8")
     try:
-        result = await _latex(ctx, markdown) if ctx.output_mode == "latex" else await _word(ctx, markdown)
+        result = await _latex(ctx) if ctx.output_mode == "latex" else await _word(ctx, (ctx.workspace / "paper.md").read_text(encoding="utf-8"))
         if ctx.research:
             message = " ".join(result.get("log") or [])
             paths = (["paper.tex"] if "tex only" in message else ["paper.tex", "paper.pdf"]) if ctx.output_mode == "latex" else ["paper.docx"]
@@ -67,4 +66,4 @@ async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     except Exception as exc:
         await ctx.set_stage("export", "blocked", str(exc)[:80])
         await ctx.events.emit("paper_export", f"导出失败：{exc}")
-        return {"log": [f"export: failed ({exc})"]}
+        return {"research_blocked": True, "log": [f"export: failed ({exc})"]}

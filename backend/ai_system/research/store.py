@@ -825,35 +825,38 @@ class ResearchStore:
             state["outcome"] = ("needs_attention" if issues else "completed") if self.delivery_ready(state) else "blocked"
             self._save(db, state, "sections_committed", {"versions": {key: state["sections"][key] for key in sections}, "issues": issues})
 
-    def publish_paper(self, text: str):
+    def publish_paper(self, text: str, *, filename: str = "paper.md"):
         """Keep generated versions and preserve a manually edited active paper."""
+        if filename not in {"paper.md", "paper.tex"}:
+            raise ValueError("不支持的论文源文件")
         with self._transaction() as db:
             state = self._read(db)
             if not self.delivery_ready(state):
                 raise ResearchConflict("研究仍有阻塞问题，不能发布论文")
-            relative = f".system/research/{self.research_id}/papers/{state['commit_seq'] + 1}.md"
+            suffix = Path(filename).suffix
+            relative = f".system/research/{self.research_id}/papers/{state['commit_seq'] + 1}{suffix}"
             target = self.root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")
-            paper = self.root / "paper.md"
+            paper = self.root / filename
             existing = paper.read_text(encoding="utf-8") if paper.exists() else None
-            previous = state.get("paper_hash")
+            previous = state.get("paper_hash") if Path(state.get("paper_version", "")).suffix == suffix else None
             conflict = previous is not None and existing is not None and digest(existing) != previous
             state["paper_version"] = relative
             state["paper_conflict"] = conflict
             if conflict:
                 state["outcome"] = "needs_attention"
                 report = IssueReport(task_id=next(t["task_id"] for t in state["tasks"].values() if t["kind"] != "verify"),
-                    category="writing", section="paper", message=f"paper.md 有人工修改，自动新稿保存在 {relative}")
+                    category="writing", section="paper", message=f"{filename} 有人工修改，自动新稿保存在 {relative}")
                 self._record_issue(state, report, "confirmed")
             else:
-                temp = paper.with_suffix(".md.tmp")
+                temp = paper.with_suffix(suffix + ".tmp")
                 temp.write_text(text, encoding="utf-8")
                 temp.replace(paper)
                 state["paper_hash"] = digest(text)
                 state["exports"] = []
             self._save(db, state, "paper_published", {"path": relative, "content_hash": digest(text), "conflict": conflict})
-            return relative if conflict else "paper.md", conflict
+            return relative if conflict else filename, conflict
 
     def register_exports(self, paths):
         with self._transaction() as db:

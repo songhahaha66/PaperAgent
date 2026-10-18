@@ -37,11 +37,26 @@ STYLE = (
     "1. 正文中的任何计算结果数字必须使用本节可用引用表中的真实引用，不要自己写数字或猜测编号；"
     "题目给定的常数、年份、编号可以直接写。\n"
     "2. 只有本节可用引用表中确有图表时才能插图。复制表中的图引用独占一行，正文指代同一图也使用该引用，系统会编号。没有图表时不得写图引用或声称见图。\n"
-    "3. 公式用 LaTeX（行内 $...$，独立公式 $$...$$），公式中的符号可以写，但不要在公式里代入计算结果数字。\n"
-    "4. 只输出本节正文，不要输出本节的标题，不要输出代码。小节标题用 ### 开头。\n"
-    "5. 论文是给评委读的：不要出现代码里的变量名、列名和程序输出的原样字符串（如 word_length、valAUC、n_repeat），"
+    "3. 公式使用 LaTeX 语法，公式中的符号可以写，但不要在公式里代入计算结果数字。\n"
+    "4. 论文是给评委读的：不要出现代码里的变量名、列名和程序输出的原样字符串（如 word_length、valAUC、n_repeat），"
     "改写成中文名称（如\"单词长度\"）。只引用支撑结论的关键结果，多个同类结果用表格对比，不要在一句话里罗列一串统计量。"
 )
+
+
+def writing_style(ctx: GraphContext) -> str:
+    if ctx.output_mode == "latex":
+        return STYLE + (
+            "\n输出格式：原生 LaTeX 章节源码，直接用于 XeLaTeX 编译。"
+            "只输出本节正文，不要代码围栏、Markdown 标题、加粗或管道表格；"
+            "不要输出导言区、本节标题、document 环境、自定义宏或文件操作。"
+            "小节使用 \\subsubsection，列表使用 itemize/enumerate，表格使用 tabular/booktabs。"
+            "行内公式使用 $...$，独立公式使用 \\[...\\] 或 equation/align 环境。"
+            "文本中的特殊字符要正确转义（例如百分号写为 \\%）。"
+            "登记的数值引用仍使用 {{R:Rn}}；登记图引用 {{F:Fn}} 独占一行插图，"
+            "行内使用同一引用指代；不要自行添加 figure、caption、图片 label、图片路径或 includegraphics。"
+            "这些占位引用由系统原生替换为 LaTeX 数值和 figure 环境，无需格式转换。"
+        )
+    return STYLE + "\n只输出本节 Markdown 正文，不要输出本节标题或代码；小节标题用 ### 开头。"
 
 
 def solve_key(subproblem_id: str) -> str:
@@ -200,7 +215,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         )
     solved_text = "\n\n".join(clip(sections.get(solve_key(sp["id"]), ""), 4000) for sp in subproblems)
     if key == "symbols":
-        return f"撰写「符号说明」，用 Markdown 表格（符号 | 说明 | 单位），只列下文公式里实际用到的主要符号，不超过 15 行，不列代码变量名。\n\n求解章节：\n{solved_text}"
+        table = "原生 LaTeX tabular 表格（符号、说明、单位）" if ctx.output_mode == "latex" else "Markdown 表格（符号 | 说明 | 单位）"
+        return f"撰写「符号说明」，用{table}，只列下文公式里实际用到的主要符号，不超过 15 行，不列代码变量名。\n\n求解章节：\n{solved_text}"
     if key == "sensitivity":
         return (
             "撰写「灵敏度分析」，汇总各子问题的检验和灵敏度分析结论，必须引用登记结果。\n\n"
@@ -213,10 +229,11 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )
     if key == "abstract":
+        keyword = r"\textbf{关键词：}" if ctx.output_mode == "latex" else "**关键词**："
         return (
             "撰写「摘要」：一段总述 + 每个子问题一段（2~4 句：用了什么方法、得到什么结论，只引用 1~3 个最关键的登记结果）"
             "+ 一段总结，全文不超过 1000 字，不写检验统计量的罗列，不用小节标题；"
-            "最后一行写「**关键词**：」并列出 4~6 个关键词。\n\n"
+            f"最后一行写「{keyword}」并列出 4~6 个关键词。\n\n"
             f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )
     if key.startswith("custom:"):
@@ -232,7 +249,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
 async def write_section(ctx: GraphContext, state: PaperState, key: str, title: str) -> str:
     request = section_request(key, title, state, ctx)
     with labelled(key):
-        return await call_text(ctx.writer_llm, as_messages(STYLE, request))
+        return await call_text(ctx.writer_llm, as_messages(writing_style(ctx), request))
 
 
 async def write_many(ctx: GraphContext, state: PaperState, items: List[Tuple[str, str]]) -> Dict[str, str]:
@@ -256,7 +273,7 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         from ...research.store import digest
         previous = ctx.research.snapshot()["sections"]
         for key, title in solve_items:
-            contexts[key] = digest(section_request(key, title, state, ctx))
+            contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, state, ctx)})
             if previous.get(key, {}).get("context_hash") != contexts[key]:
                 sections.pop(key, None)
     sections.update(await write_many(ctx, state, [(k, t) for k, t in solve_items if k not in sections]))
@@ -265,6 +282,11 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await ctx.set_stage("write", "in_progress", "撰写其余章节和摘要")
     with_solved = {**state, "sections": sections}
     rest = [(key, title) for key, title, _ in plan if key != "solve_heading" and not key.startswith("solve:")]
+    if ctx.research:
+        for key, title in rest:
+            contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, with_solved, ctx)})
+            if previous.get(key, {}).get("context_hash") != contexts[key]:
+                sections.pop(key, None)
     sections.update(await write_many(ctx, with_solved, [(k, t) for k, t in rest if k not in sections]))
     await ctx.set_stage("write", "completed", f"{len(sections)} 个章节")
     log = f"write: {len(sections)} sections" + (f" (template outline: {len(outline)})" if outline else "")

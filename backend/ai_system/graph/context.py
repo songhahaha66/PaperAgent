@@ -101,7 +101,7 @@ class GraphContext:
     explore_top_k: int = 1
     explore_steps: int = 12
     explore_margin: float = 2.0  # 前两名评审总分（满分 16）差距超过它就不试跑
-    output_mode: str = "markdown"  # latex / word 时 render 之后导出 paper.pdf / paper.docx
+    output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
     max_planning_calls: int = 2

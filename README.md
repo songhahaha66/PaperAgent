@@ -95,7 +95,9 @@ PaperGraphAgent（LangGraph）
 ├── 依赖调度 → 条件触发候选试跑 → 独立尝试工作区 / Python 内核求解
 ├── 结果登记 + 要求证据映射 → 固定领域检查 → 结论一致性审查
 │   └── 疑点 → 独立核验 → 反证确认 → 修改计划/假设 → 上游及受影响下游重算
-├── 引用驱动写作 → 章节检查与定向修复 → Markdown / Word / LaTeX / PDF
+├── 引用驱动写作 → 章节检查与定向修复
+│   ├── LaTeX：原生章节源码 → paper.tex → XeLaTeX → paper.pdf
+│   └── Markdown / Word：Markdown 章节 → paper.md / paper.docx
 └── ResearchStore（SQLite 业务状态与事件日志）+ LangGraph Checkpoint（执行位置）
 
 FastAPI 任务与对话

@@ -175,7 +175,8 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     issues = validation.get("issues") or []
     if business:
         current = business.get("paper_hash") and store.delivery_ready(business) and all(s["validity"] == "current" for s in business["sections"].values())
-        artifacts = [p for p in artifacts if p in {"paper.md", *business.get("exports", [])}] if current else []
+        source = "paper" + Path(business.get("paper_version", "")).suffix
+        artifacts = [p for p in artifacts if p in {source, *business.get("exports", [])}] if current else []
         if current and business.get("paper_conflict"):
             artifacts = [business["paper_version"]] if _file(root, business.get("paper_version")) else []
         if not current:
