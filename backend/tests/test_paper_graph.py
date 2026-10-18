@@ -511,7 +511,15 @@ def test_paper_accepts_rounded_registered_vectors_and_percentages():
     assert untracked_numbers("备餐量487.52、505.41，预测502.9，分位数53.85%，缺货率46%。", allowed) == []
     assert untracked_numbers("备餐量487.53，预测502.8，分位数53.86%，缺货率48%。", allowed) == [
         "487.53", "502.8", "53.86%", "48%"]
-    assert untracked_numbers("粗略值0.5、4%，符号错误-502.9。", allowed) == ["0.5", "4%", "-502.9"]
+    assert untracked_numbers("粗略值0.6、4%，符号错误-502.9。", allowed) == ["0.6", "4%", "-502.9"]
+
+
+def test_median_probability_is_a_shared_convention_not_a_computed_result():
+    text = "关键比率高于0.5，故分位点高于中位数；中位数累积概率为50%。"
+    assert ungrounded_findings({"summary": text}) == []
+    assert untracked_numbers(text, allowed_text="") == []
+    assert ungrounded_findings({"summary": "估计概率为0.51或51%。"})
+    assert untracked_numbers("估计概率为0.51或51%。", allowed_text="") == ["0.51", "51%"]
     assert untracked_numbers("### 4.1 整体思路\n#### Q1.2 求解\n正文 4.5", "") == ["4.5"]
     # 公式里单独等于一个数的是结果（Q2 把没登记的检验统计量写成 $z = 4.05$）
     assert untracked_numbers("真实序列 $z = 4.05$，$\\hat p \\approx 0.673$，$x = {{R:R1}}$", "") == ["4.05", "0.673"]
