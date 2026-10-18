@@ -32,8 +32,60 @@
           <div class="work-title-row">
             <h1>{{ currentWork?.title?.trim() || ui.untitled }}</h1>
           </div>
+          <div class="work-context" aria-live="polite">
+            <span
+              :class="[
+                'live-dot',
+                {
+                  running: isStreaming,
+                  attention: needsRecovery,
+                  complete: currentWork?.status === 'completed',
+                },
+              ]"
+            />
+            <span class="work-context-text">{{ stageText }}</span>
+            <span v-if="elapsedText" class="elapsed">{{ elapsedText }}</span>
+            <span v-if="connectionState === 'reconnecting'" class="connection-state">{{
+              ui.reconnect
+            }}</span>
+            <button v-if="connectionState === 'lost'" class="text-action" @click="reconnectTask">
+              {{ ui.reconnect }}
+            </button>
+          </div>
         </div>
         <div class="work-actions">
+          <button
+            class="progress-trigger"
+            :aria-label="isZh ? '查看研究进度' : 'View research progress'"
+            @click="openProgress"
+          >
+            <t-icon name="task" />
+            <span>{{ isZh ? '任务进度' : 'Progress' }}</span>
+            <span v-if="researchSnapshot?.tasks?.length" class="progress-count"
+              >{{ acceptedTaskCount }}/{{ researchSnapshot.tasks.length }}</span
+            >
+          </button>
+          <t-button
+            v-if="canResume"
+            theme="primary"
+            :title="recoveryHint"
+            @click="sendMessage('继续', 'resume')"
+          >
+            <template #icon><t-icon name="play" /></template
+            >{{ isZh ? '继续研究' : 'Continue research' }}
+          </t-button>
+          <t-button
+            v-else-if="needsRecovery && recoveryUnavailable"
+            theme="primary"
+            @click="prepareNewResearch"
+            >{{ ui.restartResearch }}</t-button
+          >
+          <t-button
+            v-else-if="currentWork?.status === 'waiting' && !isStreaming"
+            theme="primary"
+            @click="sendMessage('确认', 'confirm')"
+            >{{ isZh ? '确认方案' : 'Confirm plan' }}</t-button
+          >
           <t-button
             v-if="isStreaming"
             theme="default"
@@ -55,84 +107,6 @@
           ></t-dropdown>
         </div>
       </header>
-      <section class="progress-strip" aria-label="研究进度">
-        <div class="progress-summary" aria-live="polite">
-          <span class="progress-label">{{ isZh ? '研究进度' : 'Progress' }}</span>
-          <span
-            :class="[
-              'live-dot',
-              {
-                running: isStreaming,
-                attention: needsRecovery,
-                complete: currentWork?.status === 'completed',
-              },
-            ]"
-          /><strong>{{ stageText }}</strong
-          ><span v-if="elapsedText" class="elapsed">{{ ui.elapsed }} {{ elapsedText }}</span
-          ><span
-            v-if="isStreaming"
-            :class="['connection-state', { lost: connectionState === 'lost' }]"
-            >{{
-              connectionState === 'lost'
-                ? ui.disconnected
-                : connectionState === 'reconnecting'
-                  ? ui.reconnect
-                  : ui.connected
-            }}</span
-          ><button v-if="connectionState === 'lost'" class="text-action" @click="reconnectTask">
-            {{ ui.reconnect }}
-          </button>
-        </div>
-        <ResearchProgress :snapshot="researchSnapshot" :work-status="currentWork?.status" />
-      </section>
-      <div v-if="needsRecovery" class="recovery-banner" role="status">
-        <t-icon name="pause-circle" />
-        <div>
-          <strong>{{ recoveryTitle }}</strong>
-          <p>{{ recoveryHint }}</p>
-          <p v-if="researchSnapshot?.validation_count">
-            {{
-              isZh
-                ? `仍有 ${researchSnapshot.validation_count} 项校验问题，可在研究结果中查看。`
-                : `${researchSnapshot.validation_count} validation issues remain. Review them in Research results.`
-            }}
-          </p>
-        </div>
-        <t-button
-          v-if="canResume"
-          theme="primary"
-          size="small"
-          @click="sendMessage('继续', 'resume')"
-          >{{ ui.resume }}<template #suffix><t-icon name="arrow-right" /></template
-        ></t-button>
-        <t-button
-          v-else-if="recoveryUnavailable"
-          theme="primary"
-          size="small"
-          @click="prepareNewResearch"
-        >
-          {{ ui.restartResearch }}
-        </t-button>
-      </div>
-      <div
-        v-else-if="currentWork?.status === 'waiting' && !isStreaming"
-        class="recovery-banner confirmation-banner"
-      >
-        <t-icon name="task-checked" />
-        <div>
-          <strong>{{ isZh ? '建模方案已准备好' : 'The modeling plan is ready' }}</strong>
-          <p>
-            {{
-              isZh
-                ? '在对话中查看方案，确认后开始求解；也可以直接补充修改意见。'
-                : 'Review the plan in the conversation, then confirm or suggest changes.'
-            }}
-          </p>
-        </div>
-        <t-button theme="primary" size="small" @click="sendMessage('确认', 'confirm')">{{
-          isZh ? '确认并执行' : 'Confirm & run'
-        }}</t-button>
-      </div>
       <WorkPaneLayout
         :session="panelSession"
         :panels="displayPanels"
@@ -227,6 +201,25 @@
             </div>
           </section>
           <section
+            v-else-if="panel.kind === 'progress'"
+            class="progress-panel"
+            @scroll="rememberPanelScroll('progress', $event)"
+          >
+            <header class="progress-panel-heading">
+              <span class="eyebrow">{{ isZh ? '研究工作流' : 'RESEARCH WORKFLOW' }}</span>
+              <h2>{{ isZh ? '任务与验收' : 'Tasks & acceptance' }}</h2>
+              <p v-if="needsRecovery">{{ recoveryHint }}</p>
+              <p v-else>
+                {{
+                  isZh
+                    ? '跟踪任务依赖、研究结果和需要处理的问题。'
+                    : 'Track dependencies, accepted results and findings that need attention.'
+                }}
+              </p>
+            </header>
+            <ResearchProgress :snapshot="researchSnapshot" :work-status="currentWork?.status" />
+          </section>
+          <section
             v-else-if="panel.kind === 'files'"
             class="files-section"
             @scroll.capture="rememberPanelScroll('files', $event)"
@@ -236,7 +229,6 @@
               :work-id="workId"
               :loading="loading || isFileRefreshing"
               :file-tree-data="workspaceFiles"
-              :research-snapshot="researchSnapshot"
               @file-select="handleWorkspaceFileSelect"
               @refresh="handleFileRefresh"
               @main-paper-click="handleMainPaperClick"
@@ -533,13 +525,6 @@ const recoveryUnavailable = computed(
 const canResume = computed(
   () => needsRecovery.value && !!researchSnapshot.value?.research_id && !recoveryUnavailable.value,
 )
-const recoveryTitle = computed(() =>
-  recoveryUnavailable.value
-    ? ui.value.incompleteTitle
-    : currentWork.value?.status === 'failed'
-      ? ui.value.failedTitle
-      : ui.value.pausedTitle,
-)
 const recoveryHint = computed(() =>
   recoveryUnavailable.value
     ? ui.value.restartHint
@@ -614,14 +599,30 @@ function panelPresentation(panel: Pick<WorkPanel, 'kind' | 'path'>) {
     paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
     figures: { label: ui.value.figures, icon: 'chart-line' },
     files: { label: ui.value.files, icon: 'folder-open' },
+    progress: { label: isZh.value ? '任务进度' : 'Progress', icon: 'task' },
   }[panel.kind]
 }
 const panelOptions = computed(() =>
-  (['paper', 'figures', 'files'] as const).map((kind) => ({
+  (['progress', 'paper', 'figures', 'files'] as const).map((kind) => ({
     content: panelPresentation({ kind }).label,
     value: kind,
   })),
 )
+const acceptedTaskCount = computed(
+  () =>
+    researchSnapshot.value?.tasks?.filter((task) => task.progress.state === 'accepted').length || 0,
+)
+function openProgress() {
+  const state = panelSession.value
+  const side = !stackedPanes.value
+  const hadSecondary = !!state.secondaryActiveId
+  panelStore.open(workId.value, 'progress', undefined, side ? 'secondary' : 'main')
+  if (side && !hadSecondary) {
+    state.splitAxis = 'horizontal'
+    state.secondaryFirst = false
+    state.splitRatio = 0.64
+  }
+}
 function openPanel(kind: string, group: PanelGroup) {
   panelStore.open(workId.value, kind as PanelKind, undefined, group)
 }
@@ -766,6 +767,10 @@ async function restorePanelScroll() {
   }
   if (isPanelVisible('figures') && figureScroller.value)
     figureScroller.value.scrollTop = panelSession.value.scroll.figures || 0
+  if (isPanelVisible('progress')) {
+    const scroller = document.querySelector<HTMLElement>('.progress-panel')
+    if (scroller) scroller.scrollTop = panelSession.value.scroll.progress || 0
+  }
   if (isPanelVisible('files')) {
     const scroller = document.querySelector<HTMLElement>('.files-section .fm-body')
     if (scroller) scroller.scrollTop = panelSession.value.scroll.files || 0
@@ -1485,10 +1490,11 @@ const generateWorkTitle = async (question: string) => {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 12px 24px;
-  min-height: 60px;
+  padding: 18px 28px;
+  min-height: 88px;
   box-sizing: border-box;
   flex-shrink: 0;
+  border-bottom: 1px solid #e8ede8;
 }
 .work-heading,
 .work-title-row {
@@ -1497,56 +1503,33 @@ const generateWorkTitle = async (question: string) => {
 .work-title-row h1 {
   margin: 0;
   font-family: var(--td-font-family);
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 17px;
+  font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: -0.3px;
 }
-.work-actions {
+.work-context {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  gap: 7px;
+  margin-top: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: #879189;
 }
-.work-actions .t-button {
-  height: 32px;
-  font-size: 12px;
-}
-.work-actions .t-button--shape-square {
-  width: 32px;
-}
-.progress-strip {
-  padding: 0 24px 10px;
-  flex-shrink: 0;
-  border-bottom: 1px solid #eceeeb;
-}
-.progress-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 28px;
-}
-.progress-label {
-  color: var(--td-text-color-secondary);
-  font-size: 12px;
-  margin-right: 6px;
-  flex-shrink: 0;
-}
-.progress-summary strong {
-  font-size: 12px;
-  font-weight: 400;
-  color: #626c63;
+.work-context-text {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .live-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #aeb5ae;
+  background: #bdc6be;
   flex-shrink: 0;
 }
 .live-dot.running,
@@ -1554,57 +1537,78 @@ const generateWorkTitle = async (question: string) => {
   background: var(--td-brand-color);
 }
 .live-dot.attention {
-  background: var(--td-warning-color);
+  background: #c48d49;
 }
-.elapsed,
-.connection-state {
-  color: #7d857e;
-  font-size: 11px;
+.elapsed {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.connection-state {
-  margin-left: auto;
-}
-.connection-state.lost {
-  color: var(--td-error-color);
-}
-.recovery-banner {
-  margin: 16px 24px 0;
+.work-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid #e6ddc8;
-  background: #fcf9f1;
-  border-radius: 10px;
+  gap: 10px;
   flex-shrink: 0;
 }
-.recovery-banner > .t-icon {
-  font-size: 22px;
-  color: var(--td-warning-color);
-  flex-shrink: 0;
+.work-actions .t-button {
+  height: 34px;
+  font-size: 12px;
+  border-radius: 8px;
 }
-.recovery-banner > div {
-  flex: 1;
-  min-width: 0;
+.work-actions .t-button--shape-square {
+  width: 32px;
+  border-color: #e6ebe6;
 }
-.recovery-banner strong {
-  font-size: 14px;
-  font-weight: 500;
+.progress-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #e5ebe5;
+  background: #fff;
+  border-radius: 8px;
+  color: #68766c;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
 }
-.recovery-banner p {
-  margin: 6px 0 0;
+.progress-trigger:hover {
+  background: #f6f9f6;
+  border-color: #d4dfd6;
+}
+.progress-count {
+  color: #16865d;
+  padding-left: 8px;
+  border-left: 1px solid #e3ebe4;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.progress-panel {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: #fcfdfb;
+}
+.progress-panel-heading {
+  padding: 28px 24px 0;
+}
+.eyebrow {
+  font-size: 10px;
+  color: #a0aca1;
+  letter-spacing: 1.5px;
+}
+.progress-panel-heading h2 {
+  margin: 8px 0 10px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  color: #2d3d31;
+}
+.progress-panel-heading p {
   font-size: 12px;
   line-height: 1.8;
-  color: var(--td-text-color-secondary);
-}
-.recovery-banner > .t-button {
-  flex-shrink: 0;
-}
-.confirmation-banner {
-  border-color: #dae5db;
-  background: #f6f9f5;
+  color: #748179;
+  margin: 0 0 22px;
 }
 .chat-section,
 .files-section {
@@ -1817,9 +1821,10 @@ const generateWorkTitle = async (question: string) => {
 }
 @media (max-width: 768px) {
   .workspace-header {
-    min-height: 56px;
-    padding: 10px 16px;
-    gap: 12px;
+    min-height: 74px;
+    padding: 12px 16px;
+    gap: 10px;
+    flex-wrap: wrap;
   }
   .work-title-row h1 {
     font-size: 14px;
@@ -1832,28 +1837,6 @@ const generateWorkTitle = async (question: string) => {
   }
   .work-actions .t-button--shape-square {
     padding: 0;
-  }
-  .progress-strip {
-    padding: 0 16px 8px;
-  }
-  .progress-label,
-  .elapsed {
-    display: none;
-  }
-  .recovery-banner {
-    margin: 12px 16px 0;
-    padding: 12px;
-    flex-wrap: wrap;
-  }
-  .recovery-banner > .t-icon {
-    align-self: start;
-    margin-top: 2px;
-  }
-  .recovery-banner > div {
-    min-width: calc(100% - 36px);
-  }
-  .recovery-banner > .t-button {
-    margin-left: 34px;
   }
   .chat-messages-container :deep(.chat-messages) {
     padding: 20px 16px;

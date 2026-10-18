@@ -259,26 +259,9 @@ const { hostRenderer } = require('./vueHost.cjs')
   })
   assert.equal(messages.at(-1).revision.base_revision, 2)
   assert.equal(messages.at(-1).revision.scope[0], 'Q2')
-  const phases = await loadModule('src/utils/paperPipeline.ts', {})
-  const updates = [
-    { type: 'paper_phase', content: { stage: 'solve', status: 'blocked' } },
-    { type: 'paper_phase', content: { stage: 'write', status: 'in_progress' } },
-  ]
-  assert.equal(phases.derivePhases(updates).find((p) => p.key === 'solve').status, 'blocked')
-  assert.equal(phases.derivePhases(updates).find((p) => p.key === 'design').status, 'pending')
-  const failedAnalysis = [
-    { type: 'paper_phase', content: { stage: 'analyze', status: 'in_progress' } },
-  ]
+  const pipeline = await loadModule('src/utils/paperPipeline.ts', {})
   assert.equal(
-    phases.derivePhases(failedAnalysis, { failed: true }).find((p) => p.key === 'analyze').status,
-    'blocked',
-  )
-  assert.equal(
-    phases.derivePhases(failedAnalysis).find((p) => p.key === 'analyze').status,
-    'in_progress',
-  )
-  assert.equal(
-    phases.deriveSubproblems([
+    pipeline.deriveSubproblems([
       { type: 'paper_solved', content: 'Q2 已通过验收，登记 5 项结果' },
       { type: 'paper_stage', content: 'Q2：重新求解' },
     ])[0].status,
@@ -287,9 +270,9 @@ const { hostRenderer } = require('./vueHost.cjs')
   const stagedPremise = [
     { type: 'paper_stage', content: 'Q1 已提交，关键假设已登记，按冻结契约重新执行' },
   ]
-  assert.equal(phases.deriveSubproblems(stagedPremise)[0].status, 'in_progress')
+  assert.equal(pipeline.deriveSubproblems(stagedPremise)[0].status, 'in_progress')
   assert.equal(
-    phases.deriveSubproblems([
+    pipeline.deriveSubproblems([
       ...stagedPremise,
       { type: 'paper_solved', content: 'Q1 已通过验收，登记 7 项结果' },
     ])[0].status,
@@ -308,7 +291,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     content: { tasks: [task], issues },
   })
   assert.equal(
-    phases.deriveSubproblems([oldCompletion, researchState(currentTask)])[0].status,
+    pipeline.deriveSubproblems([oldCompletion, researchState(currentTask)])[0].status,
     'pending',
   )
   const acceptedTask = {
@@ -319,17 +302,17 @@ const { hostRenderer } = require('./vueHost.cjs')
   }
   const openReview = [{ task_id: 'Q1', status: 'suspected', blocking: true }]
   assert.equal(
-    phases.deriveSubproblems([oldCompletion, researchState(acceptedTask, openReview)])[0].status,
+    pipeline.deriveSubproblems([oldCompletion, researchState(acceptedTask, openReview)])[0].status,
     'failed',
   )
   assert.equal(
-    phases.deriveSubproblems([
+    pipeline.deriveSubproblems([
       researchState(acceptedTask, openReview),
       researchState(acceptedTask),
     ])[0].status,
     'completed',
   )
-  console.log('PASS: revisions carry scope/version and retries preserve explicit phase status')
+  console.log('PASS: revisions carry scope/version and retries preserve task acceptance status')
 })().catch((error) => {
   console.error(error)
   process.exitCode = 1

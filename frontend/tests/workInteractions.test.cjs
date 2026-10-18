@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict')
 const { loadModule, vue, pinia, flush } = require('./moduleHarness.cjs')
 async function environment() {
+  const width = vue.ref(1400),
+    isMobile = vue.ref(false)
   const auth = vue.reactive({ token: 'test', currentUser: { id: 7 } })
   const storeModule = await loadModule('src/stores/workPanels.ts', {
     vue,
@@ -59,7 +61,7 @@ async function environment() {
           }),
         },
         '@/composables/useBreakpoint': {
-          useBreakpoint: () => ({ isMobile: vue.ref(false), width: vue.ref(1400) }),
+          useBreakpoint: () => ({ isMobile, width }),
         },
         '@/api/chat': {
           WebSocketChatHandler: Socket,
@@ -138,7 +140,7 @@ async function environment() {
       },
     }
   }
-  return { store, work }
+  return { store, work, width, isMobile }
 }
 ;(async () => {
   const env = await environment()
@@ -165,6 +167,40 @@ async function environment() {
   console.log(
     'PASS: forbidden, missing and unavailable research leave loading and recover on retry',
   )
+  const progressWork = await env.work('progress')
+  await progressWork.state.loadWork()
+  progressWork.state.researchSnapshot.value = {
+    tasks: [
+      { task_id: 'Q1', progress: { state: 'accepted' } },
+      { task_id: 'Q2', progress: { state: 'rework' } },
+    ],
+  }
+  progressWork.state.openProgress()
+  assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress')
+  assert.equal(progressWork.state.panelSession.value.splitRatio, 0.64)
+  assert.equal(progressWork.state.acceptedTaskCount.value, 1)
+  progressWork.state.openProgress()
+  assert.equal(
+    progressWork.state.panelSession.value.panels.filter((tab) => tab.kind === 'progress').length,
+    1,
+  )
+  assert.equal(progressWork.sent.length, 0, 'viewing progress never resumes research')
+  progressWork.stop()
+  env.width.value = 620
+  env.isMobile.value = true
+  const narrowWork = await env.work('narrow')
+  narrowWork.state.openProgress()
+  assert.equal(narrowWork.state.panelSession.value.activeId, 'progress')
+  assert.equal(narrowWork.state.panelSession.value.secondaryActiveId, null)
+  assert.ok(narrowWork.state.panelSession.value.panels.some((tab) => tab.kind === 'chat'))
+  narrowWork.stop()
+  env.width.value = 1400
+  env.isMobile.value = false
+  console.log(
+    'PASS: progress opens beside chat on desktop, as a tab on narrow screens, without starting a run',
+  )
+
   const first = await env.work('first')
   await first.state.loadWork()
   assert.equal(
@@ -271,7 +307,6 @@ async function environment() {
     'exporting a paper does not make incomplete work successful',
   )
   assert.equal(recovery.state.recoveryUnavailable.value, true)
-  assert.equal(recovery.state.recoveryTitle.value, 'This research is incomplete')
   assert.equal(recovery.state.recoveryHint.value, 'Start research again')
   assert.equal(
     recovery.state.canResume.value,
@@ -289,7 +324,6 @@ async function environment() {
   )
   recovery.state.researchSnapshot.value.engine_version = 'research-v3'
   assert.equal(recovery.state.canResume.value, true, 'current protocol work remains resumable')
-  assert.equal(recovery.state.recoveryTitle.value, 'Progress saved')
   recovery.state.researchSnapshot.value.research_id = null
   assert.equal(recovery.state.canResume.value, false, 'a missing execution record is not resumable')
   assert.equal(recovery.state.recoveryUnavailable.value, true)

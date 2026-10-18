@@ -13,29 +13,11 @@
           <t-icon :name="isCollapsed ? 'chevron-up' : 'chevron-down'" size="16px" />
         </template>
       </t-button>
-      <t-tabs v-if="!isCollapsed" v-model="activeTab" size="medium" class="fm-tabs">
-        <t-tab-panel value="files">
-          <template #label>
-            <div class="tab-label">
-              <t-icon name="folder-open" />
-              <span>文件</span>
-            </div>
-          </template>
-        </t-tab-panel>
-        <t-tab-panel value="plan">
-          <template #label>
-            <div class="tab-label">
-              <t-icon name="task" />
-              <span>计划</span>
-            </div>
-          </template>
-        </t-tab-panel>
-      </t-tabs>
-      <span v-else class="fm-collapsed-title">文件管理器</span>
+      <span class="fm-title"><t-icon name="folder-open" />文件</span>
       <t-button
         variant="text"
         shape="square"
-        aria-label="刷新文件与计划"
+        aria-label="刷新文件"
         @click.stop="handleRefresh"
         :loading="isLoading"
         class="fm-btn"
@@ -46,7 +28,7 @@
       </t-button>
     </div>
     <div v-show="!isCollapsed" class="fm-body">
-      <div v-if="activeTab === 'files'" class="tab-content">
+      <div class="tab-content">
         <div class="file-tree">
           <div v-if="isLoading && !fileTreeData?.length" class="loading-state">
             <t-loading size="small" text="加载文件中..." />
@@ -67,17 +49,12 @@
           <span class="selected-file-info">{{ selectedFile }}</span>
         </div>
       </div>
-      <div v-else-if="activeTab === 'plan'" class="tab-content plan-tab">
-        <ResearchProgress :snapshot="researchSnapshot || null" expanded />
-      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
-import type { ResearchSnapshot } from '@/types/research'
-import ResearchProgress from '@/components/ResearchProgress.vue'
+import { ref, computed } from 'vue'
 
 interface Props {
   fileTreeData:
@@ -103,7 +80,6 @@ interface Props {
       }>
   workId?: string
   loading?: boolean
-  researchSnapshot?: ResearchSnapshot | null
   fillHeight?: boolean
 }
 
@@ -115,7 +91,6 @@ interface Emits {
 const props = defineProps<Props>()
 const emit = defineEmits<Emits>()
 
-const activeTab = ref('files')
 const isCollapsed = ref(false)
 const selectedFile = ref<string | null>(null)
 
@@ -531,47 +506,14 @@ defineExpose({
   font-size: 16px;
 }
 
-.fm-tabs {
-  flex: 1;
-  min-width: 0;
-}
-
-.fm-tabs :deep(.t-tabs__header) {
-  padding: 0;
-  height: 51px;
-}
-
-.fm-tabs :deep(.t-tabs__nav-item) {
-  height: 51px;
-  padding: 0 16px;
-}
-.fm-tabs :deep(.t-tabs__nav-item-wrapper) {
-  margin: 0;
-  padding: 0;
-}
-.fm-tabs :deep(.t-tabs__nav-item:first-child) {
-  padding-left: 0;
-}
-.fm-tabs :deep(.t-tabs__nav-container.t-is-top::after) {
-  display: none;
-}
-.fm-tabs :deep(.t-tabs__content) {
-  display: none;
-}
-
-.fm-collapsed-title {
+.fm-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
   font-size: 13px;
   font-weight: 500;
-  color: #666;
-  padding-left: 4px;
-}
-
-.tab-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
+  color: #637369;
 }
 
 .fm-body {
@@ -649,12 +591,5 @@ defineExpose({
 .no-file-selected {
   color: #b0b0b0;
   font-style: italic;
-}
-
-.plan-tab {
-  overflow-y: auto;
-}
-.plan-tab :deep(.research-task-list) {
-  max-height: none;
 }
 </style>

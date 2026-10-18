@@ -1,105 +1,101 @@
 <template>
   <div class="paper-pipeline">
-    <!-- 阶段进度 -->
-    <div class="pipeline-steps">
-      <div
-        v-for="phase in phases"
-        :key="phase.key"
-        :class="['pipeline-step', `is-${phase.status}`]"
-        :title="phase.note || phase.label"
-      >
-        <span class="step-dot">
-          <t-icon v-if="phase.status === 'completed'" name="check" size="12px" />
-          <t-icon v-else-if="phase.status === 'blocked'" name="close" size="12px" />
-          <t-loading v-else-if="phase.status === 'in_progress' && running" size="12px" />
-        </span>
-        <span class="step-label">{{ phase.label }}</span>
+    <details class="pipeline-record" :open="running || waitingConfirm">
+      <summary class="record-summary">
+        <t-icon name="task" size="14px" />
+        <span>{{ running ? '正在研究' : waitingConfirm ? '待确认方案' : '研究过程' }}</span>
+        <small v-if="subproblems.length">{{ subproblems.length }} 项任务</small>
+        <span class="record-caret" aria-hidden="true">⌄</span>
+      </summary>
+      <div class="record-content">
+        <div v-if="currentText" class="pipeline-current">
+          <t-loading v-if="running" size="14px" />
+          <span>{{ currentText }}</span>
+        </div>
+
+        <!-- 题目分析结果 -->
+        <div v-if="analysis" class="pipeline-section">
+          <div class="section-title">题目分析</div>
+          <MarkdownRenderer :content="analysis" />
+        </div>
+
+        <!-- 子问题进度 -->
+        <div v-if="subproblems.length" class="pipeline-section">
+          <div class="section-title">子问题</div>
+          <div
+            v-for="sp in subproblems"
+            :key="sp.id"
+            :class="['subproblem-row', `is-${sp.status}`]"
+          >
+            <span class="sp-id">{{ sp.id }}</span>
+            <span class="sp-text">{{ sp.text }}</span>
+            <span :class="['sp-status', `is-${sp.status}`]">{{
+              sp.status === 'completed'
+                ? '已完成'
+                : sp.status === 'failed'
+                  ? '需处理'
+                  : sp.status === 'pending'
+                    ? '待执行'
+                    : running
+                      ? '进行中'
+                      : '已保存'
+            }}</span>
+          </div>
+        </div>
+
+        <!-- 其他阶段事件 -->
+        <div v-if="milestones.length" class="pipeline-section">
+          <div class="section-title">进展</div>
+          <ul class="milestones">
+            <li v-for="(item, i) in milestones" :key="i">{{ item }}</li>
+          </ul>
+        </div>
+
+        <!-- 等待用户确认 -->
+        <t-alert
+          v-if="confirm"
+          :theme="waitingConfirm ? 'warning' : 'info'"
+          class="pipeline-confirm"
+        >
+          <template #title>{{ waitingConfirm ? '请确认建模方案' : '建模方案' }}</template>
+          <template #message>
+            <MarkdownRenderer :content="confirm" />
+            <p v-if="waitingConfirm" class="confirm-hint">
+              回复“确认”继续求解，或直接写下修改意见重新设计。
+            </p>
+          </template>
+        </t-alert>
+
+        <!-- 原始事件（排查用） -->
+        <details class="pipeline-raw">
+          <summary>
+            技术详情 <span>{{ events.length }} 条事件</span>
+          </summary>
+          <div v-for="sp in subproblems.filter((s) => s.runs)" :key="sp.id" class="run-stat">
+            {{ sp.id }} · 执行 {{ sp.runs }} 次<span v-if="sp.fails">
+              · 失败 {{ sp.fails }} 次</span
+            >
+          </div>
+          <ul class="raw-list">
+            <li v-for="(block, i) in events" :key="i">
+              <code>{{ block.type }}</code> {{ asText(block.content) }}
+            </li>
+          </ul>
+        </details>
       </div>
-    </div>
-
-    <div v-if="currentText" class="pipeline-current">
-      <t-loading v-if="running" size="14px" />
-      <span>{{ currentText }}</span>
-    </div>
-
-    <!-- 题目分析结果 -->
-    <div v-if="analysis" class="pipeline-section">
-      <div class="section-title">题目分析</div>
-      <MarkdownRenderer :content="analysis" />
-    </div>
-
-    <!-- 子问题进度 -->
-    <div v-if="subproblems.length" class="pipeline-section">
-      <div class="section-title">子问题</div>
-      <div v-for="sp in subproblems" :key="sp.id" :class="['subproblem-row', `is-${sp.status}`]">
-        <span class="sp-id">{{ sp.id }}</span>
-        <span class="sp-text">{{ sp.text }}</span>
-        <span :class="['sp-status', `is-${sp.status}`]">{{
-          sp.status === 'completed'
-            ? '已完成'
-            : sp.status === 'failed'
-              ? '需处理'
-              : sp.status === 'pending'
-                ? '待执行'
-                : running
-                  ? '进行中'
-                  : '已保存'
-        }}</span>
-      </div>
-    </div>
-
-    <!-- 其他阶段事件 -->
-    <div v-if="milestones.length" class="pipeline-section">
-      <div class="section-title">进展</div>
-      <ul class="milestones">
-        <li v-for="(item, i) in milestones" :key="i">{{ item }}</li>
-      </ul>
-    </div>
-
-    <!-- 等待用户确认 -->
-    <t-alert v-if="confirm" :theme="waitingConfirm ? 'warning' : 'info'" class="pipeline-confirm">
-      <template #title>{{ waitingConfirm ? '请确认建模方案' : '建模方案' }}</template>
-      <template #message>
-        <MarkdownRenderer :content="confirm" />
-        <p v-if="waitingConfirm" class="confirm-hint">
-          回复“确认”继续求解，或直接写下修改意见重新设计。
-        </p>
-      </template>
-    </t-alert>
-
+    </details>
     <t-alert v-if="error" theme="error" :message="error" class="pipeline-error" />
 
     <div v-if="result" class="pipeline-section pipeline-result">
       <MarkdownRenderer :content="result" />
     </div>
-
-    <!-- 原始事件（排查用） -->
-    <details class="pipeline-raw">
-      <summary>
-        技术详情 <span>{{ events.length }} 条事件</span>
-      </summary>
-      <div v-for="sp in subproblems.filter((s) => s.runs)" :key="sp.id" class="run-stat">
-        {{ sp.id }} · 执行 {{ sp.runs }} 次<span v-if="sp.fails"> · 失败 {{ sp.fails }} 次</span>
-      </div>
-      <ul class="raw-list">
-        <li v-for="(block, i) in events" :key="i">
-          <code>{{ block.type }}</code> {{ asText(block.content) }}
-        </li>
-      </ul>
-    </details>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
-import {
-  derivePhases,
-  deriveSubproblems,
-  asText,
-  isPaperEvent,
-  type PipelineBlock,
-} from '@/utils/paperPipeline'
+import { deriveSubproblems, asText, isPaperEvent, type PipelineBlock } from '@/utils/paperPipeline'
 
 // superseded：这条消息之后已经有新消息（例如用户已回复确认），卡片不再提示等待确认
 const props = defineProps<{ blocks: PipelineBlock[]; streaming?: boolean; superseded?: boolean }>()
@@ -131,9 +127,6 @@ const running = computed(
   () => !!props.streaming && !result.value && !error.value && !waitingConfirm.value,
 )
 
-const phases = computed(() =>
-  derivePhases(props.blocks, { done: !!result.value, failed: !!error.value }),
-)
 const subproblems = computed(() => deriveSubproblems(props.blocks))
 
 const MILESTONE_TYPES = new Set(['paper_consistency', 'paper_validation', 'paper_export'])
@@ -155,52 +148,39 @@ const currentText = computed(() => {
   margin-top: 8px;
 }
 
-.pipeline-steps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 4px;
-}
-
-.pipeline-step {
+.record-summary {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px 2px 4px;
-  border-radius: 12px;
+  gap: 8px;
+  width: fit-content;
+  padding: 9px 12px;
+  border: 1px solid #e8ede8;
+  border-radius: 8px;
+  background: #fafcf9;
+  color: #718075;
   font-size: 12px;
-  color: var(--td-text-color-placeholder, #999);
-  background: var(--td-bg-color-secondarycontainer, #f3f3f3);
+  cursor: pointer;
+  list-style: none;
 }
-
-.step-dot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  border: 1px solid currentColor;
+.record-summary::-webkit-details-marker {
+  display: none;
 }
-
-.pipeline-step.is-completed {
-  color: var(--td-success-color, #2ba471);
+.record-summary small {
+  color: #a0aaa1;
+  margin-left: 4px;
+  font-size: 11px;
 }
-
-.pipeline-step.is-completed .step-dot {
-  background: var(--td-success-color, #2ba471);
-  border-color: var(--td-success-color, #2ba471);
-  color: #fff;
+.record-caret {
+  color: #a0aaa1;
 }
-
-.pipeline-step.is-in_progress {
-  color: var(--td-text-color-primary, #333);
-  font-weight: 600;
+.record-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 0 4px 16px;
+  margin-left: 8px;
+  border-left: 1px solid #e5ece5;
 }
-
-.pipeline-step.is-blocked {
-  color: var(--td-error-color, #d54941);
-}
-
 .pipeline-current {
   display: flex;
   align-items: center;

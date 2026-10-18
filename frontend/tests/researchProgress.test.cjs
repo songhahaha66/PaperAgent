@@ -46,25 +46,25 @@ const { hostRenderer } = require('./vueHost.cjs')
   function mount(value) {
     const host = hostRenderer()
     const app = host.renderer.createApp({
-      setup: () => () => vue.h(component.default, { snapshot: value.value, expanded: true }),
+      setup: () => () => vue.h(component.default, { snapshot: value.value }),
     })
     app.mount(host.root)
     return { host, app }
   }
   const { host, app } = mount(snapshot)
   await flush()
-  assert.match(text(host.root), /2\/3 项已验收/)
+  assert.match(text(host.root), /2\/ 3任务已验收/)
   assert.match(text(host.root), /等待上游验收/)
-  assert.match(text(host.root), /依赖：Q1/)
+  assert.match(text(host.root), /依赖 Q1/)
   snapshot.value = {
     ...snapshot.value,
     research_revision: 2,
     tasks: [task('Q1', 'rework', [], 2), task('Q2', 'waiting', ['Q1'], 2), task('Q3', 'accepted')],
   }
   await flush()
-  assert.match(text(host.root), /1\/3 项已验收/)
-  assert.match(text(host.root), /Q1 · v2.*待返工/)
-  assert.match(text(host.root), /Q3 · v1.*已验收/)
+  assert.match(text(host.root), /1\/ 3任务已验收/)
+  assert.match(text(host.root), /Q1v2.*待返工/)
+  assert.match(text(host.root), /Q3v1.*已验收/)
   snapshot.value = {
     ...snapshot.value,
     tasks: [
@@ -74,7 +74,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     ],
   }
   await flush()
-  assert.match(text(host.root), /1\/4 项已验收/)
+  assert.match(text(host.root), /1\/ 4任务已验收/)
   assert.match(text(host.root), /独立核验任务/)
   assert.equal(
     host.find((node) => node.kind === 'li').props['data-task'],
@@ -93,8 +93,8 @@ const { hostRenderer } = require('./vueHost.cjs')
   app.unmount()
   const restored = mount(vue.ref(serialized))
   await flush()
-  assert.match(text(restored.host.root), /1\/4 项已验收/)
-  assert.match(text(restored.host.root), /Q3 · v1.*已验收/)
+  assert.match(text(restored.host.root), /1\/ 4任务已验收/)
+  assert.match(text(restored.host.root), /Q3v1.*已验收/)
   assert.match(text(restored.host.root), /已中断，待恢复/)
   restored.app.unmount()
   console.log(

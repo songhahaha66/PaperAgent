@@ -1,14 +1,7 @@
 <template>
   <div class="json-chat-renderer">
     <div class="chat-messages">
-      <div
-        v-for="(message, index) in messages"
-        :key="message.id"
-        :class="[
-          'chat-message-wrapper',
-          { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider },
-        ]"
-      >
+      <div v-for="(message, index) in messages" :key="message.id" class="chat-message-wrapper">
         <ChatItem
           :role="message.role"
           :datetime="formatDateTime(message.datetime)"
@@ -19,7 +12,7 @@
               <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
               <MarkdownRenderer v-if="getTextContent(message)" :content="getTextContent(message)" />
 
-              <!-- 状态图流水线（v2）的事件汇总成阶段卡片 -->
+              <!-- 保留每次研究运行的过程记录 -->
               <PaperPipelineCard
                 v-if="isPipelineMessage(getJsonBlocks(message))"
                 :blocks="getJsonBlocks(message)"
@@ -73,24 +66,6 @@
             </div>
           </template>
         </ChatItem>
-
-        <!-- 对话分割线 -->
-        <div
-          v-if="index < messages.length - 1"
-          class="message-divider"
-          @click="isMobile ? toggleDivider(index) : undefined"
-        >
-          <div class="divider-line"></div>
-          <div
-            class="divider-icon"
-            :class="{ show: hoveredDivider === index }"
-            @mouseenter="!isMobile && showDivider(index)"
-            @mouseleave="!isMobile && hideDivider()"
-            @click.stop="isMobile && toggleDivider(index)"
-          >
-            <t-icon name="arrow-up" />
-          </div>
-        </div>
       </div>
       <slot />
     </div>
@@ -98,13 +73,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { ChatItem } from '@tdesign-vue-next/chat'
-import { MessagePlugin } from 'tdesign-vue-next'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import PaperPipelineCard from '@/components/PaperPipelineCard.vue'
 import { isPipelineMessage } from '@/utils/paperPipeline'
-import { useBreakpoint } from '@/composables/useBreakpoint'
 
 // 定义消息类型
 interface ChatMessage {
@@ -134,27 +107,8 @@ const researchSourceLabel = (path: string, files: string[]) => {
 }
 const getResearchContexts = (message: ChatMessage) =>
   (message.json_blocks || []).filter((b) => b.type === 'research_context').map((b) => b.content)
-const { isMobile } = useBreakpoint()
-
-// 分割线悬停状态
-const hoveredDivider = ref<number | null>(null)
-
 // JSON块折叠状态 (messageId-blockIndex -> collapsed)
 const collapsedBlocks = ref<Map<string, boolean>>(new Map())
-
-// 显示分割线
-const showDivider = (index: number) => {
-  hoveredDivider.value = index
-}
-
-// 隐藏分割线
-const hideDivider = () => {
-  hoveredDivider.value = null
-}
-
-const toggleDivider = (index: number) => {
-  hoveredDivider.value = hoveredDivider.value === index ? null : index
-}
 
 // 切换JSON块的折叠状态
 const toggleBlock = (messageId: string, blockIndex: number) => {
@@ -304,18 +258,6 @@ const getJsonBlocks = (message: ChatMessage) => {
       : parseJsonBlocks(message.content || '').blocks
   return blocks.filter((block) => !HIDDEN_BLOCK_TYPES.has(block?.type))
 }
-
-// 复制消息
-const copyMessage = (content: string) => {
-  navigator.clipboard
-    .writeText(content)
-    .then(() => {
-      MessagePlugin.success('消息已复制到剪贴板')
-    })
-    .catch(() => {
-      MessagePlugin.error('复制失败')
-    })
-}
 </script>
 
 <style scoped>
@@ -333,60 +275,16 @@ const copyMessage = (content: string) => {
 }
 
 .chat-message-wrapper {
-  margin-bottom: 16px;
-  transition: opacity 0.3s ease;
+  margin-bottom: 28px;
 }
-
-.message-dimmed {
-  opacity: 0.3;
+:deep(.t-chat__avatar) {
+  width: 28px;
+  height: 28px;
 }
-
-.message-divider {
-  position: relative;
-  height: 20px;
-  margin: 8px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.divider-line {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background-color: #e7e7e7;
-  z-index: 1;
-}
-
-.divider-icon {
-  position: relative;
-  z-index: 2;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background-color: #f5f5f5;
-  border: 1px solid #e7e7e7;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: all 0.3s ease;
-}
-
-.divider-icon.show {
-  opacity: 1;
-  background-color: #0052d9;
-  border-color: #0052d9;
-  color: white;
-}
-
-.divider-icon:hover {
-  background-color: #0052d9;
-  border-color: #0052d9;
-  color: white;
+:deep(.t-chat__datetime) {
+  color: #8a958e;
+  font-size: 11px;
+  margin-bottom: 8px;
 }
 
 /* Ensure chat-markdown container uses full width */
