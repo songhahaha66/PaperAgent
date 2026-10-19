@@ -728,7 +728,7 @@ select {
   color: var(--pa-ink);
   background: var(--pa-surface);
   border: 1px solid var(--pa-line);
-  border-radius: 6px;
+  border-radius: var(--pa-radius-control);
   padding: 7px 9px;
   cursor: pointer;
 }
@@ -794,7 +794,7 @@ button:disabled {
   font-size: 12px;
   line-height: 1.7;
   background: var(--pa-surface-muted);
-  border-radius: 8px;
+  border-radius: var(--pa-radius-card);
   padding: 12px;
 }
 blockquote {
@@ -837,13 +837,13 @@ details {
   background: var(--pa-surface);
   color: var(--pa-ink);
   border: 1px solid var(--pa-line);
-  border-radius: 7px;
+  border-radius: var(--pa-radius-card);
   resize: vertical;
   font: 13px/1.7 inherit;
 }
 .primary {
   background: var(--pa-accent);
-  color: white;
+  color: var(--pa-on-accent);
 }
 .thread article,
 .execution,
@@ -858,7 +858,7 @@ details {
 .thread .user {
   background: var(--pa-surface-muted);
   padding: 12px;
-  border-radius: 7px;
+  border-radius: var(--pa-radius-card);
 }
 .thread strong {
   font-size: 12px;

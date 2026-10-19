@@ -55,7 +55,7 @@ watch(
   position: absolute;
   inset: 0;
   z-index: 40;
-  background: #0003;
+  background: var(--pa-mask);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -64,7 +64,7 @@ watch(
 .source-card {
   background: var(--pa-surface);
   border: 1px solid var(--pa-line);
-  border-radius: 12px;
+  border-radius: var(--pa-radius-overlay);
   box-shadow: var(--pa-shadow-overlay);
   padding: 24px;
   max-width: 620px;
@@ -89,7 +89,7 @@ button {
   background: var(--pa-surface-muted);
   color: var(--pa-ink);
   padding: 7px 10px;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-control);
 }
 blockquote {
   white-space: pre-wrap;

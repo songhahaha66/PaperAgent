@@ -196,7 +196,7 @@ button {
   background: var(--pa-surface);
   color: var(--pa-ink);
   padding: 5px 9px;
-  border-radius: 5px;
+  border-radius: var(--pa-radius-control);
   cursor: pointer;
 }
 button:disabled {
@@ -211,8 +211,8 @@ button:disabled {
 .pdf-page {
   position: relative;
   margin: auto;
-  background: white;
-  color: black;
+  background: var(--pa-document-paper);
+  color: var(--pa-document-ink);
   --min-font-size: 1;
   --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
   --min-font-size-inv: calc(1 / var(--min-font-size));
@@ -248,7 +248,7 @@ button:disabled {
   display: contents;
 }
 :deep(.textLayer ::selection) {
-  background: #4687ff66;
+  background: color-mix(in srgb, var(--pa-info) 40%, transparent);
 }
 :deep(.pdf-link) {
   position: absolute;
@@ -260,7 +260,7 @@ button:disabled {
 }
 :deep(.pdf-link:hover),
 :deep(.pdf-link:focus) {
-  background: #4687ff33;
-  outline: 1px solid #4687ff;
+  background: color-mix(in srgb, var(--pa-info) 20%, transparent);
+  outline: 1px solid var(--pa-info);
 }
 </style>
