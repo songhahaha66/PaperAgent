@@ -86,11 +86,13 @@ async function render() {
     })
     await renderTask.promise
     if (seq !== renderGeneration) return
+    const textContent = await source.getTextContent()
+    if (seq !== renderGeneration) return
     const text = document.createElement('div')
     text.className = 'textLayer'
     root.append(text)
     textLayer = new TextLayer({
-      textContentSource: await source.getTextContent(),
+      textContentSource: textContent,
       container: text,
       viewport,
     })
@@ -130,17 +132,22 @@ async function render() {
 }
 async function load() {
   const seq = ++generation
+  const workId = props.workId,
+    version = props.version || '',
+    previousTask = task
   ++renderGeneration
   renderTask?.cancel()
   textLayer?.cancel()
-  await task?.destroy()
+  task = undefined
   pdf = undefined
   loading.value = true
   error.value = ''
   try {
+    await previousTask?.destroy()
+    if (seq !== generation) return
     const response = await fetch(
-      `${apiBase}/api/workspace/${encodeURIComponent(props.workId)}/download/paper.pdf`,
-      { headers: { Authorization: `Bearer ${auth.token || ''}` } },
+      `${apiBase}/api/workspace/${encodeURIComponent(workId)}/download/paper.pdf?version=${encodeURIComponent(version)}`,
+      { headers: { Authorization: `Bearer ${auth.token || ''}` }, cache: 'no-store' },
     )
     if (!response.ok) throw new Error('download')
     const bytes = new Uint8Array(await response.arrayBuffer())

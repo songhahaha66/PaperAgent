@@ -1,5 +1,43 @@
 const assert = require('node:assert/strict')
 const { loadModule, vue, flush } = require('./moduleHarness.cjs')
+function deferred() {
+  let resolve
+  const promise = new Promise(done => { resolve = done })
+  return {promise, resolve}
+}
+async function pdfFixture() {
+  const requests=[], jobs=[], rendered=[], cleanup=[]
+  const mod=await loadModule('src/components/PaperPdfReader.vue', {
+    vue:{...vue,onBeforeUnmount:callback=>cleanup.push(callback)},
+    '@/stores/auth':{useAuthStore:()=>({token:'test-token'})},
+    'pdfjs-dist/build/pdf.worker.min.mjs?url':{default:'worker.js'},
+    'pdfjs-dist':{
+      GlobalWorkerOptions:{},TextLayer:class {},
+      getDocument:({data})=>{
+        const result=deferred()
+        const job={...result,bytes:Array.from(data),destroyed:0,
+          destroy(){this.destroyed++;return this.destroyGate?.promise}}
+        jobs.push(job)
+        return job
+      },
+    },
+  }, {
+    fetch:(url,options)=>{
+      const result=deferred()
+      requests.push({...result,url,options})
+      return result.promise
+    },
+  })
+  const props=vue.reactive({workId:'work/id',version:'pdf-v1'})
+  const scope=vue.effectScope()
+  const reader=scope.run(()=>mod.default.setup(props,{emit(){},expose(){}}))
+  await flush()
+  return {props,reader,requests,jobs,rendered,
+    respond(index,byte){requests[index].resolve({ok:true,arrayBuffer:async()=>Uint8Array.of(byte).buffer})},
+    decode(index,pages){jobs[index].resolve({numPages:pages,getPage:async page=>{rendered.push({index,page});return {}}})},
+    stop(){cleanup.forEach(callback=>callback());scope.stop()},
+  }
+}
 ;(async () => {
   const util = await loadModule('src/utils/paperSelection.ts', {})
   const chosen = util.sourceSelection('part.tex', 'v', '开头😀重复。重复。', 7, 9)
@@ -35,4 +73,59 @@ const { loadModule, vue, flush } = require('./moduleHarness.cjs')
   assert.equal(editor.draft.value,'unique target','Cross-project local drafts do not leak')
   scope.stop()
   console.log('PASS: versioned offsets, source ambiguity, confirmed read selections, draft preservation and project guards')
+
+  let pdf=await pdfFixture()
+  assert.match(pdf.requests[0].url,/work%2Fid\/download\/paper\.pdf\?version=pdf-v1$/)
+  assert.equal(pdf.requests[0].options.cache,'no-store')
+  assert.equal(pdf.requests[0].options.headers.Authorization,'Bearer test-token')
+  pdf.respond(0,1);await flush();pdf.decode(0,3);await flush()
+  assert.equal(pdf.reader.count.value,3)
+  pdf.props.version='pdf-v2 / new';await flush()
+  assert.match(pdf.requests[1].url,/\?version=pdf-v2%20%2F%20new$/)
+  assert.notEqual(pdf.requests[1].url,pdf.requests[0].url)
+  assert.equal(pdf.requests[1].options.cache,'no-store')
+  assert.equal(pdf.jobs[0].destroyed,1)
+  pdf.respond(1,2);await flush();pdf.decode(1,4);await flush()
+  assert.deepEqual(pdf.jobs[1].bytes,[2])
+  assert.equal(pdf.reader.count.value,4)
+  assert.equal(pdf.rendered.at(-1).index,1)
+  pdf.stop()
+
+  // An obsolete load waiting for destroy must not erase a newer document or fetch again.
+  pdf=await pdfFixture()
+  pdf.respond(0,1);await flush();pdf.decode(0,3);await flush()
+  pdf.jobs[0].destroyGate=deferred()
+  pdf.props.version='pdf-v2';await flush()
+  assert.equal(pdf.requests.length,1)
+  pdf.props.version='pdf-v3';await flush()
+  assert.equal(pdf.requests.length,2)
+  assert.match(pdf.requests[1].url,/version=pdf-v3$/)
+  pdf.respond(1,3);await flush();pdf.decode(1,5);await flush()
+  pdf.jobs[0].destroyGate.resolve();await flush()
+  assert.equal(pdf.requests.length,2)
+  assert.equal(pdf.reader.count.value,5)
+  await pdf.reader.render()
+  assert.equal(pdf.rendered.at(-1).index,1)
+  pdf.stop()
+
+  // Late fetch responses never enter PDF.js or replace the current document.
+  pdf=await pdfFixture()
+  pdf.props.version='pdf-v2';await flush()
+  pdf.respond(1,2);await flush();pdf.decode(0,6);await flush()
+  pdf.respond(0,1);await flush()
+  assert.equal(pdf.jobs.length,1)
+  assert.deepEqual(pdf.jobs[0].bytes,[2])
+  assert.equal(pdf.reader.count.value,6)
+  pdf.stop()
+
+  // A decoder that resolves after destruction is stale too.
+  pdf=await pdfFixture()
+  pdf.respond(0,1);await flush()
+  pdf.props.version='pdf-v2';await flush()
+  pdf.respond(1,2);await flush();pdf.decode(1,7);await flush()
+  pdf.decode(0,3);await flush()
+  assert.equal(pdf.reader.count.value,7)
+  assert.equal(pdf.rendered.at(-1).index,1)
+  pdf.stop()
+  console.log('PASS: PDF versions bypass response caches and stale loads cannot replace the current document')
 })().catch(error => {console.error(error);process.exitCode=1})

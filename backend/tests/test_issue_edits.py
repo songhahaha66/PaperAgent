@@ -23,8 +23,8 @@ def linked(paper,monkeypatch,request):
             task=key.split(':')[1];state['sections'][key]+=' '.join('{{R:'+r['id']+'}}' for r in store.registry_payload()['results'] if r['subproblem']==task)
     store.save_sections(state['sections'],[]);store.publish_paper(assemble(state))
     if getattr(request,'param',False):
-        from ai_system.modules.writing.validation import assemble_latex
-        store.publish_paper(assemble_latex(state),filename='paper.tex');(store.root/'paper.pdf').write_bytes(b'%PDF-old-fixture')
+        from test_native_latex import render_native_paper
+        store.publish_paper(render_native_paper(store,state),filename='paper.tex');(store.root/'paper.pdf').write_bytes(b'%PDF-old-fixture')
     model=SimpleNamespace(model_name='offline-issue',calls=[],verdict='resolved',error=False)
     async def controlled(llm,schema,messages,validate=None,**kwargs):
         model.calls.append(schema.__name__)

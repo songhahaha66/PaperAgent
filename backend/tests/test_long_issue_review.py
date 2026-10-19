@@ -7,7 +7,7 @@ import pytest
 from test_paper_editor import paper
 from test_review_cache import no_network
 from ai_system.modules.writing import consistency as consistency
-from ai_system.modules.writing.validation import assemble,assemble_latex
+from ai_system.modules.writing.validation import assemble
 from ai_system.graph.state import ClaimIssue
 from ai_system.research import segmented_review as seg
 from ai_system.research.models import ResearchConflict
@@ -24,7 +24,8 @@ def longpaper(paper,monkeypatch,request):
     for k in state['sections']:
         if k.startswith('solve:'):
             sid=k.split(':')[1];state['sections'][k]+=' '.join('{{R:'+r['id']+'}}' for r in store.registry_payload()['results'] if r['subproblem']==sid)
-    store.save_sections(state['sections'],[]);store.publish_paper(assemble_latex(state) if getattr(request,'param',False) else assemble(state),filename='paper.tex' if getattr(request,'param',False) else 'paper.md')
+    from test_native_latex import render_native_paper
+    store.save_sections(state['sections'],[]);store.publish_paper(render_native_paper(store,state) if getattr(request,'param',False) else assemble(state),filename='paper.tex' if getattr(request,'param',False) else 'paper.md')
     if getattr(request,'param',False):(store.root/'paper.pdf').write_bytes(b'%PDF-original-fixture')
     model=SimpleNamespace(model_name='offline-long-editor',calls=[],fail_target=False,fail_block=False,verdict='resolved',new_finding=False)
     async def controlled(llm,schema,messages,validate=None,**kw):

@@ -29,6 +29,19 @@ def accepted_store(root):
     return store
 
 
+def render_native_paper(store, state):
+    """Build file-project fixtures through the same registry/citation renderers."""
+    from ai_system.research.control import refresh_registry
+    from ai_system.research.citations import render_citations
+    from ai_system.graph.registry import publication_text, REF_PATTERN
+    ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex')
+    ctx.research=store
+    refresh_registry(ctx)
+    text=publication_text(render_citations(store.root,ctx.registry.render(assemble_latex(state),latex=True),True))
+    assert not REF_PATTERN.search(text)
+    return text
+
+
 def test_latex_workspace_starts_with_tex_not_markdown(tmp_path):
     WorkspaceStructureManager.create_workspace_structure(tmp_path, 'native', output_mode='latex')
     assert (tmp_path / 'paper.tex').exists()
@@ -48,7 +61,7 @@ def test_native_project_draft_is_separate_from_rendered_research_artifacts(tmp_p
     assert not research_snapshot(tmp_path,'work','paused').artifacts
     # Native render uses project files, without the legacy publish_paper hash.
     assert not store.snapshot().get('paper_hash')
-    store.set_delivery_stage('render','completed')
+    store.set_delivery_stage('render','completed','')
     assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
     store.register_exports(['paper.tex','paper.pdf'])
     assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.pdf','paper.tex']
