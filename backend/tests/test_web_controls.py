@@ -78,7 +78,7 @@ def test_browser_saved_step_connection_reaches_all_roles_with_live_defaults(conf
             llm = (LLMHandler(model_config=config).get_llm_instance() if role == 'brain'
                    else create_llm_from_model_config(config))
             assert llm.extra_body == {'reasoning_effort':'low'}
-            assert llm.request_timeout == 120 and llm.max_retries == 0
+            assert llm.request_timeout == 600 and llm.max_retries == 0
 
 
 def test_step_connection_route_preserves_its_explicit_probe_budget(config_client, monkeypatch):

@@ -103,12 +103,6 @@
                 ><t-icon name="arrow-up" /></t-button
             ></t-tooltip>
           </div>
-          <ResearchSetupForm
-            :key="setupVersion"
-            v-model="researchSetup"
-            :disabled="creating"
-            :csv-files="[]"
-          />
           <div v-if="layoutOpen" id="composer-layout-settings" class="layout-settings">
             <div>
               <label>{{ ui.template }}</label
@@ -231,7 +225,6 @@ import { useWorkPanelsStore } from '@/stores/workPanels'
 import { parseWorkDate, formatWorkDate } from '@/utils/dates'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
-import ResearchSetupForm from '@/components/ResearchSetupForm.vue'
 import { researchSetupAPI, defaultResearchSetup } from '@/api/researchSetup'
 import Sidebar from '@/components/Sidebar.vue'
 const { ui, isZh } = useStudioCopy()
@@ -246,9 +239,7 @@ const auth = useAuthStore(),
 const question = ref(''),
   mode = ref<'markdown' | 'word' | 'latex'>('latex'),
   templateId = ref(0)
-const researchSetup = ref(defaultResearchSetup()),
-  setupVersion = ref(0),
-  preparedWorkId = ref('')
+const preparedWorkId = ref('')
 const files = ref<UploadFile[]>([]),
   templates = ref<PaperTemplate[]>([])
 const panelStore = useWorkPanelsStore()
@@ -400,14 +391,9 @@ async function startWork() {
         uploaded.add(raw)
       }
     }
-    const configured = await researchSetupAPI.save(draft.work_id, researchSetup.value)
-    const gaps = configured.literature.sources.filter((s) => s.error)
-    if (gaps.length)
-      throw new Error(
-        '公开资料尚未获取完整：' +
-          gaps.map((s) => s.error).join('；') +
-          '。输入和工作区已保留，可在文献面板检查。',
-      )
+    // Initialize new work with the existing fixed defaults. Removing the form
+    // must not silently change confirmation, paper length or literature policy.
+    await researchSetupAPI.save(draft.work_id, defaultResearchSetup())
     historyStore.upsert(draft)
     panelStore.open(draft.work_id, 'progress', undefined, 'secondary')
     localStorage.setItem(`pendingQuestion:${draft.work_id}`, question.value.trim())
@@ -421,8 +407,6 @@ async function startWork() {
 function resetDraft() {
   if (creating.value) return
   question.value = ''
-  researchSetup.value = defaultResearchSetup()
-  setupVersion.value++
   preparedWorkId.value = ''
   files.value = []
   templateId.value = 0

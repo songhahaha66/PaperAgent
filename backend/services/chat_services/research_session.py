@@ -74,6 +74,7 @@ class ResearchSnapshot(BaseModel):
     outcome: str | None = None
     delivery: dict | None = None
     delivery_stages: dict = Field(default_factory=dict)
+    outcomes: list[dict] = Field(default_factory=list)
     requirements: list[dict] = Field(default_factory=list)
     assumptions: list[dict] = Field(default_factory=list)
     validations: list[dict] = Field(default_factory=list)
@@ -164,7 +165,22 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         )
         for item in raw_claims[:200] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
+    from ai_system.research.outcomes import outcomes
+    readable_outcomes = outcomes(business, registry, lambda path, prefix="": _file(root, path, prefix),
+                                 current_files=store.file_inputs() if business else None)
     used_runs = {r.run_id for r in [*results, *issue_evidence]}
+    for outcome in readable_outcomes:
+        used_runs.update(r["run_id"] for r in outcome["results"])
+        for previous in outcome["history"]:
+            used_runs.update(r["run_id"] for r in previous["results"])
+    if business:
+        # Comparison runs are evidence too, even before a formal result is accepted.
+        # Inspect existing tables only; this endpoint must not initialize stores.
+        with store._connect() as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='comparisons'").fetchone():
+                for row in db.execute('SELECT payload FROM comparisons ORDER BY rowid DESC LIMIT 30'):
+                    for branch in json.loads(row[0]).get('branches', []):
+                        used_runs.update(branch.get('run_ids') or [])
     runs = []
     for run_id in sorted(used_runs):
         # Only expose source files within the exact run, never arbitrary manifest paths.
@@ -179,7 +195,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             input_path=_file(root, info.get("input"), prefix),
             stdout_path=_file(root, info.get("stdout"), prefix),
         ))
-    artifacts = [p for p in ("paper.md", "paper.pdf", "paper.docx", "paper.tex") if _file(root, p)]
+    artifacts = [p for p in ("paper.md", "paper.pdf", "paper.docx", "paper.tex")
+                 if _file(root, p) and (root / p).stat().st_size and
+                 (not p.endswith(('.md', '.tex')) or (root / p).read_text(encoding='utf-8', errors='replace').strip())]
     if thread.get('engine_version') == ENGINE_VERSION and not business:
         # A new work may contain a template scaffold before its first research commit.
         artifacts = []
@@ -210,7 +228,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         work_id=work_id, work_status=status, research_id=thread.get("thread_id"),
         graph_status=thread.get("status"),
         has_research=bool(thread or registry or artifacts),
-        results=results, runs=runs, claims=claims, artifacts=artifacts,
+        results=results, runs=runs, claims=claims, artifacts=artifacts, outcomes=readable_outcomes,
         validation_count=len(issues) if isinstance(issues, list) else 0,
         truncated=len(raw_results) > 500 or len(raw_claims) > 200,
     )
@@ -276,7 +294,7 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
     root = Path(workspace).resolve()
     snapshot = scoped_snapshot(snapshot, subproblem_id)
     # Bounded context, with an explicit record of exactly which evidence was included.
-    context = snapshot.model_dump()
+    context = snapshot.model_dump(exclude={"outcomes"})
     # A long Q1 must not crowd out every later question in an unscoped answer.
     buckets = {}
     for result in context["results"]:

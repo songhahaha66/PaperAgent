@@ -176,7 +176,7 @@ def test_ai_proposal_route_uses_saved_step_model_with_bounded_defaults(paper, mo
         assert response.status_code == 200, response.text
     llm = captured[0]
     assert llm.extra_body == {'reasoning_effort':'low'}
-    assert llm.request_timeout == 120 and llm.max_retries == 0
+    assert llm.request_timeout == 600 and llm.max_retries == 0
     engine.dispose()
 
 

@@ -187,6 +187,8 @@ async function environment() {
   assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
   assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress')
   assert.equal(progressWork.state.panelSession.value.splitRatio, 0.45)
+  assert.equal(progressWork.state.acceptedTaskCount.value, 0, 'acceptance without review evidence is not shown as checked')
+  progressWork.state.researchSnapshot.value.outcomes = [{task_id:'Q1',checking:'passed'}]
   assert.equal(progressWork.state.acceptedTaskCount.value, 1)
   progressWork.state.openProgress()
   assert.equal(

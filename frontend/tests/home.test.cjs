@@ -85,6 +85,8 @@ async function fixture() {
 ;(async () => {
   const f = await fixture()
   assert.match(text(f.host.root), /正在读取最近研究/)
+  assert.doesNotMatch(text(f.host.root), /执行设置|调用上限/)
+  assert.equal(f.host.find(n => n.props?.class === 'research-setup'), undefined)
   assert.equal(
     f.host.find((n) => n.props?.class === 'suggestions'),
     undefined,

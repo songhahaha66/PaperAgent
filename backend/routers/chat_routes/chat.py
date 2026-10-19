@@ -244,6 +244,12 @@ async def get_task_status(
     return task_manager.get_task_status(work_id)
 
 
+@router.get("/work/{work_id}/outcomes")
+async def get_research_outcomes(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    snapshot = await get_research_snapshot(work_id, current_user_id=current_user, db=db)
+    return {"schema_version": 1, "work_id": work_id, "outcomes": snapshot.outcomes, "runs": snapshot.runs}
+
+
 @router.get("/work/{work_id}/research")
 async def get_research_snapshot(
     work_id: str,

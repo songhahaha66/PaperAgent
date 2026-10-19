@@ -7,6 +7,15 @@
     @open-file="(path) => emit('open-file', path)"
     :refresh-key="snapshot?.commit_seq"
   />
+  <section v-else-if="outcome" class="result-viewer readable-result">
+    <ResearchOutcome
+      :work-id="workId"
+      :outcome="outcome"
+      :runs="snapshot?.runs || []"
+      @open-file="(path) => emit('open-file', path)"
+      @issue="(id) => emit('issue', id)"
+    />
+  </section>
   <section v-else class="result-viewer">
     <template v-if="result">
       <header>
@@ -58,14 +67,22 @@ import { computed } from 'vue'
 import type { ResearchSnapshot } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
 import ResearchComparisons from './ResearchComparisons.vue'
+import ResearchOutcome from './ResearchOutcome.vue'
 const props = defineProps<{
   workId: string
-  resultType: 'experiment' | 'registered'
+  resultType: 'experiment' | 'registered' | 'task'
   resultId: string
   snapshot: ResearchSnapshot | null
 }>()
-const emit = defineEmits<{ 'open-file': [path: string] }>()
+const emit = defineEmits<{ 'open-file': [path: string]; issue: [id: string] }>()
 const { isZh } = useStudioCopy()
+const outcome = computed(() =>
+  props.snapshot?.outcomes?.find((o) =>
+    props.resultType === 'task'
+      ? o.id === props.resultId
+      : o.results.some((r) => r.id === props.resultId),
+  ),
+)
 const result = computed(
   () =>
     props.snapshot?.results.find((r) => r.id === props.resultId) ||
@@ -80,6 +97,9 @@ const claims = computed(
 )
 </script>
 <style scoped>
+.readable-result {
+  padding: 0 !important;
+}
 .result-viewer {
   padding: 28px;
   overflow: auto;
@@ -106,7 +126,7 @@ button {
   padding: 8px 12px;
   margin: 4px;
   border: 1px solid var(--pa-line);
-  border-radius: 6px;
+  border-radius: var(--pa-radius-control);
   background: var(--pa-surface);
   color: inherit;
   cursor: pointer;

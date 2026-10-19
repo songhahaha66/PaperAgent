@@ -22,7 +22,7 @@ export interface WorkPanel {
   kind: PanelKind
   group: PanelGroup
   path?: string
-  resultType?: 'experiment' | 'registered'
+  resultType?: 'experiment' | 'registered' | 'task'
   resultId?: string
   location?: string
 }
@@ -43,7 +43,7 @@ export type WorkObject =
   | { type: 'file'; path: string }
   | { type: 'paper' }
   | { type: 'literature'; evidenceId?: string }
-  | { type: 'result'; resultType: 'experiment' | 'registered'; id: string }
+  | { type: 'result'; resultType: 'experiment' | 'registered' | 'task'; id: string }
 
 // Tab-scoped, per-user UI state survives refresh; no credentials are stored here.
 export const useWorkPanelsStore = defineStore('work-panels', () => {

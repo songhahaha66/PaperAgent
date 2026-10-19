@@ -135,10 +135,63 @@
           >
         </details>
       </details>
+      <section v-if="c.protocol" class="metric-comparison">
+        <h3>{{ isZh ? '指标比较' : 'Metric comparison' }} · {{ c.protocol.metric }}</h3>
+        <p>
+          {{
+            c.protocol.higher_is_better
+              ? isZh
+                ? '越大越好'
+                : 'Higher is better'
+              : isZh
+                ? '越小越好'
+                : 'Lower is better'
+          }}
+          ·
+          {{
+            isZh
+              ? '以冻结协议和实测结果为依据；指标单位未单独登记。'
+              : 'Uses the frozen protocol and measurements. A separate metric unit was not recorded.'
+          }}
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>{{ isZh ? '方案' : 'Candidate' }}</th>
+              <th>{{ c.protocol.metric }}</th>
+              <th>{{ isZh ? '共同基线' : 'Baseline' }}</th>
+              <th>{{ isZh ? '改善' : 'Improvement' }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="branch in c.branches" :key="branch.index">
+              <td>{{ branch.name }}</td>
+              <td>{{ number(branch.metric) }}</td>
+              <td>{{ number(branch.baseline) }}</td>
+              <td>{{ number(branch.improvement) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+      <p v-if="!c.reason">
+        {{
+          isZh
+            ? '当前记录没有下一步选择及其理由。'
+            : 'No next-step selection or reason was recorded.'
+        }}
+      </p>
       <div class="branches">
         <article v-for="b in c.branches" :key="b.index" class="branch">
           <h3>候选 {{ b.index + 1 }} · {{ b.name }}</h3>
           <strong>{{ statusLabel(b.status) }}</strong>
+          <ResultSeries
+            v-if="b.predictions?.length"
+            :values="b.predictions.map((p) => p.observed)"
+            :comparison="b.predictions.map((p) => p.prediction)"
+            :label="isZh ? '实测标签' : 'Observed labels'"
+            :comparison-label="b.name + (isZh ? '预测' : ' prediction')"
+            :axis-label="isZh ? '冻结验证样本顺序' : 'Frozen validation sample order'"
+          />
           <p>
             实测 {{ number(b.metric) }} · 共同基线 {{ number(b.baseline) }} · 改善
             {{ number(b.improvement) }}
@@ -193,6 +246,7 @@ import { ref, computed, watch } from 'vue'
 import { comparisonAPI, type ComparisonState, type ComparisonSpec } from '@/api/comparisons'
 import type { ResearchSnapshot } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
+import ResultSeries from './ResultSeries.vue'
 const props = defineProps<{
     workId: string
     disabled?: boolean
@@ -206,7 +260,12 @@ const emit = defineEmits<{ 'open-file': [path: string] }>()
 const statusLabel = (state: string) =>
   ({
     winner: '已完成',
-    tie: '差异不明显',
+    tie: '差异未超过容差',
+    tied: '差异未超过容差',
+    only_valid: '仅一个方案有效',
+    no_valid: '无有效方案',
+    input_changed: '输入已变化',
+    budget_exhausted: '预算已耗尽',
     not_applicable: '未执行',
     failed: '失败',
     completed: '已完成',

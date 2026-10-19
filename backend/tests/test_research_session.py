@@ -227,6 +227,17 @@ def test_snapshot_api_checks_ownership_before_reading_files(web):
     assert response.status_code == 403 and "R1" not in response.text
 
 
+def test_outcomes_api_preserves_the_same_owner_boundary(web):
+    client, work, *_ = web
+    response = client.get('/api/chat/work/work/outcomes')
+    assert response.status_code == 200
+    assert response.json()['outcomes'][0]['checking'] == 'unreviewed'
+    assert response.json()['outcomes'][0]['results'][0]['id'] == 'R1'
+    work.created_by = 9
+    denied = client.get('/api/chat/work/work/outcomes')
+    assert denied.status_code == 403 and 'R1' not in denied.text
+
+
 def test_snapshot_does_not_show_a_lost_coordinator_as_running(web):
     client, work, *_ = web
     work.status = "in_progress"

@@ -14,6 +14,7 @@ from routers.work_routes import workspace
 
 REQUESTS = [
     ('GET', '/files', {}),
+    ('GET', '/paper', {}),
     ('GET', '/files/paper.md', {}),
     ('GET', '/download/paper.pdf', {}),
     ('GET', '/images/chart.png', {}),
@@ -54,3 +55,12 @@ def test_file_reader_returns_the_service_contract_without_a_second_type_dispatch
 @pytest.mark.parametrize('filename,expected', [('paper.tex', 'text'), ('data.csv', 'text'), ('chart.PNG', 'image'), ('paper.pdf', 'binary'), ('unknown.custom', 'binary')])
 def test_file_classification_keeps_the_same_fallback(filename, expected):
     assert workspace.workspace_file_service.detect_file_type(filename) == expected
+
+
+def test_empty_paper_api_is_readable_before_research(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=7))
+    monkeypatch.setattr(workspace.workspace_file_service, 'get_workspace_path', lambda _: tmp_path)
+    response = client.get('/api/workspace/example/paper')
+    assert response.status_code == 200
+    assert response.json()['sections'] == [] and response.json()['artifacts'] == []
+    assert list(tmp_path.iterdir()) == []

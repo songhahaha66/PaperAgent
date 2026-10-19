@@ -117,9 +117,17 @@ def source_info(store, snapshot):
     return filename, content
 
 
+def empty_document(research_id=None, commit_seq=0):
+    return {'research_id': research_id, 'commit_seq': commit_seq, 'source_hash': None,
+            'sections': [], 'history': [], 'tasks': [], 'patch_attempts': [],
+            'verified_methods': [], 'verified_formula_blocks': {}, 'artifacts': []}
+
+
 async def document(store):
-    state = await paper_state(store)
     snapshot = store.snapshot()
+    if not snapshot or not any(s.get('text', '').strip() for s in snapshot['sections'].values()):
+        return empty_document(store.research_id, (snapshot or {}).get('commit_seq', 0))
+    state = await paper_state(store)
     titles = {k: title for k, title, _ in section_plan(state)}
     ctx = GraphContext.create(str(store.root), planner_llm=None)
     ctx.research = store
@@ -165,7 +173,8 @@ async def document(store):
         try:blocks['solve:'+task]=canonical_method_block(methods,task)
         except ValueError:pass
     return {'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
-            'sections': [{'key': k, 'title': titles.get(k, k), 'readable': readable[k], **v} for k, v in snapshot['sections'].items()],
+            'artifacts': [p for p in ('paper.md', 'paper.tex', 'paper.pdf', 'paper.docx') if (store.root / p).is_file() and (store.root / p).stat().st_size],
+            'sections': [{'key': k, 'title': titles.get(k, k), 'readable': readable[k], **v} for k, v in snapshot['sections'].items() if v.get('text', '').strip()],
             'history': history, 'tasks': [{'id': k, 'title': v['objective'], 'dependencies': v['dependencies']}
                                         for k, v in snapshot['tasks'].items() if not v['retired']]}
 

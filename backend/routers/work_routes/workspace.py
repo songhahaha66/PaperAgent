@@ -323,6 +323,10 @@ def _paper_store(db, work_id, user_id, *, mutation=False):
 
 @router.get('/{work_id}/paper')
 async def get_paper_document(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    _require_workspace_access(db, work_id, current_user)
+    root = workspace_file_service.get_workspace_path(work_id)
+    if not (root / '.system/graph_thread.json').exists():
+        return paper_editor.empty_document()
     store = _paper_store(db, work_id, current_user)
     try:
         return await paper_editor.document(store)

@@ -31,15 +31,45 @@
           </div>
           <p class="task-reason">{{ taskNextStep(task) }}</p>
           <p v-for="issue in issuesFor(task)" :key="issue.id" class="step-error" role="alert">
-            {{ issue.message }}
+            {{
+              ['suspected', 'inconclusive'].includes(issue.status)
+                ? isZh
+                  ? '待核实意见：'
+                  : 'Finding to verify: '
+                : ''
+            }}{{ issue.message }}
             <button @click="emit('issue', issue.id)">{{ isZh ? '处理' : 'Address' }}</button>
           </p>
+          <dl v-if="outcomeFor(task)" class="task-states">
+            <div>
+              <dt>{{ isZh ? '计算' : 'Computation' }}</dt>
+              <dd>
+                {{
+                  task.execution_status === 'failed'
+                    ? isZh
+                      ? '计算失败'
+                      : 'Computation failed'
+                    : outcomeLabel(task.execution_status, isZh)
+                }}
+              </dd>
+            </div>
+            <div>
+              <dt>{{ isZh ? '成果' : 'Availability' }}</dt>
+              <dd>{{ outcomeLabel(outcomeFor(task)!.availability, isZh) }}</dd>
+            </div>
+            <div>
+              <dt>{{ isZh ? '检查' : 'Checks' }}</dt>
+              <dd>{{ outcomeLabel(outcomeFor(task)!.checking, isZh) }}</dd>
+            </div>
+          </dl>
           <button
-            v-for="r in snapshot?.results.filter((r) => r.subproblem_id === task.task_id) || []"
-            :key="r.id"
-            @click="emit('object', { type: 'result', resultType: 'registered', id: r.id })"
+            v-if="
+              outcomeFor(task)?.results.length ||
+              snapshot?.results.some((r) => r.subproblem_id === task.task_id)
+            "
+            @click="emit('object', { type: 'result', resultType: 'task', id: task.task_id })"
           >
-            {{ r.name }}
+            {{ isZh ? '查看结果' : 'View results' }}
           </button>
           <details class="task-details">
             <summary>
@@ -120,6 +150,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useStudioCopy } from '@/lang/studio'
+import { outcomeLabel } from '@/utils/outcomeLabels'
 import { paperLabel } from '@/utils/workFiles'
 import type { WorkObject } from '@/stores/workPanels'
 import type { ResearchSnapshot } from '@/types/research'
@@ -134,10 +165,12 @@ import {
 const props = defineProps<{ snapshot: ResearchSnapshot | null; workStatus?: string }>()
 const emit = defineEmits<{ object: [object: WorkObject]; issue: [id: string] }>()
 const { isZh } = useStudioCopy()
+const outcomeFor = (task: ResearchTask) =>
+  props.snapshot?.outcomes?.find((o) => o.task_id === task.task_id)
 const tasks = computed(() => orderedTasks(props.snapshot?.tasks || []))
 const status = computed(() => props.workStatus || props.snapshot?.work_status || 'created')
 const accepted = computed(
-  () => tasks.value.filter((t) => taskState(t, status.value) === 'accepted').length,
+  () => tasks.value.filter((t) => outcomeFor(t)?.checking === 'passed').length,
 )
 const writingBlockers = computed(
   () => props.snapshot?.delivery?.blockers.filter((b) => b.action === 'rewrite') || [],
@@ -154,10 +187,20 @@ const taskStatus = (task: ResearchTask) => {
     ? isZh.value
       ? `有 ${count} 项问题需要处理`
       : `${count} issues to address`
-    : taskLabel(taskState(task, status.value), isZh.value)
+    : taskState(task, status.value) === 'accepted' && outcomeFor(task)?.checking !== 'passed'
+      ? outcomeLabel(outcomeFor(task)?.checking || 'unreviewed', isZh.value)
+      : taskLabel(taskState(task, status.value), isZh.value)
 }
 const taskNextStep = (task: ResearchTask) => {
   const state = taskState(task, status.value)
+  if (
+    taskState(task, status.value) === 'accepted' &&
+    outcomeFor(task)?.checking !== 'passed' &&
+    !task.reason?.trim()
+  )
+    return isZh.value
+      ? '计算与检查分别记录；已产生的成果可查看，检查状态见下方。'
+      : 'Computation and checks are recorded separately. Available results can be opened below.'
   if (state === 'accepted') {
     const count =
       props.snapshot?.results.filter((r) => r.subproblem_id === task.task_id).length || 0
@@ -206,6 +249,18 @@ const stageLabel = (state: string) =>
   })[state]?.[isZh.value ? 0 : 1] || state
 </script>
 <style scoped>
+.task-states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+}
+.task-states dt {
+  color: var(--pa-muted);
+}
+.task-states dd {
+  margin: 4px 0;
+}
 .step-error {
   color: var(--pa-danger);
 }
@@ -214,7 +269,7 @@ button {
   background: var(--pa-surface);
   color: var(--pa-accent);
   padding: 5px 9px;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-control);
   cursor: pointer;
   margin: 4px;
 }

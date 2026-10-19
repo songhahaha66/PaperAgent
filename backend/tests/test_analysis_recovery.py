@@ -55,6 +55,7 @@ def test_analysis_contract_failures_use_existing_bounded_retry_and_actual_candid
 
 
 class FailingAnalysis(FakeModel):
+    model_name: str = "controlled-before-repair"
     recovered:bool=False
     calls:int=0
     def with_structured_output(self,schema,**kwargs):
@@ -85,6 +86,11 @@ def test_exhausted_analysis_marks_failed_then_resumes_original_question_without_
     assert any(kind=='paper_phase' and c['stage']=='analyze' and c['status']=='blocked' for kind,c in events)
     assert not (tmp_path/'plan.md').exists(), "failed analysis must not invent a fixed task plan"
     model.recovered=True
+    from ai_system.research.runtime import RepeatedOperationBlocked
+    with pytest.raises(RepeatedOperationBlocked):
+        asyncio.run(agent.resume_failed())
+    assert model.calls == 3, 'same exhausted operation must not silently retry'
+    model.model_name = 'controlled-repaired-connection'
     assert 'paper.md' in asyncio.run(agent.resume_failed())
     after=json.loads((tmp_path/'.system/graph_thread.json').read_text())
     assert after['thread_id']==thread['thread_id'] and after['status']=='done'

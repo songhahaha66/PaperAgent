@@ -54,3 +54,6 @@ jobs:
 
     - name: Type check and build
       run: npm run build
+
+    - name: Workspace regressions
+      run: npm run test:workspace

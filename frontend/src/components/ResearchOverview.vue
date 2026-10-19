@@ -25,29 +25,28 @@
       @object="(object) => emit('object', object)"
       @issue="(id) => emit('issue', id)"
     />
-    <section class="generated">
-      <h3>已生成结果</h3>
-      <p
-        v-if="
-          !snapshot?.results.length && !state?.comparisons.length && !snapshot?.artifacts.length
-        "
-      >
-        结果会随研究推进出现在这里。
-      </p>
+    <section v-if="!snapshot?.tasks?.length && snapshot?.outcomes?.length" class="generated">
+      <h3>保留的任务成果</h3>
       <button
-        v-for="r in snapshot?.results || []"
-        :key="r.id"
-        @click="emit('object', { type: 'result', resultType: 'registered', id: r.id })"
+        v-for="outcome in snapshot.outcomes"
+        :key="outcome.id"
+        @click="emit('object', { type: 'result', resultType: 'task', id: outcome.id })"
       >
-        <strong>{{ r.name }}</strong
-        ><span>{{ r.kind === 'figure' ? '图表' : r.value }} {{ r.unit }}</span>
+        <strong>{{ outcome.title }}</strong
+        ><span>查看结果</span>
       </button>
+    </section>
+    <section class="generated">
+      <h3>实验与交付</h3>
+      <p v-if="!state?.comparisons.length && !snapshot?.artifacts.length">
+        实验与交付成果会随研究推进保存。
+      </p>
       <button
         v-for="c in state?.comparisons || []"
         :key="c.id"
         @click="emit('object', { type: 'result', resultType: 'experiment', id: c.id })"
       >
-        <strong>{{ c.task_id }} 实验结果</strong><span>{{ c.reason || c.status }}</span>
+        <strong>{{ c.task_id }} 实验</strong><span>查看结果</span>
       </button>
       <button
         v-for="path in snapshot?.artifacts || []"
@@ -257,7 +256,7 @@ p {
 }
 button {
   border: 1px solid var(--pa-line);
-  border-radius: 6px;
+  border-radius: var(--pa-radius-control);
   padding: 8px 12px;
   background: var(--pa-surface);
   color: inherit;
@@ -300,7 +299,7 @@ summary {
 .attention {
   padding: 14px;
   background: var(--pa-surface-muted);
-  border-radius: 8px;
+  border-radius: var(--pa-radius-card);
   margin: 12px 0;
 }
 [role='alert'] {

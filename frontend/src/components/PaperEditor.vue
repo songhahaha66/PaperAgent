@@ -3,9 +3,21 @@
     <header>
       <strong>{{ isZh ? '论文' : 'Paper' }}</strong>
       <button @click="load">{{ isZh ? '刷新正文' : 'Refresh' }}</button>
-      <button @click="$emit('open-file', 'paper.tex')" v-if="latex">LaTeX</button>
-      <button @click="$emit('open-file', 'paper.pdf')" v-if="latex">PDF</button>
-      <button @click="$emit('artifact')">{{ isZh ? '排版预览' : 'Preview' }}</button>
+      <button
+        @click="$emit('open-file', 'paper.tex')"
+        v-if="document?.artifacts?.includes('paper.tex')"
+      >
+        LaTeX
+      </button>
+      <button
+        @click="$emit('open-file', 'paper.pdf')"
+        v-if="document?.artifacts?.includes('paper.pdf')"
+      >
+        PDF
+      </button>
+      <button v-if="document?.artifacts?.length" @click="$emit('artifact')">
+        {{ isZh ? '排版预览' : 'Preview' }}
+      </button>
     </header>
     <p v-if="draftNotice" role="status">{{ draftNotice }}</p>
     <p v-if="error" role="alert">{{ error }}</p>
@@ -42,17 +54,20 @@
     </section>
     <p v-if="!document && !error">{{ isZh ? '正在读取章节…' : 'Loading sections…' }}</p>
     <template v-if="document">
-      <p v-if="!document.sections.length">
-        {{
-          isZh
-            ? '论文将在研究通过验收并完成写作后显示。'
-            : 'Sections will appear after research checks and writing complete.'
-        }}
-      </p>
-      <label
+      <div v-if="!readableSections.length" class="paper-empty" role="status">
+        <h2>{{ isZh ? '论文尚无正文' : 'No paper text yet' }}</h2>
+        <p>
+          {{
+            isZh
+              ? '论文将在研究通过验收并完成写作后显示。'
+              : 'Text will appear when writing has produced content.'
+          }}
+        </p>
+      </div>
+      <label v-if="readableSections.length"
         >{{ isZh ? '选择章节' : 'Section' }}
         <select v-model="selected" :disabled="busy || !!issueContext">
-          <option v-for="s in document.sections" :key="s.key" :value="s.key">
+          <option v-for="s in readableSections" :key="s.key" :value="s.key">
             {{ s.title }}
           </option>
         </select>
@@ -320,7 +335,7 @@
           </section>
         </details>
       </template>
-      <details>
+      <details v-if="document.patch_attempts?.length">
         <summary>
           {{ isZh ? '局部提案请求历史' : 'Fragment request history' }} ({{
             document.patch_attempts?.length || 0
@@ -347,7 +362,7 @@
           </button>
         </div>
       </details>
-      <details>
+      <details v-if="document.history.length">
         <summary>
           {{ isZh ? '版本与候选历史' : 'Version and candidate history' }} ({{
             document.history.length
@@ -550,6 +565,7 @@ watch(
   },
   { immediate: true },
 )
+const readableSections = computed(() => document.value?.sections.filter((s) => s.text.trim()) || [])
 const busy = computed(() => working.value || props.disabled)
 const section = computed(() => document.value?.sections.find((s) => s.key === selected.value))
 const fragmentReady = computed(() => {
@@ -685,7 +701,7 @@ async function load() {
       }
       selected.value =
         document.value.sections.find((s) => s.key === location)?.key ||
-        document.value.sections[0]?.key ||
+        readableSections.value[0]?.key ||
         ''
     }
   } catch (e) {
@@ -747,7 +763,7 @@ async function propose() {
   }
 }
 async function decide(decision: string) {
-  if (!document.value || !proposal.value || busy.value) return
+  if (!document.value?.research_id || !proposal.value || busy.value) return
   working.value = true
   error.value = ''
   try {
@@ -789,6 +805,15 @@ watch(
 )
 </script>
 <style scoped>
+.paper-empty {
+  text-align: center;
+  padding: 72px 18px;
+  color: var(--pa-muted);
+}
+.paper-empty h2 {
+  font-size: 19px;
+  color: var(--pa-ink);
+}
 .paper-editor {
   padding: 24px;
   overflow: auto;

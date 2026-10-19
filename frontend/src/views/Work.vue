@@ -226,6 +226,7 @@
             :result-type="panel.resultType || 'registered'"
             :result-id="panel.resultId || ''"
             :snapshot="researchSnapshot"
+            @issue="openIssueEditor"
             @open-file="handleWorkspaceFileSelect"
           />
           <ResearchComparisons
@@ -629,7 +630,8 @@ async function confirmCurrentPlan() {
 }
 const acceptedTaskCount = computed(
   () =>
-    researchSnapshot.value?.tasks?.filter((task) => task.progress.state === 'accepted').length || 0,
+    researchSnapshot.value?.outcomes?.filter((outcome) => outcome.checking === 'passed').length ||
+    0,
 )
 const primaryAction = computed(() => {
   if (!currentWork.value) return null

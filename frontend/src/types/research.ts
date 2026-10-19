@@ -1,3 +1,45 @@
+export interface ReadableResult {
+  id: string
+  name: string
+  description: string
+  unit: string
+  kind: string
+  value: string
+  run_id: string
+  figure_path: string | null
+  series: number[] | null
+  meaning_available: boolean
+}
+export interface ResearchOutcome {
+  id: string
+  task_id: string
+  title: string
+  objective: string
+  revision: number | null
+  attempt_id: string | null
+  computation: string
+  availability: string
+  checking: string
+  method: {
+    name?: string
+    idea?: string
+    formulation?: string
+    steps?: string[]
+    validation?: string
+  } | null
+  results: ReadableResult[]
+  claims: { id: string; statement: string; strength: string; evidence: string[] }[]
+  issues: { id: string; message: string; category: string; status: string; action: string }[]
+  sources: { path: string; hash: string; available: boolean }[]
+  next_step: string | null
+  history: {
+    attempt_id: string
+    revision: number
+    execution_status: string
+    acceptance: string
+    results: ReadableResult[]
+  }[]
+}
 export type ResearchAction =
   | 'auto'
   | 'ask'
@@ -17,6 +59,7 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  outcomes?: ResearchOutcome[]
   execution_reason?: { kind: string; message: string } | null
   schema_version: 2
   engine_version?: string | null

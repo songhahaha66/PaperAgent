@@ -47,7 +47,7 @@ const { hostRenderer } = require('./vueHost.cjs')
   function mount(value) {
     const host = hostRenderer()
     const app = host.renderer.createApp({
-      setup: () => () => vue.h(component.default, { snapshot: value.value }),
+      setup: () => () => vue.h(component.default, { snapshot: {...value.value, outcomes: value.value.tasks.map(t => ({task_id:t.task_id, checking:t.acceptance==='accepted' && t.validity==='current' ? 'passed' : 'pending',availability:'unavailable',results:[]}))} }),
     })
     app.mount(host.root)
     return { host, app }
