@@ -3,6 +3,8 @@
 This deliberately does not widen the publication registry or change the planner.
 An available calculation is not an accepted scientific conclusion.
 """
+
+from ai_system.research.domain import findings as research_findings
 from ..graph.registry import numeric_series, REF_PATTERN
 from .validation import report_fingerprint
 
@@ -41,7 +43,6 @@ def result_view(item, safe_file):
         'run_id': str(item.get('run_id') or ''),
         'figure_path': safe_file(item.get('path'), 'outputs/'),
         'series': numeric_series(item.get('value', '')) if item.get('kind') == 'series' else None,
-        'meaning_available': bool(description),
     }
 
 
@@ -60,17 +61,7 @@ def claim_view(claim, items):
 def outcomes(business, registry, safe_file, current_files=None):
     """Project persisted reports, never infer labels, units, decisions or sources."""
     if not business:
-        grouped = {}
-        for item in registry.get('results', [])[:500]:
-            if not isinstance(item, dict) or 'id' not in item or 'subproblem' not in item:
-                continue
-            grouped.setdefault(str(item['subproblem']), []).append(result_view(item, safe_file))
-        return [{'id': key, 'task_id': key, 'title': key, 'objective': '',
-                 'computation': 'unknown', 'availability': 'legacy', 'checking': 'unreviewed',
-                 'revision': None, 'attempt_id': None, 'method': None, 'results': items,
-                 'claims': [claim_view(c, registry.get('results', [])) for c in registry.get('claims', []) if c.get('subproblem') == key],
-                 'issues': [], 'sources': [], 'next_step': None, 'history': []}
-                for key, items in grouped.items()]
+        return []
     views = []
     for key, task in business['tasks'].items():
         if task['retired']:
@@ -89,7 +80,7 @@ def outcomes(business, registry, safe_file, current_files=None):
         frozen_files = {p: h for p, h in attempt.get('input_refs', {}).items() if p.startswith(('data/', 'attachment/'))}
         inputs_match = current_files is None or frozen_files == {p: h for p, h in current_files.items() if p.startswith(('data/', 'attachment/'))}
         current = bool(active and attempt['revision'] == task['revision'] and task['validity'] == 'current' and inputs_match)
-        issues = [i for i in business['issues'] if i['task_id'] == key and i['status'] not in CLOSED]
+        issues = [i for i in research_findings(business) if i['task_id'] == key and i['status'] not in CLOSED]
         report = (attempt.get('result') or {}).get('report') or {}
         design = (attempt.get('result') or {}).get('design') or task.get('design') or {}
         method = design.get('chosen') or {}

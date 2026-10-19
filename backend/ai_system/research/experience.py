@@ -1,4 +1,6 @@
 """Deterministic experience cards. Historical advice never becomes current evidence."""
+
+from ai_system.research.domain import findings as research_findings
 import csv
 import json
 import re
@@ -88,7 +90,7 @@ def card_for(state, attempt_id, root=None):
         if expanded==related:break
         related=expanded
     blocking=any(i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'} and
-        (i['task_id'] in related or related.intersection(i.get('repair_targets',{}))) for i in state['issues'])
+        (i['task_id'] in related or related.intersection(i.get('repair_targets',{}))) for i in research_findings(state))
     execution=result.get('execution_status')
     if empirical and any(c['outcome']=='failed' for c in checks):level='counterexample'
     elif empirical and validation.get('outcome')=='accepted' and all(c['outcome']=='passed' for c in checks) and current and not blocking and a.get('acceptance')=='accepted' and execution=='succeeded':level='verified'
@@ -96,9 +98,9 @@ def card_for(state, attempt_id, root=None):
     else:level='unconfirmed'
     cancelled=bool(re.search(r'timeout|timed out|cancel|超时|执行超过.{0,12}秒|取消|中断',str(result.get('report',{}).get('error','')),re.I))
     if cancelled or execution=='cancelled':level='unconfirmed'
-    earlier=sorted({i['producer_attempt'] for i in state['issues'] if i.get('producer_attempt')
+    earlier=sorted({i['producer_attempt'] for i in research_findings(state) if i.get('producer_attempt')
         and i.get('resolution_attempt')==attempt_id and i['status']=='resolved'})
-    repaired_by=[i['resolution_attempt'] for i in state['issues'] if i.get('producer_attempt')==attempt_id and i.get('resolution_attempt')]
+    repaired_by=[i['resolution_attempt'] for i in research_findings(state) if i.get('producer_attempt')==attempt_id and i.get('resolution_attempt')]
     return {'problem_type':problem_type(methods,question),'question':question[:600],'method_keys':methods,
         'data_conditions':frozen.get('conditions',{'data_mode':'unknown','structure':'unknown','columns':[]}),
         'steps':chosen.get('steps',[])[:8], 'observations':[c['message'][:500] for c in checks][:8],
@@ -134,7 +136,8 @@ def prompt_context(ctx, branch, methods, stage):
         remember_design(ctx,branch,[])
     actual=conditions(ctx.workspace,branch['source']+' '+branch['subproblem']['question'])
     try:
-        hits=scope.search(branch['subproblem']['question'],methods,actual)
+        from ai_system.modules.registry import invoke_sync
+        hits=invoke_sync(ctx,'experience.search',question=branch['subproblem']['question'],methods=methods,actual=actual)
     except Exception:
         return '# 历史经验暂不可用，本次按当前契约独立研究，不推断历史内容。'
     selected=[];budget=150  # Reserve the instruction envelope within ~800 tokens.

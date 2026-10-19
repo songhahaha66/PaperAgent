@@ -9,13 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from .context import GraphContext
-from .nodes.analyze import analyze
-from .nodes.confirm import confirm
-from .nodes.consistency import reconcile
-from .nodes.design import design
-from .nodes.export import export, route_after_render
-from .nodes.validate import render, repair, route_after_validate, validate
-from .nodes.write import write
+from ai_system.graph.confirm import confirm
 from .state import PaperState
 
 
@@ -26,7 +20,7 @@ def send_designs(state: PaperState) -> List[Send]:
             "subproblem": sp,
             "analysis": state["analysis"],
             "data_profile": state.get("data_profile", ""),
-            "feedback": state.get("feedback", ""),
+            "feedback": state.get("confirmation_feedback", ""),
         })
         for sp in state["analysis"]["subproblems"]
     ]
@@ -45,31 +39,31 @@ def solve_join(state: PaperState) -> dict:
     return {}
 
 
+async def analyze_capability(state, runtime):
+    from ai_system.modules.registry import invoke
+    return await invoke(runtime.context, 'experiments.analyze', state=state)
+
+
+async def design_capability(branch, runtime):
+    from ai_system.modules.registry import invoke
+    return await invoke(runtime.context, 'experiments.plan', branch=branch)
+
+
 def build_graph():
-    from ..research.control import observe, dispatch, execute
+    from ..research.control import observe
+    from ..research.loop import select, act
 
     graph = StateGraph(PaperState, context_schema=GraphContext)
-    for name, node in (
-        ("analyze", analyze), ("design", design), ("confirm", confirm),
-        ("observe", observe), ("solve", execute), ("solve_join", solve_join),
-        ("reconcile", reconcile), ("write", write), ("validate", validate),
-        ("repair", repair), ("render", render), ("export", export),
-    ):
+    for name, node in (("analyze", analyze_capability), ("design", design_capability), ("confirm", confirm),
+                       ("observe", observe), ("act", act), ("solve_join", solve_join)):
         graph.add_node(name, node)
-
     graph.add_edge(START, "analyze")
     graph.add_conditional_edges("analyze", route_after_analyze, ["design", "observe"])
     graph.add_edge("design", "confirm")
     graph.add_conditional_edges("confirm", route_after_confirm, ["design", "observe"])
-    graph.add_conditional_edges("observe", dispatch, ["solve", "reconcile", END])
-    graph.add_edge("solve", "solve_join")
+    graph.add_conditional_edges("observe", select, ["act", END])
+    graph.add_edge("act", "solve_join")
     graph.add_edge("solve_join", "observe")
-    graph.add_conditional_edges("reconcile", lambda state: "observe" if state.get("research_restart") else "write", ["observe", "write"])
-    graph.add_edge("write", "validate")
-    graph.add_conditional_edges("validate", route_after_validate, ["repair", "render", "observe", END])
-    graph.add_edge("repair", "validate")
-    graph.add_conditional_edges("render", route_after_render, ["export", "observe", END])
-    graph.add_edge("export", END)
     return graph
 
 

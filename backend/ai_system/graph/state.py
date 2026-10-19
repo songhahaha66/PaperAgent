@@ -89,7 +89,7 @@ class ResultItem(BaseModel):
     value: str = Field(description="单个数值、一小段文字，或同一变量的完整一维数值序列（JSON数组字符串）；必须来自run_id的输出。不同指标各登记一条，不能拼接整行输出。序列的长度、最小值等数值检查需另登记标量")
     run_id: str = Field(description="打印该值的那次执行的 run_id")
     unit: str = Field(default="", description="只填物理或计数单位（如 点、秒、米、万元、%），p 值、AUC、系数、比例这类无量纲量留空")
-    description: str = Field(default="", description="一句话说明")
+    description: str = Field(default="", description="可选补充说明；不用于指标身份、来源关联或有效性判定，无须为登记额外生成描述")
 
 
 class Finding(BaseModel):
@@ -129,26 +129,6 @@ class SolveReport(BaseModel):
     controls: List[NegativeControl] = Field(
         default_factory=list, description="仅填实际执行且适用于本问题的标签置换对照；普通样本外预测不强制附加此实验，未做时留空，不编造"
     )
-
-
-class ValidationProtocol(BaseModel):
-    applicable: bool = Field(description="能否用一个统一的数值指标比较不同方案（预测、分类、拟合类通常可以；优化、评价、描述类通常不行）")
-    metric: str = Field(default="", description="比较用的单个数值指标，如 验证集 AUC、留出集 RMSE；不能是多个指标的组合")
-    higher_is_better: bool = Field(default=True, description="指标是否越大越好")
-    procedure: str = Field(default="", description="所有方案共用的验证做法：数据划分方式（如按比赛分组留出 20%）、随机种子")
-    baseline: str = Field(default="", description="对照基线，如 多数类、常数预测、上一期值")
-
-
-class ProbeReport(BaseModel):
-    works: bool = Field(description="核心模型是否已在真实数据上跑通")
-    metric_value: str = Field(default="", description="按验证协议算出的指标值，必须是某次执行 print 出的数")
-    metric_run_id: str = Field(default="", description="打印该指标的那次执行的 run_id")
-    baseline_value: str = Field(default="", description="基线在同一协议下的指标值")
-    shuffled_value: str = Field(
-        default="", description="标签置换对照：构造特征之前把目标列随机打乱、其余完全不变时同一指标的值，与 metric_value 在同一次执行里 print"
-    )
-    summary: str = Field(description="做了什么、结果如何，2~4 句")
-    problems: List[str] = Field(default_factory=list, description="遇到的问题或方案本身的缺陷")
 
 
 class Conflict(BaseModel):
@@ -193,7 +173,7 @@ class PaperState(TypedDict, total=False):
     # 子问题编号 -> {"methods", "candidates", "scores", "chosen", "critic"}
     plan_ahead: bool  # True：全部子问题先设计再统一确认；False：每个子问题轮到求解时才设计
     designs: Annotated[Dict[str, Dict[str, Any]], merge_dict]
-    feedback: str
+    confirmation_feedback: str
     approved: bool
     design_round: int
     # 子问题编号 -> SolveReport dict + status
@@ -220,6 +200,6 @@ class BranchInput(TypedDict, total=False):
     subproblem: Dict[str, Any]
     analysis: Dict[str, Any]
     data_profile: str
-    feedback: str
+    confirmation_feedback: str
     design: Dict[str, Any]
     dependencies: Dict[str, Dict[str, Any]]

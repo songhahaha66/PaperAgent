@@ -24,7 +24,7 @@ from ..research.control import refresh_registry
 from ..research.planner import propose_revision, Planner
 from .build import compile_graph
 from .context import GraphContext
-from .nodes.confirm import is_approval
+from ai_system.graph.confirm import is_approval
 from .tracing import LLMCallTrace,labelled
 
 logger = logging.getLogger(__name__)
@@ -247,6 +247,8 @@ class PaperGraphAgent:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
         if ctx.research.snapshot() is not None:
             ctx.research.recover()
+            from ..research.loop import resume
+            resume(ctx.research)
             refresh_registry(ctx)
             await graph.aupdate_state(config, {"research_blocked": False}, as_node="solve_join")
         return await self._invoke(graph, None, {**config, "recursion_limit": GRAPH_RECURSION_LIMIT}, thread_id, ctx)

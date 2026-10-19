@@ -7,8 +7,8 @@ from langchain_core.outputs import ChatResult,ChatGeneration,LLMResult
 from test_paper_editor import paper
 from test_review_cache import no_network
 from services.chat_services import paper_editor as editor,paper_corrections as edits
-from ai_system.graph.nodes import consistency
-from ai_system.graph.nodes.validate import assemble
+from ai_system.modules.writing import consistency as consistency
+from ai_system.modules.writing.validation import assemble
 from ai_system.graph.state import ClaimAudit
 from ai_system.graph.llm_utils import InvalidStructuredReply
 from ai_system.research.store import digest
@@ -187,7 +187,7 @@ def test_saved_model_proposal_can_resume_only_failed_legacy_full_review(scoped):
     from ai_system.research.review_cache import ReviewCache
     v=scoped;p=propose(v);state={**v.state,'sections':{**v.state['sections'],**p['after_sections']}}
     from ai_system.research.review_cache import review_context
-    from ai_system.graph.nodes.consistency import section_audit_prompt,AUDIT_SYSTEM
+    from ai_system.modules.writing.consistency import section_audit_prompt,AUDIT_SYSTEM
     ctx=edits.proposal_context(v.store,state,v.llm);prompt=section_audit_prompt(state,ctx,force=True)[0]
     context=review_context(ctx,state,'sections',AUDIT_SYSTEM,prompt,ClaimAudit,sections=state['sections'],extra={'non_blocking':True})
     cache=ReviewCache(v.store);record=cache.start('sections',context);cache.failed(record,TimeoutError())
@@ -204,7 +204,7 @@ def test_saved_model_proposal_can_resume_only_failed_legacy_full_review(scoped):
 
 
 def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkeypatch):
-    from ai_system.graph.nodes.validate import assemble_latex
+    from ai_system.modules.writing.validation import assemble_latex
     v=scoped;v.store.publish_paper(assemble_latex(v.state),filename='paper.tex');(v.store.root/'paper.pdf').write_bytes(b'previous PDF')
     before=v.store.snapshot();original=(v.store.root/'paper.tex').read_bytes();p=propose(v)
     async def failure(folder):return SimpleNamespace(pdf_path=None,error='compiler failed')

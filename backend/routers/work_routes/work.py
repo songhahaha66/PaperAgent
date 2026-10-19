@@ -8,7 +8,6 @@ from services import crud
 from typing import Optional
 from ..utils import route_guard
 from config.paths import get_workspace_path
-from services.file_services.plan_reconciler import PlanReconciler
 import os
 import uuid
 from pathlib import Path
@@ -18,26 +17,24 @@ from datetime import datetime
 router = APIRouter(prefix="/api/works", tags=["works"])
 
 
-def _sync_work_from_workspace_metadata(work):
+def _project_progress(work):
     if not work:
         return work
-    try:
-        workspace_path = get_workspace_path(work.work_id)
-        from ai_system.research.runtime import execution_reason
-        work.execution_reason=execution_reason(workspace_path,work.status)
-        PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
-        metadata_file = workspace_path / "metadata.json"
-        if metadata_file.exists():
-            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-            # 状态以数据库为准（由生成任务的开始/待确认/完成/失败写入）；
-            # 计划推算出的状态在论文已导出后仍可能停在"进行中"，这里只取进度
-            if metadata.get("progress") is not None:
-                work.progress = max(0, min(100, int(metadata["progress"])))
-        if work.status == "completed":
-            work.progress = 100
-    except Exception:
-        pass
-    return work
+    from ai_system.research.runtime import execution_reason
+    from ai_system.research.store import ResearchStore, DB_PATH
+    root=get_workspace_path(work.work_id)
+    progress=0
+    thread=root/'.system/graph_thread.json'
+    if thread.is_file() and (root/DB_PATH).is_file():
+        saved=json.loads(thread.read_text())
+        if saved.get('engine_version')=='research-v3':
+            snapshot=ResearchStore(root,saved['thread_id'],read_only=True).snapshot()
+            tasks=[t for t in (snapshot or {}).get('tasks',{}).values() if not t['retired']]
+            if tasks:progress=round(100*sum(t['acceptance']=='accepted' and t['validity']=='current' for t in tasks)/len(tasks))
+    # A read projection must not dirty the ORM session or infer scientific
+    # completion from a document's size or an old Markdown status label.
+    return schemas.WorkResponse.model_validate(work).model_copy(update={
+        'progress':progress, 'execution_reason':execution_reason(root,work.status)})
 
 @router.post("", response_model=schemas.WorkResponse)
 @route_guard
@@ -62,7 +59,7 @@ async def get_works(
     """获取用户的工作列表"""
     response = crud.get_user_works(db, current_user, skip, limit, status, search)
     if isinstance(response, dict) and isinstance(response.get("works"), list):
-        response["works"] = [_sync_work_from_workspace_metadata(work) for work in response["works"]]
+        response["works"] = [_project_progress(work) for work in response["works"]]
     return response
 
 @router.get("/{work_id}", response_model=schemas.WorkResponse)
@@ -75,10 +72,10 @@ async def get_work(
     """获取工作详情"""
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    return _sync_work_from_workspace_metadata(work)
+    return _project_progress(work)
 
 @router.put("/{work_id}", response_model=schemas.WorkResponse)
 @route_guard
@@ -101,47 +98,6 @@ async def delete_work(
     """删除工作"""
     return crud.delete_work(db, work_id, current_user)
 
-@router.patch("/{work_id}/status")
-@route_guard
-async def update_work_status(
-    work_id: str,
-    status: str = Query(..., description="新的工作状态"),
-    progress: Optional[int] = Query(None, ge=0, le=100, description="工作进度(0-100)"),
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """更新工作状态和进度"""
-    return crud.update_work_status(db, work_id, status, progress, current_user)
-
-@router.get("/{work_id}/metadata")
-@route_guard
-async def get_work_metadata(
-    work_id: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """获取工作元数据文件内容"""
-    # 检查工作是否存在
-    work = crud.get_work(db, work_id)
-    if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
-    if work.created_by != current_user:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    import json
-    from pathlib import Path
-    workspace_path = get_workspace_path(work_id)
-    try:
-        PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
-    except Exception:
-        # Metadata should remain readable even if plan reconciliation fails.
-        pass
-    metadata_file = workspace_path / "metadata.json"
-    if not metadata_file.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work metadata not found")
-    with open(metadata_file, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-    return metadata
-
 @router.get("/{work_id}/chat-history")
 @route_guard
 async def get_work_chat_history(
@@ -152,7 +108,7 @@ async def get_work_chat_history(
     """获取工作对话历史"""
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
     import json
@@ -207,7 +163,7 @@ async def upload_attachment(
     # 检查工作是否存在且属于当前用户
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
 
@@ -268,7 +224,7 @@ async def get_attachments(
     # 检查工作是否存在且属于当前用户
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
 
@@ -309,7 +265,7 @@ async def delete_attachment(
     # 检查工作是否存在且属于当前用户
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
 

@@ -106,8 +106,6 @@ class GraphContext:
     max_repair_rounds: int = 2
     max_review_rounds: int = 1
     explore_top_k: int = 1
-    explore_steps: int = 12
-    explore_margin: float = 2.0  # 前两名评审总分（满分 16）差距超过它就不试跑
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
@@ -135,13 +133,13 @@ class GraphContext:
             options["template_requirements"] = contract.read_text(encoding="utf-8")[:TEMPLATE_REQUIREMENTS_CHARS]
         if 'skill_policy' not in options:
             from ..research.store import ResearchStore, DB_PATH
-            from .methods import DEFAULT_SKILL_POLICY
+            from ai_system.modules.methods import DEFAULT_SKILL_POLICY
             options['skill_policy'] = (ResearchStore(workspace, 'workspace-skills', read_only=True).skill_preferences()['policy']
                                        if (workspace / DB_PATH).exists() else dict(DEFAULT_SKILL_POLICY))
         if 'explore_top_k' not in options and (workspace/'.system/research.sqlite').exists():
             from ..research.store import ResearchStore
-            from ..research.comparison import ComparisonStore
-            options['explore_top_k']=2 if ComparisonStore(ResearchStore(workspace,'workspace-comparisons')).policy()['enabled'] else 1
+            from ai_system.modules.experiments.store import ExperimentStore
+            options['explore_top_k']=2 if ExperimentStore(ResearchStore(workspace,'workspace-comparisons')).policy()['enabled'] else 1
         if (workspace/'.system/research.sqlite').exists():
             from ..research.runtime import ResearchRuntime
             settings=ResearchRuntime(workspace).policy()
@@ -150,7 +148,7 @@ class GraphContext:
         return cls(
             workspace=workspace,
             fs=fs,
-            registry=ResultRegistry.load(fs),
+            registry=ResultRegistry(fs),
             kernels=KernelPool(workspace, fs, timeout=options.pop("kernel_timeout", 180.0)),
             events=EventSink(stream_manager),
             planner_llm=planner_llm,

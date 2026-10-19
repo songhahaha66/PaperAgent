@@ -1,4 +1,6 @@
 """Versioned recovery with controlled replies. HTTP is forbidden; zero real model calls."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,json,time
 from types import SimpleNamespace
 import pytest
@@ -31,13 +33,13 @@ async def failed(store,stage='sections'):
     with pytest.raises(TimeoutError):await tasks.execute(store,stage,model(error=TimeoutError()))
 def edit(store):
     sections={k:v['text'] for k,v in store.snapshot()['sections'].items()};sections['abstract']+='新的措辞。';store.save_sections(sections,[])
-def issue_map(store):return {i['id']:i for i in store.snapshot()['issues']}
+def issue_map(store):return {i['id']:i for i in research_findings(store.snapshot())}
 
 
 def test_new_version_only_replaces_old_service_after_actual_completed_review(setup):
     store=setup.store
     async def scenario():
-        await failed(store);old=next(i for i in store.snapshot()['issues'] if i['category']=='service')
+        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service')
         writing=store.report_issues([IssueReport(task_id='Q1',category='writing',section='evaluation',message='保留实质写作意见')],'manual')[0]
         science=store.report_issues([IssueReport(task_id='Q1',category='model',message='保留科研问题')],'local_review')[0]
         edit(store);t=item(store);assert t['state']=='pending' and issue_map(store)[old['id']]['status']=='confirmed'
@@ -60,7 +62,7 @@ def test_new_version_only_replaces_old_service_after_actual_completed_review(set
 def test_same_version_recovers_instead_of_superseding_and_retains_failure(setup):
     store=setup.store
     async def scenario():
-        await failed(store);old=next(i for i in store.snapshot()['issues'] if i['category']=='service')
+        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service')
         t=item(store);assert t['state']=='failed'
         receipt=tasks.start(store,'sections',t['version'],'once',model());await drain()
         issue=issue_map(store)[old['id']];assert issue['status']=='resolved'
@@ -73,7 +75,7 @@ def test_same_version_recovers_instead_of_superseding_and_retains_failure(setup)
 def test_new_review_failure_never_clears_old_failures(setup):
     store=setup.store
     async def scenario():
-        await failed(store);old=next(i for i in store.snapshot()['issues'] if i['category']=='service');edit(store)
+        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service');edit(store)
         t=item(store);tasks.start(store,'sections',t['version'],'fail-again',model(error=TimeoutError()));await drain()
         assert item(store)['state']=='failed' and issue_map(store)[old['id']]['status']=='confirmed'
         assert not any(r.get('superseded_by') for r in tasks.records(store))
@@ -133,7 +135,7 @@ def test_cancellation_persists_recoverable_failure(setup):
 def test_fragment_cannot_supersede_full_chapter_service(setup):
     store=setup.store
     async def scenario():
-        await failed(store);old=next(i for i in store.snapshot()['issues'] if i['category']=='service')
+        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service')
         context=review_context(setup.ctx,setup.state,'fragment','system','prompt',ClaimAudit,sections=setup.state['sections'],extra={'non_blocking':True})
         cache=ReviewCache(store);r=cache.start('fragment',context);cache.complete(r,{'verdict':'equivalent','reason':'fixture'})
         assert issue_map(store)[old['id']]['status']=='confirmed' and item(store)['state']=='failed'

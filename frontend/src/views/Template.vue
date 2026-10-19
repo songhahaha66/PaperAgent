@@ -1,6 +1,7 @@
 <template>
-  <div class="template-page">
+  <div class="template-page" :class="{ embedded }">
     <Sidebar
+      v-if="!embedded"
       :is-sidebar-collapsed="isSidebarCollapsed"
       :active-history-id="activeHistoryId"
       @toggle-sidebar="toggleSidebar"
@@ -9,7 +10,7 @@
     />
 
     <div class="main-content">
-      <div class="workspace-header">
+      <div v-if="!embedded" class="workspace-header">
         <h1>{{ ui.templates }}</h1>
         <p>{{ ui.templateEmptyHint }}</p>
       </div>
@@ -341,6 +342,7 @@ import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import { formatWorkDate } from '@/utils/dates'
 const { ui, isZh } = useStudioCopy()
+defineProps<{ embedded?: boolean }>()
 const { isMobile } = useBreakpoint()
 
 // 侧边栏折叠状态 - 手机端默认收起
@@ -815,6 +817,15 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.template-page.embedded {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  background: var(--pa-surface);
+}
+.embedded .main-content {
+  overflow: visible;
+}
 .template-page {
   display: flex;
   height: 100vh;

@@ -7,7 +7,7 @@ const {loadModule,vue,flush}=require('./moduleHarness.cjs')
     key:'evaluation',title:'局限',revision:2,validity:'current',content_hash:'b'.repeat(64),
     text:'保留长章节。'.repeat(2000)+'唯一短句。',readable:'',task_refs:['Q1'],evidence_refs:[],
   }]}
-  const module=await loadModule('src/components/PaperEditor.vue',{
+  const module=await loadModule('src/components/PaperRevision.vue',{
     vue,
     '@/api/paper':{paperAPI:{read:async()=>paper,propose:async(work,body)=>{
       payloads.push(JSON.parse(JSON.stringify(body)))
@@ -16,8 +16,10 @@ const {loadModule,vue,flush}=require('./moduleHarness.cjs')
     '@/lang/studio':{useStudioCopy:()=>({isZh:vue.ref(true)})},
   })
   const effects=vue.effectScope()
-  const editor=effects.run(()=>module.default.setup({workId:'work',latex:false},{expose(){},emit(){}}))
-  await flush();editor.fragment.value='唯一短句。';editor.instruction.value='更简明';await flush()
+  const editor=effects.run(()=>module.default.setup({workId:'work',latex:false,fragmentRequest:{section:'evaluation',text:'唯一短句。',at:1}},{expose(){},emit(){}}))
+  await flush();editor.fragment.value='唯一';await editor.load();await flush()
+  assert.equal(editor.fragment.value,'唯一','A background read must not reapply the original selection over the narrowed draft')
+  editor.fragment.value='唯一短句。';editor.instruction.value='更简明';await flush()
   assert.equal(editor.fragmentReady.value,true)
   await editor.propose()
   assert.equal(payloads.length,1)

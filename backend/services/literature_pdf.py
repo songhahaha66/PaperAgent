@@ -5,7 +5,13 @@ import resource
 import sys
 
 resource.setrlimit(resource.RLIMIT_CPU, (6, 6))
-resource.setrlimit(resource.RLIMIT_AS, (768 * 1024 * 1024, 768 * 1024 * 1024))
+# Darwin does not support lowering address-space/data limits for this process.
+# CPU time, input size and page/text budgets apply on every platform.
+if sys.platform != 'darwin':
+    memory_limit = resource.RLIMIT_AS
+    hard_limit = resource.getrlimit(memory_limit)[1]
+    cap = min(768 * 1024 * 1024, hard_limit) if hard_limit != resource.RLIM_INFINITY else 768 * 1024 * 1024
+    resource.setrlimit(memory_limit, (cap, cap))
 import pdfplumber
 
 raw = sys.stdin.buffer.read(6_000_001)

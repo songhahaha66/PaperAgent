@@ -3,7 +3,7 @@ const {loadModule,vue,flush}=require('./moduleHarness.cjs')
 ;(async()=>{
   const pending=[],recoveries=[],events=[],timers=[]
   const view=(research,state='failed',can_resume=true)=>({research_id:research,research_revision:1,history:[],pending_candidates:[],tasks:[{stage:'sections',label:'章节一致性',version:research.repeat(64).slice(0,64),state,coverage:'全文',can_resume}]})
-  const mod=await loadModule('src/components/ReviewTasks.vue',{
+  const mod=await loadModule('src/components/PaperChecks.vue',{
     vue:{...vue,onMounted(fn){fn()},onUnmounted(){}},
     '@/api/researchSetup':{reviewTasksAPI:{read(work){return new Promise(resolve=>pending.push({work,resolve}))},recover(work,body){return new Promise(resolve=>recoveries.push({work,body,resolve}))}}},
   },{crypto:{randomUUID:()=> 'nonce'},setInterval(fn){timers.push(fn);return 1},clearInterval(){}})

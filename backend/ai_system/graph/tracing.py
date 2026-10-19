@@ -21,6 +21,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 logger = logging.getLogger(__name__)
 
 CURRENT_LABEL: ContextVar[str] = ContextVar("paper_graph_label", default="")
+CURRENT_CAPABILITY: ContextVar[str] = ContextVar('research_capability', default='')
 SLOW_CALL_SECONDS = 90.0
 
 
@@ -89,6 +90,7 @@ class LLMCallTrace(BaseCallbackHandler):
             "start": round(time.time() - self.started, 1),
             "node": _node(metadata),
             "label": CURRENT_LABEL.get(),
+            "capability": CURRENT_CAPABILITY.get(),
             "_t0": time.monotonic(),
             'output_limit':params.get('max_tokens') or params.get('max_completion_tokens'),
         }

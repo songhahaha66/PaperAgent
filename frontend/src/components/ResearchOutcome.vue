@@ -2,7 +2,7 @@
   <article class="outcome">
     <header>
       <p>
-        {{ outcome.task_id }}<span v-if="outcome.revision"> · v{{ outcome.revision }}</span>
+        <span v-if="outcome.revision">方案版本 {{ outcome.revision }}</span>
       </p>
       <h2>{{ outcome.title }}</h2>
     </header>
@@ -54,16 +54,9 @@
     </p>
     <section v-for="result in outcome.results" :key="result.id" class="measurement">
       <h4>
-        {{ result.name }}<small> · {{ result.id }}</small>
+        {{ result.name }}
       </h4>
       <p v-if="result.description">{{ result.description }}</p>
-      <p v-else class="note">
-        {{
-          isZh
-            ? '此记录缺少含义说明，保留原名称与值；不推断意义或单位。'
-            : 'Meaning was not recorded; original name and value are retained.'
-        }}
-      </p>
       <ResultSeries
         v-if="result.series?.length"
         :values="result.series"
@@ -87,6 +80,7 @@
       </p>
       <details>
         <summary>{{ isZh ? '原始记录与计算来源' : 'Raw record and computation' }}</summary>
+        <p>{{ isZh ? '结果引用：' : 'Result reference: ' }}{{ result.id }}</p>
         <pre>{{ result.value }}<span v-if="result.unit"> {{ result.unit }}</span></pre>
         <p>{{ result.run_id || (isZh ? '未登记运行编号' : 'No run recorded') }}</p>
         <template v-for="run in runs.filter((r) => r.id === result.run_id)" :key="run.id"
@@ -237,6 +231,9 @@ dd {
 }
 .value {
   font-size: 21px;
+}
+.value > span {
+  margin-left: 6px;
 }
 pre,
 code {

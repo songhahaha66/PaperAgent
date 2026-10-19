@@ -4,6 +4,8 @@ Each command holds BEGIN IMMEDIATE through validation and publication. Documents
 are intentionally coarse in this first schema: old revisions and attempts remain
 in the journal, while reads see a single committed, consistent snapshot.
 """
+
+from ai_system.research.domain import findings as research_findings
 import hashlib
 import json
 import re
@@ -14,7 +16,7 @@ from contextlib import contextmanager, closing
 from pathlib import Path
 
 from . import ENGINE_VERSION
-from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord
+from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord, ContentFeedback, RuntimeFault
 from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps, needs_owner_review
 from .assumptions import assumption_id, premise_definition, assumption_scope
 
@@ -73,6 +75,8 @@ class ResearchStore:
                 CREATE TABLE IF NOT EXISTS counters (research_id TEXT NOT NULL, prefix TEXT NOT NULL, value INTEGER NOT NULL,
                     PRIMARY KEY(research_id, prefix));
             """)
+        from .migration import migrate_workspace
+        migrate_workspace(self)
 
     def _connect(self):
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=30) if self.read_only else sqlite3.connect(self.path, timeout=30)
@@ -94,7 +98,10 @@ class ResearchStore:
 
     def _read(self, db):
         row = db.execute("SELECT payload FROM research WHERE id=?", (self.research_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+        state = json.loads(row[0]) if row else None
+        if state and state.get("schema_version") != 3:
+            raise ValueError("研究数据尚未迁移，请先运行 python -m services.migrate_data")
+        return state
 
     def snapshot(self):
         with closing(self._connect()) as db:
@@ -123,14 +130,14 @@ class ResearchStore:
                 "kind": sp.get("kind", "compute"), "retired": False,
             } for sp in analysis["subproblems"]}
             validate_dependencies(tasks)
-            state = {"schema_version": 2, "engine_version": ENGINE_VERSION,
+            state = {"schema_version": 3, "engine_version": ENGINE_VERSION,
                      "research_id": self.research_id, "revision": 1, "commit_seq": 0,
                      "spec": {"requirement": requirement, "amendments": [],
                               "requirements": [{**r.model_dump(), "revision": 1} for r in requirements]},
                      "assumptions": {a.id: {**a.model_dump(), "revision": 1, "status": "active", "source": "analysis", "producer_attempt": None} for a in assumptions},
                      "assumption_history": [], "validations": [],
                      "tasks": tasks, "attempts": {}, "evidence": {}, "claims": {},
-                     "sections": {}, "issues": [], "delivery_stages": {}, "outcome": "running", "max_attempts": max_attempts,
+                     "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running", "max_attempts": max_attempts,
                      "planning_calls": 0, "proposal_hashes": [], "max_total_attempts": len(tasks) * max_attempts + 6}
             self._validate_contracts(state)
             self._bind_assumption_inputs(state)
@@ -153,13 +160,13 @@ class ResearchStore:
             return hashlib.file_digest(stream, "sha256").hexdigest()
 
     def skill_preferences(self):
-        from ..graph.methods import DEFAULT_SKILL_POLICY
+        from ai_system.modules.methods import DEFAULT_SKILL_POLICY
         with closing(self._connect()) as db:
             row = db.execute("SELECT response FROM commands WHERE research_id='workspace-skills' AND id='policy'").fetchone()
         return json.loads(row[0]) if row else {'version': 0, 'policy': dict(DEFAULT_SKILL_POLICY)}
 
     def set_skill_preferences(self, policy, base_version):
-        from ..graph.methods import validate_skill_policy
+        from ai_system.modules.methods import validate_skill_policy
         policy = validate_skill_policy(policy)
         with self._transaction() as db:
             row = db.execute("SELECT response FROM commands WHERE research_id='workspace-skills' AND id='policy'").fetchone()
@@ -239,7 +246,7 @@ class ResearchStore:
                 raise ResearchConflict(f"任务 {task_id} 的依赖尚未验收")
             if any(state["assumptions"][aid]["status"] == "refuted" for aid in task["assumption_ids"]):
                 raise ResearchConflict("任务依赖的假设已被反证")
-            if any(i["blocking"] and i["status"] == "confirmed" and task_id in i["repair_targets"] for i in state["issues"]):
+            if any(i["blocking"] and i["status"] == "confirmed" and task_id in i["repair_targets"] for i in research_findings(state)):
                 raise ResearchConflict("任务需要先提交修复计划")
             attempts = [a for a in state["attempts"].values() if a["task_id"] == task_id and a["revision"] == task["revision"]]
             if len(attempts) >= state["max_attempts"] or len(state["attempts"]) >= state["max_total_attempts"]:
@@ -248,7 +255,7 @@ class ResearchStore:
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
                               protocol_hash=digest(protocol(state, task_id)), review_required=review_required,
-                              review_issue_ids=[i["id"] for i in state["issues"] if needs_owner_review(i) and i["task_id"] == task_id])
+                              review_issue_ids=[i["id"] for i in research_findings(state) if needs_owner_review(i) and i["task_id"] == task_id])
             from .experience import conditions
             basis = {'question':task['objective'],'protocol':protocol(state,task_id),
                      'conditions':conditions(self.root,state['spec']['requirement']+' '+task['objective'])}
@@ -262,7 +269,9 @@ class ResearchStore:
         receipt = self._commit(result)
         if self.experience_scope is not None:
             try:
-                self.experience_scope.index(self)
+                from types import SimpleNamespace
+                from ai_system.modules.registry import invoke_sync
+                invoke_sync(SimpleNamespace(experience_scope=self.experience_scope,research=self), 'experience.candidates')
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning('研究已提交；经验索引未完成，可从经验面板补建')
@@ -373,10 +382,10 @@ class ResearchStore:
                     self._record_issue(state, report, "suspected" if report.category not in {"execution", "service", "evidence"} else "confirmed",
                                        producer_attempt=order.attempt_id)
                     if report.category == "evidence":
-                        self._confirm_issue(state, next(i for i in state["issues"] if i["producer_attempt"] == order.attempt_id and i["message"] == report.message), refute=False)
+                        self._confirm_issue(state, next(i for i in research_findings(state) if i["producer_attempt"] == order.attempt_id and i["message"] == report.message), refute=False)
                         acceptance = "inconclusive"
                 if task.get("verifies_issue"):
-                    issue = next(i for i in state["issues"] if i["id"] == task["verifies_issue"])
+                    issue = next(i for i in research_findings(state) if i["id"] == task["verifies_issue"])
                     issue["evidence_refs"] = sorted(set(issue["evidence_refs"]) | {rid for c in validation.checks for rid in c.evidence_refs})
                     if validation.outcome == "rejected" and review_clear:
                         self._confirm_issue(state, issue)
@@ -405,7 +414,7 @@ class ResearchStore:
                         self._confirm_issue(state, issue, refute=check.outcome == "failed")
                 attempt["acceptance"] = task["acceptance"] if task.get("verifies_issue") else acceptance
                 self._resolve_repairs(state, order.attempt_id)
-                if any(i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in state["issues"]):
+                if any(i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in research_findings(state)):
                     state["outcome"] = "blocked"
             else:
                 attempt["validity"] = "stale"
@@ -420,8 +429,8 @@ class ResearchStore:
 
     def report_comparison_failure(self,record,order):
         """Only confirmed execution/contract failures enter the existing repair loop."""
-        from .comparison import ComparisonStore
-        saved=ComparisonStore(self).read(order.task_id,order.revision)
+        from ai_system.modules.experiments.store import ExperimentStore
+        saved=ExperimentStore(self).read(order.task_id,order.revision)
         if not saved or saved['id']!=record['id'] or saved['status']!='no_valid':return
         bad=[r for r in saved['branches'] if r['status'] in {'code_error','contract_error','execution_error','timeout'}]
         if not bad and not saved.get('protocol_error'):return
@@ -477,7 +486,7 @@ class ResearchStore:
     def _commit_reviews(self, state, result, available, *, staging):
         order = result.order
         recorded = []
-        allowed = available | {ref for i in state["issues"] if i["id"] in order.review_issue_ids for ref in i["evidence_refs"]}
+        allowed = available | {ref for i in research_findings(state) if i["id"] in order.review_issue_ids for ref in i["evidence_refs"]}
         for review in result.reviews:
             for report in review.issues:
                 if not set(report.evidence_refs) <= allowed:
@@ -497,7 +506,7 @@ class ResearchStore:
             # Successful auditing closes service faults; scientific findings close
             # only when the current report has been rechecked with no open issues.
             clear = not result.reviews[-1].issues
-            for issue in [*recorded, *[i for i in state["issues"] if i["id"] in order.review_issue_ids]]:
+            for issue in [*recorded, *[i for i in research_findings(state) if i["id"] in order.review_issue_ids]]:
                 if not needs_owner_review(issue) or issue["task_id"] != order.task_id:
                     continue
                 if clear or issue["category"] == "service" and not any(r.category == "service" for r in result.reviews[-1].issues):
@@ -517,18 +526,19 @@ class ResearchStore:
             raise ValueError("问题指向未知假设")
         revision = target_revision if target_revision is not None else task["revision"]
         identity = digest({**report.model_dump(), "revision": revision, "source": source})[:24]
-        previous = next((i for i in state["issues"] if i["id"] == identity), None)
+        previous = next((i for i in research_findings(state) if i["id"] == identity), None)
         if previous:
             if (report.category in {"writing", "service"} or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
                 previous["status"] = status
                 previous['blocking']=report.category!='writing' or report.section!='paper'
             return previous
-        issue = Issue(**report.model_dump(), id=identity, task_revision=revision,
+        record_type = RuntimeFault if report.category in {'execution', 'service'} else ContentFeedback
+        issue = record_type(**report.model_dump(), id=identity, task_revision=revision,
             producer_attempt=producer_attempt, status=status, source=source,
             assumption_revision=state["assumptions"][report.assumption_id]["revision"] if report.assumption_id else None,
             action="retry" if report.category in {"execution", "service"} else "rewrite" if report.category == "writing" else "verify",
             blocking=report.category != "writing" or report.section != "paper").model_dump()
-        state["issues"].append(issue)
+        state["faults" if report.category in {"execution", "service"} else "feedback"].append(issue)
         return issue
 
     @classmethod
@@ -545,7 +555,7 @@ class ResearchStore:
 
     @staticmethod
     def _resolve_repairs(state, resolution_attempt):
-        for issue in state["issues"]:
+        for issue in research_findings(state):
             if issue["status"] != "repairing":
                 continue
             if issue["source"] == "local_review" and issue["action"] != "recompute":
@@ -560,7 +570,7 @@ class ResearchStore:
         with self._transaction() as db:
             state = self._read(db)
             if source == "sections":
-                for issue in state["issues"]:
+                for issue in research_findings(state):
                     if issue["source"] == "sections" and issue["category"] == "writing" and issue.get("section") != "paper":
                         issue["status"] = "resolved"
             recorded = [self._record_issue(state, report, "confirmed" if report.category in {"writing", "service"} else "suspected", source=source)
@@ -571,14 +581,14 @@ class ResearchStore:
     @staticmethod
     def delivery_ready(state):
         return all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in state["tasks"].values()) and not any(
-            i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in state["issues"])
+            i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in research_findings(state))
 
     def schedule_investigations(self):
         with self._transaction() as db:
             state = self._read(db)
             created = []
             changed = False
-            for issue in state["issues"]:
+            for issue in research_findings(state):
                 if issue["status"] != "suspected" or any(t.get("verifies_issue") == issue["id"] for t in state["tasks"].values()):
                     continue
                 if not issue["check_ids"]:
@@ -672,7 +682,7 @@ class ResearchStore:
             state = self._read(db)
             if state["revision"] != patch.base_revision:
                 raise ResearchConflict("研究版本已改变，请刷新后重试")
-            issues = [i for i in state["issues"] if i["id"] in patch.issue_ids]
+            issues = [i for i in research_findings(state) if i["id"] in patch.issue_ids]
             if len(issues) != len(set(patch.issue_ids)) or any(i["status"] != "confirmed" or i["action"] != "recompute" for i in issues):
                 raise ResearchConflict("计划只能修复当前已确认的问题")
             for issue in issues:
@@ -749,12 +759,12 @@ class ResearchStore:
             changed_assumptions = {change.assumption_id for change in patch.assumptions}
             for task in state["tasks"].values():
                 if task.get("verifies_issue"):
-                    issue = next(i for i in state["issues"] if i["id"] == task["verifies_issue"])
+                    issue = next(i for i in research_findings(state) if i["id"] == task["verifies_issue"])
                     if issue["assumption_id"] in changed_assumptions:
                         # A frozen countercheck of the old premise cannot refute
                         # its replacement. Fresh scope acceptance closes the repair.
                         task["retired"] = True
-            for issue in state["issues"]:
+            for issue in research_findings(state):
                 related_assumption = issue["assumption_id"] in changed_assumptions and issue["status"] not in {"resolved", "dismissed", "superseded"}
                 if issue not in issues and not related_assumption and not (patch.amendment and issue["task_id"] in affected and issue["status"] in {"confirmed", "inconclusive"}):
                     continue
@@ -829,6 +839,13 @@ class ResearchStore:
                 state["outcome"] = outcome
                 self._save(db, state, "outcome_changed", {"outcome": outcome})
 
+    def save_consistency(self, conflicts):
+        with self._transaction() as db:
+            state = self._read(db)
+            if state.get('consistency') != conflicts:
+                state['consistency'] = conflicts
+                self._save(db, state, 'consistency_committed', {'conflicts': conflicts})
+
     def set_delivery_stage(self, stage, status, note):
         if stage not in {"write", "validate", "render", "export"}:
             return
@@ -880,13 +897,13 @@ class ResearchStore:
                 return
             for task in state["tasks"].values():
                 if task.get("verifies_issue"):
-                    issue = next(i for i in state["issues"] if i["id"] == task["verifies_issue"])
+                    issue = next(i for i in research_findings(state) if i["id"] == task["verifies_issue"])
                     if issue["status"] == "inconclusive":
                         task["retired"] = False
                         issue["status"] = "suspected"
             pending = {key for key, task in state["tasks"].items()
                        if not task["retired"] and (task["acceptance"] != "accepted" or task["validity"] != "current")}
-            pending |= {i["task_id"] for i in state["issues"] if needs_owner_review(i)}
+            pending |= {i["task_id"] for i in research_findings(state) if needs_owner_review(i)}
             for attempt in state["attempts"].values():
                 if attempt["execution_status"] == "running":
                     attempt["execution_status"] = "cancelled"
@@ -894,7 +911,7 @@ class ResearchStore:
             for stage in state.get("delivery_stages", {}).values():
                 if stage["status"] == "in_progress":
                     stage.update(status="pending", note="")
-            for issue in state["issues"]:
+            for issue in research_findings(state):
                 if issue["category"] == "service":
                     # Starting a retry is not proof that its audit completed.
                     # ReviewCache closes only the matching context on success.
@@ -904,7 +921,7 @@ class ResearchStore:
                     issue["repair_targets"] = {issue["task_id"]: state["tasks"][issue["task_id"]]["revision"]}
             self._save(db, state, "recovered", {"affected": sorted(pending)})
 
-    def save_sections(self, sections: dict, issues: list, contexts: dict | None = None):
+    def save_sections(self, sections: dict, issues: list, contexts: dict | None = None, *, verified=True):
         with self._transaction() as db:
             state = self._read(db)
             for key, text in sections.items():
@@ -917,7 +934,7 @@ class ResearchStore:
                     "text": text, "content_hash": digest(text), "context_hash": context_hash,
                     "evidence_refs": re.findall(r"\{\{[RF]:([RF][0-9]+)\}\}", text),
                     "task_refs": refs, "validity": "current"}
-            state["outcome"] = ("needs_attention" if issues else "completed") if self.delivery_ready(state) else "blocked"
+            state["outcome"] = (("needs_attention" if issues else "completed") if self.delivery_ready(state) else "blocked") if verified else "running"
             self._save(db, state, "sections_committed", {"versions": {key: state["sections"][key] for key in sections}, "issues": issues})
 
     def publish_paper(self, text: str, *, filename: str = "paper.md"):

@@ -1,4 +1,6 @@
 """Actual store/editor/export paths with offline controlled model contracts; HTTP forbidden."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,json
 from types import SimpleNamespace
 import pytest
@@ -7,8 +9,8 @@ from fastapi.testclient import TestClient
 from test_paper_editor import paper
 from test_review_cache import no_network
 from ai_system.graph.state import ClaimAudit,ClaimIssue
-from ai_system.graph.nodes import consistency
-from ai_system.graph.nodes.validate import assemble
+from ai_system.modules.writing import consistency as consistency
+from ai_system.modules.writing.validation import assemble
 from ai_system.research.models import IssueReport,ResearchConflict
 from ai_system.research.review_cache import ReviewCache,review_context
 from services.chat_services import paper_editor as editor,paper_corrections as edits,issue_edits as issues
@@ -21,7 +23,7 @@ def linked(paper,monkeypatch,request):
             task=key.split(':')[1];state['sections'][key]+=' '.join('{{R:'+r['id']+'}}' for r in store.registry_payload()['results'] if r['subproblem']==task)
     store.save_sections(state['sections'],[]);store.publish_paper(assemble(state))
     if getattr(request,'param',False):
-        from ai_system.graph.nodes.validate import assemble_latex
+        from ai_system.modules.writing.validation import assemble_latex
         store.publish_paper(assemble_latex(state),filename='paper.tex');(store.root/'paper.pdf').write_bytes(b'%PDF-old-fixture')
     model=SimpleNamespace(model_name='offline-issue',calls=[],verdict='resolved',error=False)
     async def controlled(llm,schema,messages,validate=None,**kwargs):
@@ -45,7 +47,7 @@ def binding(v):
 def propose(v,automatic=False):
     section=v.store.snapshot()['sections']['evaluation'];scope={'old':v.old,'section_revision':section['revision'],'section_hash':section['content_hash'],'source_hash':v.store.snapshot()['paper_hash']}
     return asyncio.run(editor.propose(v.store,'evaluation','按意见修正措辞',None if automatic else section['text'].replace(v.old,v.new),v.model,source_issue=binding(v),**({'fragment_scope':scope} if automatic else {})))
-def current(v):return next(i for i in v.store.snapshot()['issues'] if i['id']==v.source['id'])
+def current(v):return next(i for i in research_findings(v.store.snapshot()) if i['id']==v.source['id'])
 
 @pytest.mark.parametrize('automatic',[False,True])
 def test_issue_candidate_review_diff_and_apply_close_only_verified_source(linked,automatic):
@@ -57,7 +59,7 @@ def test_issue_candidate_review_diff_and_apply_close_only_verified_source(linked
     source=current(v);assert source['status']=='resolved' and source['review_resolution']['candidate_id']==p['id'] and source['review_resolution']['review_id']==p['review_id']
     assert v.new in (v.store.root/'paper.md').read_text() and v.old not in (v.store.root/'paper.md').read_text()
     after=v.store.snapshot();assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
-    assert next(i for i in after['issues'] if i['id']==other['id'])['status']=='confirmed' and not v.store.delivery_ready(after)
+    assert next(i for i in research_findings(after) if i['id']==other['id'])['status']=='confirmed' and not v.store.delivery_ready(after)
     assert v.model.calls==(['FragmentReplacement','IssueAudit'] if automatic else ['IssueAudit'])
 
 @pytest.mark.parametrize('mode',['unresolved','uncertain','failure','reject'])
@@ -84,7 +86,7 @@ def test_stale_opinion_or_new_paper_cannot_receive_old_candidate(linked):
 def test_absent_or_inexact_quote_is_chapter_only_and_science_routes_to_research(linked):
     v=linked
     with v.store._transaction() as db:
-        state=v.store._read(db);i=next(i for i in state['issues'] if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
+        state=v.store._read(db);i=next(i for i in research_findings(state) if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
     c=issues.context(v.store,v.source['id']);assert c['quote'] is None and '仅定位章节' in c['location']
     science=v.store.report_issues([IssueReport(task_id='Q1',category='model',message='实际数据与方法需要核验',evidence_refs=['R1'])],'local_review')[0]
     c=issues.context(v.store,science['id']);assert c['route']=='research' and c['evidence']
@@ -96,7 +98,7 @@ def test_absent_or_inexact_quote_is_chapter_only_and_science_routes_to_research(
 def test_long_sections_cannot_be_declared_full_pass_or_resolve_source(linked):
     v=linked;sections={k:s['text'] for k,s in v.store.snapshot()['sections'].items()};sections['evaluation']=v.old+'尾部。'*2500;v.store.save_sections(sections,[])
     with v.store._transaction() as db:
-        state=v.store._read(db);i=next(i for i in state['issues'] if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
+        state=v.store._read(db);i=next(i for i in research_findings(state) if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
     from services.chat_services.review_tasks import status
     t=next(t for t in status(v.store)['tasks'] if t['stage']=='sections');assert t['state']=='partial' and t['outcome']=='incomplete' and t['segmented']['completed_blocks']==0
     from ai_system.research.segmented_review import CoverageError
@@ -144,7 +146,7 @@ def test_failed_pdf_export_keeps_issue_source_and_pdf(linked,monkeypatch):
 def test_invalid_or_overlapping_quote_never_becomes_exact_location(linked,quote):
     v=linked
     with v.store._transaction() as db:
-        state=v.store._read(db);i=next(i for i in state['issues'] if i['id']==v.source['id']);i.pop('paper_origin')
+        state=v.store._read(db);i=next(i for i in research_findings(state) if i['id']==v.source['id']);i.pop('paper_origin')
         if quote=='aaa':state['sections']['evaluation']['text']+=' aaaaa';from ai_system.research.store import digest;state['sections']['evaluation']['content_hash']=digest(state['sections']['evaluation']['text'])
         v.store._save(db,state,'fixture_quotes',{})
     text=v.store.snapshot()['sections']['evaluation']['text'];state={**v.state,'sections':{**v.state['sections'],'evaluation':text}}
@@ -164,7 +166,7 @@ def test_scientific_revision_rejects_stale_issue_before_any_planner_call(linked,
         asyncio.run(agent.revise_research(command_id='stale-source',research_id=v.store.research_id,base_revision=v.store.snapshot()['revision'],change='核查数据',scope=['Q1'],source_issue={'id':source['id'],'version':'f'*64}))
     with pytest.raises((ResearchConflict,ValueError)):
         asyncio.run(agent.revise_research(command_id='wrong-scope',research_id=v.store.research_id,base_revision=v.store.snapshot()['revision'],change='核查数据',scope=['Q2'],source_issue={'id':source['id'],'version':c['version']}))
-    assert next(i for i in v.store.snapshot()['issues'] if i['id']==source['id'])['status']=='suspected'
+    assert next(i for i in research_findings(v.store.snapshot()) if i['id']==source['id'])['status']=='suspected'
 
 
 def test_revision_command_cannot_be_rebound_to_different_source_issue(linked):

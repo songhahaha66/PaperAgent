@@ -68,12 +68,12 @@ async function environment() {
         '@/composables/useBreakpoint': {
           useBreakpoint: () => ({ isMobile, width }),
         },
-        '@/api/researchSetup': {researchSetupAPI:{overview:async()=>({})}},
+        '@/api/researchSetup': {researchSetupAPI:{settings:async()=>({})}},
         '@/api/chat': {
           WebSocketChatHandler: Socket,
           chatAPI: {
             getResearchSnapshot: async () => ({
-              schema_version: 2,
+              schema_version: 3,
               work_id: id,
               work_status: 'completed',
               has_research: true,
@@ -196,6 +196,12 @@ async function environment() {
     1,
   )
   assert.equal(progressWork.sent.length, 0, 'viewing progress never resumes research')
+  progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
+  assert.equal(progressWork.state.inputValue.value, '先比较新方法的影响')
+  assert.equal(progressWork.state.questionScope.value, 'Q1')
+  assert.equal(progressWork.state.messageAction.value, 'revise_research')
+  assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
+  assert.equal(progressWork.sent.length, 0, 'preparing a method change must not invalidate or execute research')
   progressWork.stop()
   env.width.value = 620
   env.isMobile.value = true
@@ -215,7 +221,7 @@ async function environment() {
   let pauseCount = 0
   const primary = await env.work('primary-action', false, [], {
     getResearchSnapshot: async () => ({
-      schema_version: 2, work_id: 'primary-action', work_status: actionStatus,
+      schema_version: 3, work_id: 'primary-action', work_status: actionStatus,
       has_research: true, research_id: 'research-1', engine_version: 'research-v3',
       artifacts: ['paper.pdf'], tasks: [], results: [], runs: [], claims: [],
     }),
@@ -376,7 +382,7 @@ async function environment() {
   restored.state.handleStreamMessage(
     {
       type: 'json_block',
-      block: { type: 'research_snapshot', content: { schema_version: 2, work_id: 'another-work' } },
+      block: { type: 'research_snapshot', content: { schema_version: 3, work_id: 'another-work' } },
     },
     replyId,
   )
@@ -540,7 +546,7 @@ async function environment() {
   assert.equal(literature.state.literatureEvidenceId.value,'')
   literature.state.openLiteratureEvidence({ detail: { workId:'literature', evidenceId:'C1' } })
   assert.equal(literature.state.literatureEvidenceId.value,'C1')
-  assert(literature.state.panelSession.value.panels.some(p=>p.kind==='literature'))
+  assert(literature.state.panelSession.value.panels.some(p=>p.kind==='materials'))
   literature.state.citeLiterature('C1')
   assert.equal(literature.state.citationRequest.value.id,'C1')
   assert(literature.state.panelSession.value.panels.some(p=>p.kind==='paper'))

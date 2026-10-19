@@ -3,6 +3,8 @@
 A bare JSON file, an empty legacy result, or a gateway response alone is not
 sufficient. This module never constructs a model client or invokes a model.
 """
+
+from ai_system.research.domain import findings as research_findings
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,10 +32,11 @@ def validate_scientific_checkpoint(store,values):
         if task['retired'] or task['kind']=='verify':continue
         if task['acceptance']!='accepted' or task['validity']!='current' or (values.get('solutions') or {}).get(key)!=task['report']:raise ValueError('检查点求解结果与当前验收不一致')
         if (values.get('designs') or {}).get(key)!=task.get('design'):raise ValueError('检查点设计/冻结方案已变化')
-        exploration=(task.get('design') or {}).get('exploration')
+        from ai_system.modules.experiments.store import ExperimentStore
+        exploration=ExperimentStore(store).read(key,task['revision']) if (task.get('design') or {}).get('experiment_id') else None
         if exploration:
-            from .comparison import ComparisonStore
-            if ComparisonStore(store).policy()['version']!=exploration['policy_version']:raise ValueError('旧审查之后比较配置已变化')
+            from ai_system.modules.experiments.store import ExperimentStore
+            if ExperimentStore(store).policy()['version']!=exploration['policy_version']:raise ValueError('旧审查之后比较配置已变化')
         attempt=snapshot['attempts'][task['active_attempt']]
         if store._inputs(snapshot,task,store.file_inputs())!=attempt['input_refs'] or digest(protocol(snapshot,key))!=attempt['protocol_hash']:raise ValueError('检查点对应输入/冻结验收已变化')
         original={r['id']:r for r in attempt['result']['results']}
@@ -49,7 +52,7 @@ def checkpoint_pair(pre,post,node,next_node):
 
 
 def completed_reconcile_proof(store,ctx,pre,post,saved,trace,requests):
-    from ..graph.nodes.consistency import reconcile_prompt,RECONCILE_SYSTEM,validate_findings
+    from ai_system.modules.writing.consistency import reconcile_prompt,RECONCILE_SYSTEM,validate_findings
     from ..graph.state import ConsistencyReview
     if not checkpoint_pair(pre,post,'reconcile','write'):raise ValueError('缺少成功审查的相邻执行检查点')
     validate_scientific_checkpoint(store,pre.values);validate_scientific_checkpoint(store,post.values)
@@ -75,7 +78,7 @@ def completed_reconcile_proof(store,ctx,pre,post,saved,trace,requests):
 
 
 def section_failure_proof(store,ctx,pre,post,validation):
-    from ..graph.nodes.consistency import section_audit_prompt,AUDIT_SYSTEM
+    from ai_system.modules.writing.consistency import section_audit_prompt,AUDIT_SYSTEM
     from ..graph.state import ClaimAudit
     if not checkpoint_pair(pre,post,'validate','observe'):raise ValueError('缺少审查失败的相邻执行检查点')
     snapshot=validate_scientific_checkpoint(store,pre.values)
@@ -83,7 +86,7 @@ def section_failure_proof(store,ctx,pre,post,validation):
     if pre.values.get('sections')!=sections:raise ValueError('失败审查对应的章节版本已变化')
     recorded={i['id']:i for i in validation.get('issues',[])}
     checkpoint_issues={i['id']:i for i in post.values.get('issues',[])}
-    candidates=[i for i in snapshot['issues'] if i['category']=='service' and i['source']=='sections' and i['status']=='confirmed'
+    candidates=[i for i in research_findings(snapshot) if i['category']=='service' and i['source']=='sections' and i['status']=='confirmed'
         and i['message'].startswith('章节审查未完成：') and i['id'] in recorded and checkpoint_issues.get(i['id'])==recorded[i['id']]]
     if len(candidates)!=1:raise ValueError('无法唯一关联旧章节服务故障')
     if '预算耗尽' not in candidates[0]['message']:raise ValueError('此迁移只绑定有明确证据的旧预算拒绝')
@@ -123,14 +126,14 @@ async def migrate(store,model_id,*,apply=False):
     from ..graph.state import ConsistencyReview
     if not cache.get('reconcile',success['context'],ConsistencyReview):
         record=cache.start('reconcile',success['context'],source='legacy_checkpoint_migration')
-        from ..graph.nodes.consistency import RECONCILE_SYSTEM,reconcile_prompt
+        from ai_system.modules.writing.consistency import RECONCILE_SYSTEM,reconcile_prompt
         input_state=next(cp.values for cp in history if cp.config==success['provenance']['input_checkpoint'])
         current=lambda:review_context(ctx,input_state,'reconcile',RECONCILE_SYSTEM,reconcile_prompt(input_state,ctx),ConsistencyReview)
         cache.complete(record,success['result'],provenance=success['provenance'],current_context=current)
     failure=failures[0]
     with store._transaction() as db:
-        state=store._read(db);issue=next(i for i in state['issues'] if i['id']==failure['issue_id'])
-        from ..graph.nodes.consistency import section_audit_prompt,AUDIT_SYSTEM
+        state=store._read(db);issue=next(i for i in research_findings(state) if i['id']==failure['issue_id'])
+        from ai_system.modules.writing.consistency import section_audit_prompt,AUDIT_SYSTEM
         from ..graph.state import ClaimAudit
         input_state=next(cp.values for cp in history if cp.config==failure['provenance']['input_checkpoint'])
         prompt,_=section_audit_prompt(input_state,ctx)

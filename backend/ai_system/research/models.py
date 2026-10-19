@@ -146,6 +146,16 @@ class Issue(IssueReport):
     repair_targets: dict[str, int] = Field(default_factory=dict)
 
 
+class ContentFeedback(Issue):
+    """A scientific or editorial finding; resolution requires evidence or review."""
+    category: Literal['domain', 'assumption', 'model', 'data', 'evidence', 'writing', 'coverage']
+
+
+class RuntimeFault(Issue):
+    """An operational failure; retrying does not invalidate a scientific method."""
+    category: Literal['execution', 'service']
+
+
 class CheckResult(Contract):
     check_id: str
     outcome: Literal["passed", "failed", "inconclusive"]

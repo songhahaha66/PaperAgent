@@ -14,8 +14,8 @@ from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_editor as editor
 from test_native_latex import accepted_store
 from test_research_p2 import problem, TASK
-from ai_system.graph.nodes.validate import assemble, assemble_latex
-from ai_system.graph.nodes.write import section_plan
+from ai_system.modules.writing.validation import assemble, assemble_latex
+from ai_system.modules.writing.sections import section_plan
 
 
 @pytest.fixture
@@ -36,6 +36,27 @@ def paper(tmp_path, monkeypatch):
 def candidate(store):
     before = store.snapshot()['sections']['solve:Q1']['text']
     return asyncio.run(editor.propose(store, 'solve:Q1', '简洁表述', before.replace('原来的表述', '修订后的表述')))
+
+
+def test_document_order_matches_assembled_outline(paper):
+    store, state = paper
+    doc = asyncio.run(editor.document(store))
+    expected = [key for key, _, _ in section_plan(state) if key in store.snapshot()['sections']]
+    assert [section['key'] for section in doc['sections']] == expected
+    assert [(entry['key'], entry['title'], entry['level']) for entry in doc['outline']] == section_plan(state)
+    group = next(entry for entry in doc['outline'] if entry['key'] == 'solve_heading')
+    assert not group['available']  # A structural heading need not have its own text.
+
+
+def test_document_never_promotes_an_old_pdf_by_file_existence(paper):
+    store, _ = paper
+    (store.root / 'paper.pdf').write_bytes(b'old-export')
+    assert 'paper.pdf' not in asyncio.run(editor.document(store))['artifacts']
+    store.register_exports(['paper.pdf'])
+    assert 'paper.pdf' in asyncio.run(editor.document(store))['artifacts']
+    (store.root / 'paper.md').write_text('人工修改')
+    document=asyncio.run(editor.document(store))
+    assert not document['artifacts'] and document['publication_notice']
 
 
 def test_review_apply_is_section_local_versioned_and_idempotent(paper):
@@ -144,7 +165,7 @@ def test_ai_proposal_route_uses_saved_step_model_with_bounded_defaults(paper, mo
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
-    from models.models import Base, ModelConfig, Work
+    from models.models import Base, ModelConfig, Project
     from routers.work_routes import workspace
     from auth.auth import get_current_user
     from database.database import get_db
@@ -153,7 +174,7 @@ def test_ai_proposal_route_uses_saved_step_model_with_bounded_defaults(paper, mo
     Base.metadata.create_all(engine)
     sessions = sessionmaker(bind=engine)
     with sessions() as db:
-        db.add(Work(work_id='step-route', title='Paper', created_by=7, output_mode='markdown'))
+        db.add(Project(work_id='step-route', title='Paper', created_by=7, output_mode='markdown'))
         db.add(ModelConfig(type='writing', model_id='step-5-preview', api_key='fixture',
                            base_url='https://aigw.saurlax.com/v1', created_by=7))
         db.commit()

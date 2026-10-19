@@ -37,7 +37,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     research_revision: 1,
     commit_seq: 5,
     tasks: [task('Q1', 'accepted'), task('Q2', 'waiting', ['Q1']), task('Q3', 'accepted')],
-    issues: [],
+    feedback: [],
     artifacts: [],
     results: [],
     delivery: { ready: false, blockers: [] },
@@ -84,7 +84,7 @@ const { hostRenderer } = require('./vueHost.cjs')
           }
         : task,
     ),
-    issues: [
+    feedback: [
       { id: 'recheck', status: 'confirmed', message: '重新验证容量约束' },
       { id: 'second', status: 'suspected', message: '核对误差' },
       { id: 'old', status: 'resolved', message: '已处理' },

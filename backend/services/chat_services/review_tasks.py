@@ -1,4 +1,6 @@
 """Versioned views and recoveries over review_records, never a second queue store."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,json,time
 from contextlib import closing
 from ai_system.research.store import ResearchStore,digest
@@ -20,10 +22,7 @@ def paper_state(store):
         'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired'],
         'subproblems':[t['subproblem'] for t in snapshot['tasks'].values() if not t['retired']]},
         'sections':{k:v['text'] for k,v in snapshot['sections'].items()},'consistency':[]}
-    saved=store.root/'.system/consistency.json'
-    if saved.exists():
-        try:state['consistency']=json.loads(saved.read_text()).get('conflicts',[])
-        except (OSError,ValueError):pass
+    state['consistency']=snapshot.get('consistency',[])
     return state
 
 
@@ -36,7 +35,7 @@ def material(store,stage):
     path=store.root/filename
     actual=digest(path.read_text()) if path.is_file() else None
     request_hash=None
-    from ai_system.graph.nodes.consistency import section_audit_prompt,AUDIT_SYSTEM,reconcile_prompt,RECONCILE_SYSTEM
+    from ai_system.modules.writing.consistency import section_audit_prompt,AUDIT_SYSTEM,reconcile_prompt,RECONCILE_SYSTEM
     if stage=='sections':
         from ai_system.research.segmented_review import needed
         if needed(state['sections']):
@@ -131,7 +130,7 @@ def status(store):
         current=material(store,stage);context={'policy':'review-recovery-intent-v1','stage':stage,'version_material':current,'extra':{'non_blocking':True}}
         version=digest(context);same=[r for r in rows if r['source']=='recovery-intent' and r['context_hash']==version]
         root=[r for r in rows if r['stage']==stage and r['source']!='recovery-intent' and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
-        coverage={'reconcile':'当前登记结论与研究契约','sections':'当前章节一致性；每节最多6000字符','citations':'当前引用句与登记原文支持性'}[stage]
+        coverage={'reconcile':'当前登记结论与研究契约','sections':'当前版本正文与登记结论的一致性；长文分段核查','citations':'当前引用句与登记原文支持性'}[stage]
         item={'stage':stage,'label':label,'version':version,'state':'pending','coverage':coverage,'record_id':None,'reason':None,'can_resume':True}
         applicable=(stage!='reconcile' or len(context_from_store(store,'version').registry.claims)>=2) and (stage=='reconcile' or bool(state['sections']))
         if not applicable:item.update(state='not_required',coverage='当前材料尚不需要此审查',can_resume=False)
@@ -151,7 +150,7 @@ def status(store):
         elif same and same[0]['state'] in {'failed','superseded'}:item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('error_code','interrupted'))
         elif root and root[0]['state'] in {'failed','running','superseded'}:item.update(state='failed' if root[0]['state']!='running' else 'running',record_id=root[0]['id'],reason=root[0].get('error_code'),can_resume=root[0]['state']!='running')
         if stage=='sections':
-            from ai_system.graph.nodes.consistency import section_coverage
+            from ai_system.modules.writing.consistency import section_coverage
             item['coverage_detail']=section_coverage(state['sections'])
             from ai_system.research.segmented_review import needed
             if needed(state['sections']):
@@ -188,7 +187,7 @@ def status(store):
             if p.get('status')=='pending':pending_candidates.append({'id':p['id'],'section':p['section'],'review_kind':p.get('review_kind','full_document'),
                 'state':'failed' if p.get('review_issues') else 'completed','issues':p.get('review_issues',[]),'origin':p.get('origin','manual')})
     return {'research_id':store.research_id,'research_revision':snapshot['revision'],'tasks':tasks,'history':history[:12],
-        'issues':[{k:i.get(k) for k in ('id','category','section','status','message')} for i in snapshot['issues'] if i['status'] not in {'resolved','dismissed','superseded'}],
+        'issues':[{k:i.get(k) for k in ('id','category','section','status','message')} for i in research_findings(snapshot) if i['status'] not in {'resolved','dismissed','superseded'}],
         'pending_candidates':pending_candidates,'budget':budget}
 
 
@@ -204,7 +203,7 @@ def _save_findings(store,stage,reports,expected):
 
 async def execute(store,stage,llm):
     """Reuse each stage's schemas/prompts and cache, without resuming solve/write."""
-    from ai_system.graph.nodes.consistency import RECONCILE_SYSTEM,AUDIT_SYSTEM,reconcile_prompt,section_audit_prompt,validate_findings,NOT_A_CONFLICT
+    from ai_system.modules.writing.consistency import RECONCILE_SYSTEM,AUDIT_SYSTEM,reconcile_prompt,section_audit_prompt,validate_findings,NOT_A_CONFLICT
     from ai_system.research.review_cache import run_review
     state=paper_state(store);ctx=context_from_store(store,getattr(llm,'model_name',None) or getattr(llm,'model',None));ctx.planner_llm=llm
     if stage=='citations':

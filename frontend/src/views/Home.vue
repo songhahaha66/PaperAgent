@@ -391,8 +391,6 @@ async function startWork() {
         uploaded.add(raw)
       }
     }
-    // Initialize new work with the existing fixed defaults. Removing the form
-    // must not silently change confirmation, paper length or literature policy.
     await researchSetupAPI.save(draft.work_id, defaultResearchSetup())
     historyStore.upsert(draft)
     panelStore.open(draft.work_id, 'progress', undefined, 'secondary')

@@ -1,4 +1,6 @@
 """Perturbation tests for the authoritative research state and publication rules."""
+
+from ai_system.research.domain import findings as research_findings
 import json
 import sys
 from pathlib import Path
@@ -245,7 +247,7 @@ def test_observe_uses_confirmed_failure_to_commit_planner_proposal(tmp_path, mon
     finish(store, "Q1")
 
     async def propose(self, snapshot):
-        return PlanProposal(reason="add capacity check", issue_ids=[i["id"] for i in snapshot["issues"] if i["status"] == "confirmed"],
+        return PlanProposal(reason="add capacity check", issue_ids=[i["id"] for i in research_findings(snapshot) if i["status"] == "confirmed"],
                             changes=[TaskChange(task_id="Q1", objective="enforce capacity before publishing")])
 
     monkeypatch.setattr(Planner, "propose", propose)

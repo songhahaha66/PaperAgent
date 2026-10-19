@@ -1,4 +1,6 @@
 """Failures observed with a real model: bounded feedback, verification and delivery."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import sys
@@ -66,7 +68,7 @@ def test_missing_or_unrelated_checks_cannot_dismiss_a_cited_metric(tmp_path, che
     store.report_issues([IssueReport(task_id="Q2", category="evidence", section="abstract",
         message="扰动目标值不能证明未登记的解坐标", evidence_refs=[refs[-1]["id"]], check_ids=checks)], "sections")
     assert store.schedule_investigations() == []
-    assert store.snapshot()["issues"][-1]["status"] == "inconclusive"
+    assert research_findings(store.snapshot())[-1]["status"] == "inconclusive"
     assert not store.delivery_ready(store.snapshot())
 
 
@@ -87,7 +89,7 @@ def test_independent_finite_value_must_agree_with_the_original_result(tmp_path, 
     [verification] = store.schedule_investigations()
     submit(store, verification, {"allocation": value})
     state = store.snapshot()
-    assert state["issues"][0]["status"] == status
+    assert research_findings(state)[0]["status"] == status
     assert state["tasks"]["Q2"]["validity"] == ("stale" if status == "confirmed" else "current")
     check = state["validations"][-1]["checks"][0]
     assert check["outcome"] == ("failed" if status == "confirmed" else "passed")
@@ -126,18 +128,18 @@ def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputin
     store = ResearchStore(tmp_path, agent._load_thread())
     before = store.snapshot()
     assert before["outcome"] == "blocked" and before["sections"]
-    assert all(i["blocking"] for i in before["issues"] if i["status"] == "confirmed")
+    assert all(i["blocking"] for i in research_findings(before) if i["status"] == "confirmed")
     assert not (tmp_path / "paper.md").exists()
     assert any(kind == "paper_phase" and content["stage"] == "validate" and content["status"] == "blocked"
                for kind, content in events)
-    assert any(kind == "research_state" and content["outcome"] == "blocked" and content["issues"]
+    assert any(kind == "research_state" and content["outcome"] == "blocked" and (content["feedback"] or content["faults"])
                for kind, content in events)
     attempts = set(before["attempts"])
     model.broken = False
     assert "paper.md" in asyncio.run(agent.resume_failed())
     after = store.snapshot()
     assert set(after["attempts"]) == attempts
-    assert all(i["status"] in {"resolved", "dismissed"} for i in after["issues"])
+    assert all(i["status"] in {"resolved", "dismissed"} for i in research_findings(after))
     assert store.delivery_ready(after) and (tmp_path / "paper.md").exists()
     assert "F999" not in (tmp_path / "paper.md").read_text()
     assert "23.1" not in (tmp_path / "paper.md").read_text()

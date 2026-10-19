@@ -9,14 +9,14 @@ from sklearn.preprocessing import StandardScaler
 from test_paper_editor import paper
 from test_review_cache import no_network
 from ai_system.research.method_facts import verified_methods,canonical_method_block
-from ai_system.research.comparison import ComparisonStore
+from ai_system.modules.experiments.store import ExperimentStore
 from ai_system.research.store import digest
 from ai_system.research.validation import protocol
 from ai_system.research.models import ResearchConflict
-from ai_system.graph.nodes.estimator_contracts import check_estimator
-from ai_system.graph.nodes import consistency
+from ai_system.modules.experiments.contracts import check_estimator
+from ai_system.modules.writing import consistency as consistency
 from ai_system.graph.state import ClaimAudit,ClaimIssue
-from ai_system.graph.nodes.validate import assemble
+from ai_system.modules.writing.validation import assemble
 from services.chat_services import paper_editor as editor,paper_corrections as corrections
 
 
@@ -27,7 +27,7 @@ def verified_paper(paper,monkeypatch):
     with store._transaction() as db:
         snapshot=store._read(db);snapshot['tasks']['Q1']['design']={'candidates':candidates}
         store._save(db,snapshot,'fixture-methods',{})
-    snapshot=store.snapshot();task=snapshot['tasks']['Q1'];comparison=ComparisonStore(store);comparison.set_policy(True)
+    snapshot=store.snapshot();task=snapshot['tasks']['Q1'];comparison=ExperimentStore(store);comparison.set_policy(True)
     branches=[];runs={}
     for i,(model,family,pre) in enumerate([(LinearRegression(),'ols',[]),(Ridge(alpha=1),'ridge',[])]):
         contract={'family':family,'standardize':False,'alpha':1.0 if family=='ridge' else None};audit=check_estimator(model,contract)
@@ -120,7 +120,7 @@ def test_unverified_or_stale_method_records_never_authorize_formula_corrections(
             if change=='unverified':branch['implementation_audit']['checked']=False
             elif change=='code':branch['code']+='changed'
             elif change=='family':branch['implementation_audit']['family']='unknown'
-        with v.store._transaction() as db:db.execute('UPDATE comparisons SET payload=? WHERE id=?',(json.dumps(row),row['id']))
+        with v.store._transaction() as db:db.execute('UPDATE experiment_comparisons SET payload=? WHERE id=?',(json.dumps(row),row['id']))
     assert not verified_methods(v.store)
     with pytest.raises((ValueError,ResearchConflict)):proposed(v)
 

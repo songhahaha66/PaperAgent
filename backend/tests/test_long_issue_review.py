@@ -1,11 +1,13 @@
 """Long source-issue candidates through graph entry, recovery and atomic publication; no HTTP."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,copy,json
 from types import SimpleNamespace
 import pytest
 from test_paper_editor import paper
 from test_review_cache import no_network
-from ai_system.graph.nodes import consistency
-from ai_system.graph.nodes.validate import assemble,assemble_latex
+from ai_system.modules.writing import consistency as consistency
+from ai_system.modules.writing.validation import assemble,assemble_latex
 from ai_system.graph.state import ClaimIssue
 from ai_system.research import segmented_review as seg
 from ai_system.research.models import ResearchConflict
@@ -58,7 +60,7 @@ def propose(v,automatic=True):
     s=v.store.snapshot()['sections']['evaluation']
     options={'fragment_scope':{'old':OLD,'section_revision':s['revision'],'section_hash':s['content_hash'],'source_hash':v.store.snapshot()['paper_hash']}} if automatic else {}
     return asyncio.run(editor.propose(v.store,'evaluation','按源意见修正',None if automatic else s['text'].replace(OLD,NEW),v.model,source_issue=binding(v),**options))
-def current(v):return next(i for i in v.store.snapshot()['issues'] if i['id']==v.source['id'])
+def current(v):return next(i for i in research_findings(v.store.snapshot()) if i['id']==v.source['id'])
 
 @pytest.mark.parametrize('automatic',[True,False])
 def test_tail_edit_reuses_other_blocks_and_publishes_only_with_both_proofs(longpaper,automatic):
@@ -70,7 +72,7 @@ def test_tail_edit_reuses_other_blocks_and_publishes_only_with_both_proofs(longp
     assert long_review.verify(v.store,r)
     result=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert result['status']=='applied'
     after=v.store.snapshot();assert current(v)['status']=='resolved' and current(v)['review_resolution']['coverage_review_id']==r['provenance']['coverage_review_id']
-    assert next(i for i in after['issues'] if i['id']==v.other['id'])['status']=='confirmed'
+    assert next(i for i in research_findings(after) if i['id']==v.other['id'])['status']=='confirmed'
     assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
     assert NEW in (v.store.root/'paper.md').read_text() and OLD not in (v.store.root/'paper.md').read_text()
 
@@ -134,7 +136,7 @@ def test_graph_entry_routes_before_legacy_preflight_and_without_registered_claim
 
 
 def test_normal_graph_validate_node_reaches_segmented_audit(longpaper):
-    from ai_system.graph.nodes import validate as validate_node
+    from ai_system.modules.writing import validation as validate_node
     v=longpaper;before=v.store.snapshot()
     with v.store._transaction() as db:db.execute('DELETE FROM review_records')
     result=asyncio.run(validate_node.validate(v.state,SimpleNamespace(context=v.ctx)))

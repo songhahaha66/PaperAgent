@@ -8,7 +8,6 @@ export interface ReadableResult {
   run_id: string
   figure_path: string | null
   series: number[] | null
-  meaning_available: boolean
 }
 export interface ResearchOutcome {
   id: string
@@ -59,9 +58,36 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  plans?: {
+    id: string
+    version: number
+    objective: string
+    dependencies: string[]
+    methods: { name: string; idea?: string }[]
+    selected: number | null
+    status: string
+    current: boolean
+  }[]
+  experiments?: {
+    id: string
+    plan_id: string
+    plan_version: number
+    status: string
+    acceptance: string
+    experience_versions: { id: string; version: number }[]
+  }[]
+  faults?: {
+    id: string
+    task_id: string
+    message: string
+    status: string
+    action: string
+    category: string
+  }[]
+  legacy_records?: { source: string; raw: unknown }[]
   outcomes?: ResearchOutcome[]
   execution_reason?: { kind: string; message: string } | null
-  schema_version: 2
+  schema_version: 3
   engine_version?: string | null
   research_revision?: number
   commit_seq?: number
@@ -127,7 +153,7 @@ export interface ResearchSnapshot {
     outcome: string
     checks: { check_id: string; outcome: string; message: string }[]
   }[]
-  issues?: {
+  feedback?: {
     id: string
     task_id: string
     task_revision: number

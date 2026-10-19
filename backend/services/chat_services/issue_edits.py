@@ -1,4 +1,6 @@
 """Issue-to-candidate bindings over existing issues, reviews and editor commands."""
+
+from ai_system.research.domain import findings as research_findings
 import json
 from contextlib import closing
 from typing import Literal
@@ -7,7 +9,7 @@ from ai_system.research.models import ResearchConflict
 from ai_system.research.store import digest,ResearchStore
 from ai_system.graph.state import ClaimIssue
 from ai_system.research.review_cache import ReviewCache,run_review
-from ai_system.graph.nodes.consistency import AUDIT_SYSTEM,section_audit_prompt,validate_findings
+from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt,validate_findings
 from ai_system.graph.llm_utils import call_structured,as_messages,cap_output
 
 TERMINAL={'resolved','dismissed','superseded'}
@@ -28,7 +30,7 @@ def bind_findings(store,ids,sections):
     rows=records(store)
     with store._transaction() as db:
         state=store._read(db);changed=[]
-        for issue in state['issues']:
+        for issue in research_findings(state):
             if issue['id'] not in ids or issue.get('section') not in sections:continue
             text=sections[issue['section']];origin={'section':issue['section'],'section_hash':digest(text),'review_id':None,'quote':None}
             for row in rows:
@@ -48,7 +50,7 @@ def bind_findings(store,ids,sections):
 
 def context(store,issue_id):
     from .review_tasks import material
-    state=store.snapshot();issue=next((i for i in state['issues'] if i['id']==issue_id),None)
+    state=store.snapshot();issue=next((i for i in research_findings(state) if i['id']==issue_id),None)
     if not issue:raise ValueError('意见不存在')
     key=issue.get('section');section=state['sections'].get(key);origin=issue.get('paper_origin') or {}
     same_origin=not origin.get('section_hash') or bool(section and origin['section_hash']==section['content_hash'])
@@ -89,7 +91,7 @@ def require_binding(store,request,*,writing=True):
 def ready(store):
     state=store.snapshot()
     return all(t['retired'] or t['acceptance']=='accepted' and t['validity']=='current' for t in state['tasks'].values()) and not any(
-        i['blocking'] and i['status'] not in TERMINAL and (i['category']!='writing' or i.get('section')=='paper') for i in state['issues'])
+        i['blocking'] and i['status'] not in TERMINAL and (i['category']!='writing' or i.get('section')=='paper') for i in research_findings(state))
 
 
 def review_material(store,state,llm,binding):
@@ -145,7 +147,7 @@ def require_review(store,p,state):
 
 
 def resolve(state,p,record):
-    issue=next(i for i in state['issues'] if i['id']==p['source_issue']['id'])
+    issue=next(i for i in research_findings(state) if i['id']==p['source_issue']['id'])
     if issue['category']!='writing':raise ResearchConflict('科研问题不能靠文稿修改关闭')
     issue.update(status='resolved',review_resolution={'policy':'issue-edit-review-v1','source_version':p['source_issue']['version'],'candidate_id':p['id'],
         'review_id':record['id'],'review_context_hash':record['context_hash'],'review_result_hash':record['result_hash'],

@@ -9,11 +9,7 @@ export type PanelKind =
   | 'files'
   | 'file'
   | 'progress'
-  | 'skills'
-  | 'literature'
-  | 'experiences'
-  | 'comparisons'
-  | 'overview'
+  | 'materials'
   | 'result'
 export type PanelGroup = 'main' | 'secondary'
 export type SplitEdge = 'left' | 'right' | 'top' | 'bottom'
@@ -92,16 +88,35 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
         followChat: true,
       }
     const state = sessions.value[workId]!
-    if (state.panels.some((p) => p.kind === 'overview')) {
+    const retired: Record<string, PanelKind> = {
+      overview: 'progress',
+      comparisons: 'materials',
+      literature: 'materials',
+      experiences: 'progress',
+      skills: 'progress',
+    }
+    if (
+      state.panels.some((p) => retired[p.kind as string]) ||
+      new Set(state.panels.map((p) => p.id)).size !== state.panels.length
+    ) {
+      const seen = new Set<string>()
       state.panels = state.panels
-        .filter(
-          (p) => p.kind !== 'overview' || !state.panels.some((other) => other.kind === 'progress'),
-        )
-        .map((p) =>
-          p.kind === 'overview' ? { ...p, id: 'progress', kind: 'progress' as const } : p,
-        )
-      if (state.activeId === 'overview') state.activeId = 'progress'
-      if (state.secondaryActiveId === 'overview') state.secondaryActiveId = 'progress'
+        .map((p) => {
+          const kind = retired[p.kind as string]
+          if (!kind) return p
+          if (state.activeId === p.id) state.activeId = kind
+          if (state.secondaryActiveId === p.id) state.secondaryActiveId = kind
+          return { ...p, id: kind, kind }
+        })
+        .filter((p) => {
+          if (seen.has(p.id)) return false
+          seen.add(p.id)
+          return true
+        })
+      if (!state.panels.some((p) => p.id === state.activeId && p.group === 'main'))
+        state.activeId = state.panels.find((p) => p.group === 'main')?.id || 'chat'
+      if (!state.panels.some((p) => p.id === state.secondaryActiveId && p.group === 'secondary'))
+        state.secondaryActiveId = state.panels.find((p) => p.group === 'secondary')?.id || null
     }
     return state
   }
@@ -114,7 +129,6 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
     state.focusedGroup = panel.group
   }
   function open(workId: string, kind: PanelKind, path?: string, group?: PanelGroup) {
-    if (kind === 'overview') kind = 'progress'
     if (kind === 'file') {
       path = path?.replace(/^\.\//, '').replace(/\\/g, '/')
       if (path === 'paper.md') {
@@ -138,9 +152,14 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
   }
   function openObject(workId: string, object: WorkObject, group?: PanelGroup) {
     if (object.type !== 'result') {
-      open(workId, object.type, object.type === 'file' ? object.path : undefined, group)
+      open(
+        workId,
+        object.type === 'literature' ? 'materials' : object.type,
+        object.type === 'file' ? object.path : undefined,
+        group,
+      )
       if (object.type === 'literature' && object.evidenceId)
-        session(workId).panels.find((p) => p.kind === 'literature')!.location = object.evidenceId
+        session(workId).panels.find((p) => p.kind === 'materials')!.location = object.evidenceId
       return
     }
     const state = session(workId),

@@ -17,8 +17,15 @@ from config.paths import get_project_root, get_pa_data_base, get_workspaces_path
 # 设置日志系统（只显示在终端，关闭LiteLLM日志）
 setup_simple_logging("INFO")
 
-# 创建数据库表
-models.Base.metadata.create_all(bind=engine)
+# Alembic is the schema authority. Every entry point runs the same migrations.
+from alembic import command
+from alembic.config import Config
+from pathlib import Path
+_migration_config = Config(str(Path(__file__).parent / 'alembic.ini'))
+_migration_config.set_main_option('script_location', str(Path(__file__).parent / 'alembic'))
+command.upgrade(_migration_config, 'head')
+from services.migrate_data import migrate_all
+migrate_all()
 
 # 初始化异步配置
 initialize_async_config(max_workers=20, max_processes=4)
@@ -40,7 +47,7 @@ async def lifespan(app: FastAPI):
 
     # 上次进程退出时还在生成的工作没有任务在跑了：标成已暂停，用户发"继续"会从断点接着跑
     with Session(engine) as db:
-        stale = db.query(models.Work).filter(models.Work.status == "in_progress").update({"status": "paused"})
+        stale = db.query(models.Project).filter(models.Project.status == "in_progress").update({"status": "paused"})
         db.commit()
     if stale:
         logger.info(f"{stale} 个中断的工作已标记为暂停")

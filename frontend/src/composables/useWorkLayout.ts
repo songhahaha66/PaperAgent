@@ -68,19 +68,17 @@ export function useWorkLayout(workId: Ref<string>) {
       paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
       figures: { label: ui.value.figures, icon: 'chart-line' },
       files: { label: ui.value.files, icon: 'folder-open' },
-      skills: { label: isZh.value ? '科研技能' : 'Research skills', icon: 'books' },
-      overview: { label: isZh.value ? '运行状态' : 'Run status', icon: 'task' },
-      comparisons: { label: isZh.value ? '方案比较' : 'Experiments', icon: 'chart-line' },
-      experiences: { label: isZh.value ? '研究经验' : 'Experience', icon: 'books' },
-      literature: { label: isZh.value ? '文献' : 'Literature', icon: 'books' },
-      progress: { label: isZh.value ? '运行状态' : 'Run status', icon: 'task' },
+      materials: { label: isZh.value ? '资料与成果' : 'Materials and results', icon: 'books' },
+      progress: { label: isZh.value ? '研究进度' : 'Research progress', icon: 'task' },
     }[panel.kind]
   }
   const panelOptions = computed(() =>
-    (['progress', 'paper', 'literature', 'figures', 'files'] as const).map((kind) => ({
-      content: panelPresentation({ kind }).label,
-      value: kind,
-    })),
+    (['progress', 'materials', 'paper', 'figures', 'files'] as const).map(
+      (kind) => ({
+        content: panelPresentation({ kind }).label,
+        value: kind,
+      }),
+    ),
   )
   function openProgress() {
     const state = panelSession.value
@@ -101,7 +99,7 @@ export function useWorkLayout(workId: Ref<string>) {
     if (id === 'files' && !target.classList.contains('fm-body')) return
     if (
       id === 'progress' &&
-      !target.classList.contains('research-overview') &&
+      !target.classList.contains('research-status') &&
       !target.classList.contains('progress-panel')
     )
       return
@@ -145,7 +143,7 @@ export function useWorkLayout(workId: Ref<string>) {
       figureScroller.value.scrollTop = panelSession.value.scroll.figures || 0
     if (isPanelVisible('progress')) {
       const scroller =
-        document.querySelector<HTMLElement>('.research-overview') ||
+        document.querySelector<HTMLElement>('.research-status') ||
         document.querySelector<HTMLElement>('.progress-panel')
       if (scroller) scroller.scrollTop = panelSession.value.scroll.progress || 0
     }

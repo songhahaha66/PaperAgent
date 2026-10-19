@@ -1,4 +1,6 @@
 """P2 contracts, counterexamples, causal replanning and delivery gates."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import re
@@ -55,7 +57,7 @@ def submit(store, key, values, *, order=None, issues=()):
 
 def repair_patch(state):
     return PlanPatch(command_id="repair", base_revision=state["revision"], reason="use robust demand estimator",
-        issue_ids=[i["id"] for i in state["issues"] if i["status"] == "confirmed"],
+        issue_ids=[i["id"] for i in research_findings(state) if i["status"] == "confirmed"],
         changes=[TaskChange(task_id="Q1", objective="Use median demand")],
         assumptions=[AssumptionChange(assumption_id="A1", base_revision=1, statement="Median demand is representative",
             task_ids=["Q1", "Q2"], checks=problem().assumptions[0].checks)])
@@ -74,13 +76,13 @@ def test_domain_failure_overrides_worker_acceptance_and_revokes_assumption_consu
     assert not ready_tasks(snapshot)
     assert {r["subproblem"] for r in store.registry_payload()["results"]} == {"Q3"}
     assert snapshot["tasks"]["Q3"]["active_attempt"] == unrelated
-    assert all(i["status"] == "confirmed" and i["evidence_refs"] for i in snapshot["issues"])
+    assert all(i["status"] == "confirmed" and i["evidence_refs"] for i in research_findings(snapshot))
     store.apply_patch(repair_patch(snapshot))
     assert ready_tasks(store.snapshot()) == ["Q1"]
     submit(store, "Q1", {"demand": 8})
     assert ready_tasks(store.snapshot()) == ["Q2"]
     submit(store, "Q2", {"allocation": 8, "residual": 0})
-    assert all(i["status"] == "resolved" for i in store.snapshot()["issues"])
+    assert all(i["status"] == "resolved" for i in research_findings(store.snapshot()))
     assert store.snapshot()["assumptions"]["A1"]["revision"] == 2
     assert store.delivery_ready(store.snapshot())
 
@@ -121,12 +123,12 @@ def test_false_suspicion_is_dismissed_and_uncheckable_claim_never_becomes_truth(
     store.report_issues([report], "review")
     [verification] = store.schedule_investigations()
     submit(store, verification, {"residual": 0})
-    assert store.snapshot()["issues"][0]["status"] == "dismissed"
+    assert research_findings(store.snapshot())[0]["status"] == "dismissed"
     assert store.report_issues([report], "review") == []
     before = store.registry_payload()
     store.report_issues([IssueReport(task_id="Q1", category="model", message="uncheckable statement", evidence_refs=[refs[0]["id"]])], "review")
     assert not store.schedule_investigations()
-    assert store.snapshot()["issues"][-1]["status"] == "inconclusive"
+    assert research_findings(store.snapshot())[-1]["status"] == "inconclusive"
     assert store.registry_payload() == before
     assert not store.delivery_ready(store.snapshot())
 
@@ -202,7 +204,7 @@ def test_verification_execution_failure_retries_without_refuting_assumption(tmp_
     assert key in ready_tasks(store.snapshot())
     assert not store.schedule_investigations(), "recovery reuses the bounded investigation task"
     submit(store, key, {"residual": 0})
-    assert all(i["status"] in {"dismissed", "resolved"} for i in store.snapshot()["issues"])
+    assert all(i["status"] in {"dismissed", "resolved"} for i in research_findings(store.snapshot()))
 
 
 def test_repair_must_change_issue_cause_and_worker_cannot_cite_unseen_history(tmp_path):
@@ -213,7 +215,7 @@ def test_repair_must_change_issue_cause_and_worker_cannot_cite_unseen_history(tm
     with pytest.raises(ValueError, match="上游"):
         store.apply_patch(PlanPatch(command_id="unrelated", base_revision=1, reason="pretend repaired",
             changes=[TaskChange(task_id="Q3", objective="unrelated change")],
-            issue_ids=[i["id"] for i in before["issues"]]))
+            issue_ids=[i["id"] for i in research_findings(before)]))
     assert store.snapshot() == before
     old_ref = next(iter(before["evidence"]))
     with pytest.raises(ValueError, match="冻结输入"):
@@ -231,7 +233,7 @@ def test_replacing_refuted_assumption_retires_pending_counterchecks_of_old_premi
     assert store.snapshot()["tasks"][verification]["retired"]
     submit(store, "Q1", {"demand": 8})
     submit(store, "Q2", {"allocation": 8, "residual": 0})
-    assert all(i["status"] == "resolved" for i in store.snapshot()["issues"])
+    assert all(i["status"] == "resolved" for i in research_findings(store.snapshot()))
     assert store.snapshot()["assumptions"]["A1"]["status"] == "active"
 
 
@@ -296,7 +298,7 @@ def test_real_graph_automatically_repairs_upstream_and_downstream_and_delivers(t
     assert [sum(a["task_id"] == key for a in state["attempts"].values()) for key in ("Q1", "Q2", "Q3")] == [2, 2, 1]
     assert state["assumptions"]["A1"]["revision"] == 2
     assert state["assumption_history"][0]["status"] == "refuted"
-    assert all(i["status"] == "resolved" for i in state["issues"])
+    assert all(i["status"] == "resolved" for i in research_findings(state))
     active = ResearchStore(tmp_path, agent._load_thread()).registry_payload()["results"]
     assert next(r["value"] for r in active if r["name"] == "demand") == "8"
     assert "12" not in (tmp_path / "paper.md").read_text()
@@ -369,11 +371,11 @@ def test_consistency_suspicion_runs_independent_verification_then_replans_only_i
     assert state["planning_calls"] == (1 if counterexample else 0)
     assert sum(a["task_id"] == "Q1" for a in state["attempts"].values()) == (2 if counterexample else 1)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1
-    assert state["issues"][0]["status"] == ("resolved" if counterexample else "dismissed")
+    assert research_findings(state)[0]["status"] == ("resolved" if counterexample else "dismissed")
     assert store.delivery_ready(state)
     from services.chat_services.research_session import research_snapshot
     snapshot = research_snapshot(tmp_path, "work", "completed")
-    assert snapshot.schema_version == 2 and "paper.md" in snapshot.artifacts
+    assert snapshot.schema_version == 3 and "paper.md" in snapshot.artifacts
     assert all(r["status"] == "accepted" for r in snapshot.requirements)
     historical = [r for r in snapshot.issue_evidence if r.subproblem_id == investigations[0]["task_id"]]
     assert len(historical) == 1 and historical[0].value == ("4" if counterexample else "0")

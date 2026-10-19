@@ -1,4 +1,6 @@
 """Self-contained real sklearn computations; no gateway or substitute API calls."""
+
+from ai_system.research.domain import findings as research_findings
 import contextlib,io,json,sys,hashlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,11 +11,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 from ai_system.research.store import ResearchStore,digest
 from ai_system.research.validation import protocol,report_fingerprint
-from ai_system.research.comparison import ComparisonStore,SupervisedSpec
+from ai_system.modules.experiments.store import ExperimentStore,SupervisedSpec
 from ai_system.research.models import WorkerResult,IssueReport,ReviewRecord
 from ai_system.research.execution_recovery import preview,resolve,REFUSAL
-from ai_system.graph.nodes.supervised_probe import prepare,metric_value
-from ai_system.graph.nodes.estimator_contracts import check_estimator,candidate_contract
+from ai_system.modules.experiments.supervised import prepare,metric_value
+from ai_system.modules.experiments.contracts import check_estimator,candidate_contract
 
 COMPUTE='''Xtr=np.asarray(_data['X_train']); Xva=_V.to_numpy(); ytr=np.asarray(_formal_train); yva=np.asarray(_formal_truth)
 beta,*_=np.linalg.lstsq(np.column_stack([np.ones(len(Xtr)),Xtr]),ytr,rcond=None)
@@ -60,7 +62,7 @@ def recovered(tmp_path):
         branches.append({'index':index,'name':name,'status':'valid','code_hash':digest(expression),'driver_hash':hashlib.sha256(driver.encode()).hexdigest(),
           'implementation_audit':audit,'predictions':[{'prediction':float(p)} for p in pred],'prediction_hash':hashlib.sha256(blob).hexdigest(),'metric':metric_value('RMSE',truth,pred),'run_ids':['candidate'+str(index)]})
         (folder/f'inputs-{index}.json').write_text(json.dumps(payload))
-    cfg=ComparisonStore(store);cfg.set_policy(True,spec)
+    cfg=ExperimentStore(store);cfg.set_policy(True,spec)
     record=cfg.create('Q1',1,{'status':'winner','chosen_index':0,'owner_attempt':aid,'implementation_contract_version':1,'contract_hash':digest(protocol(store.snapshot(),'Q1')),
       'policy_version':cfg.policy()['version'],'candidate_hashes':[digest(c) for c in candidates],'task_hash':digest(store.snapshot()['tasks']['Q1']['subproblem']),'input_refs':order.input_refs,
       'file_inputs':store.file_inputs(),'protocol':frozen,'protocol_hash':digest(frozen),'branches':branches})
@@ -82,7 +84,7 @@ def recovered(tmp_path):
        'requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':['R1']}]}
     store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',results=results,report=report,issues=[issue,other],design={'candidates':candidates},
         reviews=[ReviewRecord(report_hash=report_fingerprint(report),issues=[])]))
-    selected=next(i for i in store.snapshot()['issues'] if i['message']==issue.message)
+    selected=next(i for i in research_findings(store.snapshot()) if i['message']==issue.message)
     return SimpleNamespace(store=store,issue=selected,path=path,transcript=transcript,run=run,manifest=manifest)
 
 
@@ -91,15 +93,15 @@ def test_explicit_resolution_preserves_issue_and_other_real_failure(recovered):
     assert proof['refusal']['kernel_executed'] is False and proof['successful_computation']['run_id']=='computed'
     assert {p['outcome'] for p in proof['validation']['checks']}=={'passed'}
     resolve(store,recovered.issue['id'],proof['proof_hash']);after=store.snapshot()
-    issue=next(i for i in after['issues'] if i['id']==recovered.issue['id'])
+    issue=next(i for i in research_findings(after) if i['id']==recovered.issue['id'])
     assert issue['status']=='resolved' and issue['message']==recovered.issue['message'] and issue['evidence_refs']==['R2','R3']
     assert issue['resolution']==proof and not store.delivery_ready(after)
-    assert next(i for i in after['issues'] if i['id']!=issue['id'])['status']=='confirmed'
+    assert next(i for i in research_findings(after) if i['id']!=issue['id'])['status']=='confirmed'
     seq=after['commit_seq'];resolve(store,issue['id'],proof['proof_hash']);assert store.snapshot()['commit_seq']==seq
     assert after['attempts']==before['attempts'] and after['validations']==before['validations']
 
 
-@pytest.mark.parametrize('change',['no_recovery','constants_only','contract_changed','input_changed','revision_changed','ambiguous_refusal','comparison_policy_changed','candidate_changed'])
+@pytest.mark.parametrize('change',['no_recovery','constants_only','contract_changed','input_changed','revision_changed','ambiguous_refusal','experiment_policy_changed','candidate_changed'])
 def test_unrecovered_or_changed_context_never_closes(recovered,change):
     store=recovered.store
     if change=='no_recovery':recovered.path.write_text(json.dumps(recovered.transcript[:2]+recovered.transcript[4:]))
@@ -108,7 +110,7 @@ def test_unrecovered_or_changed_context_never_closes(recovered,change):
         recovered.run('computed',code);messages=recovered.transcript;messages[2]['data']['tool_calls'][0]['args']['code']=code;recovered.path.write_text(json.dumps(messages))
     elif change=='input_changed':(store.root/'data/sample.csv').write_text('x1,x2,target\n1,2,3\n')
     elif change=='ambiguous_refusal':recovered.path.write_text(json.dumps(recovered.transcript[:2]+recovered.transcript))
-    elif change=='comparison_policy_changed':ComparisonStore(store).set_policy(False)
+    elif change=='experiment_policy_changed':ExperimentStore(store).set_policy(False)
     else:
         with store._transaction() as db:
             state=store._read(db)
@@ -117,14 +119,14 @@ def test_unrecovered_or_changed_context_never_closes(recovered,change):
             else:state['tasks']['Q1']['revision']+=1
             store._save(db,state,'test_context_changed',{})
     with pytest.raises(ValueError):preview(store,recovered.issue['id'])
-    assert next(i for i in store.snapshot()['issues'] if i['id']==recovered.issue['id'])['status']=='confirmed'
+    assert next(i for i in research_findings(store.snapshot()) if i['id']==recovered.issue['id'])['status']=='confirmed'
 
 
 def test_source_change_after_preview_cannot_apply_old_proof(recovered):
     proof=preview(recovered.store,recovered.issue['id'])
     path=recovered.store.root/'runs/computed/stdout.log';path.write_text('no recovery data')
     with pytest.raises(ValueError):resolve(recovered.store,recovered.issue['id'],proof['proof_hash'])
-    assert recovered.store.snapshot()['issues'][0]['status']=='confirmed'
+    assert research_findings(recovered.store.snapshot())[0]['status']=='confirmed'
 
 
 def test_additional_failed_kernel_run_is_not_treated_as_recovered(recovered):
@@ -142,8 +144,8 @@ def test_policy_change_inside_resolution_transaction_rolls_back(recovered,monkey
     @contextlib.contextmanager
     def changed():
         with original() as db:
-            db.execute('UPDATE comparison_policy SET version=version+1 WHERE id=1')
+            db.execute('UPDATE experiment_policy SET version=version+1 WHERE id=1')
             yield db
     monkeypatch.setattr(store,'_transaction',changed)
     with pytest.raises(ValueError,match='关闭前比较配置'):resolve(store,recovered.issue['id'],proof['proof_hash'])
-    assert store.snapshot()['issues'][0]['status']=='confirmed'
+    assert research_findings(store.snapshot())[0]['status']=='confirmed'

@@ -14,9 +14,9 @@ def verified_methods(store):
     state=store.snapshot()
     if not state:return []
     with closing(store._connect()) as db:
-        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='comparisons'").fetchone():return []
-        records=[json.loads(r[0]) for r in db.execute('SELECT payload FROM comparisons WHERE research_id=?',(store.research_id,))]
-        policy=db.execute('SELECT version FROM comparison_policy WHERE id=1').fetchone()
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='experiment_comparisons'").fetchone():return []
+        records=[json.loads(r[0]) for r in db.execute('SELECT payload FROM experiment_comparisons WHERE research_id=?',(store.research_id,))]
+        policy=db.execute('SELECT version FROM experiment_policy WHERE id=1').fetchone()
     files=store.file_inputs();facts=[]
     try:manifest=json.loads((store.root/'manifest.json').read_text()).get('runs',{})
     except (OSError,ValueError):return []

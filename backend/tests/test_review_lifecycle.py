@@ -1,4 +1,6 @@
 """Local audit findings and newly adopted premises share committed research state."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import re
@@ -90,7 +92,7 @@ def test_unresolved_local_review_blocks_delivery_without_unrelated_check_dismiss
         async def send_json_block(self,kind,content):events.append((kind,content))
     agent, store = run_agent(tmp_path, monkeypatch, AuditModel(mode="stuck", loose_number_once=False),stream_manager=Stream())
     state = store.snapshot()
-    findings = [i for i in state["issues"] if i["source"] == "local_review"]
+    findings = [i for i in research_findings(state) if i["source"] == "local_review"]
     assert findings and all(i["status"] == "inconclusive" for i in findings)
     assert state["outcome"] == "blocked" and not store.delivery_ready(state)
     assert not (tmp_path / "paper.md").exists()
@@ -107,7 +109,7 @@ def test_successful_local_repair_gets_fresh_review_and_closes_recorded_findings(
     state = store.snapshot()
     assert store.delivery_ready(state) and (tmp_path / "paper.md").exists()
     assert model.review_calls == 2
-    findings = [i for i in state["issues"] if i["source"] == "local_review"]
+    findings = [i for i in research_findings(state) if i["source"] == "local_review"]
     assert findings and all(i["status"] == "resolved" and i["resolution_attempt"] for i in findings)
     report = state["tasks"]["Q1"]["report"]
     assert [bool(r["issues"]) for r in report["reviews"]] == [True, False]
@@ -128,13 +130,13 @@ def test_resume_rechecks_local_findings_instead_of_clearing_them_at_recovery(tmp
     unrelated = original["tasks"]["Q3"]["active_attempt"]
     assert not store.delivery_ready(original)
     store.recover()
-    assert any(i["source"] == "local_review" and i["status"] not in {"resolved", "dismissed"} for i in store.snapshot()["issues"])
+    assert any(i["source"] == "local_review" and i["status"] not in {"resolved", "dismissed"} for i in research_findings(store.snapshot()))
     agent = PaperGraphAgent(AuditModel(mode="clear", loose_number_once=False), workspace_dir=str(tmp_path), judge=FixedJudge(), explore_top_k=1, max_review_rounds=1)
     asyncio.run(agent.resume_failed())
     state = store.snapshot()
     assert store.delivery_ready(state) and (tmp_path / "paper.md").exists()
     assert state["tasks"]["Q3"]["active_attempt"] == unrelated
-    assert all(i["status"] in {"resolved", "dismissed"} for i in state["issues"])
+    assert all(i["status"] in {"resolved", "dismissed"} for i in research_findings(state))
     retry = state["attempts"][state["tasks"]["Q1"]["active_attempt"]]
     assert retry["review_issue_ids"], "the new audit is bound to the previously open findings"
 
@@ -145,9 +147,9 @@ def test_resume_routes_uncheckable_global_finding_to_owner_and_fresh_audit(tmp_p
     finding = IssueReport(task_id="Q1", category="model", section="analysis", message="核对逐日序列，不能用单日值与全周平均比较")
     [issue] = store.report_issues([finding], "sections")
     store.schedule_investigations()
-    assert store.snapshot()["issues"][-1]["status"] == "inconclusive"
+    assert research_findings(store.snapshot())[-1]["status"] == "inconclusive"
     store.recover()
-    assert store.snapshot()["issues"][-1]["status"] == "inconclusive", "recovery itself is not a resolution"
+    assert research_findings(store.snapshot())[-1]["status"] == "inconclusive", "recovery itself is not a resolution"
 
     class RecheckModel(AuditModel):
         solver_saw_finding: bool = False
@@ -174,7 +176,7 @@ def test_resume_routes_uncheckable_global_finding_to_owner_and_fresh_audit(tmp_p
     assert model.solver_saw_finding and model.reviewer_saw_finding
     assert store.delivery_ready(state)
     assert state["tasks"]["Q3"]["active_attempt"] == original["tasks"]["Q3"]["active_attempt"]
-    resolved = next(i for i in state["issues"] if i["id"] == issue["id"])
+    resolved = next(i for i in research_findings(state) if i["id"] == issue["id"])
     assert resolved["source"] == "sections" and resolved["status"] == "resolved"
     attempt = state["attempts"][resolved["resolution_attempt"]]
     assert issue["id"] in attempt["review_issue_ids"]
@@ -198,7 +200,7 @@ def test_global_finding_cannot_close_without_fresh_clear_owner_review(tmp_path, 
         issues=[finding] if audit == "still_open" else [])]
     store.commit(WorkerResult(order=order, execution_status="succeeded", acceptance="accepted", report=report,
         results=[{"id": "R99", "subproblem": "Q1", "name": "demand", "value": "8", "run_id": "run_test"}], reviews=reviews))
-    assert next(i for i in store.snapshot()["issues"] if i["id"] == issue["id"])["status"] == "inconclusive"
+    assert next(i for i in research_findings(store.snapshot()) if i["id"] == issue["id"])["status"] == "inconclusive"
     assert not store.delivery_ready(store.snapshot())
 
 
@@ -259,7 +261,7 @@ def test_clear_local_audit_cannot_close_an_independent_solver_finding(tmp_path):
     store.commit(WorkerResult(order=store.claim("Q1", review_required=True), execution_status="succeeded", acceptance="accepted", report=report,
         results=[{"id": "R1", "subproblem": "Q1", "name": "demand", "value": "8", "run_id": "run_test"}], issues=[finding],
         reviews=[ReviewRecord(report_hash=report_fingerprint(report), issues=[finding]), ReviewRecord(report_hash=report_fingerprint(report), issues=[])]))
-    issues = store.snapshot()["issues"]
+    issues = research_findings(store.snapshot())
     assert next(i for i in issues if i["source"] == "local_review")["status"] == "resolved"
     assert next(i for i in issues if i["source"] == "worker")["status"] == "suspected"
     assert not store.delivery_ready(store.snapshot())
@@ -274,7 +276,7 @@ def test_downstream_rewrite_cannot_close_a_finding_about_its_frozen_upstream(tmp
         results=[{"id": "R2", "subproblem": "Q2", "name": "allocation", "value": "8", "run_id": "run_test"},
                  {"id": "R3", "subproblem": "Q2", "name": "residual", "value": "0", "run_id": "run_test"}],
         reviews=[ReviewRecord(report_hash=report_fingerprint(report), issues=[finding]), ReviewRecord(report_hash=report_fingerprint(report), issues=[])]))
-    [issue] = store.snapshot()["issues"]
+    [issue] = research_findings(store.snapshot())
     assert issue["task_id"] == "Q1" and issue["status"] == "suspected"
     assert not store.delivery_ready(store.snapshot())
 
@@ -290,7 +292,7 @@ def test_commit_requires_fresh_review_and_cannot_hide_open_findings(tmp_path, re
         reviews=[] if record_kind == "missing" else [record])
     store.commit(result)
     assert not store.delivery_ready(store.snapshot())
-    assert any(i["source"] == "local_review" and i["blocking"] for i in store.snapshot()["issues"])
+    assert any(i["source"] == "local_review" and i["blocking"] for i in research_findings(store.snapshot()))
     with pytest.raises(ResearchConflict, match="冻结输入"):
         store.commit(result.model_copy(update={"order": order.model_copy(update={"attempt_id": store.claim("Q3").attempt_id, "review_required": False})}))
 
@@ -351,7 +353,7 @@ def test_new_consumers_inherit_versioned_premises_and_refutation_recomputes_them
     roots = [AssumptionChange(assumption_id=key, base_revision=1, statement="revised premise", task_ids=a["task_ids"], checks=a["checks"])
         for key, a in state["assumptions"].items() if a["status"] == "refuted"]
     store.apply_patch(PlanPatch(command_id="repair", base_revision=state["revision"], reason="replace refuted premises",
-        assumptions=roots, issue_ids=[i["id"] for i in state["issues"] if i["status"] == "confirmed"]))
+        assumptions=roots, issue_ids=[i["id"] for i in research_findings(state) if i["status"] == "confirmed"]))
     assert store.snapshot()["assumptions"][aid]["revision"] == 2
     assert store.snapshot()["assumptions"][aid]["source"] == "solve"
     assert any(a["id"] == aid and a["revision"] == 1 and a["status"] == "refuted" for a in store.snapshot()["assumption_history"])
@@ -384,7 +386,7 @@ class LocalCountercheckModel(ReviewLoopModel):
 def test_local_findings_use_independent_counterchecks_and_only_replan_after_confirmation(tmp_path, monkeypatch, counterexample):
     _, store = run_agent(tmp_path, monkeypatch, LocalCountercheckModel(counterexample=counterexample, loose_number_once=False))
     state = store.snapshot()
-    [issue] = [i for i in state["issues"] if i["source"] == "local_review"]
+    [issue] = [i for i in research_findings(state) if i["source"] == "local_review"]
     assert issue["status"] == ("resolved" if counterexample else "dismissed")
     assert state["planning_calls"] == (1 if counterexample else 0)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1

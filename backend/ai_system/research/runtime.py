@@ -20,12 +20,6 @@ class ResearchRuntime:
     def __init__(self,root,research_id='workspace-runtime'):
         self.active_research_id=research_id
         self.store=ResearchStore(root,BUDGET_ID)
-        with closing(self.store._connect()) as db:
-            db.executescript('''CREATE TABLE IF NOT EXISTS failure_guards(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS runtime_stop(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS runtime_policy(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS request_budgets(research_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS model_requests(research_id TEXT NOT NULL,sequence INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(research_id,sequence));''')
 
     def extend_limit(self,extra_requests,*,expected_limit,command_id,authorization):
         """Apply an explicitly authorized small extension; never reset usage or provider faults."""
@@ -58,25 +52,8 @@ class ResearchRuntime:
     def policy(self):
         with closing(self.store._connect()) as db:
             row=db.execute('SELECT payload FROM runtime_policy WHERE id=1').fetchone()
-            frozen=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
-        if row:
-            policy=json.loads(row[0])
-            if policy.get('policy_version')==2:return policy
-            return {'request_limit':40,'timeout_seconds':90,'compact_paper':False,'confirm_models':False,**policy,
-                    'policy_version':1,'limit_source':'legacy','timeout_source':'legacy','preference_source':'legacy'}
-        # Missing policy in an existing project retains its previous effective limits.
-        legacy=bool(frozen or (self.store.root/'.system/graph_thread.json').exists() or (self.store.root/'.system/graph.sqlite').exists())
-        for name,key in [('llm_calls.json','calls'),('results.json','results')]:
-            try:legacy=legacy or bool(json.loads((self.store.root/'.system'/name).read_text()).get(key))
-            except (OSError,ValueError,TypeError):pass
-        policy={'policy_version':2,'request_limit':40 if legacy else None,'timeout_seconds':90 if legacy else None,
-                'limit_source':'legacy' if legacy else 'default','timeout_source':'legacy' if legacy else 'model_connection','preference_source':'legacy' if legacy else 'default',
-                'compact_paper':False,'confirm_models':False}
-        if frozen:
-            saved=json.loads(frozen[0])
-            policy.update(request_limit=saved.get('request_limit',40),timeout_seconds=saved.get('timeout_seconds',90))
-        with self.store._transaction() as db:db.execute('INSERT OR IGNORE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
-        return policy
+        if row is None:raise ValueError('运行配置尚未迁移')
+        return json.loads(row[0])
 
     def configure(self,settings):
         limit=settings.get('request_limit')
@@ -87,30 +64,11 @@ class ResearchRuntime:
                 'compact_paper':False,'confirm_models':False,**settings}
         with self.store._transaction() as db:db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
 
-    def _metered_state(self,state):
-        if state.get('metering_version')==2:return state
-        # Older releases persisted reported tokens in traces, not request_budgets.
-        # Import those known values once, before accumulating new per-attempt usage.
-        calls=[]
-        if state.get('used',0):
-            for name in ('llm_calls.json','editor_llm_calls.json'):
-                try:calls.extend(json.loads((self.store.root/'.system'/name).read_text()).get('calls',[]))
-                except (OSError,ValueError,TypeError):pass
-        state.update(metering_version=2,input_tokens=sum(int(c.get('input') or 0) for c in calls if c.get('usage_returned')),
-                     output_tokens=sum(int(c.get('output') or 0) for c in calls if c.get('usage_returned')),
-                     usage_reported_calls=sum(bool(c.get('usage_returned')) for c in calls))
-        return state
-
     def status(self,research_id=None):
         policy=self.policy()
         with closing(self.store._connect()) as db:r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
-        state=self._metered_state({**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready'})})
+        state={**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready','metering_version':2})}
         state.setdefault('input_tokens',0);state.setdefault('output_tokens',0);state.setdefault('usage_reported_calls',0)
-        if state.get('state')=='provider_blocked':
-            # Old 429 records did not distinguish rate limiting from quota. Keep
-            # the historical fact, but only a user-initiated call may probe again.
-            state['state']='service_interrupted'
-            state['legacy_provider_blocked']=True
         state['stop_reason']=self.stop_reason()
         return state
 
@@ -130,7 +88,7 @@ class ResearchRuntime:
         policy=self.policy()
         with self.store._transaction() as db:
             r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
-            state=self._metered_state({**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready'})})
+            state={**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready','metering_version':2})}
             limit=state.get('request_limit')
             if limit is not None and state['used']>=limit:
                 reason={'kind':'explicit_limit' if state.get('limit_source')!='legacy' else 'legacy_limit',

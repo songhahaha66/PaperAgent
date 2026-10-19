@@ -1,5 +1,5 @@
 import { apiClient } from '@/utils/apiClient'
-import type { ComparisonSpec } from './comparisons'
+import type { ComparisonSpec } from './experiments'
 export interface ResearchSetup {
   request_limit: number | null
   timeout_seconds?: number | null
@@ -31,7 +31,7 @@ export const researchSetupAPI = {
       `/api/workspace/${work}/research-setup`,
       { method: 'PUT', body: JSON.stringify(body) },
     ),
-  overview: (work: string) => apiClient.request<any>(`/api/workspace/${work}/research-overview`),
+  settings: (work: string) => apiClient.request<any>(`/api/workspace/${work}/research-settings`),
 }
 export interface ReviewTaskItem {
   stage: 'reconcile' | 'sections' | 'citations'
@@ -43,6 +43,11 @@ export interface ReviewTaskItem {
   reason?: string
   outcome?: string
   record_id?: string
+  coverage_detail?: {
+    policy: string
+    complete: boolean
+    sections: Record<string, { total_chars: number; included_chars: number; local_complete?: boolean }>
+  }
   segmented?: {
     sections?: {
       section: string

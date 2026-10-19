@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 def _require_workspace_access(db: Session, work_id: str, user_id: int, *, exporting: bool = False) -> None:
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != user_id:
         action = "export" if exporting else "access"
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorized to {action} this workspace")
@@ -437,7 +437,7 @@ def _skill_store(db, work_id, user_id, *, mutation=False):
 
 @router.get('/{work_id}/skills')
 async def get_research_skills(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
-    from ai_system.graph.methods import skill_catalog
+    from ai_system.modules.methods import skill_catalog
     store = _skill_store(db, work_id, current_user)
     snapshot = store.snapshot()
     usage = [{'task_id': key, 'skills': task.get('design', {}).get('skills', []), 'validity': task['validity']}
@@ -448,7 +448,7 @@ async def get_research_skills(work_id: str, db: Session = Depends(get_db), curre
 
 @router.get('/{work_id}/skills/{skill_key}')
 async def get_research_skill_detail(work_id: str, skill_key: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
-    from ai_system.graph.methods import skill_detail
+    from ai_system.modules.methods import skill_detail
     _require_workspace_access(db, work_id, current_user)
     try:
         return skill_detail(skill_key)
@@ -523,7 +523,9 @@ async def literature_policy(work_id: str, request: LiteraturePolicy, db: Session
 async def literature_search(work_id: str, request: LiteratureQuery, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
     service = _literature(work_id,db,current_user,True)
     try:
-        return await service.search(request.query,request.limit,request.fetch_open_access)
+        from ai_system.modules.registry import invoke
+        from types import SimpleNamespace
+        return await invoke(SimpleNamespace(workspace=service.store.root), 'literature.collect', query=request.query,limit=request.limit,fetch_open_access=request.fetch_open_access)
     except ValueError as exc:
         raise HTTPException(409,str(exc))
 
@@ -532,7 +534,9 @@ async def literature_search(work_id: str, request: LiteratureQuery, db: Session=
 async def literature_import(work_id: str, request: LiteratureURL, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
     service = _literature(work_id,db,current_user,True)
     try:
-        return await service.import_url(request.url)
+        from ai_system.modules.registry import invoke
+        from types import SimpleNamespace
+        return await invoke(SimpleNamespace(workspace=service.store.root), 'literature.import', url=request.url)
     except ValueError as exc:
         raise HTTPException(409,str(exc))
 
@@ -600,13 +604,13 @@ def _experience_scope(work_id,db,user_id):
     return ExperienceScope(user_id,work_id)
 
 
-@router.get('/{work_id}/experiences')
+@router.get('/{work_id}/experience-usage')
 async def experience_list(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     scope=_experience_scope(work_id,db,current_user)
     from services.research_experience import current_usage
     from ai_system.research.store import ResearchStore
     import json
-    result=scope.list();root=workspace_file_service.get_workspace_path(work_id)
+    result={};root=workspace_file_service.get_workspace_path(work_id)
     thread=root/'.system/graph_thread.json'
     try:
         saved=json.loads(thread.read_text()) if thread.exists() else None
@@ -616,67 +620,25 @@ async def experience_list(work_id:str,db:Session=Depends(get_db),current_user:in
         result['usage']=[];result['usage_error']='当前研究经验记录暂不可读'
     for usage in result['usage']:
         usage['available']=scope.valid_refs(usage['refs'])
+        usage['sources']=scope.reference_sources(usage['refs'])
     return result
 
 
-@router.put('/{work_id}/experiences/policy')
-async def experience_policy(work_id:str,request:ExperienceSwitch,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    scope=_experience_scope(work_id,db,current_user);scope.set_enabled(request.enabled)
-    return {'enabled':request.enabled}
-
-
-@router.post('/{work_id}/experiences/rebuild')
-async def experience_rebuild(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    return _experience_scope(work_id,db,current_user).rebuild()
-
-
-@router.patch('/{work_id}/experiences/{experience_id}')
-async def experience_change(work_id:str,experience_id:str,request:ExperienceSwitch,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    scope=_experience_scope(work_id,db,current_user)
-    try:scope.change(experience_id,enabled=request.enabled)
-    except KeyError:raise HTTPException(404,'经验不存在或不可访问')
-    return {'enabled':request.enabled}
-
-
-@router.delete('/{work_id}/experiences/{experience_id}')
-async def experience_delete(work_id:str,experience_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    scope=_experience_scope(work_id,db,current_user)
-    try:scope.change(experience_id,delete=True)
-    except KeyError:raise HTTPException(404,'经验不存在或不可访问')
-    return {'deleted':True}
-
-
-class ComparisonPolicyRequest(BaseModel):
-    enabled:bool
-    spec:dict|None=None
-
-
-@router.get('/{work_id}/comparisons')
+@router.get('/{work_id}/experiments')
 async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     _require_workspace_access(db,work_id,current_user)
-    from ai_system.research.comparison import ComparisonStore
+    from ai_system.modules.experiments.store import ExperimentStore
     from ai_system.research.store import ResearchStore,digest
     from ai_system.research.validation import protocol
-    from ai_system.graph.nodes.supervised_probe import metadata
+    from ai_system.modules.experiments.supervised import metadata
     store=ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')
-    comparisons=ComparisonStore(store);policy=comparisons.policy();records=comparisons.list()
+    comparisons=ExperimentStore(store);policy=comparisons.policy();records=comparisons.list()
     files=store.file_inputs()
     for record in records:
         source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
         task=(source or {}).get('tasks',{}).get(record['task_id'])
         record['input_current']=files==record['file_inputs'] and policy['version']==record['policy_version'] and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'])
     return {'policy':policy,'files':metadata(store.root),'comparisons':records}
-
-
-@router.put('/{work_id}/comparisons/policy')
-async def comparison_policy(work_id:str,request:ComparisonPolicyRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    _require_workspace_access(db,work_id,current_user)
-    if task_manager.get_running_task(work_id):raise HTTPException(409,'研究执行中不能修改比较配置或协议')
-    from ai_system.research.comparison import ComparisonStore
-    from ai_system.research.store import ResearchStore
-    try:
-        return ComparisonStore(ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')).set_policy(request.enabled,request.spec)
-    except ValueError as exc:raise HTTPException(422,str(exc))
 
 
 class ResearchSetupRequest(BaseModel):
@@ -735,8 +697,8 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
     from ai_system.research.store import ResearchStore
     from ai_system.research.runtime import ResearchRuntime
     from ai_system.research.literature import LiteratureService
-    from ai_system.research.comparison import ComparisonStore,SupervisedSpec
-    from ai_system.graph.methods import validate_skill_policy
+    from ai_system.modules.experiments.store import ExperimentStore,SupervisedSpec
+    from ai_system.modules.methods import validate_skill_policy
     from services.research_experience import ExperienceScope
     from services.literature_fetch import public_url
     root=workspace_file_service.get_workspace_path(work_id)
@@ -749,51 +711,34 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
         runtime=ResearchRuntime(root)
         runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper','confirm_models')})
         skills=ResearchStore(root,'workspace-skills');skills.set_skill_preferences(skill,skills.skill_preferences()['version'])
-        ComparisonStore(skills).set_policy(request.compare,spec)
+        ExperimentStore(skills).set_policy(request.compare,spec)
         ExperienceScope(current_user,work_id).set_enabled(request.reuse_experience)
         library=LiteratureService(root);library.store.set_policy(request.literature_mode)
         for url in urls:
             known=next((s for s in library.store.state()['sources'] if s['url']==url and s.get('evidence_count')),None)
-            if not known:await library.import_url(url)
+            if not known:
+                from ai_system.modules.registry import invoke
+                from types import SimpleNamespace
+                await invoke(SimpleNamespace(workspace=root),'literature.import',url=url)
         if request.literature_query.strip() and not any(o.get('query')==request.literature_query for o in library.store.state()['operations']):
-            await library.search(request.literature_query,1,False)
+            from ai_system.modules.registry import invoke
+            from types import SimpleNamespace
+            await invoke(SimpleNamespace(workspace=root),'literature.collect',query=request.literature_query,limit=1,fetch_open_access=False)
         return {'configured':True,'literature':library.store.state()}
     except ValueError as exc:raise HTTPException(422,str(exc))
 
 
-@router.get('/{work_id}/research-overview')
-async def research_overview(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+@router.get('/{work_id}/research-settings')
+async def research_settings(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     _require_workspace_access(db,work_id,current_user)
-    import json
     from ai_system.research.runtime import ResearchRuntime
-    from ai_system.research.comparison import ComparisonStore
+    from ai_system.modules.experiments.store import ExperimentStore
     from ai_system.research.literature import LiteratureStore
-    from ai_system.research.citations import citation_usage
-    from ai_system.research.store import ResearchStore
-    from services.research_experience import ExperienceScope,current_usage
-    from ai_system.research.experience import design_usage
-    from services.chat_services.research_session import research_snapshot
-    root=workspace_file_service.get_workspace_path(work_id);thread=root/'.system/graph_thread.json'
-    saved=json.loads(thread.read_text()) if thread.exists() else {};rid=saved.get('thread_id')
-    runtime=ResearchRuntime(root,rid or 'workspace-runtime');store=ResearchStore(root,rid,read_only=True) if rid else None
-    snapshot=store.snapshot() if store else None
-    library=LiteratureStore(root).state();scope=ExperienceScope(current_user,work_id)
-    usage=current_usage(store) if snapshot else []
-    citations=citation_usage(root) if rid else []
-    comparison=ComparisonStore(runtime.store)
-    comparisons=comparison.list()
-    for record in comparisons:
-        task=(snapshot or {}).get('tasks',{}).get(record['task_id'],{})
-        record['current']=task.get('revision')==record['revision'] and record['research_id']==rid
-    actual=research_snapshot(root,work_id,crud.get_work(db,work_id).status)
-    last_error=next((a.get('result',{}).get('report',{}).get('error') for a in reversed(list((snapshot or {}).get('attempts',{}).values())) if a.get('result',{}).get('report',{}).get('error')),None)
-    if actual.execution_reason and actual.work_status in {'failed','paused'}:last_error=actual.execution_reason['message']
-    if not last_error and saved.get('status')=='failed':
-        last_error='研究执行失败，已保留检查点与请求计数。可查看对话中的错误后恢复。'
-    return {'settings':runtime.policy(),'budget':runtime.status(),'requests':runtime.requests() if rid else [],
-        'execution_resolutions':[{'issue':{k:i.get(k) for k in ('id','task_id','task_revision','message','evidence_refs','status')},'proof':i['resolution']}
-            for i in (snapshot or {}).get('issues',[]) if i.get('category')=='execution' and i.get('resolution')][-20:],
-        'research':actual.model_dump(),'literature':{'sources':len(library['sources']),'evidence':sum(s.get('evidence_count',0) for s in library['sources']),'operations':library['operations'],'citations':citations},
-        'experience':{'enabled':scope.enabled(db),'usage':usage,'design_usage':design_usage(store) if store else []},'comparisons':comparisons,
-        'skills':[{ 'task_id':key,'skills':(task.get('design') or {}).get('skills',[])} for key,task in (snapshot or {}).get('tasks',{}).items()],
-        'sections':len((snapshot or {}).get('sections',{})),'last_error':last_error}
+    from services.research_experience import ExperienceScope
+    root=workspace_file_service.get_workspace_path(work_id)
+    runtime=ResearchRuntime(root)
+    return {'settings':runtime.policy(), 'budget':runtime.status(),
+            'modules':{'experiments':ExperimentStore(runtime.store).policy(),
+                       'literature':{'mode':LiteratureStore(root).policy()},
+                       'skills':runtime.store.skill_preferences()},
+            'experience':{'enabled':ExperienceScope(current_user,work_id).enabled(db)}}

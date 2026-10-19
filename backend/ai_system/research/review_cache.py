@@ -1,4 +1,6 @@
 """Versioned, context-bound review results and narrowly scoped service recovery."""
+
+from ai_system.research.domain import findings as research_findings
 import json,time,uuid,hashlib,re,asyncio
 from dataclasses import asdict,is_dataclass
 from contextlib import closing
@@ -67,8 +69,8 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
     configuration={}
     if store:
         with closing(store._connect()) as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='comparison_policy'").fetchone():
-                row=db.execute('SELECT version,payload FROM comparison_policy WHERE id=1').fetchone()
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='experiment_policy'").fetchone():
+                row=db.execute('SELECT version,payload FROM experiment_policy WHERE id=1').fetchone()
                 if row:configuration['comparison']={'version':row[0],'policy':json.loads(row[1])}
     citations={}
     for cid in set(re.findall(r'\{\{C:C(\d+)\}\}', '\n'.join((sections or {}).values()))):
@@ -78,11 +80,8 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
                 row=db.execute('SELECT payload FROM literature_passages WHERE id=?',(int(cid),)).fetchone() if exists else None
             citations['C'+cid]=digest(json.loads(row[0])) if row else None
         except (AttributeError,ValueError,KeyError):citations['C'+cid]=None
-    consistency=None
-    if stage in {'sections','fragment','section_blocks','section_global','issue_target'}:
-        try:consistency=digest(json.loads((root/'.system/consistency.json').read_text()))
-        except (OSError,ValueError):pass
-    from ..graph.nodes.consistency import section_coverage
+    consistency=digest(snapshot.get('consistency', [])) if stage in {'sections','fragment','section_blocks','section_global','issue_target'} else None
+    from ai_system.modules.writing.consistency import section_coverage
     return {'policy':POLICY,'stage':stage,'request_hash':digest({'system':system,'prompt':prompt,'schema':schema.model_json_schema()}),'reconcile_projection_hash':consistency,
         'section_coverage':section_coverage(sections or {}) if stage=='sections' else None,
         'model_id':getattr(ctx.planner_llm,'model_name',None) or getattr(ctx.planner_llm,'model',None),
@@ -178,7 +177,7 @@ class ReviewCache:
 
     def complete(self,record,result,*,provenance=None,current_context=None):
         if record['stage']=='sections' and not record['context'].get('section_coverage',{}).get('complete',True):
-            from ..graph.nodes.consistency import ReviewCoverageIncomplete
+            from ai_system.modules.writing.consistency import ReviewCoverageIncomplete
             raise ReviewCoverageIncomplete('不完整章节审查不能登记为完成')
         record={**record,'result':result,'result_hash':digest(result),'completed_at':time.time(),'provenance':provenance or {}}
         if record.get('source')=='segmented-aggregate':
@@ -208,7 +207,7 @@ class ReviewCache:
         coverage=record.get('coverage') or review_coverage(record['stage'],record['context'])
         if coverage['kind']!='research':return []
         replaced=[]
-        for issue in state['issues']:
+        for issue in research_findings(state):
             scope=issue.get('review_scope') or {}
             if issue['category']!='service' or issue['status'] in {'resolved','dismissed','superseded'} or issue['source'] not in {'review:'+record['stage'],'review-task:'+record['stage']} or scope.get('stage')!=record['stage']:continue
             prior=db.execute("SELECT state,payload FROM review_records WHERE id=? AND research_id=? AND context_hash=?",(scope.get('failed_review_id'),self.store.research_id,scope.get('context_hash'))).fetchone()
@@ -230,7 +229,7 @@ class ReviewCache:
 
     @staticmethod
     def _transitions(state,ids):
-        return {name:[i['id'] for i in state['issues'] if i['id'] in ids and i['status']==status]
+        return {name:[i['id'] for i in research_findings(state) if i['id'] in ids and i['status']==status]
             for name,status in [('resolved_service_issues','resolved'),('superseded_service_issues','superseded')]}
 
     def _verified_children(self,db,record):
@@ -269,7 +268,7 @@ class ReviewCache:
     @staticmethod
     def _close_matching(state,record):
         closed=[]
-        for issue in state['issues']:
+        for issue in research_findings(state):
             scope=issue.get('review_scope',{})
             if issue['category']!='service' or issue['status'] in {'resolved','dismissed','superseded'} or scope.get('stage')!=record['stage'] or scope.get('context_hash')!=record['context_hash']:continue
             source_ok=issue['source']=='review:'+record['stage'] or (
@@ -318,7 +317,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             return answer
         heartbeat=asyncio.create_task(cache.heartbeat(record))
         if stage=='sections':
-            from ..graph.nodes.consistency import require_complete_sections
+            from ai_system.modules.writing.consistency import require_complete_sections
             require_complete_sections(sections or {})
         answer=await perform()
         verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict','section_blocks':'issues','section_global':'issues','issue_target':'issues'}[stage]

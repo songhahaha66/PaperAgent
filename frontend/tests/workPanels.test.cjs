@@ -9,6 +9,27 @@ const { loadModule, vue, pinia } = require('./moduleHarness.cjs')
   })
   const store = module.useWorkPanelsStore(pinia.createPinia())
   const first = store.session('first')
+  const initialPanels=first.panels
+  assert.equal(store.session('first').panels,initialPanels,'reading a migrated session must preserve array identity and never retrigger its render')
+  const old=store.session('legacy')
+  old.panels.push({id:'overview',kind:'overview',group:'main'})
+  old.activeId='overview'
+  const converted=store.session('legacy')
+  assert.equal(converted.activeId,'progress')
+  assert.equal(converted.panels.filter(p=>p.kind==='progress').length,1)
+  const convertedPanels=converted.panels
+  assert.equal(store.session('legacy').panels,convertedPanels,'legacy conversion runs once')
+  store.remove('legacy')
+  const retired = store.session('retired-personal-panels')
+  retired.panels.push({id:'experiences',kind:'experiences',group:'secondary'},{id:'skills',kind:'skills',group:'secondary'})
+  retired.secondaryActiveId='experiences'
+  const migrated = store.session('retired-personal-panels')
+  assert.equal(migrated.secondaryActiveId,'progress')
+  assert.equal(migrated.panels.filter(panel=>panel.kind==='progress').length,1)
+  assert(!migrated.panels.some(panel=>['experiences','skills'].includes(panel.kind)))
+  const migratedPanels=migrated.panels
+  assert.equal(store.session('retired-personal-panels').panels,migratedPanels)
+  store.remove('retired-personal-panels')
   assert.equal(first.activeId, 'chat')
   first.draft = 'Unsent question'
   first.scroll.chat = 340

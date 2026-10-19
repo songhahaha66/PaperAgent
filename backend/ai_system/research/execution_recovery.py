@@ -4,6 +4,8 @@ This narrow policy does not resolve arbitrary execution faults. Legacy tool
 refusals are reconstructed from the saved transcript (and labelled as such),
 not invented as failed kernel runs. No LLM or candidate execution is performed.
 """
+
+from ai_system.research.domain import findings as research_findings
 import ast
 import hashlib
 import json
@@ -13,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from .store import digest
 from .validation import protocol,evaluate
-from .comparison import ComparisonStore
+from ai_system.modules.experiments.store import ExperimentStore
 
 REFUSAL='本任务方案已冻结；禁止重新 fit/调参。请复用 comparison_estimator、_formal_truth、_formal_pred 和已登记的 comparison 指标。'
 POLICY='frozen-linear-refit-recovery-v1'
@@ -70,7 +72,7 @@ def preview(store,issue_id,*,refusal_id=None,computation_run=None):
         data=_read(store.root,path)
         if path!='manifest.json':source_artifacts[path]=_hash(data)
         return data
-    state=store.snapshot();issue=next((i for i in state['issues'] if i['id']==issue_id),None)
+    state=store.snapshot();issue=next((i for i in research_findings(state) if i['id']==issue_id),None)
     if not issue:raise ValueError('执行问题不存在')
     if issue.get('resolution',{}).get('policy')==POLICY and issue['status']=='resolved':return issue['resolution']
     if issue['category']!='execution' or issue['source']!='worker' or issue['status']!='confirmed' or issue['action']!='retry' or issue.get('assumption_id'):
@@ -109,12 +111,12 @@ def preview(store,issue_id,*,refusal_id=None,computation_run=None):
     selected=[r for r in refusals if refusal_id is None or r['tool_call_id']==refusal_id]
     if len(selected)!=1:raise ValueError('工具拒绝关联有歧义或缺失，必须选择唯一原始事件')
     refused=selected[0]
-    comparison_store=ComparisonStore(store)
+    comparison_store=ExperimentStore(store)
     record=comparison_store.read(issue['task_id'],task['revision'])
     if not record or record.get('owner_attempt')!=aid or record.get('implementation_contract_version')!=1 or record['status']!='winner' or record['contract_hash']!=digest(protocol(state,issue['task_id'])) or record['file_inputs']!=store.file_inputs():raise ValueError('缺少同一尝试、输入和验收契约的已核查冻结比较')
     if record.get('policy_version')!=comparison_store.policy()['version'] or record.get('candidate_hashes')!=[digest(c) for c in (task.get('design') or {}).get('candidates',[])[:2]] or record.get('task_hash')!=digest(task['subproblem']) or record.get('input_refs')!=attempt['input_refs']:
         raise ValueError('比较配置、任务或冻结候选已改变')
-    from ..graph.nodes.supervised_probe import prepare,metric_value
+    from ai_system.modules.experiments.supervised import prepare,metric_value
     frozen,payload,truth,_,_,_=prepare(store.root,record['protocol'])
     if digest(frozen)!=record['protocol_hash'] or frozen['metric']!='RMSE' or frozen['task_type']!='regression':raise ValueError('冻结比较协议已改变或不适用')
     # The refused operation must actually be the declared OLS/Ridge experiment.
@@ -162,7 +164,7 @@ def preview(store,issue_id,*,refusal_id=None,computation_run=None):
     if set(evidence)!=set(branches):raise ValueError('问题证据没有覆盖所报告的两种方法')
     proof={'policy':POLICY,'research_id':store.research_id,'issue_id':issue_id,'original_issue_hash':digest({k:v for k,v in issue.items() if k not in {'resolution','resolution_attempt'}}),
         'task_id':issue['task_id'],'revision':task['revision'],'attempt_id':aid,'input_digest':attempt['input_digest'],'input_refs':refs,'protocol_hash':attempt['protocol_hash'],
-        'comparison_id':record['id'],'comparison_protocol_hash':record['protocol_hash'],'comparison_policy_version':record['policy_version'],
+        'comparison_id':record['id'],'comparison_protocol_hash':record['protocol_hash'],'experiment_policy_version':record['policy_version'],
         'candidate_hashes':record['candidate_hashes'],'task_hash':record['task_hash'],'transcript_path':transcript_path,'transcript_hash':_hash(raw),
         'refusal':{'source':'legacy_saved_transcript','tool_call_id':refused['tool_call_id'],'message_index':refused['response_index'],'code_hash':digest(refused['code']),'response_hash':refused['content_hash'],'kernel_executed':False},
         'successful_computation':{'run_id':success['run_id'],'tool_call_id':success['tool_call_id'],'code_hash':success['code_hash'],'stdout_hash':success['stdout_hash'],'metric_outputs':bindings,'prediction_delta_outputs':deltas},
@@ -177,7 +179,7 @@ def resolve(store,issue_id,proof_hash,*,actor_id=None):
     proof=preview(store,issue_id)
     if proof['proof_hash']!=proof_hash:raise ValueError('恢复证明已变化，请重新核对')
     with store._transaction() as db:
-        state=store._read(db);issue=next(i for i in state['issues'] if i['id']==issue_id)
+        state=store._read(db);issue=next(i for i in research_findings(state) if i['id']==issue_id)
         if issue['status']=='resolved':
             if issue.get('resolution',{}).get('proof_hash')==proof_hash:return issue['resolution']
             raise ValueError('问题已由其他证明关闭')
@@ -185,8 +187,8 @@ def resolve(store,issue_id,proof_hash,*,actor_id=None):
         task=state['tasks'][issue['task_id']]
         if task['active_attempt']!=proof['attempt_id'] or task['revision']!=proof['revision'] or task['validity']!='current' or state['attempts'][proof['attempt_id']]['result_digest']!=proof['result_digest']:
             raise ValueError('关闭前当前尝试或结果已改变')
-        policy_version=db.execute('SELECT version FROM comparison_policy WHERE id=1').fetchone()
-        if not policy_version or policy_version[0]!=proof['comparison_policy_version'] or digest(task['subproblem'])!=proof['task_hash'] or [digest(c) for c in (task.get('design') or {}).get('candidates',[])[:2]]!=proof['candidate_hashes']:
+        policy_version=db.execute('SELECT version FROM experiment_policy WHERE id=1').fetchone()
+        if not policy_version or policy_version[0]!=proof['experiment_policy_version'] or digest(task['subproblem'])!=proof['task_hash'] or [digest(c) for c in (task.get('design') or {}).get('candidates',[])[:2]]!=proof['candidate_hashes']:
             raise ValueError('关闭前比较配置、任务或候选已改变')
         for path,expected in proof['source_artifacts'].items():
             if _hash(_read(store.root,path))!=expected:raise ValueError('关闭前执行证据文件已改变')

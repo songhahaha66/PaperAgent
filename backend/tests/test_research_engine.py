@@ -107,7 +107,7 @@ def test_unversioned_research_requires_new_run_without_changing_existing_files(t
 
 
 def test_resume_after_delivery_failure_preserves_all_committed_attempts(tmp_path, monkeypatch):
-    import ai_system.graph.build as build_module
+    import ai_system.modules.writing.sections as build_module
     agent = agent_for(tmp_path)
     writer = build_module.write
 
@@ -124,7 +124,7 @@ def test_resume_after_delivery_failure_preserves_all_committed_attempts(tmp_path
 
 
 def test_resume_before_initial_plan_uses_current_checkpoint(tmp_path, monkeypatch):
-    import ai_system.graph.build as build_module
+    import ai_system.modules.experiments.analysis as build_module
     agent = agent_for(tmp_path)
     analyzer = build_module.analyze
 

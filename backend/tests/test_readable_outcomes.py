@@ -13,6 +13,15 @@ from services.chat_services import paper_editor
 from test_research_control import make_store
 
 
+def test_result_explanation_is_optional_not_a_semantic_or_provenance_gate():
+    from ai_system.research.outcomes import result_view
+    item={'id':'R1','name':'预测值','kind':'number','value':'1234.57','unit':'万千瓦时','run_id':'run_exact'}
+    view=result_view(item,lambda *args:None)
+    assert view['name']=='预测值' and view['unit']=='万千瓦时'
+    assert view['run_id']=='run_exact' and view['description']==''
+    assert 'meaning_available' not in view
+
+
 def submit(store, *, fault=False, reviewed=True):
     order = store.claim('Q1', review_required=reviewed)
     ref = store.allocate_ref('R')
@@ -68,11 +77,13 @@ def test_legacy_metadata_and_series_are_not_invented(tmp_path):
     (tmp_path / '.system/results.json').write_text(json.dumps({'results': [
         {'id': 'R8', 'subproblem': 'other', 'kind': 'series', 'value': '[2, 4, 8]', 'run_id': 'run_old'},
         {'id': 'R9', 'subproblem': 'other', 'kind': 'text', 'value': 'observed', 'run_id': ''}], 'claims': []}))
-    view = research_snapshot(tmp_path, 'legacy', 'paused').outcomes[0]
-    assert view['availability'] == 'legacy' and view['checking'] == 'unreviewed'
-    assert view['method'] is None and view['next_step'] is None and view['sources'] == []
-    assert view['results'][0]['name'] == 'R8' and view['results'][0]['series'] == [2, 4, 8]
-    assert not view['results'][0]['unit'] and not view['results'][0]['meaning_available']
+    from services.migrate_data import migrate_project
+    migrate_project(tmp_path)
+    view = research_snapshot(tmp_path, 'legacy', 'paused')
+    assert not view.outcomes and not view.results
+    saved = next(r for r in view.legacy_records if r['source']=='.system/results.json')
+    raw = json.loads(saved['raw'])
+    assert raw['results'][0]['value']=='[2, 4, 8]' and 'name' not in raw['results'][0]
 
 
 def test_empty_paper_does_not_require_checkpoint_or_create_sections(tmp_path):

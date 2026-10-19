@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.export.latex import compile_pdf, fragment_issues, native_document
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import Result
-from ai_system.graph.nodes import write as writing
-from ai_system.graph.nodes.validate import assemble_latex, untracked_numbers, check_sections
+from ai_system.modules.writing import sections as writing
+from ai_system.modules.writing.validation import assemble_latex, untracked_numbers, check_sections
 from services.file_services.workspace_structure import WorkspaceStructureManager
 from services.chat_services.research_session import research_snapshot
 from test_paper_graph import FakeModel
@@ -161,7 +161,7 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
 
 
 def test_failed_native_export_blocks_completion_and_preserves_source(tmp_path, monkeypatch):
-    import ai_system.graph.nodes.export as exporter
+    import ai_system.modules.writing.export as exporter
     from ai_system.export.latex import LatexResult
     from ai_system.graph import PaperGraphAgent
     from test_paper_graph import _make_workspace, TASK as GRAPH_TASK, FixedJudge

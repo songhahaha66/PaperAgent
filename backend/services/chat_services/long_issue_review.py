@@ -2,13 +2,15 @@
 
 Uses the existing review_records and publication gate; never resolves an issue here.
 """
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,json
 from ai_system.research import segmented_review as seg
 from ai_system.research.review_cache import ReviewCache,ReviewInProgress,review_context,science_version
 from ai_system.research.store import digest
 from ai_system.research.models import ResearchConflict
 from ai_system.graph.state import ClaimAudit,ClaimIssue
-from ai_system.graph.nodes.consistency import AUDIT_SYSTEM,section_audit_prompt,validate_findings,NOT_A_CONFLICT
+from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt,validate_findings,NOT_A_CONFLICT
 from ai_system.graph.llm_utils import as_messages,call_structured,cap_output
 
 POLICY='long-issue-edit-v1'
@@ -52,7 +54,7 @@ def material(store,state,llm,binding):
     target=review_context(ctx,selected,'issue_target',system,prompt,IssueAudit,sections=selected['sections'],extra={'non_blocking':True,'source_issue':binding,
         'policy':POLICY,'location':location,'full_candidate_hash':digest({k:digest(v) for k,v in state['sections'].items()})})
     coverage=seg.aggregate_context(ctx,state,candidate=True)
-    others={i['id']:digest(i) for i in store.snapshot()['issues'] if i['id']!=binding['id'] and i['category']=='writing' and i['status'] not in {'resolved','dismissed','superseded'}}
+    others={i['id']:digest(i) for i in research_findings(store.snapshot()) if i['id']!=binding['id'] and i['category']=='writing' and i['status'] not in {'resolved','dismissed','superseded'}}
     composite=review_context(ctx,state,'sections',POLICY,digest({'coverage':digest(coverage),'target':digest(target)}),IssueAudit,sections=state['sections'],
         extra={'non_blocking':True,'scope':{'id':binding['id']},'source_issue':binding,'policy':POLICY,'coverage_context_hash':digest(coverage),
             'target_context_hash':digest(target),'location':location,'existing_issues':others})
@@ -60,14 +62,14 @@ def material(store,state,llm,binding):
     return ctx,selected,system,prompt,target,coverage,composite
 
 
-def known_findings(store,findings,context,sections):
+def known_findings(store,reports,context,sections):
     """Only the unchanged, already-known *other* writing findings may remain."""
     snapshot=store.snapshot();allowed=[];known=context['extra']['existing_issues']
-    for finding in findings:
+    for finding in reports:
         if finding.research_issue:raise ResearchConflict('候选发现新的科研问题，不能以文稿修改放行')
         if not finding.contradicts or NOT_A_CONFLICT.search(finding.problem):continue
         match=None
-        for issue in snapshot['issues']:
+        for issue in research_findings(snapshot):
             if issue['id'] not in known or digest(issue)!=known[issue['id']] or issue.get('section')!=finding.section:continue
             quote=(issue.get('paper_origin') or {}).get('quote')
             same_text=finding.problem==issue['message'] or issue['message']=='与结论表不一致：'+finding.problem

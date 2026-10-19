@@ -3,6 +3,8 @@
 Questions never enter the graph or receive tools. Registry/manifest data is
 projected through an allowlist; model configuration and raw transcripts stay out.
 """
+
+from ai_system.research.domain import findings as research_findings, plan_view
 import json
 import os
 import re
@@ -13,7 +15,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai_system.graph.nodes.confirm import is_approval
+from ai_system.graph.confirm import is_approval
 from ai_system.research import ENGINE_VERSION
 
 ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "revise_research"]
@@ -67,7 +69,7 @@ class ResearchClaim(BaseModel):
 
 class ResearchSnapshot(BaseModel):
     execution_reason: dict | None = None
-    schema_version: int = 2
+    schema_version: int = 3
     engine_version: str | None = None
     research_revision: int = 0
     commit_seq: int = 0
@@ -79,7 +81,12 @@ class ResearchSnapshot(BaseModel):
     assumptions: list[dict] = Field(default_factory=list)
     validations: list[dict] = Field(default_factory=list)
     tasks: list[dict] = Field(default_factory=list)
-    issues: list[dict] = Field(default_factory=list)
+    feedback: list[dict] = Field(default_factory=list)
+    faults: list[dict] = Field(default_factory=list)
+    plans: list[dict] = Field(default_factory=list)
+    experiments: list[dict] = Field(default_factory=list)
+    legacy_records: list[dict] = Field(default_factory=list)
+    consistency: list[dict] = Field(default_factory=list)
     issue_evidence: list[ResearchResult] = Field(default_factory=list)
     work_id: str
     work_status: str
@@ -131,9 +138,17 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         business = store.snapshot()
         registry = store.registry_payload(snapshot=business)
     else:
-        registry = _read_json(root, ".system/results.json")
+        registry = {}
+    legacy_records = list(business.get('legacy_records', [])) if business else []
+    if (root / '.system/research.sqlite').is_file():
+        from ai_system.research.store import ResearchStore
+        with ResearchStore(root, 'legacy-reader', read_only=True)._connect() as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='legacy_records'").fetchone():
+                for row in db.execute('SELECT source,raw FROM legacy_records ORDER BY source'):
+                    raw = row[1].decode('utf-8', errors='replace') if isinstance(row[1],bytes) else row[1]
+                    legacy_records.append({'source':row[0], 'raw':raw})
     manifest = _read_json(root, "manifest.json")
-    validation = _read_json(root, ".system/validation.json")
+
     raw_results = registry.get("results") or []
     raw_claims = registry.get("claims") or []
     raw_runs = manifest.get("runs") or {}
@@ -148,8 +163,8 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         )
         for item in raw_results[:500] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
-    visible_issues = [issue for index, issue in enumerate(business["issues"])
-                      if issue["status"] not in {"resolved", "dismissed", "superseded"} or index >= len(business["issues"]) - 30] if business else []
+    visible_issues = [issue for index, issue in enumerate(research_findings(business))
+                      if issue["status"] not in {"resolved", "dismissed", "superseded"} or index >= len(research_findings(business)) - 30] if business else []
     issue_refs = {ref for issue in visible_issues for ref in issue["evidence_refs"]}
     historical = [entry["payload"] for rid, entry in business["evidence"].items() if rid in issue_refs] if business else []
     issue_evidence = [ResearchResult(id=str(item["id"]), subproblem_id=str(item["subproblem"]),
@@ -177,8 +192,8 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         # Comparison runs are evidence too, even before a formal result is accepted.
         # Inspect existing tables only; this endpoint must not initialize stores.
         with store._connect() as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='comparisons'").fetchone():
-                for row in db.execute('SELECT payload FROM comparisons ORDER BY rowid DESC LIMIT 30'):
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='experiment_comparisons'").fetchone():
+                for row in db.execute('SELECT payload FROM experiment_comparisons ORDER BY rowid DESC LIMIT 30'):
                     for branch in json.loads(row[0]).get('branches', []):
                         used_runs.update(branch.get('run_ids') or [])
     runs = []
@@ -201,7 +216,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     if thread.get('engine_version') == ENGINE_VERSION and not business:
         # A new work may contain a template scaffold before its first research commit.
         artifacts = []
-    issues = validation.get("issues") or []
+    issues = [i for i in visible_issues if i.get("source")=="sections" and i["status"] not in {"resolved","dismissed","superseded"}]
     if business:
         current = business.get("paper_hash") and store.delivery_ready(business) and all(s["validity"] == "current" for s in business["sections"].values())
         source = "paper" + Path(business.get("paper_version", "")).suffix
@@ -224,7 +239,13 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         delivery_stages=control.get("delivery_stages", {}),
         requirements=control.get("requirements", []), assumptions=control.get("assumptions", []),
         validations=business["validations"][-20:] if business else [],
-        issues=visible_issues, issue_evidence=issue_evidence,
+        feedback=[i for i in visible_issues if i['category'] not in {'execution','service'}],
+        faults=[i for i in visible_issues if i['category'] in {'execution','service'}],
+        plans=[plan_view(t) for t in business['tasks'].values()] if business else [],
+        experiments=[{'id':a['attempt_id'],'plan_id':a['task_id'],'plan_version':a['revision'],
+            'status':a['execution_status'],'acceptance':a.get('acceptance','pending'),
+            'experience_versions':a.get('experience_refs',[])} for a in business['attempts'].values()] if business else [],
+        legacy_records=legacy_records, consistency=business.get("consistency",[]) if business else [], issue_evidence=issue_evidence,
         work_id=work_id, work_status=status, research_id=thread.get("thread_id"),
         graph_status=thread.get("status"),
         has_research=bool(thread or registry or artifacts),
@@ -294,7 +315,7 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
     root = Path(workspace).resolve()
     snapshot = scoped_snapshot(snapshot, subproblem_id)
     # Bounded context, with an explicit record of exactly which evidence was included.
-    context = snapshot.model_dump(exclude={"outcomes"})
+    context = snapshot.model_dump(exclude={"outcomes", "legacy_records"})
     # A long Q1 must not crowd out every later question in an unscoped answer.
     buckets = {}
     for result in context["results"]:
@@ -310,20 +331,13 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
     used_runs = {r["run_id"] for r in context["results"]}
     context["runs"] = [r for r in context["runs"] if r["id"] in used_runs]
     context["truncated"] |= len(snapshot.results) > 80 or len(snapshot.claims) > 40
-    validation = _read_json(root, ".system/validation.json")
-    consistency = _read_json(root, ".system/consistency.json")
-    context["validation"] = [
-        {"section": str(i.get("section", "")), "message": str(i.get("message", ""))}
-        for i in (validation.get("issues") or [])[:30] if isinstance(i, dict)
-    ]
-    context["consistency"] = [
-        {"claims": c.get("claims", []), "resolution": str(c.get("resolution", ""))}
-        for c in (consistency.get("conflicts") or [])[:20] if isinstance(c, dict)
-    ]
-    sources = [path for path, items in (
-        (".system/validation.json", context["validation"]),
-        (".system/consistency.json", context["consistency"]),
-    ) if items]
+
+    context["validation"] = [{"section":str(i.get("section", "")), "message":str(i.get("message", ""))}
+        for i in snapshot.feedback[:30] if i.get('source')=='sections']
+    context["consistency"] = [{"claims":c.get("claims", []), "resolution":str(c.get("resolution", ""))}
+        for c in snapshot.consistency[:20]]
+    sources = [name for name, rows in (("research:feedback",context["validation"]),
+                                      ("research:consistency",context["consistency"])) if rows]
     snippets = []
     budget = 16_000
     for path in [*snapshot.artifacts[:1], *[r.stdout_path for r in snapshot.runs if r.id in used_runs][:6]]:

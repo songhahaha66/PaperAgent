@@ -1,4 +1,6 @@
 """Cross-study advice with real SQLite/checks, real kernel evidence, no model calls."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import sys
@@ -10,13 +12,13 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from models.models import Base,User,Work,ResearchExperience
+from models.models import Base,User,Project,ResearchExperience
 from services.research_experience import ExperienceScope
 from ai_system.research.store import ResearchStore,digest
 from ai_system.research.models import WorkerResult,PlanPatch,TaskChange,IssueReport
 from ai_system.research.experience import card_for,conditions,prompt_context
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.solve import build_task
+from ai_system.modules.experiments.execution import build_task
 
 TASK='连续线性规划：最大化 3x+2y，约束 x+y<=4,x<=2,y<=3,x,y为非负连续实数；独立复核答案 x=2,z=10。'
 DESIGN={'methods':['linear_programming'],'chosen':{'name':'线性规划','method_keys':['linear_programming'],
@@ -39,7 +41,7 @@ def env(tmp_path):
     Base.metadata.create_all(engine);sessions=sessionmaker(bind=engine)
     with sessions() as db:
         for uid in (1,2):db.add(User(id=uid,username=f'user{uid}',email=f'{uid}@example.test',password_hash='unused'))
-        for wid,uid in [('A',1),('B',1),('C',2)]:db.add(Work(work_id=wid,title=wid,created_by=uid))
+        for wid,uid in [('A',1),('B',1),('C',2)]:db.add(Project(work_id=wid,title=wid,created_by=uid))
         db.commit()
     def root(wid):return tmp_path/'workspaces'/wid
     def scope(wid='A',uid=1):return ExperienceScope(uid,wid,sessions,root)
@@ -62,11 +64,18 @@ def submit(store,x=2,z=10,order=None,*,execution='succeeded',error='',ground=Tru
     return store.commit(result),result
 
 
+def adopt_ready(scope):
+    for card in scope.list()['cards']:
+        if card['card']['level'] in {'verified','counterexample'} and card['status']!='adopted':
+            scope.transition(card['id'],'validate',card['version'])
+            scope.transition(card['id'],'adopt',card['version'])
+
+
 def repair(store):
     state=store.snapshot()
     store.apply_patch(PlanPatch(command_id='repair',base_revision=state['revision'],reason='从检查反例修复',
         changes=[TaskChange(task_id='Q1',objective=TASK+' 使用 SciPy 修复求解')],
-        issue_ids=[i['id'] for i in state['issues'] if i['status']=='confirmed']))
+        issue_ids=[i['id'] for i in research_findings(state) if i['status']=='confirmed']))
 
 
 async def kernel_submit(store,code,order=None):
@@ -91,10 +100,11 @@ def test_A_failure_repair_then_B_uses_advice_but_generates_new_kernel_evidence(e
     assert old.order.attempt_id in verified['card']['repairs']
     counter=next(c for c in cards if c['card']['level']=='counterexample')
     assert new.order.attempt_id in counter['card']['repaired_by']
+    adopt_ready(env.scope())
     b=env.store('B');order=b.claim('Q1')
     ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'),experience_store=b,experience_order=order)
     branch={'source':TASK,'subproblem':analysis()['subproblems'][0],'data_profile':'self-contained','design':DESIGN}
-    from ai_system.graph.nodes import design
+    from ai_system.modules.experiments import planning as design
     from ai_system.graph.state import CandidateSet,ModelCandidate
     async def structured(_llm,schema,messages,**kwargs):
         assert counter['id'] in messages[-1].content
@@ -127,7 +137,7 @@ def test_empty_checks_success_is_unconfirmed_and_indexing_is_idempotent(env):
 
 @pytest.mark.parametrize('mutation',['disable','delete','policy','permission','input','revision','blocker','version','hash'])
 def test_inflight_submission_rechecks_history_before_publication(env,mutation):
-    a=env.store('A');submit(a);b=env.store('B');order=b.claim('Q1')
+    a=env.store('A');submit(a);adopt_ready(env.scope());b=env.store('B');order=b.claim('Q1')
     ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'),experience_store=b,experience_order=order)
     branch={'source':TASK,'subproblem':analysis()['subproblems'][0]}
     assert prompt_context(ctx,branch,['linear_programming'],'design')
@@ -136,7 +146,7 @@ def test_inflight_submission_rechecks_history_before_publication(env,mutation):
     elif mutation=='delete':env.scope().change(ref['id'],delete=True)
     elif mutation=='policy':env.scope().set_enabled(False)
     elif mutation=='permission':
-        with env.sessions() as db:db.query(Work).filter(Work.work_id=='A').update({'created_by':2});db.commit()
+        with env.sessions() as db:db.query(Project).filter(Project.work_id=='A').update({'created_by':2});db.commit()
     elif mutation=='input':
         (a.root/'data').mkdir(exist_ok=True);(a.root/'data/new.csv').write_text('x\n1')
     elif mutation=='revision':
@@ -154,7 +164,7 @@ def test_inflight_submission_rechecks_history_before_publication(env,mutation):
 
 
 def test_owner_scope_conditions_methods_disable_delete_and_recovery(env):
-    a=env.store('A');submit(a);card=env.scope().list()['cards'][0];actual=conditions(a.root,TASK)
+    a=env.store('A');submit(a);adopt_ready(env.scope());card=env.scope().list()['cards'][0];actual=conditions(a.root,TASK)
     assert env.scope('B').search(TASK,['linear_programming'],actual)
     assert not env.scope('C',2).search(TASK,['linear_programming'],actual)
     assert not env.scope('B').search(TASK,['regression'],actual)
@@ -200,7 +210,7 @@ def test_checks_without_grounded_successful_run_are_unconfirmed(env):
 
 
 def test_missing_or_changed_run_logs_stop_future_injection(env):
-    a=env.store();_,r=submit(a);actual=conditions(a.root,TASK)
+    a=env.store();_,r=submit(a);adopt_ready(env.scope());actual=conditions(a.root,TASK)
     assert env.scope('B').search(TASK,['linear_programming'],actual)
     manifest=json.loads((a.root/'manifest.json').read_text())
     run=manifest['runs'][r.results[0]['run_id']]
@@ -224,7 +234,7 @@ def test_attempt_context_reads_root_literature_and_carries_authenticated_experie
 
 
 def test_changed_stdout_cannot_be_revalidated_by_rebuilding_index(env):
-    a=env.store();_,r=submit(a);actual=conditions(a.root,TASK)
+    a=env.store();_,r=submit(a);adopt_ready(env.scope());actual=conditions(a.root,TASK)
     assert env.scope('B').search(TASK,['linear_programming'],actual)
     manifest=json.loads((a.root/'manifest.json').read_text())
     (a.root/manifest['runs'][r.results[0]['run_id']]['stdout']).write_text('2 10\nchanged after commit')
@@ -237,6 +247,7 @@ def test_changed_stdout_cannot_be_revalidated_by_rebuilding_index(env):
 def test_known_data_columns_must_match_before_reusing(env):
     a=env.store();(a.root/"data").mkdir(exist_ok=True);(a.root/"data/input.csv").write_text("demand,capacity\n1,2\n")
     submit(a)
+    adopt_ready(env.scope())
     known=conditions(a.root,TASK)
     assert env.scope("B").search(TASK,["linear_programming"],known)
     assert not env.scope("B").search(TASK,["linear_programming"],{**known,"columns":["temperature","date"]})
@@ -244,7 +255,7 @@ def test_known_data_columns_must_match_before_reusing(env):
 
 def test_revocation_during_commit_rolls_back_before_publication(env,monkeypatch):
     from ai_system.research.models import ResearchConflict
-    a=env.store();submit(a);b=env.store('B');order=b.claim('Q1');scope=b.experience_scope
+    a=env.store();submit(a);adopt_ready(env.scope());b=env.store('B');order=b.claim('Q1');scope=b.experience_scope
     ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=scope,experience_store=b,experience_order=order)
     prompt_context(ctx,{'source':TASK,'subproblem':analysis()['subproblems'][0]},['linear_programming'],'solve')
     decisions=iter([True,False]);monkeypatch.setattr(scope,'valid_refs',lambda _:next(decisions))

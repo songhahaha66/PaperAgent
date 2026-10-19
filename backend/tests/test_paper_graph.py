@@ -1,3 +1,5 @@
+
+from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import re
@@ -15,9 +17,9 @@ from langgraph.types import Command
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
-from ai_system.graph.nodes.confirm import is_approval
-from ai_system.graph.nodes.review import ungrounded_findings
-from ai_system.graph.nodes.validate import assemble, place_figures, untracked_numbers
+from ai_system.graph.confirm import is_approval
+from ai_system.modules.experiments.review import ungrounded_findings
+from ai_system.modules.writing.validation import assemble, place_figures, untracked_numbers
 from ai_system.graph.registry import value_in_output
 from ai_system.graph.state import (
     CandidateSet,
@@ -30,7 +32,6 @@ from ai_system.graph.state import (
     ProblemAnalysis,
     ResultReview,
     Subproblem,
-    ValidationProtocol,
 )
 from ai_system.research import ENGINE_VERSION
 from ai_system.research.models import Requirement, Assumption, IssueReport
@@ -99,8 +100,7 @@ class _Structured:
                 # 真实解析器对不合 schema 的输出会抛校验错误
                 return CandidateSet.model_validate({"candidates": []})
             return CandidateSet(candidates=[_candidate("方案甲"), _candidate("方案乙")])
-        if self.schema is ValidationProtocol:
-            return ValidationProtocol(applicable=True, metric="留出集 AUC", procedure="按年份留出", baseline="常数预测")
+
         if self.schema is ConsistencyReview:
             # A valid completed review; malformed IDs are fail-closed separately.
             return ConsistencyReview(conflicts=[
@@ -265,7 +265,7 @@ def test_graph_end_to_end_offline(tmp_path):
     ws = _make_workspace(tmp_path)
     model = FakeModel()
     # Legacy graph fixture; trusted supervised comparison has separate real-data tests.
-    ctx = _context(ws, model, explore_margin=100)
+    ctx = _context(ws, model)
     ctx.research = ResearchStore(ws, "t")
 
     async def go():
@@ -362,7 +362,7 @@ def test_confirm_interrupt_and_feedback(tmp_path):
     assert first["__interrupt__"][0].value["type"] == "confirm_models"
     assert "方案乙" in first["__interrupt__"][0].value["message"]
     # 修改意见触发重新设计，再次等待确认
-    assert second["feedback"] == "问题二请用双重差分" and second["design_round"] == 1
+    assert second["confirmation_feedback"] == "问题二请用双重差分" and second["design_round"] == 1
     assert "__interrupt__" in second
     assert third["approved"] is True
     assert (ws / "paper.md").exists()
@@ -398,8 +398,8 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     assert not any(stage == "export" for stage, _ in phases) and not (ws / "paper.tex").exists()
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
     calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
-    tagged = {(c["node"], c["label"]) for c in calls}
-    assert {("solve", "Q1"), ("solve", "Q2"), ("write", "abstract"), ("repair", "repair:abstract")} <= tagged
+    tagged = {(c.get("capability"), c["label"]) for c in calls}
+    assert {("experiments.execute", "Q1"), ("experiments.execute", "Q2"), ("writing.write", "abstract"), ("writing.repair", "repair:abstract")} <= tagged
 
     # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
     first_thread = json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"]
@@ -550,7 +550,7 @@ def test_place_figures_inserts_inline_only_figures_after_paragraph():
 
 
 def test_assemble_keeps_figures_out_of_summary_sections():
-    from ai_system.graph.nodes.write import solve_key
+    from ai_system.modules.writing.sections import solve_key
 
     state = {
         "analysis": {"title": "T", "subproblems": [{"id": "Q1", "title": "建模"}]},
@@ -563,7 +563,7 @@ def test_assemble_keeps_figures_out_of_summary_sections():
 
 
 def test_hypothesis_test_subproblems_skip_exploration():
-    from ai_system.graph.nodes.explore import is_hypothesis_test
+    from ai_system.modules.experiments.exploration import is_hypothesis_test
 
     assert is_hypothesis_test({"title": "检验势头是否随机(教练假说检验)", "question": "检验比赛中的波动是否随机"})
     assert not is_hypothesis_test({"title": "换挡点预测", "question": "预测转折并检验泛化性"})
@@ -591,7 +591,7 @@ def test_render_units_math_and_duplicates(tmp_path):
 
 
 def test_demote_headings_nests_section_body():
-    from ai_system.graph.nodes.validate import demote_headings
+    from ai_system.modules.writing.validation import demote_headings
 
     assert demote_headings("### 模型的建立\n正文\n#### 细节", 3) == "#### 模型的建立\n正文\n##### 细节"
     assert demote_headings("### 背景\n正文", 2) == "### 背景\n正文"
@@ -624,39 +624,8 @@ def test_compact_messages_keeps_recent_steps_and_stable_prefix():
     assert [m.content for m in later[:21]] == [m.content for m in compacted[:21]]
 
 
-def test_select_probe_metric_direction_ties_and_fallbacks():
-    from ai_system.graph.nodes.explore import Probe, select_probe, shortlist
-
-    def probe(i, prior, works=True, metric=None):
-        p = Probe(candidate_index=i, candidate={"name": f"方案{i}"}, kernel_key=f"Q1~c{i}", prior=prior, project_measured=True)
-        p.report = {"works": works, "metric_value": str(metric) if metric is not None else ""}
-        p.run_log = [{"ok": works}]
-        p.metric = metric
-        return p
-
-    rmse = {"applicable": True, "metric": "RMSE", "higher_is_better": False}
-    # 越小越好
-    assert select_probe([probe(0, 10, metric=3.2), probe(1, 8, metric=2.1)], rmse)[0].candidate_index == 1
-    # Frozen absolute tolerance/order replaces critic tie breaking.
-    assert select_probe([probe(0, 8, metric=2.000), probe(1, 10, metric=2.010)], rmse)[0].candidate_index == 0
-    # 没跑通或指标没核对通过的均不能晋升到正式求解
-    assert select_probe([probe(0, 12, works=False, metric=1.0), probe(1, 5, metric=9.0)], rmse)[0].candidate_index == 1
-    assert select_probe([probe(0, 12), probe(1, 5)], rmse)[0] is None
-    # 没有统一指标时直接正式求解，不用文字评分替代执行验收
-    none = {"applicable": False}
-    winner, reason = select_probe([probe(0, 12), probe(1, 5)], none)
-    assert winner is None and "不沿用自评" in reason
-    # 都没跑通就沿用评审选择
-    winner, reason = select_probe([probe(0, 5, works=False), probe(1, 9, works=False)], none)
-    assert winner is None and "不沿用自评" in reason
-
-    design = {"candidates": [{}, {}, {}], "scores": [{"total": 5}, {"total": 9}, {"total": None}], "chosen_index": 1}
-    assert shortlist(design, 2) == [1, 0]
-    assert shortlist({"candidates": [{}], "chosen_index": 0}, 2) == [0]
-
-
 def test_claims_replace_per_subproblem_and_render(tmp_path):
-    from ai_system.graph.nodes.consistency import valid_conflicts
+    from ai_system.modules.writing.consistency import valid_conflicts
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -786,7 +755,7 @@ def test_design_falls_back_when_candidates_keep_failing(tmp_path, monkeypatch):
 
 
 def test_normalize_plan_fills_writing_kind_and_dependencies():
-    from ai_system.graph.nodes.analyze import normalize_plan
+    from ai_system.modules.experiments.analysis import normalize_plan
 
     plan = normalize_plan([
         {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []},
@@ -810,7 +779,7 @@ def test_model_candidate_rejects_empty_placeholder():
 
 
 def test_normalize_plan_drops_paper_writing_subproblem():
-    from ai_system.graph.nodes.analyze import normalize_plan
+    from ai_system.modules.experiments.analysis import normalize_plan
 
     plan = normalize_plan([
         {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []},
@@ -821,7 +790,7 @@ def test_normalize_plan_drops_paper_writing_subproblem():
 
 
 def test_normalize_plan_drops_duplicate_ids():
-    from ai_system.graph.nodes.analyze import normalize_plan
+    from ai_system.modules.experiments.analysis import normalize_plan
 
     first = {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []}
     second = {"id": "Q2", "kind": "compute", "title": "检验", "question": "用 Q1 的模型检验", "depends_on": []}
@@ -833,7 +802,7 @@ def test_normalize_plan_drops_duplicate_ids():
 def test_report_issues_requires_registered_results(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.review import report_issues
+    from ai_system.modules.experiments.review import report_issues
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -857,10 +826,10 @@ def test_report_issues_requires_registered_results(tmp_path):
     assert not any("不是本子问题" in i for i in report_issues(ctx, stolen, "Q3", ["Q1"]))
 
 
-def test_record_results_recovers_mistyped_run_id(tmp_path):
+def test_record_results_requires_explicit_run_even_when_recent_output_has_the_value(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.solve import build_tools
+    from ai_system.modules.experiments.execution import build_tools
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -872,6 +841,8 @@ def test_record_results_recovers_mistyped_run_id(tmp_path):
     run_log = [{"run_id": run_id, "code": "", "ok": True}]
     record = {t.name: t for t in build_tools(ctx, "Q2", run_log)}["record_results"]
     reply = asyncio.run(record.coroutine([{"name": "p值", "value": "0.0123", "run_id": run_id[:-3] + "zzz"}]))
+    assert "登记失败" in reply and not registry.results
+    reply = asyncio.run(record.coroutine([{"name": "p值", "value": "0.0123", "run_id": run_id}]))
     assert "{{R:R1}}" in reply and registry.get("R1").run_id == run_id
     # 最近的执行里也没有这个值：照样拒绝
     reply = asyncio.run(record.coroutine([{"name": "编造", "value": "0.9876", "run_id": "run_x"}]))
@@ -881,7 +852,7 @@ def test_record_results_recovers_mistyped_run_id(tmp_path):
 def test_label_shuffle_control_flags_leakage(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.review import baseline_gaps, control_issues
+    from ai_system.modules.experiments.review import baseline_gaps, control_issues
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -926,7 +897,7 @@ def test_label_shuffle_control_flags_leakage(tmp_path):
 def test_leaky_metric_downgrades_findings(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.review import downgrade_findings
+    from ai_system.modules.experiments.review import downgrade_findings
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -963,7 +934,7 @@ def test_leaky_metric_downgrades_findings(tmp_path):
 def test_implausible_refs_catch_wrong_reference_numbers(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.review import implausible_refs
+    from ai_system.modules.experiments.review import implausible_refs
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -981,26 +952,8 @@ def test_implausible_refs_catch_wrong_reference_numbers(tmp_path):
     assert implausible_refs(ctx, good) == []
 
 
-def test_probe_metric_rejected_when_shuffled_labels_keep_the_gain(tmp_path):
-    from types import SimpleNamespace
-
-    from ai_system.graph.nodes.explore import shuffle_check
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "logloss 0.4674 baseline 0.6778 shuffled 0.48 clean 0.675")
-    fs.finish_run(run_id, "success")
-    ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
-    report = {"metric_value": "0.4674", "metric_run_id": run_id, "baseline_value": "0.6778"}
-    protocol = {"higher_is_better": False}
-    assert "泄漏" in shuffle_check(ctx, {**report, "shuffled_value": "0.48"}, protocol)
-    assert shuffle_check(ctx, {**report, "shuffled_value": "0.675"}, protocol) == ""
-    assert shuffle_check(ctx, report, protocol) == "没有做标签置换对照"
-
-
 def test_metric_direction_overrides_model_for_known_metrics():
-    from ai_system.graph.nodes.review import metric_direction
+    from ai_system.modules.experiments.review import metric_direction
 
     assert metric_direction("验证集上的对数损失（LogLoss）") is False
     assert metric_direction("测试集 RMSE") is False
@@ -1014,7 +967,7 @@ def test_metric_direction_overrides_model_for_known_metrics():
 
 
 def test_strip_template_tokens_from_code():
-    from ai_system.graph.nodes.solve import strip_template_tokens
+    from ai_system.modules.experiments.execution import strip_template_tokens
 
     leaked = "print(df['swing'].mean())</｜DSML｜parameter>    }  ]</｜DSML｜invoke></think>Let me define the target"
     assert strip_template_tokens(leaked) == "print(df['swing'].mean())"
@@ -1059,7 +1012,7 @@ def test_cap_output_only_lowers_max_tokens():
 
 
 def test_placeholder_runs_are_not_executed(tmp_path):
-    from ai_system.graph.nodes.solve import PLACEHOLDER_REPLY, build_tools
+    from ai_system.modules.experiments.execution import PLACEHOLDER_REPLY, build_tools
 
     ws = _make_workspace(tmp_path)
     ctx = _context(ws, FakeModel())
@@ -1151,7 +1104,7 @@ def test_run_agent_asks_for_report_when_steps_run_out():
     from langgraph.errors import GraphRecursionError
 
     from ai_system.graph.compaction import HistoryRecorder
-    from ai_system.graph.nodes.solve import FINAL_NUDGE, ReportFallback, run_agent
+    from ai_system.modules.experiments.execution import FINAL_NUDGE, ReportFallback, run_agent
 
     class Agent:
         async def ainvoke(self, payload, config=None):
@@ -1198,7 +1151,7 @@ def test_stream_manager_accepts_structured_block():
 
 
 def test_writing_brief_asks_for_actionable_advice():
-    from ai_system.graph.nodes.write import ACTIONABLE_ADVICE, subproblem_brief
+    from ai_system.modules.writing.sections import ACTIONABLE_ADVICE, subproblem_brief
 
     memo = {"id": "Q4", "kind": "writing", "title": "给教练的备忘录", "question": "给出建议", "deliverables": ["一页备忘录"]}
     brief = subproblem_brief({"analysis": {"subproblems": [memo]}}, None, memo)
@@ -1208,7 +1161,7 @@ def test_writing_brief_asks_for_actionable_advice():
 def test_dependency_handoff_includes_solution_code(tmp_path):
     from types import SimpleNamespace
 
-    from ai_system.graph.nodes.solve import _dependency_text, export_solution_code, solution_code_path
+    from ai_system.modules.experiments.execution import _dependency_text, export_solution_code, solution_code_path
 
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()

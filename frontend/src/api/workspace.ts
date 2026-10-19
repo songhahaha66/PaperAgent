@@ -11,8 +11,6 @@ export interface WorkCreate {
 export interface WorkUpdate {
   title?: string
   description?: string
-  status?: string
-  progress?: number
   tags?: string
   template_id?: number // 关联的论文模板ID
   output_mode?: 'markdown' | 'word' | 'latex' // 输出模式
@@ -84,13 +82,6 @@ export interface FileDeleteResponse {
   message: string
 }
 
-export interface WorkMetadata {
-  work_id: string
-  created_at: string
-  status: string
-  progress: number
-}
-
 export interface AttachmentInfo {
   filename: string // 存储的文件名
   original_filename: string // 原始文件名
@@ -115,51 +106,6 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
-}
-
-export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'blocked'
-
-export interface PlanPhase {
-  id: string
-  title: string
-  description?: string
-}
-
-export interface PlanItem {
-  id: string
-  order: number
-  title: string
-  status: PlanItemStatus
-  status_label?: string
-  description?: string
-  phase?: string
-  depends_on?: string[]
-  raw_status?: string
-}
-
-export interface PlanStats {
-  total: number
-  completed: number
-  in_progress: number
-  blocked: number
-  pending: number
-  progress_percent: number
-}
-
-export interface PlanData {
-  version: number
-  revision?: number
-  title: string
-  methodology?: string
-  planning_mode?: 'dynamic' | 'static' | string
-  phases?: PlanPhase[]
-  items: PlanItem[]
-  stats: PlanStats
-  current_focus?: PlanItem | null
-  next_actions?: Array<{ id: string; title: string; reason?: string }>
-  source?: string
-  source_markdown?: string
-  updated_at?: string
 }
 
 // 工作管理API
@@ -215,39 +161,10 @@ export const workspaceAPI = {
   },
 
   // 更新工作状态
-  async updateWorkStatus(
-    token: string,
-    workId: string,
-    status: string,
-    progress?: number,
-  ): Promise<Work> {
-    const params = new URLSearchParams()
-    params.append('status', status)
-    if (progress !== undefined) params.append('progress', progress.toString())
-
-    const response = await apiClient.request<Work>(
-      `/api/works/${workId}/status?${params.toString()}`,
-      {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    )
-    return response
-  },
-
   // 删除工作
   async deleteWork(token: string, workId: string): Promise<{ message: string }> {
     const response = await apiClient.request<{ message: string }>(`/api/works/${workId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return response
-  },
-
-  // 获取工作元数据
-  async getWorkMetadata(token: string, workId: string): Promise<WorkMetadata> {
-    const response = await apiClient.request<WorkMetadata>(`/api/works/${workId}/metadata`, {
-      method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
     })
     return response

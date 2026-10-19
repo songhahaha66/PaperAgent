@@ -4,10 +4,8 @@ set -e
 printf '%s\n' "Clearing stale matplotlib font cache..."
 rm -rf /root/.cache/matplotlib /tmp/matplotlib-*
 
-printf '%s\n' "Running database migrations..."
 # 使用预装的虚拟环境（避免运行时下载）
 . .venv/bin/activate
-alembic upgrade head
 printf '%s\n' "Starting application server..."
 
 # 使用虚拟环境中的 uvicorn

@@ -15,7 +15,7 @@
       }}</t-button>
     </div>
     <article v-else class="document-sheet">
-      <header class="document-toolbar">
+      <header v-if="showToolbar" class="document-toolbar">
         <span :title="loadedPath">{{ paperLabel(loadedPath, isZh) || loadedPath }}</span>
         <div>
           <t-button v-if="paper" size="small" theme="default" @click="$emit('edit-paper')">{{
@@ -102,8 +102,9 @@ const props = withDefaults(
     active: boolean
     refreshKey?: number
     scrollTop?: number
+    showToolbar?: boolean
   }>(),
-  { path: 'paper.md', available: true, scrollTop: 0 },
+  { path: 'paper.md', available: true, scrollTop: 0, showToolbar: true },
 )
 const emit = defineEmits<{
   'open-file': [path: string]

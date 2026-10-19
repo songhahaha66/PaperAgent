@@ -1,4 +1,6 @@
 """Offline review-cache tests. Any real HTTP send fails this module immediately."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,copy,json,sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -80,13 +82,13 @@ def test_failure_is_not_success_and_only_matching_service_issue_closes(env):
     with pytest.raises(TimeoutError):invoke(env,failure)
     cache=ReviewCache(env.store);context=review_context(env.ctx,env.state,'reconcile','system','prompt',ConsistencyReview)
     assert cache.get('reconcile',context,ConsistencyReview) is None
-    own=next(i for i in env.store.snapshot()['issues'] if i.get('review_scope'))
+    own=next(i for i in research_findings(env.store.snapshot()) if i.get('review_scope'))
     unrelated=env.store.report_issues([IssueReport(task_id='Q1',category='service',message='different service failed')],'other')[0]
     citation=env.store.report_issues([IssueReport(task_id='Q1',category='writing',section='solve:Q1',message='C32 remains unverified')],'sections')[0]
     scientific=env.store.report_issues([IssueReport(task_id='Q1',category='model',message='unresolved scientific finding')],'local_review')[0]
     async def success():return ConsistencyReview(conflicts=[])
     invoke(env,success)
-    state=env.store.snapshot();issues={i['id']:i for i in state['issues']}
+    state=env.store.snapshot();issues={i['id']:i for i in research_findings(state)}
     assert issues[own['id']]['status']=='resolved' and issues[own['id']]['review_resolution']['context_hash']==digest(context)
     assert issues[unrelated['id']]['status']=='confirmed' and issues[citation['id']]['status']=='confirmed'
     assert issues[scientific['id']]['status']=='suspected'
@@ -96,14 +98,14 @@ def test_failure_is_not_success_and_only_matching_service_issue_closes(env):
 def test_only_completed_same_coverage_new_version_supersedes_old_service_failure(env):
     async def failure():raise TimeoutError()
     with pytest.raises(TimeoutError):invoke(env,failure)
-    original=env.store.snapshot()['issues'][0]
+    original=research_findings(env.store.snapshot())[0]
     async def sections():return ClaimAudit(issues=[])
     invoke(env,sections,'sections',env.state['sections'])
-    assert env.store.snapshot()['issues'][0]['status']=='confirmed'
+    assert research_findings(env.store.snapshot())[0]['status']=='confirmed'
     (env.store.root/'data/input.csv').write_text('changed')
     async def success():return ConsistencyReview(conflicts=[])
     invoke(env,success)
-    replacement=next(i for i in env.store.snapshot()['issues'] if i['id']==original['id'])
+    replacement=next(i for i in research_findings(env.store.snapshot()) if i['id']==original['id'])
     assert replacement['status']=='superseded' and replacement['review_supersession']['old_review_id']==original['review_scope']['failed_review_id']
 
 
@@ -142,7 +144,7 @@ def test_delivery_metadata_does_not_repeat_unchanged_review(env):
 
 
 def test_validate_keeps_scoped_gateway_failure_blocking(env,monkeypatch):
-    from ai_system.graph.nodes import consistency,validate
+    from ai_system.modules.writing import consistency, validation as validate
     from ai_system.graph.context import GraphContext
     from ai_system.research.citations import audit_citations
     ctx=GraphContext.create(str(env.store.root),planner_llm=SimpleNamespace(model_name='offline-model'));ctx.research=env.store
@@ -186,7 +188,7 @@ def test_legacy_section_failure_is_bound_without_resolving_or_clearing_citations
     pre,post,_,_,_=snapshots(env);pre.next=('validate',);post.next=('observe',);post.values['issues']=[issue]
     proof=section_failure_proof(env.store,env.ctx,pre,post,{'issues':[issue]})
     assert proof['issue_id']==issue['id'] and proof['stage']=='sections'
-    assert env.store.snapshot()['issues'][0]['status']=='confirmed'
+    assert research_findings(env.store.snapshot())[0]['status']=='confirmed'
     pre.values['sections']['abstract']+=' changed'
     with pytest.raises(ValueError):section_failure_proof(env.store,env.ctx,pre,post,{'issues':[issue]})
 
@@ -206,19 +208,19 @@ def test_authorized_extension_preserves_count_and_is_idempotent(tmp_path):
 def test_resume_keeps_service_failure_open_until_matching_review_completes(env):
     async def failure():raise TimeoutError()
     with pytest.raises(TimeoutError):invoke(env,failure,'sections',env.state['sections'])
-    original=env.store.snapshot()['issues'][0]
+    original=research_findings(env.store.snapshot())[0]
     env.store.recover()
-    assert env.store.snapshot()['issues'][0]['status']=='confirmed'
+    assert research_findings(env.store.snapshot())[0]['status']=='confirmed'
     async def success():return ClaimAudit(issues=[])
     invoke(env,success,'sections',env.state['sections'])
-    issue=env.store.snapshot()['issues'][0]
+    issue=research_findings(env.store.snapshot())[0]
     assert issue['id']==original['id'] and issue['status']=='resolved' and issue['review_resolution']
 
 
 @pytest.mark.parametrize('stage',['reconcile','sections'])
 def test_unknown_review_identifiers_are_failed_not_silently_dropped(env,monkeypatch,stage):
     from ai_system.graph.context import GraphContext
-    from ai_system.graph.nodes import consistency
+    from ai_system.modules.writing import consistency as consistency
     from ai_system.graph.state import ClaimIssue
     ctx=GraphContext.create(str(env.store.root),planner_llm=None);ctx.research=env.store;ctx.registry=env.ctx.registry
     async def malformed(*args,validate=None,**kwargs):
@@ -231,7 +233,7 @@ def test_unknown_review_identifiers_are_failed_not_silently_dropped(env,monkeypa
         result=asyncio.run(consistency.reconcile(env.state,SimpleNamespace(context=ctx)))
         assert result['research_restart'] is True
     else:asyncio.run(consistency.audit_sections(env.state,ctx))
-    issues=env.store.snapshot()['issues']
+    issues=research_findings(env.store.snapshot())
     assert any(i['category']=='service' and i['status']=='confirmed' for i in issues)
     with env.store._connect() as db:
         assert not db.execute("SELECT 1 FROM review_records WHERE state='completed'").fetchone()

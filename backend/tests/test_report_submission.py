@@ -12,7 +12,7 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.solve import _solve_loop, build_task, build_tools, submission_schema
+from ai_system.modules.experiments.execution import _solve_loop, build_task, build_tools, submission_schema
 from ai_system.graph.state import NegativeControl
 from test_paper_graph import FakeModel
 
@@ -58,7 +58,7 @@ def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_c
     from langchain.agents.middleware import ModelRequest
     from langchain_core.messages import AIMessage,ToolMessage
     from ai_system.graph.compaction import StepBudgetMiddleware
-    from ai_system.graph.nodes.review import submission_inventory_issues
+    from ai_system.modules.experiments.review import submission_inventory_issues
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     task=branch();runs=[]
     messages=[HumanMessage(content='solve')]
@@ -158,7 +158,7 @@ def test_submission_grounds_summary_and_equivalent_numeric_formatting(tmp_path):
 
 
 def test_review_retains_original_computation_and_its_output_after_formatting_retries(tmp_path):
-    from ai_system.graph.nodes.review import review_prompt
+    from ai_system.modules.experiments.review import review_prompt
     ctx = GraphContext.create(str(tmp_path), planner_llm=None)
     runs = []
     for index in range(10):
@@ -187,7 +187,7 @@ def test_optional_controls_do_not_bypass_an_explicit_frozen_experiment(tmp_path)
 
 
 def test_registration_returns_current_inventory_without_waiting_for_a_failed_report(tmp_path):
-    from ai_system.graph.nodes.review import submission_inventory_issues
+    from ai_system.modules.experiments.review import submission_inventory_issues
     ctx = GraphContext.create(str(tmp_path), planner_llm=None)
     task, runs = branch(), []
     tools = {tool.name: tool for tool in build_tools(ctx, "Q1", runs,

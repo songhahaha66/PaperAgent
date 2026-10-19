@@ -176,7 +176,7 @@ const writingBlockers = computed(
   () => props.snapshot?.delivery?.blockers.filter((b) => b.action === 'rewrite') || [],
 )
 const issuesFor = (task: ResearchTask) =>
-  props.snapshot?.issues?.filter(
+  props.snapshot?.feedback?.filter(
     (i) =>
       task.progress.issue_ids.includes(i.id) &&
       !['resolved', 'dismissed', 'superseded'].includes(i.status),

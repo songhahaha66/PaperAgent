@@ -38,6 +38,22 @@ def seed(root):
             "run_one": {"status": "success", "input": "runs/run_one/input.py", "stdout": "runs/run_one/stdout.log"},
         },
     }))
+    from ai_system.research.store import ResearchStore
+    from ai_system.research.models import WorkerResult
+    from services.migrate_data import migrate_project
+    store=ResearchStore(root,'research-1')
+    question='检查研究结果与样本数量'
+    store.initialize(question,{'subproblems':[{'id':key,'title':key,'question':question,'depends_on':[]} for key in ('Q1','Q2')],
+        'requirements':[{'id':'RQ'+str(i),'statement':question,'source_quote':question,'kind':'goal','task_ids':[key],'checks':[]} for i,key in enumerate(('Q1','Q2'),1)],'assumptions':[]})
+    projection=json.loads((root/'.system/results.json').read_text())
+    for i,key in enumerate(('Q1','Q2')):
+        row={'kind':'number','unit':'','description':'','path':None,**projection['results'][i]}
+        order=store.claim(key)
+        store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',
+            report={'status':'completed','requirement_evidence':[{'requirement_id':'RQ'+str(i+1),'evidence_refs':[row['id']]}]},
+            results=[row],claims=projection['claims'] if key=='Q1' else []))
+    store.publish_paper('# 研究\n已有报告，不得改写')
+    migrate_project(root)
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
 
 
@@ -88,11 +104,10 @@ def test_snapshot_scopes_real_results_and_allowlists_manifest_paths(tmp_path):
     assert research_snapshot(tmp_path, "work", "completed").runs[0].stdout_path is None
 
 
-def test_corrupt_registry_is_not_treated_as_an_empty_new_work(tmp_path):
+def test_corrupt_projection_cannot_override_authoritative_results(tmp_path):
     seed(tmp_path)
     (tmp_path / ".system/results.json").write_text("{")
-    with pytest.raises(ValueError, match="暂时无法读取"):
-        research_snapshot(tmp_path, "work", "completed")
+    assert len(research_snapshot(tmp_path,"work","completed").results)==2
 
 
 @pytest.mark.parametrize('destination', ['https://api.deepseek.com/v1', 'https://aigw.saurlax.com/v1'])
@@ -247,11 +262,13 @@ def test_snapshot_does_not_show_a_lost_coordinator_as_running(web):
 
 def test_corrupt_records_reject_message_without_running_or_resetting(web):
     client, work, calls, statuses, saved, root = web
-    (root / ".system/results.json").write_text("{")
+    import sqlite3
+    with sqlite3.connect(root/'.system/research.sqlite') as db:db.execute("UPDATE research SET payload='{' WHERE id='research-1'")
     events = exchange(client, {"problem": "解释结果"})
     assert events[-1]["type"] == "error"
     assert not calls and not statuses and not saved
-    assert (root / ".system/results.json").read_text() == "{"
+    with sqlite3.connect(root/'.system/research.sqlite') as db:assert db.execute('SELECT payload FROM research').fetchone()[0]=='{'
+
 
 
 
@@ -327,6 +344,9 @@ def test_unscoped_question_balances_subproblems_and_includes_actual_validation(t
     monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
     seed(tmp_path)
     (tmp_path / ".system/validation.json").write_text(json.dumps({"issues": [{"section": "Q2", "message": "缺少基线说明"}]}))
+    from ai_system.research.store import ResearchStore
+    from ai_system.research.models import IssueReport
+    ResearchStore(tmp_path,'research-1').report_issues([IssueReport(task_id='Q2',category='writing',section='Q2',message='缺少基线说明')],'sections')
     snapshot = research_snapshot(tmp_path, "work", "completed")
     q2 = snapshot.results[1]
     snapshot.results = [
@@ -345,7 +365,7 @@ def test_unscoped_question_balances_subproblems_and_includes_actual_validation(t
         "总结已有研究", [], destination_url="https://api.deepseek.com/v1"))
     assert "R2" in blocks[0]["result_ids"] and len(blocks[0]["result_ids"]) == 80
     assert blocks[0]["truncated"]
-    assert ".system/validation.json" in blocks[0]["files"]
+    assert "research:feedback" in blocks[0]["files"]
     assert "缺少基线说明" in captured[-1].content
 
 
@@ -358,7 +378,7 @@ def test_unversioned_history_is_read_only_and_cannot_enter_graph(tmp_path, actio
     metadata.pop("engine_version")
     thread.write_text(json.dumps(metadata))
     snapshot = research_snapshot(tmp_path, "work", "waiting")
-    assert snapshot.results and snapshot.engine_version is None
+    assert not snapshot.results and snapshot.legacy_records and snapshot.engine_version is None
     assert resolve_action("ask", "解释已有结果", snapshot) == "ask"
     with pytest.raises(ValueError, match="不支持恢复"):
         resolve_action(action, "继续", snapshot)

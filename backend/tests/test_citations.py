@@ -83,7 +83,8 @@ def test_rejected_citation_candidate_leaves_published_paper_untouched(paper):
 
 def test_design_and_writing_receive_fetched_evidence_without_result_registration(tmp_path,monkeypatch):
     from ai_system.graph.context import GraphContext
-    from ai_system.graph.nodes import design,write
+    from ai_system.modules.experiments import planning as design
+    from ai_system.modules.writing import sections as write
     from ai_system.graph.state import CandidateSet,ModelCandidate
     from test_research_p2 import problem,TASK
     library,_,e=seed(tmp_path)

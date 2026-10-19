@@ -5,8 +5,8 @@ from collections import Counter
 from pydantic import BaseModel,Field,ConfigDict
 from ai_system.graph.context import GraphContext
 from ai_system.graph.llm_utils import as_messages,call_structured,cap_output
-from ai_system.graph.nodes.consistency import audit_sections,section_audit_prompt,AUDIT_SYSTEM
-from ai_system.graph.nodes.validate import check_sections
+from ai_system.modules.writing.consistency import audit_sections,section_audit_prompt,AUDIT_SYSTEM
+from ai_system.modules.writing.validation import check_sections
 from ai_system.graph.registry import REF_PATTERN,MATH_PATTERN,publication_text
 from ai_system.graph.state import ClaimAudit
 from ai_system.research.store import digest
@@ -284,7 +284,7 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
     checks=await audit_citations(store.root,list(after.values()),llm)
     combined={**state,'sections':{**state['sections'],**after}}
     if any(CITATION.search(t) for t in after.values()) and 'references' in combined['sections']:
-        from ai_system.graph.nodes.write import reference_section
+        from ai_system.modules.writing.sections import reference_section
         combined['sections']['references']=reference_section(combined,ctx)
     issues=[{'section':k,'message':m} for k,t in combined['sections'].items() for m in citation_issues(store.root,t)]
     issues+=check_sections(combined,ctx)

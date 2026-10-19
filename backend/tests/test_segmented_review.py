@@ -1,4 +1,6 @@
 """Offline deterministic oracles; any real HTTP is forbidden by the shared fixture."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,copy,json,time
 from types import SimpleNamespace
 import pytest
@@ -153,7 +155,7 @@ def test_current_queue_failure_resume_reports_progress_and_tail_location(long):
         await drain();t=task();assert t['state']=='failed' and t['segmented']['completed_blocks']==2
         v.model.fail=None;review_tasks.start(v.store,'sections',t['version'],'segmented-resume',v.model);await drain()
         t=task();assert t['state']=='completed' and t['outcome']=='findings' and t['segmented']['global']['state']=='completed'
-        finding=next(i for i in v.store.snapshot()['issues'] if i['category']=='writing')
+        finding=next(i for i in research_findings(v.store.snapshot()) if i['category']=='writing')
         located=issue_edits.context(v.store,finding['id']);assert located['quote']==TAIL and located['origin_current']
         assert finding['paper_origin']['review_id']
     asyncio.run(scenario())

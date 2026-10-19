@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.solve import export_solution_code
+from ai_system.modules.experiments.execution import export_solution_code
 from ai_system.sandbox.kernel import PythonKernel
 
 

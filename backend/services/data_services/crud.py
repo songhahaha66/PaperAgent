@@ -333,8 +333,8 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
     )
     
     # 检查是否有works引用该模板
-    from models.models import Work
-    works_using_template = db.query(Work).filter(Work.template_id == template_id).all()
+    from models.models import Project
+    works_using_template = db.query(Project).filter(Project.template_id == template_id).all()
     if works_using_template:
         work_titles = [work.title for work in works_using_template[:5]]  # 只显示前5个
         if len(works_using_template) > 5:
@@ -366,8 +366,8 @@ def force_delete_paper_template(db: Session, template_id: int, user_id: int):
     )
     
     # 查找并删除引用该模板的所有works
-    from models.models import Work
-    works_using_template = db.query(Work).filter(Work.template_id == template_id).all()
+    from models.models import Project
+    works_using_template = db.query(Project).filter(Project.template_id == template_id).all()
     
     if works_using_template:
         # 删除引用该模板的工作
@@ -427,7 +427,7 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
         work_id = generate_work_id()
         
         # 创建工作记录
-        db_work = models.Work(
+        db_work = models.Project(
             work_id=work_id,
             title=work.title,
             description=work.description,
@@ -456,42 +456,42 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work creation failed: {str(e)}"
+            detail=f"Project creation failed: {str(e)}"
         )
 
 
 def get_work(db: Session, work_id: str):
     """根据工作ID获取工作"""
-    return db.query(models.Work).filter(models.Work.work_id == work_id).first()
+    return db.query(models.Project).filter(models.Project.work_id == work_id).first()
 
 async def get_work_async(db: AsyncSession, work_id: str):
     """异步版本：根据工作ID获取工作"""
     # 使用异步select查询
     from sqlalchemy import select
-    stmt = select(models.Work).where(models.Work.work_id == work_id)
+    stmt = select(models.Project).where(models.Project.work_id == work_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100, 
                    status: str = None, search: str = None):
     """获取用户的工作列表，支持筛选和搜索"""
-    query = db.query(models.Work).filter(models.Work.created_by == user_id)
+    query = db.query(models.Project).filter(models.Project.created_by == user_id)
     
     # 状态筛选
     if status:
-        query = query.filter(models.Work.status == status)
+        query = query.filter(models.Project.status == status)
     
     # 搜索筛选
     if search:
         search_filter = f"%{search}%"
         query = query.filter(
-            (models.Work.title.ilike(search_filter)) |
-            (models.Work.description.ilike(search_filter)) |
-            (models.Work.tags.ilike(search_filter))
+            (models.Project.title.ilike(search_filter)) |
+            (models.Project.description.ilike(search_filter)) |
+            (models.Project.tags.ilike(search_filter))
         )
     
     # 按更新时间倒序排列
-    query = query.order_by(models.Work.updated_at.desc())
+    query = query.order_by(models.Project.updated_at.desc())
     
     total = query.count()
     works = query.offset(skip).limit(limit).all()
@@ -508,7 +508,7 @@ def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user
     db_work = ensure_owner(
         get_work(db, work_id),
         user_id,
-        not_found_detail="Work not found",
+        not_found_detail="Project not found",
         forbidden_detail="Not authorized to modify this work",
     )
     
@@ -526,7 +526,7 @@ def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work update failed: {str(e)}"
+            detail=f"Project update failed: {str(e)}"
         )
 
 def delete_work(db: Session, work_id: str, user_id: int):
@@ -534,7 +534,7 @@ def delete_work(db: Session, work_id: str, user_id: int):
     db_work = ensure_owner(
         get_work(db, work_id),
         user_id,
-        not_found_detail="Work not found",
+        not_found_detail="Project not found",
         forbidden_detail="Not authorized to delete this work",
     )
     
@@ -548,31 +548,29 @@ def delete_work(db: Session, work_id: str, user_id: int):
         # 删除数据库记录
         db.delete(db_work)
         db.commit()
-        return {"message": "Work deleted successfully"}
+        return {"message": "Project deleted successfully"}
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work deletion failed: {str(e)}"
+            detail=f"Project deletion failed: {str(e)}"
         )
 
-def update_work_status(db: Session, work_id: str, status: str, progress: int = None, user_id: int = None):
+def update_work_status(db: Session, work_id: str, status: str, user_id: int = None):
     """更新工作状态和进度"""
     db_work = get_work(db, work_id)
     if not db_work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if user_id:
         ensure_owner(
             db_work,
             user_id,
-            not_found_detail="Work not found",
+            not_found_detail="Project not found",
             forbidden_detail="Not authorized to modify this work",
         )
     
     try:
         db_work.status = status
-        if progress is not None:
-            db_work.progress = max(0, min(100, progress))  # 确保进度在0-100之间
         
         db.commit()
         db.refresh(db_work)
@@ -581,7 +579,7 @@ def update_work_status(db: Session, work_id: str, status: str, progress: int = N
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work status update failed: {str(e)}"
+            detail=f"Project status update failed: {str(e)}"
         )
 
 

@@ -217,7 +217,8 @@ const closeSidebarOnMobile = () => {
 }
 
 const navigationItems = computed(() => [
-  { path: '/template', label: ui.value.templates, icon: 'file-copy' },
+  { path: '/experiences', label: isZh.value ? '个人经验' : 'Personal experience', icon: 'books' },
+  { path: '/resources', label: isZh.value ? '资源库' : 'Resources', icon: 'folder-open' },
   { path: '/api-config', label: ui.value.models, icon: 'setting' },
 ])
 function navigate(path: string) {

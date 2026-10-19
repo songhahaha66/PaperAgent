@@ -2,6 +2,7 @@ import { apiClient } from '@/utils/apiClient'
 export interface PaperSection {
   key: string
   title: string
+  level?: number
   text: string
   readable: string
   revision: number
@@ -65,6 +66,17 @@ export interface PaperIssueContext {
   evidence_note: string
 }
 export interface PaperDocument {
+  title?: string
+  publication_notice?: string
+  outline?: { key: string; title: string; level: number; available: boolean }[]
+  feedback?: {
+    id: string
+    message: string
+    category: string
+    section: string | null
+    task_id: string
+    status: string
+  }[]
   artifacts?: string[]
   research_id: string | null
   commit_seq: number

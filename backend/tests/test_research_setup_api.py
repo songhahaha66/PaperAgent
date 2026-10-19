@@ -29,24 +29,25 @@ def test_setup_and_overview_before_run_and_cannot_overwrite_checkpoint(env,clien
     base='/api/workspace/B'
     result=client.put(base+'/research-setup',json={'request_limit':40,'compact_paper':True,'skill_keys':['regression']})
     assert result.status_code==200,result.text
-    overview=client.get(base+'/research-overview').json()
+    overview=client.get(base+'/research-settings').json()
     assert overview['budget']['used']==0 and overview['settings']['request_limit']==40
-    assert not overview['research']['has_research']
+    assert 'research' not in overview
     root=env.root('B');(root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':'existing'}))
     assert client.put(base+'/research-setup',json={'request_limit':1}).status_code==409
-    assert client.get(base+'/research-overview').json()['settings']['request_limit']==40
+    assert client.get(base+'/research-settings').json()['settings']['request_limit']==40
 
 
 def test_template_scaffold_is_not_a_published_research_artifact(env,client):
     root=env.root('B');(root/'.system').mkdir(parents=True,exist_ok=True)
     (root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':'preparing','engine_version':'research-v3'}))
     (root/'paper.tex').write_text('template scaffold')
-    overview=client.get('/api/workspace/B/research-overview')
+    overview=client.get('/api/workspace/B/research-settings')
     assert overview.status_code==200
-    assert overview.json()['research']['artifacts']==[]
+    from services.chat_services.research_session import research_snapshot
+    assert research_snapshot(root,'B','created').artifacts==[]
 
 
-@pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),('GET','research-overview',None),
+@pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),('GET','research-settings',None),
     ('GET','research/issues/unknown/execution-recovery',None),
     ('POST','research/issues/unknown/execution-recovery',{'proof_hash':'0'*64})])
 def test_unified_routes_keep_work_owner_boundary(client,method,path,body):
@@ -80,7 +81,7 @@ def test_readiness_uses_runtime_env_fallback_and_exposes_only_booleans(env,monke
 def test_new_default_is_metered_without_implicit_cap_and_permissions_unchanged(client):
     response=client.put('/api/workspace/B/research-setup',json={'confirm_models':True,'literature_mode':'off'})
     assert response.status_code==200,response.text
-    data=client.get('/api/workspace/B/research-overview').json()
+    data=client.get('/api/workspace/B/research-settings').json()
     assert data['budget']['request_limit'] is None and data['settings']['timeout_seconds'] is None
-    assert data['settings']['confirm_models'] is True and data['literature']['sources']==0
+    assert data['settings']['confirm_models'] is True and data['modules']['literature']['mode']=='off'
     assert data['settings']['limit_source']=='default'

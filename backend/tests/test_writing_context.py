@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.write import section_request, STYLE
+from ai_system.modules.writing.sections import section_request, STYLE
 from test_paper_graph import FakeModel, _analysis
 from test_report_submission import seed
 
@@ -54,7 +54,7 @@ def test_assumptions_section_uses_only_active_premises_and_never_pads_given_fact
 
 def test_semantic_audit_preserves_actual_references_and_includes_auxiliary_evidence(tmp_path, monkeypatch):
     import asyncio
-    from ai_system.graph.nodes import consistency
+    from ai_system.modules.writing import consistency as consistency
     from ai_system.graph.state import ClaimAudit
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
     objective = seed(ctx, [], name='objective', value='13')

@@ -8,8 +8,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import GroundingError, ResultRegistry
-from ai_system.graph.nodes.solve import build_tools, submission_schema
-from ai_system.graph.nodes.review import submission_inventory_issues
+from ai_system.modules.experiments.execution import build_tools, submission_schema
+from ai_system.modules.experiments.review import submission_inventory_issues
 from ai_system.research.validation import evaluate
 from test_report_submission import branch, report
 

@@ -16,8 +16,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from ai_system.graph.build import compile_graph
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import REF_PATTERN, publication_text
-from ai_system.graph.nodes.write import section_plan
-from ai_system.graph.nodes.validate import assemble, assemble_latex
+from ai_system.modules.writing.sections import section_plan
+from ai_system.modules.writing.validation import assemble, assemble_latex
 from ai_system.research.store import ResearchStore, digest
 from ai_system.research.citations import audit_citations, citation_issues, render_citations
 from ai_system.research.literature import CITATION
@@ -119,7 +119,7 @@ def source_info(store, snapshot):
 
 def empty_document(research_id=None, commit_seq=0):
     return {'research_id': research_id, 'commit_seq': commit_seq, 'source_hash': None,
-            'sections': [], 'history': [], 'tasks': [], 'patch_attempts': [],
+            'sections': [], 'outline': [], 'feedback': [], 'history': [], 'tasks': [], 'patch_attempts': [],
             'verified_methods': [], 'verified_formula_blocks': {}, 'artifacts': []}
 
 
@@ -128,7 +128,13 @@ async def document(store):
     if not snapshot or not any(s.get('text', '').strip() for s in snapshot['sections'].values()):
         return empty_document(store.research_id, (snapshot or {}).get('commit_seq', 0))
     state = await paper_state(store)
-    titles = {k: title for k, title, _ in section_plan(state)}
+    plan = section_plan(state)
+    titles = {k: title for k, title, _ in plan}
+    levels = {k: level for k, _, level in plan}
+    # Writing completion and JSON storage order are not document order. Use the
+    # same outline as assembly/export, retaining unmatched historical sections.
+    keys = [key for key, _, _ in plan if key in snapshot['sections']]
+    keys.extend(key for key in snapshot['sections'] if key not in titles)
     ctx = GraphContext.create(str(store.root), planner_llm=None)
     ctx.research = store
     refresh_registry(ctx)
@@ -139,7 +145,7 @@ async def document(store):
         if native:
             text = CITATION.sub(lambda m:'PAPERAGENTCITE'+m.group(1),text)
         if native and shutil.which('pandoc'):
-            process = await asyncio.create_subprocess_exec('pandoc', '--sandbox', '-f', 'latex', '-t', 'gfm+tex_math_dollars', '--wrap=none', stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            process = await asyncio.create_subprocess_exec('pandoc', '--sandbox', '-f', 'latex', '-t', 'gfm+tex_math_dollars-tex_math_gfm', '--wrap=none', stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             try:
                 out, _ = await asyncio.wait_for(process.communicate(text.encode()), timeout=15)
                 if process.returncode == 0:
@@ -172,9 +178,26 @@ async def document(store):
     for task in {f['task_id'] for f in methods}:
         try:blocks['solve:'+task]=canonical_method_block(methods,task)
         except ValueError:pass
-    return {'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
-            'artifacts': [p for p in ('paper.md', 'paper.tex', 'paper.pdf', 'paper.docx') if (store.root / p).is_file() and (store.root / p).stat().st_size],
-            'sections': [{'key': k, 'title': titles.get(k, k), 'readable': readable[k], **v} for k, v in snapshot['sections'].items() if v.get('text', '').strip()],
+    source = 'paper.tex' if native else 'paper.md'
+    source_path = store.root / source
+    try:
+        source_current = bool(snapshot.get('paper_hash') and source_path.is_file()
+                              and digest(source_path.read_text(encoding='utf-8')) == snapshot['paper_hash'])
+    except (OSError, UnicodeError):
+        source_current = False
+    published = bool(source_current and not snapshot.get('paper_conflict') and store.delivery_ready(snapshot)
+                     and all(section['validity'] == 'current' for section in snapshot['sections'].values()))
+    available = {source, *snapshot.get('exports', [])} if published else set()
+    return {'title': state['analysis'].get('title', ''), 'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
+            'publication_notice': '源文件有人工修改，须先合并；当前目录展示登记正文，旧排版文件不作为当前版本。' if snapshot.get('paper_hash') and (not source_current or snapshot.get('paper_conflict')) else '',
+            'artifacts': [p for p in ('paper.md', 'paper.tex', 'paper.pdf', 'paper.docx') if p in available and (store.root / p).is_file() and (store.root / p).stat().st_size],
+            'outline': [{'key': key, 'title': title, 'level': level,
+                         'available': bool(snapshot['sections'].get(key, {}).get('text', '').strip())}
+                        for key, title, level in plan],
+            'sections': [{'key': k, 'title': titles.get(k, '未归类章节'), 'level': levels.get(k, 2), 'readable': readable[k], **snapshot['sections'][k]}
+                         for k in keys if snapshot['sections'][k].get('text', '').strip()],
+            'feedback': [{field: item.get(field) for field in ('id', 'message', 'category', 'section', 'task_id', 'status')}
+                         for item in snapshot['feedback'] if item['status'] not in {'resolved', 'dismissed', 'superseded'}],
             'history': history, 'tasks': [{'id': k, 'title': v['objective'], 'dependencies': v['dependencies']}
                                         for k, v in snapshot['tasks'].items() if not v['retired']]}
 
@@ -272,7 +295,7 @@ async def decide(store, proposal_id, apply, output_mode):
     native = filename.endswith('.tex')
     reference_update = None
     if 'references' not in changes and any(CITATION.search(t) for t in changes.values()) and 'references' in state['sections']:
-        from ai_system.graph.nodes.write import reference_section
+        from ai_system.modules.writing.sections import reference_section
         reference_update = reference_section(state,ctx)
         state['sections']['references'] = reference_update
     reviewed=bool(proposal.get('source_issue')) or proposal.get('edit_kind')=='evidence' or proposal.get('generation_contract')=='scoped-anchored-edits-v2'

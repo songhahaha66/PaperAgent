@@ -24,12 +24,8 @@ export interface SkillState {
   usage: { task_id: string; skills: { key: string; version: number }[]; validity: string }[]
 }
 export const skillsAPI = {
+  catalog: () => apiClient.request<{ methods: ResearchSkill[] }>('/api/resources/methods'),
+  method: (key: string) =>
+    apiClient.request<ResearchSkill>(`/api/resources/methods/${encodeURIComponent(key)}`),
   read: (work: string) => apiClient.request<SkillState>(`/api/workspace/${work}/skills`),
-  detail: (work: string, key: string) =>
-    apiClient.request<ResearchSkill>(`/api/workspace/${work}/skills/${encodeURIComponent(key)}`),
-  save: (work: string, base_version: number, policy: SkillPolicy) =>
-    apiClient.request<{ version: number; policy: SkillPolicy; affected: string[] }>(
-      `/api/workspace/${work}/skills`,
-      { method: 'PUT', body: JSON.stringify({ base_version, policy }) },
-    ),
 }

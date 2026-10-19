@@ -1,4 +1,6 @@
 """Real diabetes data, sklearn kernels and SQLite; model replies are deterministic."""
+
+from ai_system.research.domain import findings as research_findings
 import asyncio
 import copy
 import json
@@ -12,9 +14,9 @@ from sklearn.datasets import load_diabetes
 from sklearn.metrics import mean_squared_error
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes import supervised_probe as engine
-from ai_system.graph.nodes.explore import explore
-from ai_system.research.comparison import ComparisonStore,CandidateCode,SupervisedSpec
+from ai_system.modules.experiments import supervised as engine
+from ai_system.modules.experiments.exploration import explore
+from ai_system.modules.experiments.store import ExperimentStore,CandidateCode,SupervisedSpec
 from ai_system.research.store import ResearchStore,digest
 from ai_system.research.models import ResearchConflict,PlanPatch,TaskChange,PlanProposal
 from ai_system.research.control import worker_context
@@ -49,7 +51,7 @@ def setup(tmp_path,monkeypatch):
     store=ResearchStore(root,'study');analysis={'overall_analysis':'监督学习比较','subproblems':[{'id':'Q1','title':'回归预测','question':TASK,'depends_on':[],'deliverables':['独立验证']}],
         'requirements':[{'id':'RQ1','statement':'回归预测','source_quote':'预测 target','kind':'goal','task_ids':['Q1'],'checks':[]}],'assumptions':[]}
     store.initialize(TASK,analysis)
-    cfg=ComparisonStore(store);spec=SupervisedSpec(dataset='data/diabetes.csv',target='target',features=list(load_diabetes().feature_names),id_column='sample_id',negative_control_tolerance=.15).model_dump();cfg.set_policy(True,spec)
+    cfg=ExperimentStore(store);spec=SupervisedSpec(dataset='data/diabetes.csv',target='target',features=list(load_diabetes().feature_names),id_column='sample_id',negative_control_tolerance=.15).model_dump();cfg.set_policy(True,spec)
     parent=GraphContext.create(str(root),planner_llm=None,explore_top_k=2,n_candidates=2);parent.research=store
     order=store.claim('Q1');ctx=worker_context(parent,order)
     candidates=[candidate('shallow','gbdt','shallow random forest'),candidate('ridge','regression','scaled ridge')]
@@ -134,7 +136,7 @@ def test_input_changed_before_promotion_is_not_promoted(setup,monkeypatch):
 
 
 def test_budget_exhaustion_reserves_before_call_and_survives_resume(setup,monkeypatch):
-    from ai_system.research import comparison
+    from ai_system.modules.experiments import store as comparison
     monkeypatch.setitem(comparison.LIMITS,'model_calls',1)
     first=run(setup).to_record();assert first['status']=='budget_exhausted' and first['chosen_index'] is None
     assert len(setup.calls)==1 and setup.cfg.budget('Q1')['used']['model_calls']==1
@@ -154,7 +156,7 @@ def test_protocol_and_code_cannot_be_edited_after_measurement(setup):
 def test_failed_comparison_enters_existing_issue_and_planner_repair_without_budget_reset(setup):
     setup.codes.update(shallow=BAD_A,ridge=BAD_B);record=run(setup).to_record()
     setup.store.report_comparison_failure(record,setup.order)
-    snapshot=setup.store.snapshot();issue=snapshot['issues'][0]
+    snapshot=setup.store.snapshot();issue=research_findings(snapshot)[0]
     assert issue['source']=='comparison' and issue['status']=='confirmed' and issue['action']=='recompute'
     class Model:
         def with_structured_output(self,*a,**k):return self
@@ -235,20 +237,20 @@ def test_failed_comparison_blocks_formal_solver_and_commits_complete_failure_rec
     setup.codes.update(shallow=BAD_A,ridge=BAD_B);setup.store.recover()
     async def forbidden(*args,**kwargs):pytest.fail('no-valid experiments cannot fall back to a formal model self-score')
     import importlib
-    solve_module=importlib.import_module('ai_system.graph.nodes.solve')
+    solve_module=importlib.import_module('ai_system.modules.experiments.execution')
     monkeypatch.setattr(solve_module,'_solve_loop',forbidden)
     asyncio.run(execute(setup.branch,SimpleNamespace(context=setup.parent)))
     records=setup.cfg.list();assert len(records)==1 and records[0]['status']=='no_valid'
     assert all(r['run_ids'] and r['error_detail'] for r in records[0]['branches'])
     assert not setup.store.registry_payload()['results']
     snapshot=setup.store.snapshot()
-    assert any(i['source']=='comparison' and i['action']=='recompute' for i in snapshot['issues'])
+    assert any(i['source']=='comparison' and i['action']=='recompute' for i in research_findings(snapshot))
     attempted=list(snapshot['attempts'].values())[-1]
     assert attempted['result']['report']['status']=='comparison_blocked'
 
 
 def test_winner_kernel_and_export_retain_real_training_model(setup):
-    from ai_system.graph.nodes.solve import export_solution_code
+    from ai_system.modules.experiments.execution import export_solution_code
     async def work():
         try:
             result=await explore(setup.ctx,setup.branch)
@@ -264,7 +266,7 @@ def test_winner_kernel_and_export_retain_real_training_model(setup):
 
 
 def test_two_candidate_mode_generates_exactly_two_distinct_allowed_plans(setup,monkeypatch):
-    from ai_system.graph.nodes import design
+    from ai_system.modules.experiments import planning as design
     from ai_system.graph.state import CandidateSet,ModelCandidate
     setup.ctx.n_candidates=1;seen=[]
     async def generate(llm,schema,messages,**kwargs):
@@ -286,7 +288,7 @@ def test_gateway_authorization_failure_stops_further_calls_and_is_not_a_method_e
     record=run(setup).to_record();assert record['status']=='no_valid' and record['provider_unavailable']
     assert calls==[1] and not any(r['run_ids'] for r in record['branches'])
     assert setup.cfg.budget('Q1')['used']['model_calls']==1
-    setup.store.report_comparison_failure(record,setup.order);assert not setup.store.snapshot()['issues']
+    setup.store.report_comparison_failure(record,setup.order);assert not research_findings(setup.store.snapshot())
     assert run(setup).record['status']=='no_valid' and calls==[1]
 
 
@@ -297,4 +299,4 @@ def test_missing_second_plan_is_visible_and_never_executes_a_single_plan_fallbac
     assert len(result.record['branches'])==2 and result.record['branches'][1]['status']=='not_generated'
     assert setup.calls==[]
     setup.store.report_comparison_failure(result.record,setup.order)
-    assert setup.store.snapshot()['issues'][0]['source']=='comparison'
+    assert research_findings(setup.store.snapshot())[0]['source']=='comparison'

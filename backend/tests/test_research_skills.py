@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from ai_system.graph.methods import skill_catalog, skill_detail, describe, methods_catalog, validate_skill_policy
+from ai_system.modules.methods import skill_catalog, skill_detail, describe, methods_catalog, validate_skill_policy
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.design import pick_methods, propose, make_design
-from ai_system.graph.nodes.solve import build_task
+from ai_system.modules.experiments.planning import pick_methods, propose, make_design
+from ai_system.modules.experiments.execution import build_task
 from ai_system.graph.state import MethodPick, CandidateSet, ModelCandidate
 from ai_system.research.models import ResearchConflict
 from ai_system.research.store import ResearchStore
@@ -76,7 +76,7 @@ def test_selection_invalidates_existing_evidence_without_relaxing_contract(tmp_p
 
 
 def test_design_and_solver_receive_selected_skill_and_source(tmp_path, monkeypatch):
-    import ai_system.graph.nodes.design as design_module
+    import ai_system.modules.experiments.planning as design_module
     ctx = GraphContext.create(str(tmp_path), planner_llm=None, skill_policy=SELECTED)
     branch = {'source':TASK, 'analysis':problem().model_dump(), 'subproblem':problem().model_dump()['subproblems'][0], 'data_profile':'columns x, y'}
     prompts = []

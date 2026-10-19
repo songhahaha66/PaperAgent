@@ -1,4 +1,6 @@
 """Frozen linear constraints reject fabricated feasibility, and use the existing repair lifecycle."""
+
+from ai_system.research.domain import findings as research_findings
 import json
 import sys
 from pathlib import Path
@@ -46,7 +48,7 @@ def test_false_zero_violation_is_rejected_and_repaired_without_recomputing_unrel
     submit(store, 'Q1', {'x': 4, 'y': 4, 'objective': 20, 'max_violation': 0})
     state = store.snapshot()
     assert state['validations'][-1]['outcome'] == 'rejected'
-    assert '复算左值 12' in state['issues'][0]['message']
+    assert '复算左值 12' in research_findings(state)[0]['message']
     assert not store.delivery_ready(state) and 'Q2' not in ready_tasks(state)
     assert {r['subproblem'] for r in store.registry_payload()['results']} == {'Q3'}
     snapshot = research_snapshot(tmp_path, 'work', 'failed')
@@ -55,7 +57,7 @@ def test_false_zero_violation_is_rejected_and_repaired_without_recomputing_unrel
     assert any('复算左值 12' in b['message'] and b['action'] == 'recompute' for b in snapshot.delivery['blockers'])
     original = state['spec']['requirements'][0]['checks']
     store.apply_patch(PlanPatch(command_id='repair', base_revision=state['revision'], reason='Respect actual constraints',
-        issue_ids=[state['issues'][0]['id']], changes=[TaskChange(task_id='Q1', objective='Re-enumerate feasible integer pairs')]))
+        issue_ids=[research_findings(state)[0]['id']], changes=[TaskChange(task_id='Q1', objective='Re-enumerate feasible integer pairs')]))
     assert store.snapshot()['spec']['requirements'][0]['checks'] == original
     assert research_snapshot(tmp_path, 'work', 'failed').tasks[0]['validation'] is None
     submit(store, 'Q1', {'x': 3, 'y': 2, 'objective': 13})
@@ -63,7 +65,7 @@ def test_false_zero_violation_is_rejected_and_repaired_without_recomputing_unrel
     state = store.snapshot()
     assert store.delivery_ready(state)
     assert state['tasks']['Q3']['active_attempt'] == unrelated
-    assert all(i['status'] == 'resolved' for i in state['issues'])
+    assert all(i['status'] == 'resolved' for i in research_findings(state))
     assert research_snapshot(tmp_path, 'work', 'completed').delivery == {'ready': True, 'blockers': []}
     assert '未验证最优性' in research_snapshot(tmp_path, 'work', 'completed').tasks[0]['validation']['checks'][0]['message']
 
@@ -129,7 +131,7 @@ def test_delivery_explains_exhausted_budget_even_when_execution_issue_exists(tmp
 
 def test_submission_requires_decisions_not_just_self_reported_residual(tmp_path):
     from ai_system.graph.context import GraphContext
-    from ai_system.graph.nodes.solve import submission_schema
+    from ai_system.modules.experiments.execution import submission_schema
     from test_paper_graph import FakeModel
     from test_report_submission import branch, seed, report
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())

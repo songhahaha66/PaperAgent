@@ -1,4 +1,6 @@
 """Bounded planning over immutable requirements and evidence-backed issues."""
+
+from ai_system.research.domain import findings as research_findings
 import json
 
 from .models import Contract, Requirement, PlanPatch, TaskChange, PlanProposal
@@ -23,7 +25,7 @@ def ready_tasks(snapshot):
     tasks = snapshot["tasks"]
     if len(snapshot["attempts"]) >= snapshot["max_total_attempts"]:
         return []
-    blocked = {key for i in snapshot["issues"] if i["status"] == "confirmed" and i["action"] == "recompute"
+    blocked = {key for i in research_findings(snapshot) if i["status"] == "confirmed" and i["action"] == "recompute"
                for key in i["repair_targets"]}
     return [key for key, task in tasks.items() if not task["retired"] and key not in blocked
             and task["execution_status"] == "pending"
@@ -63,10 +65,10 @@ class Planner:
         context = {"spec": snapshot["spec"], "revision": snapshot["revision"], "assumptions": snapshot["assumptions"],
             "tasks": [{k: t[k] for k in ("task_id", "revision", "objective", "dependencies", "requirement_ids", "assumption_ids", "acceptance")}
                       for t in snapshot["tasks"].values() if not t["retired"]],
-            "issues": [i for i in snapshot["issues"] if i["status"] == "confirmed" and i["action"] == "recompute"],
+            "issues": [i for i in research_findings(snapshot) if i["status"] == "confirmed" and i["action"] == "recompute"],
             "validations": snapshot["validations"][-8:],
             "evidence": [{"id": k, **v["payload"]} for k, v in snapshot["evidence"].items()
-                         if any(k in i["evidence_refs"] for i in snapshot["issues"] if i["status"] == "confirmed")],
+                         if any(k in i["evidence_refs"] for i in research_findings(snapshot) if i["status"] == "confirmed")],
             "remaining_attempts": snapshot["max_total_attempts"] - len(snapshot["attempts"])}
         prompt = (
             "你是研究全局规划器。仅修复已确认的研究问题，issue_ids必须引用上下文问题编号。"

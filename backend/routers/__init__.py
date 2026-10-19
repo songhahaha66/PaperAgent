@@ -9,9 +9,13 @@ from .work_routes import work_router, workspace_router
 from .file_routes import template_router
 from .config_routes import model_config_router
 from .mcp_routes import mcp_router
+from .experience_routes import router as experience_router
+from .resource_routes import router as resource_router
 
 # 所有路由列表，方便在主应用中注册
 all_routers = [
+    resource_router,
+    experience_router,
     auth_router,
     chat_router,
     work_router,

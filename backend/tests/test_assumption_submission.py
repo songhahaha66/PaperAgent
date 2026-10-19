@@ -11,12 +11,12 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph import llm_utils
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.design import propose
-from ai_system.graph.nodes.solve import submission_schema
+from ai_system.modules.experiments.planning import propose
+from ai_system.modules.experiments.execution import submission_schema
 from ai_system.graph.state import CandidateSet
 from ai_system.research.assumptions import unbound_assumptions, premise_definition
 from ai_system.research.models import AssumptionDraft
-from ai_system.research.control import dispatch
+from ai_system.research.control import task_dispatch as dispatch
 from test_paper_graph import _analysis, _candidate
 from test_report_submission import branch, report
 from test_research_p2 import store_for
@@ -131,8 +131,8 @@ def test_dispatched_premise_scope_matches_central_dependency_scope(tmp_path):
 
 
 def test_default_design_executes_one_route_without_judging_or_probing(tmp_path):
-    from ai_system.graph.nodes.design import make_design
-    from ai_system.graph.nodes.explore import explore
+    from ai_system.modules.experiments.planning import make_design
+    from ai_system.modules.experiments.exploration import explore
     from test_paper_graph import FakeModel
     class UnexpectedJudge:
         async def ask(self, *args, **kwargs):

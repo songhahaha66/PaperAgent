@@ -3,6 +3,8 @@
 Only review_records are durable. Core spans partition every source character;
 left-neighbour windows overlap intentionally and do not count twice as coverage.
 """
+
+from ai_system.research.domain import findings as research_findings
 import asyncio,json,re,time
 from contextlib import closing
 from pydantic import BaseModel,Field
@@ -142,7 +144,7 @@ def _rows(store):
 
 
 def block_material(ctx,state,block):
-    from ..graph.nodes.consistency import AUDIT_SYSTEM,section_audit_prompt
+    from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt
     selected={**state,'sections':{block['section']:block['left']+block['text']}}
     # The normal evidence/contract prompt is reused; the window never exceeds its cap.
     prompt=section_audit_prompt(selected if block['section']!='references' else {**state,'sections':{'scope':'文献列表也须逐块核查，实际原文见下方范围说明。'}},ctx,force=True)[0]
@@ -156,7 +158,7 @@ def block_material(ctx,state,block):
 
 
 def validate_block(answer,block,ctx,state):
-    from ..graph.nodes.consistency import validate_findings
+    from ai_system.modules.writing.consistency import validate_findings
     if any(i.section!=block['section'] or i.quote and i.quote not in block['left']+block['text'] for i in answer.issues):raise CoverageError('局部意见超出实际原文窗口')
     if any(s.quote not in block['text'] or not set(s.claim_ids)<=set(ctx.registry.claims) for s in answer.statements):raise CoverageError('主要主张不是本块逐字原文或引用了未知结论')
     validate_findings([i.research_issue for i in answer.issues if i.research_issue],state,ctx)
@@ -192,7 +194,7 @@ async def child(ctx,state,stage,schema,context,system,prompt,validate):
 
 
 def global_material(ctx,state,bindings):
-    from ..graph.nodes.consistency import AUDIT_SYSTEM,section_audit_prompt
+    from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt
     ledger=[]
     for index,(block,answer,row) in enumerate(bindings):
         ledger.append({'key':f'B{index+1}','section':block['section'],'core_hash':block['core_hash'],'review_key':row['context']['extra']['reuse_key'],
@@ -207,7 +209,7 @@ def global_material(ctx,state,bindings):
 
 
 def validate_global(answer,ledger,ctx,state):
-    from ..graph.nodes.consistency import validate_findings
+    from ai_system.modules.writing.consistency import validate_findings
     expected=[r['key'] for r in ledger]
     if sorted(answer.block_keys)!=sorted(expected) or len(answer.block_keys)!=len(expected):raise CoverageError('跨节核查遗漏或重复输入块')
     quotes={(r['section'],s['quote']) for r in ledger for s in r['statements']}

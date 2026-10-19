@@ -52,6 +52,7 @@ def test_explicit_cap_checked_before_next_send_and_old_limit_retained(tmp_path):
     with runtime.store._transaction() as db:
         db.execute('UPDATE runtime_policy SET payload=?',(json.dumps({'request_limit':40,'timeout_seconds':90,'confirm_models':True,'compact_paper':True}),))
         db.execute('UPDATE request_budgets SET payload=?',(json.dumps({'request_limit':40,'timeout_seconds':90,'used':40,'state':'budget_exhausted'}),))
+    with runtime.store._transaction() as db:db.execute('DELETE FROM domain_migrations')
     restored=ResearchRuntime(tmp_path)
     assert restored.policy()['limit_source']=='legacy' and restored.status()['request_limit']==40
     with pytest.raises(ResearchBudgetExhausted):restored.reserve('model.invalid')
@@ -146,6 +147,8 @@ def test_known_legacy_token_usage_is_imported_once_before_new_requests(tmp_path)
     with rt.store._transaction() as db:
         db.execute('UPDATE request_budgets SET payload=?',(json.dumps({'used':1,'request_limit':40,'timeout_seconds':90,'state':'active'}),))
     (tmp_path/'.system/llm_calls.json').write_text(json.dumps({'calls':[{'input':11,'output':5,'usage_returned':True},{'input':0,'output':0,'usage_returned':False}]}))
+    with rt.store._transaction() as db:db.execute('DELETE FROM domain_migrations')
+    rt=ResearchRuntime(tmp_path)
     assert rt.status()['input_tokens']==11
     seq=rt.reserve('new');rt.usage(seq,{'input_tokens':7,'output_tokens':3})
     assert ResearchRuntime(tmp_path).status()['input_tokens']==18

@@ -1,5 +1,5 @@
 <template>
-  <ResearchComparisons
+  <ExperimentResult
     v-if="resultType === 'experiment'"
     :work-id="workId"
     :record-id="resultId"
@@ -66,7 +66,7 @@
 import { computed } from 'vue'
 import type { ResearchSnapshot } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
-import ResearchComparisons from './ResearchComparisons.vue'
+import ExperimentResult from './ExperimentResult.vue'
 import ResearchOutcome from './ResearchOutcome.vue'
 const props = defineProps<{
   workId: string

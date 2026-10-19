@@ -5,9 +5,9 @@ import httpx,pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.research.runtime import ResearchRuntime,budget_scope,request_hook,response_hook,ResearchBudgetExhausted
 from ai_system.graph.tracing import LLMCallTrace
-from test_experiences import env,submit,TASK
+from test_experiences import env,submit,TASK,adopt_ready
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes import design
+from ai_system.modules.experiments import planning as design
 from ai_system.research.experience import prompt_context,design_usage
 
 
@@ -47,7 +47,7 @@ def test_usage_unknown_is_explicit_and_resume_trace_is_not_overwritten(tmp_path)
 
 
 def test_confirmation_design_really_receives_history_then_freezes_its_refs(env):
-    a=env.store('A');submit(a);b=env.store('B')
+    a=env.store('A');submit(a);adopt_ready(env.scope());b=env.store('B')
     # The confirmation design happens before claim; a later worker freezes it.
     ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'));ctx.research=b
     branch={'source':TASK,'subproblem':{'id':'Q1','question':TASK}}
@@ -57,8 +57,8 @@ def test_confirmation_design_really_receives_history_then_freezes_its_refs(env):
 
 
 def test_uploaded_csv_in_attachment_is_eligible_for_comparison(tmp_path):
-    from ai_system.graph.nodes.supervised_probe import csv_files,prepare
-    from ai_system.research.comparison import SupervisedSpec
+    from ai_system.modules.experiments.supervised import csv_files,prepare
+    from ai_system.modules.experiments.store import SupervisedSpec
     folder=tmp_path/'attachment';folder.mkdir();(folder/'sample.csv').write_text('x,target\n'+'\n'.join(f'{i},{i*2}' for i in range(40)))
     spec=SupervisedSpec(dataset='attachment/sample.csv',features=['x'],target='target').model_dump()
     assert csv_files(tmp_path)==[folder/'sample.csv']
@@ -67,7 +67,7 @@ def test_uploaded_csv_in_attachment_is_eligible_for_comparison(tmp_path):
 
 def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     from types import SimpleNamespace
-    from ai_system.graph.nodes.validate import render
+    from ai_system.modules.writing.validation import render
     from test_literature import seed
     from test_research_p2 import problem, TASK
     _,_,evidence=seed(tmp_path)
@@ -81,8 +81,8 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
 
 
 def test_paired_confirmation_lists_both_and_does_not_announce_a_winner(tmp_path,monkeypatch):
-    from ai_system.graph.nodes.confirm import designs_summary
-    from ai_system.graph.nodes import explore
+    from ai_system.graph.confirm import designs_summary
+    from ai_system.modules.experiments import exploration as explore
     monkeypatch.setattr(explore,'two_candidate_mode',lambda *args:True)
     choices=[{'name':name,'idea':'使用当前数据','validation':'真实指标'} for name in ['OLS','Ridge']]
     state={'analysis':{'subproblems':[{'id':'Q1','title':'回归'}]},
@@ -95,7 +95,7 @@ def test_actual_estimator_guard_rejects_misnamed_methods_and_parameters():
     from sklearn.linear_model import LinearRegression,Ridge
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler,PolynomialFeatures
-    from ai_system.graph.nodes.estimator_contracts import candidate_contract,check_estimator
+    from ai_system.modules.experiments.contracts import candidate_contract,check_estimator
     ols=candidate_contract({'name':'OLS基线','idea':'使用LinearRegression'})
     ridge=candidate_contract({'name':'标准化Ridge','idea':'使用StandardScaler与Ridge(alpha=1)'})
     assert check_estimator(LinearRegression(),ols)['family']=='ols'
@@ -123,7 +123,7 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
 
 def test_parallel_writing_preserves_finished_sections_when_another_call_fails(tmp_path,monkeypatch):
     from test_native_latex import accepted_store
-    from ai_system.graph.nodes import write as writing
+    from ai_system.modules.writing import sections as writing
     store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
     async def section(ctx,state,key,title):
         if key=='analysis':raise ResearchBudgetExhausted('budget reached')
@@ -156,9 +156,9 @@ def test_real_langchain_transport_hook_and_total_timeout(tmp_path):
 def test_formal_handoff_protects_frozen_metrics_and_rejects_new_fit(tmp_path,monkeypatch):
     # Reuse the real-data/real-kernel fixture, while model code replies stay deterministic.
     from test_supervised_comparison import setup as fixture
-    from ai_system.graph.nodes.explore import explore
-    from ai_system.graph.nodes.comparison_handoff import handoff,proof_issues
-    from ai_system.graph.nodes.solve import build_tools
+    from ai_system.modules.experiments.exploration import explore
+    from ai_system.modules.experiments.handoff import handoff,proof_issues
+    from ai_system.modules.experiments.execution import build_tools
     from langchain_core.tools import StructuredTool
     setup=fixture.__wrapped__(tmp_path,monkeypatch)
     async def work():
@@ -180,7 +180,7 @@ def test_compact_plan_merges_prose_without_removing_validation_sections(tmp_path
     from types import SimpleNamespace
     from test_native_latex import accepted_store
     from test_research_p2 import problem,TASK
-    from ai_system.graph.nodes import write as writing
+    from ai_system.modules.writing import sections as writing
     store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None,compact_paper=True);ctx.research=store
     state={'analysis':problem().model_dump(),'task':TASK,'designs':{},'solutions':{}}
     calls=[]

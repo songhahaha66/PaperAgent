@@ -62,15 +62,14 @@ class PaperTemplate(Base):
 User.templates = relationship("PaperTemplate", back_populates="creator")
 User.model_configs = relationship("ModelConfig", back_populates="creator")
 
-class Work(Base):
-    __tablename__ = "works"
+class Project(Base):
+    __tablename__ = "projects"
     
     id = Column(Integer, primary_key=True, index=True)
     work_id = Column(String(50), unique=True, nullable=False, index=True)  # 唯一工作ID
     title = Column(String(200), nullable=False)  # 工作标题
     description = Column(Text)  # 工作描述
     status = Column(String(50), nullable=False, default="created")  # 工作状态
-    progress = Column(Integer, default=0)  # 进度百分比 (0-100)
     tags = Column(Text)  # 标签，JSON格式存储
     template_id = Column(Integer, ForeignKey("paper_templates.id"), nullable=True)  # 关联的论文模板ID
     output_mode = Column(String(20), nullable=False, default="markdown")  # 输出模式：markdown, word, latex
@@ -79,11 +78,11 @@ class Work(Base):
     created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     
     # 关联关系
-    creator = relationship("User", back_populates="works")
+    creator = relationship("User", back_populates="projects")
     template = relationship("PaperTemplate")  # 关联论文模板
 
 # 添加反向关系
-User.works = relationship("Work", back_populates="creator")
+User.projects = relationship("Project", back_populates="creator")
 
 # --- 新增聊天相关表 ---
 
@@ -106,21 +105,6 @@ class ChatSession(Base):
     # 删除messages关联关系，聊天记录改用JSON文件存储
 
 # 删除ChatMessage表，聊天记录改用JSON文件存储
-
-class WorkFlowState(Base):
-    """工作流状态表"""
-    __tablename__ = "work_flow_states"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    work_id = Column(String(50), nullable=False, index=True)  # 关联的工作ID
-    current_state = Column(String(50), nullable=False)  # 当前状态
-    previous_state = Column(String(50))  # 前一个状态
-    state_data = Column(JSON)  # 状态相关的数据
-    transition_reason = Column(Text)  # 状态转换原因
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # 状态枚举值
-    # CREATED, PLANNING, MODELING, CODING, EXECUTING, ANALYZING, WRITING, REVIEWING, COMPLETED, ARCHIVED
 
 # 更新User模型的反向关系
 User.chat_sessions = relationship("ChatSession", back_populates="creator")
@@ -163,7 +147,7 @@ User.webauthn_credentials = relationship("WebAuthnCredential", back_populates="u
 
 
 class ResearchExperience(Base):
-    """A rebuildable per-owner index; tombstones survive source reindex/recovery."""
+    """User-owned, versioned methods with an explicit adoption lifecycle."""
     __tablename__ = 'research_experiences'
     id = Column(String(64), primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
@@ -174,6 +158,9 @@ class ResearchExperience(Base):
     payload = Column(JSON, nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
     deleted = Column(Boolean, nullable=False, default=False)
+    status = Column(String(20), nullable=False, default='candidate')
+    history = Column(JSON, nullable=False, default=list)
+    validation = Column(JSON, nullable=True)
 
 
 class ResearchExperiencePreference(Base):

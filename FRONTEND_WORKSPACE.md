@@ -1,31 +1,19 @@
-# Workspace interaction refactor
+# 研究工作区
 
-This batch retains the existing tab workspace, optional splits, file viewers and paper editing APIs. It changes the entry points and their responsibilities:
+当前领域模型与迁移契约见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-- `Work.vue` opens files, paper, literature and typed results through the workspace store. Reopening an object activates its existing tab. `overview` is a compatibility alias for the single run-status tab.
-- `ResearchOverview` now composes current run state, generated results, task progress, review recovery and expandable run records. It no longer repeats literature, skills, experience and comparison configuration.
-- `ResearchResultViewer` dispatches registered results and existing experiment records to their content viewers. Historical experiment records remain reachable from run status. The workspace does not assume CSV inputs, a specific metric or two result candidates.
-- References open the same literature tab at the acquired passage. Registered results open only source links actually supplied by the snapshot. Experiment data links require a matching current workspace file.
-- New work starts with task text and attachments. Budget and capability controls are in settings; existing defaults remain unchanged. Existing experiment configuration is available in project settings.
-- Paper editing controls expand on demand. Tab-scoped, user-scoped `sessionStorage` retains tabs, split geometry, chat drafts, reading positions, citation location, selected paper section and section drafts across refresh. Drafts retain their original base commit; server conflict checks still control publication. This is browser-session recovery, not cross-device synchronization.
-- Confirmation rechecks the current research snapshot and status, rejects changed or unavailable snapshots, and prevents duplicate submissions while checking.
-- Shared `t-icon` controls resolve to installed local SVG components, so icon-only actions are visible without a runtime icon CDN.
+工作区保留标签页和两个可调整的内容区：聊天固定在主区；桌面初始将聊天与论文并排，移动端初始显示聊天。拖动标签到内容边缘建立分屏，拖回标签栏合并。窄屏上下堆叠。标签、分屏比例、编辑草稿与阅读位置按用户和项目保存。
 
-## Validation performed
+页面职责：
 
-On the cloud environment, based on `origin/dev` at `0c2f8fedf3b7fe6735d8a7c339fe7a16bb2e86a1`:
+- **研究进度**：方案、依赖、验收、待处理动作和独立的运行故障；从同一研究快照读取状态。
+- **资料与成果**：文献来源与摘录、研究成果、比较实验和交付文件。实验只能查看，不承担配置管理。
+- **论文**：目录按模板和导出顺序组织；正文连续阅读，有正式 PDF 时默认打开 PDF。修订独立于阅读，沿用证据核查和版本保护。依据、内容意见和检查范围按需打开。未生成的 PDF 明确显示状态，不用正文冒充。
+- **个人经验**：用户层独立入口，管理候选、验证、采用、撤回、停用和删除。项目中不提供个人库管理，只在研究进度展示实际引用的版本与来源。
+- **资源库**：方法和论文模板的全局入口。方法步骤与来源按版本查看，方案改变通过研究修改流程提出，不在设置里批量使任务失效。
 
-- `npm run build` (includes Vue/TypeScript checks).
-- `npm run test:panels`, including new canonical-object, refresh, citation-location and per-section draft tests.
-- `npm run test:paper`, `test:messages`, `test:research`, `test:resources`, `test:home`.
-- New historical-result test verifies ID-based access, three candidates, and no policy mutation while viewing.
-- Chromium with the real local API, PostgreSQL, workspace files, research SQLite and graph checkpoint: open material from chat and file navigation; switch tabs; view run status; open a result, its code and output; follow a citation to a retrieved NumPy documentation passage; refresh at that passage; restore manual paper edits after refresh; preview, reject and apply an edit; inspect a mobile viewport.
+首页只保留研究题目、附件、模板与输出选择。确认、文献、经验和研究篇幅沿用既有默认策略，不重新摆出执行设置。项目设置的高级部分显示用量和超时。旧个人经验、科研技能标签迁到研究进度，不再提供项目内的管理旁路。旧模板地址跳转到资源库的模板页。
 
-The environment database was empty. The browser walkthrough therefore uses an explicitly labelled local demonstration project with constructed demand observations and actual Python calculations. It does not claim a live research run or model-generated findings. The model-request counter remained zero.
+界面调整直接在项目中实现、验证并打开实际页面；除非用户明确要求，不制作独立可视化原型。
 
-Screenshots and browser check output in the execution environment:
-`/workspace/scratch/paperagent-review/` (`01-workspace.png` through `08-mobile.png`, `checks.txt`). These are captured application screens, not design mockups. The local walkthrough script and fixture setup are `/tmp/paperagent-browser.cjs` and `/tmp/seed-paperagent.py`; the temporary fixture credential file is not a deliverable and is not committed.
-
-## Current boundaries
-
-Registered-result snapshots provide code/output links but do not expose a separate, authoritative per-result dataset link. The viewer states this gap. Existing comparison computation and protocol constraints remain in their domain viewer. Request budget and timeout can be set before research; started projects display their existing budget because the existing setup API disallows overwriting a checkpoint. No backend agent/runtime rewrite, new comparison algorithm, paid model call or production deployment is part of this batch.
+验证命令：`cd frontend && npm run test:workspace && npm run build`。

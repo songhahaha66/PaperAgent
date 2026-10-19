@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.graph import llm_utils
 from ai_system.graph.context import GraphContext
-from ai_system.graph.nodes.analyze import analyze
+from ai_system.modules.experiments.analysis import analyze
 from ai_system.graph.state import ProblemAnalysis
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.research.models import DomainCheck,LinearModel
@@ -162,7 +162,7 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
 
 
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
-    from ai_system.research.control import dispatch
+    from ai_system.research.control import task_dispatch as dispatch
     from ai_system.graph.build import send_designs
     from test_research_p2 import store_for,problem,TASK as original
     store=store_for(tmp_path)
@@ -177,10 +177,9 @@ def test_dispatch_uses_committed_original_source_for_initial_and_recovered_worke
 
 
 def test_inline_source_data_reaches_design_exploration_solver_and_local_review(tmp_path):
-    from ai_system.graph.nodes.design import pick_methods,propose,critique
-    from ai_system.graph.nodes.explore import make_protocol
-    from ai_system.graph.nodes.solve import build_task
-    from ai_system.graph.nodes.review import review_prompt
+    from ai_system.modules.experiments.planning import pick_methods,propose,critique
+    from ai_system.modules.experiments.execution import build_task
+    from ai_system.modules.experiments.review import review_prompt
     from test_report_submission import branch
     from test_paper_graph import _Structured,_candidate
     source='销量依次为：420、435、410、460、475。售价 15 元、成本 8 元、剩余残值 2 元。'
@@ -204,9 +203,8 @@ def test_inline_source_data_reaches_design_exploration_solver_and_local_review(t
         await pick_methods(ctx,task)
         await propose(ctx,task,['regression'])
         await critique(ctx,task,candidates)
-        await make_protocol(ctx,task,candidates)
     asyncio.run(run())
-    assert {'MethodPick','CandidateSet','ValidationProtocol','judge'}<=set(observed)
+    assert {'MethodPick','CandidateSet','judge'}<=set(observed)
     assert source in build_task(task,ctx)
     assert source in review_prompt(task,{},ctx,[])
 
@@ -214,7 +212,7 @@ def test_inline_source_data_reaches_design_exploration_solver_and_local_review(t
 @pytest.mark.parametrize('reported_works,run_ok',[(False,True),(True,False),(True,True)])
 def test_failed_or_ungrounded_explorations_release_kernels_without_promoting_state(tmp_path,monkeypatch,reported_works,run_ok):
     import importlib
-    mod=importlib.import_module('ai_system.graph.nodes.explore')
+    mod=importlib.import_module('ai_system.modules.experiments.exploration')
     from test_report_submission import branch
     task=branch()
     task['design'].update(candidates=[task['design']['chosen']]*2,scores=[{'total':1}]*2,chosen_index=0)
@@ -227,7 +225,6 @@ def test_failed_or_ungrounded_explorations_release_kernels_without_promoting_sta
         p.report={'works':reported_works,'problems':['failed or ungrounded execution']}
         p.messages=[AIMessage(content='broken code context')]
         p.run_log=[{'ok':run_ok}]
-    monkeypatch.setattr(mod,'make_protocol',protocol)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None,explore_top_k=2)
     ctx.kernels=Kernels()
     assert asyncio.run(mod.explore(ctx,task)) is None
