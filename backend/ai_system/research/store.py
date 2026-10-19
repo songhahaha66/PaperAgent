@@ -894,8 +894,10 @@ class ResearchStore:
                 if stage["status"] == "in_progress":
                     stage.update(status="pending", note="")
             for issue in state["issues"]:
-                if issue["category"] == "service" and issue["source"] != "local_review":
-                    issue["status"] = "resolved"  # The graph will rerun the failed audit before delivery.
+                if issue["category"] == "service":
+                    # Starting a retry is not proof that its audit completed.
+                    # ReviewCache closes only the matching context on success.
+                    continue
                 elif issue["action"] == "retry" and issue["status"] == "confirmed":
                     issue["status"] = "repairing"
                     issue["repair_targets"] = {issue["task_id"]: state["tasks"][issue["task_id"]]["revision"]}

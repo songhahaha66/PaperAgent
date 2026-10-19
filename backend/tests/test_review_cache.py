@@ -197,6 +197,18 @@ def test_authorized_extension_preserves_count_and_is_idempotent(tmp_path):
     with pytest.raises(ValueError):runtime.extend_limit(6,expected_limit=4,command_id='too-many',authorization='offline-test')
 
 
+def test_resume_keeps_service_failure_open_until_matching_review_completes(env):
+    async def failure():raise TimeoutError()
+    with pytest.raises(TimeoutError):invoke(env,failure,'sections',env.state['sections'])
+    original=env.store.snapshot()['issues'][0]
+    env.store.recover()
+    assert env.store.snapshot()['issues'][0]['status']=='confirmed'
+    async def success():return ClaimAudit(issues=[])
+    invoke(env,success,'sections',env.state['sections'])
+    issue=env.store.snapshot()['issues'][0]
+    assert issue['id']==original['id'] and issue['status']=='resolved' and issue['review_resolution']
+
+
 @pytest.mark.parametrize('stage',['reconcile','sections'])
 def test_unknown_review_identifiers_are_failed_not_silently_dropped(env,monkeypatch,stage):
     from ai_system.graph.context import GraphContext
