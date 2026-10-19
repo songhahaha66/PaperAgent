@@ -102,22 +102,20 @@ class _Structured:
         if self.schema is ValidationProtocol:
             return ValidationProtocol(applicable=True, metric="留出集 AUC", procedure="按年份留出", baseline="常数预测")
         if self.schema is ConsistencyReview:
-            # 编号写错的冲突（C99）应被过滤
+            # A valid completed review; malformed IDs are fail-closed separately.
             return ConsistencyReview(conflicts=[
-                Conflict(claims=["C1", "C99"], issue="Q1 结论强度与 Q2 不符", resolution="统一表述为倾向性结论"),
-                Conflict(claims=["C99"], issue="不存在", resolution="x"),
+                Conflict(claims=["C1"], issue="Q1 结论强度与 Q2 不符", resolution="统一表述为倾向性结论"),
             ])
         if self.schema is ClaimAudit:
             _Structured.audits += 1
             if _Structured.audits == 1:
                 return ClaimAudit(issues=[
                     ClaimIssue(section="evaluation", problem="把 C1 写成了显著"),
-                    ClaimIssue(section="not_a_section", problem="x"),
                     # 核对后一致的句子不是问题，不应触发修复
                     ClaimIssue(section="evaluation", problem="正文称 AUC 为 0.79，与 C1 一致。无矛盾。"),
                     ClaimIssue(section="evaluation", contradicts=False, problem="没有提到 C1"),
                 ])
-            return ClaimAudit()
+            return ClaimAudit(issues=[])
         if self.schema is ResultReview:
             # Q1 第一次审查要求返工，随后重新审查通过；其余直接通过
             prompt = messages[-1].content
@@ -870,7 +868,7 @@ def test_record_results_recovers_mistyped_run_id(tmp_path):
     fs.save_run_stdout(run_id, "permutation p = 0.0123")
     fs.finish_run(run_id, "success")
     registry = ResultRegistry.load(fs)
-    ctx = SimpleNamespace(registry=registry, kernels=SimpleNamespace(get=lambda key: None))
+    ctx = SimpleNamespace(registry=registry, kernels=SimpleNamespace(get=lambda key: None), comparison_proof=None)
     run_log = [{"run_id": run_id, "code": "", "ok": True}]
     record = {t.name: t for t in build_tools(ctx, "Q2", run_log)}["record_results"]
     reply = asyncio.run(record.coroutine([{"name": "p值", "value": "0.0123", "run_id": run_id[:-3] + "zzz"}]))

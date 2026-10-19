@@ -21,6 +21,33 @@ class ResearchRuntime:
                 CREATE TABLE IF NOT EXISTS request_budgets(research_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS model_requests(research_id TEXT NOT NULL,sequence INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(research_id,sequence));''')
 
+    def extend_limit(self,extra_requests,*,expected_limit,command_id,authorization):
+        """Apply an explicitly authorized small extension; never reset usage or provider faults."""
+        from .store import digest
+        if not 1<=extra_requests<=5 or not command_id or not authorization:raise ValueError('追加需要明确授权，且单次仅支持1至5次')
+        signature=digest({'extra':extra_requests,'expected_limit':expected_limit,'authorization':authorization})
+        with self.store._transaction() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS budget_extensions(command_id TEXT PRIMARY KEY,signature TEXT NOT NULL,payload TEXT NOT NULL)')
+            prior=db.execute('SELECT signature,payload FROM budget_extensions WHERE command_id=?',(command_id,)).fetchone()
+            if prior:
+                if prior[0]!=signature:raise ValueError('追加命令已绑定其他授权')
+                return json.loads(prior[1])
+            row=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
+            if not row:raise ValueError('没有已冻结的请求预算')
+            state=json.loads(row[0])
+            if state['request_limit']!=expected_limit:raise ValueError('当前上限已变化，请重新核对')
+            if state['state']=='provider_blocked':raise ValueError('网关授权/额度拒绝不能由本地预算追加解除')
+            receipt={'command_id':command_id,'research_id':self.active_research_id,'old_limit':expected_limit,
+                'new_limit':expected_limit+extra_requests,'used_at_extension':state['used'],'authorization':authorization,'recorded_at':time.time()}
+            state['request_limit']=receipt['new_limit'];state['state']='active' if state['used']<state['request_limit'] else 'budget_exhausted'
+            db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?',(json.dumps(state),BUDGET_ID))
+            policy=db.execute('SELECT payload FROM runtime_policy WHERE id=1').fetchone()
+            if policy:
+                settings=json.loads(policy[0]);settings['request_limit']=receipt['new_limit']
+                db.execute('UPDATE runtime_policy SET payload=? WHERE id=1',(json.dumps(settings),))
+            db.execute('INSERT INTO budget_extensions VALUES (?,?,?)',(command_id,signature,json.dumps(receipt,ensure_ascii=False)))
+        return receipt
+
     def policy(self):
         with closing(self.store._connect()) as db:r=db.execute('SELECT payload FROM runtime_policy WHERE id=1').fetchone()
         return json.loads(r[0]) if r else {'request_limit':40,'timeout_seconds':90,'compact_paper':False,'confirm_models':False}

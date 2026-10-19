@@ -81,23 +81,32 @@ def valid_conflicts(conflicts: List[Dict], known: set) -> List[Dict]:
     return kept
 
 
+def reconcile_prompt(state,ctx):
+    subproblems = "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in state["analysis"]["subproblems"])
+    contract = ctx.research.snapshot()
+    return f"# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
+
+
 async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     claims = ctx.registry.claims
     if not ctx.check_claims or len(claims) < 2:
         return {"consistency": [], "research_restart": False, "log": ["reconcile: skipped"]}
     await ctx.events.stage(f"审查 {len(claims)} 条结论的一致性")
-    subproblems = "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in state["analysis"]["subproblems"])
-    contract = ctx.research.snapshot()
-    prompt = f"# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
+    prompt = reconcile_prompt(state,ctx)
     try:
-        review = await call_structured(ctx.planner_llm, ConsistencyReview, as_messages(RECONCILE_SYSTEM, prompt))
+        from ...research.review_cache import run_review
+        def validate(result):
+            if 'conflicts' not in result.model_fields_set:raise ValueError('结论审查没有明确返回conflicts字段')
+            if any(not c.claims or not set(c.claims)<=set(claims) for c in result.conflicts):raise ValueError('结论审查引用了未知结论')
+            validate_findings([c.research_issue for c in result.conflicts if c.research_issue],state,ctx)
+        async def perform():return await call_structured(ctx.planner_llm, ConsistencyReview, as_messages(RECONCILE_SYSTEM, prompt),validate=validate)
+        review = await run_review(ctx,state,'reconcile',ConsistencyReview,RECONCILE_SYSTEM,prompt,perform,validate=validate)
         conflicts = valid_conflicts([c.model_dump() for c in review.conflicts], set(claims))
     except Exception as exc:
-        ctx.write_json(".system/consistency.json", {"error": str(exc), "conflicts": []})
-        ctx.research.report_issues([IssueReport(task_id=state["analysis"]["subproblems"][0]["id"],
-            category="service", message=f"结论审查未完成：{exc}")], "reconcile")
-        return {"consistency": [], "research_restart": True, "log": [f"reconcile: failed ({exc})"]}
+        from ...research.review_cache import error_code
+        ctx.write_json(".system/consistency.json", {"error": error_code(exc), "conflicts": []})
+        return {"consistency": [], "research_restart": True, "log": [f"reconcile: failed ({error_code(exc)})"]}
     research_reports = [IssueReport.model_validate(c["research_issue"]) for c in conflicts if c.get("research_issue")]
     if research_reports:
         active = ctx.research.report_issues(research_reports, "reconcile")
@@ -114,12 +123,10 @@ async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     return {"consistency": conflicts, "research_restart": False, "log": [f"reconcile: {len(conflicts)} conflicts"]}
 
 
-async def audit_sections(state: PaperState, ctx: GraphContext) -> List[IssueReport]:
-    """核对汇总性章节；审查服务失败时阻止交付，恢复后重试。"""
+def section_audit_prompt(state,ctx):
     sections = state.get("sections") or {}
     keys = [k for k in AUDITED_SECTIONS if sections.get(k)]
-    if not ctx.registry.claims or not keys:
-        return []
+    if not ctx.registry.claims or not keys:return None
     body = "\n\n".join(
         f"## 章节 key: {k}\n{clip(sections[k], AUDIT_SECTION_CHARS)}" for k in keys
     )
@@ -131,10 +138,34 @@ async def audit_sections(state: PaperState, ctx: GraphContext) -> List[IssueRepo
         f"section 只能填这些 key：{json.dumps(keys)}\n"
         f"# 研究契约\n{json.dumps({'requirements': state['analysis']['requirements'], 'assumptions': state['analysis']['assumptions']}, ensure_ascii=False)}"
     )
+    return prompt,keys
+
+
+def validate_findings(issues,state,ctx):
+    tasks={s['id'] for s in state['analysis']['subproblems']}
+    for issue in issues:
+        if issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.registry.results):raise ValueError('审查问题超出冻结任务/证据范围')
+
+
+async def audit_sections(state: PaperState, ctx: GraphContext) -> List[IssueReport]:
+    """Completed results are reusable only for the same complete review context."""
+    prepared=section_audit_prompt(state,ctx)
+    if prepared is None:return []
+    prompt,keys=prepared
     try:
-        audit = await call_structured(ctx.planner_llm, ClaimAudit, as_messages(AUDIT_SYSTEM, prompt))
+        from ...research.review_cache import run_review
+        def validate(result):
+            if 'issues' not in result.model_fields_set:raise ValueError('章节审查没有明确返回issues字段')
+            if any(i.section not in keys for i in result.issues):raise ValueError('章节审查引用了未提供的章节')
+            validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
+        async def perform():return await call_structured(ctx.planner_llm, ClaimAudit, as_messages(AUDIT_SYSTEM, prompt),validate=validate)
+        audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},validate=validate)
     except Exception as exc:
-        return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{exc}")]
+        from ...research.review_cache import error_code
+        if ctx.research is not None:
+            failures=[i for i in ctx.research.snapshot()['issues'] if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed'}]
+            if failures:return []  # A persisted failure remains a publication blocker.
+        return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_code(exc)}")]
     return [
         issue.research_issue or IssueReport(task_id=issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
                     category="writing", section=issue.section, message=f"与结论表不一致：{issue.problem}")

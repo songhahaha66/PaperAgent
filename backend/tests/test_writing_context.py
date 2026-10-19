@@ -61,9 +61,9 @@ def test_semantic_audit_preserves_actual_references_and_includes_auxiliary_evide
     decision = seed(ctx, [], name='x_opt', value='3')
     ctx.registry.set_claims('Q1', [{'statement': f'目标为 {{{{R:{objective.id}}}}}', 'strength': '显著'}])
     seen = []
-    async def audit(llm, schema, messages):
+    async def audit(llm, schema, messages, **kwargs):
         seen.extend(messages)
-        return ClaimAudit()
+        return ClaimAudit(issues=[])
     monkeypatch.setattr(consistency, 'call_structured', audit)
     state = {'analysis': _analysis().model_dump(), 'sections': {'sensitivity': f'决策为 {{{{R:{decision.id}}}}}，目标为 {{{{R:{objective.id}}}}}。'}}
     assert asyncio.run(consistency.audit_sections(state, ctx)) == []
