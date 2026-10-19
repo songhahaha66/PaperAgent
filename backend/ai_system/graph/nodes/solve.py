@@ -309,6 +309,7 @@ def build_task(
     if not set(chosen.get('method_keys') or []) <= allowed_method_keys(ctx.skill_policy):
         raise ValueError('已有方案使用了当前禁用的技能，请重新设计')
     files = "\n".join(f"- {f}" for f in list_data_files(ctx.workspace)) or "（无）"
+    from ...research.experience import prompt_context
     return "\n\n".join(filter(None, [
         f"# 原题（含题内数据；不得用模拟数据替代）\n{branch['source']}",
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n交付物：{'；'.join(subproblem.get('deliverables') or [])}",
@@ -318,6 +319,7 @@ def build_task(
         + f"\n检验：{chosen['validation']}",
         f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}",
         f"# 方法参考\n{describe(chosen.get('method_keys') or [], ctx.skill_policy)}",
+        prompt_context(ctx,branch,chosen.get('method_keys') or [],'solve') if chosen.get('method_keys') else '',
         _dependency_text(branch.get("dependencies") or {}, ctx),
         "# 研究契约（不得放宽验收；按指定名称登记检查指标，并填写 requirement_evidence）\n" + json.dumps(branch["research_contract"], ensure_ascii=False) if branch.get("research_contract") else "",
         "# 必须逐项复核的先前审查意见\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",

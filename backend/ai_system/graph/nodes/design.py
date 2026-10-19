@@ -105,6 +105,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
     dependency_text = _dependency_text(branch.get("dependencies") or {}, ctx)
     from ...research.citations import literature_root
     from ...research.literature import literature_context
+    from ...research.experience import prompt_context
     prompt = (
         f"# 原题（含题内数据）\n{branch['source']}\n\n"
         f"# 题目整体分析\n{analysis['overall_analysis']}\n\n"
@@ -114,6 +115,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}\n\n"
         f"# 参考方法\n{describe(method_keys, ctx.skill_policy) or '（在允许范围内自行选择）'}\n\n"
         + literature_context(literature_root(ctx), _subproblem_text(branch['subproblem'])) + '\n\n'
+        + prompt_context(ctx,branch,method_keys,'design') + '\n\n'
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
         + f"请给出最多 {ctx.n_candidates} 个候选方案，直接执行已明确的方法即可，不凑数。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
@@ -200,6 +202,8 @@ async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str
         record['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in keys if key in SKILL_SOURCES]
         from ...research.literature import CITATION
         record['literature_refs']=sorted(set(CITATION.findall(json.dumps(record.get('chosen',{}),ensure_ascii=False))))
+        if ctx.experience_order is not None:
+            record['experience_refs']=[r for r in ctx.experience_order.experience_refs if r['stage']=='design']
         return record, log
 
 

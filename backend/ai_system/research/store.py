@@ -48,13 +48,14 @@ def validate_dependencies(tasks: dict) -> None:
 
 
 class ResearchStore:
-    def __init__(self, workspace: str | Path, research_id: str, *, read_only: bool = False):
+    def __init__(self, workspace: str | Path, research_id: str, *, read_only: bool = False, experience_scope=None):
         self.root = Path(workspace).resolve()
         self.path = self.root / DB_PATH
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", research_id):
             raise ValueError("研究标识格式错误")
         self.research_id = research_id
         self.read_only = read_only
+        self.experience_scope = experience_scope
         if not self.path.resolve().is_relative_to(self.root):
             raise ValueError("研究数据库必须位于工作区内")
         if read_only:
@@ -248,12 +249,43 @@ class ResearchStore:
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
                               protocol_hash=digest(protocol(state, task_id)), review_required=review_required,
                               review_issue_ids=[i["id"] for i in state["issues"] if needs_owner_review(i) and i["task_id"] == task_id])
-            state["attempts"][order.attempt_id] = {**order.model_dump(), "execution_status": "running", "started_at": time.time()}
+            from .experience import conditions
+            basis = {'question':task['objective'],'protocol':protocol(state,task_id),
+                     'conditions':conditions(self.root,state['spec']['requirement']+' '+task['objective'])}
+            state["attempts"][order.attempt_id] = {**order.model_dump(), "execution_status": "running", "started_at": time.time(),
+                                                 'experience_basis':basis}
             task.update(execution_status="running", active_attempt=order.attempt_id)
             self._save(db, state, "claimed", order.model_dump())
             return order
 
     def commit(self, result: WorkerResult):
+        receipt = self._commit(result)
+        if self.experience_scope is not None:
+            try:
+                self.experience_scope.index(self)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning('研究已提交；经验索引未完成，可从经验面板补建')
+        return receipt
+
+    def bind_experiences(self, order, refs):
+        if not self.experience_scope or not self.experience_scope.valid_refs(refs):
+            raise ResearchConflict('经验权限、版本或来源已改变，请重新领取任务')
+        with self._transaction() as db:
+            state=self._read(db);attempt=state['attempts'][order.attempt_id]
+            if attempt['execution_status']!='running' or attempt.get('commit') or attempt['lease']!=order.lease:
+                raise ResearchConflict('经验不能加入已结束的尝试')
+            combined={ (r['id'],r['stage']):r for r in order.experience_refs }
+            combined.update({(r['id'],r['stage']):r for r in refs})
+            frozen=list(combined.values())
+            if len(frozen)>12:raise ResearchConflict('本次尝试经验引用超过预算')
+            if frozen==order.experience_refs:return
+            order.experience_refs=frozen
+            order.input_digest=digest({'inputs':order.input_refs,'experiences':frozen})
+            attempt.update(experience_refs=frozen,input_digest=order.input_digest)
+            self._save(db,state,'experiences_bound',{'attempt_id':order.attempt_id,'refs':frozen})
+
+    def _commit(self, result: WorkerResult):
         signature = digest(result.model_dump())
         files = self.file_inputs()
         with self._transaction() as db:
@@ -267,11 +299,16 @@ class ResearchStore:
             task = state["tasks"][order.task_id]
             if any(attempt[key] != getattr(order, key) for key in ("task_id", "revision", "lease", "input_digest", "input_refs", "protocol_hash", "review_required", "review_issue_ids")):
                 raise ResearchConflict("执行权或冻结输入不匹配")
+            if attempt.get('experience_refs',[])!=order.experience_refs:
+                raise ResearchConflict('冻结经验引用不匹配')
+            experience_current = not order.experience_refs or (self.experience_scope is not None and self.experience_scope.valid_refs(order.experience_refs))
             current = (task["revision"] == order.revision and task["active_attempt"] == order.attempt_id
                        and attempt["execution_status"] == "running"
                        and self._inputs(state, task, files) == order.input_refs
-                       and digest(protocol(state, order.task_id)) == order.protocol_hash)
+                       and digest(protocol(state, order.task_id)) == order.protocol_hash and experience_current)
             receipt = {"attempt_id": order.attempt_id, "published": current, "commit_seq": state["commit_seq"] + 1}
+            if not experience_current:
+                receipt['reason']='引用经验已禁用、删除、变更或来源/权限失效，需重新领取任务'
             attempt.update(execution_status=result.execution_status, acceptance=result.acceptance,
                            result_digest=signature, commit=receipt, result=result.model_dump())
             if current:
@@ -311,6 +348,9 @@ class ResearchStore:
                 validation = evaluate(state, order.task_id, result.results) if result.execution_status == "succeeded" else ValidationRecord(
                     protocol_hash=order.protocol_hash, checks=[], outcome="inconclusive")
                 attempt["validation"] = validation.model_dump()
+                from .experience import grounded
+                attempt['experience_evidence'] = grounded(self.root,state,
+                    sorted({ref for check in validation.checks for ref in check.evidence_refs}))
                 state["validations"].append({"attempt_id": order.attempt_id, **validation.model_dump()})
                 acceptance = result.acceptance
                 if not task.get("verifies_issue") and validation.outcome != "accepted":
@@ -373,6 +413,8 @@ class ResearchStore:
                     task["revision"] += 1
                     state["revision"] += 1
                     self._invalidate(state, {order.task_id}, "执行期间输入已改变")
+            if receipt['published'] and order.experience_refs and not self.experience_scope.valid_refs(order.experience_refs):
+                raise ResearchConflict('提交前经验已失效，保留先前结果并重新领取任务')
             self._save(db, state, "attempt_committed", receipt)
             return receipt
 

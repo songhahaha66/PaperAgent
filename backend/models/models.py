@@ -159,3 +159,23 @@ class WebAuthnChallenge(Base):
 
 
 User.webauthn_credentials = relationship("WebAuthnCredential", back_populates="user")
+
+
+class ResearchExperience(Base):
+    """A rebuildable per-owner index; tombstones survive source reindex/recovery."""
+    __tablename__ = 'research_experiences'
+    id = Column(String(64), primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    source_work_id = Column(String(50), nullable=False, index=True)
+    source_key = Column(String(255), nullable=False, unique=True)
+    version = Column(Integer, nullable=False, default=1)
+    content_hash = Column(String(64), nullable=False)
+    payload = Column(JSON, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    deleted = Column(Boolean, nullable=False, default=False)
+
+
+class ResearchExperiencePreference(Base):
+    __tablename__ = 'research_experience_preferences'
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=True)

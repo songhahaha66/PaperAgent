@@ -28,6 +28,11 @@ async def observe(state, runtime):
     store = ctx.research
     store.initialize(state["task"], state["analysis"])
     snapshot = store.refresh_inputs()
+    if ctx.experience_scope is not None:
+        try:
+            ctx.experience_scope.index(store)
+        except Exception:
+            await ctx.events.stage('经验索引暂不可用，研究继续；可在经验面板补建')
     ctx.skill_policy = store.skill_preferences()['policy']
     refresh_registry(ctx)
     tasks = snapshot["tasks"]
@@ -199,7 +204,9 @@ def worker_context(ctx, order):
         n_candidates=ctx.n_candidates, max_solver_steps=ctx.max_solver_steps,
         max_review_rounds=ctx.max_review_rounds, explore_top_k=ctx.explore_top_k,
         explore_steps=ctx.explore_steps, explore_margin=ctx.explore_margin,
-        template_requirements=ctx.template_requirements, check_claims=ctx.check_claims, skill_policy=ctx.skill_policy)
+        template_requirements=ctx.template_requirements, check_claims=ctx.check_claims, skill_policy=ctx.skill_policy,
+        experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
+        source_workspace=ctx.workspace)
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref

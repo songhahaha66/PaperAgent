@@ -207,6 +207,7 @@ class WorkOrder(Contract):
     lease: str
     input_refs: dict[str, str]
     protocol_hash: str
+    experience_refs: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
     review_required: bool = False
     review_issue_ids: list[str] = Field(default_factory=list)
 

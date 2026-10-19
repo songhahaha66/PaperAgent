@@ -501,3 +501,59 @@ async def literature_check(work_id: str, evidence_id: str, request: LiteratureCl
         return service.store.review(row['key']) or (checks[0] if checks else {'status':'insufficient','reason':'核查未完成'})
     except ValueError as exc:
         raise HTTPException(409,str(exc))
+
+
+class ExperienceSwitch(BaseModel):
+    enabled: bool
+
+
+def _experience_scope(work_id,db,user_id):
+    _require_workspace_access(db,work_id,user_id)
+    from services.research_experience import ExperienceScope
+    return ExperienceScope(user_id,work_id)
+
+
+@router.get('/{work_id}/experiences')
+async def experience_list(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    scope=_experience_scope(work_id,db,current_user)
+    from services.research_experience import current_usage
+    from ai_system.research.store import ResearchStore
+    import json
+    result=scope.list();root=workspace_file_service.get_workspace_path(work_id)
+    thread=root/'.system/graph_thread.json'
+    try:
+        saved=json.loads(thread.read_text()) if thread.exists() else None
+        store=ResearchStore(root,saved['thread_id'],read_only=True) if saved else None
+        result['usage']=current_usage(store) if store else []
+    except (OSError,ValueError,KeyError):
+        result['usage']=[];result['usage_error']='当前研究经验记录暂不可读'
+    for usage in result['usage']:
+        usage['available']=scope.valid_refs(usage['refs'])
+    return result
+
+
+@router.put('/{work_id}/experiences/policy')
+async def experience_policy(work_id:str,request:ExperienceSwitch,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    scope=_experience_scope(work_id,db,current_user);scope.set_enabled(request.enabled)
+    return {'enabled':request.enabled}
+
+
+@router.post('/{work_id}/experiences/rebuild')
+async def experience_rebuild(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    return _experience_scope(work_id,db,current_user).rebuild()
+
+
+@router.patch('/{work_id}/experiences/{experience_id}')
+async def experience_change(work_id:str,experience_id:str,request:ExperienceSwitch,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    scope=_experience_scope(work_id,db,current_user)
+    try:scope.change(experience_id,enabled=request.enabled)
+    except KeyError:raise HTTPException(404,'经验不存在或不可访问')
+    return {'enabled':request.enabled}
+
+
+@router.delete('/{work_id}/experiences/{experience_id}')
+async def experience_delete(work_id:str,experience_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    scope=_experience_scope(work_id,db,current_user)
+    try:scope.change(experience_id,delete=True)
+    except KeyError:raise HTTPException(404,'经验不存在或不可访问')
+    return {'deleted':True}

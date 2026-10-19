@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
-export type PanelKind = 'chat' | 'paper' | 'figures' | 'files' | 'file' | 'progress' | 'skills' | 'literature'
+export type PanelKind = 'chat' | 'paper' | 'figures' | 'files' | 'file' | 'progress' | 'skills' | 'literature' | 'experiences'
 export type PanelGroup = 'main' | 'secondary'
 export type SplitEdge = 'left' | 'right' | 'top' | 'bottom'
 export interface WorkPanel {

@@ -562,6 +562,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 logger.warning(f"获取工作配置失败: {e}")
 
             logger.info(f"工作 {work_id} 使用状态图流水线，输出 {output_mode}")
+            from services.research_experience import ExperienceScope
             main_agent = None if action == "ask" else PaperGraphAgent(
                 llm_handler.get_llm_instance(), 
                 stream_manager, 
@@ -570,7 +571,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 template_id, 
                 codeagent_llm,
                 output_mode=output_mode,
-                writer_llm=writer_llm
+                writer_llm=writer_llm,
+                experience_scope=ExperienceScope(user_id,work_id)
             )
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确

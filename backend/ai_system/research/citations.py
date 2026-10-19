@@ -13,7 +13,7 @@ BOUNDARIES = {'abstract':'摘要','fulltext_xml':'开放全文','fulltext_pdf':'
 
 
 def literature_root(ctx):
-    return getattr(getattr(ctx,'research',None),'root',ctx.workspace)
+    return getattr(ctx,'source_workspace',None) or getattr(getattr(ctx,'research',None),'root',ctx.workspace)
 
 
 def claims_in(text, store):

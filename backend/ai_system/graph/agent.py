@@ -143,7 +143,7 @@ class PaperGraphAgent:
                 graph_input, thread_id = ({"task": user_input}, uuid.uuid4().hex) if new_run else await self._prepare(graph, user_input)
                 if isinstance(graph_input, dict):
                     ctx.registry.reset()
-                ctx.research = ResearchStore(self.workspace_dir, thread_id)
+                ctx.research = ResearchStore(self.workspace_dir, thread_id, experience_scope=ctx.experience_scope)
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}
                 if graph_input is None:
                     return await self._resume_graph(graph, config, thread_id, ctx)
@@ -162,7 +162,7 @@ class PaperGraphAgent:
         if research_id != self._load_thread():
             raise ValueError("研究标识已改变，请刷新后重试")
         self._require_current_thread()
-        store = ResearchStore(self.workspace_dir, research_id)
+        store = ResearchStore(self.workspace_dir, research_id, experience_scope=self.options.get("experience_scope"))
         snapshot = store.snapshot()
         if not snapshot:
             raise ValueError("研究尚未生成可修订任务")
@@ -201,7 +201,7 @@ class PaperGraphAgent:
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
                 graph = compile_graph(saver)
-                ctx.research = ResearchStore(self.workspace_dir, thread_id)
+                ctx.research = ResearchStore(self.workspace_dir, thread_id, experience_scope=ctx.experience_scope)
                 config = {"configurable": {"thread_id": thread_id}}
                 return await self._resume_graph(graph, config, thread_id, ctx)
         finally:

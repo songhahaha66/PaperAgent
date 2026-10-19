@@ -92,6 +92,10 @@ class GraphContext:
     coder_llm: Any
     writer_llm: Any
     research: Any = None
+    experience_scope: Any = None
+    experience_store: Any = None
+    experience_order: Any = None
+    source_workspace: Any = None
     skill_policy: Any = None
     judge: Any = None
     n_candidates: int = 1
