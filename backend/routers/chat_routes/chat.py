@@ -277,6 +277,8 @@ async def pause_work(
     task = task_manager.get_running_task(work_id)
     if not task:
         return {"work_status": work.status}
+    from ai_system.research.runtime import ResearchRuntime
+    if task.action!='ask':ResearchRuntime(get_workspace_path(work_id)).note_stop('manual_pause','已手动暂停，进度与累计用量保留')
     task_manager.cancel_task(work_id, reason="paused")
     if task._async_task:
         try:

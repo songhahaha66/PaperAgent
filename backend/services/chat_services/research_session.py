@@ -66,6 +66,7 @@ class ResearchClaim(BaseModel):
 
 
 class ResearchSnapshot(BaseModel):
+    execution_reason: dict | None = None
     schema_version: int = 2
     engine_version: str | None = None
     research_revision: int = 0
@@ -196,7 +197,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     if business and status == 'completed' and any(t['validity'] == 'stale' and not t['retired'] for t in business['tasks'].values()):
         status = 'paused'
     control = public_snapshot(business, work_status=status) if business else {}
+    from ai_system.research.runtime import execution_reason
     return ResearchSnapshot(
+        execution_reason=execution_reason(root,status),
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
         outcome=control.get("outcome"), delivery=control.get("delivery"), tasks=control.get("tasks", []),
@@ -228,6 +231,8 @@ def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot) -> 
         raise ValueError("该研究记录不支持恢复，请重新研究")
     if requested in {"confirm", "revise"} and not waiting:
         raise ValueError("当前没有等待确认的建模方案")
+    if requested == "resume" and waiting:
+        raise ValueError("当前等待方案确认，请先明确确认或修改方案")
     if requested == "resume" and (not snapshot.research_id or snapshot.work_status == "completed"):
         raise ValueError("当前没有可恢复的研究任务")
     if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.tasks or waiting):

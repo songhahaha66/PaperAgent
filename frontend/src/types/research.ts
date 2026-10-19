@@ -17,6 +17,7 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  execution_reason?: { kind: string; message: string } | null
   schema_version: 2
   engine_version?: string | null
   research_revision?: number
@@ -119,6 +120,6 @@ export interface ResearchRevisionCommand {
   command_id: string
   research_id: string
   base_revision: number
-  source_issue?:{id:string;version:string}
+  source_issue?: { id: string; version: string }
   scope?: string[]
 }

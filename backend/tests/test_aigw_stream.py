@@ -77,11 +77,11 @@ def test_step_defaults_keep_explicit_handler_overrides_and_saved_body():
                              extra_body={'reasoning_effort': 'medium'})
     llm = LLMHandler(model_config=config).get_llm_instance()
     assert llm.extra_body == {'reasoning_effort': 'medium'}
-    assert llm.request_timeout == 120 and llm.max_retries == 0
+    assert llm.request_timeout == 600 and llm.max_retries == 0
     body = {'reasoning_effort': 'high', 'custom': 'preserved'}
     llm = LLMHandler(model_config=config, extra_body=body, timeout=45, max_retries=1).get_llm_instance()
     assert llm.extra_body == body
-    assert llm.request_timeout == 45 and llm.max_retries == 1
+    assert llm.request_timeout == 45 and llm.max_retries == 0
     assert body == {'reasoning_effort': 'high', 'custom': 'preserved'}
     assert config.extra_body == {'reasoning_effort': 'medium'}
 
@@ -93,4 +93,4 @@ def test_step_runtime_defaults_do_not_change_other_connections(host, model):
     llm = OpenAIProvider({'model_id': model, 'api_key': 'fixture',
                           'base_url': f'https://{host}/v1'}).create_llm_instance()
     assert llm.extra_body is None
-    assert llm.request_timeout == 600 and llm.max_retries == 6
+    assert llm.request_timeout == 600 and llm.max_retries == 0

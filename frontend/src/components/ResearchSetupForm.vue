@@ -1,6 +1,6 @@
 <template>
   <details class="research-setup">
-    <summary>预算与能力设置</summary>
+    <summary>执行设置</summary>
     <div class="setup-grid">
       <label
         ><input
@@ -20,21 +20,20 @@
         ><input type="checkbox" v-model="value.compact_paper" :disabled="disabled" />简短论文</label
       >
       <label
-        >模型请求上限
-        <input
+        ><input
+          type="checkbox"
+          :checked="value.request_limit !== null"
+          :disabled="disabled"
+          @change="value.request_limit = ($event.target as HTMLInputElement).checked ? 40 : null"
+        />设置本研究的明确调用上限</label
+      >
+      <label v-if="value.request_limit !== null"
+        >调用上限<input
           type="number"
-          v-model.number="value.request_limit"
           min="1"
-          max="40"
+          v-model.number="value.request_limit"
           :disabled="disabled"
-      /></label>
-      <label
-        >每次请求超时（秒）<input
-          type="number"
-          v-model.number="value.timeout_seconds"
-          min="10"
-          max="120"
-          :disabled="disabled"
+          required
       /></label>
       <label
         >文献检索
@@ -46,8 +45,8 @@
       >
     </div>
     <p>
-      默认最多 40 次模型请求，每次 90
-      秒。暂停和恢复沿用预算。文献可在项目内添加，技能与经验可在研究设置中调整。
+      默认累计调用与服务返回的 token
+      用量，不设置整项研究的调用截止。暂停恢复不会清零。请求超时沿用模型连接设置；需要时可明确设置调用上限。
     </p>
   </details>
 </template>

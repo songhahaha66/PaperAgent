@@ -136,7 +136,7 @@ class ReviewCache:
         from .runtime import ResearchRuntime
         now=time.time();key=digest(context)
         record={'id':uuid.uuid4().hex,'stage':stage,'context':context,'context_hash':key,'started_at':now,'source':source,
-            'coverage':review_coverage(stage,context),'lease':{'process':PROCESS_ID,'token':uuid.uuid4().hex,'expires_at':now+ResearchRuntime(self.store.root).policy().get('timeout_seconds',90)+30}}
+            'coverage':review_coverage(stage,context),'lease':{'process':PROCESS_ID,'token':uuid.uuid4().hex,'expires_at':now+(ResearchRuntime(self.store.root).policy().get('timeout_seconds') or 600)+30}}
         if command_id:record['command_id']=command_id
         with self.store._transaction() as db:
             active=db.execute("SELECT id,payload FROM review_records WHERE research_id=? AND stage=? AND context_hash=? AND state='running' ORDER BY rowid DESC LIMIT 1",(self.store.research_id,stage,key)).fetchone()
@@ -164,7 +164,7 @@ class ReviewCache:
     async def heartbeat(self,record,interval=10):
         """A live multi-call composition renews the existing lease; crashes do not."""
         from .runtime import ResearchRuntime
-        duration=ResearchRuntime(self.store.root).policy().get('timeout_seconds',90)+30
+        duration=(ResearchRuntime(self.store.root).policy().get('timeout_seconds') or 600)+30
         while True:
             await asyncio.sleep(interval)
             with self.store._transaction() as db:
@@ -304,7 +304,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
     before=context();store=getattr(ctx,'research',None)
     if store is None:
         return await perform()
-    cache=ReviewCache(store);record=None;joined=False
+    cache=ReviewCache(store);record=None;joined=False;heartbeat=None
     try:
         hit=cache.get(stage,before,schema)
         if hit:
@@ -316,6 +316,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             answer=await cache.wait(pending.record,schema,context)
             if validate is not None:validate(answer)
             return answer
+        heartbeat=asyncio.create_task(cache.heartbeat(record))
         if stage=='sections':
             from ..graph.nodes.consistency import require_complete_sections
             require_complete_sections(sections or {})
@@ -334,3 +335,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
         if joined:raise
         if record is None:record=cache.start(stage,before)
         cache.failed(record,exc,current_context=context);raise
+    finally:
+        if heartbeat is not None:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat,return_exceptions=True)

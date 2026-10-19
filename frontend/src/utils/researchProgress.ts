@@ -55,14 +55,19 @@ export function researchHeadline(
   workStatus: string,
   zh: boolean,
 ) {
+  if (workStatus === 'waiting') return zh ? '等待确认研究方案' : 'Waiting for plan confirmation'
+  if (['paused', 'failed', 'cancelled'].includes(workStatus) && snapshot?.execution_reason)
+    return snapshot.execution_reason.message
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
   if (!snapshot?.tasks?.length) {
     if (workStatus === 'waiting') return zh ? '等待确认研究方案' : 'Waiting for plan confirmation'
     if (workStatus === 'in_progress')
       return zh ? '正在分析并建立研究任务' : 'Preparing research tasks'
-    if (['paused', 'failed', 'cancelled'].includes(workStatus))
-      return zh ? '研究已停止，等待恢复' : 'Research stopped, resume needed'
+    if (workStatus === 'failed')
+      return zh ? '执行失败，进度已保留' : 'Execution failed, progress saved'
+    if (['paused', 'cancelled'].includes(workStatus))
+      return zh ? '研究已暂停，进度已保留' : 'Research paused, progress saved'
     return zh ? '等待建立研究任务' : 'Waiting for research tasks'
   }
   const running = snapshot.tasks.filter((t) => taskState(t, workStatus) === 'running')

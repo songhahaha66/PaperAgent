@@ -1,4 +1,4 @@
-"""Per-study durable request cap and unified entry preferences; no credentials stored."""
+"""Durable request usage, explicit/legacy limits and operation failure guards."""
 import json
 import time
 from contextlib import closing,contextmanager
@@ -10,6 +10,10 @@ BUDGET_ID='workspace-model-budget'
 
 
 class ResearchBudgetExhausted(RuntimeError):pass
+class RepeatedOperationBlocked(RuntimeError):pass
+class ModelServiceError(RuntimeError):pass
+
+ACTIVE_MODEL_REQUEST=ContextVar('paperagent_model_request',default=None)
 
 
 class ResearchRuntime:
@@ -17,7 +21,9 @@ class ResearchRuntime:
         self.active_research_id=research_id
         self.store=ResearchStore(root,BUDGET_ID)
         with closing(self.store._connect()) as db:
-            db.executescript('''CREATE TABLE IF NOT EXISTS runtime_policy(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
+            db.executescript('''CREATE TABLE IF NOT EXISTS failure_guards(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS runtime_stop(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS runtime_policy(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS request_budgets(research_id TEXT PRIMARY KEY,payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS model_requests(research_id TEXT NOT NULL,sequence INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(research_id,sequence));''')
 
@@ -35,6 +41,7 @@ class ResearchRuntime:
             row=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
             if not row:raise ValueError('没有已冻结的请求预算')
             state=json.loads(row[0])
+            if state.get('request_limit') is None:raise ValueError('当前没有调用上限，无需追加')
             if state['request_limit']!=expected_limit:raise ValueError('当前上限已变化，请重新核对')
             if state['state']=='provider_blocked':raise ValueError('网关授权/额度拒绝不能由本地预算追加解除')
             receipt={'command_id':command_id,'research_id':self.active_research_id,'old_limit':expected_limit,
@@ -49,41 +56,152 @@ class ResearchRuntime:
         return receipt
 
     def policy(self):
-        with closing(self.store._connect()) as db:r=db.execute('SELECT payload FROM runtime_policy WHERE id=1').fetchone()
-        return json.loads(r[0]) if r else {'request_limit':40,'timeout_seconds':90,'compact_paper':False,'confirm_models':False}
+        with closing(self.store._connect()) as db:
+            row=db.execute('SELECT payload FROM runtime_policy WHERE id=1').fetchone()
+            frozen=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
+        if row:
+            policy=json.loads(row[0])
+            if policy.get('policy_version')==2:return policy
+            return {'request_limit':40,'timeout_seconds':90,'compact_paper':False,'confirm_models':False,**policy,
+                    'policy_version':1,'limit_source':'legacy','timeout_source':'legacy','preference_source':'legacy'}
+        # Missing policy in an existing project retains its previous effective limits.
+        legacy=bool(frozen or (self.store.root/'.system/graph_thread.json').exists() or (self.store.root/'.system/graph.sqlite').exists())
+        for name,key in [('llm_calls.json','calls'),('results.json','results')]:
+            try:legacy=legacy or bool(json.loads((self.store.root/'.system'/name).read_text()).get(key))
+            except (OSError,ValueError,TypeError):pass
+        policy={'policy_version':2,'request_limit':40 if legacy else None,'timeout_seconds':90 if legacy else None,
+                'limit_source':'legacy' if legacy else 'default','timeout_source':'legacy' if legacy else 'model_connection','preference_source':'legacy' if legacy else 'default',
+                'compact_paper':False,'confirm_models':False}
+        if frozen:
+            saved=json.loads(frozen[0])
+            policy.update(request_limit=saved.get('request_limit',40),timeout_seconds=saved.get('timeout_seconds',90))
+        with self.store._transaction() as db:db.execute('INSERT OR IGNORE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
+        return policy
 
     def configure(self,settings):
-        with self.store._transaction() as db:db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)',(json.dumps(settings),))
+        limit=settings.get('request_limit')
+        if limit is not None and (type(limit) is not int or limit<0):raise ValueError('内部请求上限必须为非负整数')
+        policy={'policy_version':2,'preference_source':'explicit','request_limit':limit,'timeout_seconds':settings.get('timeout_seconds'),
+                'limit_source':'explicit' if limit is not None else 'default',
+                'timeout_source':'explicit' if settings.get('timeout_seconds') is not None else 'model_connection',
+                'compact_paper':False,'confirm_models':False,**settings}
+        with self.store._transaction() as db:db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
+
+    def _metered_state(self,state):
+        if state.get('metering_version')==2:return state
+        # Older releases persisted reported tokens in traces, not request_budgets.
+        # Import those known values once, before accumulating new per-attempt usage.
+        calls=[]
+        if state.get('used',0):
+            for name in ('llm_calls.json','editor_llm_calls.json'):
+                try:calls.extend(json.loads((self.store.root/'.system'/name).read_text()).get('calls',[]))
+                except (OSError,ValueError,TypeError):pass
+        state.update(metering_version=2,input_tokens=sum(int(c.get('input') or 0) for c in calls if c.get('usage_returned')),
+                     output_tokens=sum(int(c.get('output') or 0) for c in calls if c.get('usage_returned')),
+                     usage_reported_calls=sum(bool(c.get('usage_returned')) for c in calls))
+        return state
 
     def status(self,research_id=None):
-        rid=BUDGET_ID
-        with closing(self.store._connect()) as db:r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(rid,)).fetchone()
-        return json.loads(r[0]) if r else {**self.policy(),'used':0,'state':'ready'}
+        policy=self.policy()
+        with closing(self.store._connect()) as db:r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
+        state=self._metered_state({**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready'})})
+        state.setdefault('input_tokens',0);state.setdefault('output_tokens',0);state.setdefault('usage_reported_calls',0)
+        if state.get('state')=='provider_blocked':
+            # Old 429 records did not distinguish rate limiting from quota. Keep
+            # the historical fact, but only a user-initiated call may probe again.
+            state['state']='service_interrupted'
+            state['legacy_provider_blocked']=True
+        state['stop_reason']=self.stop_reason()
+        return state
+
+    def remaining(self):
+        state=self.status();limit=state.get('request_limit')
+        return None if limit is None else max(0,limit-state['used'])
 
     def reserve(self,host):
+        try:return self._reserve(host)
+        except ResearchBudgetExhausted:
+            state=self.status()
+            self.note_stop('legacy_limit' if state.get('limit_source')=='legacy' else 'explicit_limit',f"已达到请求上限（{state['used']}/{state['request_limit']}），计数和已完成结果保留")
+            raise
+
+    def _reserve(self,host):
         from ..graph.tracing import CURRENT_LABEL
-        rid=self.store.research_id
+        policy=self.policy()
         with self.store._transaction() as db:
-            r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(rid,)).fetchone()
-            state=json.loads(r[0]) if r else {**self.policy(),'used':0,'state':'ready'}
-            if state['state']=='provider_blocked':raise ResearchBudgetExhausted('网关授权或额度已拒绝，请求已停止；检查点和预算保留')
-            if state['used']>=state['request_limit']:
-                raise ResearchBudgetExhausted(f"研究模型请求预算耗尽（{state['used']}/{state['request_limit']}），保留检查点，恢复不会清零")
-            state['used']+=1;state['state']='active' if state['used']<state['request_limit'] else 'budget_exhausted'
+            r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
+            state=self._metered_state({**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready'})})
+            limit=state.get('request_limit')
+            if limit is not None and state['used']>=limit:
+                reason={'kind':'explicit_limit' if state.get('limit_source')!='legacy' else 'legacy_limit',
+                        'message':f"已达到请求上限（{state['used']}/{limit}），计数和已完成结果保留"}
+                self._stop(db,reason)
+                raise ResearchBudgetExhausted(reason['message'])
+            state['used']+=1;state['state']='budget_exhausted' if limit is not None and state['used']>=limit else 'active'
             seq=state['used'];row={'sequence':seq,'sent_at':time.time(),'host':host,'label':CURRENT_LABEL.get(),'research_id':self.active_research_id,'state':'sent'}
-            db.execute('INSERT OR REPLACE INTO request_budgets VALUES (?,?)',(rid,json.dumps(state)))
-            db.execute('INSERT INTO model_requests VALUES (?,?,?)',(rid,seq,json.dumps(row)))
+            db.execute('INSERT OR REPLACE INTO request_budgets VALUES (?,?)',(BUDGET_ID,json.dumps(state)))
+            db.execute('INSERT INTO model_requests VALUES (?,?,?)',(BUDGET_ID,seq,json.dumps(row)))
         return seq
 
     def response(self,sequence,status):
         with self.store._transaction() as db:
-            r=db.execute('SELECT payload FROM model_requests WHERE research_id=? AND sequence=?',(self.store.research_id,sequence)).fetchone()
+            r=db.execute('SELECT payload FROM model_requests WHERE research_id=? AND sequence=?',(BUDGET_ID,sequence)).fetchone()
             if r:
                 row=json.loads(r[0]);row.update(http_status=status,headers_at=time.time(),state='http_response')
-                db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(row),self.store.research_id,sequence))
-                if status in {401,403,429}:
-                    state=json.loads(db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(self.store.research_id,)).fetchone()[0]);state['state']='provider_blocked'
-                    db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?',(json.dumps(state),self.store.research_id))
+                db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(row),BUDGET_ID,sequence))
+
+    def usage(self,sequence,usage=None):
+        usage=usage or {};known=bool(usage)
+        values={key:max(0,int(usage.get(source) or 0)) for key,source in [('input_tokens','input_tokens'),('output_tokens','output_tokens')]}
+        with self.store._transaction() as db:
+            row=db.execute('SELECT payload FROM model_requests WHERE research_id=? AND sequence=?',(BUDGET_ID,sequence)).fetchone()
+            if not row:return
+            item=json.loads(row[0])
+            if item.get('usage_recorded'):return
+            item.update(**values,usage_recorded=True,usage_returned=known)
+            state=json.loads(db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()[0])
+            for key,value in values.items():state[key]=state.get(key,0)+value
+            state['usage_reported_calls']=state.get('usage_reported_calls',0)+int(known)
+            db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(item),BUDGET_ID,sequence))
+            db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?',(json.dumps(state),BUDGET_ID))
+
+    def _stop(self,db,reason):
+        db.execute('INSERT OR REPLACE INTO runtime_stop VALUES (1,?)',(json.dumps({**reason,'recorded_at':time.time()}),))
+
+    def note_stop(self,kind,message):
+        with self.store._transaction() as db:self._stop(db,{'kind':kind,'message':message})
+
+    def stop_reason(self):
+        with closing(self.store._connect()) as db:row=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
+        return json.loads(row[0]) if row else None
+
+    def guard(self,key):
+        with closing(self.store._connect()) as db:row=db.execute('SELECT payload FROM failure_guards WHERE id=?',(key,)).fetchone()
+        return json.loads(row[0]) if row else {'count':0}
+
+    def check_guard(self,key):
+        guard=self.guard(key)
+        if guard.get('blocked') or guard['count']>=3:
+            self.note_stop(guard.get('kind') if guard.get('blocked') else 'repeated_failure',guard.get('message') or '同一操作重复失败，已保存状态')
+            raise RepeatedOperationBlocked(guard.get('message') or '同一操作重复失败，已停止无效重试；请检查输入或模型连接后恢复')
+
+    def failed(self,key,signature,kind,message,*,terminal=False):
+        with self.store._transaction() as db:
+            row=db.execute('SELECT payload FROM failure_guards WHERE id=?',(key,)).fetchone();old=json.loads(row[0]) if row else {}
+            errors=old.get('errors',{})
+            if not errors and old.get('signature'):errors[old['signature']]=old.get('count',0)
+            errors[signature]=errors.get(signature,0)+1
+            count=max(errors.values())
+            value={'errors':errors,'signature':signature,'count':count,'blocked':terminal,'kind':kind,'message':message,'at':time.time()}
+            db.execute('INSERT OR REPLACE INTO failure_guards VALUES (?,?)',(key,json.dumps(value)))
+            self._stop(db,{'kind':kind if terminal or count<3 else 'repeated_failure','message':message,'operation':key})
+        return count
+
+    def succeeded(self,key):
+        with self.store._transaction() as db:
+            db.execute('DELETE FROM failure_guards WHERE id=?',(key,))
+            reason=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
+            if reason and json.loads(reason[0]).get('operation')==key:db.execute('DELETE FROM runtime_stop WHERE id=1')
 
     def requests(self):
         with closing(self.store._connect()) as db:return [json.loads(r[0]) for r in db.execute('SELECT payload FROM model_requests WHERE research_id=? ORDER BY sequence',(self.store.research_id,))]
@@ -102,9 +220,12 @@ def budget_scope(root,research_id=None):
 def request_hook(request):
     runtime=ACTIVE_BUDGET.get()
     if runtime is not None:
-        request.extensions['paperagent_budget']=(runtime,runtime.reserve(request.url.host))
-        # Applies before any network send, including SDK-internal retry attempts.
-        request.extensions['timeout']={k:runtime.status()['timeout_seconds'] for k in ('connect','read','write','pool')}
+        active=ACTIVE_MODEL_REQUEST.get()
+        sequence=active[1] if active and active[0] is runtime else runtime.reserve(request.url.host)
+        request.extensions['paperagent_budget']=(runtime,sequence)
+        # Only explicit/legacy project overrides replace the model connection's timeout.
+        timeout=runtime.policy().get('timeout_seconds')
+        if timeout is not None:request.extensions['timeout']={k:timeout for k in ('connect','read','write','pool')}
 
 
 def response_hook(response):
@@ -114,3 +235,18 @@ def response_hook(response):
 
 async def async_request_hook(request):request_hook(request)
 async def async_response_hook(response):response_hook(response)
+
+
+def execution_reason(root,status):
+    """Read-only projection for recent work and snapshots; never starts/migrates a run."""
+    if status=='waiting':return {'kind':'waiting_confirmation','message':'等待确认研究方案'}
+    if status not in {'paused','failed','cancelled'}:return None
+    import sqlite3
+    path=root/'.system/research.sqlite'
+    if not path.exists():return None
+    try:
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
+            row=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
+        reason=json.loads(row[0]) if row else None
+        return reason if reason and reason.get('kind') not in {'running','completed'} else None
+    except (sqlite3.Error,ValueError):return None

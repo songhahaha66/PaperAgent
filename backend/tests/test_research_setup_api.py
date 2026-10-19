@@ -54,7 +54,8 @@ def test_unified_routes_keep_work_owner_boundary(client,method,path,body):
 
 
 def test_config_limits_and_inflight_changes_are_rejected(client,monkeypatch):
-    assert client.put('/api/workspace/B/research-setup',json={'request_limit':41}).status_code==422
+    assert client.put('/api/workspace/B/research-setup',json={'request_limit':0}).status_code==422
+    assert client.put('/api/workspace/B/research-setup',json={'request_limit':41}).status_code==200
     monkeypatch.setattr(workspace.task_manager,'get_running_task',lambda _:object())
     assert client.put('/api/workspace/B/research-setup',json={}).status_code==409
 
@@ -74,3 +75,12 @@ def test_readiness_uses_runtime_env_fallback_and_exposes_only_booleans(env,monke
     assert result.status_code==200
     assert result.json()=={'ready':True,'roles':{'brain':True,'code':True,'writing':True}}
     assert 'offline-test-secret' not in result.text
+
+
+def test_new_default_is_metered_without_implicit_cap_and_permissions_unchanged(client):
+    response=client.put('/api/workspace/B/research-setup',json={'confirm_models':True,'literature_mode':'off'})
+    assert response.status_code==200,response.text
+    data=client.get('/api/workspace/B/research-overview').json()
+    assert data['budget']['request_limit'] is None and data['settings']['timeout_seconds'] is None
+    assert data['settings']['confirm_models'] is True and data['literature']['sources']==0
+    assert data['settings']['limit_source']=='default'

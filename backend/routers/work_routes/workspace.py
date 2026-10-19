@@ -676,8 +676,8 @@ async def comparison_policy(work_id:str,request:ComparisonPolicyRequest,db:Sessi
 
 
 class ResearchSetupRequest(BaseModel):
-    request_limit:int=Field(default=40,ge=1,le=40)
-    timeout_seconds:int=Field(default=90,ge=10,le=120)
+    request_limit:int|None=Field(default=None,ge=1)
+    timeout_seconds:float|None=Field(default=None,gt=0)
     compact_paper:bool=True
     confirm_models:bool=True
     reuse_experience:bool=True
@@ -783,6 +783,7 @@ async def research_overview(work_id:str,db:Session=Depends(get_db),current_user:
         record['current']=task.get('revision')==record['revision'] and record['research_id']==rid
     actual=research_snapshot(root,work_id,crud.get_work(db,work_id).status)
     last_error=next((a.get('result',{}).get('report',{}).get('error') for a in reversed(list((snapshot or {}).get('attempts',{}).values())) if a.get('result',{}).get('report',{}).get('error')),None)
+    if actual.execution_reason and actual.work_status in {'failed','paused'}:last_error=actual.execution_reason['message']
     if not last_error and saved.get('status')=='failed':
         last_error='研究执行失败，已保留检查点与请求计数。可查看对话中的错误后恢复。'
     return {'settings':runtime.policy(),'budget':runtime.status(),'requests':runtime.requests() if rid else [],

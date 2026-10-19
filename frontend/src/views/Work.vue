@@ -344,15 +344,29 @@
         <section v-if="settingsState" class="capability-settings">
           <h3>{{ isZh ? '请求预算与超时' : 'Request budget and timeout' }}</h3>
           <p>
-            {{ settingsState.budget.used }} / {{ settingsState.budget.request_limit }}
-            {{ isZh ? '次请求，每次最多' : 'requests, at most' }}
-            {{ settingsState.budget.timeout_seconds }} {{ isZh ? '秒' : 'seconds' }}
+            {{ settingsState.budget.used }} {{ isZh ? '次累计调用' : 'requests'
+            }}<span v-if="settingsState.budget.request_limit != null">
+              / {{ settingsState.budget.request_limit }} {{ isZh ? '明确上限' : 'limit' }}</span
+            >
+          </p>
+          <p>
+            {{ isZh ? '服务返回的 token：' : 'Reported tokens: '
+            }}{{ settingsState.budget.input_tokens || 0 }} {{ isZh ? '输入' : 'input' }} /
+            {{ settingsState.budget.output_tokens || 0 }} {{ isZh ? '输出' : 'output' }}。{{
+              isZh
+                ? '未返回的用量不估算。暂停恢复不清零。'
+                : 'Unreported usage is not estimated. Resume retains usage.'
+            }}
           </p>
           <p>
             {{
-              isZh
-                ? '暂停与恢复沿用当前预算。新研究可在开始前调整。'
-                : 'Pause and resume retain this budget. Configure new research before starting.'
+              settingsState.budget.timeout_seconds == null
+                ? isZh
+                  ? '请求超时沿用模型连接设置。'
+                  : 'Request timeout follows the model connection.'
+                : (isZh ? '沿用本项目原有请求超时：' : 'Existing project timeout: ') +
+                  settingsState.budget.timeout_seconds +
+                  ' s'
             }}
           </p>
         </section>

@@ -18,6 +18,7 @@ def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
     
     return {
         "id": config.id,
+        "timeout_seconds": getattr(config,"timeout_seconds",None),
         "type": config.type,
         "model_id": config.model_id,
         "base_url": config.base_url,
@@ -88,7 +89,7 @@ async def apply_default_model(
             if target is None:
                 target = models.ModelConfig(type=role, created_by=current_user)
                 db.add(target)
-            for attr in ("model_id", "base_url", "api_key", "provider", "is_active"):
+            for attr in ("model_id", "base_url", "api_key", "provider", "is_active", "timeout_seconds"):
                 if hasattr(source, attr):
                     setattr(target, attr, getattr(source, attr))
         db.commit()

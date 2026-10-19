@@ -5,7 +5,6 @@ AI提供商抽象层
 
 import logging
 import httpx
-import asyncio
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Mapping, cast
 from urllib.parse import urlparse
@@ -17,6 +16,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from ..config.api_settings import normalize_openai_base_url
+from .model_runtime import RuntimeModelMixin
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,14 @@ def _patch_reasoning_content():
 _patch_reasoning_content()
 
 
-class AIGWChatOpenAI(ChatOpenAI):
+class MeteredChatOpenAI(RuntimeModelMixin, ChatOpenAI):pass
+
+class MeteredChatAnthropic(RuntimeModelMixin, ChatAnthropic):pass
+
+class MeteredChatGoogle(RuntimeModelMixin, ChatGoogleGenerativeAI):pass
+
+
+class AIGWChatOpenAI(MeteredChatOpenAI):
     """Normalize this gateway's cumulative counters per request, including tools."""
 
     def _get_request_payload(self, *args, **kwargs):
@@ -77,16 +84,7 @@ class AIGWChatOpenAI(ChatOpenAI):
         return payload
 
     async def _astream(self, *args, **kwargs):
-        from ..research.runtime import ACTIVE_BUDGET
-        runtime=ACTIVE_BUDGET.get()
-        async with asyncio.timeout(runtime.status()['timeout_seconds'] if runtime else None):
-            async for chunk in self._normalized_astream(*args,**kwargs):yield chunk
-
-    async def _agenerate(self,*args,**kwargs):
-        from ..research.runtime import ACTIVE_BUDGET
-        runtime=ACTIVE_BUDGET.get()
-        async with asyncio.timeout(runtime.status()['timeout_seconds'] if runtime else None):
-            return await super()._agenerate(*args,**kwargs)
+        async for chunk in self._normalized_astream(*args, **kwargs):yield chunk
 
     async def _normalized_astream(self,*args,**kwargs):
         final_usage = None
@@ -167,7 +165,7 @@ class OpenAIProvider(BaseLLMProvider):
                 and urlparse(self.base_url).hostname == "api.deepseek.com"):
             extra_body = {"thinking": {"type": "disabled"}}
 
-        model_class = AIGWChatOpenAI if gateway_host else ChatOpenAI
+        model_class = AIGWChatOpenAI if gateway_host else MeteredChatOpenAI
         from ..research.runtime import request_hook,response_hook,async_request_hook,async_response_hook
         return model_class(
             model=self.model_id,
@@ -176,11 +174,12 @@ class OpenAIProvider(BaseLLMProvider):
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
-            # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
-            max_retries=kwargs.get('max_retries', 0 if step_gateway else 6),
+            # RuntimeModelMixin owns bounded service retries; the SDK never multiplies them.
+            max_retries=kwargs.get('max_retries', 0),
             # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
             # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
-            timeout=kwargs.get('timeout', 120 if step_gateway else 600),
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            stream_chunk_timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
             extra_body=extra_body,
             http_client=httpx.Client(event_hooks={'request':[request_hook],'response':[response_hook]},follow_redirects=False),
@@ -204,12 +203,14 @@ class AnthropicProvider(BaseLLMProvider):
         if not self.validate_config():
             raise ValueError(f"Anthropic提供商配置无效: {self.get_model_info()}")
 
-        return ChatAnthropic(
+        return MeteredChatAnthropic(
             model=self.model_id,
             api_key=self.api_key,
             base_url=self.base_url if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 16000)
+            max_tokens=kwargs.get('max_tokens', 16000),
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            max_retries=kwargs.get('max_retries',0)
         )
 
     def validate_config(self) -> bool:
@@ -229,11 +230,13 @@ class GoogleProvider(BaseLLMProvider):
         if not self.validate_config():
             raise ValueError(f"Google提供商配置无效: {self.get_model_info()}")
 
-        return ChatGoogleGenerativeAI(
+        return MeteredChatGoogle(
             model=self.model_id,
             google_api_key=self.api_key,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 16000)
+            max_tokens=kwargs.get('max_tokens', 16000),
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            max_retries=kwargs.get('max_retries',0)
         )
 
     def validate_config(self) -> bool:
@@ -254,18 +257,19 @@ class LocalProvider(BaseLLMProvider):
             raise ValueError(f"本地模型提供商配置无效: {self.get_model_info()}")
 
         # 本地模型通常使用OpenAI兼容格式
-        return ChatOpenAI(
+        return MeteredChatOpenAI(
             model=self.model_id,
             api_key=self.api_key or "fake-key",  # 本地模型可能不需要真实API key
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else "http://localhost:11434/v1",
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
-            # 网关偶发 502/521，默认重试 2 次（十秒内）扛不过去，一次长求解会因此整段失败
-            max_retries=kwargs.get('max_retries', 6),
+            # RuntimeModelMixin owns bounded service retries; the SDK never multiplies them.
+            max_retries=kwargs.get('max_retries', 0),
             # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
             # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
-            timeout=kwargs.get('timeout', 600),
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            stream_chunk_timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
             extra_body=kwargs.get('extra_body'),
         )
@@ -332,7 +336,8 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
         'model_id': model_config.model_id,
         'api_key': model_config.api_key,
         'base_url': model_config.base_url,
-        'is_active': getattr(model_config, 'is_active', True)
+        'is_active': getattr(model_config, 'is_active', True),
+        'timeout_seconds': getattr(model_config,'timeout_seconds',None)
     }
     extra_body = getattr(model_config, 'extra_body', None)
     if extra_body:

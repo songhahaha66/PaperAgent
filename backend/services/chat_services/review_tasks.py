@@ -171,7 +171,7 @@ def status(store):
             if current['source_conflict']:item.update(can_resume=False,reason='源文件有人工修改，先合并原稿')
             elif not prerequisites:item.update(can_resume=False,reason='先完成当前研究任务的验收/重算')
             elif budget['state']=='provider_blocked':item.update(can_resume=False,reason='网关鉴权或额度拒绝，先修复配置')
-            elif budget['used']>=budget['request_limit'] and item.get('segmented',{}).get('remaining_requests_upper_bound',1)>0:item.update(can_resume=False,reason=f"请求预算不足（{budget['used']}/{budget['request_limit']}），进度保留，追加授权后可恢复")
+            elif budget.get('request_limit') is not None and budget['used']>=budget['request_limit'] and item.get('segmented',{}).get('remaining_requests_upper_bound',1)>0:item.update(can_resume=False,reason=f"请求预算不足（{budget['used']}/{budget['request_limit']}），进度保留，追加授权后可恢复")
         tasks.append(item)
     history=[]
     for row in rows[:30]:

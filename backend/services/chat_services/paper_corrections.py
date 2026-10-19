@@ -139,7 +139,7 @@ async def generate_fragment(store,key,section,source,instruction,llm,request,rec
     scope=resolve_scope(key,section,source,request)
     if len(instruction)>2000:raise ValueError('局部改写要求最多2000字符，请明确一个小范围修改')
     budget=ResearchRuntime(store.root,store.research_id).status()
-    if budget['request_limit']-budget['used']<2:raise ValueError('局部改写至少需要保留生成与审查两次请求；原稿未改变')
+    if budget.get('request_limit') is not None and budget['request_limit']-budget['used']<2:raise ValueError('局部改写至少需要保留生成与审查两次请求；原稿未改变')
     record=patch_attempt(store,scope,recovery_of)
     system='只润色给定的一个短片段。保持事实、结论强度、数字、公式和引用逐字不变。不要扩展背景或解释，只返回replacement字段，不返回原文、定位或其他章节。'
     payload={'instruction':instruction,'fragment':scope['old']}
@@ -263,7 +263,7 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
         from ai_system.research.runtime import ResearchRuntime
         budget=ResearchRuntime(store.root,store.research_id).status()
-        if budget['used']>=budget['request_limit'] or budget['state']=='provider_blocked':raise ResearchConflict('请求预算或网关不可用，意见与原稿保留')
+        if (budget.get('request_limit') is not None and budget['used']>=budget['request_limit']) or budget['state']=='provider_blocked':raise ResearchConflict('请求预算或网关不可用，意见与原稿保留')
     elif not store.delivery_ready(snapshot):raise ResearchConflict('研究未通过验收，不能以文稿修改代替研究修复')
     keys=list(dict.fromkeys(keys))
     if not 1<=len(keys)<=6 or any(k not in snapshot['sections'] or snapshot['sections'][k]['validity']!='current' or k=='references' for k in keys):raise ValueError('请选择一至六个当前正文章节')
@@ -333,7 +333,7 @@ async def review_pending_fragment(store,proposal_id,llm):
         raise ResearchConflict('只能恢复尚无有效审查结果的已保存候选；实际审查意见不能绕过')
     from ai_system.research.runtime import ResearchRuntime
     budget=ResearchRuntime(store.root,store.research_id).status()
-    if budget['state']=='provider_blocked' or budget['used']>=budget['request_limit']:raise ResearchConflict('审查预算或网关不可用；候选保留，恢复不会清零预算')
+    if budget['state']=='provider_blocked' or (budget.get('request_limit') is not None and budget['used']>=budget['request_limit']):raise ResearchConflict('审查预算或网关不可用；候选保留，恢复不会清零预算')
     from .issue_edits import ready
     if not (ready(store) if p.get('source_issue') else store.delivery_ready(snapshot)) or snapshot['commit_seq']!=p['base_commit'] or digest(source)!=p['source_hash']:raise ResearchConflict('研究或原稿版本已变化，不能重审旧提案')
     scope=p.get('scope') if p.get('generation_contract')=='scoped-anchored-edits-v2' else None

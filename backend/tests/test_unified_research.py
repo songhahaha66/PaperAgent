@@ -24,14 +24,14 @@ def test_actual_send_budget_is_shared_durable_and_stops_before_transport(tmp_pat
     assert all(set(r)<={'sequence','sent_at','host','label','research_id','state','http_status','headers_at'} for r in runtime.requests())
 
 
-def test_gateway_authorization_or_quota_stops_other_role_requests(tmp_path):
+def test_rate_limit_response_is_not_a_permanent_global_quota_block(tmp_path):
     runtime=ResearchRuntime(tmp_path);sent=[]
     def handler(request):sent.append(1);return httpx.Response(429,json={})
     with httpx.Client(transport=httpx.MockTransport(handler),event_hooks={'request':[request_hook],'response':[response_hook]}) as client:
         with budget_scope(tmp_path,'study'):
             client.post('https://aigw.saurlax.com/v1/chat/completions')
-            with pytest.raises(ResearchBudgetExhausted):client.post('https://aigw.saurlax.com/v1/chat/completions')
-    assert sent==[1] and runtime.status()['state']=='provider_blocked'
+            assert client.post('https://aigw.saurlax.com/v1/chat/completions').status_code==429
+    assert sent==[1,1] and runtime.status()['state']=='active'
 
 
 def test_usage_unknown_is_explicit_and_resume_trace_is_not_overwritten(tmp_path):
@@ -148,8 +148,8 @@ def test_real_langchain_transport_hook_and_total_timeout(tmp_path):
         async with httpx.AsyncClient(transport=httpx.MockTransport(slow),event_hooks={'request':[async_request_hook],'response':[async_response_hook]}) as client:
             model=AIGWChatOpenAI(model='step-5-preview',api_key='test-only',base_url='https://aigw.saurlax.com/v1',http_async_client=client,streaming=False,max_retries=0)
             with budget_scope(tmp_path,'study'):
-                with pytest.raises(TimeoutError):await model.ainvoke('short')
-        assert runtime.status()['used']==1 and len(runtime.requests())==1
+                with pytest.raises(ResearchBudgetExhausted):await model.ainvoke('short')
+        assert runtime.status()['used']==2 and len(runtime.requests())==2
     asyncio.run(work())
 
 

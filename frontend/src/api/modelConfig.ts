@@ -6,6 +6,7 @@ export interface ModelConfig {
   type: string // brain(中枢大脑), code(代码实验), writing(论文写作)
   model_id: string
   base_url: string
+  timeout_seconds?: number | null
   is_active: boolean
   created_at: string
 }
@@ -14,18 +15,20 @@ export interface ModelConfigCreate {
   type: string
   model_id: string
   base_url: string
+  timeout_seconds?: number | null
   api_key: string
 }
 
 export interface ModelConfigUpdate {
   model_id?: string
   base_url?: string
+  timeout_seconds?: number | null
   api_key?: string
   is_active?: boolean
 }
 
 class ModelConfigAPI {
-  async readiness(): Promise<{ready: boolean; roles: Record<string, boolean>}> {
+  async readiness(): Promise<{ ready: boolean; roles: Record<string, boolean> }> {
     return apiClient.request('/model-configs/readiness')
   }
   async applyDefault(): Promise<ModelConfig[]> {
@@ -36,6 +39,7 @@ class ModelConfigAPI {
     type: string
     model_id: string
     base_url: string
+    timeout_seconds?: number | null
     api_key?: string
   }): Promise<{ ok: boolean }> {
     return apiClient.request<{ ok: boolean }>('/model-configs/test', {

@@ -23,6 +23,8 @@ def _sync_work_from_workspace_metadata(work):
         return work
     try:
         workspace_path = get_workspace_path(work.work_id)
+        from ai_system.research.runtime import execution_reason
+        work.execution_reason=execution_reason(workspace_path,work.status)
         PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
         metadata_file = workspace_path / "metadata.json"
         if metadata_file.exists():

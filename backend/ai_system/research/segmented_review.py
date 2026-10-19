@@ -175,7 +175,7 @@ def reusable(rows,stage,context,schema):
 
 def _budget(ctx):
     value=ResearchRuntime(ctx.research.root,ctx.research.research_id).status()
-    if value['state']=='provider_blocked' or value['used']>=value['request_limit']:raise ResearchBudgetExhausted('分段审查预算不足；已完成块保留，恢复不会清零')
+    if value['state']=='provider_blocked' or (value.get('request_limit') is not None and value['used']>=value['request_limit']):raise ResearchBudgetExhausted('分段审查预算不足；已完成块保留，恢复不会清零')
 
 
 async def child(ctx,state,stage,schema,context,system,prompt,validate):

@@ -128,6 +128,8 @@ class LLMJudge:
                     return verdict
                 last_error = ValueError("模型没有返回结构化结果")
             except Exception as exc:
+                from ..research.runtime import ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
+                if isinstance(exc,(ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError)):raise
                 last_error = exc
             await asyncio.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"判分失败（重试 {MAX_ATTEMPTS} 次）: {last_error}") from last_error
@@ -155,7 +157,9 @@ class LLMJudge:
                 reply = await self.llm.ainvoke(prompt + _json_instruction(schema))
                 content = reply.content if isinstance(reply.content, str) else str(reply.content)
                 verdict = parse_verdict(content, schema)
-        except Exception:
+        except Exception as exc:
+            from ..research.runtime import ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
+            if isinstance(exc,(ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError)):raise
             return None
         if verdict is None:
             return None

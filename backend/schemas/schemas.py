@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List
 from datetime import datetime
 
@@ -80,10 +80,13 @@ class ModelConfigBase(BaseModel):
     model_id: str
     base_url: str
 
+    timeout_seconds: Optional[float] = Field(default=None,gt=0,le=3600)
+
 class ModelConfigCreate(ModelConfigBase):
     api_key: str  # 创建时必须提供api_key
 
 class ModelConfigUpdate(BaseModel):
+    timeout_seconds: Optional[float] = Field(default=None,gt=0,le=3600)
     model_id: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None  # 更新时可以选择性提供api_key
@@ -156,6 +159,7 @@ class WorkUpdate(BaseModel):
     output_mode: Optional[str] = None  # 输出模式：markdown, word, latex
 
 class WorkResponse(WorkBase):
+    execution_reason: Optional[dict] = None
     id: int
     work_id: str
     status: str

@@ -103,28 +103,12 @@
                 ><t-icon name="arrow-up" /></t-button
             ></t-tooltip>
           </div>
-          <div class="setup-entry">
-            <button type="button" class="layout-toggle" @click="setupOpen = true">
-              {{ isZh ? '预算与能力设置' : 'Budget and capabilities' }}
-            </button>
-          </div>
-          <t-drawer
-            v-model:visible="setupOpen"
-            :header="isZh ? '新研究设置' : 'New research settings'"
-            :footer="false"
-            size="min(560px, 95vw)"
-          >
-            <ResearchSetupForm
-              :key="setupVersion"
-              v-model="researchSetup"
-              :disabled="creating"
-              :csv-files="
-                files
-                  .filter((f) => f.name?.toLowerCase().endsWith('.csv'))
-                  .map((f) => 'attachment/' + f.name)
-              "
-            />
-          </t-drawer>
+          <ResearchSetupForm
+            :key="setupVersion"
+            v-model="researchSetup"
+            :disabled="creating"
+            :csv-files="[]"
+          />
           <div v-if="layoutOpen" id="composer-layout-settings" class="layout-settings">
             <div>
               <label>{{ ui.template }}</label
@@ -178,7 +162,9 @@
               <div class="recent-info">
                 <h3>{{ work.title?.trim() || ui.untitled }}</h3>
                 <div class="recent-meta">
-                  <span v-if="workStatus(work.status)">{{ workStatus(work.status) }}</span>
+                  <span v-if="workStatus(work.status, work.execution_reason)">{{
+                    workStatus(work.status, work.execution_reason)
+                  }}</span>
                   <time v-if="updatedTime(work.updated_at)" :datetime="work.updated_at"
                     >{{ isZh ? '更新于 ' : 'Updated ' }}{{ updatedTime(work.updated_at) }}</time
                   >
@@ -190,8 +176,8 @@
                     ? '查看论文'
                     : 'View paper'
                   : isZh
-                    ? '继续研究'
-                    : 'Continue research'
+                    ? '打开研究'
+                    : 'Open research'
               }}</t-button>
             </li>
           </ul>
@@ -260,7 +246,6 @@ const auth = useAuthStore(),
 const question = ref(''),
   mode = ref<'markdown' | 'word' | 'latex'>('latex'),
   templateId = ref(0)
-const setupOpen = ref(false)
 const researchSetup = ref(defaultResearchSetup()),
   setupVersion = ref(0),
   preparedWorkId = ref('')
@@ -283,7 +268,22 @@ function workTimestamp(value?: string) {
 function updatedTime(value?: string) {
   return workTimestamp(value) === null ? '' : formatWorkDate(value!, isZh.value ? 'zh-CN' : 'en-US')
 }
-function workStatus(status: string) {
+function workStatus(status: string, reason?: { kind: string; message: string } | null) {
+  if (['paused', 'failed', 'cancelled'].includes(status) && reason) {
+    const known: Record<string, [string, string]> = {
+      manual_pause: ['已手动暂停', 'Paused by you'],
+      explicit_limit: ['达到明确调用上限', 'Explicit request limit reached'],
+      legacy_limit: ['达到原项目调用上限', 'Existing project limit reached'],
+      authentication: ['模型连接认证失败', 'Model authentication failed'],
+      quota: ['服务额度不足', 'Provider quota unavailable'],
+      rate_limit: ['服务限流', 'Service rate limited'],
+      timeout: ['服务响应超时', 'Service timed out'],
+      service_error: ['服务异常', 'Service error'],
+      repeated_failure: ['相同操作重复失败', 'Repeated operation failure'],
+      invalid_response: ['模型响应需检查', 'Model response needs review'],
+    }
+    if (known[reason.kind]) return known[reason.kind]![isZh.value ? 0 : 1]
+  }
   return (
     {
       created: ['待开始', 'Not started'],
@@ -291,9 +291,9 @@ function workStatus(status: string) {
       running: ['进行中', 'In progress'],
       waiting: ['需要确认', 'Needs confirmation'],
       completed: ['已完成', 'Completed'],
-      paused: ['中断', 'Interrupted'],
-      failed: ['中断', 'Interrupted'],
-      cancelled: ['中断', 'Interrupted'],
+      paused: ['已暂停', 'Paused'],
+      failed: ['执行失败', 'Execution failed'],
+      cancelled: ['已停止', 'Stopped'],
     }[status]?.[isZh.value ? 0 : 1] || ''
   )
 }

@@ -70,6 +70,8 @@ class PaperGraphAgent:
             logger.warning("PaperGraphAgent 只支持 markdown / latex / word 输出，按 markdown 处理 output_mode=%s", output_mode)
             output_mode = "markdown"
 
+        from ..research.runtime import ResearchRuntime
+        ResearchRuntime(Path(workspace_dir)).policy()
         self.llm = llm
         self.stream_manager = stream_manager
         self.workspace_dir = str(Path(workspace_dir).resolve())
@@ -82,7 +84,8 @@ class PaperGraphAgent:
             confirm_models = os.getenv("AI_CONFIRM_MODELS", "").lower() in ("1", "true", "yes")
             if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
                 from ..research.runtime import ResearchRuntime
-                confirm_models=ResearchRuntime(Path(self.workspace_dir)).policy()['confirm_models']
+                settings=ResearchRuntime(Path(self.workspace_dir)).policy()
+                if settings.get('preference_source')!='default':confirm_models=settings['confirm_models']
         if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
@@ -255,12 +258,17 @@ class PaperGraphAgent:
         log_offset = len(before.values.get("log") or [])
         try:
             from ..research.runtime import budget_scope
-            with budget_scope(Path(self.workspace_dir),thread_id):
+            with budget_scope(Path(self.workspace_dir),thread_id) as runtime:
+                runtime.note_stop('running','研究执行中')
                 result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
         except asyncio.CancelledError:
             self._save_thread(thread_id, 'paused')
             raise
         except Exception as exc:
+            from ..research.runtime import ResearchRuntime
+            runtime=ResearchRuntime(Path(self.workspace_dir),thread_id)
+            reason=runtime.stop_reason()
+            if not reason or reason.get('kind')=='running':runtime.note_stop('failed','研究执行失败，已保存检查点；请查看具体步骤。')
             self._save_thread(thread_id, "failed")
             for stage, status in list(ctx.stage_status.items()):
                 if status == "in_progress":

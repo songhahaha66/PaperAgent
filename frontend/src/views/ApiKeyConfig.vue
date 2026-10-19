@@ -119,6 +119,7 @@ interface Form {
   apiKey: string
   baseUrl: string
   modelId: string
+  timeoutSeconds?: number | null
 }
 const { ui, isZh } = useStudioCopy(),
   { isMobile } = useBreakpoint()
@@ -172,15 +173,24 @@ const ConnectionFields = defineComponent({
           ],
           ['baseUrl', 'endpoint', 'https://api.deepseek.com/v1', 'text'],
           ['modelId', 'modelId', 'deepseek-flash', 'text'],
+          ['timeoutSeconds', 'requestTimeout', '600', 'number'],
         ].map(([key, label, placeholder, type]) =>
           h('label', { class: 'connection-field' }, [
-            h('span', props.ui[label as string]),
+            h(
+              'span',
+              label === 'requestTimeout'
+                ? isZh.value
+                  ? '模型请求超时（秒，留空为 600）'
+                  : 'Request timeout (seconds, blank for 600)'
+                : props.ui[label as string],
+            ),
             h(Input, {
               modelValue: props.form[key as string],
               'onUpdate:modelValue': (v: string) => {
-                props.form[key as string] = v
+                props.form[key as string] =
+                  key === 'timeoutSeconds' ? (v === '' ? null : Number(v)) : v
               },
-              type: type as 'text' | 'password',
+              type: type as 'text' | 'password' | 'number',
               placeholder,
               disabled: props.disabled,
               autocomplete: key === 'apiKey' ? 'new-password' : 'off',
@@ -202,6 +212,10 @@ function setDeepSeek() {
 }
 function valid(form: Form) {
   return (
+    (form.timeoutSeconds == null ||
+      (Number.isFinite(form.timeoutSeconds) &&
+        form.timeoutSeconds > 0 &&
+        form.timeoutSeconds <= 3600)) &&
     !!form.modelId.trim() &&
     !!(form.id || form.apiKey.trim()) &&
     (!form.baseUrl.trim() || /^https?:\/\/[^\s/]+/.test(form.baseUrl.trim()))
@@ -213,6 +227,7 @@ function adopt(config: ModelConfig) {
     apiKey: '',
     baseUrl: config.base_url || '',
     modelId: config.model_id,
+    timeoutSeconds: config.timeout_seconds ?? null,
   }
 }
 async function persist(role: Role) {
@@ -220,6 +235,7 @@ async function persist(role: Role) {
   const data = {
     model_id: form.modelId.trim(),
     base_url: form.baseUrl.trim(),
+    timeout_seconds: form.timeoutSeconds ?? null,
     ...(form.apiKey.trim() ? { api_key: form.apiKey.trim() } : {}),
   }
   const result = form.id

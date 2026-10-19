@@ -92,8 +92,14 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
     model = structured_model(llm, schema, include_raw=True)
     last_error: Exception | None = None
     retry_messages = messages
+    from ..research.runtime import ACTIVE_BUDGET,ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
+    from ..core_handlers.model_runtime import operation_key
+    from ..research.store import digest
+    active=ACTIVE_BUDGET.get()
+    guard=operation_key(active,llm,(schema.__name__,messages),{}) if active else None
     for attempt in range(retries + 1):
         parsed = None
+        if active:active.check_guard(guard)
         try:
             # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
             # 重试改走纯文本 JSON
@@ -113,14 +119,11 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             parsed = result if isinstance(result, schema) else schema.model_validate(result)
             if validate is not None:
                 validate(parsed)
+            if active:active.succeeded(guard)
             return parsed
         except Exception as exc:  # 网关偶发错误或模型输出不合 schema
-            from ..research.runtime import ACTIVE_BUDGET,ResearchBudgetExhausted
-            active=ACTIVE_BUDGET.get()
-            if type(exc).__name__ in {'AuthenticationError','PermissionDeniedError','RateLimitError','ResearchBudgetExhausted'} or active and (active.status()['used']>=active.status()['request_limit'] or active.status()['state']=='provider_blocked'):
-                if active and active.status()['used']>=active.status()['request_limit']:
-                    raise ResearchBudgetExhausted('研究模型请求预算耗尽，保留检查点，恢复不会清零') from None
-                raise
+            if isinstance(exc,(ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError)) or not isinstance(exc,ValueError):raise
+            if active:active.failed(guard,digest([type(exc).__name__,str(exc)]),'invalid_response',f'模型响应未通过 {schema.__name__} 校验；已保留状态，请检查输入后恢复。')
             last_error = exc
             if parsed is not None:
                 # Repair this candidate, rather than guessing a different plan
@@ -143,18 +146,24 @@ def message_text(message: Any) -> str:
 
 async def call_text(llm: Any, messages: List[BaseMessage]) -> str:
     last_error: Exception | None = None
+    from ..research.runtime import ACTIVE_BUDGET,ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
+    from ..core_handlers.model_runtime import operation_key
+    from ..research.store import digest
+    active=ACTIVE_BUDGET.get();guard=operation_key(active,llm,('text',messages),{}) if active else None
     for attempt in range(RETRIES + 1):
+        if active:active.check_guard(guard)
         try:
             text = message_text(await llm.ainvoke(messages)).strip()
             if text:
+                if active:active.succeeded(guard)
                 return text
             raise ValueError("模型返回了空内容")
         except Exception as exc:
-            if type(exc).__name__ in {'AuthenticationError', 'PermissionDeniedError', 'RateLimitError', 'ResearchBudgetExhausted'}:
-                raise
+            if isinstance(exc,(ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError)) or not isinstance(exc,ValueError):raise
+            if active:active.failed(guard,digest([type(exc).__name__,str(exc)]),'invalid_response','模型连续返回空内容，已保存状态，请检查输入后恢复。')
             last_error = exc
             logger.warning("文本生成第 %d 次失败: %s", attempt + 1, type(exc).__name__)
-            await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+            if attempt<RETRIES:await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"文本生成失败: {last_error}") from last_error
 
 

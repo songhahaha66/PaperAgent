@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -32,6 +32,7 @@ class ModelConfig(Base):
     provider = Column(String(50), nullable=False, server_default="openai")  # AI提供商：openai, anthropic, google, local
     model_id = Column(String(50), nullable=False)  # 模型ID
     base_url = Column(String(100), nullable=False)  # 模型URL
+    timeout_seconds = Column(Float, nullable=True)  # None uses the model client default (600s).
     api_key = Column(String(255), nullable=False)  # API密钥
     is_active = Column(Boolean, default=True)  # 是否激活
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间

@@ -140,12 +140,12 @@ async function fixture() {
   assert.equal(rows.length, 5)
   assert.match(text(rows[0]), /进行中研究进行中更新于/)
   assert.match(text(rows[1]), /待确认方案需要确认/)
-  assert.match(text(rows[2]), /中断研究中断/)
+  assert.match(text(rows[2]), /中断研究已暂停/)
   const findButton = (node, label) => {
     if (node.kind === 'button' && text(node) === label) return node
     return (node.children || []).map((n) => findButton(n, label)).find(Boolean)
   }
-  findButton(rows[0], '继续研究').props.onClick()
+  findButton(rows[0], '打开研究').props.onClick()
   findButton(rows[3], '查看论文').props.onClick()
   assert.deepEqual(f.routes, ['/work/active', '/work/done'])
   assert.deepEqual(
@@ -156,6 +156,16 @@ async function fixture() {
     ],
   )
   assert.equal(f.mutations.length, 0, 'opening recent work never starts or resumes execution')
+  f.history.works = [
+    {work_id:'manual',title:'手动暂停',status:'paused',execution_reason:{kind:'manual_pause',message:'已手动暂停'}},
+    {work_id:'cap',title:'明确限额',status:'failed',execution_reason:{kind:'explicit_limit',message:'达到上限'}},
+    {work_id:'auth',title:'模型认证',status:'failed',execution_reason:{kind:'authentication',message:'认证失败'}},
+  ]
+  await flush()
+  assert.match(text(f.host.root),/已手动暂停/)
+  assert.match(text(f.host.root),/达到明确调用上限/)
+  assert.match(text(f.host.root),/模型连接认证失败/)
+  assert.equal(f.mutations.length,0)
   f.history.works = [
     { work_id: 'unknown', title: '无时间记录', status: 'unexpected', updated_at: 'invalid' },
   ]
