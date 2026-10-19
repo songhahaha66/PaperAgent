@@ -123,17 +123,13 @@ def test_native_preview_preserves_inline_commands_and_isolates_display_math(pape
     assert (store.root / 'paper.tex').read_bytes() == before
 
 
-def test_compile_failure_preserves_source_and_candidate(paper, monkeypatch):
+def test_native_legacy_proposals_cannot_overwrite_file_project(paper):
     store, state = paper
     store.publish_paper(assemble_latex(state), filename='paper.tex')
     original = (store.root / 'paper.tex').read_text()
-    p = candidate(store)
-    async def fail(_): return SimpleNamespace(pdf_path=None, error='compiler unavailable')
-    monkeypatch.setattr(editor, 'compile_pdf', fail)
-    with pytest.raises(ValueError, match='compiler unavailable'):
-        asyncio.run(editor.decide(store, p['id'], True, 'latex'))
+    with pytest.raises(ResearchConflict, match='源码选区评论'):
+        candidate(store)
     assert (store.root / 'paper.tex').read_text() == original
-    assert editor.get_proposal(store, p['id'])['status'] == 'pending'
 
 
 def test_api_review_flow_and_ownership(paper, monkeypatch):
@@ -214,18 +210,12 @@ def test_data_change_invalidates_pending_wording_candidate(paper):
     assert any(t['validity'] == 'stale' for t in store.snapshot()['tasks'].values())
 
 
-@pytest.mark.parametrize('failure', ['pdf_replace', 'save'])
-def test_partial_publication_failure_restores_all_files_and_database(paper, monkeypatch, failure):
+@pytest.mark.parametrize('failure', ['source_replace', 'save'])
+def test_partial_publication_failure_restores_files_and_database_in_other_modes(paper, monkeypatch, failure):
     store, state = paper
-    store.publish_paper(assemble_latex(state), filename='paper.tex')
-    (store.root / 'paper.pdf').write_bytes(b'previous PDF')
     before = store.snapshot()
-    source = (store.root / 'paper.tex').read_bytes()
+    source = (store.root / 'paper.md').read_bytes()
     proposal = candidate(store)
-    async def compile_candidate(folder):
-        (folder / 'paper.pdf').write_bytes(b'candidate PDF')
-        return SimpleNamespace(pdf_path='paper.pdf')
-    monkeypatch.setattr(editor, 'compile_pdf', compile_candidate)
     if failure == 'save':
         save = store._save
         def fail_save(db, snapshot, kind, payload):
@@ -236,15 +226,14 @@ def test_partial_publication_failure_restores_all_files_and_database(paper, monk
     else:
         replace = Path.replace
         def fail_replace(path, target):
-            if path.name == 'paper.pdf.edit-tmp':
-                raise RuntimeError('injected PDF replacement failure')
+            if path.name == 'paper.md.edit-tmp':
+                raise RuntimeError('injected source replacement failure')
             return replace(path, target)
         monkeypatch.setattr(Path, 'replace', fail_replace)
     with pytest.raises(RuntimeError, match='injected'):
-        asyncio.run(editor.decide(store, proposal['id'], True, 'latex'))
+        asyncio.run(editor.decide(store, proposal['id'], True, 'markdown'))
     assert store.snapshot() == before
-    assert (store.root / 'paper.tex').read_bytes() == source
-    assert (store.root / 'paper.pdf').read_bytes() == b'previous PDF'
+    assert (store.root / 'paper.md').read_bytes() == source
     assert editor.get_proposal(store, proposal['id'])['status'] == 'pending'
     assert not (store.root / editor.PUBLICATION_MARKER).exists()
 

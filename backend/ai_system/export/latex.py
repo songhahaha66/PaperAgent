@@ -76,7 +76,6 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
     """在工作空间根目录编译（图片路径相对工作空间），中间文件放 .system/latex/，PDF 复制到根目录"""
     result = LatexResult(tex_path=tex_name)
     target = workspace / f"{Path(tex_name).stem}.pdf"
-    target.unlink(missing_ok=True)
     if not shutil.which("xelatex"):
         result.error = "服务器没有安装 xelatex，只生成了 paper.tex"
         return result
@@ -87,14 +86,24 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
     pdf.unlink(missing_ok=True)
     cmd = ["xelatex", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"-output-directory={BUILD_DIR}", tex_name]
     out = ""
-    for _ in range(2):  # 第二遍解析交叉引用
+    for iteration in range(3):  # bibliography, then resolve cross-references
         code, out, _err = await run_command(cmd, workspace, timeout=COMPILE_TIMEOUT)
         if code != 0:
             break
+        if iteration == 0:
+            aux = build / f"{stem}.aux"
+            if aux.exists() and r'\bibdata{' in aux.read_text(errors='replace'):
+                if not shutil.which('bibtex'):
+                    result.error = '缺少 bibtex，保留上次成功 PDF；请安装后重新编译'
+                    return result
+                code, out, _err = await run_command(['bibtex', f'{BUILD_DIR}/{stem}'], workspace, timeout=COMPILE_TIMEOUT)
+                if code != 0:
+                    result.error = '参考文献编译失败：' + out.strip()[-500:]
+                    return result
     log_file = build / f"{stem}.log"
     log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else out
     errors = _log_errors(log)
-    if "There were undefined references" in log:
+    if "There were undefined references" in log or "There were undefined citations" in log:
         errors.append("存在未定义的交叉引用")
     if code != 0 or errors or not pdf.exists():
         result.error = "xelatex 编译失败：" + ("；".join(errors) if errors else out.strip()[-500:])

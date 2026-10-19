@@ -25,7 +25,15 @@ def route_after_render(state: PaperState, runtime: Runtime[GraphContext]) -> str
 
 
 async def _latex(ctx: GraphContext) -> dict:
-    result = await compile_pdf(ctx.workspace)
+    if ctx.research:
+        from services.chat_services.paper_project import compile_project, meta
+        await compile_project(ctx.research)
+        from types import SimpleNamespace
+        data=meta(ctx.workspace)
+        result=SimpleNamespace(tex_path='paper.tex',pdf_path='paper.pdf' if data.get('compile',{}).get('state')=='current' else None,
+                               pages=None,warnings=data.get('compile',{}).get('warnings',[]),error=data.get('compile',{}).get('message'))
+    else:
+        result = await compile_pdf(ctx.workspace)
     await ctx.events.file_changed(result.tex_path)
     if result.pdf_path:
         pages = f"（{result.pages} 页）" if result.pages else ""

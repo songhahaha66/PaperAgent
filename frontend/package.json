@@ -33,6 +33,7 @@
     "katex": "^0.16.44",
     "markdown-it": "^14.2.0",
     "markdown-it-katex": "^2.0.3",
+    "pdfjs-dist": "^6.4.299",
     "pinia": "^3.0.4",
     "pinia-plugin-persistedstate": "^4.7.1",
     "tdesign-icons-vue-next": "^0.4.2",

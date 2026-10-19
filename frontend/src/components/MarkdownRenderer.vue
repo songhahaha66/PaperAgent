@@ -15,17 +15,27 @@ interface Props {
   content: string
   // 渲染上下文（用于相对路径图片解析&鉴权）
   workId?: string // 工作区ID，可选
+  inlineSources?: boolean
   basePath?: string // 当前 markdown 文件所在目录，用于解析相对图片路径
 }
 
 const props = defineProps<Props>()
 const authStore = useAuthStore()
-function openLiterature(event:MouseEvent) {
-  const link=(event.target as Element).closest?.('a[href^="#literature-"]')
-  const evidenceId=link?.getAttribute('href')?.slice('#literature-'.length)
-  if(evidenceId && /^C[1-9]\d*$/.test(evidenceId)) {
+const emit = defineEmits<{ source: [id: string] }>()
+function openLiterature(event: MouseEvent) {
+  const link = (event.target as Element).closest?.(
+    'a[href^="#literature-"], a[href^="https://paperagent.local/citations/"]',
+  )
+  const evidenceId = link
+    ?.getAttribute('href')
+    ?.match(/(?:#literature-|paperagent\.local\/citations\/)([A-Za-z0-9_-]+)/)?.[1]
+  if (evidenceId && /^(?:C[1-9]\d*|E[A-Za-z0-9_-]+)$/.test(evidenceId)) {
     event.preventDefault()
-    window.dispatchEvent(new CustomEvent('paper-literature-open',{detail:{workId:props.workId,evidenceId}}))
+    if (props.inlineSources) emit('source', evidenceId)
+    else
+      window.dispatchEvent(
+        new CustomEvent('paper-literature-open', { detail: { workId: props.workId, evidenceId } }),
+      )
   }
 }
 
@@ -78,7 +88,11 @@ async function ensureImageSrc(img: HTMLImageElement) {
   // markdown-it 可能已对 src 做过 percent-encoding，先解码还原为原始路径，
   // 防止后续 encodeURIComponent 产生双重编码（%25）
   let decodedSrc = rawSrc
-  try { decodedSrc = decodeURIComponent(rawSrc) } catch { /* 非法序列则保持原样 */ }
+  try {
+    decodedSrc = decodeURIComponent(rawSrc)
+  } catch {
+    /* 非法序列则保持原样 */
+  }
 
   // 处理相对路径（相对于 basePath）
   const filePath = props.basePath ? normalizePath(props.basePath, decodedSrc) : decodedSrc

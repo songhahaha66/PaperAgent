@@ -204,7 +204,7 @@ def render_citations(workspace, text, latex=False):
         label = f"[{row['source_id']}·{BOUNDARIES[row['boundary']]}·{row['locator']}]"
         if latex:
             from ..export.latex import escape_plain
-            return r'\href{' + escape_plain(row['source_url']) + '}{' + escape_plain(label) + '}'
+            return r'\href{https://paperagent.local/citations/' + row['id'] + '}{' + escape_plain(label) + '}'
         safe_label = re.sub(r'([\\`*_[\]{}()!])',r'\\\1',html.escape(label.strip('[]')))
         return '['+safe_label+'](#literature-'+row['id']+')'
     return CITATION.sub(replacement,text)

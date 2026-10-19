@@ -157,7 +157,7 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
     monkeypatch.setattr(latex, 'run_command', fail)
     result = asyncio.run(compile_pdf(tmp_path))
     assert result.pdf_path is None and result.error
-    assert not (tmp_path / 'paper.pdf').exists()
+    assert (tmp_path / 'paper.pdf').read_bytes() == b'%PDF-old'
 
 
 def test_failed_native_export_blocks_completion_and_preserves_source(tmp_path, monkeypatch):
@@ -165,9 +165,9 @@ def test_failed_native_export_blocks_completion_and_preserves_source(tmp_path, m
     from ai_system.export.latex import LatexResult
     from ai_system.graph import PaperGraphAgent
     from test_paper_graph import _make_workspace, TASK as GRAPH_TASK, FixedJudge
-    async def no_pdf(workspace):
+    async def no_pdf(workspace, *args):
         return LatexResult('paper.tex', error='模拟编译错误')
-    monkeypatch.setattr(exporter, 'compile_pdf', no_pdf)
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf', no_pdf)
     root = _make_workspace(tmp_path)
     agent = PaperGraphAgent(FakeModel(), workspace_dir=str(root), judge=FixedJudge(), output_mode='latex')
     output = asyncio.run(agent.run(GRAPH_TASK))

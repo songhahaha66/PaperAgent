@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, Form
+from fastapi import BackgroundTasks, APIRouter, Depends, HTTPException, status, Query, UploadFile, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from database.database import get_db
@@ -742,3 +742,138 @@ async def research_settings(work_id:str,db:Session=Depends(get_db),current_user:
                        'literature':{'mode':LiteratureStore(root).policy()},
                        'skills':runtime.store.skill_preferences()},
             'experience':{'enabled':ExperienceScope(current_user,work_id).enabled(db)}}
+
+# Unified contextual comments and file-backed draft editing. The research loop
+# still owns formal experiments and acceptance; drafts remain accessible.
+class PaperSelection(BaseModel):
+    file: str = Field(min_length=1,max_length=500)
+    version: str = Field(pattern=r'^[a-f0-9]{64}$')
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+    quote: str = Field(max_length=100000)
+
+
+class PaperCommentRequest(BaseModel):
+    research_id: str
+    request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
+    message: str = Field(min_length=1,max_length=20000)
+    selection: PaperSelection | None = None
+    read_quote: str | None = Field(default=None,max_length=100000)
+    thread_id: str | None = Field(default=None,max_length=64)
+
+
+class FilePatch(PaperSelection):
+    replacement: str = Field(max_length=100000)
+
+
+class PaperFileEdit(BaseModel):
+    research_id: str
+    patches: list[FilePatch] = Field(min_length=1,max_length=24)
+    thread_id: str | None = None
+
+
+class PaperChangeDecision(BaseModel):
+    research_id: str
+    decision: Literal['apply','reject','revert']
+
+
+def _paper_identity(store, research_id):
+    if store.research_id != research_id:
+        raise HTTPException(409,'研究标识已改变，请刷新')
+
+
+@router.get('/{work_id}/paper/project')
+async def paper_project_state(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    from services.chat_services import paper_project,paper_sources
+    try:
+        return {**paper_project.describe(store),'research_id':store.research_id,'sources':paper_sources.cards(store)}
+    except (ValueError,ResearchConflict,OSError) as exc:
+        raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/paper/locate')
+async def paper_locate(work_id: str, request: dict, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    from services.chat_services.paper_project import candidates
+    quote=str(request.get('quote',''))
+    if not 1 <= len(quote) <= 100000:
+        raise HTTPException(422,'请选择有效阅读文字')
+    try:return {'candidates':candidates(store.root,quote),'confirmation_required':True}
+    except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/paper/changes')
+async def paper_file_change(work_id: str, request: PaperFileEdit, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    _paper_identity(store,request.research_id)
+    from services.chat_services import paper_project
+    try:
+        paper_project.initialize(store)
+        return paper_project.propose_change(store,request.thread_id,None,[p.model_dump() for p in request.patches])
+    except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/paper/changes/{change_id}')
+async def paper_change_decision(work_id: str, change_id: str, request: PaperChangeDecision, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    _paper_identity(store,request.research_id)
+    from services.chat_services import paper_project
+    try:return await paper_project.decide(store,change_id,request.decision)
+    except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/paper/compile')
+async def paper_compile(work_id: str, request: dict, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    _paper_identity(store,request.get('research_id'))
+    from services.chat_services import paper_project
+    try:return await paper_project.compile_project(store)
+    except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
+
+
+async def _execute_paper_comment(store, execution_id, llm, resume=False):
+    from services.chat_services.paper_comments import execute
+    from ai_system.research.runtime import budget_scope
+    from ai_system.graph.tracing import LLMCallTrace
+    trace=LLMCallTrace()
+    if hasattr(llm,'model_copy'):
+        callbacks=getattr(llm,'callbacks',None)
+        llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
+    try:
+        with budget_scope(store.root,store.research_id):
+            await execute(store,execution_id,llm,resume=resume)
+    except Exception:
+        # Failure details live in the execution, not in an unhandled background task.
+        import logging
+        logging.getLogger(__name__).exception('Paper comment did not complete')
+    finally:
+        trace.dump(store.root/'.system/editor_llm_calls.json')
+
+
+@router.post('/{work_id}/paper/comments',status_code=202)
+async def paper_comment(work_id: str, request: PaperCommentRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    _paper_identity(store,request.research_id)
+    from services.chat_services import paper_comments
+    try:
+        # Resolve configuration before recording a runnable request.
+        llm=_paper_writing_model(db,current_user)
+        record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote)
+        if created:background_tasks.add_task(_execute_paper_comment,store,record['id'],llm)
+        return record
+    except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/paper/executions/{execution_id}/resume',status_code=202)
+async def paper_comment_resume(work_id: str, execution_id: str, request: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    _paper_identity(store,request.get('research_id'))
+    from services.chat_services import paper_project
+    paper_project.initialize(store)
+    records=paper_project.read_records(store,'paper_executions')
+    record=next((r for r in records if r['id']==execution_id),None)
+    if not record:raise HTTPException(404,'执行记录不存在')
+    if record['state'] not in {'failed','pending','running'}:return record
+    background_tasks.add_task(_execute_paper_comment,store,execution_id,_paper_writing_model(db,current_user),True)
+    return record

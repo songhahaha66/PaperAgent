@@ -279,17 +279,33 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
     native = ctx.output_mode == "latex"
     filename = "paper.tex" if native else "paper.md"
-    raw = assemble_latex(state) if native else assemble(state)
+    if native and ctx.research:
+        from services.chat_services.paper_project import sync_generated
+        from services.chat_services.paper_sources import write_bibliography
+        sync_generated(ctx.research,state,ctx)
+        write_bibliography(ctx.workspace)
+        # Read the actual project source, preserving its preamble and user edits.
+        raw = (ctx.workspace / 'paper.tex').read_text(encoding='utf-8')
+    else:
+        raw = assemble_latex(state) if native else assemble(state)
     # 带引用的原稿留在 .system，方便追溯每个数字的来源
     ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
     from ai_system.graph.registry import publication_text
     from ai_system.research.citations import render_citations, literature_root,citation_issues
-    problems=citation_issues(literature_root(ctx),raw)
+    if native and ctx.research:
+        from services.chat_services.paper_sources import validate_references
+        validate_references(ctx.workspace,raw,raw)
+        problems=[]
+    else:
+        problems=citation_issues(literature_root(ctx),raw)
     if problems:raise ValueError('发布前文献引用未获原文支持：'+'；'.join(problems))
-    rendered = publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw, latex=native),native))
+    rendered = raw if native and ctx.research else publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw, latex=native),native))
     if REF_PATTERN.search(rendered):
         raise ValueError("论文仍有未解析的登记引用，禁止发布")
-    path, conflict = ctx.research.publish_paper(rendered, filename=filename) if ctx.research else (filename, False)
+    if native and ctx.research:
+        path, conflict = filename, False
+    else:
+        path, conflict = ctx.research.publish_paper(rendered, filename=filename) if ctx.research else (filename, False)
     if ctx.research:
         ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")
     else:

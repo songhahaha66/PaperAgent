@@ -139,7 +139,7 @@ async def document(store):
     ctx.research = store
     refresh_registry(ctx)
     readable = {}
-    native = str(snapshot.get('paper_version', '')).endswith('.tex')
+    native = (store.root/'paper.tex').is_file() or str(snapshot.get('paper_version', '')).endswith('.tex')
     for key, section in snapshot['sections'].items():
         text = publication_text(ctx.registry.render(section['text'], latex=native))
         if native:
@@ -188,6 +188,8 @@ async def document(store):
     published = bool(source_current and not snapshot.get('paper_conflict') and store.delivery_ready(snapshot)
                      and all(section['validity'] == 'current' for section in snapshot['sections'].values()))
     available = {source, *snapshot.get('exports', [])} if published else set()
+    if (store.root/'paper.tex').is_file():
+        available.update({'paper.tex','paper.pdf'})
     return {'title': state['analysis'].get('title', ''), 'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
             'publication_notice': '源文件有人工修改，须先合并；当前目录展示登记正文，旧排版文件不作为当前版本。' if snapshot.get('paper_hash') and (not source_current or snapshot.get('paper_conflict')) else '',
             'artifacts': [p for p in ('paper.md', 'paper.tex', 'paper.pdf', 'paper.docx') if p in available and (store.root / p).is_file() and (store.root / p).stat().st_size],
@@ -215,6 +217,8 @@ def guard_wording(before, after, latex):
 
 
 async def propose(store, key, instruction, content=None, llm=None,*,edit_kind='wording',section_keys=None,section_contents=None,fragment_scope=None,recovery_of=None,source_issue=None):
+    if (store.root / 'paper.tex').is_file():
+        raise ResearchConflict('LaTeX 文稿请使用源码选区评论与文件补丁；旧章节提案已停用以保护原稿')
     if source_issue:
         from .paper_corrections import propose_correction
         return await propose_correction(store,section_keys or [key],instruction,llm,section_contents or ({key:content} if content is not None else None),
@@ -261,6 +265,8 @@ def get_proposal(store, proposal_id):
 async def decide(store, proposal_id, apply, output_mode):
     recover_publication(store)
     proposal = get_proposal(store, proposal_id)
+    if apply and (store.root / 'paper.tex').is_file():
+        raise ResearchConflict('该历史章节提案保留供参考；请在当前源码上重新评论，避免覆盖 LaTeX 项目')
     if proposal['status'] != 'pending':
         return proposal
     if not apply:
