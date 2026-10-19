@@ -26,6 +26,10 @@ def scoped(paper,monkeypatch):
     store.save_sections(state['sections'],[]);store.publish_paper(assemble(state))
     calls=[]
     async def generate(llm,schema,messages,validate=None,**kwargs):
+        if schema is edits.FragmentAudit:
+            reply=schema(verdict='equivalent',reason='原义及结论强度保持一致。')
+            if validate:validate(reply)
+            return reply
         assert kwargs['retries']==0 and schema is edits.FragmentReplacement
         assert len(messages[-1].content)<2400 and '保留全文' not in messages[-1].content
         calls.append(messages);reply=schema(replacement='主要局限源于数据规模和实验设计。');validate(reply);return reply
@@ -144,7 +148,10 @@ def test_real_structured_adapter_never_retries_a_truncated_reply(scoped,monkeypa
 
 def test_candidate_audit_truncation_also_stops_without_publish(scoped,monkeypatch):
     from ai_system.graph.llm_utils import call_structured
-    v=scoped;before=v.store.snapshot();monkeypatch.setattr(consistency,'call_structured',call_structured)
+    v=scoped;before=v.store.snapshot();original=edits.call_structured
+    async def dispatch(llm,schema,messages,**kwargs):
+        return await call_structured(llm,schema,messages,**kwargs) if schema is edits.FragmentAudit else await original(llm,schema,messages,**kwargs)
+    monkeypatch.setattr(edits,'call_structured',dispatch)
     class Model:
         calls=0;model_name='offline'
         def with_structured_output(self,*args,**kwargs):return self
@@ -162,6 +169,35 @@ def test_generation_reserves_remaining_call_for_audit(scoped):
     v=scoped;runtime=ResearchRuntime(v.store.root,v.store.research_id);runtime.configure({'request_limit':1,'timeout_seconds':90,'compact_paper':False,'confirm_models':False})
     with pytest.raises(ValueError,match='两次'):propose(v)
     assert not v.calls and runtime.status()['used']==0
+
+
+@pytest.mark.parametrize('verdict',['changed','uncertain'])
+def test_local_semantic_change_or_uncertainty_remains_a_blocker(scoped,monkeypatch,verdict):
+    v=scoped;original=edits.call_structured;before=v.store.snapshot()
+    async def reject(llm,schema,messages,**kwargs):
+        return schema(verdict=verdict,reason='原义没有得到确认。') if schema is edits.FragmentAudit else await original(llm,schema,messages,**kwargs)
+    monkeypatch.setattr(edits,'call_structured',reject);p=propose(v)
+    assert p['review_issues'] and p['review_id']
+    with pytest.raises(ValueError):asyncio.run(editor.decide(v.store,p['id'],True,'markdown'))
+    with pytest.raises(ResearchConflict):asyncio.run(edits.review_pending_fragment(v.store,p['id'],v.llm))
+    assert v.store.snapshot()==before
+
+
+def test_saved_model_proposal_can_resume_only_failed_legacy_full_review(scoped):
+    from ai_system.research.review_cache import ReviewCache
+    v=scoped;p=propose(v);state={**v.state,'sections':{**v.state['sections'],**p['after_sections']}}
+    context=edits.review_binding(v.store,state,v.llm)
+    cache=ReviewCache(v.store);record=cache.start('sections',context);cache.failed(record,TimeoutError())
+    with v.store._transaction() as db:
+        db.execute("DELETE FROM review_records WHERE stage='fragment'")
+        p.update(review_id=None,review_kind='full_document',review_context_hash=digest(context),review_issues=[{'section':v.key,'message':'full review incomplete'}])
+        db.execute('UPDATE commands SET response=? WHERE id=?',(json.dumps(p),'paper-edit:'+p['id']))
+    before=v.store.snapshot();result=asyncio.run(edits.review_pending_fragment(v.store,p['id'],v.llm))
+    assert result['origin']=='model' and result['review_kind']=='fragment_equivalence' and not result['review_issues']
+    assert result['review_history'][0]['failed_record_id']==record['id']
+    assert len(v.calls)==1 and v.store.snapshot()==before
+    with pytest.raises(ResearchConflict):asyncio.run(edits.review_pending_fragment(v.store,p['id'],v.llm))
+    applied=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert applied['status']=='applied'
 
 
 def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkeypatch):

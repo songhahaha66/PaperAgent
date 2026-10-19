@@ -28,6 +28,7 @@ export interface PaperProposal {
   edit_kind?:'wording'|'evidence'
   origin?:'model'|'manual'
   generation_contract?:string
+  review_kind?:'fragment_equivalence'|'full_document'
   scope?:{id:string;old:string;start:number;end:number;section_hash:string}
   generation_edits?:{section:string;old:string;replacement:string}[]
 }

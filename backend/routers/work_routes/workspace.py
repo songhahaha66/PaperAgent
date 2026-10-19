@@ -286,7 +286,16 @@ class PaperEditRequest(BaseModel):
 
 class PaperDecision(BaseModel):
     research_id: str
-    decision: Literal['apply', 'reject']
+    decision: Literal['apply', 'reject','review']
+
+
+def _paper_writing_model(db,user_id):
+    from ai_system.config.environment import setup_environment_from_db
+    from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+    config=setup_environment_from_db(db).config_manager
+    model=config.get_model_config('writing',user_id) or config.get_model_config('brain',user_id)
+    if model is None:raise HTTPException(409,'没有配置写作模型；可直接编辑候选正文')
+    return create_llm_from_model_config(model)
 
 
 def _paper_store(db, work_id, user_id, *, mutation=False):
@@ -315,13 +324,7 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
         raise HTTPException(409, '研究版本已改变，请刷新论文')
     llm = None
     if request.content is None or '{{C:' in request.content:
-        from ai_system.config.environment import setup_environment_from_db
-        from ai_system.core_handlers.llm_providers import create_llm_from_model_config
-        config = setup_environment_from_db(db).config_manager
-        model = config.get_model_config('writing', current_user) or config.get_model_config('brain', current_user)
-        if model is None:
-            raise HTTPException(409, '没有配置写作模型；可直接编辑候选正文')
-        llm = create_llm_from_model_config(model)
+        llm = _paper_writing_model(db,current_user)
     try:
         from ai_system.research.runtime import budget_scope, ResearchBudgetExhausted
         from ai_system.graph.tracing import LLMCallTrace
@@ -355,6 +358,17 @@ async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecisi
     if request.research_id != store.research_id:
         raise HTTPException(409, '研究标识已改变，请刷新论文')
     try:
+        if request.decision=='review':
+            from ai_system.research.runtime import budget_scope
+            from ai_system.graph.tracing import LLMCallTrace
+            from services.chat_services.paper_corrections import review_pending_fragment
+            llm=_paper_writing_model(db,current_user);trace=LLMCallTrace()
+            if hasattr(llm,'model_copy'):
+                callbacks=getattr(llm,'callbacks',None)
+                llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
+            try:
+                with budget_scope(store.root,store.research_id):return await review_pending_fragment(store,proposal_id,llm)
+            finally:trace.dump(store.root/'.system/editor_llm_calls.json')
         return await paper_editor.decide(store, proposal_id, request.decision == 'apply', crud.get_work(db, work_id).output_mode or 'markdown')
     except (ValueError, ResearchConflict) as exc:
         raise HTTPException(409, str(exc))

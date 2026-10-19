@@ -7,7 +7,7 @@ from .store import ResearchStore,digest
 from .models import IssueReport
 
 POLICY='review-context-cache-v1'
-STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查'}
+STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查'}
 
 
 def _payload(item):
@@ -155,7 +155,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             cache.reuse(hit[1],current_context=context);return hit[0]
         record=cache.start(stage,before)
         answer=await perform()
-        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts'}[stage]
+        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')
         if isinstance(answer,dict) and verdict_field not in answer:raise ValueError('review_reply_missing_verdict_field')
         answer=schema.model_validate(answer.model_dump() if hasattr(answer,'model_dump') else answer)

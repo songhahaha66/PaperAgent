@@ -1,5 +1,6 @@
 """Evidence-bound document corrections, without changing research or fitting."""
 import json,re,uuid,time
+from typing import Literal
 from collections import Counter
 from pydantic import BaseModel,Field,ConfigDict
 from ai_system.graph.context import GraphContext
@@ -12,7 +13,7 @@ from ai_system.research.store import digest
 from ai_system.research.models import ResearchConflict
 from ai_system.research.control import refresh_registry
 from ai_system.research.method_facts import verified_methods,canonical_method_block
-from ai_system.research.review_cache import ReviewCache,review_context
+from ai_system.research.review_cache import ReviewCache,review_context,run_review
 from ai_system.research.citations import audit_citations,citation_issues
 from ai_system.research.literature import CITATION
 from ai_system.graph.tracing import labelled
@@ -65,6 +66,24 @@ class FragmentScope(BaseModel):
 class FragmentReplacement(BaseModel):
     model_config=ConfigDict(extra='forbid')
     replacement:str=Field(min_length=1,max_length=900)
+
+
+class FragmentAudit(BaseModel):
+    verdict:Literal['equivalent','changed','uncertain']
+    reason:str=Field(min_length=1,max_length=240)
+
+
+FRAGMENT_AUDIT_SYSTEM=('审查一次等义润色。只判断所选原文与替换文字是否保持事实、适用范围、结论强度和逻辑，且与邻近语境一致。'
+    '程序另行保护全文数字、公式、引用和片段外原文不变。不要重审未修改全文或扩展实验。'
+    '只要新增/遗漏主张、强度变化或语义改变，返回changed；无法确定则uncertain；确为等义才equivalent。reason简短，不超过240字符。')
+
+
+def fragment_prompt(store,state,scope):
+    before=store.snapshot()['sections'][scope['section']]['text'];after=state['sections'][scope['section']]
+    start,end=scope['start'],scope['end'];replacement=after[start:len(after)-len(before)+end]
+    if before[start:end]!=scope['old'] or after!=before[:start]+replacement+before[end:]:raise ResearchConflict('局部审查输入包含范围外变化')
+    return json.dumps({'before':scope['old'],'replacement':replacement,'left_context':before[max(0,start-180):start],
+        'right_context':before[end:end+180]},ensure_ascii=False)
 
 
 class PatchFailure(ValueError):
@@ -163,8 +182,12 @@ def proposal_context(store,state,llm):
     return ctx
 
 
-def review_binding(store,state,llm):
-    ctx=proposal_context(store,state,llm);prepared=section_audit_prompt(state,ctx,force=True)
+def review_binding(store,state,llm,scope=None):
+    ctx=proposal_context(store,state,llm)
+    if scope:
+        return review_context(ctx,state,'fragment',FRAGMENT_AUDIT_SYSTEM,fragment_prompt(store,state,scope),FragmentAudit,
+            sections=state['sections'],extra={'non_blocking':True,'scope':scope,'policy':'exact-fragment-equivalence-v1'})
+    prepared=section_audit_prompt(state,ctx,force=True)
     if prepared is None:raise ValueError('没有可执行的章节一致性核查')
     prompt,_=prepared
     return review_context(ctx,state,'sections',AUDIT_SYSTEM,prompt,ClaimAudit,sections=state['sections'],extra={'non_blocking':True})
@@ -174,10 +197,32 @@ def require_review(store,proposal,state):
     """Recheck the exact candidate review and provenance before publication."""
     from types import SimpleNamespace
     if digest(verified_methods(store))!=proposal['method_facts_hash']:raise ResearchConflict('已核验的方法设置已改变，须重新生成候选')
-    context=review_binding(store,state,SimpleNamespace(model_name=proposal['review_model_id']))
-    hit=ReviewCache(store).get('sections',context,ClaimAudit)
-    if not hit or hit[1]['id']!=proposal['review_id'] or hit[1]['context_hash']!=proposal['review_context_hash'] or hit[0].issues:
+    scope=proposal['scope'] if proposal.get('review_kind')=='fragment_equivalence' else None
+    context=review_binding(store,state,SimpleNamespace(model_name=proposal['review_model_id']),scope)
+    hit=ReviewCache(store).get('fragment' if scope else 'sections',context,FragmentAudit if scope else ClaimAudit)
+    if not hit or hit[1]['id']!=proposal['review_id'] or hit[1]['context_hash']!=proposal['review_context_hash'] or (hit[0].verdict!='equivalent' if scope else bool(hit[0].issues)):
         raise ResearchConflict('候选缺少同上下文的有效一致性审查，禁止应用')
+
+
+async def review_candidate(store,state,llm,scope=None):
+    ctx=proposal_context(store,state,llm);issues=[]
+    if scope:
+        prompt=fragment_prompt(store,state,scope)
+        async def perform():return await call_structured(cap_output(llm,1800),FragmentAudit,as_messages(FRAGMENT_AUDIT_SYSTEM,prompt),retries=0)
+        try:
+            with labelled('paper-edit:fragment-audit'):
+                answer=await run_review(ctx,state,'fragment',FragmentAudit,FRAGMENT_AUDIT_SYSTEM,prompt,perform,sections=state['sections'],
+                    extra={'non_blocking':True,'scope':scope,'policy':'exact-fragment-equivalence-v1'})
+            if answer.verdict!='equivalent':issues.append({'section':scope['section'],'message':'局部等义性未通过：'+answer.reason})
+        except Exception as exc:issues.append({'section':scope['section'],'message':'局部等义性审查未完成：'+type(exc).__name__})
+    else:
+        with labelled('paper-edit:audit'):
+            issues=[{'section':i.section,'message':i.message} for i in await audit_sections(state,ctx,candidate=True)]
+    context=review_binding(store,state,llm,scope)
+    hit=ReviewCache(store).get('fragment' if scope else 'sections',context,FragmentAudit if scope else ClaimAudit)
+    if not hit:issues.append({'section':scope['section'] if scope else '','message':'审查没有有效完成记录，不能应用候选'})
+    if hit and not scope and hit[0].issues and not issues:issues.append({'section':'','message':'章节审查存在尚未解决的意见'})
+    return issues,hit,context
 
 
 def require_scope(store,proposal,snapshot,source):
@@ -224,16 +269,14 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         combined['sections']['references']=reference_section(combined,ctx)
     issues=[{'section':k,'message':m} for k,t in combined['sections'].items() for m in citation_issues(store.root,t)]
     issues+=check_sections(combined,ctx)
-    with labelled('paper-edit:audit'):
-        issues+=[{'section':i.section,'message':i.message} for i in await audit_sections(combined,ctx,candidate=True)]
-    context=review_binding(store,combined,llm);hit=ReviewCache(store).get('sections',context,ClaimAudit)
-    if not hit:issues.append({'section':'','message':'章节审查未完成，不能应用候选'})
-    if hit and hit[0].issues and not issues:issues.append({'section':'','message':'章节审查存在尚未解决的意见'})
+    review_issues,hit,context=await review_candidate(store,combined,llm,scope)
+    issues+=review_issues
     primary=keys[0]
     proposal={'id':uuid.uuid4().hex,'section':primary,'section_keys':keys,'edit_kind':'wording' if wording else 'evidence','instruction':instruction,
         'before':before[primary],'after':after[primary],'before_sections':before,'after_sections':after,
         'generation_contract':'scoped-anchored-edits-v2' if answer else 'manual-evidence-v1','generation_edits':answer.model_dump()['edits'] if answer else [],
         'scope':scope,'patch_attempt_id':attempt['id'] if attempt else None,'origin':'model' if answer else 'manual',
+        'review_kind':'fragment_equivalence' if scope else 'full_document',
         'base_commit':snapshot['commit_seq'],'source_hash':digest(source),'filename':filename,'status':'pending',
         'section_revision':snapshot['sections'][primary]['revision'],'citation_checks':checks,
         'citation_issues':list(dict.fromkeys(m for t in after.values() for m in citation_issues(store.root,t))),
@@ -247,3 +290,30 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
             attempt.update(state='proposed',proposal_id=proposal['id'],updated_at=time.time())
             db.execute('UPDATE paper_patch_attempts SET payload=? WHERE id=?',(json.dumps(attempt,ensure_ascii=False),attempt['id']))
     return proposal
+
+
+async def review_pending_fragment(store,proposal_id,llm):
+    """Resume only a failed service review of a saved exact model proposal."""
+    from .paper_editor import get_proposal,source_info,paper_state
+    p=get_proposal(store,proposal_id);snapshot=store.refresh_inputs();_,source=source_info(store,snapshot)
+    if p['status']!='pending' or p.get('generation_contract')!='scoped-anchored-edits-v2' or p.get('review_id') or p.get('review_history') or p.get('review_kind')=='fragment_equivalence':
+        raise ResearchConflict('只能重审尚无有效审查结果的已保存模型局部提案；实际审查意见不能绕过')
+    if not store.delivery_ready(snapshot) or snapshot['commit_seq']!=p['base_commit'] or digest(source)!=p['source_hash']:raise ResearchConflict('研究或原稿版本已变化，不能重审旧提案')
+    require_scope(store,p,snapshot,source)
+    with store._connect() as db:
+        failed=db.execute("SELECT payload FROM review_records WHERE research_id=? AND context_hash=? AND stage='sections' AND state='failed'",(store.research_id,p['review_context_hash'])).fetchone()
+    if not failed:raise ResearchConflict('没有可恢复的对应服务审查失败记录')
+    state=await paper_state(store);state['sections'].update(p['after_sections']);ctx=proposal_context(store,state,llm)
+    problems=check_sections(state,ctx)
+    if problems:raise ResearchConflict('候选仍有确定性或引用问题，不能以重审放行')
+    issues,hit,context=await review_candidate(store,state,llm,p['scope'])
+    history=[*p.get('review_history',[]),{'kind':p.get('review_kind','full_document'),'context_hash':p['review_context_hash'],
+        'failed_record_id':json.loads(failed[0])['id'],'issues':p['review_issues']}]
+    p.update(review_kind='fragment_equivalence',review_history=history,review_issues=issues,review_id=hit[1]['id'] if hit else None,
+        review_context_hash=digest(context),review_model_id=getattr(llm,'model_name',None) or getattr(llm,'model',None))
+    with store._transaction() as db:
+        current=store._read(db);latest=json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,'paper-edit:'+proposal_id)).fetchone()[0])
+        if latest['status']!='pending':return latest
+        if current['commit_seq']!=p['base_commit'] or digest(source_info(store,current)[1])!=p['source_hash']:raise ResearchConflict('审查期间原稿改变，未覆盖')
+        db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',(json.dumps(p,ensure_ascii=False),store.research_id,'paper-edit:'+proposal_id))
+    return p

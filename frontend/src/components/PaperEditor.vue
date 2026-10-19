@@ -109,7 +109,7 @@
           <p v-for="issue in proposal.citation_issues || []" :key="issue" role="alert">{{ issue }}</p>
           <p v-for="(check,i) in proposal.citation_checks || []" :key="i">{{ check.status }} · {{ check.reason }}</p>
           <p v-for="(issue,i) in proposal.review_issues || []" :key="i" role="alert">{{issue.section}} · {{issue.message}}</p>
-          <p v-if="proposal.review_id">{{isZh?'已保存候选全文审查记录':'Candidate review recorded'}} · {{proposal.review_id.slice(0,10)}}</p>
+          <p v-if="proposal.review_id">{{proposal.review_kind==='fragment_equivalence'?(isZh?'已保存局部等义性审查记录':'Fragment equivalence review recorded'):(isZh?'已保存候选全文审查记录':'Candidate review recorded')}} · {{proposal.review_id.slice(0,10)}}</p>
           <div v-for="change in proposalDiffs" :key="change.key" class="section-diff">
           <h4>{{document.sections.find(s=>s.key===change.key)?.title||change.key}}</h4>
           <div class="diff">
@@ -133,6 +133,7 @@
           <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length || !!proposal.review_issues?.length" @click="decide('apply')">
             {{ isZh ? '应用并更新论文' : 'Apply and update paper' }}
           </button>
+          <button v-if="proposal.status==='pending' && proposal.generation_contract==='scoped-anchored-edits-v2' && !proposal.review_id && proposal.review_kind!=='fragment_equivalence' && proposal.review_issues?.length" :disabled="busy" @click="decide('review')">{{isZh?'仅重审这个局部提案':'Review this fragment proposal only'}}</button>
           <button v-if="proposal.status === 'pending'" :disabled="busy" @click="decide('reject')">
             {{ isZh ? '拒绝' : 'Reject' }}
           </button>
