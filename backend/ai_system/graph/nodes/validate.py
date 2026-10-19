@@ -88,6 +88,8 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
         if key == "solve_heading":
             continue
         text = sections.get(key, "")
+        from ...research.citations import citation_issues, bibliography, literature_root
+        issues.extend({'section':key,'message':message} for message in citation_issues(literature_root(ctx),text))
         if len(text.strip()) < MIN_SECTION_CHARS:
             issues.append({"section": key, "message": f"「{title}」缺失或过短"})
             continue
@@ -105,7 +107,8 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
             if result and result.kind == "series":
                 issues.append({"section": key, "message": "数值序列引用不支持 [0] 等索引。引用代表完整序列，请整组展示，或使用已经逐项登记的真实引用；不要把同一个序列填到多个单值单元格。"})
                 break
-        loose = untracked_numbers(text, allowed_text, latex=ctx.output_mode == "latex")
+        bibliography_numbers = bibliography(literature_root(ctx),ctx.output_mode=='latex') if key=='references' else ''
+        loose = untracked_numbers(text, allowed_text+'\n'+bibliography_numbers, latex=ctx.output_mode == "latex")
         if loose:
             issues.append({
                 "section": key,
@@ -127,6 +130,8 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
 async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     await ctx.set_stage("validate", "in_progress")
+    from ...research.citations import audit_citations, literature_root
+    await audit_citations(literature_root(ctx),list((state.get('sections') or {}).values()),ctx.planner_llm)
     reports = [IssueReport(task_id=i["section"].split(":", 1)[1] if i["section"].startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
         category="writing", section=i["section"], message=i["message"]) for i in check_sections(state, ctx)]
     if ctx.check_claims:
@@ -270,7 +275,8 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     # 带引用的原稿留在 .system，方便追溯每个数字的来源
     ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
     from ..registry import publication_text
-    rendered = publication_text(ctx.registry.render(raw, latex=native))
+    from ...research.citations import render_citations, literature_root
+    rendered = publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw, latex=native),native))
     if REF_PATTERN.search(rendered):
         raise ValueError("论文仍有未解析的登记引用，禁止发布")
     path, conflict = ctx.research.publish_paper(rendered, filename=filename) if ctx.research else (filename, False)

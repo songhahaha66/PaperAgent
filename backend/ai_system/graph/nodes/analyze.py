@@ -174,6 +174,10 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             raise ValueError("\n".join(errors))
 
     analysis = await call_structured(ctx.planner_llm, ProblemAnalysis, as_messages(SYSTEM, prompt), validate=validate_analysis)
+    from ...research.literature import maybe_search
+    literature = await maybe_search(ctx.workspace, state['task'], analysis.title)
+    if literature:
+        await ctx.events.emit('literature_updated', literature['search'])
 
     plan = analysis.model_dump()
     plan["subproblems"] = normalize_plan(plan["subproblems"])

@@ -103,6 +103,8 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
 
     # 按需设计时前序子问题已经求解完，方案可以建立在它们的实际结论上
     dependency_text = _dependency_text(branch.get("dependencies") or {}, ctx)
+    from ...research.citations import literature_root
+    from ...research.literature import literature_context
     prompt = (
         f"# 原题（含题内数据）\n{branch['source']}\n\n"
         f"# 题目整体分析\n{analysis['overall_analysis']}\n\n"
@@ -111,6 +113,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         f"# 已登记的要求、假设及任务作用范围\n{json.dumps(branch.get('research_contract', {}), ensure_ascii=False)}\n\n"
         f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}\n\n"
         f"# 参考方法\n{describe(method_keys, ctx.skill_policy) or '（在允许范围内自行选择）'}\n\n"
+        + literature_context(literature_root(ctx), _subproblem_text(branch['subproblem'])) + '\n\n'
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
         + f"请给出最多 {ctx.n_candidates} 个候选方案，直接执行已明确的方法即可，不凑数。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
@@ -125,6 +128,15 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
 
     result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt), validate=validate_candidates)
     candidates = [c.model_dump() for c in result.candidates][: ctx.n_candidates]
+    from ...research.citations import audit_citations, citation_issues
+    from ...research.literature import CITATION
+    for candidate in candidates:
+        text='\n'.join([candidate['idea'],candidate['formulation'],candidate['validation'],*candidate['steps']])
+        if CITATION.search(text):
+            await audit_citations(literature_root(ctx),[text],ctx.planner_llm)
+            issues=citation_issues(literature_root(ctx),text)
+            if issues:
+                raise ValueError('设计中的文献引用未获支持：'+'；'.join(issues))
     if not candidates:
         raise RuntimeError(f"{branch['subproblem']['id']} 没有生成任何候选方案")
     return candidates
@@ -186,6 +198,8 @@ async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str
         record, log = await _make_design(ctx, branch)
         keys = record['chosen'].get('method_keys') or []
         record['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in keys if key in SKILL_SOURCES]
+        from ...research.literature import CITATION
+        record['literature_refs']=sorted(set(CITATION.findall(json.dumps(record.get('chosen',{}),ensure_ascii=False))))
         return record, log
 
 

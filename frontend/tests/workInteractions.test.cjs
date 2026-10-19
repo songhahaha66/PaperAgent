@@ -123,7 +123,7 @@ async function environment() {
       },
       {
         document: { querySelector: () => null },
-        window: { dispatchEvent() {} },
+        window: { dispatchEvent() {}, addEventListener() {}, removeEventListener() {} },
         localStorage: { getItem: () => null },
         CustomEvent: class {},
         setTimeout,
@@ -525,6 +525,19 @@ async function environment() {
   assert.equal(lost.sockets.length, 0, 'late recovery cannot attach a socket after navigation')
   assert.equal(lost.state.chatMessages.value.length, 0)
   console.log('PASS: late recovery status cannot revive an unmounted work')
+
+  const literature = await env.work('literature')
+  literature.state.openLiteratureEvidence({ detail: { workId:'other', evidenceId:'C1' } })
+  assert.equal(literature.state.literatureEvidenceId.value,'')
+  literature.state.openLiteratureEvidence({ detail: { workId:'literature', evidenceId:'C1' } })
+  assert.equal(literature.state.literatureEvidenceId.value,'C1')
+  assert(literature.state.panelSession.value.panels.some(p=>p.kind==='literature'))
+  literature.state.citeLiterature('C1')
+  assert.equal(literature.state.citationRequest.value.id,'C1')
+  assert(literature.state.panelSession.value.panels.some(p=>p.kind==='paper'))
+  assert.equal(literature.sent.length,0,'opening provenance never starts a model or research task')
+  literature.stop()
+  console.log('PASS: citation traces open the current work library and prepare a reviewable paper edit')
 })().catch((error) => {
   console.error(error)
   process.exitCode = 1

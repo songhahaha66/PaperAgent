@@ -65,6 +65,7 @@
               >{{ acceptedTaskCount }}/{{ researchSnapshot.tasks.length }}</span
             >
           </button>
+          <button class="progress-trigger" @click="openPanel('literature', isMobile ? 'main' : 'secondary')">{{ isZh ? '文献' : 'Literature' }}</button>
           <t-button
             v-if="primaryAction"
             class="work-primary-action"
@@ -194,6 +195,7 @@
             @updated="loadResearchSnapshot"
             @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
           />
+          <ResearchLiterature v-else-if="panel.kind === 'literature'" :work-id="workId" :disabled="isStreaming" :evidence-id="literatureEvidenceId" :refresh-key="researchSnapshot?.commit_seq" @updated="loadResearchSnapshot" @cite="citeLiterature" />
           <section
             v-else-if="panel.kind === 'files'"
             class="files-section"
@@ -246,6 +248,7 @@
             :refresh-key="researchSnapshot?.commit_seq"
             :disabled="isStreaming"
             @open-file="handleWorkspaceFileSelect"
+            :citation-request="citationRequest"
             @artifact="paperPreview = true"
             @updated="refreshPaper"
             @ask="askPaper"
@@ -294,7 +297,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { workspaceAPI } from '@/api/workspace'
@@ -306,6 +309,7 @@ import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
+import ResearchLiterature from '@/components/ResearchLiterature.vue'
 import ResearchSkills from '@/components/ResearchSkills.vue'
 import ResearchEvidence from '@/components/ResearchEvidence.vue'
 import ResearchProgress from '@/components/ResearchProgress.vue'
@@ -378,6 +382,19 @@ const {
 // Metadata arrives after cached panes mount; restore scroll once their content is rendered.
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
 const paperPreview = ref(false)
+const literatureEvidenceId = ref('')
+const citationRequest = ref<{id:string;at:number}|null>(null)
+function citeLiterature(id:string) {
+  citationRequest.value={id,at:Date.now()}
+  paperPreview.value=false
+  openPanel('paper',isMobile.value?'main':'secondary')
+}
+function openLiteratureEvidence(event:Event) {
+  const detail=(event as CustomEvent).detail
+  if(detail?.workId!==workId.value || !/^C[1-9]\d*$/.test(detail?.evidenceId || ''))return
+  literatureEvidenceId.value=detail.evidenceId
+  openPanel('literature',isMobile.value?'main':'secondary')
+}
 async function refreshPaper() {
   await loadResearchSnapshot()
   await artifacts.loadWorkspaceFiles(true)
@@ -581,7 +598,9 @@ const getOutputModeText = (mode?: string) => {
 
 onMounted(() => {
   void loadWork()
+  window.addEventListener('paper-literature-open',openLiteratureEvidence)
 })
+onUnmounted(()=>window.removeEventListener('paper-literature-open',openLiteratureEvidence))
 </script>
 <style scoped>
 .work-page {

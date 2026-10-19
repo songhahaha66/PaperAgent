@@ -307,7 +307,7 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
     if request.research_id != store.research_id or request.base_commit != store.snapshot()['commit_seq']:
         raise HTTPException(409, '研究版本已改变，请刷新论文')
     llm = None
-    if request.content is None:
+    if request.content is None or '{{C:' in request.content:
         from ai_system.config.environment import setup_environment_from_db
         from ai_system.core_handlers.llm_providers import create_llm_from_model_config
         config = setup_environment_from_db(db).config_manager
@@ -378,3 +378,126 @@ async def save_research_skills(work_id: str, request: SkillSelection, db: Sessio
         return store.set_skill_preferences(request.policy, request.base_version)
     except (ValueError, ResearchConflict) as exc:
         raise HTTPException(409, str(exc))
+
+
+class LiteratureQuery(BaseModel):
+    query: str = Field(min_length=2,max_length=300)
+    limit: int = Field(default=3,ge=1,le=5)
+    fetch_open_access: bool = True
+
+
+class LiteratureURL(BaseModel):
+    url: str = Field(min_length=8,max_length=2048)
+
+
+class LiteratureClaim(BaseModel):
+    claim: str = Field(min_length=10,max_length=1500)
+
+
+class LiteraturePolicy(BaseModel):
+    mode: str
+
+
+def _literature(work_id, db, user_id, mutation=False):
+    _require_workspace_access(db,work_id,user_id)
+    if mutation and task_manager.get_running_task(work_id):
+        raise HTTPException(409,'研究正在执行，请完成后再修改文献资料')
+    from ai_system.research.literature import LiteratureService
+    return LiteratureService(workspace_file_service.get_workspace_path(work_id))
+
+
+@router.get('/{work_id}/literature')
+async def literature_state(work_id: str, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user)
+    from ai_system.research.citations import citation_usage
+    suggestion = ''
+    thread = service.store.root/'.system/graph_thread.json'
+    try:
+        if thread.exists():
+            import json
+            from ai_system.research.store import ResearchStore
+            saved = json.loads(thread.read_text())
+            snapshot = ResearchStore(service.store.root,saved['thread_id'],read_only=True).snapshot()
+            suggestion = (snapshot or {}).get('spec',{}).get('requirement','')[:300]
+        return {**service.store.state(),'citations':citation_usage(service.store.root),'query_suggestion':suggestion}
+    except (ValueError,OSError,KeyError):
+        return {**service.store.state(),'citations':[],'query_suggestion':suggestion,'citations_error':'研究引用记录暂不可读，文献资料仍保留'}
+
+
+@router.put('/{work_id}/literature/policy')
+async def literature_policy(work_id: str, request: LiteraturePolicy, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user,True)
+    try:
+        service.store.set_policy(request.mode)
+        return {'mode':service.store.policy()}
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/literature/search')
+async def literature_search(work_id: str, request: LiteratureQuery, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user,True)
+    try:
+        return await service.search(request.query,request.limit,request.fetch_open_access)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/literature/import')
+async def literature_import(work_id: str, request: LiteratureURL, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user,True)
+    try:
+        return await service.import_url(request.url)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))
+
+
+@router.get('/{work_id}/literature/sources/{source_id}')
+async def literature_source(work_id: str, source_id: str, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user)
+    try:
+        return {**service.store.source(source_id),'evidence':service.store.passages(source_id)}
+    except ValueError as exc:
+        raise HTTPException(404,str(exc))
+
+
+@router.post('/{work_id}/literature/sources/{source_id}/fetch')
+async def literature_fetch(work_id: str, source_id: str, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user,True)
+    try:
+        return await service.fetch_source(source_id)
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/literature/retrieve')
+async def literature_retrieve(work_id: str, request: LiteratureQuery, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user)
+    return {'evidence':service.store.retrieve(request.query,request.limit)}
+
+
+@router.get('/{work_id}/literature/evidence/{evidence_id}')
+async def literature_evidence(work_id: str, evidence_id: str, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user)
+    try:
+        return service.store.evidence(evidence_id)
+    except ValueError as exc:
+        raise HTTPException(404,str(exc))
+
+
+@router.post('/{work_id}/literature/evidence/{evidence_id}/check')
+async def literature_check(work_id: str, evidence_id: str, request: LiteratureClaim, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
+    service = _literature(work_id,db,current_user,True)
+    from ai_system.research.citations import audit_citations, claims_in
+    from ai_system.config.environment import setup_environment_from_db
+    from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+    try:
+        service.store.evidence(evidence_id)
+        config = setup_environment_from_db(db).config_manager
+        model = config.get_model_config('writing',current_user)
+        text = request.claim+' {{C:'+evidence_id+'}}'
+        checks = await audit_citations(service.store.root,[text],create_llm_from_model_config(model))
+        row = claims_in(text,service.store)[0]
+        return service.store.review(row['key']) or (checks[0] if checks else {'status':'insufficient','reason':'核查未完成'})
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))

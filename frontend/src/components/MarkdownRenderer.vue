@@ -1,11 +1,12 @@
 <template>
-  <div ref="rootEl" class="markdown-content" v-html="renderedContent"></div>
+  <div ref="rootEl" class="markdown-content" v-html="renderedContent" @click="openLiterature"></div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
 import mila from 'markdown-it-katex'
+import DOMPurify from 'dompurify'
 import 'katex/dist/katex.min.css'
 import { useAuthStore } from '@/stores/auth'
 import { workspaceFileAPI } from '@/api/workspace'
@@ -19,6 +20,14 @@ interface Props {
 
 const props = defineProps<Props>()
 const authStore = useAuthStore()
+function openLiterature(event:MouseEvent) {
+  const link=(event.target as Element).closest?.('a[href^="#literature-"]')
+  const evidenceId=link?.getAttribute('href')?.slice('#literature-'.length)
+  if(evidenceId && /^C[1-9]\d*$/.test(evidenceId)) {
+    event.preventDefault()
+    window.dispatchEvent(new CustomEvent('paper-literature-open',{detail:{workId:props.workId,evidenceId}}))
+  }
+}
 
 // 简单的相对路径规范化
 function normalizePath(base: string, rel: string): string {
@@ -44,7 +53,11 @@ md.use(mila)
 // 渲染后的 HTML
 const renderedContent = computed(() => {
   if (!props.content) return ''
-  return md.render(props.content)
+  // Retrieved source text is untrusted even when a model repeats it in prose.
+  // Preserve KaTeX HTML/MathML/SVG while stripping executable HTML and URLs.
+  return DOMPurify.sanitize(md.render(props.content), {
+    USE_PROFILES: { html: true, mathMl: true, svg: true },
+  })
 })
 
 // 图片 blob 缓存：key -> blobUrl

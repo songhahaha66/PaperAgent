@@ -81,6 +81,8 @@
         </template>
         <section v-if="proposal" class="proposal">
           <h3>{{ isZh ? '修改前后对比' : 'Review changes' }} · {{ proposal.status }}</h3>
+          <p v-for="issue in proposal.citation_issues || []" :key="issue" role="alert">{{ issue }}</p>
+          <p v-for="(check,i) in proposal.citation_checks || []" :key="i">{{ check.status }} · {{ check.reason }}</p>
           <div class="diff">
             <div>
               <h4>{{ isZh ? '修改前' : 'Before' }}</h4>
@@ -98,7 +100,7 @@
                 : 'Check facts and conclusion strength. Applying saves history and rebuilds the export.'
             }}
           </p>
-          <button v-if="proposal.status === 'pending'" :disabled="busy" @click="decide('apply')">
+          <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length" @click="decide('apply')">
             {{ isZh ? '应用并更新论文' : 'Apply and update paper' }}
           </button>
           <button v-if="proposal.status === 'pending'" :disabled="busy" @click="decide('reject')">
@@ -129,6 +131,7 @@ const props = defineProps<{
   latex: boolean
   refreshKey?: number
   disabled?: boolean
+  citationRequest?: {id:string;at:number}|null
 }>()
 const emit = defineEmits<{
   'open-file': [path: string]
@@ -149,6 +152,11 @@ const document = ref<PaperDocument | null>(null),
   proposal = ref<PaperProposal | null>(null),
   selection = ref('')
 const draftCommit = ref(0)
+watch(()=>props.citationRequest,request=>{
+  if(!request)return
+  mode.value='wording';manual.value=false
+  instruction.value=`判断文献证据 {{C:${request.id}}} 是否支持本节的背景或方法。支持时仅补充有来源的定性观点并引用此标记，保留全部实验结果、数字、公式和原有引用；不支持时明确说明缺口，不添加引用。`
+},{immediate:true})
 const busy = computed(() => working.value || props.disabled)
 const section = computed(() => document.value?.sections.find((s) => s.key === selected.value))
 const affected = computed(() => {

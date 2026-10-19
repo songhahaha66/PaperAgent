@@ -273,7 +273,11 @@ def reference_section(state: PaperState, ctx: GraphContext) -> str:
                     (path.suffix.lower() in {".txt", ".md"} and any(word in path.stem.lower() for word in ("reference", "bibliograph", "参考文献")))):
                 entries.append("附件 " + path.name + "：\n" + path.read_text(encoding="utf-8", errors="replace")[:12000])
     entries = list(dict.fromkeys(entries))[:30]
+    from ...research.citations import bibliography, literature_root
+    registered = bibliography(literature_root(ctx), ctx.output_mode=='latex')
     if not entries:
+        if registered:
+            return registered
         return "来源缺口：当前研究尚未登记可核验的书目来源。题目、上传数据与本研究计算记录仅作为研究材料，不冒充公开文献。正式提交前，请补充实际使用文献的作者、题名、出版信息及可核验链接，并逐项核对其与正文论述的对应关系。"
     note = "以下来源由用户在题目或书目附件中提供，书目信息按原文保留，尚未独立核验。待完善：核对作者、题名、年份、出版信息和正文对应关系；原文缺少的字段仍为缺口，系统未补造。"
     if ctx.output_mode == "latex":
@@ -285,14 +289,17 @@ def reference_section(state: PaperState, ctx: GraphContext) -> str:
             parts = re.split(r"(https?://[^\s{}\\]+)", item)
             return ''.join(r'\url{' + part + '}' if index % 2 else escape_plain(part)
                            for index, part in enumerate(parts))
-        return note + "\n\\begin{itemize}\n" + "\n".join("\\item " + reference_text(item) for item in entries) + "\n\\end{itemize}"
-    return note + "\n\n" + "\n\n".join("- " + item for item in entries)
+        return note + "\n\\begin{itemize}\n" + "\n".join("\\item " + reference_text(item) for item in entries) + "\n\\end{itemize}" + ('\n\n'+registered if registered else '')
+    return note + "\n\n" + "\n\n".join("- " + item for item in entries) + ('\n\n'+registered if registered else '')
 
 
 async def write_section(ctx: GraphContext, state: PaperState, key: str, title: str) -> str:
     if key == "references":
         return reference_section(state, ctx)
     request = section_request(key, title, state, ctx)
+    from ...research.citations import literature_root
+    from ...research.literature import literature_context
+    request += literature_context(literature_root(ctx), title+' '+state.get('task','')[:500])
     with labelled(key):
         return await call_text(ctx.writer_llm, as_messages(writing_style(ctx), request))
 

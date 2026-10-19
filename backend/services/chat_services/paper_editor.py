@@ -20,6 +20,8 @@ from ai_system.graph.llm_utils import as_messages, call_text
 from ai_system.graph.nodes.write import section_plan, writing_style
 from ai_system.graph.nodes.validate import assemble, assemble_latex
 from ai_system.research.store import ResearchStore, digest
+from ai_system.research.citations import audit_citations, citation_issues, render_citations
+from ai_system.research.literature import CITATION
 from ai_system.research.models import ResearchConflict
 from ai_system.research.control import refresh_registry
 from ai_system.export.latex import compile_pdf, fragment_issues
@@ -127,6 +129,8 @@ async def document(store):
     native = str(snapshot.get('paper_version', '')).endswith('.tex')
     for key, section in snapshot['sections'].items():
         text = publication_text(ctx.registry.render(section['text'], latex=native))
+        if native:
+            text = CITATION.sub(lambda m:'PAPERAGENTCITE'+m.group(1),text)
         if native and shutil.which('pandoc'):
             process = await asyncio.create_subprocess_exec('pandoc', '--sandbox', '-f', 'latex', '-t', 'gfm+tex_math_dollars', '--wrap=none', stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             try:
@@ -140,7 +144,7 @@ async def document(store):
             except TimeoutError:
                 process.kill()
                 await process.wait()
-        readable[key] = text
+        readable[key] = render_citations(store.root,re.sub(r'PAPERAGENTCITE(C[1-9]\d*)',lambda m:'{{C:'+m.group(1)+'}}',text))
     with store._connect() as db:
         history = [json.loads(row[0]) for row in db.execute(
             "SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 30",
@@ -156,7 +160,7 @@ def guard_wording(before, after, latex):
         raise ValueError('修改后的章节不能为空或超过 100000 字符')
     # Wording edits cannot silently change evidence, numeric values or equations.
     from ai_system.graph.registry import MATH_PATTERN
-    signature = lambda s: (Counter(REF_PATTERN.findall(s)), Counter(re.findall(r'\d+(?:\.\d+)?', s)), MATH_PATTERN.findall(s))
+    signature = lambda s: (Counter(REF_PATTERN.findall(s)), Counter(re.findall(r'\d+(?:\.\d+)?', CITATION.sub('',s))), MATH_PATTERN.findall(s))
     if signature(before) != signature(after):
         raise ValueError('修改改变了数字、公式或证据引用，请使用“研究修改”进行局部重算')
     if latex and fragment_issues(after):
@@ -174,14 +178,17 @@ async def propose(store, key, instruction, content=None, llm=None):
         if llm is None:
             raise ValueError('没有配置写作模型；可以直接编辑候选正文')
         ctx = GraphContext.create(str(store.root), planner_llm=llm, output_mode='latex' if filename.endswith('.tex') else 'markdown')
+        from ai_system.research.literature import literature_context
         content = await call_text(llm, as_messages(writing_style(ctx),
             '仅润色下面这个章节，保持全部研究事实、结论强度、数字、公式和引用不变。不得根据指令修改方法或数据。只返回完整章节正文。\n'
-            + '修改要求：' + instruction + '\n当前正文：\n' + before))
+            + '修改要求：' + instruction + '\n当前正文：\n' + before + literature_context(store.root,instruction)))
     content = publication_text(content)
     guard_wording(before, content, filename.endswith('.tex'))
+    checks = await audit_citations(store.root,[content],llm) if CITATION.search(content) else []
     proposal = {'id': uuid.uuid4().hex, 'section': key, 'instruction': instruction, 'before': before, 'after': content,
                 'base_commit': snapshot['commit_seq'], 'source_hash': digest(source), 'filename': filename,
-                'status': 'pending', 'section_revision': section['revision']}
+                'status': 'pending', 'section_revision': section['revision'], 'citation_checks':checks,
+                'citation_issues':citation_issues(store.root,content)}
     with store._transaction() as db:
         if store._read(db)['commit_seq'] != snapshot['commit_seq']:
             raise ResearchConflict('研究已更新，请刷新后重新提出修改')
@@ -218,12 +225,20 @@ async def decide(store, proposal_id, apply, output_mode):
     if snapshot['commit_seq'] != proposal['base_commit'] or digest(source) != proposal['source_hash']:
         raise ResearchConflict('论文或研究版本已改变。候选和人工稿均已保留，请刷新后重新提出修改。')
     state = await paper_state(store)
+    problems = citation_issues(store.root,proposal['after'])
+    if problems:
+        raise ValueError('文献引用未获支持：'+'；'.join(problems))
     state['sections'][proposal['section']] = proposal['after']
     ctx = GraphContext.create(str(store.root), planner_llm=None, output_mode=output_mode)
     ctx.research = store
     refresh_registry(ctx)
     native = filename.endswith('.tex')
-    rendered = publication_text(ctx.registry.render(assemble_latex(state) if native else assemble(state), latex=native))
+    reference_update = None
+    if proposal['section']!='references' and CITATION.search(proposal['after']) and 'references' in state['sections']:
+        from ai_system.graph.nodes.write import reference_section
+        reference_update = reference_section(state,ctx)
+        state['sections']['references'] = reference_update
+    rendered = publication_text(render_citations(store.root,ctx.registry.render(assemble_latex(state) if native else assemble(state), latex=native),native))
     if REF_PATTERN.search(rendered):
         raise ValueError('论文包含未解析的引用，禁止发布')
     # Compile in isolation; a failed export must not replace a good paper/PDF.
@@ -262,11 +277,16 @@ async def decide(store, proposal_id, apply, output_mode):
                 version.write_text(rendered, encoding='utf-8')
                 section = current['sections'][proposal['section']]
                 section.update(text=proposal['after'], content_hash=digest(proposal['after']), revision=section['revision'] + 1)
+                versions = {proposal['section']:section}
+                if reference_update is not None and current['sections']['references']['text']!=reference_update:
+                    references = current['sections']['references']
+                    references.update(text=reference_update,content_hash=digest(reference_update),revision=references['revision']+1)
+                    versions['references'] = references
                 current.update(paper_hash=digest(rendered), paper_version=version.relative_to(store.root).as_posix(), paper_conflict=False,
                                exports=[filename] + exports)
                 prepare_publication(store, proposal_id, staging, [filename] + exports)
                 proposal.update(status='applied', applied_revision=section['revision'])
-                store._save(db, current, 'section_edit_applied', {'proposal': proposal, 'versions': {proposal['section']: section}})
+                store._save(db, current, 'section_edit_applied', {'proposal': proposal, 'versions': versions})
                 db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
                            (json.dumps(proposal, ensure_ascii=False), store.research_id, 'paper-edit:' + proposal_id))
         except BaseException:

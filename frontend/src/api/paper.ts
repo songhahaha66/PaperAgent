@@ -17,6 +17,8 @@ export interface PaperProposal {
   after: string
   status: 'pending' | 'applied' | 'rejected'
   section_revision: number
+  citation_issues?: string[]
+  citation_checks?: {status:string;reason:string}[]
 }
 export interface PaperDocument {
   research_id: string
