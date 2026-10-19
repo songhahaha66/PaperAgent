@@ -128,12 +128,12 @@ async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     return {"consistency": conflicts, "research_restart": False, "log": [f"reconcile: {len(conflicts)} conflicts"]}
 
 
-def section_audit_prompt(state,ctx):
+def section_audit_prompt(state,ctx,*,force=False):
     sections = state.get("sections") or {}
     keys = [k for k in sections if k!='references' and sections.get(k)]
     from ...research.method_facts import method_context
     methods=method_context(getattr(ctx,'research',None))
-    if not keys or not ctx.registry.claims and not methods:return None
+    if not keys or not ctx.registry.claims and not methods and not force:return None
     body = "\n\n".join(
         f"## 章节 key: {k}\n{clip(sections[k], AUDIT_SECTION_CHARS)}" for k in keys
     )
@@ -157,7 +157,7 @@ def validate_findings(issues,state,ctx):
 
 async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False) -> List[IssueReport]:
     """Completed results are reusable only for the same complete review context."""
-    prepared=section_audit_prompt(state,ctx)
+    prepared=section_audit_prompt(state,ctx,force=candidate)
     if prepared is None:return []
     prompt,keys=prepared
     try:
@@ -166,7 +166,8 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
             if 'issues' not in result.model_fields_set:raise ValueError('章节审查没有明确返回issues字段')
             if any(i.section not in keys for i in result.issues):raise ValueError('章节审查引用了未提供的章节')
             validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
-        async def perform():return await call_structured(ctx.planner_llm, ClaimAudit, as_messages(AUDIT_SYSTEM, prompt),validate=validate)
+        async def perform():
+            return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
         audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
     except Exception as exc:
         from ...research.review_cache import error_code

@@ -8,6 +8,7 @@ export interface PaperSection {
   validity: string
   task_refs: string[]
   evidence_refs: string[]
+  content_hash:string
 }
 export interface PaperProposal {
   id: string
@@ -25,10 +26,16 @@ export interface PaperProposal {
   review_issues?:{section:string;message:string}[]
   review_id?:string
   edit_kind?:'wording'|'evidence'
+  origin?:'model'|'manual'
+  generation_contract?:string
+  scope?:{id:string;old:string;start:number;end:number;section_hash:string}
+  generation_edits?:{section:string;old:string;replacement:string}[]
 }
 export interface PaperDocument {
   research_id: string
   commit_seq: number
+  source_hash?:string
+  patch_attempts?:{id:string;state:string;recovery_of?:string|null;recovery_id?:string;scope:{section:string;section_hash:string;source_hash:string;old:string}}[]
   sections: PaperSection[]
   history: PaperProposal[]
   tasks: { id: string; title: string; dependencies: string[] }[]

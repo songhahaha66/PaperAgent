@@ -62,7 +62,7 @@ def verified_paper(paper,monkeypatch):
     return SimpleNamespace(store=store,state=state,record=record,comparison=comparison,after=after,block=block,llm=SimpleNamespace(model_name='offline-review'))
 
 
-def proposed(v):return asyncio.run(editor.propose(v.store,'solve:Q1','修正方法说明和汇总措辞',llm=v.llm,edit_kind='evidence',section_keys=['solve:Q1','abstract']))
+def proposed(v):return asyncio.run(editor.propose(v.store,'solve:Q1','修正方法说明和汇总措辞',llm=v.llm,edit_kind='evidence',section_keys=['solve:Q1','abstract'],section_contents={'solve:Q1':v.after,'abstract':v.state['sections']['abstract'].replace('原来的','修订后的')}))
 
 
 def test_reviewed_multi_section_candidate_and_atomic_apply_leave_experiments_unchanged(verified_paper):

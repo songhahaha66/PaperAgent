@@ -53,7 +53,13 @@ def _usage(response) -> Dict[str, int]:
         for generation in generations:
             usage = getattr(getattr(generation, "message", None), "usage_metadata", None)
             if usage:
-                return {"input": int(usage.get("input_tokens") or 0), "output": int(usage.get("output_tokens") or 0),'usage_returned':True}
+                fields={"input":int(usage.get('input_tokens') or 0),'output':int(usage.get('output_tokens') or 0),'usage_returned':True}
+                reasoning=(usage.get('output_token_details') or {}).get('reasoning')
+                if reasoning is None:
+                    meta=getattr(generation.message,'response_metadata',{}) or {}
+                    reasoning=((meta.get('token_usage') or {}).get('completion_tokens_details') or {}).get('reasoning_tokens')
+                if isinstance(reasoning,int):fields['reported_reasoning_tokens']=reasoning
+                return fields
     return {"input": 0, "output": 0,'usage_returned':False}
 
 
@@ -78,11 +84,13 @@ class LLMCallTrace(BaseCallbackHandler):
         self._open: Dict[UUID, Dict[str, Any]] = {}
 
     def on_chat_model_start(self, serialized, messages, *, run_id: UUID, metadata=None, **kwargs) -> None:
+        params=kwargs.get('invocation_params') or {}
         self._open[run_id] = {
             "start": round(time.time() - self.started, 1),
             "node": _node(metadata),
             "label": CURRENT_LABEL.get(),
             "_t0": time.monotonic(),
+            'output_limit':params.get('max_tokens') or params.get('max_completion_tokens'),
         }
 
     def _close(self, run_id: UUID, **fields) -> None:
@@ -96,7 +104,17 @@ class LLMCallTrace(BaseCallbackHandler):
             logger.warning("慢调用 %.0fs：%s %s %s", record["seconds"], record["node"], record["label"], fields)
 
     def on_llm_end(self, response, *, run_id: UUID, **kwargs) -> None:
-        self._close(run_id, **_usage(response), finish=_finish_reason(response))
+        shape={}
+        for generations in response.generations or []:
+            for generation in generations:
+                message=getattr(generation,'message',None)
+                shape={'public_reply_chars':len(str(getattr(message,'content','') or '')),
+                    'reasoning_content_returned':'reasoning_content' in (getattr(message,'additional_kwargs',{}) or {}),
+                    'reasoning_chars':len(str((getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content',''))),
+                    'tool_argument_chars':len(json.dumps(getattr(message,'tool_calls',[]) or [],ensure_ascii=False))}
+                break
+            if shape:break
+        self._close(run_id, **_usage(response), **shape,finish=_finish_reason(response))
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs) -> None:
         self._close(run_id, error=type(error).__name__)

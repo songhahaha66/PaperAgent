@@ -16,8 +16,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from ai_system.graph.build import compile_graph
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import REF_PATTERN, publication_text
-from ai_system.graph.llm_utils import as_messages, call_text
-from ai_system.graph.nodes.write import section_plan, writing_style
+from ai_system.graph.nodes.write import section_plan
 from ai_system.graph.nodes.validate import assemble, assemble_latex
 from ai_system.research.store import ResearchStore, digest
 from ai_system.research.citations import audit_citations, citation_issues, render_citations
@@ -149,13 +148,15 @@ async def document(store):
         history = [json.loads(row[0]) for row in db.execute(
             "SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 30",
             (store.research_id,))]
+        patch_attempts=([json.loads(r[0]) for r in db.execute('SELECT payload FROM paper_patch_attempts WHERE research_id=? ORDER BY rowid DESC LIMIT 20',(store.research_id,))]
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_patch_attempts'").fetchone() else [])
     from ai_system.research.method_facts import verified_methods,canonical_method_block
     methods=verified_methods(store)
     blocks={}
     for task in {f['task_id'] for f in methods}:
         try:blocks['solve:'+task]=canonical_method_block(methods,task)
         except ValueError:pass
-    return {'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'verified_methods':methods,'verified_formula_blocks':blocks,
+    return {'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
             'sections': [{'key': k, 'title': titles.get(k, k), 'readable': readable[k], **v} for k, v in snapshot['sections'].items()],
             'history': history, 'tasks': [{'id': k, 'title': v['objective'], 'dependencies': v['dependencies']}
                                         for k, v in snapshot['tasks'].items() if not v['retired']]}
@@ -173,26 +174,22 @@ def guard_wording(before, after, latex):
         raise ValueError('；'.join(fragment_issues(after)))
 
 
-async def propose(store, key, instruction, content=None, llm=None,*,edit_kind='wording',section_keys=None,section_contents=None):
+async def propose(store, key, instruction, content=None, llm=None,*,edit_kind='wording',section_keys=None,section_contents=None,fragment_scope=None,recovery_of=None):
     if edit_kind=='evidence':
         if content is not None:raise ValueError('依据修正须通过带证据审查的候选生成')
         from .paper_corrections import propose_correction
         return await propose_correction(store,section_keys or [key],instruction,llm,section_contents)
     if section_keys or section_contents:raise ValueError('多节修正需要选择按已核验证据修正模式')
+    if content is None:
+        if not fragment_scope:raise ValueError('请明确选择一个原文短片段，自动润色不再生成整节正文')
+        from .paper_corrections import propose_correction
+        return await propose_correction(store,[key],instruction,llm,fragment_scope=fragment_scope,recovery_of=recovery_of,wording=True)
     snapshot = store.refresh_inputs()
     filename, source = source_info(store, snapshot)
     section = snapshot['sections'].get(key)
     if not section or section['validity'] != 'current' or not store.delivery_ready(snapshot):
         raise ResearchConflict('章节或研究证据已失效，请完成局部重算后再修改')
     before = section['text']
-    if content is None:
-        if llm is None:
-            raise ValueError('没有配置写作模型；可以直接编辑候选正文')
-        ctx = GraphContext.create(str(store.root), planner_llm=llm, output_mode='latex' if filename.endswith('.tex') else 'markdown')
-        from ai_system.research.literature import literature_context
-        content = await call_text(llm, as_messages(writing_style(ctx),
-            '仅润色下面这个章节，保持全部研究事实、结论强度、数字、公式和引用不变。不得根据指令修改方法或数据。只返回完整章节正文。\n'
-            + '修改要求：' + instruction + '\n当前正文：\n' + before + literature_context(store.root,instruction)))
     content = publication_text(content)
     guard_wording(before, content, filename.endswith('.tex'))
     checks = await audit_citations(store.root,[content],llm) if CITATION.search(content) else []
@@ -237,6 +234,9 @@ async def decide(store, proposal_id, apply, output_mode):
         raise ResearchConflict('论文或研究版本已改变。候选和人工稿均已保留，请刷新后重新提出修改。')
     state = await paper_state(store)
     changes=proposal.get('after_sections') or {proposal['section']:proposal['after']}
+    if proposal.get('generation_contract')=='scoped-anchored-edits-v2':
+        from .paper_corrections import require_scope
+        require_scope(store,proposal,snapshot,source)
     problems = [p for text in changes.values() for p in citation_issues(store.root,text)]
     if problems:
         raise ValueError('文献引用未获支持：'+'；'.join(problems))
@@ -250,12 +250,13 @@ async def decide(store, proposal_id, apply, output_mode):
         from ai_system.graph.nodes.write import reference_section
         reference_update = reference_section(state,ctx)
         state['sections']['references'] = reference_update
-    if proposal.get('edit_kind')=='evidence':
+    reviewed=proposal.get('edit_kind')=='evidence' or proposal.get('generation_contract')=='scoped-anchored-edits-v2'
+    if reviewed:
         from .paper_corrections import require_review,guard_correction
         from ai_system.research.method_facts import canonical_method_block
         if proposal.get('review_issues'):raise ValueError('候选尚有审查问题，不能应用')
         for key,text in changes.items():
-            block=canonical_method_block(proposal['method_facts'],key.split(':',1)[1]) if key.startswith('solve:') else None
+            block=canonical_method_block(proposal['method_facts'],key.split(':',1)[1]) if key.startswith('solve:') and proposal.get('edit_kind')=='evidence' else None
             guard_correction(snapshot['sections'][key]['text'],text,block,native)
         require_review(store,proposal,state)
     rendered = publication_text(render_citations(store.root,ctx.registry.render(assemble_latex(state) if native else assemble(state), latex=native),native))
@@ -288,7 +289,7 @@ async def decide(store, proposal_id, apply, output_mode):
                 _, active = source_info(store, current)
                 if current['commit_seq'] != proposal['base_commit'] or digest(active) != proposal['source_hash']:
                     raise ResearchConflict('编译期间论文发生变化，未覆盖最新版本，请刷新后重试')
-                if proposal.get('edit_kind')=='evidence':
+                if reviewed:
                     from ai_system.research.method_facts import verified_methods
                     if digest(verified_methods(store))!=proposal['method_facts_hash']:
                         raise ResearchConflict('编译期间已核验方法改变，未覆盖当前论文')

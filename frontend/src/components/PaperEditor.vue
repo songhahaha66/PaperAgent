@@ -73,9 +73,16 @@
           </button>
         </template>
         <template v-else>
+          <template v-if="mode==='wording' && !manual">
+            <label>{{isZh?'只修改这个原文片段（最多600字符，须唯一匹配）':'Exact fragment to edit (up to 600 characters)'}}</label>
+            <textarea class="edit-fragment" v-model="fragment" maxlength="600" :disabled="busy" />
+            <details><summary>{{isZh?'查看本节原文并复制片段':'View source and copy a fragment'}}</summary><pre>{{section.text}}</pre></details>
+            <p v-if="patchFailure">{{patchFailure.recovery_allowed?(isZh?'仅可在原片段内缩小到一半以内，再恢复一次；不会原样重试。':'One recovery requires a fragment less than half the original.'):(isZh?'本次请求已停止，请查看失败记录。':'This request has stopped.')}}</p>
+          </template>
           <fieldset v-if="mode==='evidence'" class="correction-sections">
             <legend>{{isZh?'一起修正的章节':'Sections to correct together'}}</legend>
             <p>{{isZh?'依据当前已核验方法和结果修正公式或结论措辞。实验设置和实测结果保持不变；候选通过引用与全文一致性核查后才能应用。':'Correct explanations using verified methods and results. Experimental settings and results stay fixed. Source and consistency checks are required.'}}</p>
+            <p>{{isZh?'多节及公式修正请直接编辑候选。自动改写请选择“措辞润色”并指定一个短片段。':'Use manual candidates for formulas or multiple sections. Automatic wording changes require one exact short fragment.'}}</p>
             <label v-for="s in document.sections.filter(s=>s.key!=='references')" :key="s.key"><input type="checkbox" :value="s.key" v-model="correctionKeys" :disabled="busy" />{{s.title}}</label>
           </fieldset>
           <label
@@ -91,12 +98,14 @@
               <textarea class="candidate" :data-section="key" v-model="evidenceDrafts[key]" :disabled="busy" />
             </div>
           </template>
-          <button :disabled="busy || (!(manual && mode==='wording') && !instruction.trim()) || (mode==='evidence' && !correctionKeys.length)" @click="propose">
+          <button :disabled="busy || (!(manual && mode==='wording') && !instruction.trim()) || (mode==='evidence' && (!manual || !correctionKeys.length)) || (mode==='wording' && !manual && !fragmentReady)" @click="propose">
             {{ busy ? (isZh ? '处理中…' : 'Working…') : isZh ? '生成修改对比' : 'Preview changes' }}
           </button>
         </template>
         <section v-if="proposal" class="proposal">
           <h3>{{ isZh ? '修改前后对比' : 'Review changes' }} · {{ proposal.status }}</h3>
+          <p v-if="proposal.origin==='model'">{{isZh?'模型局部提案':'Model fragment proposal'}} · {{proposal.scope?.id.slice(0,12)}}</p>
+          <p v-else-if="proposal.origin==='manual'">{{isZh?'人工候选':'Manual candidate'}}</p>
           <p v-for="issue in proposal.citation_issues || []" :key="issue" role="alert">{{ issue }}</p>
           <p v-for="(check,i) in proposal.citation_checks || []" :key="i">{{ check.status }} · {{ check.reason }}</p>
           <p v-for="(issue,i) in proposal.review_issues || []" :key="i" role="alert">{{issue.section}} · {{issue.message}}</p>
@@ -130,6 +139,13 @@
         </section>
       </template>
       <details>
+        <summary>{{isZh?'局部提案请求历史':'Fragment request history'}} ({{document.patch_attempts?.length||0}})</summary>
+        <div v-for="attempt in document.patch_attempts||[]" :key="attempt.id">
+          <p>{{attempt.scope.section}} · {{attempt.state}} · {{attempt.id.slice(0,10)}}<br/>{{attempt.scope.old.slice(0,120)}}</p>
+          <button v-if="attempt.state==='truncated' && !attempt.recovery_of && !attempt.recovery_id" :disabled="busy || document.source_hash!==attempt.scope.source_hash || !document.sections.some(s=>s.key===attempt.scope.section && s.content_hash===attempt.scope.section_hash)" @click="restorePatchFailure(attempt)">{{isZh?'选择更短片段，恢复一次':'Narrow fragment for one recovery'}}</button>
+        </div>
+      </details>
+      <details>
         <summary>
           {{ isZh ? '版本与候选历史' : 'Version and candidate history' }} ({{
             document.history.length
@@ -143,7 +159,7 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch,nextTick } from 'vue'
 import { paperAPI, type PaperDocument, type PaperProposal } from '@/api/paper'
 import { useStudioCopy } from '@/lang/studio'
 import MarkdownRenderer from './MarkdownRenderer.vue'
@@ -173,11 +189,13 @@ const document = ref<PaperDocument | null>(null),
   proposal = ref<PaperProposal | null>(null),
   selection = ref('')
 const draftCommit = ref(0)
+const fragment=ref('')
+const patchFailure=ref<{attempt_id:string;recovery_allowed:boolean;scope:{old:string}}|null>(null)
 const correctionKeys=ref<string[]>([])
 const evidenceDrafts=ref<Record<string,string>>({})
 watch(correctionKeys,keys=>{for(const key of keys)if(!(key in evidenceDrafts.value))evidenceDrafts.value[key]=document.value?.sections.find(s=>s.key===key)?.text||''})
 watch(mode,m=>{if(m==='evidence'){manual.value=false;correctionKeys.value=section.value?[section.value.key]:[]}})
-const proposalDiffs=computed(()=>proposal.value?Object.entries(proposal.value.after_sections||{[proposal.value.section]:proposal.value.after}).map(([key,after])=>({key,after,before:proposal.value?.before_sections?.[key]||proposal.value?.before||''})):[])
+const proposalDiffs=computed(()=>proposal.value?.scope?[{key:proposal.value.section,before:proposal.value.scope.old,after:proposal.value.generation_edits?.[0]?.replacement||''}]:proposal.value?Object.entries(proposal.value.after_sections||{[proposal.value.section]:proposal.value.after}).map(([key,after])=>({key,after,before:proposal.value?.before_sections?.[key]||proposal.value?.before||''})):[])
 watch(()=>props.citationRequest,request=>{
   if(!request)return
   mode.value='wording';manual.value=false
@@ -185,6 +203,12 @@ watch(()=>props.citationRequest,request=>{
 },{immediate:true})
 const busy = computed(() => working.value || props.disabled)
 const section = computed(() => document.value?.sections.find((s) => s.key === selected.value))
+const fragmentReady=computed(()=>{
+  const old=fragment.value,text=section.value?.text||''
+  if(!old.trim()||old.length>600||text.indexOf(old)<0||text.indexOf(old)!==text.lastIndexOf(old))return false
+  if(!patchFailure.value)return true
+  return patchFailure.value.recovery_allowed && patchFailure.value.scope.old.includes(old) && old.length<=Math.floor(patchFailure.value.scope.old.length/2)
+})
 const affected = computed(() => {
   const tasks = document.value?.tasks || [],
     ids = new Set(section.value?.task_refs || [])
@@ -204,9 +228,11 @@ watch(section, (s, previous) => {
   draftCommit.value = document.value?.commit_seq || 0
   draft.value = s?.text || ''
   selection.value = ''
+  fragment.value='';patchFailure.value=null
 })
 function captureSelection() {
   selection.value = window.getSelection()?.toString().slice(0, 4000) || ''
+  if(selection.value.length<=600 && section.value?.text.split(selection.value).length===2)fragment.value=selection.value
 }
 function ask() {
   emit(
@@ -224,6 +250,13 @@ function research() {
 }
 function failure(e: unknown) {
   error.value = e instanceof Error ? e.message : String(e)
+  const detail=(e as {response?:{data?:{detail?:any}}})?.response?.data?.detail
+  if(detail?.attempt_id)patchFailure.value=detail
+}
+async function restorePatchFailure(attempt:NonNullable<PaperDocument['patch_attempts']>[number]) {
+  selected.value=attempt.scope.section;mode.value='wording';manual.value=false
+  await nextTick()
+  fragment.value=attempt.scope.old;patchFailure.value={attempt_id:attempt.id,recovery_allowed:true,scope:{old:attempt.scope.old}}
 }
 async function load() {
   try {
@@ -247,10 +280,17 @@ async function propose() {
       instruction: instruction.value,
       ...(manual.value && mode.value==='wording' ? { content: draft.value } : {}),
       ...(mode.value==='evidence'?{edit_kind:'evidence',section_keys:correctionKeys.value,...(manual.value?{section_contents:Object.fromEntries(correctionKeys.value.map(key=>[key,evidenceDrafts.value[key]]))}:{})}:{}),
+      ...(mode.value==='wording' && !manual?{fragment_scope:{section_revision:section.value.revision,section_hash:section.value.content_hash,source_hash:document.value.source_hash,old:fragment.value},...(patchFailure.value?{recovery_of:patchFailure.value.attempt_id}:{})}:{}),
     })
     await load()
   } catch (e) {
     failure(e)
+    const pendingFailure=patchFailure.value
+    const pendingError=error.value,pendingFragment=fragment.value
+    await load()
+    await nextTick()
+    patchFailure.value=pendingFailure
+    error.value=pendingError;fragment.value=pendingFragment
   } finally {
     working.value = false
   }

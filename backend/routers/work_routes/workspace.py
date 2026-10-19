@@ -267,6 +267,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_editor
+from services.chat_services.paper_corrections import FragmentScope,PatchFailure
 from services.chat_services.task_manager import task_manager
 
 
@@ -279,6 +280,8 @@ class PaperEditRequest(BaseModel):
     edit_kind:Literal['wording','evidence']='wording'
     section_keys:list[str]|None=Field(default=None,max_length=6)
     section_contents:dict[str,str]|None=Field(default=None,max_length=6)
+    fragment_scope:FragmentScope|None=None
+    recovery_of:str|None=Field(default=None,max_length=32)
 
 
 class PaperDecision(BaseModel):
@@ -328,12 +331,16 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
             llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
         with budget_scope(store.root,store.research_id):
             try:
-                if request.edit_kind=='wording' and request.section_keys is None:
+                if request.edit_kind=='wording' and request.section_keys is None and request.fragment_scope is None:
                     return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
                 options={'edit_kind':request.edit_kind,'section_keys':request.section_keys}
                 if request.section_contents is not None:options['section_contents']=request.section_contents
+                if request.fragment_scope is not None:options['fragment_scope']=request.fragment_scope.model_dump()
+                if request.recovery_of is not None:options['recovery_of']=request.recovery_of
                 return await paper_editor.propose(store,request.section,request.instruction,request.content,llm,**options)
             finally:trace.dump(store.root/'.system/editor_llm_calls.json')
+    except PatchFailure as exc:
+        raise HTTPException(409,exc.detail) from None
     except (ValueError, ResearchConflict, ResearchBudgetExhausted) as exc:
         raise HTTPException(409, str(exc))
     except RuntimeError as exc:
