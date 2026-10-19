@@ -198,7 +198,7 @@
             @updated="loadResearchSnapshot"
             @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
           />
-          <ResearchOverview v-else-if="panel.kind === 'overview'" :work-id="workId" :running="isStreaming" :refresh-key="researchSnapshot?.commit_seq" @open="kind=>openPanel(kind,isMobile?'main':'secondary')" />
+          <ResearchOverview @resolved="refreshPaper" v-else-if="panel.kind === 'overview'" :work-id="workId" :running="isStreaming" :refresh-key="researchSnapshot?.commit_seq" @open="kind=>openPanel(kind,isMobile?'main':'secondary')" />
           <ResearchComparisons v-else-if="panel.kind === 'comparisons'" :work-id="workId" :disabled="isStreaming" :refresh-key="researchSnapshot?.commit_seq" />
           <ResearchExperiences v-else-if="panel.kind === 'experiences'" :work-id="workId" :refresh-key="researchSnapshot?.commit_seq" />
           <ResearchLiterature v-else-if="panel.kind === 'literature'" :work-id="workId" :disabled="isStreaming" :evidence-id="literatureEvidenceId" :refresh-key="researchSnapshot?.commit_seq" @updated="loadResearchSnapshot" @cite="citeLiterature" />

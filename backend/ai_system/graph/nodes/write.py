@@ -82,6 +82,13 @@ def section_plan(state: PaperState) -> List[Tuple[str, str, int]]:
     return plan
 
 
+COMPACT_OUTLINE = [
+    {"key":"abstract","title":"摘要"},
+    {"key":"solve_heading","title":"问题、研究设计与实测结果"},
+    {"key":"evaluation","title":"检验、局限与结论"},
+]
+
+
 def current_premises(state: PaperState, sid: str | None = None) -> List[Dict]:
     return [a for a in state["analysis"]["assumptions"] if a.get("status", "active") == "active"
             and (sid is None or sid in a["task_ids"])]
@@ -199,10 +206,17 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             f"就按交付物要求的文体和篇幅直接写成正文，不要套用上面的结构。"
             + ("篇幅控制在600~900字，" if ctx.compact_paper else "篇幅控制在1500~3000字，")
             + "次要的检验细节一句话带过。"
-            f"\n\n{subproblem_brief(state, ctx, subproblem)}"
+            + ("合并交代问题与数据、采用前提及无新增假设的边界、符号定义、模型公式、共同划分、"
+               "方法参数、实测结果与图、已完成检查及恢复边界。只在此节集中引用一句有公开原文支持的背景，"
+               "不得把文献当成本研究结果或添加实验。" if ctx.compact_paper else "")
+            + f"\n\n{subproblem_brief(state, ctx, subproblem)}"
         )
 
     if key == "restatement":
+        if ctx.compact_paper:
+            return ("合并撰写问题、数据、研究设计与假设边界，约150–250字。说明实际特征、共同固定划分、原定方法与参数，"
+                    "只列已采用前提；没有新增假设时如实说明。符号、模型公式和结果详列在求解小节。本节不重复文献背景或C引用。\n\n"
+                    +state['task']+'\n\n'+analysis['overall_analysis'])
         return f"撰写「问题重述」，包括问题背景和需要解决的问题（逐条列出）。\n\n题目：\n{state['task']}"
     if key == "analysis":
         return (
@@ -301,7 +315,10 @@ async def write_section(ctx: GraphContext, state: PaperState, key: str, title: s
     request = section_request(key, title, state, ctx)
     from ...research.citations import literature_root
     from ...research.literature import literature_context
-    request += literature_context(literature_root(ctx), title+' '+state.get('task','')[:500])
+    if not ctx.compact_paper or key.startswith('solve:'):
+        request += literature_context(literature_root(ctx), title+' '+state.get('task','')[:500])
+    else:
+        request += '\n本节不重复文献背景或C引用；需要的公开资料背景由求解小节集中说明。'
     with labelled(key):
         return await call_text(cap_output(ctx.writer_llm, 4800) if ctx.compact_paper else ctx.writer_llm,
                                as_messages(writing_style(ctx), request))
@@ -328,6 +345,8 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await ctx.events.stage("开始撰写论文")
 
     outline = template_outline(ctx.template_requirements) if ctx.template_requirements else []
+    if not outline and ctx.compact_paper:
+        outline = COMPACT_OUTLINE
     state = {**state, "outline": outline}
     plan = section_plan(state)
     solve_items = [(key, title) for key, title, _ in plan if key.startswith("solve:")]

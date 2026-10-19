@@ -174,3 +174,22 @@ def test_formal_handoff_protects_frozen_metrics_and_rejects_new_fit(tmp_path,mon
             assert '禁止' in reply and len(runs)==before
         finally:await setup.ctx.kernels.close()
     asyncio.run(work())
+
+
+def test_compact_plan_merges_prose_without_removing_validation_sections(tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from test_native_latex import accepted_store
+    from test_research_p2 import problem,TASK
+    from ai_system.graph.nodes import write as writing
+    store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None,compact_paper=True);ctx.research=store
+    state={'analysis':problem().model_dump(),'task':TASK,'designs':{},'solutions':{}}
+    calls=[]
+    async def generate(ctx,state,items):
+        calls.extend(key for key,_ in items)
+        return {key:'已保存研究边界、公式、登记结果与局限。'*10 for key,_ in items}
+    monkeypatch.setattr(writing,'write_many',generate)
+    updated=asyncio.run(writing.write(state,SimpleNamespace(context=ctx)))
+    assert {'abstract','evaluation','references'}<=set(updated['sections'])
+    assert {key for key in updated['sections'] if key.startswith('solve:')}=={'solve:Q1','solve:Q2','solve:Q3'}
+    assert len(calls)==6  # Three actual study tasks + abstract/evaluation + deterministic bibliography.
+    assert len(writing.COMPACT_OUTLINE)==3

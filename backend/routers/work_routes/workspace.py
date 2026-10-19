@@ -6,6 +6,7 @@ from auth.auth import get_current_user
 from services import crud
 from services.file_services.workspace_files import workspace_file_service
 from urllib.parse import unquote
+import asyncio
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -610,6 +611,40 @@ class ResearchSetupRequest(BaseModel):
     comparison_spec:dict|None=None
 
 
+class ExecutionRecoveryDecision(BaseModel):
+    proof_hash:str=Field(min_length=64,max_length=64)
+
+
+def _execution_recovery_store(db,work_id,current_user):
+    _require_workspace_access(db,work_id,current_user)
+    if task_manager.get_running_task(work_id):raise HTTPException(409,'研究执行中不能关闭执行问题')
+    import json
+    from ai_system.research.store import ResearchStore
+    root=workspace_file_service.get_workspace_path(work_id)
+    try:
+        thread=json.loads((root/'.system/graph_thread.json').read_text())
+        store=ResearchStore(root,thread['thread_id'])
+        if not store.snapshot():raise ValueError('研究尚未初始化')
+        return store
+    except (OSError,ValueError,KeyError):raise HTTPException(409,'没有可核验的当前研究')
+
+
+@router.get('/{work_id}/research/issues/{issue_id}/execution-recovery')
+async def preview_execution_recovery(work_id:str,issue_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    store=_execution_recovery_store(db,work_id,current_user)
+    from ai_system.research.execution_recovery import preview
+    try:return await asyncio.to_thread(preview,store,issue_id)
+    except (ValueError,KeyError,OSError) as exc:raise HTTPException(409,str(exc))
+
+
+@router.post('/{work_id}/research/issues/{issue_id}/execution-recovery')
+async def close_recovered_execution(work_id:str,issue_id:str,request:ExecutionRecoveryDecision,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    store=_execution_recovery_store(db,work_id,current_user)
+    from ai_system.research.execution_recovery import resolve
+    try:return await asyncio.to_thread(resolve,store,issue_id,request.proof_hash,actor_id=current_user)
+    except (ValueError,KeyError,OSError) as exc:raise HTTPException(409,str(exc))
+
+
 @router.put('/{work_id}/research-setup')
 async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     _require_workspace_access(db,work_id,current_user)
@@ -673,6 +708,8 @@ async def research_overview(work_id:str,db:Session=Depends(get_db),current_user:
     if not last_error and saved.get('status')=='failed':
         last_error='研究执行失败，已保留检查点与请求计数。可查看对话中的错误后恢复。'
     return {'settings':runtime.policy(),'budget':runtime.status(),'requests':runtime.requests() if rid else [],
+        'execution_resolutions':[{'issue':{k:i.get(k) for k in ('id','task_id','task_revision','message','evidence_refs','status')},'proof':i['resolution']}
+            for i in (snapshot or {}).get('issues',[]) if i.get('resolution')][-20:],
         'research':actual.model_dump(),'literature':{'sources':len(library['sources']),'evidence':sum(s.get('evidence_count',0) for s in library['sources']),'operations':library['operations'],'citations':citations},
         'experience':{'enabled':scope.enabled(db),'usage':usage,'design_usage':design_usage(store) if store else []},'comparisons':comparisons,
         'skills':[{ 'task_id':key,'skills':(task.get('design') or {}).get('skills',[])} for key,task in (snapshot or {}).get('tasks',{}).items()],
