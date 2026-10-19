@@ -47,6 +47,9 @@
             <option value="research">
               {{ isZh ? '数据、方法或结论' : 'Data, method or conclusions' }}
             </option>
+            <option value="evidence" :disabled="!document.verified_methods?.length">
+              {{isZh?'按已核验证据修正文稿':'Correct text using verified evidence'}}
+            </option>
           </select>
         </label>
         <textarea
@@ -70,13 +73,25 @@
           </button>
         </template>
         <template v-else>
+          <fieldset v-if="mode==='evidence'" class="correction-sections">
+            <legend>{{isZh?'一起修正的章节':'Sections to correct together'}}</legend>
+            <p>{{isZh?'依据当前已核验方法和结果修正公式或结论措辞。实验设置和实测结果保持不变；候选通过引用与全文一致性核查后才能应用。':'Correct explanations using verified methods and results. Experimental settings and results stay fixed. Source and consistency checks are required.'}}</p>
+            <label v-for="s in document.sections.filter(s=>s.key!=='references')" :key="s.key"><input type="checkbox" :value="s.key" v-model="correctionKeys" :disabled="busy" />{{s.title}}</label>
+          </fieldset>
           <label
             ><input type="checkbox" v-model="manual" :disabled="busy" />{{
               isZh ? '直接编辑候选正文' : 'Edit candidate manually'
             }}</label
           >
-          <textarea v-if="manual" class="candidate" v-model="draft" :disabled="busy" />
-          <button :disabled="busy || (!manual && !instruction.trim())" @click="propose">
+          <textarea v-if="manual && mode==='wording'" class="candidate" v-model="draft" :disabled="busy" />
+          <template v-if="manual && mode==='evidence'">
+            <div v-for="key in correctionKeys" :key="key">
+              <label>{{document.sections.find(s=>s.key===key)?.title}}</label>
+              <details v-if="document.verified_formula_blocks?.[key]"><summary>{{isZh?'核验公式说明（修正时完整保留）':'Verified formula explanation'}}</summary><pre>{{document.verified_formula_blocks[key]}}</pre></details>
+              <textarea class="candidate" :data-section="key" v-model="evidenceDrafts[key]" :disabled="busy" />
+            </div>
+          </template>
+          <button :disabled="busy || (!(manual && mode==='wording') && !instruction.trim()) || (mode==='evidence' && !correctionKeys.length)" @click="propose">
             {{ busy ? (isZh ? '处理中…' : 'Working…') : isZh ? '生成修改对比' : 'Preview changes' }}
           </button>
         </template>
@@ -84,15 +99,20 @@
           <h3>{{ isZh ? '修改前后对比' : 'Review changes' }} · {{ proposal.status }}</h3>
           <p v-for="issue in proposal.citation_issues || []" :key="issue" role="alert">{{ issue }}</p>
           <p v-for="(check,i) in proposal.citation_checks || []" :key="i">{{ check.status }} · {{ check.reason }}</p>
+          <p v-for="(issue,i) in proposal.review_issues || []" :key="i" role="alert">{{issue.section}} · {{issue.message}}</p>
+          <p v-if="proposal.review_id">{{isZh?'已保存候选全文审查记录':'Candidate review recorded'}} · {{proposal.review_id.slice(0,10)}}</p>
+          <div v-for="change in proposalDiffs" :key="change.key" class="section-diff">
+          <h4>{{document.sections.find(s=>s.key===change.key)?.title||change.key}}</h4>
           <div class="diff">
             <div>
               <h4>{{ isZh ? '修改前' : 'Before' }}</h4>
-              <pre>{{ proposal.before }}</pre>
+              <pre>{{ change.before }}</pre>
             </div>
             <div>
               <h4>{{ isZh ? '修改后' : 'After' }}</h4>
-              <pre>{{ proposal.after }}</pre>
+              <pre>{{ change.after }}</pre>
             </div>
+          </div>
           </div>
           <p>
             {{
@@ -101,7 +121,7 @@
                 : 'Check facts and conclusion strength. Applying saves history and rebuilds the export.'
             }}
           </p>
-          <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length" @click="decide('apply')">
+          <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length || !!proposal.review_issues?.length" @click="decide('apply')">
             {{ isZh ? '应用并更新论文' : 'Apply and update paper' }}
           </button>
           <button v-if="proposal.status === 'pending'" :disabled="busy" @click="decide('reject')">
@@ -153,6 +173,11 @@ const document = ref<PaperDocument | null>(null),
   proposal = ref<PaperProposal | null>(null),
   selection = ref('')
 const draftCommit = ref(0)
+const correctionKeys=ref<string[]>([])
+const evidenceDrafts=ref<Record<string,string>>({})
+watch(correctionKeys,keys=>{for(const key of keys)if(!(key in evidenceDrafts.value))evidenceDrafts.value[key]=document.value?.sections.find(s=>s.key===key)?.text||''})
+watch(mode,m=>{if(m==='evidence'){manual.value=false;correctionKeys.value=section.value?[section.value.key]:[]}})
+const proposalDiffs=computed(()=>proposal.value?Object.entries(proposal.value.after_sections||{[proposal.value.section]:proposal.value.after}).map(([key,after])=>({key,after,before:proposal.value?.before_sections?.[key]||proposal.value?.before||''})):[])
 watch(()=>props.citationRequest,request=>{
   if(!request)return
   mode.value='wording';manual.value=false
@@ -220,7 +245,8 @@ async function propose() {
       base_commit: manual.value ? draftCommit.value : document.value.commit_seq,
       section: selected.value,
       instruction: instruction.value,
-      ...(manual.value ? { content: draft.value } : {}),
+      ...(manual.value && mode.value==='wording' ? { content: draft.value } : {}),
+      ...(mode.value==='evidence'?{edit_kind:'evidence',section_keys:correctionKeys.value,...(manual.value?{section_contents:Object.fromEntries(correctionKeys.value.map(key=>[key,evidenceDrafts.value[key]]))}:{})}:{}),
     })
     await load()
   } catch (e) {

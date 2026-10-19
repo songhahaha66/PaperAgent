@@ -28,7 +28,8 @@ def structured_model(llm: Any, schema: Type[T], *, include_raw: bool = False):
 
 class InvalidStructuredReply(ValueError):
     def __init__(self, error: Exception, reply: BaseMessage):
-        if (getattr(reply, "response_metadata", {}) or {}).get("finish_reason") == "length":
+        self.truncated=(getattr(reply, "response_metadata", {}) or {}).get("finish_reason") == "length"
+        if self.truncated:
             error = ValueError("输出达到长度上限被截断；请缩短描述和候选方案，返回完整闭合对象，保留全部原题要求，不要反复扩展假设和检查列表")
         super().__init__(str(error))
         calls = getattr(reply, "tool_calls", [])
@@ -86,12 +87,12 @@ def as_messages(system: str, user: str) -> List[BaseMessage]:
     return [SystemMessage(content=system), HumanMessage(content=user)]
 
 
-async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None) -> T:
+async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None,retries: int=RETRIES) -> T:
     llm = cap_output(llm, STRUCTURED_MAX_TOKENS)
     model = structured_model(llm, schema, include_raw=True)
     last_error: Exception | None = None
     retry_messages = messages
-    for attempt in range(RETRIES + 1):
+    for attempt in range(retries + 1):
         parsed = None
         try:
             # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
@@ -100,9 +101,13 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             if isinstance(result, dict) and "raw" in result and "parsed" in result:
                 if (getattr(result["raw"], "response_metadata", {}) or {}).get("finish_reason") == "length":
                     raise InvalidStructuredReply(ValueError("被截断"), result["raw"])
-                if result.get("parsing_error"):
-                    raise InvalidStructuredReply(result["parsing_error"], result["raw"])
-                result = result["parsed"]
+                raw=result['raw'];parsed_reply=result['parsed']
+                if parsed_reply is None:
+                    from ..judge.llm import parse_verdict
+                    parsed_reply=parse_verdict(message_text(raw),schema)
+                if parsed_reply is None and result.get('parsing_error'):
+                    raise InvalidStructuredReply(result['parsing_error'],raw)
+                result = parsed_reply
             if result is None:
                 raise ValueError("模型没有返回结构化结果")
             parsed = result if isinstance(result, schema) else schema.model_validate(result)
@@ -124,7 +129,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             elif isinstance(exc, InvalidStructuredReply):
                 retry_messages = [*messages, exc.candidate]
             logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, type(exc).__name__)
-            if attempt < RETRIES:
+            if attempt < retries:
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"结构化输出 {schema.__name__} 失败: {last_error}") from last_error
 

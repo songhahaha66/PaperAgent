@@ -19,6 +19,12 @@ export interface PaperProposal {
   section_revision: number
   citation_issues?: string[]
   citation_checks?: {status:string;reason:string}[]
+  section_keys?:string[]
+  before_sections?:Record<string,string>
+  after_sections?:Record<string,string>
+  review_issues?:{section:string;message:string}[]
+  review_id?:string
+  edit_kind?:'wording'|'evidence'
 }
 export interface PaperDocument {
   research_id: string
@@ -26,6 +32,8 @@ export interface PaperDocument {
   sections: PaperSection[]
   history: PaperProposal[]
   tasks: { id: string; title: string; dependencies: string[] }[]
+  verified_methods?:{task_id:string;fit_intercept:boolean;standardize:boolean}[]
+  verified_formula_blocks?:Record<string,string>
 }
 export const paperAPI = {
   read: (work: string) => apiClient.request<PaperDocument>(`/api/workspace/${work}/paper`),

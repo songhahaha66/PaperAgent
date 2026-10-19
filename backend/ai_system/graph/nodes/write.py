@@ -35,6 +35,8 @@ SOLVE_HEADING = "五、模型的建立与求解"
 STYLE = (
     "你是数学建模竞赛论文的执笔手，文风严谨、简洁，使用中文学术写作规范。\n"
     "硬性规则：\n"
+    "固定拆分上的数值更低不等于统计显著；缺乏对应检验证据时写实测差异，不写显著优于。"
+    "公式必须匹配实际核验的截距、惩罚与训练集预处理设置；不得把带截距实现写成无截距方程。\n"
     "1. 正文中的任何计算结果数字必须使用本节可用引用表中的真实引用，不要自己写数字或猜测编号；"
     "题目给定的常数、年份、编号可以直接写。\n"
     "2. 只有本节可用引用表中确有图表时才能插图。复制表中的图引用独占一行，正文指代同一图也使用该引用，系统会编号。没有图表时不得写图引用或声称见图。\n"
@@ -155,6 +157,8 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     if key == "references":
         return reference_section(state, ctx)
     request = _section_body(key, title, state, ctx)
+    from ...research.method_facts import method_context
+    request+=method_context(getattr(ctx,'research',None))
     from ..registry import ResultRegistry
     allowed = None
     if key.startswith("solve:"):

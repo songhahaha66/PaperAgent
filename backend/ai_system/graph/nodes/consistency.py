@@ -36,6 +36,11 @@ RECONCILE_SYSTEM = (
 )
 
 AUDIT_SYSTEM = (
+    "区分实测数值差异与统计显著性：固定拆分上误差更低、相对均值基线改善，并不能单独支持统计显著。"
+    "即使结论表的strength标为显著，仍要核查具体检验证据；不得把结果明确当作已做显著性检验。"
+    "正文同时声明未做显著性检验却使用显著优于/显著改善时，须要求限定为该拆分上的实测差异。"
+    "方法公式须对照实际核验的估计器设置：截距、是否惩罚截距、训练集中心化和标准化的拟合范围。"
+    "明确的中心化方程加截距恢复，或含常数列且正确处理截距惩罚的方程均有效；不要要求固定符号写法。"
     "构造反例前先核对登记序列的对应关系：对象、日期和统计范围必须一致；逐日不等式须逐日比较，不能用某日最小值与全周均值比较来反证。"
     "若根因是数据、模型或假设错误，填写research_issue并引用登记证据和检查编号，进入研究核验；仅写作错误只填section和problem。"
     "补写没有证据支持的数值、夸大结论或遗漏适用条件，应按已有证据重写，不能为此重算原本正确的上游。"
@@ -125,8 +130,10 @@ async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
 
 def section_audit_prompt(state,ctx):
     sections = state.get("sections") or {}
-    keys = [k for k in AUDITED_SECTIONS if sections.get(k)]
-    if not ctx.registry.claims or not keys:return None
+    keys = [k for k in sections if k!='references' and sections.get(k)]
+    from ...research.method_facts import method_context
+    methods=method_context(getattr(ctx,'research',None))
+    if not keys or not ctx.registry.claims and not methods:return None
     body = "\n\n".join(
         f"## 章节 key: {k}\n{clip(sections[k], AUDIT_SECTION_CHARS)}" for k in keys
     )
@@ -138,6 +145,7 @@ def section_audit_prompt(state,ctx):
         f"section 只能填这些 key：{json.dumps(keys)}\n"
         f"# 研究契约\n{json.dumps({'requirements': state['analysis']['requirements'], 'assumptions': state['analysis']['assumptions']}, ensure_ascii=False)}"
     )
+    prompt+=methods
     return prompt,keys
 
 
@@ -147,7 +155,7 @@ def validate_findings(issues,state,ctx):
         if issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.registry.results):raise ValueError('审查问题超出冻结任务/证据范围')
 
 
-async def audit_sections(state: PaperState, ctx: GraphContext) -> List[IssueReport]:
+async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False) -> List[IssueReport]:
     """Completed results are reusable only for the same complete review context."""
     prepared=section_audit_prompt(state,ctx)
     if prepared is None:return []
@@ -159,10 +167,10 @@ async def audit_sections(state: PaperState, ctx: GraphContext) -> List[IssueRepo
             if any(i.section not in keys for i in result.issues):raise ValueError('章节审查引用了未提供的章节')
             validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
         async def perform():return await call_structured(ctx.planner_llm, ClaimAudit, as_messages(AUDIT_SYSTEM, prompt),validate=validate)
-        audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},validate=validate)
+        audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
     except Exception as exc:
         from ...research.review_cache import error_code
-        if ctx.research is not None:
+        if ctx.research is not None and not candidate:
             failures=[i for i in ctx.research.snapshot()['issues'] if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed'}]
             if failures:return []  # A persisted failure remains a publication blocker.
         return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_code(exc)}")]

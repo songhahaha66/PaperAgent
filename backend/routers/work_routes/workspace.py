@@ -276,6 +276,9 @@ class PaperEditRequest(BaseModel):
     section: str
     instruction: str = Field(default='', max_length=20000)
     content: str | None = Field(default=None, max_length=100000)
+    edit_kind:Literal['wording','evidence']='wording'
+    section_keys:list[str]|None=Field(default=None,max_length=6)
+    section_contents:dict[str,str]|None=Field(default=None,max_length=6)
 
 
 class PaperDecision(BaseModel):
@@ -318,10 +321,25 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
         llm = create_llm_from_model_config(model)
     try:
         from ai_system.research.runtime import budget_scope, ResearchBudgetExhausted
+        from ai_system.graph.tracing import LLMCallTrace
+        trace=LLMCallTrace()
+        if llm is not None and hasattr(llm,'model_copy'):
+            callbacks=getattr(llm,'callbacks',None)
+            llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
         with budget_scope(store.root,store.research_id):
-            return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
+            try:
+                if request.edit_kind=='wording' and request.section_keys is None:
+                    return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
+                options={'edit_kind':request.edit_kind,'section_keys':request.section_keys}
+                if request.section_contents is not None:options['section_contents']=request.section_contents
+                return await paper_editor.propose(store,request.section,request.instruction,request.content,llm,**options)
+            finally:trace.dump(store.root/'.system/editor_llm_calls.json')
     except (ValueError, ResearchConflict, ResearchBudgetExhausted) as exc:
         raise HTTPException(409, str(exc))
+    except RuntimeError as exc:
+        detail=('模型回复达到输出长度上限，原论文已保留。可缩小范围或直接编辑候选正文。'
+                if getattr(exc.__cause__,'truncated',False) else '候选生成未完成，原论文已保留。请核对请求余量并缩小修改范围。')
+        raise HTTPException(409,detail) from None
 
 
 @router.post('/{work_id}/paper/proposals/{proposal_id}')

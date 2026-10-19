@@ -149,7 +149,13 @@ async def document(store):
         history = [json.loads(row[0]) for row in db.execute(
             "SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 30",
             (store.research_id,))]
-    return {'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],
+    from ai_system.research.method_facts import verified_methods,canonical_method_block
+    methods=verified_methods(store)
+    blocks={}
+    for task in {f['task_id'] for f in methods}:
+        try:blocks['solve:'+task]=canonical_method_block(methods,task)
+        except ValueError:pass
+    return {'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'verified_methods':methods,'verified_formula_blocks':blocks,
             'sections': [{'key': k, 'title': titles.get(k, k), 'readable': readable[k], **v} for k, v in snapshot['sections'].items()],
             'history': history, 'tasks': [{'id': k, 'title': v['objective'], 'dependencies': v['dependencies']}
                                         for k, v in snapshot['tasks'].items() if not v['retired']]}
@@ -167,7 +173,12 @@ def guard_wording(before, after, latex):
         raise ValueError('；'.join(fragment_issues(after)))
 
 
-async def propose(store, key, instruction, content=None, llm=None):
+async def propose(store, key, instruction, content=None, llm=None,*,edit_kind='wording',section_keys=None,section_contents=None):
+    if edit_kind=='evidence':
+        if content is not None:raise ValueError('依据修正须通过带证据审查的候选生成')
+        from .paper_corrections import propose_correction
+        return await propose_correction(store,section_keys or [key],instruction,llm,section_contents)
+    if section_keys or section_contents:raise ValueError('多节修正需要选择按已核验证据修正模式')
     snapshot = store.refresh_inputs()
     filename, source = source_info(store, snapshot)
     section = snapshot['sections'].get(key)
@@ -225,19 +236,28 @@ async def decide(store, proposal_id, apply, output_mode):
     if snapshot['commit_seq'] != proposal['base_commit'] or digest(source) != proposal['source_hash']:
         raise ResearchConflict('论文或研究版本已改变。候选和人工稿均已保留，请刷新后重新提出修改。')
     state = await paper_state(store)
-    problems = citation_issues(store.root,proposal['after'])
+    changes=proposal.get('after_sections') or {proposal['section']:proposal['after']}
+    problems = [p for text in changes.values() for p in citation_issues(store.root,text)]
     if problems:
         raise ValueError('文献引用未获支持：'+'；'.join(problems))
-    state['sections'][proposal['section']] = proposal['after']
+    state['sections'].update(changes)
     ctx = GraphContext.create(str(store.root), planner_llm=None, output_mode=output_mode)
     ctx.research = store
     refresh_registry(ctx)
     native = filename.endswith('.tex')
     reference_update = None
-    if proposal['section']!='references' and CITATION.search(proposal['after']) and 'references' in state['sections']:
+    if 'references' not in changes and any(CITATION.search(t) for t in changes.values()) and 'references' in state['sections']:
         from ai_system.graph.nodes.write import reference_section
         reference_update = reference_section(state,ctx)
         state['sections']['references'] = reference_update
+    if proposal.get('edit_kind')=='evidence':
+        from .paper_corrections import require_review,guard_correction
+        from ai_system.research.method_facts import canonical_method_block
+        if proposal.get('review_issues'):raise ValueError('候选尚有审查问题，不能应用')
+        for key,text in changes.items():
+            block=canonical_method_block(proposal['method_facts'],key.split(':',1)[1]) if key.startswith('solve:') else None
+            guard_correction(snapshot['sections'][key]['text'],text,block,native)
+        require_review(store,proposal,state)
     rendered = publication_text(render_citations(store.root,ctx.registry.render(assemble_latex(state) if native else assemble(state), latex=native),native))
     if REF_PATTERN.search(rendered):
         raise ValueError('论文包含未解析的引用，禁止发布')
@@ -268,6 +288,10 @@ async def decide(store, proposal_id, apply, output_mode):
                 _, active = source_info(store, current)
                 if current['commit_seq'] != proposal['base_commit'] or digest(active) != proposal['source_hash']:
                     raise ResearchConflict('编译期间论文发生变化，未覆盖最新版本，请刷新后重试')
+                if proposal.get('edit_kind')=='evidence':
+                    from ai_system.research.method_facts import verified_methods
+                    if digest(verified_methods(store))!=proposal['method_facts_hash']:
+                        raise ResearchConflict('编译期间已核验方法改变，未覆盖当前论文')
                 # Persist both sides in the existing version journal and paper archive.
                 archive = store.root / '.system/research' / store.research_id / 'papers'
                 archive.mkdir(parents=True, exist_ok=True)
@@ -275,9 +299,11 @@ async def decide(store, proposal_id, apply, output_mode):
                 (archive / old_name).write_text(source, encoding='utf-8')
                 version = archive / f'{current["commit_seq"] + 1}{Path(filename).suffix}'
                 version.write_text(rendered, encoding='utf-8')
-                section = current['sections'][proposal['section']]
-                section.update(text=proposal['after'], content_hash=digest(proposal['after']), revision=section['revision'] + 1)
-                versions = {proposal['section']:section}
+                versions={}
+                for key,text in changes.items():
+                    section=current['sections'][key]
+                    section.update(text=text,content_hash=digest(text),revision=section['revision']+1)
+                    versions[key]=section
                 if reference_update is not None and current['sections']['references']['text']!=reference_update:
                     references = current['sections']['references']
                     references.update(text=reference_update,content_hash=digest(reference_update),revision=references['revision']+1)
@@ -285,7 +311,8 @@ async def decide(store, proposal_id, apply, output_mode):
                 current.update(paper_hash=digest(rendered), paper_version=version.relative_to(store.root).as_posix(), paper_conflict=False,
                                exports=[filename] + exports)
                 prepare_publication(store, proposal_id, staging, [filename] + exports)
-                proposal.update(status='applied', applied_revision=section['revision'])
+                proposal.update(status='applied', applied_revision=current['sections'][proposal['section']]['revision'],
+                    applied_revisions={k:v['revision'] for k,v in versions.items()})
                 store._save(db, current, 'section_edit_applied', {'proposal': proposal, 'versions': versions})
                 db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
                            (json.dumps(proposal, ensure_ascii=False), store.research_id, 'paper-edit:' + proposal_id))

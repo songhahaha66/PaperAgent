@@ -95,7 +95,7 @@ class ResultItem(BaseModel):
 class Finding(BaseModel):
     statement: str = Field(description="一条结论，依据的数值写成 {{R:Rn}} 引用")
     strength: Literal["显著", "倾向", "不显著"] = Field(
-        description="证据强度：检验显著或结果明确=显著；方向一致但证据有限=倾向；检验不显著或无法判断=不显著"
+        description="证据强度：显著须有对应统计检验证据；固定拆分上的实测改善或方向一致但证据有限=倾向；检验不显著或无法判断=不显著。数值差异不自动等于统计显著"
     )
 
 
