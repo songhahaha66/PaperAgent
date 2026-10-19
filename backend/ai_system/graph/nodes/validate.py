@@ -138,7 +138,7 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         flagged = {issue.section for issue in reports}
         reports += [i for i in await audit_sections(state, ctx) if i.section not in flagged]
     issues = ctx.research.report_issues(reports, "sections")
-    active_service=[i for i in ctx.research.snapshot()['issues'] if i['category']=='service' and i['status'] not in {'resolved','dismissed'}
+    active_service=[i for i in ctx.research.snapshot()['issues'] if i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
                     and (i.get('review_scope',{}).get('stage') in {'sections','citations'} or i['source']=='sections')]
     issues=list({i['id']:i for i in [*issues,*active_service]}.values())
     research_restart = any(i["blocking"] and i["action"] != "rewrite" for i in issues)

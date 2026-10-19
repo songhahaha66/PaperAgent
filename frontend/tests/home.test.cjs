@@ -21,6 +21,7 @@ async function fixture() {
       'vue-router': { useRouter: () => ({ push: (path) => routes.push(path) }) },
       'tdesign-vue-next': { MessagePlugin: { warning() {} } },
       '@/api/template': { templateAPI: {} },
+      '@/api/researchSetup': { researchSetupAPI: {}, defaultResearchSetup: () => ({}) },
       '@/api/workspace': {
         workspaceAPI: { createWork: () => mutations.push('create') },
         attachmentAPI: {},

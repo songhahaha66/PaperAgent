@@ -1,5 +1,5 @@
 """Versioned, context-bound review results and narrowly scoped service recovery."""
-import json,time,uuid,hashlib,re
+import json,time,uuid,hashlib,re,asyncio
 from dataclasses import asdict,is_dataclass
 from contextlib import closing
 from pathlib import Path
@@ -8,6 +8,35 @@ from .models import IssueReport
 
 POLICY='review-context-cache-v1'
 STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查'}
+PROCESS_ID=uuid.uuid4().hex
+SCIENCE_FIELDS=('inputs','tasks','contract_hash','evidence_hash','claims_hash','artifact_hashes','committed_evidence_hash','configuration_hash')
+
+
+def science_version(context):return digest({k:context.get(k) for k in SCIENCE_FIELDS})
+
+
+def coverage_material(stage,context):
+    if context.get('policy')=='review-recovery-intent-v1':
+        material=context['version_material'];science=material['science'];sections=material.get('section_hashes',{});sources=material.get('citation_sources',{});request=material.get('request_hash')
+    else:science=science_version(context);sections=context.get('section_hashes',{});sources=context.get('citation_sources',{});request=context.get('request_hash')
+    return digest({'science':science,'sections':sorted(sections.values()) if stage=='citations' else sections,
+        'sources':sources,'request':request if stage!='citations' else None})
+
+
+class ReviewInProgress(RuntimeError):
+    def __init__(self,record):self.record=record;super().__init__('该版本审查正在运行，请等待原请求')
+
+
+class ReviewSuperseded(ValueError):pass
+
+
+def review_coverage(stage,context):
+    candidate=context.get('extra',{}).get('non_blocking',False) and context.get('policy')!='review-recovery-intent-v1'
+    scope=context.get('extra',{}).get('scope')
+    return {'kind':'candidate' if candidate else 'research','stage':stage,
+        'slot':f'{stage}:'+('candidate:'+str((scope or {}).get('id') or digest(context.get('section_hashes',{}))) if candidate else 'research'),
+        'version':digest(context),'sections':context.get('section_hashes',{}),
+        'input_hash':digest(context.get('inputs',{})),'material_version':coverage_material(stage,context),'policy':'review-coverage-v1'}
 
 
 def _payload(item):
@@ -48,7 +77,11 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
                 row=db.execute('SELECT payload FROM literature_passages WHERE id=?',(int(cid),)).fetchone() if exists else None
             citations['C'+cid]=digest(json.loads(row[0])) if row else None
         except (AttributeError,ValueError,KeyError):citations['C'+cid]=None
-    return {'policy':POLICY,'stage':stage,'request_hash':digest({'system':system,'prompt':prompt,'schema':schema.model_json_schema()}),
+    consistency=None
+    if stage in {'sections','fragment'}:
+        try:consistency=digest(json.loads((root/'.system/consistency.json').read_text()))
+        except (OSError,ValueError):pass
+    return {'policy':POLICY,'stage':stage,'request_hash':digest({'system':system,'prompt':prompt,'schema':schema.model_json_schema()}),'reconcile_projection_hash':consistency,
         'model_id':getattr(ctx.planner_llm,'model_name',None) or getattr(ctx.planner_llm,'model',None),
         'inputs':store.file_inputs() if store else {},
         'tasks':{k:{p:v.get(p) for p in ('revision','active_attempt','validity','subproblem','dependencies')} for k,v in snapshot.get('tasks',{}).items()},
@@ -89,26 +122,104 @@ class ReviewCache:
             except (KeyError,ValueError,TypeError):continue
         return None
 
-    def start(self,stage,context,source='model'):
-        record={'id':uuid.uuid4().hex,'stage':stage,'context':context,'context_hash':digest(context),'started_at':time.time(),'source':source}
-        with self.store._transaction() as db:db.execute('INSERT INTO review_records VALUES (?,?,?,?,?,?)',(record['id'],self.store.research_id,stage,record['context_hash'],'running',json.dumps(record,ensure_ascii=False)))
+    def start(self,stage,context,source='model',*,command_id=None):
+        from .runtime import ResearchRuntime
+        now=time.time();key=digest(context)
+        record={'id':uuid.uuid4().hex,'stage':stage,'context':context,'context_hash':key,'started_at':now,'source':source,
+            'coverage':review_coverage(stage,context),'lease':{'process':PROCESS_ID,'token':uuid.uuid4().hex,'expires_at':now+ResearchRuntime(self.store.root).policy().get('timeout_seconds',90)+30}}
+        if command_id:record['command_id']=command_id
+        with self.store._transaction() as db:
+            active=db.execute("SELECT id,payload FROM review_records WHERE research_id=? AND stage=? AND context_hash=? AND state='running' ORDER BY rowid DESC LIMIT 1",(self.store.research_id,stage,key)).fetchone()
+            if active:
+                prior=json.loads(active[1])
+                if prior.get('lease',{}).get('expires_at',prior.get('started_at',0)+120)>now:raise ReviewInProgress(prior)
+                prior.update(error_code='interrupted',failed_at=now,lease_expired=True)
+                db.execute("UPDATE review_records SET state='failed',payload=? WHERE id=?",(json.dumps(prior,ensure_ascii=False),active[0]))
+            db.execute('INSERT INTO review_records VALUES (?,?,?,?,?,?)',(record['id'],self.store.research_id,stage,key,'running',json.dumps(record,ensure_ascii=False)))
         return record
+
+    async def wait(self,record,schema,current_context):
+        while time.time()<record.get('lease',{}).get('expires_at',time.time()):
+            await asyncio.sleep(.05)
+            with closing(self.store._connect()) as db:row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
+            if not row:raise RuntimeError('审查记录不可用')
+            if current_context()!=record['context']:raise ReviewSuperseded('等待期间版本已改变')
+            if row[0]=='completed':
+                hit=self.get(record['stage'],record['context'],schema)
+                if hit:return hit[0]
+            if row[0]!='running':raise RuntimeError('原审查未成功完成，请查看失败记录后恢复')
+        raise RuntimeError('审查连接已中断，租约到期后可恢复')
 
     def complete(self,record,result,*,provenance=None,current_context=None):
         record={**record,'result':result,'result_hash':digest(result),'completed_at':time.time(),'provenance':provenance or {}}
+        stale=False
         with self.store._transaction() as db:
-            if current_context is not None and current_context()!=record['context']:raise ValueError('review_context_changed_before_commit')
-            db.execute("UPDATE review_records SET state='completed',payload=? WHERE id=?",(json.dumps(record,ensure_ascii=False),record['id']))
+            row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
+            if not row or row[0]!='running' or json.loads(row[1]).get('lease')!=record.get('lease'):raise ReviewSuperseded('旧审查租约已经失效')
+            current=current_context() if current_context else record['context']
+            stale=current!=record['context']
+            if stale:record.update(superseded_by_context=digest(current),late_response=True)
+            db.execute('UPDATE review_records SET state=?,payload=? WHERE id=?',('superseded' if stale else 'completed',json.dumps(record,ensure_ascii=False),record['id']))
             state=self.store._read(db)
-            if state:
+            if state and not stale:
+                if record.get('source')=='recovery-intent' and not self._verified_children(db,record):raise ValueError('恢复任务缺少实际完成审查的证明')
                 closed=self._close_matching(state,record)
-                if closed:self.store._save(db,state,'review_completed',{'review_id':record['id'],'stage':record['stage'],'context_hash':record['context_hash'],'result_hash':record['result_hash'],'resolved_service_issues':closed})
+                superseded=self._supersede_services(db,state,record)
+                if closed or superseded:self.store._save(db,state,'review_completed',{'review_id':record['id'],'stage':record['stage'],'context_hash':record['context_hash'],'result_hash':record['result_hash'],**self._transitions(state,closed+superseded)})
+        if stale:raise ReviewSuperseded('旧版本响应已保存，但不能覆盖新版本')
         return record
 
-    def failed(self,record,error,*,diagnostic=None):
+    def _supersede_services(self,db,state,record):
+        coverage=record.get('coverage') or review_coverage(record['stage'],record['context'])
+        if coverage['kind']!='research':return []
+        replaced=[]
+        for issue in state['issues']:
+            scope=issue.get('review_scope') or {}
+            if issue['category']!='service' or issue['status'] in {'resolved','dismissed','superseded'} or issue['source'] not in {'review:'+record['stage'],'review-task:'+record['stage']} or scope.get('stage')!=record['stage']:continue
+            prior=db.execute("SELECT state,payload FROM review_records WHERE id=? AND research_id=? AND context_hash=?",(scope.get('failed_review_id'),self.store.research_id,scope.get('context_hash'))).fetchone()
+            if not prior or prior[0] not in {'failed','superseded'}:continue
+            old=json.loads(prior[1]);old_coverage=old.get('coverage') or review_coverage(old['stage'],old['context'])
+            if old_coverage['slot']!=coverage['slot']:continue
+            same_material=coverage_material(record['stage'],old['context'])==coverage_material(record['stage'],record['context'])
+            proof={'policy':'service-review-supersession-v1','old_review_id':old['id'],'old_context_hash':old['context_hash'],
+                'replacement_review_id':record['id'],'replacement_context_hash':record['context_hash'],'result_hash':record['result_hash'],'original_issue_hash':digest(issue)}
+            if same_material:
+                proof['policy']='service-review-recovery-v1'
+                issue.update(status='resolved',review_resolution=proof)
+                old.update(recovered_by=record['id'],recovery=proof)
+            else:
+                issue.update(status='superseded',review_supersession=proof)
+                old.update(superseded_by=record['id'],supersession=proof)
+            db.execute('UPDATE review_records SET payload=? WHERE id=?',(json.dumps(old,ensure_ascii=False),old['id']));replaced.append(issue['id'])
+        return replaced
+
+    @staticmethod
+    def _transitions(state,ids):
+        return {name:[i['id'] for i in state['issues'] if i['id'] in ids and i['status']==status]
+            for name,status in [('resolved_service_issues','resolved'),('superseded_service_issues','superseded')]}
+
+    def _verified_children(self,db,record):
+        ids=record.get('provenance',{}).get('verified_records') or []
+        if not ids:return False
+        for rid in ids:
+            row=db.execute("SELECT state,payload FROM review_records WHERE id=? AND research_id=? AND stage=?",(rid,self.store.research_id,record['stage'])).fetchone()
+            if not row or row[0]!='completed':return False
+            child=json.loads(row[1]);coverage=child.get('coverage') or review_coverage(child['stage'],child['context'])
+            if child.get('source')=='recovery-intent' or coverage['kind']!='research' or child.get('result_hash')!=digest(child.get('result')):return False
+            expected=record['context'].get('version_material',{}).get('science')
+            if expected and science_version(child['context'])!=expected:return False
+            if coverage_material(child['stage'],child['context'])!=coverage_material(record['stage'],record['context']):return False
+        return True
+
+    def failed(self,record,error,*,diagnostic=None,current_context=None):
         code=error_code(error);record={**record,'failed_at':time.time(),'error_code':code,'diagnostic':diagnostic or {}}
         with self.store._transaction() as db:
-            db.execute("UPDATE review_records SET state='failed',payload=? WHERE id=?",(json.dumps(record,ensure_ascii=False),record['id']))
+            row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
+            if not row or row[0]!='running' or json.loads(row[1]).get('lease')!=record.get('lease'):return record
+            current=current_context() if current_context else record['context'];stale=current!=record['context']
+            if stale:record.update(superseded_by_context=digest(current),late_response=True)
+            db.execute('UPDATE review_records SET state=?,payload=? WHERE id=?',('superseded' if stale else 'failed',json.dumps(record,ensure_ascii=False),record['id']))
+            if stale:return record
             state=self.store._read(db)
             if state and state.get('tasks') and not record['context'].get('extra',{}).get('non_blocking',False):
                 task=next(iter(state['tasks']));label=STAGE_LABELS[record['stage']]
@@ -122,11 +233,12 @@ class ReviewCache:
         closed=[]
         for issue in state['issues']:
             scope=issue.get('review_scope',{})
-            if issue['category']!='service' or issue['status'] in {'resolved','dismissed'} or scope.get('stage')!=record['stage'] or scope.get('context_hash')!=record['context_hash']:continue
+            if issue['category']!='service' or issue['status'] in {'resolved','dismissed','superseded'} or scope.get('stage')!=record['stage'] or scope.get('context_hash')!=record['context_hash']:continue
             source_ok=issue['source']=='review:'+record['stage'] or (
                 issue['source']=='sections' and record['stage']=='sections' and
                 issue.get('review_binding_provenance',{}).get('policy')=='legacy-checkpoint-failure-binding-v1' and
                 scope.get('failed_review_id')=='legacy:'+issue['id'])
+            source_ok=source_ok or (issue['source']=='review-task:'+record['stage'] and record.get('source')=='recovery-intent' and scope.get('failed_review_id')==record['id'])
             if not source_ok:continue
             original=digest(issue)
             issue.update(status='resolved',review_resolution={'policy':POLICY,'review_id':record['id'],'stage':record['stage'],'context_hash':record['context_hash'],
@@ -139,7 +251,8 @@ class ReviewCache:
             if current_context is not None and current_context()!=record['context']:raise ValueError('review_context_changed_before_reuse')
             state=self.store._read(db)
             closed=self._close_matching(state,record) if state else []
-            if closed:self.store._save(db,state,'review_cache_reused',{'review_id':record['id'],'stage':record['stage'],'context_hash':record['context_hash'],'resolved_service_issues':closed})
+            replaced=self._supersede_services(db,state,record) if state else []
+            if closed or replaced:self.store._save(db,state,'review_cache_reused',{'review_id':record['id'],'stage':record['stage'],'context_hash':record['context_hash'],**self._transitions(state,closed+replaced)})
 
 
 async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=None,extra=None,validate=None):
@@ -147,21 +260,30 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
     before=context();store=getattr(ctx,'research',None)
     if store is None:
         return await perform()
-    cache=ReviewCache(store);record=None
+    cache=ReviewCache(store);record=None;joined=False
     try:
         hit=cache.get(stage,before,schema)
         if hit:
             if validate is not None:validate(hit[0])
             cache.reuse(hit[1],current_context=context);return hit[0]
-        record=cache.start(stage,before)
+        try:record=cache.start(stage,before)
+        except ReviewInProgress as pending:
+            joined=True
+            answer=await cache.wait(pending.record,schema,context)
+            if validate is not None:validate(answer)
+            return answer
         answer=await perform()
         verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')
         if isinstance(answer,dict) and verdict_field not in answer:raise ValueError('review_reply_missing_verdict_field')
         answer=schema.model_validate(answer.model_dump() if hasattr(answer,'model_dump') else answer)
         if validate is not None:validate(answer)
-        if context()!=before:raise ValueError('review_context_changed_during_call')
         cache.complete(record,answer.model_dump(),current_context=context);return answer
+    except ReviewSuperseded:raise
+    except asyncio.CancelledError:
+        if record is not None and not joined:cache.failed(record,RuntimeError('interrupted'),diagnostic={'reason':'cancelled','recoverable':True},current_context=context)
+        raise
     except Exception as exc:
+        if joined:raise
         if record is None:record=cache.start(stage,before)
-        cache.failed(record,exc);raise
+        cache.failed(record,exc,current_context=context);raise

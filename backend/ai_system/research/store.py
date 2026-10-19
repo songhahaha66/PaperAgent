@@ -405,7 +405,7 @@ class ResearchStore:
                         self._confirm_issue(state, issue, refute=check.outcome == "failed")
                 attempt["acceptance"] = task["acceptance"] if task.get("verifies_issue") else acceptance
                 self._resolve_repairs(state, order.attempt_id)
-                if any(i["blocking"] and i["status"] not in {"resolved", "dismissed"} for i in state["issues"]):
+                if any(i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in state["issues"]):
                     state["outcome"] = "blocked"
             else:
                 attempt["validity"] = "stale"
@@ -519,8 +519,9 @@ class ResearchStore:
         identity = digest({**report.model_dump(), "revision": revision, "source": source})[:24]
         previous = next((i for i in state["issues"] if i["id"] == identity), None)
         if previous:
-            if (report.category in {"writing", "service"} or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed"}:
+            if (report.category in {"writing", "service"} or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
                 previous["status"] = status
+                previous['blocking']=report.category!='writing' or report.section!='paper'
             return previous
         issue = Issue(**report.model_dump(), id=identity, task_revision=revision,
             producer_attempt=producer_attempt, status=status, source=source,
@@ -565,12 +566,12 @@ class ResearchStore:
             recorded = [self._record_issue(state, report, "confirmed" if report.category in {"writing", "service"} else "suspected", source=source)
                         for report in reports]
             self._save(db, state, "issues_reported", {"source": source, "issues": recorded})
-            return [i for i in recorded if i["status"] not in {"resolved", "dismissed"}]
+            return [i for i in recorded if i["status"] not in {"resolved", "dismissed", "superseded"}]
 
     @staticmethod
     def delivery_ready(state):
         return all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in state["tasks"].values()) and not any(
-            i["blocking"] and i["status"] not in {"resolved", "dismissed"} for i in state["issues"])
+            i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in state["issues"])
 
     def schedule_investigations(self):
         with self._transaction() as db:
@@ -754,7 +755,7 @@ class ResearchStore:
                         # its replacement. Fresh scope acceptance closes the repair.
                         task["retired"] = True
             for issue in state["issues"]:
-                related_assumption = issue["assumption_id"] in changed_assumptions and issue["status"] not in {"resolved", "dismissed"}
+                related_assumption = issue["assumption_id"] in changed_assumptions and issue["status"] not in {"resolved", "dismissed", "superseded"}
                 if issue not in issues and not related_assumption and not (patch.amendment and issue["task_id"] in affected and issue["status"] in {"confirmed", "inconclusive"}):
                     continue
                 if issue["assumption_id"] and state["assumptions"][issue["assumption_id"]]["status"] == "refuted":

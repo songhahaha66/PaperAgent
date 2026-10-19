@@ -221,3 +221,44 @@ def test_existing_citation_marker_cannot_be_substituted(scoped,monkeypatch):
     monkeypatch.setattr(edits,'call_structured',wrong)
     with pytest.raises(edits.PatchFailure):asyncio.run(edits.generate_fragment(v.store,v.key,section,source,'保留引用',v.llm,scope))
     assert calls==[1]
+
+
+def test_cancelled_candidate_audit_keeps_candidate_and_explicit_recovery(scoped,monkeypatch):
+    v=scoped;original=edits.call_structured
+    async def scenario():
+        started=asyncio.Event();gate=asyncio.Event()
+        async def block(llm,schema,messages,**kwargs):
+            if schema is edits.FragmentAudit:started.set();await gate.wait()
+            return await original(llm,schema,messages,**kwargs)
+        monkeypatch.setattr(edits,'call_structured',block)
+        work=asyncio.create_task(editor.propose(v.store,v.key,'原意不变',llm=v.llm,fragment_scope=request(v)))
+        await started.wait();work.cancel();await asyncio.gather(work,return_exceptions=True)
+        with v.store._connect() as db:
+            row=db.execute("SELECT response FROM commands WHERE id LIKE 'paper-edit:%'").fetchone()
+        saved=json.loads(row[0]);assert saved['review_state']=='pending' and saved['review_id'] is None
+        from services.chat_services.review_tasks import records
+        assert any(r['state']=='failed' for r in records(v.store))
+        monkeypatch.setattr(edits,'call_structured',original)
+        recovered=await edits.review_pending_fragment(v.store,saved['id'],v.llm)
+        assert recovered['review_id'] and not recovered['review_issues'] and len(v.calls)==1
+        assert recovered['review_history'][0]['failed_record_id']
+        with pytest.raises(ResearchConflict):await edits.review_pending_fragment(v.store,saved['id'],v.llm)
+    asyncio.run(scenario())
+
+
+def test_saved_fragment_lease_expiry_remains_recoverable(scoped):
+    import time
+    from ai_system.research.review_cache import ReviewCache
+    from services.chat_services.review_tasks import expire_leases,records
+    v=scoped;p=propose(v);state={**v.state,'sections':{**v.state['sections'],**p['after_sections']}}
+    context=edits.review_binding(v.store,state,v.llm,p['scope']);cache=ReviewCache(v.store)
+    with v.store._transaction() as db:db.execute("DELETE FROM review_records WHERE stage='fragment'")
+    r=cache.start('fragment',context);r['lease']['expires_at']=time.time()-1
+    with v.store._transaction() as db:
+        db.execute('UPDATE review_records SET payload=? WHERE id=?',(json.dumps(r),r['id']))
+        p.update(review_id=None,review_state='pending',review_issues=[{'section':v.key,'message':'进程中断'}])
+        db.execute('UPDATE commands SET response=? WHERE id=?',(json.dumps(p),'paper-edit:'+p['id']))
+    expire_leases(v.store);row=next(saved for saved in records(v.store) if saved['id']==r['id'])
+    assert row['state']=='failed' and row['diagnostic']['reason']=='lease_expired'
+    restored=asyncio.run(edits.review_pending_fragment(v.store,p['id'],v.llm))
+    assert restored['review_id'] and not restored['review_issues'] and len(v.calls)==1

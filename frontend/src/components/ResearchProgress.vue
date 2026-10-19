@@ -124,7 +124,7 @@ const writingBlockers = computed(
 )
 const issuesFor = (task: ResearchTask) =>
   props.snapshot?.issues?.filter(
-    (i) => task.progress.issue_ids.includes(i.id) && !['resolved', 'dismissed'].includes(i.status),
+    (i) => task.progress.issue_ids.includes(i.id) && !['resolved', 'dismissed', 'superseded'].includes(i.status),
   ) || []
 const taskStatus = (task: ResearchTask) => {
   const count = issuesFor(task).length

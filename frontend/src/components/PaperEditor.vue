@@ -133,7 +133,7 @@
           <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length || !!proposal.review_issues?.length" @click="decide('apply')">
             {{ isZh ? '应用并更新论文' : 'Apply and update paper' }}
           </button>
-          <button v-if="proposal.status==='pending' && proposal.generation_contract==='scoped-anchored-edits-v2' && !proposal.review_id && proposal.review_kind!=='fragment_equivalence' && proposal.review_issues?.length" :disabled="busy" @click="decide('review')">{{isZh?'仅重审这个局部提案':'Review this fragment proposal only'}}</button>
+          <button v-if="proposal.status==='pending' && ['scoped-anchored-edits-v2','manual-evidence-v1'].includes(proposal.generation_contract || '') && !proposal.review_id && proposal.review_issues?.length" :disabled="busy" @click="decide('review')">{{isZh?'恢复这个候选的审查':'Resume this candidate review'}}</button>
           <button v-if="proposal.status === 'pending'" :disabled="busy" @click="decide('reject')">
             {{ isZh ? '拒绝' : 'Reject' }}
           </button>

@@ -135,9 +135,14 @@ class Issue(IssueReport):
     producer_attempt: str | None = None
     resolution_attempt: str | None = None
     source: str
-    status: Literal["suspected", "confirmed", "repairing", "resolved", "dismissed", "inconclusive"]
+    status: Literal["suspected", "confirmed", "repairing", "resolved", "dismissed", "inconclusive","superseded"]
     action: Literal["verify", "recompute", "retry", "rewrite"]
     blocking: bool = True
+
+    @model_validator(mode='after')
+    def superseded_service_only(self):
+        if self.status=='superseded' and self.category!='service':raise ValueError('只有服务审查故障可被新版本替代，实质意见不可据此关闭')
+        return self
     repair_targets: dict[str, int] = Field(default_factory=dict)
 
 

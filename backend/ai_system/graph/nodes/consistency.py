@@ -172,7 +172,7 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
     except Exception as exc:
         from ...research.review_cache import error_code
         if ctx.research is not None and not candidate:
-            failures=[i for i in ctx.research.snapshot()['issues'] if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed'}]
+            failures=[i for i in ctx.research.snapshot()['issues'] if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}]
             if failures:return []  # A persisted failure remains a publication blocker.
         return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_code(exc)}")]
     return [

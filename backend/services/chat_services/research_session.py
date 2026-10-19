@@ -140,7 +140,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         for item in raw_results[:500] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
     visible_issues = [issue for index, issue in enumerate(business["issues"])
-                      if issue["status"] not in {"resolved", "dismissed"} or index >= len(business["issues"]) - 30] if business else []
+                      if issue["status"] not in {"resolved", "dismissed", "superseded"} or index >= len(business["issues"]) - 30] if business else []
     issue_refs = {ref for issue in visible_issues for ref in issue["evidence_refs"]}
     historical = [entry["payload"] for rid, entry in business["evidence"].items() if rid in issue_refs] if business else []
     issue_evidence = [ResearchResult(id=str(item["id"]), subproblem_id=str(item["subproblem"]),

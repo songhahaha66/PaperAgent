@@ -68,3 +68,34 @@ def test_changed_source_and_corrupted_cache_cannot_reuse_supported_verdict(tmp_p
         db.execute('UPDATE literature_passages SET payload=? WHERE id=1',(json.dumps(passage),))
     assert citation_issues(tmp_path,text)
     asyncio.run(audit_citations(tmp_path,[text],model));assert model.calls==2
+
+
+def test_concurrent_identical_citation_checks_share_one_model_reply(tmp_path):
+    _,_,e=seed(tmp_path);text='同一引用句的来源支持 {{C:'+e['id']+'}}'
+    class Gated(Reply):
+        async def ainvoke(self,messages):
+            entered.set();await release.wait();return await super().ainvoke(messages)
+    async def scenario():
+        nonlocal entered,release
+        entered=asyncio.Event();release=asyncio.Event();model=Gated()
+        first=asyncio.create_task(audit_citations(tmp_path,[text],model));await entered.wait()
+        second=asyncio.create_task(audit_citations(tmp_path,[text],model));await asyncio.sleep(.01);release.set()
+        a,b=await asyncio.gather(first,second)
+        assert model.calls==1 and a[0]['review_id']==b[0]['review_id']
+        assert {k:a[0][k] for k in ('key','status','reason','supporting_quote')}=={k:b[0][k] for k in ('key','status','reason','supporting_quote')}
+    entered=release=None;asyncio.run(scenario())
+
+
+def test_cancelled_citation_check_is_persisted_as_failure(tmp_path):
+    _,_,e=seed(tmp_path);text='尚待核验的引用 {{C:'+e['id']+'}}'
+    class Gated(Reply):
+        async def ainvoke(self,messages):entered.set();await asyncio.Event().wait()
+    async def scenario():
+        nonlocal entered
+        entered=asyncio.Event();work=asyncio.create_task(audit_citations(tmp_path,[text],Gated()));await entered.wait()
+        work.cancel();await asyncio.gather(work,return_exceptions=True)
+    entered=None;asyncio.run(scenario())
+    with ResearchStore(tmp_path,'workspace-literature')._connect() as db:
+        row=db.execute('SELECT state,payload FROM review_records').fetchone()
+        assert row[0]=='failed' and json.loads(row[1])['diagnostic']['recoverable']
+    assert citation_issues(tmp_path,text)

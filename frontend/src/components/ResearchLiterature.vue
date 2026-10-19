@@ -335,7 +335,7 @@ button {
   color: inherit;
   background: var(--pa-surface);
   border: 1px solid var(--pa-line);
-  border-radius: 8px;
+  border-radius: var(--pa-radius-control);
   padding: 9px;
 }
 input {
@@ -368,7 +368,7 @@ article,
 .support-check {
   padding: 14px;
   border: 1px solid var(--pa-line);
-  border-radius: 10px;
+  border-radius: var(--pa-radius-card);
   margin: 12px 0;
   overflow-wrap: anywhere;
 }

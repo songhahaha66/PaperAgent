@@ -5,7 +5,7 @@ def task_progress(snapshot, task, ready, work_status=None):
     key = task["task_id"]
     waiting = [dep for dep in task["dependencies"] if snapshot["tasks"][dep]["acceptance"] != "accepted"
                or snapshot["tasks"][dep]["validity"] != "current"]
-    issues = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}
+    issues = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
               and (i["task_id"] == key or key in i["repair_targets"])
               and (i["action"] != "rewrite" or task["kind"] == "writing" and i["section"] == f"solve:{key}")]
     attempts = sum(a["task_id"] == key and a["revision"] == task["revision"] for a in snapshot["attempts"].values())

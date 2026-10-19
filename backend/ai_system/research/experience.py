@@ -87,7 +87,7 @@ def card_for(state, attempt_id, root=None):
         expanded=related|{dep for key in related for dep in state['tasks'][key]['dependencies']}
         if expanded==related:break
         related=expanded
-    blocking=any(i['blocking'] and i['status'] not in {'resolved','dismissed'} and
+    blocking=any(i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'} and
         (i['task_id'] in related or related.intersection(i.get('repair_targets',{}))) for i in state['issues'])
     execution=result.get('execution_status')
     if empirical and any(c['outcome']=='failed' for c in checks):level='counterexample'

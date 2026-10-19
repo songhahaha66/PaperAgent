@@ -54,5 +54,5 @@ watch(()=>props.workId,()=>{state.value=null;notice.value='';load()},{immediate:
 watch(()=>props.refreshKey,()=>load())
 </script>
 <style scoped>
-.experience-panel{padding:24px;overflow:auto;flex:1;color:var(--pa-ink)}header{display:flex;gap:12px;align-items:center;flex-wrap:wrap}h2{font-size:20px}.card,.usage{border:1px solid var(--pa-border);border-radius:12px;padding:16px;margin:12px 0;overflow-wrap:anywhere}.note{font-size:12px;color:var(--pa-ink-muted)}button{cursor:pointer;margin:6px;padding:6px 10px}button:disabled{cursor:wait}a{color:var(--pa-info)}p{margin:8px 0}
+.experience-panel{padding:24px;overflow:auto;flex:1;color:var(--pa-ink)}header{display:flex;gap:12px;align-items:center;flex-wrap:wrap}h2{font-size:20px}.card,.usage{border:1px solid var(--pa-line);border-radius:var(--pa-radius-card);padding:16px;margin:12px 0;overflow-wrap:anywhere}.note{font-size:12px;color:var(--pa-muted)}button{cursor:pointer;margin:6px;padding:6px 10px}button:disabled{cursor:wait}a{color:var(--pa-info)}p{margin:8px 0}
 </style>

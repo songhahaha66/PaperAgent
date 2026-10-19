@@ -21,7 +21,7 @@ def needs_owner_review(issue):
     Global findings bound to executable checks keep their independent countercheck.
     A confirmed recomputation likewise cannot be cleared by a local review.
     """
-    return (issue["status"] not in {"resolved", "dismissed"} and issue["action"] != "recompute"
+    return (issue["status"] not in {"resolved", "dismissed", "superseded"} and issue["action"] != "recompute"
             and (issue["source"] == "local_review" or
                  issue["action"] == "verify" and issue["status"] == "inconclusive" and not issue["check_ids"]))
 

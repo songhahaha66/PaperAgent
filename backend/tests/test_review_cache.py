@@ -93,16 +93,18 @@ def test_failure_is_not_success_and_only_matching_service_issue_closes(env):
     assert not env.store.delivery_ready(state)
 
 
-def test_other_stage_or_changed_input_does_not_close_service_failure(env):
+def test_only_completed_same_coverage_new_version_supersedes_old_service_failure(env):
     async def failure():raise TimeoutError()
     with pytest.raises(TimeoutError):invoke(env,failure)
     original=env.store.snapshot()['issues'][0]
     async def sections():return ClaimAudit(issues=[])
     invoke(env,sections,'sections',env.state['sections'])
+    assert env.store.snapshot()['issues'][0]['status']=='confirmed'
     (env.store.root/'data/input.csv').write_text('changed')
     async def success():return ConsistencyReview(conflicts=[])
     invoke(env,success)
-    assert next(i for i in env.store.snapshot()['issues'] if i['id']==original['id'])['status']=='confirmed'
+    replacement=next(i for i in env.store.snapshot()['issues'] if i['id']==original['id'])
+    assert replacement['status']=='superseded' and replacement['review_supersession']['old_review_id']==original['review_scope']['failed_review_id']
 
 
 def test_default_empty_response_and_corrupt_cache_are_not_success(env):
@@ -121,8 +123,12 @@ def test_context_change_during_response_does_not_cache_or_close(env):
     async def changed():
         (env.store.root/'data/input.csv').write_text('changed during request')
         return ConsistencyReview(conflicts=[])
-    with pytest.raises(ValueError,match='context_changed'):invoke(env,changed)
-    with env.store._connect() as db:assert not db.execute("SELECT 1 FROM review_records WHERE state='completed'").fetchone()
+    from ai_system.research.review_cache import ReviewSuperseded
+    with pytest.raises(ReviewSuperseded):invoke(env,changed)
+    with env.store._connect() as db:
+        assert not db.execute("SELECT 1 FROM review_records WHERE state='completed'").fetchone()
+        row=db.execute("SELECT payload FROM review_records WHERE state='superseded'").fetchone()
+        assert row and json.loads(row[0])['late_response']
 
 
 def test_delivery_metadata_does_not_repeat_unchanged_review(env):
@@ -230,3 +236,16 @@ def test_unknown_review_identifiers_are_failed_not_silently_dropped(env,monkeypa
     with env.store._connect() as db:
         assert not db.execute("SELECT 1 FROM review_records WHERE state='completed'").fetchone()
         assert db.execute("SELECT 1 FROM review_records WHERE state='failed'").fetchone()
+
+
+def test_shared_review_reply_still_runs_each_callers_contract_validation(env):
+    async def scenario():
+        started=asyncio.Event();release=asyncio.Event();calls=[]
+        async def perform():started.set();await release.wait();calls.append(1);return ConsistencyReview(conflicts=[])
+        first=asyncio.create_task(run_review(env.ctx,env.state,'reconcile',ConsistencyReview,'same','same',perform));await started.wait()
+        def stricter(result):raise ValueError('caller_contract_rejected')
+        second=asyncio.create_task(run_review(env.ctx,env.state,'reconcile',ConsistencyReview,'same','same',perform,validate=stricter))
+        await asyncio.sleep(.01);release.set();assert (await first).conflicts==[]
+        with pytest.raises(ValueError,match='caller_contract_rejected'):await second
+        assert calls==[1]
+    asyncio.run(scenario())

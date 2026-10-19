@@ -68,7 +68,7 @@ async def observe(state, runtime):
     sections.update({key: None for key in (state.get("sections") or {}) if key not in sections})
     # Section-only repairs are retried by write/validate on an explicit resume;
     # they still block publication, without rerunning accepted computations.
-    unresolved = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}
+    unresolved = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
                   and not (i["source"] == "sections" and i["action"] == "rewrite")]
     complete = not unresolved and all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in tasks.values())
     blocked = not complete and not ready_tasks(snapshot)
@@ -117,7 +117,7 @@ def public_snapshot(snapshot, *, work_status=None):
             work_status in {"paused", "cancelled", "failed"} else stage["status"]}
             for key, stage in snapshot.get("delivery_stages", {}).items()},
         "tasks": [public_task(snapshot, task, ready, work_status) for task in snapshot["tasks"].values() if not task["retired"]],
-        "issues": [i for i in snapshot["issues"] if i["status"] not in {"resolved", "dismissed"}],
+        "issues": [i for i in snapshot["issues"] if i["status"] not in {"resolved", "dismissed", "superseded"}],
         "requirements": [{**r, "status": "accepted" if all(snapshot["tasks"][key]["acceptance"] == "accepted" and
             snapshot["tasks"][key]["validity"] == "current" and (snapshot["tasks"][key]["kind"] != "writing" or
             snapshot["sections"].get(f"solve:{key}", {}).get("validity") == "current") for key in r["task_ids"]) else "pending"}
@@ -144,7 +144,7 @@ def current_validation(snapshot, task):
 def delivery_status(snapshot):
     """Explain the existing delivery gate; this projection never changes scheduling."""
     from .store import ResearchStore
-    issues = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed"}]
+    issues = [i for i in snapshot["issues"] if i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}]
     blockers = [{"task_id": i["task_id"], "message": i["message"], "action": i["action"]} for i in issues]
     covered = {i["task_id"] for i in issues}
     for key, task in snapshot["tasks"].items():
@@ -293,7 +293,7 @@ async def execute(branch, runtime):
             code = local.workspace / "code" / f"{key}_solution.py"
             if code.exists():
                 ctx.fs.write_text(f"code/{key}_solution.py", code.read_text(encoding="utf-8"))
-        clear = accepted and not any(i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed"}
+        clear = accepted and not any(i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
                                      for i in snapshot["issues"])
         if clear:
             await ctx.events.emit("paper_solved", f"{key} 已通过验收，登记 {len(results)} 项结果")

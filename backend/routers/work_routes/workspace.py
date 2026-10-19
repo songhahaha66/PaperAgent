@@ -289,6 +289,13 @@ class PaperDecision(BaseModel):
     decision: Literal['apply', 'reject','review']
 
 
+class ReviewTaskRequest(BaseModel):
+    research_id:str
+    stage:Literal['reconcile','sections','citations']
+    version:str=Field(min_length=64,max_length=64)
+    command_id:str=Field(pattern=r'^[a-zA-Z0-9_-]{1,64}$')
+
+
 def _paper_writing_model(db,user_id):
     from ai_system.config.environment import setup_environment_from_db
     from ai_system.core_handlers.llm_providers import create_llm_from_model_config
@@ -315,6 +322,23 @@ async def get_paper_document(work_id: str, db: Session = Depends(get_db), curren
         return await paper_editor.document(store)
     except ValueError as exc:
         raise HTTPException(409, str(exc))
+
+
+@router.get('/{work_id}/review-tasks')
+async def get_review_tasks(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    if not store.snapshot():raise HTTPException(409,'研究尚未建立')
+    from services.chat_services import review_tasks
+    return review_tasks.status(store)
+
+
+@router.post('/{work_id}/review-tasks',status_code=202)
+async def recover_review_task(work_id:str,request:ReviewTaskRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user,mutation=True)
+    if request.research_id!=store.research_id:raise HTTPException(409,'研究标识已变化，请刷新')
+    from services.chat_services import review_tasks
+    try:return review_tasks.start(store,request.stage,request.version,request.command_id,model_factory=lambda:_paper_writing_model(db,current_user))
+    except (ValueError,ResearchConflict) as exc:raise HTTPException(409,str(exc))
 
 
 @router.post('/{work_id}/paper/proposals')

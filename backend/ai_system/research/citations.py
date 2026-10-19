@@ -1,5 +1,6 @@
 """Source-bound citations and fail-closed claim support checks, separate from R/F."""
 import hashlib
+import asyncio
 import json
 import re
 import html
@@ -137,7 +138,12 @@ async def audit_citations(workspace, texts, llm,*,active=False):
         return [_saved_verdict(store,rows[key]) for key in rows]
     cached={key:_saved_verdict(store,row) for key,row in rows.items()}
     pending=[r for key,r in rows.items() if not cached[key]]
-    record=cache.start('citations',context,source='model' if pending else 'claim-cache-composition');diagnostic={'request_hashes':[]}
+    from .review_cache import ReviewInProgress
+    try:record=cache.start('citations',context,source='model' if pending else 'claim-cache-composition')
+    except ReviewInProgress as running:
+        await cache.wait(running.record,SupportBatch,lambda:_citation_context(workspace,texts,llm,list(rows.values()),system,prompt,active)[2])
+        return await audit_citations(workspace,texts,llm,active=active)
+    diagnostic={'request_hashes':[]}
     try:
         for offset in range(0,len(pending),8):
             batch=pending[offset:offset+8]
@@ -163,9 +169,12 @@ async def audit_citations(workspace, texts, llm,*,active=False):
         if current()!=context:raise CitationContractError('citation_context_changed')
         cache.complete(record,result.model_dump(),provenance={'response_diagnostic':diagnostic,'reused_claim_keys':[key for key in rows if key not in {r['key'] for r in pending}]},current_context=current)
         return [cached[key] for key in rows]
+    except asyncio.CancelledError:
+        cache.failed(record,RuntimeError('interrupted'),diagnostic={'reason':'cancelled','recoverable':True},current_context=lambda:_citation_context(workspace,texts,llm,list(rows.values()),system,prompt,active)[2])
+        raise
     except Exception as exc:
         diagnostic['contract_error']=getattr(exc,'code',None)
-        cache.failed(record,exc,diagnostic=diagnostic)
+        cache.failed(record,exc,diagnostic=diagnostic,current_context=lambda:_citation_context(workspace,texts,llm,list(rows.values()),system,prompt,active)[2])
         return [cached[key] or {'status':'insufficient','evidence_id':rows[key]['evidence']['id'],'reason':'文献支持核查未完成，请重试或移除无法核验的引用'} for key in rows]
 
 
