@@ -22,15 +22,24 @@ def run(value):return asyncio.run(value)
 
 def proposal(context, action='deliver'):
     result=next(e for e in context['evidence'] if e.get('task_id')=='Q1')
+    coverage=[]
+    for requirement in context['spec']['requirements']:
+        actual=next((e for task in reversed(requirement['task_ids']) for e in context['evidence'] if e.get('task_id')==task),None)
+        coverage.append({'requirement_id':requirement['id'],'requirement':requirement['statement'],
+            'supported':f"{actual['name']}={actual['text']}" if actual else '',
+            'basis':[{'ref':actual['id'],'quote':actual['text']}] if actual else [],
+            'remaining':'' if actual else '由既有写作和导出阶段实施。'})
     value={'action':action,'reason':'已有估计提供了实际依据，按原要求选择下一步。',
            'requirement_ids':[r['id'] for r in context['spec']['requirements']] if action=='deliver' else ['RQ1'],
-           'basis':[{'ref':result['id'],'quote':result['text']}]}
+           'basis':[{'ref':result['id'],'quote':result['text']}],'coverage':coverage}
     if action=='research':
         value.update(gap='估计对输入扰动是否稳定，尚无实际结果。',changes=[TaskChange(action='add',task_id='Q4',
             title='估计稳定性',objective='在现有输入上有目的地扰动样本，报告估计变化与适用边界；保留原要求及数据范围。',
             dependencies=['Q1'],requirement_ids=['RQ1']).model_dump()])
     if action=='literature':
         value.update(gap='估计所依赖的代表性前提需要外部资料查证。',query='Estimate demand representative sample evidence')
+    if action!='deliver':
+        next(c for c in coverage if c['requirement_id']=='RQ1')['remaining']=value['gap']
     return value
 
 
@@ -106,6 +115,75 @@ def test_sufficient_evidence_and_repeat_observe_resume_do_not_spend_or_add_work(
     assert env.store.snapshot()['tasks']==before['tasks']
     assert env.store.snapshot()['attempts']==before['attempts']
     assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
+
+
+def test_decision_context_uses_products_and_purposes_without_completion_shortcuts(env):
+    snapshot=env.store.snapshot()
+    for task in snapshot['tasks'].values():
+        task['report'].update(summary='all requirements are covered by accepted tasks',
+                              key_findings=['unsubstantiated completion claim'],limitations=['Only the stated conditions were examined.'])
+    key,context=planner.decision_context(env.store,snapshot)
+    assert all(not {'acceptance','validity','active_attempt','revision','report','retired'} & set(task) for task in context['tasks'])
+    assert 'all requirements are covered by accepted tasks' not in json.dumps(context)
+    assert 'unsubstantiated completion claim' not in json.dumps(context)
+    assert all(task['limitations']==['Only the stated conditions were examined.'] for task in context['tasks'])
+    assert context['spec']['requirements']==snapshot['spec']['requirements']
+    assert next(t['objective'] for t in context['tasks'] if t['task_id']=='Q1')==snapshot['tasks']['Q1']['objective']
+    assert {'demand','allocation','residual','independent'}<={e['name'] for e in context['evidence']}
+    revised=copy.deepcopy(snapshot);revised['tasks']['Q1']['revision']+=1
+    new_key,new_context=planner.decision_context(env.store,revised)
+    assert new_context==context and new_key!=key, 'Scheduler identity still invalidates deduplication without becoming model evidence'
+
+
+@pytest.mark.parametrize('damage',['missing_coverage','missing_requirement','duplicate_requirement','truncated_requirement','missing_basis',
+                                   'missing_answer','foreign_basis','fake_quote','unanswered_part'])
+def test_deliver_requires_actual_coverage_for_each_complete_original_requirement(env,damage):
+    snapshot=env.store.snapshot();_,context=planner.decision_context(env.store,snapshot)
+    value=proposal(context)
+    row=value['coverage'][0]
+    if damage=='missing_coverage':value.pop('coverage')
+    elif damage=='missing_requirement':value['coverage'].pop()
+    elif damage=='duplicate_requirement':value['coverage'].append(copy.deepcopy(row))
+    elif damage=='truncated_requirement':row['requirement']='only a fragment of the original purpose'
+    elif damage=='missing_basis':
+        row.update(supported='all requirements are covered by accepted tasks',basis=[])
+    elif damage=='missing_answer':row['supported']=''
+    elif damage=='foreign_basis':value['coverage'][2]['basis']=copy.deepcopy(row['basis'])
+    elif damage=='fake_quote':row['basis'][0]['quote']='a result that was never produced'
+    else:row['remaining']='The second requested output has not been produced.'
+    with pytest.raises(ValueError):
+        planner.validate_decision(planner.EvidenceDecision.model_validate(value),snapshot,context)
+    assert env.store.snapshot()==snapshot
+
+
+def test_multi_purpose_requirement_keeps_missing_part_visible_despite_old_acceptance(env):
+    original=env.store.snapshot()
+    full='Estimate demand and justify its applicability across the stated conditions'
+    with env.store._transaction() as db:
+        snapshot=env.store._read(db)
+        snapshot['spec']['requirement']=snapshot['spec']['requirement'].replace('Estimate demand',full)
+        snapshot['spec']['requirements'][0].update(statement=full,source_quote=full)
+        snapshot['tasks']['Q1']['objective']=full
+        snapshot['tasks']['Q1']['subproblem']['question']=full
+        snapshot['tasks']['Q1']['report']['summary']='all requirements are covered by accepted tasks'
+        env.store._save(db,snapshot,'controlled_original_question',{})
+    def missing_part(context):
+        assert context['spec']['requirements'][0]['statement']==full
+        assert next(t['objective'] for t in context['tasks'] if t['task_id']=='Q1')==full
+        assert all('acceptance' not in t and 'report' not in t for t in context['tasks'])
+        value=proposal(context,'research')
+        value['gap']='现有估计未回答在题目所述不同条件下是否仍适用。'
+        value['coverage'][0]['remaining']=value['gap']
+        value['changes'][0]['objective']='检验现有估计在题目所述条件间是否保持适用，报告实际变化及适用边界。'
+        return value
+    model=Model(missing_part);ctx=env.context(model)
+    state=observe(env,ctx)
+    assert not state['research_blocked'] and len(model.calls)==1
+    selected=loop.select(state,SimpleNamespace(context=ctx))
+    assert selected[0].arg['capability']=='experiments.execute'
+    assert selected[0].arg['inputs']['branch']['subproblem']['id']=='Q4'
+    for key,task in original['tasks'].items():
+        assert env.store.snapshot()['tasks'][key]['active_attempt']==task['active_attempt']
 
 
 def test_planning_failure_blocks_delivery_and_explicit_resume_reuses_accepted_work(env):

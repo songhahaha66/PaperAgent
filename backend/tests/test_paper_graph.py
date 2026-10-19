@@ -83,9 +83,16 @@ class _Structured:
         if self.schema is EvidenceDecision:
             context=json.loads(messages[-1].content)
             evidence=context['evidence'][0]
+            coverage=[]
+            for requirement in context['spec']['requirements']:
+                actual=next((e for task in reversed(requirement['task_ids']) for e in context['evidence'] if e.get('task_id')==task),None)
+                coverage.append({'requirement_id':requirement['id'],'requirement':requirement['statement'],
+                    'supported':f"{actual['name']}={actual['text']}" if actual else '',
+                    'basis':[{'ref':actual['id'],'quote':actual['text']}] if actual else [],
+                    'remaining':'' if actual else '由后续写作和导出完成。'})
             return EvidenceDecision(action='deliver',reason='已有结果足够回答原要求，保留局限并继续原有交付检查。',
                 requirement_ids=[r['id'] for r in context['spec']['requirements']],
-                basis=[{'ref':evidence['id'],'quote':evidence['text']}])
+                basis=[{'ref':evidence['id'],'quote':evidence['text']}],coverage=coverage)
         if self.schema is ProblemAnalysis:
             analysis = _analysis()
             source = messages[-1].content.split("# 题目\n", 1)[1].split("\n\n# 数据概览", 1)[0]

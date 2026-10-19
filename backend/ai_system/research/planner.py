@@ -14,10 +14,19 @@ class DecisionBasis(Contract):
     quote: str = Field(min_length=1, max_length=2000)
 
 
+class RequirementCoverage(Contract):
+    requirement_id: str
+    requirement: str = Field(min_length=1, description='逐字复制该要求的完整statement，不省略其中的并列目的或输出')
+    supported: str = Field(max_length=3000, description='实际产物具体回答了哪些部分，给出对应答案及其边界；执行通过、任务数和文件存在不是答案。没有实质答案时为空')
+    basis: list[DecisionBasis] = Field(default_factory=list, max_length=12, description='仅引用支撑本项具体答案的实际产物或原文')
+    remaining: str = Field(max_length=2000, description='原要求中尚无相应产物回答的部分；只在研究目的已完整回答时为空。交付性要求说明待写作/导出实施的部分')
+
+
 class EvidenceDecision(PlanProposal):
     action: Literal['deliver','research','literature']
     requirement_ids: list[str] = Field(min_length=1)
     basis: list[DecisionBasis] = Field(min_length=1, max_length=12)
+    coverage: list[RequirementCoverage] = Field(min_length=1, description='逐项核对全部原要求，每项恰好一次；先核对实际产物，再决定下一步')
     gap: str = Field(default='', max_length=2000)
     query: str = Field(default='', max_length=300)
 
@@ -34,15 +43,21 @@ def decision_context(store, snapshot):
     evidence += [{'id':s['id'],'name':s['source'].get('title') or '文献摘录','text':s['text'],
                   'locator':s['locator'],'boundary':s['boundary'],'source_url':s['source_url'],
                   'content_hash':s['content_hash']} for s in sources]
-    tasks=[{k:t.get(k) for k in ('task_id','revision','objective','dependencies','requirement_ids',
-                               'active_attempt','acceptance','validity','retired','report')}
-           for t in snapshot['tasks'].values() if t['kind']!='verify']
-    for task in tasks:
-        task['report']={k:v for k,v in (task['report'] or {}).items()
-                        if k in {'summary','key_findings','limitations','requirement_evidence'}}
-    context={'spec':snapshot['spec'],'tasks':tasks,'assumptions':snapshot['assumptions'],
+    research_tasks=[t for t in snapshot['tasks'].values() if t['kind']!='verify']
+    # Execution labels and report-level claims of completion are scheduler facts,
+    # not evidence that every purpose in the original question was answered.
+    tasks=[{**{k:t[k] for k in ('task_id','objective','dependencies','requirement_ids')},
+            'limitations':(t.get('report') or {}).get('limitations',[])} for t in research_tasks if not t['retired']]
+    assumptions={key:{**{k:a[k] for k in ('statement','task_ids','checks')},'refuted':a['status']=='refuted'}
+                 for key,a in snapshot['assumptions'].items() if a['status']!='retired'}
+    context={'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
              'evidence':evidence,'inputs':store.file_inputs(),'literature_mode':literature.policy()}
-    return 'research-next:'+digest(context),context
+    # Keep version/attempt identity for deduplication without offering completion
+    # labels to the model as an answer to the research question.
+    versions=[{k:t.get(k) for k in ('task_id','revision','active_attempt','acceptance','validity','retired')}
+              for t in research_tasks]
+    return 'research-next:'+digest({'context':context,'task_versions':versions,
+        'assumption_versions':[(key,a['revision']) for key,a in snapshot['assumptions'].items()]}),context
 
 
 def validate_decision(proposal, snapshot, context):
@@ -52,14 +67,34 @@ def validate_decision(proposal, snapshot, context):
     if not selected or not selected<=requirements.keys():
         raise ValueError('下一步决策必须关联原要求')
     known={e['id']:e for e in context['evidence']}
-    targets={key for rid in selected for key in requirements[rid]['task_ids']}
-    for basis in proposal.basis:
-        row=known.get(basis.ref)
-        if not row or not basis.quote.strip() or basis.quote not in row['text']:
-            raise ValueError('决策引用必须来自当前实际结果或文献原文，不能补造')
-        if row.get('task_id') and not any(snapshot['tasks'][key]['kind']!='verify' and
-                ResearchStore._reaches(snapshot,row['task_id'],key) for key in targets):
-            raise ValueError('决策结果与所选原要求无关')
+    def check_basis(items, requirement_ids):
+        targets={key for rid in requirement_ids for key in requirements[rid]['task_ids']}
+        for basis in items:
+            row=known.get(basis.ref)
+            if not row or not basis.quote.strip() or basis.quote not in row['text']:
+                raise ValueError('决策引用必须来自当前实际结果或文献原文，不能补造')
+            if row.get('task_id') and not any(snapshot['tasks'][key]['kind']!='verify' and
+                    ResearchStore._reaches(snapshot,row['task_id'],key) for key in targets):
+                raise ValueError('决策结果与所选原要求无关')
+    check_basis(proposal.basis,selected)
+    covered=[c.requirement_id for c in proposal.coverage]
+    if len(set(covered))!=len(covered) or set(covered)!=requirements.keys():
+        raise ValueError('决策必须逐项核对全部原要求，不能遗漏或重复')
+    gaps=set()
+    for item in proposal.coverage:
+        requirement=requirements[item.requirement_id]
+        if item.requirement!=requirement['statement']:
+            raise ValueError('覆盖说明必须保留完整原要求，不能省略部分研究目的')
+        check_basis(item.basis,[item.requirement_id])
+        if requirement['kind']!='deliverable':
+            if item.remaining.strip():
+                gaps.add(item.requirement_id)
+            elif not item.supported.strip() or not item.basis:
+                raise ValueError('声称研究要求已回答时必须给出实质答案及本项实际依据')
+    if proposal.action=='deliver' and gaps:
+        raise ValueError('原要求仍有未回答部分，不能直接收敛写作')
+    if proposal.action!='deliver' and not selected<=gaps:
+        raise ValueError('补充行动必须针对覆盖核对中尚未回答的研究要求')
     if not proposal.reason.strip() or proposal.assumptions or proposal.issue_ids:
         raise ValueError('正常研究决策不能代替既有反证修复或修改假设')
     if proposal.action=='research':
@@ -253,7 +288,14 @@ class Planner:
     async def decide(self, snapshot, context):
         from ..graph.llm_utils import call_structured, as_messages, cap_output
         return await call_structured(cap_output(self.llm,4800),EvidenceDecision,as_messages(
-            '根据原研究问题、当前已验收结果和实际文献摘录决定下一步。现在没有已确认的错误；不要为规划而制造问题。'
+            '从原题逐项核对研究问题与实际登记产物，再在同一次决策中选择下一步。'
+            '先前执行通过只说明当时的检查通过，不证明原题每一部分已回答；禁止用接受状态、任务数或报告自称完成作为依据。'
+            '先逐字读取每项原要求的完整statement和source_quote，核对其中每个研究目的和需要的输出；不能忽略并列目的。'
+            'coverage每条原要求恰好一项：requirement复制完整statement，supported给出实际产物回答了哪些部分及具体答案，'
+            'basis引用支撑本项答案的真实evidence，remaining列出没有相应产物回答的部分；不能用一个输出臆推另一项未产生的答案。'
+            '输入文件清单仅说明数据可用，不说明已分析；任务objective是研究目的，不是研究结果。报告的局限保留为边界，不作为完成证明。'
+            'goal和constraint的全部研究目的都有实际依据才可deliver；某一项研究要求仍有未回答部分，就选择解决它的最小补充行动。'
+            'deliverable的格式和文书工作由既有写作/导出阶段实施，在coverage中说明，不把待排版当成新的科学研究缺口。'
             '只在影响原题答案的关键缺口仍未解决时补研究；证据已足够回答原题时选deliver，不作无目的扩展。'
             'action=research时用changes增加有目的的任务：绑定已有requirement_ids、依赖相关已验收任务，'
             'objective明确要查明什么以及怎样判定答案；不重做已有任务，不删除或放宽原要求、检查和假设。'
