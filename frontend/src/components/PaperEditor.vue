@@ -280,7 +280,7 @@ async function propose() {
       instruction: instruction.value,
       ...(manual.value && mode.value==='wording' ? { content: draft.value } : {}),
       ...(mode.value==='evidence'?{edit_kind:'evidence',section_keys:correctionKeys.value,...(manual.value?{section_contents:Object.fromEntries(correctionKeys.value.map(key=>[key,evidenceDrafts.value[key]]))}:{})}:{}),
-      ...(mode.value==='wording' && !manual?{fragment_scope:{section_revision:section.value.revision,section_hash:section.value.content_hash,source_hash:document.value.source_hash,old:fragment.value},...(patchFailure.value?{recovery_of:patchFailure.value.attempt_id}:{})}:{}),
+      ...(mode.value==='wording' && !manual.value?{fragment_scope:{section_revision:section.value.revision,section_hash:section.value.content_hash,source_hash:document.value.source_hash,old:fragment.value},...(patchFailure.value?{recovery_of:patchFailure.value.attempt_id}:{})}:{}),
     })
     await load()
   } catch (e) {
