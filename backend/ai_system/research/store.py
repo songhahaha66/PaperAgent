@@ -840,19 +840,19 @@ class ResearchStore:
             state.setdefault("delivery_stages", {})[stage] = value
             self._save(db, state, "delivery_stage", {"stage": stage, **value})
 
-    def load_revision_command(self, command_id, base_revision, change, scope):
+    def load_revision_command(self, command_id, base_revision, change, scope, *, source_issue=None):
         with closing(self._connect()) as db:
             row = db.execute("SELECT digest, response FROM commands WHERE research_id=? AND id=?",
                              (self.research_id, "revision:" + command_id)).fetchone()
             if not row:
                 return None
-            if row[0] != digest({"base_revision": base_revision, "change": change, "scope": scope}):
+            if row[0] != digest({"base_revision": base_revision, "change": change, "scope": scope,**({'source_issue':source_issue} if source_issue else {})}):
                 raise ResearchConflict("command_id 已被其他命令使用")
             return PlanPatch.model_validate_json(row[1])
 
-    def apply_revision_command(self, command_id, base_revision, change, scope, patch):
+    def apply_revision_command(self, command_id, base_revision, change, scope, patch, *, source_issue=None):
         from .models import PlanPatch
-        signature = digest({"base_revision": base_revision, "change": change, "scope": scope})
+        signature = digest({"base_revision": base_revision, "change": change, "scope": scope,**({'source_issue':source_issue} if source_issue else {})})
         # The command's original patch is retained; a retry must not append the
         # user's change to the already-revised objective a second time.
         key = "revision:" + command_id

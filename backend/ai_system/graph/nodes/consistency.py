@@ -61,6 +61,21 @@ AUDITED_SECTIONS = ("abstract", "analysis", "sensitivity", "evaluation")
 AUDIT_SECTION_CHARS = 6000
 
 
+def section_coverage(sections):
+    rows={k:{'total_chars':len(v),'included_chars':min(len(v),AUDIT_SECTION_CHARS)}
+        for k,v in sections.items() if k!='references' and v}
+    return {'policy':'section-coverage-v1','limit':AUDIT_SECTION_CHARS,'sections':rows,
+        'complete':all(r['total_chars']==r['included_chars'] for r in rows.values())}
+
+
+class ReviewCoverageIncomplete(ValueError):pass
+
+
+def require_complete_sections(sections):
+    coverage=section_coverage(sections)
+    if not coverage['complete']:raise ReviewCoverageIncomplete('章节超过6000字符，现有审查覆盖不完整；不能视为全文通过，请缩小审查范围或等待分段核查')
+
+
 def consistency_text(ctx: GraphContext, conflicts: List[Dict]) -> str:
     """给写作模型的统一口径"""
     if not ctx.registry.claims:

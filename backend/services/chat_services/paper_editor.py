@@ -174,7 +174,11 @@ def guard_wording(before, after, latex):
         raise ValueError('；'.join(fragment_issues(after)))
 
 
-async def propose(store, key, instruction, content=None, llm=None,*,edit_kind='wording',section_keys=None,section_contents=None,fragment_scope=None,recovery_of=None):
+async def propose(store, key, instruction, content=None, llm=None,*,edit_kind='wording',section_keys=None,section_contents=None,fragment_scope=None,recovery_of=None,source_issue=None):
+    if source_issue:
+        from .paper_corrections import propose_correction
+        return await propose_correction(store,section_keys or [key],instruction,llm,section_contents or ({key:content} if content is not None else None),
+            fragment_scope=fragment_scope,recovery_of=recovery_of,wording=edit_kind=='wording',source_issue=source_issue)
     if edit_kind=='evidence':
         if content is not None:raise ValueError('依据修正须通过带证据审查的候选生成')
         from .paper_corrections import propose_correction
@@ -232,6 +236,10 @@ async def decide(store, proposal_id, apply, output_mode):
     filename, source = source_info(store, snapshot)
     if snapshot['commit_seq'] != proposal['base_commit'] or digest(source) != proposal['source_hash']:
         raise ResearchConflict('论文或研究版本已改变。候选和人工稿均已保留，请刷新后重新提出修改。')
+    if proposal.get('source_issue'):
+        from .issue_edits import require_binding,ready
+        require_binding(store,proposal['source_issue'])
+        if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
     state = await paper_state(store)
     changes=proposal.get('after_sections') or {proposal['section']:proposal['after']}
     if proposal.get('generation_contract')=='scoped-anchored-edits-v2':
@@ -250,7 +258,7 @@ async def decide(store, proposal_id, apply, output_mode):
         from ai_system.graph.nodes.write import reference_section
         reference_update = reference_section(state,ctx)
         state['sections']['references'] = reference_update
-    reviewed=proposal.get('edit_kind')=='evidence' or proposal.get('generation_contract')=='scoped-anchored-edits-v2'
+    reviewed=bool(proposal.get('source_issue')) or proposal.get('edit_kind')=='evidence' or proposal.get('generation_contract')=='scoped-anchored-edits-v2'
     if reviewed:
         from .paper_corrections import require_review,guard_correction
         from ai_system.research.method_facts import canonical_method_block
@@ -293,6 +301,10 @@ async def decide(store, proposal_id, apply, output_mode):
                     from ai_system.research.method_facts import verified_methods
                     if digest(verified_methods(store))!=proposal['method_facts_hash']:
                         raise ResearchConflict('编译期间已核验方法改变，未覆盖当前论文')
+                issue_proof=None
+                if proposal.get('source_issue'):
+                    from .issue_edits import require_review as require_issue_review
+                    issue_proof=require_issue_review(store,proposal,state)
                 # Persist both sides in the existing version journal and paper archive.
                 archive = store.root / '.system/research' / store.research_id / 'papers'
                 archive.mkdir(parents=True, exist_ok=True)
@@ -314,6 +326,9 @@ async def decide(store, proposal_id, apply, output_mode):
                 prepare_publication(store, proposal_id, staging, [filename] + exports)
                 proposal.update(status='applied', applied_revision=current['sections'][proposal['section']]['revision'],
                     applied_revisions={k:v['revision'] for k,v in versions.items()})
+                if issue_proof:
+                    from .issue_edits import resolve
+                    resolve(current,proposal,issue_proof)
                 store._save(db, current, 'section_edit_applied', {'proposal': proposal, 'versions': versions})
                 db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
                            (json.dumps(proposal, ensure_ascii=False), store.research_id, 'paper-edit:' + proposal_id))

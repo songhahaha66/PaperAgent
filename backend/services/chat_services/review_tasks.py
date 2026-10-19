@@ -75,7 +75,7 @@ def adopted_review(store,current,rows):
     for p in proposals:
         row=by_id.get(p.get('review_id'))
         if p.get('status')!='applied' or not row or not valid_result(row) or not matches(row,current,'sections'):continue
-        if row['stage']=='sections' and row['result'].get('issues')==[]:return row,'编辑时章节审查（每节最多6000字符）'
+        if row['stage']=='sections' and p.get('review_kind')!='issue_section' and row['result'].get('issues')==[]:return row,'编辑时章节审查（完整覆盖）'
         if row['stage']=='fragment' and row['result'].get('verdict')=='equivalent' and p.get('generation_contract')=='scoped-anchored-edits-v2':
             if any(r['stage']=='reconcile' and valid_result(r) and matches(r,current,'reconcile') and r.get('completed_at',0)>row.get('started_at',0) for r in rows):continue
             return row,'局部等义审查覆盖本次编辑；未重审全文'
@@ -128,11 +128,20 @@ def status(store):
             findings=bool(root[0]['result'].get('issues') or any(c.get('research_issue') for c in root[0]['result'].get('conflicts',[])) or any(v.get('status')!='supported' for v in root[0]['result'].get('verdicts',[])))
             item.update(state='completed',record_id=root[0]['id'],outcome='findings' if findings else 'passed',can_resume=False)
         elif stage=='sections' and adopted_review(store,current,rows):
-            adopted,description=adopted_review(store,current,rows);item.update(state='completed',record_id=adopted['id'],coverage=description,outcome='passed',can_resume=False)
+            adopted,description=adopted_review(store,current,rows)
+            fragment=adopted['stage']=='fragment'
+            item.update(state='partial' if fragment else 'completed',record_id=adopted['id'],coverage=description,
+                outcome='incomplete' if fragment else 'passed',can_resume=fragment,
+                reason='局部编辑已核查，当前章节全量审查仍待完成' if fragment else None)
         elif stage=='citations' and not any(citation_issues(store.root,t) for t in state['sections'].values()):
             item.update(state='completed',outcome='passed',coverage='当前引用句与原文逐项核查有效（或无引用）',can_resume=False)
         elif same and same[0]['state'] in {'failed','superseded'}:item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('error_code','interrupted'))
         elif root and root[0]['state'] in {'failed','running','superseded'}:item.update(state='failed' if root[0]['state']!='running' else 'running',record_id=root[0]['id'],reason=root[0].get('error_code'),can_resume=root[0]['state']!='running')
+        if stage=='sections':
+            from ai_system.graph.nodes.consistency import section_coverage
+            item['coverage_detail']=section_coverage(state['sections'])
+            if not item['coverage_detail']['complete']:
+                item.update(state='partial',outcome='incomplete',can_resume=False,coverage='章节全量核查未完成（每节仅支持6000字符）',reason='长章节需要分段核查；不会将不完整覆盖登记为全文通过')
         if current['source_conflict']:
             item.update(state='pending',can_resume=False,reason='源文件有人工修改，先合并原稿')
         if item['can_resume']:
@@ -144,9 +153,11 @@ def status(store):
     history=[]
     for row in rows[:30]:
         replacement=row.get('superseded_by')
+        detail=row['context'].get('section_coverage')
+        coverage_note=('本次核查完整覆盖所列章节：'+', '.join(detail['sections']) if detail['complete'] else '覆盖不完整，不能判为全文通过') if detail else '历史记录未说明覆盖范围，不能据此判为全文通过' if row['stage']=='sections' and row['source']!='recovery-intent' else '仅局部等义核查，不是全文审查' if row['stage']=='fragment' else None
         history.append({'id':row['id'],'stage':row['stage'],'state':'superseded' if replacement else row['state'],'original_state':row['state'],
             'version':row['context_hash'],'replacement_review_id':replacement,'recovered_by_review_id':row.get('recovered_by'),'superseded_by_context':row.get('superseded_by_context'),
-            'error_code':row.get('error_code'),'source':row['source']})
+            'error_code':row.get('error_code'),'source':row['source'],'coverage_detail':detail,'coverage_note':coverage_note})
     pending_candidates=[]
     with closing(store._connect()) as db:
         for r in db.execute("SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 10",(store.research_id,)):
@@ -154,16 +165,18 @@ def status(store):
             if p.get('status')=='pending':pending_candidates.append({'id':p['id'],'section':p['section'],'review_kind':p.get('review_kind','full_document'),
                 'state':'failed' if p.get('review_issues') else 'completed','issues':p.get('review_issues',[]),'origin':p.get('origin','manual')})
     return {'research_id':store.research_id,'research_revision':snapshot['revision'],'tasks':tasks,'history':history[:12],
+        'issues':[{k:i.get(k) for k in ('id','category','section','status','message')} for i in snapshot['issues'] if i['status'] not in {'resolved','dismissed','superseded'}],
         'pending_candidates':pending_candidates,'budget':budget}
 
 
 def _save_findings(store,stage,reports,expected):
-    if not reports:return
+    if not reports:return []
     with store._transaction() as db:
         if intent_context(store,stage)!=expected:raise ReviewSuperseded('审查期间材料已变化')
         state=store._read(db);ids=[]
         for report in reports:ids.append(store._record_issue(state,report,'confirmed' if report.category=='writing' else 'suspected',source='review-task:'+stage)['id'])
         store._save(db,state,'review_task_findings',{'stage':stage,'issues':ids})
+    return ids
 
 
 async def execute(store,stage,llm):
@@ -209,7 +222,10 @@ async def _run(store,stage,record,llm):
                 if intent_context(store,stage)!=context:raise ReviewSuperseded('结论审查完成时材料已变化')
                 path=store.root/'.system/consistency.json';temporary=path.with_suffix('.review-tmp')
                 temporary.write_text(json.dumps(row['result'],ensure_ascii=False));temporary.replace(path)
-        _save_findings(store,stage,reports,context)
+        finding_ids=_save_findings(store,stage,reports,context)
+        if reports:
+            from .issue_edits import bind_findings
+            bind_findings(store,finding_ids,paper_state(store)['sections'])
         cache.complete(record,{'outcome':'findings' if reports else 'passed','finding_count':len(reports)},provenance={'verified_records':proof},current_context=lambda:intent_context(store,stage))
     except ReviewSuperseded:
         try:cache.complete(record,{'discarded':True},current_context=lambda:intent_context(store,stage))

@@ -443,6 +443,7 @@ export function useWorkStream(options: {
   const sendMessage = async (
     messageContent?: string,
     action: ResearchAction = messageAction.value,
+    sourceIssue?:{id:string;version:string},
   ) => {
     const content = messageContent || inputValue.value.trim()
     if (!content || isStreaming.value || isDisposed() || !authStore.token) return
@@ -467,7 +468,7 @@ export function useWorkStream(options: {
       : undefined
     if (resolvedAction !== 'ask') questionScope.value = null
     messageAction.value = 'auto'
-    await sendRealMessage(content, resolvedAction, scope)
+    await sendRealMessage(content, resolvedAction, scope,sourceIssue)
   }
 
   // 发送真实消息（WebSocket）
@@ -475,6 +476,7 @@ export function useWorkStream(options: {
     message: string,
     action: ResearchAction,
     subproblemId?: string,
+    sourceIssue?:{id:string;version:string},
   ) => {
     if (!authStore.token || isDisposed()) return
 
@@ -499,7 +501,7 @@ export function useWorkStream(options: {
 
     try {
       // 使用WebSocket发送消息
-      await sendMessageViaWebSocket(message, aiMessageId, action, subproblemId)
+      await sendMessageViaWebSocket(message, aiMessageId, action, subproblemId,sourceIssue)
     } catch (error) {
       console.error('发送消息失败:', error)
       const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
@@ -520,6 +522,7 @@ export function useWorkStream(options: {
     messageId: string,
     action: ResearchAction,
     subproblemId?: string,
+    sourceIssue?:{id:string;version:string},
   ) => {
     const handler = await connectWorkSocket(messageId)
     const snapshot = researchSnapshot.value
@@ -530,6 +533,7 @@ export function useWorkStream(options: {
             research_id: snapshot.research_id,
             base_revision: snapshot.research_revision,
             scope: subproblemId ? [subproblemId] : undefined,
+            ...(sourceIssue?{source_issue:sourceIssue}:{}),
           }
         : undefined
     handler?.sendMessage(message, undefined, action, subproblemId, revision)

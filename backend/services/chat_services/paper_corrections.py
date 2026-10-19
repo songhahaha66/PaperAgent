@@ -182,7 +182,10 @@ def proposal_context(store,state,llm):
     return ctx
 
 
-def review_binding(store,state,llm,scope=None):
+def review_binding(store,state,llm,scope=None,source_issue=None):
+    if source_issue:
+        from .issue_edits import review_context as issue_review_context
+        return issue_review_context(store,state,llm,source_issue)
     ctx=proposal_context(store,state,llm)
     if scope:
         return review_context(ctx,state,'fragment',FRAGMENT_AUDIT_SYSTEM,fragment_prompt(store,state,scope),FragmentAudit,
@@ -197,6 +200,12 @@ def require_review(store,proposal,state):
     """Recheck the exact candidate review and provenance before publication."""
     from types import SimpleNamespace
     if digest(verified_methods(store))!=proposal['method_facts_hash']:raise ResearchConflict('已核验的方法设置已改变，须重新生成候选')
+    if proposal.get('source_issue'):
+        from .issue_edits import require_review as require_issue_review
+        return require_issue_review(store,proposal,state)
+    if proposal.get('review_kind')!='fragment_equivalence':
+        from ai_system.graph.nodes.consistency import require_complete_sections
+        require_complete_sections(state['sections'])
     scope=proposal['scope'] if proposal.get('review_kind')=='fragment_equivalence' else None
     context=review_binding(store,state,SimpleNamespace(model_name=proposal['review_model_id']),scope)
     hit=ReviewCache(store).get('fragment' if scope else 'sections',context,FragmentAudit if scope else ClaimAudit)
@@ -204,7 +213,10 @@ def require_review(store,proposal,state):
         raise ResearchConflict('候选缺少同上下文的有效一致性审查，禁止应用')
 
 
-async def review_candidate(store,state,llm,scope=None):
+async def review_candidate(store,state,llm,scope=None,source_issue=None):
+    if source_issue:
+        from .issue_edits import review
+        return await review(store,state,llm,source_issue)
     ctx=proposal_context(store,state,llm);issues=[]
     if scope:
         prompt=fragment_prompt(store,state,scope)
@@ -241,11 +253,21 @@ def require_scope(store,proposal,snapshot,source):
         raise ResearchConflict('缺少对应的成功模型局部提案记录')
 
 
-async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment_scope=None,recovery_of=None,wording=False):
+async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment_scope=None,recovery_of=None,wording=False,source_issue=None):
     from .paper_editor import paper_state,source_info
     snapshot=store.refresh_inputs();filename,source=source_info(store,snapshot)
     if not llm:raise ValueError('依据修正需要实际写作与审查模型')
-    if not store.delivery_ready(snapshot):raise ResearchConflict('研究未通过验收，不能以文稿修改代替研究修复')
+    if source_issue:
+        from .issue_edits import require_binding,ready
+        linked=require_binding(store,source_issue)
+        if keys!=[linked['section']]:raise ResearchConflict('该候选只能修改源意见对应章节')
+        from ai_system.graph.nodes.consistency import require_complete_sections
+        require_complete_sections({keys[0]:snapshot['sections'][keys[0]]['text']})
+        if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
+        from ai_system.research.runtime import ResearchRuntime
+        budget=ResearchRuntime(store.root,store.research_id).status()
+        if budget['used']>=budget['request_limit'] or budget['state']=='provider_blocked':raise ResearchConflict('请求预算或网关不可用，意见与原稿保留')
+    elif not store.delivery_ready(snapshot):raise ResearchConflict('研究未通过验收，不能以文稿修改代替研究修复')
     keys=list(dict.fromkeys(keys))
     if not 1<=len(keys)<=6 or any(k not in snapshot['sections'] or snapshot['sections'][k]['validity']!='current' or k=='references' for k in keys):raise ValueError('请选择一至六个当前正文章节')
     facts=verified_methods(store)
@@ -269,13 +291,14 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         combined['sections']['references']=reference_section(combined,ctx)
     issues=[{'section':k,'message':m} for k,t in combined['sections'].items() for m in citation_issues(store.root,t)]
     issues+=check_sections(combined,ctx)
-    context=review_binding(store,combined,llm,scope)
+    context=review_binding(store,combined,llm,scope,source_issue)
     primary=keys[0]
     proposal={'id':uuid.uuid4().hex,'section':primary,'section_keys':keys,'edit_kind':'wording' if wording else 'evidence','instruction':instruction,
         'before':before[primary],'after':after[primary],'before_sections':before,'after_sections':after,
         'generation_contract':'scoped-anchored-edits-v2' if answer else 'manual-evidence-v1','generation_edits':answer.model_dump()['edits'] if answer else [],
         'scope':scope,'patch_attempt_id':attempt['id'] if attempt else None,'origin':'model' if answer else 'manual',
-        'review_kind':'fragment_equivalence' if scope else 'full_document',
+        'review_kind':'issue_section' if source_issue else 'fragment_equivalence' if scope else 'full_document',
+        **({'source_issue':source_issue,'source_issue_binding':linked['binding']} if source_issue else {}),
         'base_commit':snapshot['commit_seq'],'source_hash':digest(source),'filename':filename,'status':'pending',
         'section_revision':snapshot['sections'][primary]['revision'],'citation_checks':checks,
         'citation_issues':list(dict.fromkeys(m for t in after.values() for m in citation_issues(store.root,t))),
@@ -290,7 +313,7 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
             attempt.update(state='proposed',proposal_id=proposal['id'],updated_at=time.time())
             db.execute('UPDATE paper_patch_attempts SET payload=? WHERE id=?',(json.dumps(attempt,ensure_ascii=False),attempt['id']))
     # Persist the exact candidate before the paid review, so cancellation cannot lose it.
-    review_issues,hit,context=await review_candidate(store,combined,llm,scope)
+    review_issues,hit,context=await review_candidate(store,combined,llm,scope,source_issue)
     proposal.update(review_issues=issues+review_issues,review_state='completed' if hit else 'failed',
         review_id=hit[1]['id'] if hit else None,review_context_hash=digest(context))
     with store._transaction() as db:
@@ -311,7 +334,8 @@ async def review_pending_fragment(store,proposal_id,llm):
     from ai_system.research.runtime import ResearchRuntime
     budget=ResearchRuntime(store.root,store.research_id).status()
     if budget['state']=='provider_blocked' or budget['used']>=budget['request_limit']:raise ResearchConflict('审查预算或网关不可用；候选保留，恢复不会清零预算')
-    if not store.delivery_ready(snapshot) or snapshot['commit_seq']!=p['base_commit'] or digest(source)!=p['source_hash']:raise ResearchConflict('研究或原稿版本已变化，不能重审旧提案')
+    from .issue_edits import ready
+    if not (ready(store) if p.get('source_issue') else store.delivery_ready(snapshot)) or snapshot['commit_seq']!=p['base_commit'] or digest(source)!=p['source_hash']:raise ResearchConflict('研究或原稿版本已变化，不能重审旧提案')
     scope=p.get('scope') if p.get('generation_contract')=='scoped-anchored-edits-v2' else None
     if scope:require_scope(store,p,snapshot,source)
     with store._connect() as db:
@@ -320,10 +344,10 @@ async def review_pending_fragment(store,proposal_id,llm):
     state=await paper_state(store);state['sections'].update(p['after_sections']);ctx=proposal_context(store,state,llm)
     problems=check_sections(state,ctx)
     if problems:raise ResearchConflict('候选仍有确定性或引用问题，不能以重审放行')
-    issues,hit,context=await review_candidate(store,state,llm,scope)
+    issues,hit,context=await review_candidate(store,state,llm,scope,p.get('source_issue'))
     history=[*p.get('review_history',[]),{'kind':p.get('review_kind','full_document'),'context_hash':p['review_context_hash'],
         'failed_record_id':json.loads(failed[0])['id'] if failed else None,'issues':p['review_issues']}]
-    p.update(review_kind='fragment_equivalence' if scope else 'full_document',review_history=history,review_state='completed' if hit else 'failed',review_issues=issues,review_id=hit[1]['id'] if hit else None,
+    p.update(review_kind='issue_section' if p.get('source_issue') else 'fragment_equivalence' if scope else 'full_document',review_history=history,review_state='completed' if hit else 'failed',review_issues=issues,review_id=hit[1]['id'] if hit else None,
         review_context_hash=digest(context),review_model_id=getattr(llm,'model_name',None) or getattr(llm,'model',None))
     with store._transaction() as db:
         current=store._read(db);latest=json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,'paper-edit:'+proposal_id)).fetchone()[0])

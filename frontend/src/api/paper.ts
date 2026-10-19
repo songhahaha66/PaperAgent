@@ -28,9 +28,15 @@ export interface PaperProposal {
   edit_kind?:'wording'|'evidence'
   origin?:'model'|'manual'
   generation_contract?:string
-  review_kind?:'fragment_equivalence'|'full_document'
+  review_kind?:'fragment_equivalence'|'full_document'|'issue_section'
+  source_issue?:{id:string;version:string}
   scope?:{id:string;old:string;start:number;end:number;section_hash:string}
   generation_edits?:{section:string;old:string;replacement:string}[]
+}
+export interface PaperIssueContext {
+  issue:{id:string;task_id:string;status:string;message:string;category:string}
+  route:'writing'|'research'|'service';version:string;section:string|null;quote:string|null;location:string;origin_current:boolean;active:boolean
+  evidence:{id:string;name:string;value:string;unit:string;current:boolean;stdout_path?:string}[];evidence_note:string
 }
 export interface PaperDocument {
   research_id: string
@@ -44,6 +50,7 @@ export interface PaperDocument {
   verified_formula_blocks?:Record<string,string>
 }
 export const paperAPI = {
+  issue:(work:string,id:string)=>apiClient.request<PaperIssueContext>(`/api/workspace/${work}/paper/issues/${encodeURIComponent(id)}`),
   read: (work: string) => apiClient.request<PaperDocument>(`/api/workspace/${work}/paper`),
   propose: (work: string, body: object) =>
     apiClient.request<PaperProposal>(`/api/workspace/${work}/paper/proposals`, {

@@ -8,17 +8,18 @@
         <div><strong>{{task.label}}</strong> · <span :data-state="task.state">{{labels[task.state]||task.state}}{{task.outcome==='findings'?'，仍有实质意见':''}}</span><small>版本 {{task.version.slice(0,8)}} · {{task.coverage}}</small><small v-if="task.reason">{{task.reason}}</small></div>
         <button v-if="!['completed','not_required'].includes(task.state)" :disabled="busy===task.stage || !task.can_resume" @click="recover(task)">{{task.state==='running'?'审查进行中':'恢复这项审查'}}</button>
       </div>
+      <div v-for="issue in (state.issues||[]).filter(i=>i.category!=='service').slice(0,8)" :key="issue.id" class="review-issue"><p>{{issue.message}}</p><button @click="$emit('issue',issue.id)">{{issue.category==='writing'?'定位原文并处理意见':'查看依据并定向修改研究'}}</button></div>
       <p v-if="state.pending_candidates.length">{{state.pending_candidates.length}} 个编辑候选仍待处理。<button @click="$emit('paper')">到论文工作台核对候选</button></p>
-      <details v-if="state.history.length"><summary>近期审查与替代关系</summary><p v-for="record in state.history.slice(0,8)" :key="record.id">{{stageLabels[record.stage]||record.stage}}{{record.source==='recovery-intent'?'恢复任务':'审查结果'}} · {{labels[record.state]||record.state}} · {{record.version.slice(0,8)}}<span v-if="record.replacement_review_id"> → {{record.replacement_review_id.slice(0,8)}}（原记录保留）</span><span v-if="record.recovered_by_review_id"> → {{record.recovered_by_review_id.slice(0,8)}}（同版本恢复，原失败保留）</span><span v-if="record.error_code"> · {{record.error_code}}</span></p></details>
+      <details v-if="state.history.length"><summary>近期审查与替代关系</summary><p v-for="record in state.history.slice(0,8)" :key="record.id">{{stageLabels[record.stage]||record.stage}}{{record.source==='recovery-intent'?'恢复任务':'审查结果'}} · {{labels[record.state]||record.state}} · {{record.version.slice(0,8)}}<span v-if="record.replacement_review_id"> → {{record.replacement_review_id.slice(0,8)}}（原记录保留）</span><span v-if="record.recovered_by_review_id"> → {{record.recovered_by_review_id.slice(0,8)}}（同版本恢复，原失败保留）</span><span v-if="record.error_code"> · {{record.error_code}}</span><small v-if="record.coverage_note">{{record.coverage_note}}</small></p></details>
     </template>
   </section>
 </template>
 <script setup lang="ts">
 import {ref,onMounted,onUnmounted,watch} from 'vue'
 import {reviewTasksAPI,type ReviewTaskState,type ReviewTaskItem} from '@/api/researchSetup'
-const props=defineProps<{workId:string;refreshKey?:number}>(),emit=defineEmits<{changed:[];paper:[]}>()
+const props=defineProps<{workId:string;refreshKey?:number}>(),emit=defineEmits<{changed:[];paper:[];issue:[id:string]}>()
 const state=ref<ReviewTaskState|null>(null),error=ref(''),loading=ref(false),busy=ref('')
-const labels:Record<string,string>={pending:'待审查',running:'运行中',completed:'已完成',failed:'失败，可恢复',superseded:'被新版本替代',not_required:'当前无需执行'}
+const labels:Record<string,string>={partial:'覆盖不完整',pending:'待审查',running:'运行中',completed:'已完成',failed:'失败，可恢复',superseded:'被新版本替代',not_required:'当前无需执行'}
 const stageLabels:Record<string,string>={reconcile:'结论口径',sections:'章节一致性',citations:'文献支持',fragment:'局部等义'}
 let version=0,operation=0,timer:ReturnType<typeof setInterval>|undefined
 async function load(){const seq=++version;loading.value=true;try{const value=await reviewTasksAPI.read(props.workId);if(seq===version){state.value=value;error.value=''}}catch(e){if(seq===version)error.value=e instanceof Error?e.message:'审查状态暂不可读'}finally{if(seq===version)loading.value=false}}

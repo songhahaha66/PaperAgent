@@ -166,6 +166,7 @@ class ClaimIssue(BaseModel):
     contradicts: bool = Field(default=True, description="这句话是否确实与结论表矛盾；一致、或只是没有提到的，填 false")
     section: str = Field(description="有问题的章节 key")
     problem: str = Field(description="本节哪句话与哪条结论（编号）不一致，应怎样改")
+    quote: str = Field(default='',max_length=1200,description="可选：逐字复制本节问题原文；不能精确引用则留空，不编造引文")
     research_issue: IssueReport | None = Field(default=None, description="若根因是数据、模型或假设错误，提交研究问题而非只改措辞")
 
 

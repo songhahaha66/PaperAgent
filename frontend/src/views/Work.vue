@@ -121,6 +121,7 @@
                     @open-file="handleWorkspaceFileSelect"
                     @ask="askSubproblem"
                     @revise="reviseSubproblem"
+                    @issue="openIssueEditor"
                   />
                 </JsonChatRenderer>
                 <button v-if="!atBottom && isStreaming" class="jump-latest" @click="jumpToLatest">
@@ -198,7 +199,7 @@
             @updated="loadResearchSnapshot"
             @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
           />
-          <ResearchOverview @resolved="refreshPaper" v-else-if="panel.kind === 'overview'" :work-id="workId" :running="isStreaming" :refresh-key="researchSnapshot?.commit_seq" @open="kind=>openPanel(kind,isMobile?'main':'secondary')" />
+          <ResearchOverview @issue="openIssueEditor" @resolved="refreshPaper" v-else-if="panel.kind === 'overview'" :work-id="workId" :running="isStreaming" :refresh-key="researchSnapshot?.commit_seq" @open="kind=>openPanel(kind,isMobile?'main':'secondary')" />
           <ResearchComparisons v-else-if="panel.kind === 'comparisons'" :work-id="workId" :disabled="isStreaming" :refresh-key="researchSnapshot?.commit_seq" />
           <ResearchExperiences v-else-if="panel.kind === 'experiences'" :work-id="workId" :refresh-key="researchSnapshot?.commit_seq" />
           <ResearchLiterature v-else-if="panel.kind === 'literature'" :work-id="workId" :disabled="isStreaming" :evidence-id="literatureEvidenceId" :refresh-key="researchSnapshot?.commit_seq" @updated="loadResearchSnapshot" @cite="citeLiterature" />
@@ -255,6 +256,7 @@
             :disabled="isStreaming"
             @open-file="handleWorkspaceFileSelect"
             :citation-request="citationRequest"
+            :issue-request="issueRequest"
             @artifact="paperPreview = true"
             @updated="refreshPaper"
             @ask="askPaper"
@@ -392,6 +394,8 @@ const {
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
 const paperPreview = ref(false)
 const literatureEvidenceId = ref('')
+const issueRequest=ref<{id:string;at:number}|null>(null)
+function openIssueEditor(id:string){issueRequest.value={id,at:Date.now()};paperPreview.value=false;openPanel('paper',isMobile.value?'main':'secondary')}
 const citationRequest = ref<{id:string;at:number}|null>(null)
 function citeLiterature(id:string) {
   citationRequest.value={id,at:Date.now()}
@@ -413,10 +417,10 @@ function askPaper(message: string, task?: string) {
   layout.activateChat()
   sendMessage(message, 'ask')
 }
-function revisePaper(message: string, task?: string) {
+function revisePaper(message: string, task?: string, sourceIssue?:{id:string;version:string}) {
   questionScope.value = task || null
   layout.activateChat()
-  sendMessage(message, 'revise_research')
+  sendMessage(message, 'revise_research',sourceIssue)
 }
 const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
 const {

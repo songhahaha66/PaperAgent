@@ -119,5 +119,6 @@ export interface ResearchRevisionCommand {
   command_id: string
   research_id: string
   base_revision: number
+  source_issue?:{id:string;version:string}
   scope?: string[]
 }

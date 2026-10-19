@@ -36,7 +36,8 @@ def review_coverage(stage,context):
     return {'kind':'candidate' if candidate else 'research','stage':stage,
         'slot':f'{stage}:'+('candidate:'+str((scope or {}).get('id') or digest(context.get('section_hashes',{}))) if candidate else 'research'),
         'version':digest(context),'sections':context.get('section_hashes',{}),
-        'input_hash':digest(context.get('inputs',{})),'material_version':coverage_material(stage,context),'policy':'review-coverage-v1'}
+        'input_hash':digest(context.get('inputs',{})),'material_version':coverage_material(stage,context),'policy':'review-coverage-v1',
+        'content':context.get('section_coverage')}
 
 
 def _payload(item):
@@ -81,7 +82,9 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
     if stage in {'sections','fragment'}:
         try:consistency=digest(json.loads((root/'.system/consistency.json').read_text()))
         except (OSError,ValueError):pass
+    from ..graph.nodes.consistency import section_coverage
     return {'policy':POLICY,'stage':stage,'request_hash':digest({'system':system,'prompt':prompt,'schema':schema.model_json_schema()}),'reconcile_projection_hash':consistency,
+        'section_coverage':section_coverage(sections or {}) if stage=='sections' else None,
         'model_id':getattr(ctx.planner_llm,'model_name',None) or getattr(ctx.planner_llm,'model',None),
         'inputs':store.file_inputs() if store else {},
         'tasks':{k:{p:v.get(p) for p in ('revision','active_attempt','validity','subproblem','dependencies')} for k,v in snapshot.get('tasks',{}).items()},
@@ -112,6 +115,7 @@ class ReviewCache:
                 CREATE INDEX IF NOT EXISTS review_lookup ON review_records(research_id,stage,context_hash,state);''')
 
     def get(self,stage,context,schema):
+        if stage=='sections' and not context.get('section_coverage',{}).get('complete',True):return None
         key=digest(context)
         with closing(self.store._connect()) as db:rows=db.execute("SELECT payload FROM review_records WHERE research_id=? AND stage=? AND context_hash=? AND state='completed' ORDER BY rowid DESC",(self.store.research_id,stage,key)).fetchall()
         for row in rows:
@@ -151,6 +155,9 @@ class ReviewCache:
         raise RuntimeError('审查连接已中断，租约到期后可恢复')
 
     def complete(self,record,result,*,provenance=None,current_context=None):
+        if record['stage']=='sections' and not record['context'].get('section_coverage',{}).get('complete',True):
+            from ..graph.nodes.consistency import ReviewCoverageIncomplete
+            raise ReviewCoverageIncomplete('不完整章节审查不能登记为完成')
         record={**record,'result':result,'result_hash':digest(result),'completed_at':time.time(),'provenance':provenance or {}}
         stale=False
         with self.store._transaction() as db:
@@ -272,6 +279,9 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             answer=await cache.wait(pending.record,schema,context)
             if validate is not None:validate(answer)
             return answer
+        if stage=='sections':
+            from ..graph.nodes.consistency import require_complete_sections
+            require_complete_sections(sections or {})
         answer=await perform()
         verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')

@@ -271,6 +271,11 @@ from services.chat_services.paper_corrections import FragmentScope,PatchFailure
 from services.chat_services.task_manager import task_manager
 
 
+class SourceIssue(BaseModel):
+    id:str=Field(min_length=1,max_length=64)
+    version:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+
 class PaperEditRequest(BaseModel):
     research_id: str
     base_commit: int
@@ -282,6 +287,7 @@ class PaperEditRequest(BaseModel):
     section_contents:dict[str,str]|None=Field(default=None,max_length=6)
     fragment_scope:FragmentScope|None=None
     recovery_of:str|None=Field(default=None,max_length=32)
+    source_issue:SourceIssue|None=None
 
 
 class PaperDecision(BaseModel):
@@ -332,6 +338,14 @@ async def get_review_tasks(work_id:str,db:Session=Depends(get_db),current_user:i
     return review_tasks.status(store)
 
 
+@router.get('/{work_id}/paper/issues/{issue_id}')
+async def paper_issue_context(work_id:str,issue_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    store=_paper_store(db,work_id,current_user)
+    from services.chat_services.issue_edits import context
+    try:return context(store,issue_id)
+    except ValueError as exc:raise HTTPException(404,str(exc))
+
+
 @router.post('/{work_id}/review-tasks',status_code=202)
 async def recover_review_task(work_id:str,request:ReviewTaskRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     store=_paper_store(db,work_id,current_user,mutation=True)
@@ -347,7 +361,7 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
     if request.research_id != store.research_id or request.base_commit != store.snapshot()['commit_seq']:
         raise HTTPException(409, '研究版本已改变，请刷新论文')
     llm = None
-    if request.content is None or '{{C:' in request.content:
+    if request.source_issue is not None or request.content is None or '{{C:' in request.content:
         llm = _paper_writing_model(db,current_user)
     try:
         from ai_system.research.runtime import budget_scope, ResearchBudgetExhausted
@@ -358,9 +372,10 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
             llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
         with budget_scope(store.root,store.research_id):
             try:
-                if request.edit_kind=='wording' and request.section_keys is None and request.fragment_scope is None:
+                if request.edit_kind=='wording' and request.section_keys is None and request.fragment_scope is None and request.source_issue is None:
                     return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
                 options={'edit_kind':request.edit_kind,'section_keys':request.section_keys}
+                if request.source_issue is not None:options['source_issue']=request.source_issue.model_dump()
                 if request.section_contents is not None:options['section_contents']=request.section_contents
                 if request.fragment_scope is not None:options['fragment_scope']=request.fragment_scope.model_dump()
                 if request.recovery_of is not None:options['recovery_of']=request.recovery_of
@@ -772,7 +787,7 @@ async def research_overview(work_id:str,db:Session=Depends(get_db),current_user:
         last_error='研究执行失败，已保留检查点与请求计数。可查看对话中的错误后恢复。'
     return {'settings':runtime.policy(),'budget':runtime.status(),'requests':runtime.requests() if rid else [],
         'execution_resolutions':[{'issue':{k:i.get(k) for k in ('id','task_id','task_revision','message','evidence_refs','status')},'proof':i['resolution']}
-            for i in (snapshot or {}).get('issues',[]) if i.get('resolution')][-20:],
+            for i in (snapshot or {}).get('issues',[]) if i.get('category')=='execution' and i.get('resolution')][-20:],
         'research':actual.model_dump(),'literature':{'sources':len(library['sources']),'evidence':sum(s.get('evidence_count',0) for s in library['sources']),'operations':library['operations'],'citations':citations},
         'experience':{'enabled':scope.enabled(db),'usage':usage,'design_usage':design_usage(store) if store else []},'comparisons':comparisons,
         'skills':[{ 'task_id':key,'skills':(task.get('design') or {}).get('skills',[])} for key,task in (snapshot or {}).get('tasks',{}).items()],

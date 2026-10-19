@@ -103,6 +103,7 @@
           <span v-if="issue.source === 'local_review'">
             · {{ isZh ? '求解审查' : 'Solution review' }}</span
           ><br />{{ issue.message }}
+          <button v-if="!['resolved','dismissed','superseded'].includes(issue.status)" class="evidence-link" @click="$emit('issue',issue.id)">{{isZh?'定位并处理这条意见':'Locate and address this issue'}}</button>
           <details>
             <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
             <p>
@@ -227,6 +228,7 @@ defineEmits<{
   'open-file': [path: string]
   ask: [subproblemId: string]
   revise: [subproblemId: string]
+  issue: [id: string]
 }>()
 const { isZh } = useStudioCopy()
 const taskTitle = (id: string) => {

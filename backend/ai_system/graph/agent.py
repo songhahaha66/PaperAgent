@@ -166,7 +166,7 @@ class PaperGraphAgent:
             await ctx.kernels.close()
 
     async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
-                              change: str, scope: list[str] | None = None) -> str:
+                              change: str, scope: list[str] | None = None, source_issue:dict|None=None) -> str:
         """Apply an idempotent revision, then selectively resume this research."""
         if research_id != self._load_thread():
             raise ValueError("研究标识已改变，请刷新后重试")
@@ -176,8 +176,13 @@ class PaperGraphAgent:
         if not snapshot:
             raise ValueError("研究尚未生成可修订任务")
         # Stable command payload even when retrying after the revision committed.
-        patch = store.load_revision_command(command_id, base_revision, change, scope)
+        issue_options={'source_issue':source_issue} if source_issue else {}
+        patch = store.load_revision_command(command_id, base_revision, change, scope,**issue_options)
         if patch is None:
+            if source_issue:
+                from services.chat_services.issue_edits import require_binding
+                linked=require_binding(store,source_issue,writing=False)
+                if linked['route']!='research' or scope!=[linked['issue']['task_id']]:raise ValueError('源意见必须进入对应任务的定向研究修改')
             if snapshot["revision"] != base_revision:
                 raise ValueError("研究版本已改变，请刷新后重试")
             from ..research.runtime import budget_scope
@@ -192,7 +197,16 @@ class PaperGraphAgent:
                 raise
             finally:trace.dump(Path(self.workspace_dir)/'.system/planner_llm_calls.json')
             patch = propose_revision(snapshot, command_id, base_revision, change, scope, requirements)
-        store.apply_revision_command(command_id, base_revision, change, scope, patch)
+            if source_issue:require_binding(store,source_issue,writing=False)
+        store.apply_revision_command(command_id, base_revision, change, scope, patch,**issue_options)
+        if source_issue:
+            with store._transaction() as db:
+                key='issue-research:'+command_id
+                if not db.execute('SELECT 1 FROM commands WHERE research_id=? AND id=?',(research_id,key)).fetchone():
+                    from ..research.store import digest
+                    link={'source_issue':source_issue,'revision_command_id':command_id,'base_revision':base_revision,'scope':scope}
+                    db.execute('INSERT INTO commands VALUES (?,?,?,?)',(research_id,key,digest(link),json.dumps(link,ensure_ascii=False)))
+                    store._save(db,store._read(db),'issue_research_revision_linked',link)
         current = store.snapshot()
         if current["commit_seq"] == snapshot["commit_seq"] and current["outcome"] in {"completed", "needs_attention"}:
             # A delivered command retry must not republish the paper or rerun export.

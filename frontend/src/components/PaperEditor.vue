@@ -8,18 +8,28 @@
       <button @click="$emit('artifact')">{{ isZh ? '排版预览' : 'Preview' }}</button>
     </header>
     <p v-if="error" role="alert">{{ error }}</p>
+    <section v-if="issueContext" class="issue-context" aria-label="源审查意见">
+      <strong>{{issueContext.issue.message}}</strong><p>{{issueContext.issue.id}} · {{issueContext.issue.status}} · 版本 {{issueContext.version.slice(0,8)}}</p>
+      <p>{{issueContext.location}}</p><pre v-if="issueContext.quote" class="issue-quote">{{issueContext.quote}}</pre>
+      <p v-if="!issueContext.origin_current" role="alert">意见对应旧正文或旧任务版本，须重新核查，不能直接应用旧修改。</p>
+      <p>{{issueContext.evidence_note}}</p><p v-for="e in issueContext.evidence" :key="e.id">{{e.id}} · {{e.name}}：{{e.value}} {{e.unit}} · {{e.current?'当前证据':'历史证据'}} <button v-if="e.stdout_path" @click="$emit('open-file',e.stdout_path)">查看计算输出</button></p>
+      <template v-if="issueContext.route==='research'"><p>这是实质科研问题，需核验数据、方法或假设；不能靠修改措辞关闭。</p><textarea v-model="instruction" :disabled="busy"/><button :disabled="busy || !issueContext.active || !issueContext.origin_current" @click="research">提交这条意见的定向研究修改</button></template>
+      <p v-else-if="issueContext.route==='service'">这是服务审查故障，请在研究总览恢复对应审查。</p>
+      <p v-else>候选通过源意见核查并应用成功后，才更新这条意见；其他意见继续保留。</p>
+      <button @click="issueContext=null">退出这条意见</button>
+    </section>
     <p v-if="!document && !error">{{ isZh ? '正在读取章节…' : 'Loading sections…' }}</p>
     <template v-if="document">
       <p v-if="!document.sections.length">{{ isZh ? '论文将在研究通过验收并完成写作后显示。' : 'Sections will appear after research checks and writing complete.' }}</p>
       <label
         >{{ isZh ? '选择章节' : 'Section' }}
-        <select v-model="selected" :disabled="busy">
+        <select v-model="selected" :disabled="busy || !!issueContext">
           <option v-for="s in document.sections" :key="s.key" :value="s.key">
             {{ s.title }} · v{{ s.revision }}
           </option>
         </select>
       </label>
-      <template v-if="section">
+      <template v-if="section && (!issueContext || issueContext.route==='writing')">
         <p>
           {{
             section.validity === 'current'
@@ -98,7 +108,7 @@
               <textarea class="candidate" :data-section="key" v-model="evidenceDrafts[key]" :disabled="busy" />
             </div>
           </template>
-          <button :disabled="busy || (!(manual && mode==='wording') && !instruction.trim()) || (mode==='evidence' && (!manual || !correctionKeys.length)) || (mode==='wording' && !manual && !fragmentReady)" @click="propose">
+          <button :disabled="busy || (!!issueContext && (!issueContext.active || !issueContext.origin_current)) || (!(manual && mode==='wording') && !instruction.trim()) || (mode==='evidence' && (!manual || !correctionKeys.length)) || (mode==='wording' && !manual && !fragmentReady)" @click="propose">
             {{ busy ? (isZh ? '处理中…' : 'Working…') : isZh ? '生成修改对比' : 'Preview changes' }}
           </button>
         </template>
@@ -109,7 +119,8 @@
           <p v-for="issue in proposal.citation_issues || []" :key="issue" role="alert">{{ issue }}</p>
           <p v-for="(check,i) in proposal.citation_checks || []" :key="i">{{ check.status }} · {{ check.reason }}</p>
           <p v-for="(issue,i) in proposal.review_issues || []" :key="i" role="alert">{{issue.section}} · {{issue.message}}</p>
-          <p v-if="proposal.review_id">{{proposal.review_kind==='fragment_equivalence'?(isZh?'已保存局部等义性审查记录':'Fragment equivalence review recorded'):(isZh?'已保存候选全文审查记录':'Candidate review recorded')}} · {{proposal.review_id.slice(0,10)}}</p>
+          <p v-if="proposal.source_issue">源意见 {{proposal.source_issue.id}} · 原版本 {{proposal.source_issue.version.slice(0,8)}}</p>
+          <p v-if="proposal.review_id">{{proposal.review_kind==='issue_section'?'已保存源意见对应完整章节核查':proposal.review_kind==='fragment_equivalence'?(isZh?'已保存局部等义性审查记录':'Fragment equivalence review recorded'):(isZh?'已保存完整章节覆盖审查记录':'Complete section review recorded')}} · {{proposal.review_id.slice(0,10)}}</p>
           <div v-for="change in proposalDiffs" :key="change.key" class="section-diff">
           <h4>{{document.sections.find(s=>s.key===change.key)?.title||change.key}}</h4>
           <div class="diff">
@@ -130,7 +141,7 @@
                 : 'Check facts and conclusion strength. Applying saves history and rebuilds the export.'
             }}
           </p>
-          <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length || !!proposal.review_issues?.length" @click="decide('apply')">
+          <button v-if="proposal.status === 'pending'" :disabled="busy || !!proposal.citation_issues?.length || !!proposal.review_issues?.length || (!!proposal.source_issue && proposal.source_issue.version!==issueContext?.version)" @click="decide('apply')">
             {{ isZh ? '应用并更新论文' : 'Apply and update paper' }}
           </button>
           <button v-if="proposal.status==='pending' && ['scoped-anchored-edits-v2','manual-evidence-v1'].includes(proposal.generation_contract || '') && !proposal.review_id && proposal.review_issues?.length" :disabled="busy" @click="decide('review')">{{isZh?'恢复这个候选的审查':'Resume this candidate review'}}</button>
@@ -152,7 +163,7 @@
             document.history.length
           }})
         </summary>
-        <button v-for="p in document.history" :key="p.id" @click="proposal = p">
+        <button v-for="p in document.history" :key="p.id" @click="selectProposal(p)">
           {{ p.section }} · v{{ p.section_revision }} · {{ p.status }}
         </button>
       </details>
@@ -161,7 +172,7 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watch,nextTick } from 'vue'
-import { paperAPI, type PaperDocument, type PaperProposal } from '@/api/paper'
+import { paperAPI, type PaperDocument, type PaperProposal,type PaperIssueContext } from '@/api/paper'
 import { useStudioCopy } from '@/lang/studio'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 const props = defineProps<{
@@ -170,13 +181,14 @@ const props = defineProps<{
   refreshKey?: number
   disabled?: boolean
   citationRequest?: {id:string;at:number}|null
+  issueRequest?: {id:string;at:number}|null
 }>()
 const emit = defineEmits<{
   'open-file': [path: string]
   artifact: []
   updated: []
   ask: [message: string, task?: string]
-  research: [message: string, task?: string]
+  research: [message: string, task?: string, sourceIssue?:{id:string;version:string}]
 }>()
 const { isZh } = useStudioCopy()
 const document = ref<PaperDocument | null>(null),
@@ -190,6 +202,11 @@ const document = ref<PaperDocument | null>(null),
   proposal = ref<PaperProposal | null>(null),
   selection = ref('')
 const draftCommit = ref(0)
+const issueContext=ref<PaperIssueContext|null>(null)
+let issueSequence=0
+async function locateIssue(){const request=props.issueRequest,seq=++issueSequence,work=props.workId;if(!request){issueContext.value=null;return}try{const value=await paperAPI.issue(work,request.id);if(seq!==issueSequence||work!==props.workId)return;issueContext.value=value;proposal.value=null;await load();if(seq!==issueSequence)return;if(value.section)selected.value=value.section;await nextTick();instruction.value=value.issue.message;mode.value=value.route==='research'?'research':'wording';manual.value=false;fragment.value=value.quote&&value.quote.length<=600?value.quote:'';draft.value=section.value?.text||'';draftCommit.value=document.value?.commit_seq||0}catch(e){if(seq===issueSequence)failure(e)}}
+watch(()=>props.issueRequest,locateIssue,{immediate:true})
+async function selectProposal(p:PaperProposal){const seq=++issueSequence;proposal.value=p;if(!p.source_issue){issueContext.value=null;selected.value=p.section;return}try{const value=await paperAPI.issue(props.workId,p.source_issue.id);if(seq!==issueSequence)return;issueContext.value=value;selected.value=p.section}catch(e){if(seq===issueSequence)failure(e)}}
 const fragment=ref('')
 const patchFailure=ref<{attempt_id:string;recovery_allowed:boolean;scope:{old:string}}|null>(null)
 const correctionKeys=ref<string[]>([])
@@ -225,6 +242,7 @@ const affected = computed(() => {
   return tasks.filter((t) => ids.has(t.id))
 })
 watch(section, (s, previous) => {
+  if(s?.key===previous?.key && s?.revision===previous?.revision && s?.content_hash===previous?.content_hash)return
   if (manual.value && s?.key === previous?.key) return
   draftCommit.value = document.value?.commit_seq || 0
   draft.value = s?.text || ''
@@ -242,7 +260,8 @@ function ask() {
     section.value?.task_refs.length === 1 ? section.value.task_refs[0] : undefined,
   )
 }
-function research() {
+async function research() {
+  if(issueContext.value){try{const current=await paperAPI.issue(props.workId,issueContext.value.issue.id);if(current.version!==issueContext.value.version||!current.active)throw new Error('意见版本已改变，请重新定位');emit('research',`[源意见 ${current.issue.id} / ${current.version}] ${instruction.value}`,current.issue.task_id,{id:current.issue.id,version:current.version})}catch(e){failure(e)}return}
   emit(
     'research',
     `针对章节「${section.value?.title}」：${instruction.value}`,
@@ -279,6 +298,7 @@ async function propose() {
       base_commit: manual.value ? draftCommit.value : document.value.commit_seq,
       section: selected.value,
       instruction: instruction.value,
+      ...(issueContext.value?{source_issue:{id:issueContext.value.issue.id,version:issueContext.value.version}}:{}),
       ...(manual.value && mode.value==='wording' ? { content: draft.value } : {}),
       ...(mode.value==='evidence'?{edit_kind:'evidence',section_keys:correctionKeys.value,...(manual.value?{section_contents:Object.fromEntries(correctionKeys.value.map(key=>[key,evidenceDrafts.value[key]]))}:{})}:{}),
       ...(mode.value==='wording' && !manual.value?{fragment_scope:{section_revision:section.value.revision,section_hash:section.value.content_hash,source_hash:document.value.source_hash,old:fragment.value},...(patchFailure.value?{recovery_of:patchFailure.value.attempt_id}:{})}:{}),
@@ -311,6 +331,7 @@ async function decide(decision: string) {
     if (proposal.value.status === 'applied' && proposal.value.section === selected.value) {
       draft.value = section.value?.text || ''
       draftCommit.value = document.value?.commit_seq || 0
+      if(proposal.value.source_issue)issueContext.value=await paperAPI.issue(props.workId,proposal.value.source_issue.id)
     }
     emit('updated')
   } catch (e) {
@@ -319,7 +340,7 @@ async function decide(decision: string) {
     working.value = false
   }
 }
-watch(() => props.workId, load, { immediate: true })
+watch(() => props.workId, ()=>{issueSequence++;issueContext.value=null;load();if(props.issueRequest)locateIssue()}, { immediate: true })
 watch(
   () => props.refreshKey,
   () => {

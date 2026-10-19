@@ -20,12 +20,19 @@ ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "r
 ACTIONS = {"auto", "ask", "run", "resume", "confirm", "revise", "revise_research"}
 
 
+class SourceIssueReference(BaseModel):
+    model_config=ConfigDict(extra='forbid',strict=True)
+    id:str=Field(min_length=1,max_length=64)
+    version:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+
 class ResearchRevisionCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     command_id: str = Field(min_length=1, max_length=200)
     research_id: str
     base_revision: int = Field(ge=1)
     scope: list[str] | None = Field(default=None, min_length=1)
+    source_issue:SourceIssueReference|None=None
 
 
 class ResearchContextPermissionError(PermissionError):

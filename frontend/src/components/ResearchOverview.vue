@@ -8,7 +8,7 @@
       <p v-if="state.last_error" role="alert">最近停止原因：{{state.last_error}}</p>
       <p v-if="state.research.graph_status==='interrupted'">等待确认方案，可在对话中确认后继续；已消耗预算保留。</p>
       <p v-if="['paused','cancelled','failed'].includes(state.research.work_status)">研究已暂停或失败。原代码、检查点和有效产物保留；使用工作台恢复操作继续。</p>
-      <ReviewTasks :work-id="workId" :refresh-key="refreshKey" @changed="load" @paper="emit('open','paper')" />
+      <ReviewTasks :work-id="workId" :refresh-key="refreshKey" @changed="load" @issue="id=>emit('issue',id)" @paper="emit('open','paper')" />
       <ol>
         <li><strong>资料准备</strong><p>简短论文 {{state.settings.compact_paper?'开启':'关闭'}} · 设计确认 {{state.settings.confirm_models?'开启':'关闭'}}</p><button @click="emit('open','files')">数据与文件</button></li>
         <li><strong>公开文献与引用</strong><p>{{state.literature.sources}} 个来源 · {{state.literature.evidence}} 条实际摘录 · 正文引用 {{state.literature.citations.length}} 处</p><p v-for="(c,i) in state.literature.citations" :key="i">{{c.evidence_id}} · {{c.status}} · {{c.reason}}</p><p v-for="(o,i) in state.literature.operations.slice(0,2)" :key="i">{{o.kind}} · {{o.status}} {{o.error||''}}</p><button @click="emit('open','literature')">核对原文与支持状态</button></li>
@@ -28,7 +28,7 @@
 import {ref,computed,watch,onMounted,onUnmounted} from 'vue'
 import {researchSetupAPI,executionRecoveryAPI,type ExecutionRecoveryProof} from '@/api/researchSetup'
 import ReviewTasks from './ReviewTasks.vue'
-const props=defineProps<{workId:string;running?:boolean;refreshKey?:number}>(),emit=defineEmits<{open:[kind:string];resolved:[]}>()
+const props=defineProps<{workId:string;running?:boolean;refreshKey?:number}>(),emit=defineEmits<{open:[kind:string];resolved:[];issue:[id:string]}>()
 const recovery=ref<ExecutionRecoveryProof|null>(null),recoveryBusy=ref(false),recoveryRecorded=ref(false)
 const state=ref<any>(null),error=ref(''),loading=ref(false)
 const designCount=computed(()=>state.value?.experience.design_usage.reduce((n:number,u:any)=>n+u.refs.length,0)||0)

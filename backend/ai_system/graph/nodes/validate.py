@@ -144,6 +144,8 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     research_restart = any(i["blocking"] and i["action"] != "rewrite" for i in issues)
     blocked = bool(issues) and not research_restart and state.get("repair_round", 0) >= ctx.max_repair_rounds
     ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"))
+    from services.chat_services.issue_edits import bind_findings
+    bind_findings(ctx.research,[i['id'] for i in issues],state.get('sections') or {})
     if blocked:
         await ctx.set_stage("validate", "blocked", "章节修复次数已用尽，保留草稿，禁止交付")
     from ...research.control import public_snapshot

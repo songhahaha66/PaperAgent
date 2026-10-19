@@ -262,3 +262,12 @@ def test_saved_fragment_lease_expiry_remains_recoverable(scoped):
     assert row['state']=='failed' and row['diagnostic']['reason']=='lease_expired'
     restored=asyncio.run(edits.review_pending_fragment(v.store,p['id'],v.llm))
     assert restored['review_id'] and not restored['review_issues'] and len(v.calls)==1
+
+
+def test_applied_fragment_does_not_claim_complete_section_review(scoped):
+    from services.chat_services.review_tasks import status
+    v=scoped;v.state['sections'][v.key]='局限与适用条件。'*20+v.old
+    v.store.save_sections(v.state['sections'],[]);v.store.publish_paper(assemble(v.state))
+    p=propose(v);asyncio.run(editor.decide(v.store,p['id'],True,'markdown'))
+    task=next(t for t in status(v.store)['tasks'] if t['stage']=='sections')
+    assert task['state']=='partial' and task['outcome']=='incomplete' and '局部等义' in task['coverage']
