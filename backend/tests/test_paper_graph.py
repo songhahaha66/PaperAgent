@@ -252,7 +252,7 @@ def _make_workspace(tmp_path: Path) -> Path:
 def _context(ws: Path, model: FakeModel, **options) -> GraphContext:
     # These fixtures exercise multi-route comparison explicitly.
     return GraphContext.create(str(ws), planner_llm=model, judge=FixedJudge(),
-                               **({"n_candidates": 2, "explore_top_k": 2} | options))
+                               **({"n_candidates": 2, "explore_top_k": 1} | options))
 
 
 # ----------------------------------------------------------------------
@@ -266,7 +266,7 @@ def test_graph_end_to_end_offline(tmp_path):
     FakeModel.text_calls = []
     ws = _make_workspace(tmp_path)
     model = FakeModel()
-    # 评审分差 8 分，默认会跳过试跑；放宽阈值以覆盖探索流程
+    # Legacy graph fixture; trusted supervised comparison has separate real-data tests.
     ctx = _context(ws, model, explore_margin=100)
     ctx.research = ResearchStore(ws, "t")
 
@@ -287,12 +287,9 @@ def test_graph_end_to_end_offline(tmp_path):
     design = result["designs"]["Q1"]
     assert design["methods"] == ["arima", "regression"]
     assert design["scores"][1]["total"] == 12.0
-    # 评审选了分数更高的方案乙，但探索时按统一协议实测，方案甲胜出；方案乙编造的指标没通过核对
-    exploration = design["exploration"]
-    assert [p["name"] for p in exploration["probes"]] == ["方案乙", "方案甲"]
-    assert [p["metric_grounded"] for p in exploration["probes"]] == [False, True]
-    assert exploration["chosen_index"] == 0 and design["chosen"]["name"] == "方案甲"
-    assert "留出集 AUC" in exploration["reason"]
+    # This two-row legacy fixture cannot certify supervised experiments.
+    # Real split/metric selection is covered with diabetes data in test_supervised_comparison.
+    assert 'exploration' not in design and design['chosen']['name']=='方案乙'
 
     # 审查要求 Q1 返工一轮后通过；Q2 一次通过
     assert [bool(r["issues"]) for r in result["solutions"]["Q1"]["reviews"]] == [True, False]
@@ -633,7 +630,7 @@ def test_select_probe_metric_direction_ties_and_fallbacks():
     from ai_system.graph.nodes.explore import Probe, select_probe, shortlist
 
     def probe(i, prior, works=True, metric=None):
-        p = Probe(candidate_index=i, candidate={"name": f"方案{i}"}, kernel_key=f"Q1~c{i}", prior=prior)
+        p = Probe(candidate_index=i, candidate={"name": f"方案{i}"}, kernel_key=f"Q1~c{i}", prior=prior, project_measured=True)
         p.report = {"works": works, "metric_value": str(metric) if metric is not None else ""}
         p.run_log = [{"ok": works}]
         p.metric = metric
@@ -642,18 +639,18 @@ def test_select_probe_metric_direction_ties_and_fallbacks():
     rmse = {"applicable": True, "metric": "RMSE", "higher_is_better": False}
     # 越小越好
     assert select_probe([probe(0, 10, metric=3.2), probe(1, 8, metric=2.1)], rmse)[0].candidate_index == 1
-    # 相差 1% 以内视为打平，用评审分打破平局
-    assert select_probe([probe(0, 8, metric=2.000), probe(1, 10, metric=2.010)], rmse)[0].candidate_index == 1
+    # Frozen absolute tolerance/order replaces critic tie breaking.
+    assert select_probe([probe(0, 8, metric=2.000), probe(1, 10, metric=2.010)], rmse)[0].candidate_index == 0
     # 没跑通或指标没核对通过的均不能晋升到正式求解
     assert select_probe([probe(0, 12, works=False, metric=1.0), probe(1, 5, metric=9.0)], rmse)[0].candidate_index == 1
     assert select_probe([probe(0, 12), probe(1, 5)], rmse)[0] is None
     # 没有统一指标时直接正式求解，不用文字评分替代执行验收
     none = {"applicable": False}
     winner, reason = select_probe([probe(0, 12), probe(1, 5)], none)
-    assert winner is None and "新内核" in reason
+    assert winner is None and "不沿用自评" in reason
     # 都没跑通就沿用评审选择
     winner, reason = select_probe([probe(0, 5, works=False), probe(1, 9, works=False)], none)
-    assert winner is None and "沿用" in reason
+    assert winner is None and "不沿用自评" in reason
 
     design = {"candidates": [{}, {}, {}], "scores": [{"total": 5}, {"total": 9}, {"total": None}], "chosen_index": 1}
     assert shortlist(design, 2) == [1, 0]

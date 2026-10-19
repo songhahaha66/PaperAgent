@@ -136,6 +136,10 @@ class GraphContext:
             from .methods import DEFAULT_SKILL_POLICY
             options['skill_policy'] = (ResearchStore(workspace, 'workspace-skills', read_only=True).skill_preferences()['policy']
                                        if (workspace / DB_PATH).exists() else dict(DEFAULT_SKILL_POLICY))
+        if 'explore_top_k' not in options and (workspace/'.system/research.sqlite').exists():
+            from ..research.store import ResearchStore
+            from ..research.comparison import ComparisonStore
+            options['explore_top_k']=2 if ComparisonStore(ResearchStore(workspace,'workspace-comparisons')).policy()['enabled'] else 1
         return cls(
             workspace=workspace,
             fs=fs,

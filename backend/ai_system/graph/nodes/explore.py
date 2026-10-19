@@ -1,253 +1,81 @@
-"""
-执行驱动的方案搜索（求解的第一步）
-
-design 阶段的 critic 只能在动手前判断方案"看起来"好不好。2024_C 里看起来合理的 Q3 方案，
-跑出来验证集 AUC 只有 0.616，而这时已经没有回头的机会。这里借鉴 AIDE / MLE-bench 的做法，
-让排名靠前的几个方案先在真实数据上跑一小段，用执行结果来定：
-
-1. 为子问题定一个统一的验证协议（同一个指标、同一种划分、同一个基线），各候选按同一协议汇报，结果才可比；
-2. design 评分最高的 k 个候选各开一个内核，并行跑一个短的探索循环，只实现核心模型并按协议给出指标；
-3. 指标必须出现在探索时某次成功执行的输出里（与结果登记同一套核对），编造的指标不参与比较；
-4. 有可比指标时按指标选，差距在容差内用 design 评分打破平局；没有统一指标的子问题（优化、评价、描述类），
-   跳过试跑，直接按设计评审选择；
-5. 胜出分支的内核和对话历史整体晋升为正式求解，探索阶段的计算不浪费；其余内核释放。
-"""
-
+"""Budgeted, project-measured supervised two-candidate exploration."""
 import asyncio
-import logging
 import re
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
-
-from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import BaseMessage, HumanMessage
-from langgraph.errors import GraphRecursionError
-
-from ..compaction import (
-    CompactHistoryMiddleware,
-    DropRefusedStepsMiddleware,
-    HistoryRecorder,
-    ReportOrderingMiddleware,
-    StepBudgetMiddleware,
-    TruncationGuardMiddleware,
-)
+from dataclasses import dataclass,field
+from typing import Any,Dict,List,Optional
+from langchain_core.messages import HumanMessage
 from ..context import GraphContext
-from ..llm_utils import as_messages, call_structured
-from ..registry import GroundingError, _parse_number
-from ..state import BranchInput, ProbeReport, ValidationProtocol
-from .review import leaked, metric_direction
+from ..llm_utils import as_messages,call_structured
+from ..state import ValidationProtocol
+from ..registry import GroundingError,_parse_number
+from .review import leaked
 
-logger = logging.getLogger(__name__)
-
-# 两个指标相对差距在 1% 以内视为打平
-TIE_TOLERANCE = 0.01
-
-# 假设检验类子问题（"是否随机""是否存在"）没有"越大越好"的指标：不同检验的统计量和 p 值不能比高低。
-# 2024_C 的 Q2 曾为此试跑 13 分钟，最后"只有一个方案跑通"
-HYPOTHESIS_TASK = re.compile(r"检验|假说|是否.{0,8}(随机|存在|显著|有关)")
-PREDICTIVE_TASK = re.compile(r"预测|分类|识别|回归|拟合|估计")
+HYPOTHESIS_TASK=re.compile(r"检验|假说|是否.{0,8}(随机|存在|显著|有关)")
+PREDICTIVE_TASK=re.compile(r"预测|分类|识别|回归|拟合|估计|predict|classif|regression",re.I)
 
 
-def is_hypothesis_test(subproblem: Dict) -> bool:
-    text = f"{subproblem.get('title', '')} {subproblem.get('question', '')}"
+def is_hypothesis_test(subproblem):
+    text=f"{subproblem.get('title','')} {subproblem.get('question','')}"
     return bool(HYPOTHESIS_TASK.search(text)) and not PREDICTIVE_TASK.search(text)
 
-PROTOCOL_SYSTEM = (
-    "你是数学建模竞赛的指导老师。几个候选建模方案要先在数据上各跑一小段再决定用哪个，"
-    "请为这个子问题定一个所有方案共用的验证协议，使它们的结果可以直接比较。"
-    "协议要防止数据泄漏（例如按比赛或按时间划分，而不是随机打乱逐行划分），并给出一个简单的对照基线。"
-    "指标只能是一个数（例如 AUC），不能是“检验力与第一类错误率”这样的组合；需要兼顾多个量时，定义一个合成的单一分数。"
-    "如果这个子问题本质上没有可比的数值指标（如优化方案、综合评价、描述性分析、假设检验、写备忘录），applicable 设为 false。"
-)
 
-PROBE_SYSTEM = """你是数学建模竞赛的编程手，现在处于方案探索阶段：几个候选方案各自在数据上先跑一小段，
-按同一个验证协议比较，胜出的方案再完整求解。
+def two_candidate_mode(ctx,branch):
+    if ctx.explore_top_k<2 or is_hypothesis_test(branch['subproblem']):return False
+    from .supervised_probe import csv_files,root_store
+    from ...research.comparison import ComparisonStore
+    return bool(csv_files(ctx.workspace)) and (bool(PREDICTIVE_TASK.search(branch['subproblem']['question'])) or bool(ComparisonStore(root_store(ctx)).policy().get('spec')))
 
-- 用 run_python 执行代码。内核是持久的，前面定义的变量后面都能直接用。
-- 只实现方案的核心模型，不做灵敏度分析，不画论文用图，步数有限（约 {steps} 步）。
-- 严格按验证协议计算指标和基线，并把它们 print 出来；协议无法套用时如实说明。
-- 不要为了指标好看而泄漏数据或只挑一部分数据。
-- 同一次执行里再做一次标签置换对照：把原始结果列在构造任何特征和标签之前随机打乱（只打乱训练集标签不算）、其余完全不变，算出同一指标并 print；
-  打乱后仍明显好于基线的指标会被判为泄漏，不参与比较。
-- 数据文件路径相对于工作目录，例如 data/xxx.csv。
-
-完成后提交 ProbeReport：指标值必须是某次执行 print 出的数，metric_run_id 填那次执行的 run_id。"""
-
-PROBE_NUDGE = "探索步数有限，请现在调用 ProbeReport 提交探索结果（没跑通就如实写 works=false）。"
 
 @dataclass
 class Probe:
-    candidate_index: int
-    candidate: Dict[str, Any]
-    kernel_key: str
-    prior: Optional[float]
-    report: Optional[Dict[str, Any]] = None
-    metric: Optional[float] = None  # 只有核对通过的指标才记数值
-    grounding_error: str = ""
-    error: str = ""
-    messages: List[BaseMessage] = field(default_factory=list)
-    run_log: List[Dict] = field(default_factory=list)
-
+    candidate_index:int
+    candidate:Dict[str,Any]
+    kernel_key:str
+    prior:Optional[float]=None
+    report:Optional[Dict]=None
+    metric:Optional[float]=None
+    grounding_error:str=''
+    error:str=''
+    messages:List=field(default_factory=list)
+    run_log:List=field(default_factory=list)
+    project_measured:bool=False
     @property
-    def works(self) -> bool:
-        return bool(self.report and self.report.get("works") and any(run["ok"] for run in self.run_log))
-
-    def to_record(self) -> Dict[str, Any]:
-        report = self.report or {}
-        return {
-            "candidate_index": self.candidate_index,
-            "name": self.candidate["name"],
-            "prior": self.prior,
-            "works": self.works,
-            "metric_value": report.get("metric_value", ""),
-            "metric_grounded": self.metric is not None,
-            "grounding_error": self.grounding_error,
-            "baseline_value": report.get("baseline_value", ""),
-            "summary": report.get("summary", ""),
-            "problems": report.get("problems", []),
-            "error": self.error,
-            "runs": len(self.run_log),
-        }
+    def works(self):return bool(self.project_measured and self.report and self.report.get('works'))
+    def to_record(self):return self.report or {}
 
 
 @dataclass
 class Exploration:
-    chosen_index: int
-    reason: str
-    protocol: Dict[str, Any]
-    probes: List[Probe]
-    winner: Probe
-
-    def to_record(self) -> Dict[str, Any]:
-        return {
-            "protocol": self.protocol,
-            "probes": [p.to_record() for p in self.probes],
-            "chosen_index": self.chosen_index,
-            "reason": self.reason,
-        }
+    chosen_index:Optional[int]
+    reason:str
+    protocol:Dict
+    probes:List[Probe]
+    winner:Optional[Probe]
+    record:Dict=field(default_factory=dict)
+    def to_record(self):return self.record
 
 
-def shortlist(design: Dict[str, Any], top_k: int) -> List[int]:
-    """design 评分最高的 k 个候选；没有评分时保持生成顺序，原选中的候选总在第一位"""
-    candidates = design.get("candidates") or []
-    scores = design.get("scores") or [{} for _ in candidates]
-    chosen = design.get("chosen_index", 0)
-    order = sorted(
-        range(len(candidates)),
-        key=lambda i: (i != chosen, -(scores[i].get("total") if scores[i].get("total") is not None else -1), i),
-    )
-    return order[:top_k]
+def shortlist(design,top_k):
+    candidates=design.get('candidates') or [];scores=design.get('scores') or [{} for _ in candidates]
+    chosen=design.get('chosen_index',0)
+    return sorted(range(len(candidates)),key=lambda i:(i!=chosen,-(scores[i].get('total') if scores[i].get('total') is not None else -1),i))[:top_k]
 
 
-def _better(a: float, b: float, higher_is_better: bool) -> bool:
-    return a > b if higher_is_better else a < b
+def select_probe(probes,protocol):
+    measured=[p for p in probes if p.works and p.metric is not None] if protocol.get('applicable') else []
+    if not measured:return None,'没有项目重算指标，不沿用自评宣布胜者'
+    best=min(measured,key=lambda p:p.candidate_index)
+    for p in sorted(measured,key=lambda p:p.candidate_index):
+        if abs(p.metric-best.metric)<=protocol.get('tie_tolerance',1e-6):continue
+        if (p.metric>best.metric)==protocol.get('higher_is_better',True):best=p
+    return best,'按项目重算指标和冻结顺序选择，未使用 critic 分数'
 
 
-def _tied(a: float, b: float) -> bool:
-    return abs(a - b) <= TIE_TOLERANCE * max(abs(a), abs(b), 1e-12)
-
-
-def _prior(probe: Probe) -> float:
-    return probe.prior if probe.prior is not None else -1.0
-
-
-def select_probe(probes: List[Probe], protocol: Dict[str, Any]) -> Tuple[Optional[Probe], str]:
-    """Only executed, grounded measurements can select an exploratory winner."""
-    measured = [p for p in probes if p.works and p.metric is not None] if protocol.get("applicable") else []
-    if not measured:
-        return None, "探索未产生可核对的成功指标，沿用方案评审并从新内核正式求解"
-    higher = protocol.get("higher_is_better", True)
-    best = measured[0]
-    for probe in measured[1:]:
-        if _tied(probe.metric, best.metric):
-            if _prior(probe) > _prior(best):
-                best = probe
-        elif _better(probe.metric, best.metric, higher):
-            best = probe
-    others = "，".join(f"「{p.candidate['name']}」{p.report['metric_value']}" for p in measured if p is not best)
-    reason = f"按{protocol.get('metric') or '验证指标'}选择：{best.report['metric_value']}"
-    return best, reason + (f"（对比 {others}）" if others else "")
-
-
-def _subproblem_text(subproblem: Dict[str, Any]) -> str:
-    deliverables = "；".join(subproblem.get("deliverables") or []) or "（未列出）"
-    return f"{subproblem['id']} {subproblem['title']}\n问题：{subproblem['question']}\n交付物：{deliverables}"
-
-
-async def make_protocol(ctx: GraphContext, branch: BranchInput, candidates: List[Dict]) -> Dict[str, Any]:
-    names = "\n".join(f"- {c['name']}：{c['idea']}" for c in candidates)
-    prompt = (
-        f"# 原题（含题内数据）\n{branch['source']}\n\n"
-        f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
-        f"# 数据概览\n{branch['data_profile'][:6000]}\n\n"
-        f"# 待比较的候选方案\n{names}"
-    )
-    protocol = await call_structured(ctx.planner_llm, ValidationProtocol, as_messages(PROTOCOL_SYSTEM, prompt))
-    protocol = protocol.model_dump()
-    direction = metric_direction(protocol.get("metric", ""))
-    if direction is not None:
-        protocol["higher_is_better"] = direction
-    return protocol
-
-
-
-
-def protocol_text(protocol: Dict[str, Any]) -> str:
-    if not protocol.get("applicable"):
-        return "# 验证协议\n这个子问题没有统一的数值指标。跑通核心模型，给出能说明结果是否合理的检验即可，metric_value 留空。"
-    direction = "越大越好" if protocol.get("higher_is_better", True) else "越小越好"
-    return (
-        f"# 验证协议（所有候选方案相同，必须严格遵守）\n"
-        f"- 指标：{protocol.get('metric')}（{direction}）\n"
-        f"- 验证做法：{protocol.get('procedure')}\n"
-        f"- 对照基线：{protocol.get('baseline')}"
-    )
-
-
-async def run_probe(ctx: GraphContext, branch: BranchInput, probe: Probe, protocol: Dict[str, Any]) -> Probe:
-    from .solve import PLACEHOLDER_REPLY, ReportFallback, build_task, build_tools, run_agent  # 避免循环导入
-
-    subproblem_id = branch["subproblem"]["id"]
-    recorder = HistoryRecorder()
-    system = PROBE_SYSTEM.format(steps=ctx.explore_steps)
-    agent = create_agent(
-        model=ctx.coder_llm,
-        tools=build_tools(ctx, subproblem_id, probe.run_log, kernel_key=probe.kernel_key, record=False),
-        system_prompt=system,
-        response_format=ToolStrategy(ProbeReport),
-        middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.explore_steps, 3, PROBE_NUDGE),
-                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(), ReportOrderingMiddleware("ProbeReport")],
-    )
-    task = build_task(branch, ctx, candidate=probe.candidate, extra=protocol_text(protocol), ending="开始探索。")
-    try:
-        result = await run_agent(agent, [HumanMessage(content=task)], ctx.explore_steps * 2 + 1, PROBE_NUDGE,
-                                 fallback=ReportFallback(ctx.coder_llm, ProbeReport, system, recorder))
-    except GraphRecursionError:
-        probe.error = f"超过 {ctx.explore_steps} 步仍未完成探索"
-        return probe
-    except Exception as exc:
-        logger.exception("探索 %s 失败", probe.kernel_key)
-        probe.error = str(exc)
-        return probe
-
-    structured = result.get("structured_response")
-    probe.messages = result["messages"]
-    if structured is None:
-        probe.error = "没有提交探索报告"
-        return probe
-    probe.report = structured.model_dump()
-    value, run_id = probe.report.get("metric_value", ""), probe.report.get("metric_run_id", "")
-    if probe.works and protocol.get("applicable") and value and run_id:
-        try:
-            ctx.registry.verify(value, run_id)
-            probe.metric = _parse_number(value)
-            probe.grounding_error = shuffle_check(ctx, probe.report, protocol)
-            if probe.grounding_error:
-                probe.metric = None
-        except GroundingError as exc:
-            probe.grounding_error = str(exc)
-    return probe
+async def make_protocol(ctx,branch,candidates):
+    """Legacy descriptive protocol helper; never authorizes an experiment."""
+    prompt=f"原题：{branch['source']}\n子问题：{branch['subproblem']['question']}\n数据概览：{branch['data_profile']}"
+    result=await call_structured(ctx.planner_llm,ValidationProtocol,as_messages('提供文字验证建议；它不等于可执行的冻结协议。',prompt))
+    return result.model_dump()
 
 
 def shuffle_check(ctx: GraphContext, report: Dict[str, Any], protocol: Dict[str, Any]) -> str:
@@ -265,51 +93,38 @@ def shuffle_check(ctx: GraphContext, report: Dict[str, Any], protocol: Dict[str,
     return ""
 
 
-async def explore(ctx: GraphContext, branch: BranchInput) -> Optional[Exploration]:
-    """跑探索并把胜出分支的内核晋升到子问题名下；候选不足时返回 None（直接按原方案求解）"""
-    design = branch["design"]
-    subproblem_id = branch["subproblem"]["id"]
-    picks = shortlist(design, ctx.explore_top_k)
-    if len(picks) < 2:
-        return None
 
-    candidates = design["candidates"]
-    scores = design.get("scores") or [{} for _ in candidates]
-    priors = [scores[i].get("total") for i in picks]
-    # 评审已经明显分出高下时，试跑带来的信息不值它的成本
-    if None not in priors[:2] and priors[0] - priors[1] > ctx.explore_margin:
-        return None
-    if is_hypothesis_test(branch["subproblem"]):
-        return None
-    protocol = await make_protocol(ctx, branch, [candidates[i] for i in picks])
-    # 没有统一指标时各分支无法直接比较，只能再请 critic 读执行证据，收益小于成本，直接按评审选择求解
-    if not protocol.get("applicable"):
-        return None
-    await ctx.events.stage(f"{subproblem_id}：{len(picks)} 个候选方案先在数据上试跑")
-    probes = [
-        Probe(candidate_index=i, candidate=candidates[i], kernel_key=f"{subproblem_id}~c{i}", prior=scores[i].get("total"))
-        for i in picks
-    ]
+async def explore(ctx,branch):
+    if not two_candidate_mode(ctx,branch):return None
+    from .supervised_probe import compare,current,root_store
+    from ...research.comparison import ComparisonStore
+    record=await compare(ctx,branch)
+    if record['status']=='not_applicable':return None
+    probes=[];winner=None
+    for row in record['branches']:
+        candidates=branch['design']['candidates']
+        p=Probe(candidate_index=row['index'],candidate=candidates[row['index']] if row['index']<len(candidates) else {'name':row['name']},
+            kernel_key=row.get('kernel_key',f"{branch['subproblem']['id']}~comparison{row['index']}"),prior=row.get('prior'),
+            report={**row,'works':row['status']=='valid'},metric=row.get('metric'),project_measured=True,
+            run_log=[{'run_id':rid,'ok':row['status']=='valid','code':row.get('driver_code','')} for rid in row.get('run_ids',[])])
+        probes.append(p)
+        if row['index']==record.get('chosen_index'):winner=p
     try:
-        await asyncio.gather(*(run_probe(ctx, branch, p, protocol) for p in probes))
-        winner, reason = select_probe(probes, protocol)
-        if winner is None:
-            await ctx.events.emit("paper_explore", f"{subproblem_id}：{reason}")
-            return None
-        ctx.kernels.promote(winner.kernel_key, subproblem_id)
+        if winner is not None:
+            if not current(ctx,record,branch):
+                record.update(status='input_changed',chosen_index=None,reason='晋升前输入已改变');ComparisonStore(root_store(ctx)).save(record);winner=None
+            elif winner.kernel_key in getattr(ctx.kernels,'_kernels',{}):
+                ctx.kernels.promote(winner.kernel_key,branch['subproblem']['id'])
+                record['kernel_promoted']=True
     finally:
         await asyncio.gather(*(ctx.kernels.release(p.kernel_key) for p in probes))
-
-    await ctx.events.emit("paper_explore", f"{subproblem_id} 选用「{winner.candidate['name']}」：{reason}")
-    return Exploration(
-        chosen_index=winner.candidate_index, reason=reason, protocol=protocol, probes=probes, winner=winner
-    )
+    await ctx.events.emit('paper_explore',{'id':record['id'],'status':record['status'],'reason':record['reason']})
+    return Exploration(record.get('chosen_index'),record['reason'],record.get('protocol',{}),probes,winner,record)
 
 
-def promotion_message(exploration: Exploration) -> str:
-    return (
-        f"你的方案「{exploration.winner.candidate['name']}」在探索阶段胜出（{exploration.reason}）。"
-        "现在进入正式求解：内核中的变量都还在，在此基础上完成完整求解，补齐全部交付物、检验和灵敏度分析，"
-        "用 record_results / record_figure 登记论文要用的结果和图（探索阶段算出的数字也要重新 print 并登记），"
-        "最后提交 SolveReport，报告里的数字一律写成登记返回的引用。"
-    )
+def promotion_message(exploration):
+    row=exploration.winner.report
+    return (f"比较状态：{exploration.record['status']}。{exploration.reason}。"
+        '继续冻结的候选实现；有晋升内核时 comparison_estimator 是真实训练标签拟合的模型。恢复时原内核可能不存在，需按冻结代码重新建立模型。'
+        '比较预测不是已登记的本研究结果，正式求解仍须独立检查、print 并 record_results/record_figure，最后提交 SolveReport。'
+        f"\n冻结代码 SHA256：{row.get('code_hash')}\n{row.get('code','')}")

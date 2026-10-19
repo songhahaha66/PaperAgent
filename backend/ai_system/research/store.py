@@ -418,6 +418,23 @@ class ResearchStore:
             self._save(db, state, "attempt_committed", receipt)
             return receipt
 
+    def report_comparison_failure(self,record,order):
+        """Only confirmed execution/contract failures enter the existing repair loop."""
+        from .comparison import ComparisonStore
+        saved=ComparisonStore(self).read(order.task_id,order.revision)
+        if not saved or saved['id']!=record['id'] or saved['status']!='no_valid':return
+        bad=[r for r in saved['branches'] if r['status'] in {'code_error','contract_error','execution_error','timeout'}]
+        if not bad and not saved.get('protocol_error'):return
+        with self._transaction() as db:
+            state=self._read(db);task=state['tasks'][order.task_id]
+            if task['active_attempt']!=order.attempt_id or task['revision']!=order.revision:return
+            details='；'.join(f"候选 {r['index']+1}: {r.get('error','契约失败')}" for r in bad)
+            message=f"比较 {saved['id']} 的已确认执行/协议问题：{details or saved['reason']}。保留两支记录，不据此判定方法无效。"
+            issue=self._record_issue(state,IssueReport(task_id=order.task_id,category='execution',message=message),
+                'confirmed',producer_attempt=order.attempt_id,source='comparison')
+            self._confirm_issue(state,issue,refute=False)
+            self._save(db,state,'comparison_issue',{'comparison_id':saved['id'],'issue_id':issue['id']})
+
     def _register_assumptions(self, state, result):
         """Stage newly adopted premises; no result is accepted under unfrozen inputs."""
         if not result.assumptions:

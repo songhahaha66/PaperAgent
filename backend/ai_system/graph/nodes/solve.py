@@ -440,22 +440,24 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     design = branch["design"]
     messages = None
     try:
-        if ctx.explore_top_k > 1 and branch["subproblem"].get("kind") != "verify" and not design.get("exploration"):
-            try:
-                with labelled(f"{subproblem_id}:explore"):
-                    exploration = await explore(ctx, branch)
-            except Exception as exc:  # 探索失败不阻塞，按 design 选中的方案直接求解
-                logger.warning("探索 %s 失败，直接求解: %s", subproblem_id, exc)
+        if ctx.explore_top_k > 1 and branch["subproblem"].get("kind") != "verify":
+            with labelled(f"{subproblem_id}:explore"):
+                exploration = await explore(ctx, branch)
         if exploration is not None:
+            if exploration.winner is None:
+                design={**design,'exploration':exploration.to_record()}
+                if ctx.experience_store is not None and ctx.experience_order is not None:
+                    ctx.experience_store.report_comparison_failure(exploration.record,ctx.experience_order)
+                return {'solutions':{subproblem_id:{'status':'comparison_blocked','error':exploration.reason,
+                    'summary':exploration.reason,'reviews':[],'comparison_id':exploration.record['id']}},
+                    'designs':{subproblem_id:design},'log':[f"comparison {exploration.record['status']}"]}
             winner = exploration.winner
             design = {**design, "chosen": winner.candidate, "chosen_index": winner.candidate_index,
                       "exploration": exploration.to_record()}
             design['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in winner.candidate.get('method_keys', []) if key in SKILL_SOURCES]
             branch = {**branch, "design": design}
             run_log.extend(winner.run_log)
-            if winner.report is not None:
-                # 胜出分支连同对话历史继续，内核里的变量已经晋升到子问题名下
-                messages = winner.messages + [HumanMessage(content=promotion_message(exploration))]
+            messages = [HumanMessage(content=build_task(branch,ctx)+'\n\n'+promotion_message(exploration))]
         if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
             return {"solutions": {subproblem_id: {"status": "prepared", "reviews": []}},
                     "designs": {subproblem_id: design}, "log": [f"prepare {subproblem_id}: register selected premises"]}

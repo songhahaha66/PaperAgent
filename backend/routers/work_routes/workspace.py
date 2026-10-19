@@ -557,3 +557,36 @@ async def experience_delete(work_id:str,experience_id:str,db:Session=Depends(get
     try:scope.change(experience_id,delete=True)
     except KeyError:raise HTTPException(404,'经验不存在或不可访问')
     return {'deleted':True}
+
+
+class ComparisonPolicyRequest(BaseModel):
+    enabled:bool
+    spec:dict|None=None
+
+
+@router.get('/{work_id}/comparisons')
+async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    _require_workspace_access(db,work_id,current_user)
+    from ai_system.research.comparison import ComparisonStore
+    from ai_system.research.store import ResearchStore,digest
+    from ai_system.research.validation import protocol
+    from ai_system.graph.nodes.supervised_probe import metadata
+    store=ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')
+    comparisons=ComparisonStore(store);policy=comparisons.policy();records=comparisons.list()
+    files=store.file_inputs()
+    for record in records:
+        source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
+        task=(source or {}).get('tasks',{}).get(record['task_id'])
+        record['input_current']=files==record['file_inputs'] and policy['version']==record['policy_version'] and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'])
+    return {'policy':policy,'files':metadata(store.root),'comparisons':records}
+
+
+@router.put('/{work_id}/comparisons/policy')
+async def comparison_policy(work_id:str,request:ComparisonPolicyRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    _require_workspace_access(db,work_id,current_user)
+    if task_manager.get_running_task(work_id):raise HTTPException(409,'研究执行中不能修改比较配置或协议')
+    from ai_system.research.comparison import ComparisonStore
+    from ai_system.research.store import ResearchStore
+    try:
+        return ComparisonStore(ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')).set_policy(request.enabled,request.spec)
+    except ValueError as exc:raise HTTPException(422,str(exc))

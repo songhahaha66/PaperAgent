@@ -222,11 +222,10 @@ def test_failed_or_ungrounded_explorations_release_kernels_without_promoting_sta
         p.messages=[AIMessage(content='broken code context')]
         p.run_log=[{'ok':run_ok}]
     monkeypatch.setattr(mod,'make_protocol',protocol)
-    monkeypatch.setattr(mod,'run_probe',probe)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None,explore_top_k=2)
     ctx.kernels=Kernels()
     assert asyncio.run(mod.explore(ctx,task)) is None
-    assert sorted(released)==['Q1~c0','Q1~c1']
+    assert released==[], 'unsupported non-CSV tasks never open experiment kernels'
 
 
 @pytest.mark.parametrize('quote,expected,valid',[

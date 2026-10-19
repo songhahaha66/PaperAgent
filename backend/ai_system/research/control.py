@@ -237,10 +237,10 @@ async def execute(branch, runtime):
         local = worker_context(ctx, order)
         update = await solve(branch, SimpleNamespace(context=local))
         report = update["solutions"][key]
-        checks = [] if report["status"] == "prepared" or branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
+        checks = [] if report["status"] in {"prepared","comparison_blocked"} or branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
             local, report, key, branch["subproblem"].get("depends_on") or [],
             figure_required=needs_figure(branch["subproblem"]))
-        if report["status"] not in {"completed", "prepared"}:
+        if report["status"] not in {"completed", "prepared", "comparison_blocked"}:
             checks.append(report.get("error") or "求解未完成")
         results = [asdict(r) for r in local.registry.for_subproblem(key)]
         reviews = report.get("reviews", [])
@@ -264,7 +264,7 @@ async def execute(branch, runtime):
         ctx.fs._save_manifest()
         result = WorkerResult(order=order,
             execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
-            acceptance="rejected" if checks else "accepted", report=report,
+            acceptance="inconclusive" if report['status']=='comparison_blocked' else "rejected" if checks else "accepted", report=report,
             design=(update.get("designs") or {}).get(key) or branch.get("design"),
             results=results, claims=[asdict(c) for c in local.registry.claims.values() if c.subproblem == key], issues=[IssueReport(task_id=key, category="evidence", message=message, evidence_refs=[r["id"] for r in results]) for message in checks]
                 + [IssueReport.model_validate(i) for i in report.get("research_issues", [])],

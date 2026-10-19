@@ -97,6 +97,9 @@ async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
 
 
 async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]) -> List[Dict]:
+    from .explore import two_candidate_mode
+    paired=two_candidate_mode(ctx,branch)
+    count=2 if paired else ctx.n_candidates
     analysis = branch["analysis"]
     feedback = branch.get("feedback") or ""
     from .solve import _dependency_text  # 避免循环导入
@@ -118,9 +121,14 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
         + prompt_context(ctx,branch,method_keys,'design') + '\n\n'
         + (f"{dependency_text}\n\n" if dependency_text else "")
         + (f"# 用户对上一版方案的意见（必须采纳）\n{feedback}\n\n" if feedback else "")
-        + f"请给出最多 {ctx.n_candidates} 个候选方案，直接执行已明确的方法即可，不凑数。assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
+        + ("当前为双方案监督学习比较，必须恰好给出两项实质不同的方案，不得只改名称。" if paired else f"请给出最多 {count} 个候选方案，直接执行已明确的方法即可，不凑数。")
+        + "assumptions只列实际依赖的新增关键前提，使用稳定key、statement和可执行checks；已有前提沿用契约，不重复创建。"
     )
     def validate_candidates(result):
+        if paired:
+            from ...research.store import digest
+            if len(result.candidates)!=2 or len({digest({k:v for k,v in c.model_dump().items() if k!='name'}) for c in result.candidates})!=2:
+                raise ValueError('双方案比较需要恰好两项不同方案')
         for candidate in result.candidates:
             if not set(candidate.method_keys) <= allowed_method_keys(ctx.skill_policy):
                 raise ValueError('候选方案使用了被禁用或未允许的方法')
@@ -129,7 +137,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
             unbound_assumptions(branch["subproblem"]["id"], candidate.assumptions, branch.get("research_contract", {}))
 
     result = await call_structured(ctx.planner_llm, CandidateSet, as_messages(ACTOR_SYSTEM, prompt), validate=validate_candidates)
-    candidates = [c.model_dump() for c in result.candidates][: ctx.n_candidates]
+    candidates = [c.model_dump() for c in result.candidates][:count]
     from ...research.citations import audit_citations, citation_issues
     from ...research.literature import CITATION
     for candidate in candidates:
