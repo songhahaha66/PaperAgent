@@ -30,12 +30,22 @@
             <span class="task-state">{{ taskStatus(task) }}</span>
           </div>
           <p class="task-reason">{{ taskNextStep(task) }}</p>
+          <p v-for="issue in issuesFor(task)" :key="issue.id" class="step-error" role="alert">
+            {{ issue.message }}
+            <button @click="emit('issue', issue.id)">{{ isZh ? '处理' : 'Address' }}</button>
+          </p>
+          <button
+            v-for="r in snapshot?.results.filter((r) => r.subproblem_id === task.task_id) || []"
+            :key="r.id"
+            @click="emit('object', { type: 'result', resultType: 'registered', id: r.id })"
+          >
+            {{ r.name }}
+          </button>
           <details class="task-details">
             <summary>
-              {{ isZh ? '技术详情' : 'Technical details' }}<span aria-hidden="true">⌄</span>
+              {{ isZh ? '运行记录' : 'Run records' }}<span aria-hidden="true">⌄</span>
             </summary>
             <div class="task-detail-body">
-              <p>{{ isZh ? '任务' : 'Task' }} {{ task.task_id }} · v{{ task.revision }}</p>
               <p>
                 {{ isZh ? '当前版本尝试' : 'Attempts in this revision' }}
                 {{ task.progress.attempts }} / {{ task.progress.attempt_limit }}
@@ -63,6 +73,18 @@
         </div>
       </li>
     </ol>
+    <details
+      v-if="snapshot?.requirements?.length || snapshot?.assumptions?.length"
+      class="task-details"
+    >
+      <summary>{{ isZh ? '研究计划与假设' : 'Plan and assumptions' }}</summary>
+      <p v-for="r in snapshot?.requirements || []" :key="r.id">
+        {{ r.statement }}<small v-if="r.source_quote">（{{ r.source_quote }}）</small>
+      </p>
+      <p v-for="a in snapshot?.assumptions || []" :key="a.id">
+        {{ a.statement }}（{{ a.status }}）
+      </p>
+    </details>
     <section v-if="snapshot?.delivery" class="delivery-progress">
       <header>
         <strong>{{ isZh ? '论文交付' : 'Paper delivery' }}</strong
@@ -88,21 +110,18 @@
         {{ writingBlockers.length }}
         {{
           isZh
-            ? '项论文问题需要处理，检查结果见研究依据。'
-            : 'paper issues to address; see research evidence.'
+            ? '项论文问题需要处理，请在论文中处理。'
+            : 'paper issues to address; open the paper to address them.'
         }}
       </p>
     </section>
-    <details v-if="snapshot?.research_revision" class="task-details">
-      <summary>{{ isZh ? '技术详情' : 'Technical details' }}</summary>
-      <p>{{ isZh ? '研究版本' : 'Research revision' }} {{ snapshot.research_revision }}</p>
-    </details>
   </section>
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useStudioCopy } from '@/lang/studio'
 import { paperLabel } from '@/utils/workFiles'
+import type { WorkObject } from '@/stores/workPanels'
 import type { ResearchSnapshot } from '@/types/research'
 import {
   taskState,
@@ -113,6 +132,7 @@ import {
   type ResearchTask,
 } from '@/utils/researchProgress'
 const props = defineProps<{ snapshot: ResearchSnapshot | null; workStatus?: string }>()
+const emit = defineEmits<{ object: [object: WorkObject]; issue: [id: string] }>()
 const { isZh } = useStudioCopy()
 const tasks = computed(() => orderedTasks(props.snapshot?.tasks || []))
 const status = computed(() => props.workStatus || props.snapshot?.work_status || 'created')
@@ -124,7 +144,9 @@ const writingBlockers = computed(
 )
 const issuesFor = (task: ResearchTask) =>
   props.snapshot?.issues?.filter(
-    (i) => task.progress.issue_ids.includes(i.id) && !['resolved', 'dismissed', 'superseded'].includes(i.status),
+    (i) =>
+      task.progress.issue_ids.includes(i.id) &&
+      !['resolved', 'dismissed', 'superseded'].includes(i.status),
   ) || []
 const taskStatus = (task: ResearchTask) => {
   const count = issuesFor(task).length
@@ -141,8 +163,8 @@ const taskNextStep = (task: ResearchTask) => {
       props.snapshot?.results.filter((r) => r.subproblem_id === task.task_id).length || 0
     return count
       ? isZh.value
-        ? `${count} 项结果已通过检查，可在研究依据中查看。`
-        : `${count} results passed checks; see research evidence.`
+        ? `${count} 项结果已通过检查，可在下方打开。`
+        : `${count} results passed checks; open the paper to address them.`
       : isZh.value
         ? '这部分已完成检查。'
         : 'Checks for this task are complete.'
@@ -162,10 +184,7 @@ const taskNextStep = (task: ResearchTask) => {
       '根据检查意见重新计算，再检查结果。',
       'Recompute using the findings, then check again.',
     ],
-    failed: [
-      '查看研究依据中的问题，处理后重试。',
-      'Review the findings in research evidence before retrying.',
-    ],
+    failed: ['处理这一步的问题后重试。', 'Address this step’s findings before retrying.'],
     needs_plan: ['先调整研究计划，再继续计算。', 'Revise the research plan before continuing.'],
     blocked: ['先修正相关假设或输入。', 'Correct the related assumptions or inputs first.'],
     review: ['结果已生成，等待进一步检查。', 'Results are ready for further checks.'],
@@ -187,6 +206,19 @@ const stageLabel = (state: string) =>
   })[state]?.[isZh.value ? 0 : 1] || state
 </script>
 <style scoped>
+.step-error {
+  color: var(--pa-danger);
+}
+button {
+  border: 1px solid var(--pa-line);
+  background: var(--pa-surface);
+  color: var(--pa-accent);
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin: 4px;
+}
+
 .research-progress {
   padding: 16px;
   color: var(--td-text-color-primary);

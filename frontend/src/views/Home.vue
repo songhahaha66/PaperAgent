@@ -103,7 +103,28 @@
                 ><t-icon name="arrow-up" /></t-button
             ></t-tooltip>
           </div>
-          <ResearchSetupForm :key="setupVersion" v-model="researchSetup" :disabled="creating" :csv-files="files.filter(f=>f.name?.toLowerCase().endsWith('.csv')).map(f=>'attachment/'+f.name)" />
+          <div class="setup-entry">
+            <button type="button" class="layout-toggle" @click="setupOpen = true">
+              {{ isZh ? '预算与能力设置' : 'Budget and capabilities' }}
+            </button>
+          </div>
+          <t-drawer
+            v-model:visible="setupOpen"
+            :header="isZh ? '新研究设置' : 'New research settings'"
+            :footer="false"
+            size="min(560px, 95vw)"
+          >
+            <ResearchSetupForm
+              :key="setupVersion"
+              v-model="researchSetup"
+              :disabled="creating"
+              :csv-files="
+                files
+                  .filter((f) => f.name?.toLowerCase().endsWith('.csv'))
+                  .map((f) => 'attachment/' + f.name)
+              "
+            />
+          </t-drawer>
           <div v-if="layoutOpen" id="composer-layout-settings" class="layout-settings">
             <div>
               <label>{{ ui.template }}</label
@@ -132,7 +153,9 @@
           :message="creationError"
           class="creation-error"
         />
-        <router-link v-if="creationError&&preparedWorkId" :to="'/work/'+preparedWorkId">查看已准备的工作区与失败原因</router-link>
+        <router-link v-if="creationError && preparedWorkId" :to="'/work/' + preparedWorkId"
+          >查看已准备的工作区与失败原因</router-link
+        >
         <div v-if="modelConfigLoaded && !modelsReady" class="composer-meta">
           <router-link to="/api-config">
             <t-icon name="setting" />{{ isZh ? '配置模型连接' : 'Set up a model connection' }}
@@ -223,7 +246,7 @@ import { parseWorkDate, formatWorkDate } from '@/utils/dates'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import ResearchSetupForm from '@/components/ResearchSetupForm.vue'
-import {researchSetupAPI,defaultResearchSetup} from '@/api/researchSetup'
+import { researchSetupAPI, defaultResearchSetup } from '@/api/researchSetup'
 import Sidebar from '@/components/Sidebar.vue'
 const { ui, isZh } = useStudioCopy()
 const { isMobile } = useBreakpoint()
@@ -237,7 +260,10 @@ const auth = useAuthStore(),
 const question = ref(''),
   mode = ref<'markdown' | 'word' | 'latex'>('latex'),
   templateId = ref(0)
-const researchSetup=ref(defaultResearchSetup()),setupVersion=ref(0),preparedWorkId=ref('')
+const setupOpen = ref(false)
+const researchSetup = ref(defaultResearchSetup()),
+  setupVersion = ref(0),
+  preparedWorkId = ref('')
 const files = ref<UploadFile[]>([]),
   templates = ref<PaperTemplate[]>([])
 const panelStore = useWorkPanelsStore()
@@ -360,7 +386,7 @@ async function startWork() {
         ...data,
         template_id: templateId.value || undefined,
       })
-    preparedWorkId.value=draft.work_id
+    preparedWorkId.value = draft.work_id
     for (const item of files.value) {
       const raw = item.raw
       if (!raw)
@@ -374,11 +400,16 @@ async function startWork() {
         uploaded.add(raw)
       }
     }
-    const configured=await researchSetupAPI.save(draft.work_id,researchSetup.value)
-    const gaps=configured.literature.sources.filter(s=>s.error)
-    if(gaps.length)throw new Error('公开资料尚未获取完整：'+gaps.map(s=>s.error).join('；')+'。输入和工作区已保留，可在文献面板检查。')
+    const configured = await researchSetupAPI.save(draft.work_id, researchSetup.value)
+    const gaps = configured.literature.sources.filter((s) => s.error)
+    if (gaps.length)
+      throw new Error(
+        '公开资料尚未获取完整：' +
+          gaps.map((s) => s.error).join('；') +
+          '。输入和工作区已保留，可在文献面板检查。',
+      )
     historyStore.upsert(draft)
-    panelStore.open(draft.work_id,'overview',undefined,'secondary')
+    panelStore.open(draft.work_id, 'progress', undefined, 'secondary')
     localStorage.setItem(`pendingQuestion:${draft.work_id}`, question.value.trim())
     await router.push(`/work/${draft.work_id}`)
   } catch (error) {
@@ -390,8 +421,9 @@ async function startWork() {
 function resetDraft() {
   if (creating.value) return
   question.value = ''
-  researchSetup.value=defaultResearchSetup()
-  setupVersion.value++;preparedWorkId.value=''
+  researchSetup.value = defaultResearchSetup()
+  setupVersion.value++
+  preparedWorkId.value = ''
   files.value = []
   templateId.value = 0
   draft = null

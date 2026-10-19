@@ -71,8 +71,8 @@ const { hostRenderer } = require('./vueHost.cjs')
   }
   await flush()
   assert.match(text(host.root), /1\/3 已完成检查/)
-  assert.match(text(host.root), /建立需求预测模型待返工.*任务 Q1 · v2/)
-  assert.match(text(host.root), /汇总结果已完成检查.*任务 Q3 · v1/)
+  assert.match(text(host.root), /建立需求预测模型待返工.*运行记录/)
+  assert.match(text(host.root), /汇总结果已完成检查/)
   snapshot.value = {
     ...snapshot.value,
     tasks: snapshot.value.tasks.map((task) =>
@@ -94,7 +94,7 @@ const { hostRenderer } = require('./vueHost.cjs')
   const reason = host.find((node) => node.props?.class === 'task-reason')
   assert.equal(reason.text, '关键假设改变，需要重算')
   assert.match(mainText(host.root), /有 2 项问题需要处理/)
-  assert.doesNotMatch(mainText(host.root), /重新验证容量约束|问题记录/)
+  assert.match(mainText(host.root), /重新验证容量约束/)
   assert.equal(
     reason.parent.props.class,
     'task-content',
@@ -102,7 +102,7 @@ const { hostRenderer } = require('./vueHost.cjs')
   )
   const details = host.find((node) => node.kind === 'details')
   assert.equal(details.props.open, undefined, 'version, attempts and issue records start folded')
-  assert.match(text(details), /技术详情.*任务 Q1 · v2.*问题记录 recheck、second/)
+  assert.match(text(details), /运行记录.*问题记录 recheck、second/)
 
   snapshot.value = {
     ...snapshot.value,
@@ -133,7 +133,7 @@ const { hostRenderer } = require('./vueHost.cjs')
   const restored = mount(vue.ref(serialized))
   await flush()
   assert.match(text(restored.host.root), /1\/4 已完成检查/)
-  assert.match(text(restored.host.root), /汇总结果已完成检查.*任务 Q3 · v1/)
+  assert.match(text(restored.host.root), /汇总结果已完成检查/)
   assert.match(text(restored.host.root), /已中断，待恢复/)
   restored.app.unmount()
   const fallback = mount(

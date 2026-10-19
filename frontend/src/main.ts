@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import * as TDesign from 'tdesign-vue-next'
 import App from './App.vue'
+import AppIcon from './components/AppIcon.vue'
 import router from './router'
 import pinia from './stores'
 import i18n from './lang'
@@ -15,5 +16,6 @@ app.use(pinia)
 app.use(i18n)
 app.use(router)
 app.use(TDesign)
+app.component('TIcon', AppIcon)
 
 app.mount('#app')

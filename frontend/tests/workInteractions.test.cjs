@@ -68,6 +68,7 @@ async function environment() {
         '@/composables/useBreakpoint': {
           useBreakpoint: () => ({ isMobile, width }),
         },
+        '@/api/researchSetup': {researchSetupAPI:{overview:async()=>({})}},
         '@/api/chat': {
           WebSocketChatHandler: Socket,
           chatAPI: {
@@ -226,6 +227,7 @@ async function environment() {
   assert.equal(primary.state.primaryAction.value.kind, 'download')
   assert.equal(primary.state.primaryAction.value.label, '下载')
   assert.ok(!primary.state.workActionOptions.value.some((option) => option.value === 'download'))
+  actionStatus = 'waiting'
   primary.state.currentWork.value.status = 'waiting'
   assert.equal(primary.state.primaryAction.value.kind, 'confirm', 'an existing artifact cannot obscure plan confirmation')
   assert.ok(primary.state.workActionOptions.value.some((option) => option.value === 'download'), 'existing output remains available in the secondary menu')
@@ -233,6 +235,11 @@ async function environment() {
   await primary.state.handlePrimaryAction()
   assert.equal(primary.sent.length, 0, 'loading cannot submit an unready plan')
   primary.state.loading.value = false
+  actionStatus='completed'
+  await primary.state.handlePrimaryAction()
+  assert.equal(primary.sent.length,0,'a stale waiting button cannot confirm an already completed operation')
+  actionStatus='waiting'
+  primary.state.currentWork.value.status='waiting'
   await primary.state.handlePrimaryAction()
   assert.equal(primary.sent.at(-1).action, 'confirm')
   assert.equal(primary.state.primaryAction.value.kind, 'pause', 'execution takes precedence over confirmation and existing output')

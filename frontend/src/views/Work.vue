@@ -56,25 +56,36 @@
         <div class="work-actions">
           <button
             class="progress-trigger"
-            :aria-label="isZh ? '查看研究进度' : 'View research progress'"
+            :aria-label="isZh ? '查看运行状态' : 'View run status'"
             @click="openProgress"
           >
             <t-icon name="task" />
-            <span>{{ isZh ? '任务进度' : 'Progress' }}</span>
+            <span>{{ isZh ? '运行状态' : 'Run status' }}</span>
             <span v-if="researchSnapshot?.tasks?.length" class="progress-count"
               >{{ acceptedTaskCount }}/{{ researchSnapshot.tasks.length }}</span
             >
           </button>
-          <button class="progress-trigger" @click="openPanel('overview', isMobile ? 'main' : 'secondary')">{{ isZh ? '研究总览' : 'Overview' }}</button>
-          <button class="progress-trigger" @click="openPanel('comparisons', isMobile ? 'main' : 'secondary')">{{ isZh ? '方案比较' : 'Experiments' }}</button>
-          <button class="progress-trigger" @click="openPanel('experiences', isMobile ? 'main' : 'secondary')">{{ isZh ? '研究经验' : 'Experience' }}</button>
-          <button class="progress-trigger" @click="openPanel('literature', isMobile ? 'main' : 'secondary')">{{ isZh ? '文献' : 'Literature' }}</button>
+          <button
+            class="progress-trigger"
+            @click="openPanel('files', isMobile ? 'main' : 'secondary')"
+          >
+            <t-icon name="folder-open" />{{ isZh ? '文件' : 'Files' }}
+          </button>
+          <button
+            class="progress-trigger"
+            @click="openPanel('literature', isMobile ? 'main' : 'secondary')"
+          >
+            {{ isZh ? '文献' : 'Literature' }}
+          </button>
+          <button class="progress-trigger" @click="handleMainPaperClick">
+            {{ isZh ? '论文' : 'Paper' }}
+          </button>
           <t-button
             v-if="primaryAction"
             class="work-primary-action"
             theme="primary"
             :title="primaryAction.title"
-            :loading="pausing || downloadLoading"
+            :loading="pausing || downloadLoading || confirmingPlan"
             :disabled="loading"
             @click="handlePrimaryAction"
           >
@@ -113,17 +124,13 @@
                   :tasks="researchSnapshot?.tasks"
                   :work-status="currentWork?.status"
                   @open-progress="openProgress"
-                  @confirm-plan="sendMessage('确认', 'confirm')"
+                  @confirm-plan="confirmCurrentPlan"
+                  :confirm-busy="isStreaming || loading || confirmingPlan"
+                  @open-result="
+                    (id) => openObject({ type: 'result', resultType: 'registered', id })
+                  "
                   @open-file="handleWorkspaceFileSelect"
-                >
-                  <ResearchEvidence
-                    :snapshot="researchSnapshot"
-                    @open-file="handleWorkspaceFileSelect"
-                    @ask="askSubproblem"
-                    @revise="reviseSubproblem"
-                    @issue="openIssueEditor"
-                  />
-                </JsonChatRenderer>
+                />
                 <button v-if="!atBottom && isStreaming" class="jump-latest" @click="jumpToLatest">
                   <t-icon name="arrow-down" />{{ isZh ? '查看最新进展' : 'Latest progress' }}
                 </button>
@@ -186,11 +193,25 @@
             </div>
           </section>
           <section
-            v-else-if="panel.kind === 'progress'"
+            v-else-if="panel.kind === 'progress' || panel.kind === 'overview'"
             class="progress-panel"
-            @scroll="rememberPanelScroll('progress', $event)"
+            @scroll.capture="rememberPanelScroll('progress', $event)"
           >
-            <ResearchProgress :snapshot="researchSnapshot" :work-status="currentWork?.status" />
+            <ResearchOverview
+              :work-id="workId"
+              :snapshot="researchSnapshot"
+              :work-status="currentWork?.status"
+              :stage="stageText"
+              :running="isStreaming"
+              :refresh-key="researchSnapshot?.commit_seq"
+              :action-label="primaryAction?.label"
+              :action-busy="loading || pausing || downloadLoading"
+              @action="handlePrimaryAction"
+              @open="(kind) => openPanel(kind, isMobile ? 'main' : 'secondary')"
+              @object="openObject"
+              @issue="openIssueEditor"
+              @resolved="refreshPaper"
+            />
           </section>
           <ResearchSkills
             v-else-if="panel.kind === 'skills'"
@@ -199,10 +220,36 @@
             @updated="loadResearchSnapshot"
             @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
           />
-          <ResearchOverview @issue="openIssueEditor" @resolved="refreshPaper" v-else-if="panel.kind === 'overview'" :work-id="workId" :running="isStreaming" :refresh-key="researchSnapshot?.commit_seq" @open="kind=>openPanel(kind,isMobile?'main':'secondary')" />
-          <ResearchComparisons v-else-if="panel.kind === 'comparisons'" :work-id="workId" :disabled="isStreaming" :refresh-key="researchSnapshot?.commit_seq" />
-          <ResearchExperiences v-else-if="panel.kind === 'experiences'" :work-id="workId" :refresh-key="researchSnapshot?.commit_seq" />
-          <ResearchLiterature v-else-if="panel.kind === 'literature'" :work-id="workId" :disabled="isStreaming" :evidence-id="literatureEvidenceId" :refresh-key="researchSnapshot?.commit_seq" @updated="loadResearchSnapshot" @cite="citeLiterature" />
+          <ResearchResultViewer
+            v-else-if="panel.kind === 'result'"
+            :work-id="workId"
+            :result-type="panel.resultType || 'registered'"
+            :result-id="panel.resultId || ''"
+            :snapshot="researchSnapshot"
+            @open-file="handleWorkspaceFileSelect"
+          />
+          <ResearchComparisons
+            v-else-if="panel.kind === 'comparisons'"
+            :runs="researchSnapshot?.runs"
+            @open-file="handleWorkspaceFileSelect"
+            :work-id="workId"
+            :disabled="isStreaming"
+            :refresh-key="researchSnapshot?.commit_seq"
+          />
+          <ResearchExperiences
+            v-else-if="panel.kind === 'experiences'"
+            :work-id="workId"
+            :refresh-key="researchSnapshot?.commit_seq"
+          />
+          <ResearchLiterature
+            v-else-if="panel.kind === 'literature'"
+            :work-id="workId"
+            :disabled="isStreaming"
+            :evidence-id="literatureEvidenceId"
+            :refresh-key="researchSnapshot?.commit_seq"
+            @updated="loadResearchSnapshot"
+            @cite="citeLiterature"
+          />
           <section
             v-else-if="panel.kind === 'files'"
             class="files-section"
@@ -249,7 +296,9 @@
             </div>
           </section>
           <PaperEditor
-            v-else-if="panel.kind === 'paper' && researchSnapshot?.has_research && !paperPreview"
+            :owner-id="authStore.currentUser?.id"
+            v-show="!paperPreview"
+            v-else-if="panel.kind === 'paper' && researchSnapshot?.has_research"
             :work-id="workId"
             :latex="currentWork?.output_mode === 'latex'"
             :refresh-key="researchSnapshot?.commit_seq"
@@ -263,7 +312,11 @@
             @research="revisePaper"
           />
           <WorkDocument
-            v-else
+            v-if="
+              (panel.kind === 'paper' && paperPreview) ||
+              panel.kind === 'file' ||
+              (panel.kind === 'paper' && !researchSnapshot?.has_research)
+            "
             :key="`${workId}:${panel.id}`"
             :work-id="workId"
             :path="panel.path || paperPath"
@@ -282,12 +335,59 @@
         </template>
       </WorkPaneLayout>
       <t-drawer
+        v-model:visible="settingsOpen"
+        :header="isZh ? '研究设置' : 'Research settings'"
+        :size="isMobile ? '95%' : '620px'"
+        :footer="false"
+      >
+        <p v-if="settingsError" role="alert">{{ settingsError }}</p>
+        <section v-if="settingsState" class="capability-settings">
+          <h3>{{ isZh ? '请求预算与超时' : 'Request budget and timeout' }}</h3>
+          <p>
+            {{ settingsState.budget.used }} / {{ settingsState.budget.request_limit }}
+            {{ isZh ? '次请求，每次最多' : 'requests, at most' }}
+            {{ settingsState.budget.timeout_seconds }} {{ isZh ? '秒' : 'seconds' }}
+          </p>
+          <p>
+            {{
+              isZh
+                ? '暂停与恢复沿用当前预算。新研究可在开始前调整。'
+                : 'Pause and resume retain this budget. Configure new research before starting.'
+            }}
+          </p>
+        </section>
+        <t-button theme="default" @click="router.push('/api-config')">{{
+          isZh ? '模型与 API 设置' : 'Models and API settings'
+        }}</t-button>
+        <details open>
+          <summary>{{ isZh ? '经验复用' : 'Experience reuse' }}</summary>
+          <ResearchExperiences :work-id="workId" :refresh-key="researchSnapshot?.commit_seq" />
+        </details>
+        <details>
+          <summary>{{ isZh ? '科研技能' : 'Research skills' }}</summary>
+          <ResearchSkills
+            :work-id="workId"
+            :disabled="isStreaming"
+            @updated="loadResearchSnapshot"
+            @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
+          />
+        </details>
+        <details>
+          <summary>{{ isZh ? '实验比较设置' : 'Experiment settings' }}</summary>
+          <ResearchComparisons
+            :work-id="workId"
+            :disabled="isStreaming"
+            configure
+            :refresh-key="researchSnapshot?.commit_seq"
+          />
+        </details>
+      </t-drawer>
+      <t-drawer
         v-model:visible="detailsOpen"
         :header="ui.details"
         :size="isMobile ? '90%' : '420px'"
         :footer="false"
         ><div v-if="currentWork" class="work-details">
-          <t-tag variant="light">{{ workId }}</t-tag>
           <h2>{{ currentWork.title }}</h2>
           <p>{{ currentWork.description }}</p>
           <dl>
@@ -322,8 +422,8 @@ import ResearchComparisons from '@/components/ResearchComparisons.vue'
 import ResearchExperiences from '@/components/ResearchExperiences.vue'
 import ResearchLiterature from '@/components/ResearchLiterature.vue'
 import ResearchSkills from '@/components/ResearchSkills.vue'
-import ResearchEvidence from '@/components/ResearchEvidence.vue'
-import ResearchProgress from '@/components/ResearchProgress.vue'
+import ResearchResultViewer from '@/components/ResearchResultViewer.vue'
+import { researchSetupAPI } from '@/api/researchSetup'
 import { useWorkSession } from '@/composables/useWorkSession'
 import { useWorkStream } from '@/composables/useWorkStream'
 import { useArtifactPreview } from '@/composables/useArtifactPreview'
@@ -363,6 +463,7 @@ const {
   displayPanels,
   panelOptions,
   openProgress,
+  openObject,
   openPanel,
   rememberPanelScroll,
   openFiles,
@@ -393,20 +494,25 @@ const {
 // Metadata arrives after cached panes mount; restore scroll once their content is rendered.
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
 const paperPreview = ref(false)
-const literatureEvidenceId = ref('')
-const issueRequest=ref<{id:string;at:number}|null>(null)
-function openIssueEditor(id:string){issueRequest.value={id,at:Date.now()};paperPreview.value=false;openPanel('paper',isMobile.value?'main':'secondary')}
-const citationRequest = ref<{id:string;at:number}|null>(null)
-function citeLiterature(id:string) {
-  citationRequest.value={id,at:Date.now()}
-  paperPreview.value=false
-  openPanel('paper',isMobile.value?'main':'secondary')
+const literatureEvidenceId = computed(
+  () => panelSession.value.panels.find((p) => p.kind === 'literature')?.location || '',
+)
+const issueRequest = ref<{ id: string; at: number } | null>(null)
+function openIssueEditor(id: string) {
+  issueRequest.value = { id, at: Date.now() }
+  paperPreview.value = false
+  openPanel('paper', isMobile.value ? 'main' : 'secondary')
 }
-function openLiteratureEvidence(event:Event) {
-  const detail=(event as CustomEvent).detail
-  if(detail?.workId!==workId.value || !/^C[1-9]\d*$/.test(detail?.evidenceId || ''))return
-  literatureEvidenceId.value=detail.evidenceId
-  openPanel('literature',isMobile.value?'main':'secondary')
+const citationRequest = ref<{ id: string; at: number } | null>(null)
+function citeLiterature(id: string) {
+  citationRequest.value = { id, at: Date.now() }
+  paperPreview.value = false
+  openPanel('paper', isMobile.value ? 'main' : 'secondary')
+}
+function openLiteratureEvidence(event: Event) {
+  const detail = (event as CustomEvent).detail
+  if (detail?.workId !== workId.value || !/^C[1-9]\d*$/.test(detail?.evidenceId || '')) return
+  openObject({ type: 'literature', evidenceId: detail.evidenceId })
 }
 async function refreshPaper() {
   await loadResearchSnapshot()
@@ -417,10 +523,14 @@ function askPaper(message: string, task?: string) {
   layout.activateChat()
   sendMessage(message, 'ask')
 }
-function revisePaper(message: string, task?: string, sourceIssue?:{id:string;version:string}) {
+function revisePaper(
+  message: string,
+  task?: string,
+  sourceIssue?: { id: string; version: string },
+) {
   questionScope.value = task || null
   layout.activateChat()
-  sendMessage(message, 'revise_research',sourceIssue)
+  sendMessage(message, 'revise_research', sourceIssue)
 }
 const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
 const {
@@ -455,6 +565,54 @@ const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
   },
 })
 const detailsOpen = ref(false)
+const settingsOpen = ref(false),
+  settingsState = ref<any>(null),
+  settingsError = ref('')
+watch(settingsOpen, async (open) => {
+  if (!open) return
+  try {
+    settingsState.value = await researchSetupAPI.overview(workId.value)
+    settingsError.value = ''
+  } catch (e) {
+    settingsError.value = e instanceof Error ? e.message : '设置暂不可用'
+  }
+})
+const confirmingPlan = ref(false)
+async function confirmCurrentPlan() {
+  if (
+    confirmingPlan.value ||
+    isStreaming.value ||
+    loading.value ||
+    currentWork.value?.status !== 'waiting'
+  )
+    return
+  confirmingPlan.value = true
+  const before = researchSnapshot.value
+  try {
+    const fresh = await loadResearchSnapshot()
+    if (!fresh) {
+      MessagePlugin.error(
+        isZh.value ? '无法核对当前方案，请重试。' : 'Could not check the current plan. Retry.',
+      )
+      return
+    }
+    if (
+      fresh.research_id !== before?.research_id ||
+      fresh.research_revision !== before?.research_revision ||
+      fresh.commit_seq !== before?.commit_seq
+    ) {
+      MessagePlugin.info(
+        isZh.value
+          ? '方案已更新，请查看后重新确认。'
+          : 'The plan changed. Review it before confirming.',
+      )
+      return
+    }
+    if (currentWork.value?.status === 'waiting') return await sendMessage('确认', 'confirm')
+  } finally {
+    confirmingPlan.value = false
+  }
+}
 const acceptedTaskCount = computed(
   () =>
     researchSnapshot.value?.tasks?.filter((task) => task.progress.state === 'accepted').length || 0,
@@ -494,7 +652,7 @@ async function handlePrimaryAction() {
     case 'pause':
       return pauseTask()
     case 'confirm':
-      return sendMessage('确认', 'confirm')
+      return confirmCurrentPlan()
     case 'resume':
       return sendMessage('继续', 'resume')
     case 'download':
@@ -513,6 +671,13 @@ async function handleFileRefresh() {
   await Promise.all([artifacts.loadWorkspaceFiles(true), session.loadResearchSnapshot()])
 }
 const workActionOptions = computed(() => [
+  {
+    content: isZh.value ? '研究设置' : 'Research settings',
+    value: 'settings',
+    onClick: () => {
+      settingsOpen.value = true
+    },
+  },
   ...(primaryArtifact.value && primaryAction.value?.kind !== 'download'
     ? [
         {
@@ -611,9 +776,9 @@ const getOutputModeText = (mode?: string) => {
 
 onMounted(() => {
   void loadWork()
-  window.addEventListener('paper-literature-open',openLiteratureEvidence)
+  window.addEventListener('paper-literature-open', openLiteratureEvidence)
 })
-onUnmounted(()=>window.removeEventListener('paper-literature-open',openLiteratureEvidence))
+onUnmounted(() => window.removeEventListener('paper-literature-open', openLiteratureEvidence))
 </script>
 <style scoped>
 .work-page {
@@ -984,6 +1149,8 @@ onUnmounted(()=>window.removeEventListener('paper-literature-open',openLiteratur
     font-size: 14px;
   }
   .work-actions {
+    width: 100%;
+    flex-wrap: wrap;
     gap: 6px;
   }
   .work-actions .t-button {
@@ -1002,6 +1169,16 @@ onUnmounted(()=>window.removeEventListener('paper-literature-open',openLiteratur
     width: calc(100% - 24px);
     padding-top: 8px;
     padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .work-composer {
+    flex-wrap: wrap;
+  }
+  .work-message-input {
+    flex-basis: 100%;
+  }
+  .composer-controls {
+    width: 100%;
+    justify-content: flex-end;
   }
   .work-message-input :deep(.t-textarea__inner) {
     font-size: 16px;

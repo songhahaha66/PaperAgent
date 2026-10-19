@@ -1,16 +1,9 @@
 <template>
   <section class="literature-panel">
     <header>
-      <h2>{{ isZh ? '文献与原文证据' : 'Literature and source evidence' }}</h2>
+      <h2>{{ isZh ? '文献与引用' : 'Literature and source evidence' }}</h2>
       <button @click="load">{{ isZh ? '刷新' : 'Refresh' }}</button>
     </header>
-    <p class="note">
-      {{
-        isZh
-          ? '文献不等于本研究实验结果。引用句必须经原文支持核查；未获取的全文和无法支持的结论会保留缺口。'
-          : 'Literature is separate from your experimental results. Claims need source support; missing full text and unsupported claims stay explicit.'
-      }}
-    </p>
     <p v-if="error" role="alert">{{ error }}</p>
     <form @submit.prevent="runSearch">
       <input
@@ -175,7 +168,12 @@ import {
   type CitationCheck,
 } from '@/api/literature'
 import { useStudioCopy } from '@/lang/studio'
-const props = defineProps<{ workId: string; disabled?: boolean; evidenceId?: string; refreshKey?: number }>()
+const props = defineProps<{
+  workId: string
+  disabled?: boolean
+  evidenceId?: string
+  refreshKey?: number
+}>()
 const emit = defineEmits<{ updated: []; cite: [id: string] }>()
 const { isZh } = useStudioCopy()
 const state = ref<LiteratureState | null>(null),

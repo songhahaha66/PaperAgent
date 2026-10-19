@@ -7,7 +7,7 @@
     <p>
       {{
         isZh
-          ? '按需读取方法步骤与来源。这里是项目整理的静态技能；跨研究经验在研究经验面板单独管理。'
+          ? '选择研究可使用的方法，按需查看步骤与来源。'
           : 'Method instructions and sources load on demand. These are curated static skills; cross-research experience is managed separately.'
       }}
     </p>
@@ -37,7 +37,7 @@
       </p>
       <article v-for="skill in state.catalog" :key="skill.key" class="skill-card">
         <header>
-          <h3>{{ skill.name }} · v{{ skill.version }}</h3>
+          <h3>{{ skill.name }}</h3>
           <span>{{ skill.category }}</span>
         </header>
         <p>{{ skill.use_when }}</p>

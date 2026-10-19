@@ -5,6 +5,7 @@ import {
   type WorkPanel,
   type PanelGroup,
   type PanelKind,
+  type WorkObject,
 } from '@/stores/workPanels'
 import { isImageFile, paperLabel } from '@/utils/workFiles'
 import { useStudioCopy } from '@/lang/studio'
@@ -50,6 +51,8 @@ export function useWorkLayout(workId: Ref<string>) {
     panelSession.value.panels.map((panel) => ({ ...panel, ...panelPresentation(panel) })),
   )
   function panelPresentation(panel: Pick<WorkPanel, 'kind' | 'path'>) {
+    if (panel.kind === 'result')
+      return { label: isZh.value ? '研究结果' : 'Result', icon: 'chart-line' }
     if (panel.kind === 'file')
       return {
         label: paperLabel(panel.path!, isZh.value) || panel.path!.split('/').pop()!,
@@ -66,15 +69,15 @@ export function useWorkLayout(workId: Ref<string>) {
       figures: { label: ui.value.figures, icon: 'chart-line' },
       files: { label: ui.value.files, icon: 'folder-open' },
       skills: { label: isZh.value ? '科研技能' : 'Research skills', icon: 'books' },
-      overview: { label: isZh.value ? '研究总览' : 'Research overview', icon: 'task' },
+      overview: { label: isZh.value ? '运行状态' : 'Run status', icon: 'task' },
       comparisons: { label: isZh.value ? '方案比较' : 'Experiments', icon: 'chart-line' },
       experiences: { label: isZh.value ? '研究经验' : 'Experience', icon: 'books' },
       literature: { label: isZh.value ? '文献' : 'Literature', icon: 'books' },
-      progress: { label: isZh.value ? '任务进度' : 'Progress', icon: 'task' },
+      progress: { label: isZh.value ? '运行状态' : 'Run status', icon: 'task' },
     }[panel.kind]
   }
   const panelOptions = computed(() =>
-    (['overview', 'progress', 'paper', 'literature', 'experiences', 'comparisons', 'skills', 'figures', 'files'] as const).map((kind) => ({
+    (['progress', 'paper', 'literature', 'figures', 'files'] as const).map((kind) => ({
       content: panelPresentation({ kind }).label,
       value: kind,
     })),
@@ -96,6 +99,12 @@ export function useWorkLayout(workId: Ref<string>) {
   function rememberPanelScroll(id: string, event: Event) {
     const target = event.target as HTMLElement
     if (id === 'files' && !target.classList.contains('fm-body')) return
+    if (
+      id === 'progress' &&
+      !target.classList.contains('research-overview') &&
+      !target.classList.contains('progress-panel')
+    )
+      return
     if (isPanelVisible(id)) panelSession.value.scroll[id] = target.scrollTop
   }
   function openFiles() {
@@ -104,9 +113,11 @@ export function useWorkLayout(workId: Ref<string>) {
   function handleMainPaperClick() {
     panelStore.open(workId.value, 'paper', undefined, isMobile.value ? 'main' : 'secondary')
   }
+  function openObject(object: WorkObject) {
+    panelStore.openObject(workId.value, object, isMobile.value ? 'main' : 'secondary')
+  }
   function handleWorkspaceFileSelect(path: string) {
-    if (path === 'paper.md') handleMainPaperClick()
-    else panelStore.open(workId.value, 'file', path, isMobile.value ? 'main' : 'secondary')
+    openObject({ type: 'file', path })
   }
   function trackChatScroll(event: Event) {
     const target = event.target as HTMLElement
@@ -133,7 +144,9 @@ export function useWorkLayout(workId: Ref<string>) {
     if (isPanelVisible('figures') && figureScroller.value)
       figureScroller.value.scrollTop = panelSession.value.scroll.figures || 0
     if (isPanelVisible('progress')) {
-      const scroller = document.querySelector<HTMLElement>('.progress-panel')
+      const scroller =
+        document.querySelector<HTMLElement>('.research-overview') ||
+        document.querySelector<HTMLElement>('.progress-panel')
       if (scroller) scroller.scrollTop = panelSession.value.scroll.progress || 0
     }
     if (isPanelVisible('files')) {
@@ -179,6 +192,7 @@ export function useWorkLayout(workId: Ref<string>) {
     displayPanels,
     panelOptions,
     openProgress,
+    openObject,
     openPanel,
     rememberPanelScroll,
     openFiles,

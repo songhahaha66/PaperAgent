@@ -45,7 +45,7 @@
         <!-- 原始事件（排查用） -->
         <details class="pipeline-raw">
           <summary>
-            技术详情 <span>{{ events.length }} 条事件</span>
+            运行记录 <span>{{ events.length }} 条事件</span>
           </summary>
           <div v-for="sp in subproblems.filter((s) => s.runs)" :key="sp.id" class="run-stat">
             {{ sp.id }} · 执行 {{ sp.runs }} 次<span v-if="sp.fails">
@@ -54,7 +54,7 @@
           </div>
           <ul class="raw-list">
             <li v-for="(block, i) in events" :key="i">
-              <code>{{ block.type }}</code> {{ asText(block.content) }}
+              {{ recordText(block.content) }}
             </li>
           </ul>
         </details>
@@ -71,7 +71,7 @@
       >
     </t-alert>
     <button v-if="error" class="pipeline-action" @click="$emit('open-progress')">
-      查看任务进度与处理方式
+      查看运行状态
     </button>
     <t-alert v-if="error" theme="error" :message="error" class="pipeline-error" />
 
@@ -97,6 +97,16 @@ const props = defineProps<{
 }>()
 
 defineEmits<{ 'confirm-plan': []; 'open-progress': [] }>()
+const recordText = (content: unknown) =>
+  typeof content === 'string'
+    ? content
+    : content && typeof content === 'object'
+      ? String(
+          (content as Record<string, unknown>).message ||
+            (content as Record<string, unknown>).summary ||
+            '操作已记录',
+        )
+      : ''
 const recordOpen = ref(false)
 const events = computed(() => props.blocks.filter(isPaperEvent))
 

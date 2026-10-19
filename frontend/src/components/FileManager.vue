@@ -41,6 +41,7 @@
             v-else
             :data="processedFileTreeData"
             :expand-on-click-node="true"
+            :default-expanded="['papers', 'attachments']"
             @click="handleFileClick"
             @select="handleFileSelect"
           />

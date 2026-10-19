@@ -20,7 +20,10 @@
                 :streaming="message.isStreaming"
                 :superseded="index < messages.length - 1"
                 :can-confirm="
-                  index === messages.length - 1 && workStatus === 'waiting' && !message.isStreaming
+                  index === messages.length - 1 &&
+                  workStatus === 'waiting' &&
+                  !message.isStreaming &&
+                  !confirmBusy
                 "
                 @confirm-plan="$emit('confirm-plan')"
                 @open-progress="$emit('open-progress')"
@@ -40,7 +43,13 @@
                 >
                   {{ researchSourceLabel(path, context.files) }}
                 </button>
-                <span v-if="context.result_ids?.length">{{ context.result_ids.join(' · ') }}</span>
+                <button
+                  v-for="id in context.result_ids || []"
+                  :key="id"
+                  @click="$emit('open-result', id)"
+                >
+                  查看结果 {{ id }}
+                </button>
               </div>
 
               <!-- JSON 块内容（内部也用 Markdown 渲染） -->
@@ -74,8 +83,8 @@
                   class="json-block-content"
                   v-if="!isBlockCollapsed(message.id, bIndex, block)"
                 >
-                  <MarkdownRenderer v-if="knownEvent(block)" :content="asText(block.content)" />
-                  <pre v-else>{{ JSON.stringify(block, null, 2) }}</pre>
+                  <MarkdownRenderer v-if="readableEvent(block)" :content="readableEvent(block)" />
+                  <p v-else>操作记录已保存。可在运行状态中查看相关步骤和产物。</p>
                 </div>
                 <div v-if="eventKind(block) !== 'normal'" class="event-actions">
                   <button
@@ -83,16 +92,15 @@
                       eventKind(block) === 'confirm' &&
                       index === messages.length - 1 &&
                       workStatus === 'waiting' &&
-                      !message.isStreaming
+                      !message.isStreaming &&
+                      !confirmBusy
                     "
                     type="button"
                     @click="$emit('confirm-plan')"
                   >
                     确认方案并继续
                   </button>
-                  <button type="button" @click="$emit('open-progress')">
-                    查看任务进度与处理方式
-                  </button>
+                  <button type="button" @click="$emit('open-progress')">查看运行状态</button>
                 </div>
               </div>
             </div>
@@ -127,12 +135,18 @@ interface ChatMessage {
 // Props
 interface Props {
   messages: ChatMessage[]
+  confirmBusy?: boolean
   workStatus?: string
   tasks?: ResearchSnapshot['tasks']
 }
 
 const props = defineProps<Props>()
-defineEmits<{ 'open-file': [path: string]; 'open-progress': []; 'confirm-plan': [] }>()
+defineEmits<{
+  'open-file': [path: string]
+  'open-progress': []
+  'confirm-plan': []
+  'open-result': [id: string]
+}>()
 const researchSourceLabel = (path: string, files: string[]) => {
   if (path === '.system/validation.json') return '校验问题'
   if (path === '.system/consistency.json') return '结论审查'
@@ -182,10 +196,21 @@ const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {
     return 'confirm'
   return 'normal'
 }
+const readableEvent = (block: PipelineBlock): string => {
+  if (typeof block.content === 'string') return block.content
+  if (block.content && typeof block.content === 'object') {
+    const c = block.content as Record<string, unknown>
+    return ['message', 'summary', 'reason', 'error']
+      .map((k) => c[k])
+      .filter((v) => typeof v === 'string')
+      .join('\n\n')
+  }
+  return ''
+}
 const eventTitle = (block: PipelineBlock) => eventLabels[block.type]?.[0] || '其他执行记录'
 const eventSummary = (block: PipelineBlock) =>
   eventLabels[block.type]?.[1] ||
-  (eventKind(block) === 'normal' ? '展开查看原始记录。' : '这条记录需要处理，请查看详情。')
+  (eventKind(block) === 'normal' ? '展开查看操作记录。' : '这条记录需要处理，请查看详情。')
 // Keep user choices keyed to message and event position while streaming appends content.
 const collapsedBlocks = ref<Map<string, boolean>>(new Map())
 const isBlockCollapsed = (messageId: string, blockIndex: number, block: PipelineBlock) =>

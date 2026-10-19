@@ -47,7 +47,10 @@ export function useWorkSession(workId: Ref<string>) {
     const request = ++evidenceRequest
     try {
       const snapshot = await chatAPI.getResearchSnapshot(workId.value)
-      if (request === evidenceRequest) applyResearchSnapshot(snapshot)
+      if (request === evidenceRequest) {
+        applyResearchSnapshot(snapshot)
+        return snapshot
+      }
     } catch {
       // Do not blank existing evidence on transient read/network failures.
     }
