@@ -813,14 +813,33 @@ class ResearchStore:
                 if right and not ResearchStore._reaches(state, right["task_id"], task["task_id"]):
                     raise ValueError("跨任务验收操作数必须声明任务依赖")
 
-    def reserve_planning_call(self):
+    def reserve_planning_call(self, decision_key=None):
         with self._transaction() as db:
             state = self._read(db)
+            if decision_key:
+                row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(self.research_id,decision_key)).fetchone()
+                if row and json.loads(row[0]).get('status')!='retry':
+                    return False
             if state["planning_calls"] >= 2 or len(state["attempts"]) >= state["max_total_attempts"]:
                 return False
             state["planning_calls"] += 1
-            self._save(db, state, "planning_started", {"call": state["planning_calls"]})
+            if decision_key:
+                db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
+                    (self.research_id,decision_key,decision_key,json.dumps({'status':'planning','base_revision':state['revision']})))
+            self._save(db, state, "planning_started", {"call": state["planning_calls"],"decision":decision_key})
             return True
+
+    def planning_decision(self, key):
+        with closing(self._connect()) as db:
+            row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(self.research_id,key)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_planning_decision(self, key, record):
+        with self._transaction() as db:
+            state=self._read(db)
+            db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
+                (self.research_id,key,key,json.dumps(record,ensure_ascii=False)))
+            self._save(db,state,'research_decision',{'key':key,**record})
 
     def record_proposal(self, proposal):
         signature = digest(proposal)

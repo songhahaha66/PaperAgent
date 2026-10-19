@@ -294,7 +294,7 @@ def test_real_graph_automatically_repairs_upstream_and_downstream_and_delivers(t
     output = asyncio.run(agent.run(TASK))
     assert "paper.md" in output
     state = ResearchStore(tmp_path, agent._load_thread()).snapshot()
-    assert state["planning_calls"] == 1
+    assert state["planning_calls"] == 2  # Confirmed repair, then evidence-based convergence.
     assert [sum(a["task_id"] == key for a in state["attempts"].values()) for key in ("Q1", "Q2", "Q3")] == [2, 2, 1]
     assert state["assumptions"]["A1"]["revision"] == 2
     assert state["assumption_history"][0]["status"] == "refuted"
@@ -368,7 +368,7 @@ def test_consistency_suspicion_runs_independent_verification_then_replans_only_i
     state = store.snapshot()
     investigations = [t for t in state["tasks"].values() if t["kind"] == "verify"]
     assert len(investigations) == 1 and investigations[0]["retired"]
-    assert state["planning_calls"] == (1 if counterexample else 0)
+    assert state["planning_calls"] == (2 if counterexample else 1)
     assert sum(a["task_id"] == "Q1" for a in state["attempts"].values()) == (2 if counterexample else 1)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1
     assert research_findings(state)[0]["status"] == ("resolved" if counterexample else "dismissed")

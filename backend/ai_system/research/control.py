@@ -13,6 +13,7 @@ from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
 from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
 from .planner import ready_tasks, Planner
+from .store import digest
 from .assumptions import assumption_scope
 from .validation import needs_owner_review
 from .progress import task_progress
@@ -43,20 +44,26 @@ async def observe(state, runtime):
     snapshot = store.snapshot()
     tasks = snapshot["tasks"]
     confirmed = {i["id"] for i in research_findings(snapshot) if i["status"] == "confirmed" and i["action"] == "recompute"}
-    if confirmed and snapshot["planning_calls"] < ctx.max_planning_calls and store.reserve_planning_call():
+    repair_key='planner-repair:'+digest([snapshot['revision'],sorted(confirmed),
+        [(k,t['revision'],t['active_attempt'],t['acceptance']) for k,t in tasks.items()]])
+    if confirmed and snapshot["planning_calls"] < ctx.max_planning_calls and store.reserve_planning_call(repair_key):
         try:
             proposal = await Planner(ctx.planner_llm).propose(snapshot)
-            if (proposal.changes or proposal.assumptions) and set(proposal.issue_ids) & confirmed and store.record_proposal(
-                {"changes": [c.model_dump() for c in proposal.changes], "assumptions": [a.model_dump() for a in proposal.assumptions],
-                 "issue_ids": sorted(proposal.issue_ids)}):
+            if (proposal.changes or proposal.assumptions) and set(proposal.issue_ids) & confirmed:
+                store.record_proposal({"changes": [c.model_dump() for c in proposal.changes],
+                    "assumptions": [a.model_dump() for a in proposal.assumptions], "issue_ids": sorted(proposal.issue_ids)})
                 changes = [change.model_copy(update={"objective": tasks[change.task_id]["objective"] +
                            "\n\n补充研究策略：" + change.objective}) if change.action == "revise" and change.task_id in tasks
                            else change for change in proposal.changes]
-                store.apply_patch(PlanPatch(command_id=f"planner:{snapshot['commit_seq']}",
+                store.apply_patch(PlanPatch(command_id=repair_key+':apply',
                     base_revision=snapshot["revision"], reason=proposal.reason or "修复研究问题", changes=changes,
                     assumptions=proposal.assumptions, issue_ids=proposal.issue_ids))
+            store.save_planning_decision(repair_key,{'status':'done'})
         except Exception as exc:
+            store.save_planning_decision(repair_key,{'status':'planning_failed','error_type':type(exc).__name__})
             await ctx.events.stage(f"规划未提交，保留已验收证据：{exc}")
+    from .planner import advance_research
+    decision_blocked=await advance_research(ctx)
     snapshot = store.snapshot()
     tasks = snapshot["tasks"]
     refresh_registry(ctx)
@@ -76,7 +83,7 @@ async def observe(state, runtime):
     complete = not unresolved and all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in tasks.values())
     from .loop import flow
     progress = flow(store)
-    blocked = (not complete and not ready_tasks(snapshot)) or bool(progress.get('blocked'))
+    blocked = decision_blocked or (not complete and not ready_tasks(snapshot)) or bool(progress.get('blocked'))
     next_outcome = "blocked" if blocked else snapshot["outcome"] if snapshot["outcome"] in {"completed", "needs_attention"} else "running"
     if next_outcome != snapshot["outcome"]:
         store.set_outcome(next_outcome)
@@ -85,7 +92,8 @@ async def observe(state, runtime):
     if complete:
         await ctx.set_stage("design", "completed")
     if blocked:
-        await ctx.set_stage("solve", "blocked", "存在未关闭的研究或审查问题、未验收任务，或尝试预算已耗尽")
+        await ctx.set_stage("solve", "blocked", "下一步研究决策或资料查证尚未完成，原要求与已验收结果已保留。" if decision_blocked else
+                            "存在未关闭的研究或审查问题、未验收任务，或尝试预算已耗尽")
     analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values() if t["kind"] != "verify"],
                 "requirements": snapshot["spec"]["requirements"],
                 "assumptions": [a for a in snapshot["assumptions"].values() if a["status"] != "retired"]}

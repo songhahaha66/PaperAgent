@@ -35,7 +35,7 @@ from ai_system.graph.state import (
 )
 from ai_system.research import ENGINE_VERSION
 from ai_system.research.models import Requirement, Assumption, IssueReport
-from ai_system.research.planner import AmendmentSpec
+from ai_system.research.planner import AmendmentSpec, EvidenceDecision
 from ai_system.research.store import ResearchStore
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
@@ -80,6 +80,12 @@ class _Structured:
         self.schema = schema
 
     async def ainvoke(self, messages):
+        if self.schema is EvidenceDecision:
+            context=json.loads(messages[-1].content)
+            evidence=context['evidence'][0]
+            return EvidenceDecision(action='deliver',reason='已有结果足够回答原要求，保留局限并继续原有交付检查。',
+                requirement_ids=[r['id'] for r in context['spec']['requirements']],
+                basis=[{'ref':evidence['id'],'quote':evidence['text']}])
         if self.schema is ProblemAnalysis:
             analysis = _analysis()
             source = messages[-1].content.split("# 题目\n", 1)[1].split("\n\n# 数据概览", 1)[0]

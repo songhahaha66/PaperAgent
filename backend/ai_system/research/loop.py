@@ -4,6 +4,7 @@ from langgraph.types import Send
 
 from ai_system.modules.registry import invoke
 from .store import digest
+import json
 
 DELIVERY = ('reconcile', 'write', 'validate', 'render', 'export')
 
@@ -31,6 +32,10 @@ def select(state, runtime):
     if work:
         return [Send('act', {'capability': 'experiments.execute', 'inputs': {'branch': item.arg}})
                 for item in work]
+    from .planner import literature_action
+    literature=literature_action(ctx.research)
+    if literature:
+        return Send('act',literature)
     progress = flow(ctx.research)
     if progress.get('blocked') or state.get('artifact_conflict'):
         return END
@@ -50,6 +55,19 @@ def select(state, runtime):
 async def act(action, runtime):
     ctx = runtime.context
     name = action['capability']
+    if action.get('decision_key'):
+        from .planner import begin_collection,finish_collection
+        key=action['decision_key']
+        begin_collection(ctx.research,key)
+        try:
+            result=await invoke(ctx,name,**action['inputs'])
+        except Exception:
+            # A saved operation may have completed before the service failed.
+            # observe reconciles it; no blind network replay on resume.
+            await ctx.events.stage('文献查证未完成，已保留执行位置；将核对已保存的检索记录，暂不交付。')
+            return {'log':['literature collection interrupted']}
+        await finish_collection(ctx,key,result)
+        return {'log':['literature evidence saved for the next research decision']}
     # A failed call never advances workflow progress. Recovery selects it again.
     patch = await invoke(ctx, name, **action['inputs'])
     if name.startswith('writing.'):
@@ -82,6 +100,17 @@ def resume(store):
     """Explicit retry unblocks delivery without discarding accepted experiments."""
     with store._transaction() as db:
         snapshot = store._read(db)
+        retried=[]
+        for row in db.execute("SELECT id,response FROM commands WHERE research_id=? AND (id LIKE 'research-next:%' OR id LIKE 'planner-repair:%')",
+                              (store.research_id,)).fetchall():
+            record=json.loads(row[1])
+            if record.get('status') in {'planning','planning_failed'}:
+                record['status']='retry'
+                db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
+                           (json.dumps(record,ensure_ascii=False),store.research_id,row[0]))
+                retried.append(row[0])
+        if retried:
+            store._save(db,snapshot,'research_decision_retry_requested',{'decisions':retried})
         progress = snapshot.get('workflow')
         if progress and progress.get('blocked'):
             progress['blocked'] = False

@@ -388,7 +388,7 @@ def test_local_findings_use_independent_counterchecks_and_only_replan_after_conf
     state = store.snapshot()
     [issue] = [i for i in research_findings(state) if i["source"] == "local_review"]
     assert issue["status"] == ("resolved" if counterexample else "dismissed")
-    assert state["planning_calls"] == (1 if counterexample else 0)
+    assert state["planning_calls"] == (2 if counterexample else 1)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1
     assert len([t for t in state["tasks"].values() if t["kind"] == "verify"]) == 1
     assert store.delivery_ready(state) and (tmp_path / "paper.md").exists()
