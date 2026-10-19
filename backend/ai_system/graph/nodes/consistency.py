@@ -183,7 +183,12 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
             validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
         async def perform():
             return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
-        audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
+        from ...research.segmented_review import needed
+        if needed(state.get('sections') or {}):
+            from ...research.segmented_review import audit as segmented_audit
+            audit=await segmented_audit(ctx,state,candidate=candidate)
+            keys=list(state['sections'])
+        else:audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
     except Exception as exc:
         from ...research.review_cache import error_code
         if ctx.research is not None and not candidate:

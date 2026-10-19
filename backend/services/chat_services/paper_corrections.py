@@ -190,6 +190,8 @@ def review_binding(store,state,llm,scope=None,source_issue=None):
     if scope:
         return review_context(ctx,state,'fragment',FRAGMENT_AUDIT_SYSTEM,fragment_prompt(store,state,scope),FragmentAudit,
             sections=state['sections'],extra={'non_blocking':True,'scope':scope,'policy':'exact-fragment-equivalence-v1'})
+    from ai_system.research.segmented_review import needed,aggregate_context
+    if needed(state['sections']):return aggregate_context(ctx,state,candidate=True)
     prepared=section_audit_prompt(state,ctx,force=True)
     if prepared is None:raise ValueError('没有可执行的章节一致性核查')
     prompt,_=prepared
@@ -203,9 +205,6 @@ def require_review(store,proposal,state):
     if proposal.get('source_issue'):
         from .issue_edits import require_review as require_issue_review
         return require_issue_review(store,proposal,state)
-    if proposal.get('review_kind')!='fragment_equivalence':
-        from ai_system.graph.nodes.consistency import require_complete_sections
-        require_complete_sections(state['sections'])
     scope=proposal['scope'] if proposal.get('review_kind')=='fragment_equivalence' else None
     context=review_binding(store,state,SimpleNamespace(model_name=proposal['review_model_id']),scope)
     hit=ReviewCache(store).get('fragment' if scope else 'sections',context,FragmentAudit if scope else ClaimAudit)

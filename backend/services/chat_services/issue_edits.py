@@ -32,11 +32,15 @@ def bind_findings(store,ids,sections):
             if issue['id'] not in ids or issue.get('section') not in sections:continue
             text=sections[issue['section']];origin={'section':issue['section'],'section_hash':digest(text),'review_id':None,'quote':None}
             for row in rows:
-                if row['stage']!='sections' or not valid_result(row) or row['context'].get('section_hashes',{}).get(issue['section'])!=digest(text):continue
+                if row['stage']!='sections' or not valid_result(row,store) or row['context'].get('section_hashes',{}).get(issue['section'])!=digest(text):continue
                 finding=next((f for f in row['result'].get('issues',[]) if f['section']==issue['section'] and f.get('problem') and (issue['message']==f['problem'] or issue['message']=='与结论表不一致：'+f['problem'])),None)
                 if not finding:continue
                 origin['review_id']=row['id'];quote=finding.get('quote') or ''
-                if quote and text.find(quote)>=0 and text.find(quote,text.find(quote)+1)<0 and text.find(quote)+len(quote)<=6000:origin['quote']=quote
+                segmented=False
+                if row.get('source')=='segmented-aggregate':
+                    from ai_system.research.segmented_review import verify_proof
+                    segmented=verify_proof(store,row)
+                if quote and text.find(quote)>=0 and text.find(quote,text.find(quote)+1)<0 and (segmented or text.find(quote)+len(quote)<=6000):origin['quote']=quote
                 break
             if issue.get('paper_origin')!=origin:issue['paper_origin']=origin;changed.append(issue['id'])
         if changed:store._save(db,state,'issue_paper_context_bound',{'issue_ids':changed})

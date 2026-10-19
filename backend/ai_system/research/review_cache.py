@@ -7,7 +7,7 @@ from .store import ResearchStore,digest
 from .models import IssueReport
 
 POLICY='review-context-cache-v1'
-STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查'}
+STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查','section_blocks':'正文分块核查','section_global':'跨节结论核查'}
 PROCESS_ID=uuid.uuid4().hex
 SCIENCE_FIELDS=('inputs','tasks','contract_hash','evidence_hash','claims_hash','artifact_hashes','committed_evidence_hash','configuration_hash')
 
@@ -79,7 +79,7 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
             citations['C'+cid]=digest(json.loads(row[0])) if row else None
         except (AttributeError,ValueError,KeyError):citations['C'+cid]=None
     consistency=None
-    if stage in {'sections','fragment'}:
+    if stage in {'sections','fragment','section_blocks','section_global'}:
         try:consistency=digest(json.loads((root/'.system/consistency.json').read_text()))
         except (OSError,ValueError):pass
     from ..graph.nodes.consistency import section_coverage
@@ -122,6 +122,9 @@ class ReviewCache:
             try:
                 record=json.loads(row[0])
                 if record['context']!=context or record['result_hash']!=digest(record['result']):continue
+                if record.get('source')=='segmented-aggregate':
+                    from .segmented_review import verify_proof
+                    if not verify_proof(self.store,record):continue
                 return schema.model_validate(record['result']),record
             except (KeyError,ValueError,TypeError):continue
         return None
@@ -143,7 +146,7 @@ class ReviewCache:
         return record
 
     async def wait(self,record,schema,current_context):
-        while time.time()<record.get('lease',{}).get('expires_at',time.time()):
+        while True:
             await asyncio.sleep(.05)
             with closing(self.store._connect()) as db:row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
             if not row:raise RuntimeError('审查记录不可用')
@@ -152,13 +155,32 @@ class ReviewCache:
                 hit=self.get(record['stage'],record['context'],schema)
                 if hit:return hit[0]
             if row[0]!='running':raise RuntimeError('原审查未成功完成，请查看失败记录后恢复')
-        raise RuntimeError('审查连接已中断，租约到期后可恢复')
+            active=json.loads(row[1])
+            if active.get('lease',{}).get('expires_at',active.get('started_at',0)+120)<=time.time():raise RuntimeError('审查连接已中断，租约到期后可恢复')
+
+    async def heartbeat(self,record,interval=10):
+        """A live multi-call composition renews the existing lease; crashes do not."""
+        from .runtime import ResearchRuntime
+        duration=ResearchRuntime(self.store.root).policy().get('timeout_seconds',90)+30
+        while True:
+            await asyncio.sleep(interval)
+            with self.store._transaction() as db:
+                row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
+                if not row or row[0]!='running':return
+                saved=json.loads(row[1])
+                if saved.get('lease',{}).get('token')!=record.get('lease',{}).get('token'):return
+                expiry=time.time()+duration
+                saved['lease']['expires_at']=expiry;record['lease']['expires_at']=expiry
+                db.execute('UPDATE review_records SET payload=? WHERE id=?',(json.dumps(saved,ensure_ascii=False),record['id']))
 
     def complete(self,record,result,*,provenance=None,current_context=None):
         if record['stage']=='sections' and not record['context'].get('section_coverage',{}).get('complete',True):
             from ..graph.nodes.consistency import ReviewCoverageIncomplete
             raise ReviewCoverageIncomplete('不完整章节审查不能登记为完成')
         record={**record,'result':result,'result_hash':digest(result),'completed_at':time.time(),'provenance':provenance or {}}
+        if record.get('source')=='segmented-aggregate':
+            from .segmented_review import verify_proof
+            if not verify_proof(self.store,record):raise ValueError('分段覆盖证明不完整，不能登记章节审查完成')
         stale=False
         with self.store._transaction() as db:
             row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
@@ -216,6 +238,9 @@ class ReviewCache:
             expected=record['context'].get('version_material',{}).get('science')
             if expected and science_version(child['context'])!=expected:return False
             if coverage_material(child['stage'],child['context'])!=coverage_material(record['stage'],record['context']):return False
+            if child.get('source')=='segmented-aggregate':
+                from .segmented_review import verify_proof
+                if not verify_proof(self.store,child):return False
         return True
 
     def failed(self,record,error,*,diagnostic=None,current_context=None):
@@ -256,6 +281,9 @@ class ReviewCache:
     def reuse(self,record,*,current_context=None):
         with self.store._transaction() as db:
             if current_context is not None and current_context()!=record['context']:raise ValueError('review_context_changed_before_reuse')
+            if record.get('source')=='segmented-aggregate':
+                from .segmented_review import verify_proof
+                if not verify_proof(self.store,record):raise ValueError('分段覆盖证明已失效')
             state=self.store._read(db)
             closed=self._close_matching(state,record) if state else []
             replaced=self._supersede_services(db,state,record) if state else []
@@ -283,7 +311,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             from ..graph.nodes.consistency import require_complete_sections
             require_complete_sections(sections or {})
         answer=await perform()
-        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict'}[stage]
+        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict','section_blocks':'issues','section_global':'issues'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')
         if isinstance(answer,dict) and verdict_field not in answer:raise ValueError('review_reply_missing_verdict_field')
         answer=schema.model_validate(answer.model_dump() if hasattr(answer,'model_dump') else answer)

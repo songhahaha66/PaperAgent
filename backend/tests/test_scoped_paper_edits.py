@@ -186,7 +186,10 @@ def test_local_semantic_change_or_uncertainty_remains_a_blocker(scoped,monkeypat
 def test_saved_model_proposal_can_resume_only_failed_legacy_full_review(scoped):
     from ai_system.research.review_cache import ReviewCache
     v=scoped;p=propose(v);state={**v.state,'sections':{**v.state['sections'],**p['after_sections']}}
-    context=edits.review_binding(v.store,state,v.llm)
+    from ai_system.research.review_cache import review_context
+    from ai_system.graph.nodes.consistency import section_audit_prompt,AUDIT_SYSTEM
+    ctx=edits.proposal_context(v.store,state,v.llm);prompt=section_audit_prompt(state,ctx,force=True)[0]
+    context=review_context(ctx,state,'sections',AUDIT_SYSTEM,prompt,ClaimAudit,sections=state['sections'],extra={'non_blocking':True})
     cache=ReviewCache(v.store);record=cache.start('sections',context);cache.failed(record,TimeoutError())
     with v.store._transaction() as db:
         db.execute("DELETE FROM review_records WHERE stage='fragment'")

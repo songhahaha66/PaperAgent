@@ -38,8 +38,14 @@ def material(store,stage):
     request_hash=None
     from ai_system.graph.nodes.consistency import section_audit_prompt,AUDIT_SYSTEM,reconcile_prompt,RECONCILE_SYSTEM
     if stage=='sections':
-        prompt=section_audit_prompt(state,ctx,force=True)
-        if prompt:request_hash=digest({'system':AUDIT_SYSTEM,'prompt':prompt[0],'schema':ClaimAudit.model_json_schema()})
+        from ai_system.research.segmented_review import needed
+        if needed(state['sections']):
+            from ai_system.research.segmented_review import aggregate_context
+            try:request_hash=aggregate_context(ctx,state)['request_hash']
+            except ValueError as exc:request_hash=digest({'unplannable':str(exc),'sections':context['section_hashes']})
+        else:
+            prompt=section_audit_prompt(state,ctx,force=True)
+            if prompt:request_hash=digest({'system':AUDIT_SYSTEM,'prompt':prompt[0],'schema':ClaimAudit.model_json_schema()})
     elif stage=='reconcile':request_hash=digest({'system':RECONCILE_SYSTEM,'prompt':reconcile_prompt(state,ctx),'schema':ConsistencyReview.model_json_schema()})
     return {'science':science_version(context),'request_hash':request_hash,'sections':sections if stage!='reconcile' else {},
         'section_hashes':context['section_hashes'] if stage!='reconcile' else {},
@@ -53,7 +59,12 @@ def records(store):
         return [{**json.loads(r[1]),'state':r[0]} for r in db.execute('SELECT state,payload FROM review_records WHERE research_id=? ORDER BY rowid DESC',(store.research_id,))]
 
 
-def valid_result(row):return row['state']=='completed' and row.get('result_hash')==digest(row.get('result'))
+def valid_result(row,store=None):
+    if row['state']!='completed' or row.get('result_hash')!=digest(row.get('result')):return False
+    if row.get('source')=='segmented-aggregate':
+        from ai_system.research.segmented_review import verify_proof
+        return bool(store and verify_proof(store,row))
+    return True
 
 
 def matches(row,current,stage):
@@ -74,7 +85,7 @@ def adopted_review(store,current,rows):
         proposals=[json.loads(r[0]) for r in db.execute("SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC",(store.research_id,))]
     for p in proposals:
         row=by_id.get(p.get('review_id'))
-        if p.get('status')!='applied' or not row or not valid_result(row) or not matches(row,current,'sections'):continue
+        if p.get('status')!='applied' or not row or not valid_result(row,store) or not matches(row,current,'sections'):continue
         if row['stage']=='sections' and p.get('review_kind')!='issue_section' and row['result'].get('issues')==[]:return row,'编辑时章节审查（完整覆盖）'
         if row['stage']=='fragment' and row['result'].get('verdict')=='equivalent' and p.get('generation_contract')=='scoped-anchored-edits-v2':
             if any(r['stage']=='reconcile' and valid_result(r) and matches(r,current,'reconcile') and r.get('completed_at',0)>row.get('started_at',0) for r in rows):continue
@@ -86,6 +97,8 @@ def expire_leases(store):
     cache=ReviewCache(store)
     for row in records(store):
         if row['state']=='running' and row.get('lease',{}).get('expires_at',row.get('started_at',0)+120)<time.time():
+            if row['stage'] in {'section_blocks','section_global'}:
+                cache.failed(row,RuntimeError('interrupted'),diagnostic={'reason':'lease_expired','recoverable':True});continue
             if row['source']=='recovery-intent':current=intent_context(store,row['stage'])==row['context']
             elif row['context'].get('extra',{}).get('non_blocking',False):current=candidate_current(store,row)
             else:current=matches(row,material(store,row['stage']),row['stage']) if row['stage'] in LABELS else False
@@ -124,7 +137,7 @@ def status(store):
         if not applicable:item.update(state='not_required',coverage='当前材料尚不需要此审查',can_resume=False)
         elif same and same[0]['state']=='running':item.update(state='running',record_id=same[0]['id'],can_resume=False)
         elif same and same[0]['state']=='failed' and not same[0].get('recovered_by'):item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('error_code','interrupted'))
-        elif root and valid_result(root[0]):
+        elif root and valid_result(root[0],store):
             findings=bool(root[0]['result'].get('issues') or any(c.get('research_issue') for c in root[0]['result'].get('conflicts',[])) or any(v.get('status')!='supported' for v in root[0]['result'].get('verdicts',[])))
             item.update(state='completed',record_id=root[0]['id'],outcome='findings' if findings else 'passed',can_resume=False)
         elif stage=='sections' and adopted_review(store,current,rows):
@@ -140,15 +153,25 @@ def status(store):
         if stage=='sections':
             from ai_system.graph.nodes.consistency import section_coverage
             item['coverage_detail']=section_coverage(state['sections'])
-            if not item['coverage_detail']['complete']:
-                item.update(state='partial',outcome='incomplete',can_resume=False,coverage='章节全量核查未完成（每节仅支持6000字符）',reason='长章节需要分段核查；不会将不完整覆盖登记为全文通过')
+            from ai_system.research.segmented_review import needed
+            if needed(state['sections']):
+                try:
+                    from ai_system.research.segmented_review import progress
+                    model_id=next((r['context'].get('model_id') for r in [*root,*rows] if r['stage'] in {'sections','section_blocks'} and r['context'].get('model_id')),'version-only')
+                    segments=progress(context_from_store(store,model_id),state)
+                    item.update(segmented=segments,coverage='逐块完整覆盖原文；跨块衔接及跨节主张分别核查')
+                    item['coverage_detail']={'policy':'segmented-sections-v1','complete':segments['completed_blocks']==segments['total_blocks'] and segments['global']['state']=='completed',
+                        'sections':{s['section']:{'total_chars':s['total_chars'],'included_chars':s['covered_chars'],'local_complete':s['local_complete']} for s in segments['sections']}}
+                    if item['state'] not in {'running','failed','completed'}:item.update(state='partial',outcome='incomplete',reason='已完成块保留，恢复仅发送缺失或失效核查')
+                    if segments['global']['state']=='blocked':item.update(can_resume=False,reason=segments['global']['reason'])
+                except ValueError as exc:item.update(state='partial',outcome='incomplete',can_resume=False,reason=str(exc))
         if current['source_conflict']:
             item.update(state='pending',can_resume=False,reason='源文件有人工修改，先合并原稿')
         if item['can_resume']:
             if current['source_conflict']:item.update(can_resume=False,reason='源文件有人工修改，先合并原稿')
             elif not prerequisites:item.update(can_resume=False,reason='先完成当前研究任务的验收/重算')
             elif budget['state']=='provider_blocked':item.update(can_resume=False,reason='网关鉴权或额度拒绝，先修复配置')
-            elif budget['used']>=budget['request_limit']:item.update(can_resume=False,reason=f"请求预算不足（{budget['used']}/{budget['request_limit']}），进度保留，追加授权后可恢复")
+            elif budget['used']>=budget['request_limit'] and item.get('segmented',{}).get('remaining_requests_upper_bound',1)>0:item.update(can_resume=False,reason=f"请求预算不足（{budget['used']}/{budget['request_limit']}），进度保留，追加授权后可恢复")
         tasks.append(item)
     history=[]
     for row in rows[:30]:
@@ -199,17 +222,29 @@ async def execute(store,stage,llm):
             else:
                 if any(i.section not in state['sections'] or i.section=='references' for i in result.issues):raise ValueError('未知章节')
                 validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
-        async def perform():return await call_structured(llm,schema,as_messages(system,prompt),validate=validate,retries=0)
-        result=await run_review(ctx,state,stage,schema,system,prompt,perform,sections=None if stage=='reconcile' else state['sections'],validate=validate)
+        from ai_system.research.segmented_review import needed
+        if stage=='sections' and needed(state['sections']):
+            from ai_system.research.segmented_review import audit
+            result=await audit(ctx,state)
+        else:
+            async def perform():return await call_structured(llm,schema,as_messages(system,prompt),validate=validate,retries=0)
+            result=await run_review(ctx,state,stage,schema,system,prompt,perform,sections=None if stage=='reconcile' else state['sections'],validate=validate)
         if stage=='reconcile':reports=[c.research_issue for c in result.conflicts if c.research_issue]
         else:reports=[i.research_issue or IssueReport(task_id=next(iter(store.snapshot()['tasks'])),category='writing',section=i.section,message=i.problem) for i in result.issues if i.contradicts and not NOT_A_CONFLICT.search(i.problem)]
     current=material(store,stage)
-    proof=[r['id'] for r in records(store) if r['source']!='recovery-intent' and r['stage']==stage and valid_result(r) and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
+    proof=[r['id'] for r in records(store) if r['source']!='recovery-intent' and r['stage']==stage and valid_result(r,store) and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
     if not proof:raise RuntimeError('没有当前版本实际完成的审查记录')
     return reports,proof[:1]
 
 
 async def _run(store,stage,record,llm):
+    heartbeat=asyncio.create_task(ReviewCache(store).heartbeat(record))
+    try:await _run_owned(store,stage,record,llm)
+    finally:
+        heartbeat.cancel();await asyncio.gather(heartbeat,return_exceptions=True)
+
+
+async def _run_owned(store,stage,record,llm):
     cache=ReviewCache(store);context=record['context'];trace=LLMCallTrace()
     if hasattr(llm,'model_copy'):
         callbacks=getattr(llm,'callbacks',None);llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
