@@ -127,8 +127,71 @@ def test_completed_calculation_reused_when_writing_fails(paper,monkeypatch):
     with pytest.raises(RuntimeError):run(comments.execute(store,record['id'],object()))
     saved=project.read_records(store,'paper_executions')[0]
     assert saved['tool_result']['stdout']=='4' and saved['phase']=='write'
+    assert saved['error_type']=='RuntimeError'
     result=run(comments.execute(store,record['id'],object(),resume=True))
-    assert result['state']=='completed' and result['change_id'] and calls['tool']==1
+    assert result['state']=='completed' and result['change_id'] and calls=={'tool':1,'model':3}
+    assert all(key not in result for key in ('error','error_type','owner_pid'))
+    persisted=project.read_records(store,'paper_executions')[0]
+    assert all(key not in persisted for key in ('error','error_type','owner_pid'))
+    history=project.read_records(store,'paper_threads')[0]['messages']
+    assert any(m.get('error_type')=='RuntimeError' and m['phase']=='write' for m in history)
+    assert history[-1]['text']==result['answer']
+
+
+def test_finish_preserves_preexisting_failure_in_thread_history(paper):
+    store,_=paper
+    record,_=comments.create(store,'old-failure','解释旧记录')
+    record.update(state='failed',phase='write',error='先前写作未完成',error_type='RuntimeError',owner_pid=123,updated_at=1)
+    with store._transaction() as db:project.put(db,store,'paper_executions',record)
+    result=comments.finish(store,record,'已完成')
+    assert result['state']=='completed' and all(k not in result for k in ('error','error_type','owner_pid'))
+    history=project.read_records(store,'paper_threads')[0]['messages']
+    assert history[-2]['text']=='先前写作未完成' and history[-2]['error_type']=='RuntimeError'
+    assert history[-2]['at']==1 and history[-1]['text']=='已完成'
+
+
+@pytest.mark.parametrize('repair_ok',[True,False])
+def test_comment_writing_has_one_format_repair_without_repeating_tools(paper,monkeypatch,repair_ok):
+    from langchain_core.messages import AIMessage
+    from ai_system.graph import llm_utils
+    store,_=paper;bound=selection(store,'原来的表述')
+    record,_=comments.create(store,'one-repair','计算后修改',bound)
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    calls={'plan':0,'write':0,'repair':0,'tool':0}
+    candidate='{"replacement":"依据实际结果修订的表述"}'  # Missing required answer; never guess it.
+    class Model:
+        def with_structured_output(self,schema,**kwargs):
+            async def structured(messages):
+                if schema is comments.CommentPlan:
+                    calls['plan']+=1
+                    return comments.CommentPlan(intent='calculate',code='print(4)',edit_after=True)
+                calls['write']+=1
+                assert 'replacement字段只包含' in messages[0].content and 'answer' in messages[0].content
+                return {'raw':AIMessage(content=candidate,additional_kwargs={'reasoning_content':'private reasoning'}),
+                        'parsed':None,'parsing_error':None}
+            return SimpleNamespace(ainvoke=structured)
+        async def ainvoke(self,messages):
+            calls['repair']+=1
+            assert messages[-2].content==candidate and not messages[-2].additional_kwargs
+            assert 'private reasoning' not in str(messages)
+            return AIMessage(content=json.dumps({'answer':'实际结果为4，候选已提出。','replacement':'依据实际结果修订的表述'}) if repair_ok else candidate)
+    async def invoke(ctx,name,**inputs):
+        assert name=='experiments.comment';calls['tool']+=1
+        return {'ok':True,'stdout':'4'}
+    monkeypatch.setattr('ai_system.modules.registry.invoke',invoke)
+    before=(store.root/'paper.md').read_bytes()
+    if repair_ok:
+        result=run(comments.execute(store,record['id'],Model()))
+        assert result['state']=='completed' and result['change_id'] and result['answer']=='实际结果为4，候选已提出。'
+        assert all(key not in result for key in ('error','error_type','owner_pid'))
+    else:
+        with pytest.raises(RuntimeError,match='CommentReply'):
+            run(comments.execute(store,record['id'],Model()))
+        saved=project.read_records(store,'paper_executions')[0]
+        assert saved['state']=='failed' and saved['phase']=='write' and saved['tool_result']['stdout']=='4'
+        assert not project.read_records(store,'paper_changes')
+    assert calls=={'plan':1,'write':1,'repair':1,'tool':1}
+    assert (store.root/'paper.md').read_bytes()==before
 
 
 def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):

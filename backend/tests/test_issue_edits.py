@@ -135,11 +135,22 @@ def test_issue_endpoint_owner_and_missing_guards(linked,monkeypatch):
 
 @pytest.mark.parametrize('linked',[True],indirect=True)
 def test_failed_pdf_export_keeps_issue_source_and_pdf(linked,monkeypatch):
-    v=linked;p=propose(v);source=(v.store.root/'paper.tex').read_bytes();pdf=(v.store.root/'paper.pdf').read_bytes()
+    from services.chat_services import paper_project as project
+    from test_paper_interactions import selection
+    v=linked;before=v.store.snapshot();source=(v.store.root/'paper.tex').read_bytes();pdf=(v.store.root/'paper.pdf').read_bytes()
+    bound=selection(v.store,v.old,file='paper.tex')
+    project.initialize(v.store)
+    p=project.propose_change(v.store,None,None,[{**bound,'replacement':v.new}])
     async def failed(*a):return SimpleNamespace(pdf_path=None,error='controlled export failed')
-    monkeypatch.setattr(editor,'compile_pdf',failed)
-    with pytest.raises(ValueError,match='controlled export'):asyncio.run(editor.decide(v.store,p['id'],True,'latex'))
-    assert current(v)['status']=='confirmed' and (v.store.root/'paper.tex').read_bytes()==source and (v.store.root/'paper.pdf').read_bytes()==pdf
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',failed)
+    applied=asyncio.run(project.decide(v.store,p['id'],'apply'))
+    assert applied['status']=='applied' and current(v)['status']=='confirmed'
+    assert v.store.snapshot()==before and (v.store.root/'paper.pdf').read_bytes()==pdf
+    assert v.new in (v.store.root/'paper.tex').read_text() and v.old not in (v.store.root/'paper.tex').read_text()
+    assert (v.store.root/project.VERSIONS/bound['version']/'paper.tex').read_bytes()==source
+    doc=project.describe(v.store)
+    assert doc['compile']['state']=='failed' and doc['pdf_version']!=doc['version']
+    assert 'controlled export' in doc['compile']['message'] and not v.model.calls
 
 
 @pytest.mark.parametrize('quote',['根本不存在的引文','aaa'])

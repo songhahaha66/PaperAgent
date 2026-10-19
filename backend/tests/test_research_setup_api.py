@@ -45,6 +45,12 @@ def test_template_scaffold_is_not_a_published_research_artifact(env,client):
     assert overview.status_code==200
     from services.chat_services.research_session import research_snapshot
     assert research_snapshot(root,'B','created').artifacts==[]
+    # Draft reading uses the project endpoint independently of formal outcomes.
+    draft=client.get('/api/workspace/B/paper/project')
+    assert draft.status_code==200,draft.text
+    assert draft.json()['main']=='paper.tex'
+    assert next(f for f in draft.json()['files'] if f['path']=='paper.tex')['text']=='template scaffold'
+    assert research_snapshot(root,'B','created').artifacts==[]
 
 
 @pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),('GET','research-settings',None),

@@ -21,6 +21,8 @@ export function useArtifactPreview(options: {
   const isFileRefreshing = ref(false)
   const downloadLoading = ref(false)
   const exportLoading = ref(false)
+  // Published downloads follow research artifacts. Editable drafts are loaded
+  // independently by PaperEditor through paperProjectAPI, even before acceptance.
   const primaryArtifact = computed(() => {
     const names =
       currentWork.value?.output_mode === 'latex'

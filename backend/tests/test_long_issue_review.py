@@ -119,11 +119,26 @@ def test_old_version_and_new_findings_never_release_source_issue(longpaper):
 
 @pytest.mark.parametrize('longpaper',[True],indirect=True)
 def test_pdf_failure_keeps_source_pdf_and_issue(longpaper,monkeypatch):
-    v=longpaper;p=propose(v);before=(v.store.root/'paper.tex').read_bytes();pdf=(v.store.root/'paper.pdf').read_bytes()
+    from services.chat_services import paper_project as project
+    from test_paper_interactions import selection
+    v=longpaper;before=v.store.snapshot();source=(v.store.root/'paper.tex').read_bytes();pdf=(v.store.root/'paper.pdf').read_bytes()
+    calls=list(v.model.calls);bound=selection(v.store,OLD,file='paper.tex')
+    project.initialize(v.store)
+    p=project.propose_change(v.store,None,None,[{**bound,'replacement':NEW}])
     async def failed(*a):return SimpleNamespace(pdf_path=None,error='controlled native compile failure')
-    monkeypatch.setattr(editor,'compile_pdf',failed)
-    with pytest.raises(ValueError,match='controlled native compile'):asyncio.run(editor.decide(v.store,p['id'],True,'latex'))
-    assert current(v)['status']=='confirmed' and (v.store.root/'paper.tex').read_bytes()==before and (v.store.root/'paper.pdf').read_bytes()==pdf
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',failed)
+    applied=asyncio.run(project.decide(v.store,p['id'],'apply'))
+    expected=source.decode('utf-8').replace(OLD,NEW)
+    assert applied['status']=='applied' and (v.store.root/'paper.tex').read_text()==expected
+    assert v.store.snapshot()==before and current(v)['status']=='confirmed' and v.model.calls==calls
+    assert (v.store.root/'paper.pdf').read_bytes()==pdf
+    assert (v.store.root/project.VERSIONS/bound['version']/'paper.tex').read_bytes()==source
+    assert project.describe(v.store)['compile']['state']=='failed'
+    # Reverting the accepted draft also preserves the old PDF on compile failure;
+    # neither operation supplies scientific review evidence or resolves the issue.
+    reverted=asyncio.run(project.decide(v.store,p['id'],'revert'))
+    assert reverted['status']=='reverted' and (v.store.root/'paper.tex').read_bytes()==source
+    assert (v.store.root/'paper.pdf').read_bytes()==pdf and v.store.snapshot()==before
 
 
 def test_graph_entry_routes_before_legacy_preflight_and_without_registered_claims(longpaper,monkeypatch):

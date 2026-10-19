@@ -111,8 +111,11 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
                 if parsed_reply is None:
                     from ..judge.llm import parse_verdict
                     parsed_reply=parse_verdict(message_text(raw),schema)
-                if parsed_reply is None and result.get('parsing_error'):
-                    raise InvalidStructuredReply(result['parsing_error'],raw)
+                if parsed_reply is None:
+                    # Some providers return neither a parsed value nor an error.
+                    # Keep public content/tool arguments for the existing JSON
+                    # repair, without forwarding metadata or reasoning_content.
+                    raise InvalidStructuredReply(result.get('parsing_error') or ValueError("模型没有返回结构化结果"),raw)
                 result = parsed_reply
             if result is None:
                 raise ValueError("模型没有返回结构化结果")

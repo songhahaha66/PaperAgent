@@ -271,6 +271,32 @@ def test_structured_output_and_its_json_retry_share_a_bounded_output_limit(monke
     assert result==_analysis() and seen==[6000,6000] and original.max_tokens==16000
 
 
+@pytest.mark.parametrize('kind',['text','tool','invalid_tool'])
+def test_missing_parsed_and_error_retains_only_public_candidate_for_repair(monkeypatch,kind):
+    from services.chat_services.paper_comments import CommentReply
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    candidate={'replacement':'原候选片段'}
+    partial=json.dumps(candidate,ensure_ascii=False)
+    kwargs={'content':partial if kind=='text' else '',
+            'additional_kwargs':{'reasoning_content':'private reasoning'},
+            'response_metadata':{'headers':{'authorization':'private header'}}}
+    if kind=='tool':kwargs['tool_calls']=[{'name':'CommentReply','args':candidate,'id':'one'}]
+    if kind=='invalid_tool':kwargs['invalid_tool_calls']=[{'name':'CommentReply','args':partial,'id':'one','error':'invalid'}]
+    class Model:
+        calls=0
+        def with_structured_output(self,*args,**kwargs):return self
+        async def ainvoke(self,messages):
+            self.calls+=1
+            if self.calls==1:return {'raw':AIMessage(**kwargs),'parsed':None,'parsing_error':None}
+            assert messages[-2].content==partial
+            assert not messages[-2].additional_kwargs and not messages[-2].response_metadata
+            assert 'private reasoning' not in str(messages) and 'private header' not in str(messages)
+            return AIMessage(content=json.dumps({'answer':'说明','replacement':'原候选片段'},ensure_ascii=False))
+    model=Model()
+    assert asyncio.run(llm_utils.call_structured(model,CommentReply,[],retries=1))==CommentReply(answer='说明',replacement='原候选片段')
+    assert model.calls==2
+
+
 @pytest.mark.parametrize('raw_tool',[True,False])
 def test_truncated_structured_outputs_keep_partial_candidate_and_request_shorter_complete_json(monkeypatch,raw_tool):
     monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)

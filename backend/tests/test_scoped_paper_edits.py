@@ -203,15 +203,37 @@ def test_saved_model_proposal_can_resume_only_failed_legacy_full_review(scoped):
     applied=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert applied['status']=='applied'
 
 
-def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkeypatch):
+@pytest.mark.parametrize('conflict',[False,True])
+def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkeypatch,conflict):
     from ai_system.modules.writing.validation import assemble_latex
+    from services.chat_services import paper_project as project
+    from test_paper_interactions import selection
     v=scoped;v.store.publish_paper(assemble_latex(v.state),filename='paper.tex');(v.store.root/'paper.pdf').write_bytes(b'previous PDF')
-    before=v.store.snapshot();original=(v.store.root/'paper.tex').read_bytes();p=propose(v)
-    async def failure(folder):return SimpleNamespace(pdf_path=None,error='compiler failed')
-    monkeypatch.setattr(editor,'compile_pdf',failure)
-    with pytest.raises(ValueError,match='compiler failed'):asyncio.run(editor.decide(v.store,p['id'],True,'latex'))
-    assert v.store.snapshot()==before and (v.store.root/'paper.tex').read_bytes()==original
-    assert (v.store.root/'paper.pdf').read_bytes()==b'previous PDF' and editor.get_proposal(v.store,p['id'])['status']=='pending'
+    before=v.store.snapshot();original=(v.store.root/'paper.tex').read_bytes()
+    bound=selection(v.store,v.old,file='paper.tex');replacement='主要局限源于数据规模和实验设计。'
+    project.initialize(v.store)
+    p=project.propose_change(v.store,None,None,[{**bound,'replacement':replacement}])
+    compiles=[]
+    async def failure(*args):
+        compiles.append(1)
+        return SimpleNamespace(pdf_path=None,error='compiler failed')
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',failure)
+    if conflict:
+        manual=original.decode('utf-8').replace(v.old,'人工修改的目标。')
+        (v.store.root/'paper.tex').write_text(manual)
+        with pytest.raises(ResearchConflict):asyncio.run(project.decide(v.store,p['id'],'apply'))
+        assert (v.store.root/'paper.tex').read_text()==manual and not compiles
+        assert project.read_records(v.store,'paper_changes')[0]['status']=='pending'
+    else:
+        applied=asyncio.run(project.decide(v.store,p['id'],'apply'))
+        assert applied['status']=='applied' and compiles==[1]
+        assert (v.store.root/'paper.tex').read_text()==original.decode('utf-8').replace(v.old,replacement)
+        doc=project.describe(v.store)
+        assert doc['compile']['state']=='failed' and 'compiler failed' in doc['compile']['message']
+        assert (v.store.root/project.VERSIONS/applied['applied_version']/'paper.tex').read_bytes()==(v.store.root/'paper.tex').read_bytes()
+    assert (v.store.root/project.VERSIONS/bound['version']/'paper.tex').read_bytes()==original
+    assert v.store.snapshot()==before and not v.calls
+    assert (v.store.root/'paper.pdf').read_bytes()==b'previous PDF'
 
 
 def test_existing_citation_marker_cannot_be_substituted(scoped,monkeypatch):

@@ -35,6 +35,28 @@ def test_latex_workspace_starts_with_tex_not_markdown(tmp_path):
     assert not (tmp_path / 'paper.md').exists()
 
 
+def test_native_project_draft_is_separate_from_rendered_research_artifacts(tmp_path):
+    from services.chat_services import paper_project as project
+    from ai_system.research.models import IssueReport
+    store=accepted_store(tmp_path)
+    store.save_sections({'abstract':'已保存但尚未正式交付的正文。'},[])
+    (tmp_path/'.system/graph_thread.json').write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
+    (tmp_path/'paper.tex').write_text('论文草稿。')
+    (tmp_path/'paper.pdf').write_bytes(b'previous unregistered PDF')
+    doc=project.describe(store)
+    assert doc['main']=='paper.tex' and doc['files']
+    assert not research_snapshot(tmp_path,'work','paused').artifacts
+    # Native render uses project files, without the legacy publish_paper hash.
+    assert not store.snapshot().get('paper_hash')
+    store.set_delivery_stage('render','completed')
+    assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
+    store.register_exports(['paper.tex','paper.pdf'])
+    assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.pdf','paper.tex']
+    store.report_issues([IssueReport(task_id='Q1',category='model',message='还需核验科学结论')],'local_review')
+    assert not research_snapshot(tmp_path,'work','paused').artifacts
+    assert project.describe(store)['files'], 'Scientific blockers must not hide the editable draft'
+
+
 def test_native_style_requests_no_markdown_and_repairs_format_errors(tmp_path):
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), output_mode='latex')
     state = {'analysis': problem().model_dump(), 'task': TASK, 'sections': {}, 'solutions': {}}
