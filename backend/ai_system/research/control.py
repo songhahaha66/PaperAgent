@@ -207,6 +207,7 @@ def worker_context(ctx, order):
         template_requirements=ctx.template_requirements, check_claims=ctx.check_claims, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
         source_workspace=ctx.workspace)
+    local.compact_paper=ctx.compact_paper
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref
@@ -234,6 +235,11 @@ async def execute(branch, runtime):
     local = None
     receipt = None
     try:
+        prepared=branch.get('design') or {}
+        if prepared.get('experience_refs'):
+            if prepared.get('experience_files',ctx.research.file_inputs())!=ctx.research.file_inputs():
+                raise ResearchConflict('确认前后数据改变，请重新设计')
+            ctx.research.bind_experiences(order,prepared['experience_refs'])
         local = worker_context(ctx, order)
         update = await solve(branch, SimpleNamespace(context=local))
         report = update["solutions"][key]

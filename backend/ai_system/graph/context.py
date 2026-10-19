@@ -96,6 +96,8 @@ class GraphContext:
     experience_store: Any = None
     experience_order: Any = None
     source_workspace: Any = None
+    compact_paper: bool = False
+    comparison_proof: Any = None
     skill_policy: Any = None
     judge: Any = None
     n_candidates: int = 1
@@ -140,6 +142,11 @@ class GraphContext:
             from ..research.store import ResearchStore
             from ..research.comparison import ComparisonStore
             options['explore_top_k']=2 if ComparisonStore(ResearchStore(workspace,'workspace-comparisons')).policy()['enabled'] else 1
+        if (workspace/'.system/research.sqlite').exists():
+            from ..research.runtime import ResearchRuntime
+            settings=ResearchRuntime(workspace).policy()
+            options.setdefault('compact_paper',settings['compact_paper'])
+            options.setdefault('confirm_models',settings['confirm_models'])
         return cls(
             workspace=workspace,
             fs=fs,

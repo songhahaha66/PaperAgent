@@ -9,7 +9,7 @@ from typing import Dict, List
 from langgraph.runtime import Runtime
 
 from ..context import EXPORT_STAGE_TITLES, GraphContext, list_data_files
-from ..llm_utils import as_messages, call_structured, clip
+from ..llm_utils import as_messages, call_structured, clip, cap_output
 from ..state import PaperState, ProblemAnalysis
 
 PROFILE_KERNEL = "profile"
@@ -173,7 +173,14 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         if errors:
             raise ValueError("\n".join(errors))
 
-    analysis = await call_structured(ctx.planner_llm, ProblemAnalysis, as_messages(SYSTEM, prompt), validate=validate_analysis)
+    system = SYSTEM
+    if ctx.compact_paper:
+        system += ("\n这是紧凑研究。保持全部原题要求，但合并同一任务的交付要求；"
+                   "每个来源摘录只复制一段短而连续的原题原文，绝不能拼接不相邻的句子。"
+                   "重述与整体分析各不超过80字，问题和检查说明简短，不重复原题。"
+                   "用户仅指定一项实验时只列Q1；没有新增关键前提时assumptions为空。")
+    analysis = await call_structured(cap_output(ctx.planner_llm, 4800) if ctx.compact_paper else ctx.planner_llm,
+                                    ProblemAnalysis, as_messages(system, prompt), validate=validate_analysis)
     from ...research.literature import maybe_search
     literature = await maybe_search(ctx.workspace, state['task'], analysis.title)
     if literature:

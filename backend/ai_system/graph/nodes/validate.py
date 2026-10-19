@@ -275,7 +275,9 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     # 带引用的原稿留在 .system，方便追溯每个数字的来源
     ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
     from ..registry import publication_text
-    from ...research.citations import render_citations, literature_root
+    from ...research.citations import render_citations, literature_root,citation_issues
+    problems=citation_issues(literature_root(ctx),raw)
+    if problems:raise ValueError('发布前文献引用未获原文支持：'+'；'.join(problems))
     rendered = publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw, latex=native),native))
     if REF_PATTERN.search(rendered):
         raise ValueError("论文仍有未解析的登记引用，禁止发布")

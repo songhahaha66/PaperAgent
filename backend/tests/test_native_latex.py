@@ -118,6 +118,8 @@ def test_writing_format_is_part_of_every_section_cache(tmp_path, monkeypatch):
     calls.clear()
     asyncio.run(writing.write({**state, 'sections': updated['sections']}, SimpleNamespace(context=ctx)))
     assert calls == [], 'unchanged native sections are reused; computation attempts are untouched'
+    asyncio.run(writing.write({**state,'sections':{}},SimpleNamespace(context=ctx)))
+    assert calls == [], 'saved sections also survive a failed node with no graph-state return'
 
 
 @pytest.mark.skipif(not shutil.which('xelatex'), reason='xelatex unavailable')

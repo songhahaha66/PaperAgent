@@ -80,6 +80,9 @@ def _subproblem_text(subproblem: Dict) -> str:
 
 
 async def pick_methods(ctx: GraphContext, branch: BranchInput) -> List[str]:
+    allowed=sorted(allowed_method_keys(ctx.skill_policy))
+    if ctx.skill_policy and ctx.skill_policy['mode']=='selected' and len(allowed)==1:
+        return allowed  # The user already made this choice; no model discovery is needed.
     prompt = (
         f"# 原题\n{branch['source']}\n\n"
         f"# 子问题\n{_subproblem_text(branch['subproblem'])}\n\n"
@@ -154,6 +157,11 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
 
 async def critique(ctx: GraphContext, branch: BranchInput, candidates: List[Dict]) -> List[Dict]:
     """返回每个候选的各项期望分（0~4）与总分；没有判分器时全部记 None 并选第一个"""
+    from .explore import two_candidate_mode
+    if two_candidate_mode(ctx,branch):
+        # Both implementations must run on the frozen split. Prose scoring
+        # cannot select their winner and would spend budget before measurement.
+        return [{"total":None,"basis":"pending_project_measurement"} for _ in candidates]
     if ctx.judge is None or len(candidates) == 1:
         return [{"total": None} for _ in candidates]
     # 状态只放判断需要的内容，过滤掉无关字段，减少判分噪声
@@ -212,6 +220,10 @@ async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str
         record['literature_refs']=sorted(set(CITATION.findall(json.dumps(record.get('chosen',{}),ensure_ascii=False))))
         if ctx.experience_order is not None:
             record['experience_refs']=[r for r in ctx.experience_order.experience_refs if r['stage']=='design']
+        elif ctx.research is not None:
+            from ...research.experience import design_usage
+            used=design_usage(ctx.research,branch['subproblem']['id'])
+            if used:record['experience_refs']=used[0]['refs'];record['experience_files']=used[0]['file_inputs']
         return record, log
 
 

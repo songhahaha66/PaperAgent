@@ -37,12 +37,22 @@ class Planner:
         self.llm = llm
 
     async def amendment(self, snapshot, change, scope):
-        from ..graph.llm_utils import structured_model, as_messages
+        from ..graph.llm_utils import call_structured, as_messages, cap_output
+        from .validation import validate_spec,source_excerpt
         selected = scope if scope is not None else [key for key, t in snapshot["tasks"].items() if t["kind"] != "verify"]
         payload = {"change": change, "scope": selected, "used_requirement_ids": [r["id"] for r in snapshot["spec"]["requirements"]]}
-        response = await structured_model(self.llm, AmendmentSpec).ainvoke(as_messages(
+        def validate(contract):
+            for requirement in contract.requirements:
+                requirement.source_quote=source_excerpt(change,requirement.source_quote) or requirement.source_quote
+            validate_spec(change,{'subproblems':[{'id':key} for key in selected],
+                'requirements':[r.model_dump() for r in contract.requirements],'assumptions':[]})
+            if any(r.id in payload['used_requirement_ids'] for r in contract.requirements):
+                raise ValueError('补充要求编号与原要求重复')
+        response = await call_structured(cap_output(self.llm,4800), AmendmentSpec,as_messages(
             "把用户补充要求转成结构化要求，使用新的RQ编号，source_quote逐字摘录change，task_ids只取scope中的任务。"
-            "硬约束必须有可执行检查，检查编号全局唯一。原题约束保持不变；不要悄悄删除或放宽。", json.dumps(payload, ensure_ascii=False)))
+            "合并相同任务的要求，简短输出。方法选择或实现纠错作为goal，不虚构0/1自报检查。"
+            "硬约束必须有可执行检查，数值阈值必须出现在本项逐字摘录内；检查编号全局唯一。"
+            "原题约束保持不变；不要悄悄删除或放宽。", json.dumps(payload, ensure_ascii=False)),validate=validate)
         contract = response if isinstance(response, AmendmentSpec) else AmendmentSpec.model_validate(response)
         if not contract.requirements or {key for r in contract.requirements for key in r.task_ids} != set(selected):
             raise ValueError("补充要求未覆盖修改范围")

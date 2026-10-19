@@ -523,7 +523,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     codeagent_llm = create_llm_from_model_config(codeagent_model_config)
-                    logger.info(f"求解阶段使用 code 配置的模型: {codeagent_llm}")
+                    logger.info("求解阶段使用模型: %s", codeagent_model_config.model_id)
                 except Exception as e:
                     logger.error(f"创建 code 配置模型失败: {e}")
                     codeagent_llm = llm_handler.get_llm_instance()
@@ -537,7 +537,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                 try:
                     writer_llm = create_llm_from_model_config(writer_model_config)
-                    logger.info(f"写作阶段使用 writing 配置的模型: {writer_llm}")
+                    logger.info("写作阶段使用模型: %s", writer_model_config.model_id)
                 except Exception as e:
                     logger.error(f"创建 writing 配置模型失败: {e}")
                     writer_llm = None
@@ -591,11 +591,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             history = await loop.run_in_executor(
                                 None, chat_service.get_work_chat_history, work_id, 8,
                             )
-                            await answer_research_question(
-                                llm_handler.get_llm_instance(), stream_manager, snapshot, workspace_dir,
-                                problem, history, subproblem_id,
-                                destination_url=getattr(model_config, "base_url", "") or "",
-                            )
+                            from config.paths import get_workspace_path
+                            from ai_system.research.runtime import budget_scope
+                            with budget_scope(get_workspace_path(work_id)):
+                                await answer_research_question(
+                                    llm_handler.get_llm_instance(), stream_manager, snapshot, workspace_dir,
+                                    problem, history, subproblem_id,
+                                    destination_url=getattr(model_config, "base_url", "") or "",
+                                )
                         elif action == "revise_research":
                             await main_agent.revise_research(change=problem, **revision_command.model_dump())
                         elif action == "resume":
@@ -713,39 +716,38 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         raise
                     except Exception as e:
                         logger.error(f"AI任务执行失败: {e}")
-                        
+
                         # 失败时也保存已生成的内容
                         partial_content = ws_callback.content.strip()
                         partial_json_blocks = ws_callback.json_blocks
-                        
-                        if partial_content or partial_json_blocks:
-                            logger.info(f"[FAILED] 保存失败前已生成的内容")
-                            
-                            def save_failed_message():
-                                save_db = next(get_db())
-                                try:
-                                    save_chat_service = ChatService(save_db)
-                                    error_notice = "\n\n---\n回答失败，请重试。" if action == "ask" else f"\n\n---\n⚠️ *任务执行失败: {str(e)[:100]}*"
-                                    final_content = partial_content + error_notice
-                                    
-                                    if partial_json_blocks:
-                                        save_chat_service.add_json_card_message(
-                                            work_id, "assistant", final_content,
-                                            partial_json_blocks,
-                                            {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
-                                        )
-                                    else:
-                                        save_chat_service.add_message(
-                                            work_id, "assistant", final_content,
-                                            {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
-                                        )
-                                except Exception as save_error:
-                                    logger.error(f"[FAILED] 保存部分内容失败: {save_error}")
-                                finally:
-                                    save_db.close()
-                            
-                            await loop.run_in_executor(None, save_failed_message)
-                        
+
+                        logger.info(f"[FAILED] 保存失败前已生成的内容")
+
+                        def save_failed_message():
+                            save_db = next(get_db())
+                            try:
+                                save_chat_service = ChatService(save_db)
+                                error_notice = "\n\n---\n回答失败，请重试。" if action == "ask" else f"\n\n---\n⚠️ *任务执行失败: {str(e)[:100]}*"
+                                final_content = partial_content + error_notice
+
+                                if partial_json_blocks:
+                                    save_chat_service.add_json_card_message(
+                                        work_id, "assistant", final_content,
+                                        partial_json_blocks,
+                                        {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
+                                    )
+                                else:
+                                    save_chat_service.add_message(
+                                        work_id, "assistant", final_content,
+                                        {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
+                                    )
+                            except Exception as save_error:
+                                logger.error(f"[FAILED] 保存部分内容失败: {save_error}")
+                            finally:
+                                save_db.close()
+
+                        await loop.run_in_executor(None, save_failed_message)
+
                         if action != "ask":
                             await loop.run_in_executor(None, set_work_status, work_id, 'failed')
                         task_manager.fail_task(work_id, str(e))
@@ -868,7 +870,14 @@ async def generate_work_title(
             messages = [HumanMessage(content=title_prompt)]
 
             # 同步调用LLM
-            response = await llm.ainvoke(messages)
+            from ai_system.research.runtime import budget_scope
+            from ai_system.graph.tracing import labelled,LLMCallTrace
+            from config.paths import get_workspace_path
+            title_trace=LLMCallTrace()
+            try:
+                with budget_scope(get_workspace_path(work_id)),labelled('title'):
+                    response = await llm.ainvoke(messages,config={'callbacks':[title_trace]})
+            finally:title_trace.dump(get_workspace_path(work_id)/'.system/title_llm_calls.json')
             title = response.content
 
             # 清理标题（移除可能的引号、换行等）
@@ -882,7 +891,7 @@ async def generate_work_title(
                 status = "success"
 
         except Exception as e:
-            logger.error(f"AI生成标题失败: {e}")
+            logger.error('AI生成标题失败: %s',type(e).__name__)
             # 如果AI生成失败，使用问题作为备选标题
             title = question[:50] if len(question) > 50 else question
             status = "fallback"

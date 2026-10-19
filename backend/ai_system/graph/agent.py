@@ -7,6 +7,7 @@ PaperGraphAgent：状态图流水线的入口（构造参数 + async run），�
 """
 
 import json
+import asyncio
 import logging
 import os
 import uuid
@@ -24,7 +25,7 @@ from ..research.planner import propose_revision, Planner
 from .build import compile_graph
 from .context import GraphContext
 from .nodes.confirm import is_approval
-from .tracing import LLMCallTrace
+from .tracing import LLMCallTrace,labelled
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,17 @@ class PaperGraphAgent:
         self.judge = default_judge(llm) if judge == "default" else judge
         if confirm_models is None:
             confirm_models = os.getenv("AI_CONFIRM_MODELS", "").lower() in ("1", "true", "yes")
+            if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
+                from ..research.runtime import ResearchRuntime
+                confirm_models=ResearchRuntime(Path(self.workspace_dir)).policy()['confirm_models']
         if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
         self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
+        if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
+            from ..research.runtime import ResearchRuntime
+            if ResearchRuntime(Path(self.workspace_dir)).policy()['compact_paper']:
+                self.options.setdefault('max_solver_steps',12)
+                self.options.setdefault('max_planning_calls',1)
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
 
@@ -171,7 +180,17 @@ class PaperGraphAgent:
         if patch is None:
             if snapshot["revision"] != base_revision:
                 raise ValueError("研究版本已改变，请刷新后重试")
-            requirements = await Planner(self.llm).amendment(snapshot, change, scope)
+            from ..research.runtime import budget_scope
+            trace=LLMCallTrace()
+            callbacks=getattr(self.llm,'callbacks',None)
+            model=self.llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]}) if hasattr(self.llm,'model_copy') else self.llm
+            try:
+                with budget_scope(Path(self.workspace_dir), research_id),labelled('amendment'):
+                    requirements = await Planner(model).amendment(snapshot, change, scope)
+            except Exception:
+                self._save_thread(research_id,'failed')
+                raise
+            finally:trace.dump(Path(self.workspace_dir)/'.system/planner_llm_calls.json')
             patch = propose_revision(snapshot, command_id, base_revision, change, scope, requirements)
         store.apply_revision_command(command_id, base_revision, change, scope, patch)
         current = store.snapshot()
@@ -221,7 +240,12 @@ class PaperGraphAgent:
         before = await graph.aget_state(config)
         log_offset = len(before.values.get("log") or [])
         try:
-            result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
+            from ..research.runtime import budget_scope
+            with budget_scope(Path(self.workspace_dir),thread_id):
+                result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
+        except asyncio.CancelledError:
+            self._save_thread(thread_id, 'paused')
+            raise
         except Exception as exc:
             self._save_thread(thread_id, "failed")
             for stage, status in list(ctx.stage_status.items()):

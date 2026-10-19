@@ -25,6 +25,9 @@ export interface ModelConfigUpdate {
 }
 
 class ModelConfigAPI {
+  async readiness(): Promise<{ready: boolean; roles: Record<string, boolean>}> {
+    return apiClient.request('/model-configs/readiness')
+  }
   async applyDefault(): Promise<ModelConfig[]> {
     return apiClient.request<ModelConfig[]>('/model-configs/apply-default', { method: 'POST' })
   }

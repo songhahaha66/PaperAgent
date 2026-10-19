@@ -10,6 +10,7 @@ import json
 import math
 import re
 import time
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -21,13 +22,14 @@ from ...research.comparison import ComparisonStore,SupervisedSpec,CandidateCode
 from ...research.store import ResearchStore,digest
 from ...research.validation import protocol as research_protocol
 from ..llm_utils import as_messages,structured_model,cap_output
+from .estimator_contracts import candidate_contract,check_estimator,VERSION as CONTRACT_VERSION
 
 TERMINAL={'winner','tied','only_valid','no_valid','budget_exhausted','input_changed','not_applicable'}
 
 
 def csv_files(root):
     root=Path(root).resolve()
-    return [p for p in (root/'data').rglob('*.csv') if p.is_file() and not p.is_symlink() and p.resolve().is_relative_to(root)][:20]
+    return [p for name in ('data','attachment') for p in (root/name).rglob('*.csv') if p.is_file() and not p.is_symlink() and p.resolve().is_relative_to(root)][:20]
 
 
 def metadata(root):
@@ -44,7 +46,7 @@ def metadata(root):
 
 def prepare(root,spec):
     root=Path(root).resolve();path=(root/spec['dataset']).resolve()
-    if not path.is_relative_to(root/'data') or path.suffix.lower()!='.csv' or not path.is_file() or path.stat().st_size>10_000_000:raise ValueError('比较仅支持工作区 data 内不超过 10 MB 的 CSV')
+    if not any(path.is_relative_to(root/name) for name in ('data','attachment')) or path.suffix.lower()!='.csv' or not path.is_file() or path.stat().st_size>10_000_000:raise ValueError('比较仅支持工作区 data/attachment 内不超过 10 MB 的 CSV')
     raw=path.read_bytes();frame=pd.read_csv(path)
     if not 20<=len(frame)<=20000:raise ValueError('首版比较支持 20 至 20000 个样本')
     wanted=[spec['target'],*spec['features'],*([spec['id_column']] if spec['id_column'] else []),*([spec['split_column']] if spec['split_column'] else [])]
@@ -159,8 +161,11 @@ _X=pd.DataFrame(_data['X_train'],columns=_data['columns'])
 _V=pd.DataFrame(_data['X_validation'],columns=_data['columns'])
 _outputs={{}}
 _models={{}}
+{guard}
 for _name,_label in [('prediction','y_train'),('negative_prediction','permuted_y_train')]:
     _model=_scope['make_estimator'](_data['seed'])
+    _audit=check_estimator(_model,{contract!r})
+    if _name=='prediction':_outputs['estimator_audit']=_audit
     _model.fit(_X,np.asarray(_data[_label]))
     if _data['task_type']=='binary' and hasattr(_model,'predict_proba'):
         _pred=_model.predict_proba(_V)[:,list(_model.classes_).index(1)]
@@ -204,7 +209,8 @@ async def compare(ctx,branch):
             'input_digest':order.input_digest if order else digest(store.file_inputs()),
             'contract_hash':digest(research_protocol(state,tid)) if state else digest(branch.get('research_contract',{})),
             'policy_version':policy['version'],'branches':[{'index':i,'name':c['name'],'candidate_hash':hashes[i],
-                'prior':scores[i].get('total') if i<len(scores) else None,'status':'pending','run_ids':[]} for i,c in enumerate(candidates)]})
+                'prior':scores[i].get('total') if i<len(scores) else None,'estimator_contract':candidate_contract(c),
+                'status':'pending','run_ids':[]} for i,c in enumerate(candidates)],'implementation_contract_version':CONTRACT_VERSION})
     if not current(ctx,record,branch):
         record.update(status='input_changed',chosen_index=None,reason='冻结的任务输入已改变，未执行比较');db.save(record);return record
     if len(candidates)!=2:
@@ -244,9 +250,12 @@ async def compare(ctx,branch):
         row['status']='generating';db.save(record);started=time.monotonic()
         answer=None
         try:
-            prompt={'candidate':{'name':str(candidate.get('name',''))[:80],'method_keys':candidate.get('method_keys') or [],'variant':row['index']},
+            prompt={'candidate':{'name':str(candidate.get('name',''))[:80],'method_keys':candidate.get('method_keys') or [],
+                    'idea':str(candidate.get('idea',''))[:1500],'formulation':str(candidate.get('formulation',''))[:1500],
+                    'steps':[str(step)[:400] for step in candidate.get('steps',[])[:8]],'variant':row['index']},
                 'task_type':frozen['task_type'],'metric':frozen['metric'],'features':frozen['feature_dtypes'],'n_train':len(train),'seed':frozen['seed']}
-            answer=await ask(ctx,CandidateCode,'只生成 sklearn 管线模块 make_estimator(seed)。对象使用 fit(X_train,y_train) 和 predict(X_validation)，二分类可用 predict_proba/decision_function。项目提供划分并计算指标；不要读取文件、访问验证标签、计算/报告分数或修改项目文件。必须与另一候选实现不同的建模方案。',json.dumps(prompt,ensure_ascii=False),25)
+            prompt['candidate']['estimator_contract']=row.get('estimator_contract')
+            answer=await ask(ctx,CandidateCode,'只实现 JSON 中当前 candidate 的 sklearn 模块 make_estimator(seed)，严格遵守其方法、预处理和参数；不得自行改为另一候选或增加多项式/特征工程。对象使用 fit(X_train,y_train) 和 predict(X_validation)，二分类可用 predict_proba/decision_function。项目提供划分并计算指标；不要读取文件、访问验证标签、计算/报告分数或修改项目文件。只返回简短的工厂实现，不写长说明。',json.dumps(prompt,ensure_ascii=False),25)
             row.update(code=answer.code,code_hash=hashlib.sha256(answer.code.encode()).hexdigest(),ast_hash=valid_code(answer.code),status='code_frozen')
         except Exception as exc:
             row.update(status='code_error' if answer is not None else 'generation_error',error='候选代码不符合 make_estimator 契约' if answer is not None else '生成请求失败或超时，已耗预算且不自动重试')
@@ -272,7 +281,7 @@ async def compare(ctx,branch):
             row.update(status='budget_exhausted',error='执行或超时额度不足');db.save(record);continue
         code=directory/f"candidate-{row['index']}.py";inputs=directory/f"inputs-{row['index']}.json";output=directory/f"predictions-{row['index']}.json"
         code.write_text(row['code']);inputs.write_text(json.dumps(payload,allow_nan=False));output.unlink(missing_ok=True)
-        driver=DRIVER.format(payload=inputs.relative_to(ctx.workspace).as_posix(),code=code.relative_to(ctx.workspace).as_posix(),output=output.relative_to(ctx.workspace).as_posix())
+        driver=DRIVER.format(payload=inputs.relative_to(ctx.workspace).as_posix(),code=code.relative_to(ctx.workspace).as_posix(),output=output.relative_to(ctx.workspace).as_posix(),guard=inspect.getsource(check_estimator),contract=row.get('estimator_contract'))
         row['driver_code']=driver;row['driver_hash']=hashlib.sha256(driver.encode()).hexdigest()
         key=f"{tid}~comparison{row['index']}";row['status']='running';db.save(record)
         kernel=ctx.kernels.get(key);kernel.timeout=25;started=time.monotonic()
@@ -284,7 +293,8 @@ async def compare(ctx,branch):
                 raise RuntimeError('timeout' if run.timed_out else 'candidate execution error')
             if not output.is_file() or output.stat().st_size>2_000_000:raise ValueError('预测产物缺失或超预算')
             if hashlib.sha256(code.read_bytes()).hexdigest()!=row['code_hash']:raise ValueError('候选代码在执行期间被改动')
-            predictions=json.loads(output.read_text());measured=metric_value(frozen['metric'],truth,predictions['prediction'])
+            predictions=json.loads(output.read_text());row['implementation_audit']=predictions['estimator_audit']
+            measured=metric_value(frozen['metric'],truth,predictions['prediction'])
             negative=metric_value(frozen['metric'],negative_truth,predictions['negative_prediction'])
             base=baseline_value(frozen['metric'],train,truth);negative_base=baseline_value(frozen['metric'],negative_train,negative_truth)
             gain=measured-base if frozen['higher_is_better'] else base-measured

@@ -110,6 +110,12 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
                 validate(parsed)
             return parsed
         except Exception as exc:  # 网关偶发错误或模型输出不合 schema
+            from ..research.runtime import ACTIVE_BUDGET,ResearchBudgetExhausted
+            active=ACTIVE_BUDGET.get()
+            if type(exc).__name__ in {'AuthenticationError','PermissionDeniedError','RateLimitError','ResearchBudgetExhausted'} or active and (active.status()['used']>=active.status()['request_limit'] or active.status()['state']=='provider_blocked'):
+                if active and active.status()['used']>=active.status()['request_limit']:
+                    raise ResearchBudgetExhausted('研究模型请求预算耗尽，保留检查点，恢复不会清零') from None
+                raise
             last_error = exc
             if parsed is not None:
                 # Repair this candidate, rather than guessing a different plan
@@ -117,7 +123,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
                 retry_messages = [*messages, AIMessage(content=parsed.model_dump_json())]
             elif isinstance(exc, InvalidStructuredReply):
                 retry_messages = [*messages, exc.candidate]
-            logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, exc)
+            logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, type(exc).__name__)
             if attempt < RETRIES:
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"结构化输出 {schema.__name__} 失败: {last_error}") from last_error
@@ -139,8 +145,10 @@ async def call_text(llm: Any, messages: List[BaseMessage]) -> str:
                 return text
             raise ValueError("模型返回了空内容")
         except Exception as exc:
+            if type(exc).__name__ in {'AuthenticationError', 'PermissionDeniedError', 'RateLimitError', 'ResearchBudgetExhausted'}:
+                raise
             last_error = exc
-            logger.warning("文本生成第 %d 次失败: %s", attempt + 1, exc)
+            logger.warning("文本生成第 %d 次失败: %s", attempt + 1, type(exc).__name__)
             await asyncio.sleep(RETRY_DELAY * (attempt + 1))
     raise RuntimeError(f"文本生成失败: {last_error}") from last_error
 

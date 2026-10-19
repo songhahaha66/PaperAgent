@@ -99,9 +99,11 @@ class ComparisonStore:
             row=db.execute('SELECT payload FROM comparisons WHERE id=?',(record['id'],)).fetchone()
             if not row:raise ResearchConflict('比较记录不存在')
             old=json.loads(row[0])
-            for key in ('protocol','protocol_hash','candidate_hashes','task_hash','input_refs','file_inputs','input_digest','contract_hash','policy_version','revision'):
+            for key in ('protocol','protocol_hash','candidate_hashes','task_hash','input_refs','file_inputs','input_digest','contract_hash','policy_version','revision','implementation_contract_version'):
                 if key in old and old[key]!=record.get(key):raise ResearchConflict('比较协议或候选已冻结，不能修改')
             for before,after in zip(old['branches'],record['branches']):
+                if 'estimator_contract' in before and before['estimator_contract']!=after.get('estimator_contract'):
+                    raise ResearchConflict('候选方法契约已经冻结')
                 if before.get('code_hash') and any(before.get(k)!=after.get(k) for k in ('code','code_hash','ast_hash')):
                     raise ResearchConflict('候选代码已经冻结')
                 if before.get('driver_hash') and any(before.get(k)!=after.get(k) for k in ('driver_code','driver_hash')):

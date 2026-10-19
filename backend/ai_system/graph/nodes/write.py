@@ -15,7 +15,7 @@ from langgraph.runtime import Runtime
 from ..context import GraphContext
 from ..outline import template_outline
 from .consistency import consistency_text
-from ..llm_utils import as_messages, call_text, clip
+from ..llm_utils import as_messages, call_text, clip, cap_output
 from ..state import PaperState
 from ..tracing import labelled
 
@@ -45,8 +45,9 @@ STYLE = (
 
 
 def writing_style(ctx: GraphContext) -> str:
+    compact=('\n本研究选用简短论文：求解小节约600–900字，其他每节约100–300字，保留证据、来源与局限，不重复扩展实验。' if ctx.compact_paper else '')
     if ctx.output_mode == "latex":
-        return STYLE + (
+        return STYLE + compact + (
             "\n输出格式：原生 LaTeX 章节源码，直接用于 XeLaTeX 编译。"
             "只输出本节正文，不要代码围栏、Markdown 标题、加粗或管道表格；"
             "不要输出导言区、本节标题、document 环境、自定义宏或文件操作。"
@@ -58,7 +59,7 @@ def writing_style(ctx: GraphContext) -> str:
             "行内使用同一引用指代；不要自行添加 figure、caption、图片 label、图片路径或 includegraphics。"
             "这些占位引用由系统原生替换为 LaTeX 数值和 figure 环境，无需格式转换。"
         )
-    return STYLE + "\n只输出本节 Markdown 正文，不要输出本节标题或代码；小节标题用 ### 开头。"
+    return STYLE + compact + "\n只输出本节 Markdown 正文，不要输出本节标题或代码；小节标题用 ### 开头。"
 
 
 def solve_key(subproblem_id: str) -> str:
@@ -196,7 +197,8 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             f"撰写「{title}」的建模与求解小节，一般依次包含：模型的建立（变量、公式推导）、求解过程与算法、"
             f"结果与图表、结果检验。如果这一问的交付物是备忘录、信件、建议书等文体，"
             f"就按交付物要求的文体和篇幅直接写成正文，不要套用上面的结构。"
-            f"篇幅控制在 1500~3000 字，次要的检验细节一句话带过。"
+            + ("篇幅控制在600~900字，" if ctx.compact_paper else "篇幅控制在1500~3000字，")
+            + "次要的检验细节一句话带过。"
             f"\n\n{subproblem_brief(state, ctx, subproblem)}"
         )
 
@@ -301,11 +303,21 @@ async def write_section(ctx: GraphContext, state: PaperState, key: str, title: s
     from ...research.literature import literature_context
     request += literature_context(literature_root(ctx), title+' '+state.get('task','')[:500])
     with labelled(key):
-        return await call_text(ctx.writer_llm, as_messages(writing_style(ctx), request))
+        return await call_text(cap_output(ctx.writer_llm, 4800) if ctx.compact_paper else ctx.writer_llm,
+                               as_messages(writing_style(ctx), request))
 
 
 async def write_many(ctx: GraphContext, state: PaperState, items: List[Tuple[str, str]]) -> Dict[str, str]:
-    texts = await asyncio.gather(*(write_section(ctx, state, key, title) for key, title in items))
+    async def one(key,title):
+        text=await write_section(ctx,state,key,title)
+        if ctx.research:
+            from ...research.store import digest
+            context=digest({'style':writing_style(ctx),'request':section_request(key,title,state,ctx)})
+            ctx.research.save_sections({key:text},['章节写作尚未完成，未发布论文'],{key:context})
+        return text
+    texts = await asyncio.gather(*(one(key,title) for key,title in items),return_exceptions=True)
+    errors=[text for text in texts if isinstance(text,BaseException)]
+    if errors:raise errors[0]
     return dict(zip([key for key, _ in items], texts))
 
 
@@ -328,6 +340,8 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, state, ctx)})
             if previous.get(key, {}).get("context_hash") != contexts[key]:
                 sections.pop(key, None)
+            elif previous[key]['validity']=='current':
+                sections[key]=previous[key]['text']
     sections.update(await write_many(ctx, state, [(k, t) for k, t in solve_items if k not in sections]))
 
     # 摘要只依据各问的求解报告和登记结果，不读其他章节，和其余章节一起并行写，少一轮串行等待
@@ -339,6 +353,8 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, with_solved, ctx)})
             if previous.get(key, {}).get("context_hash") != contexts[key]:
                 sections.pop(key, None)
+            elif previous[key]['validity']=='current':
+                sections[key]=previous[key]['text']
     sections.update(await write_many(ctx, with_solved, [(k, t) for k, t in rest if k not in sections]))
     await ctx.set_stage("write", "completed", f"{len(sections)} 个章节")
     log = f"write: {len(sections)} sections" + (f" (template outline: {len(outline)})" if outline else "")

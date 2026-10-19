@@ -172,6 +172,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             stdout_path=_file(root, info.get("stdout"), prefix),
         ))
     artifacts = [p for p in ("paper.md", "paper.pdf", "paper.docx", "paper.tex") if _file(root, p)]
+    if thread.get('engine_version') == ENGINE_VERSION and not business:
+        # A new work may contain a template scaffold before its first research commit.
+        artifacts = []
     issues = validation.get("issues") or []
     if business:
         current = business.get("paper_hash") and store.delivery_ready(business) and all(s["validity"] == "current" for s in business["sections"].values())

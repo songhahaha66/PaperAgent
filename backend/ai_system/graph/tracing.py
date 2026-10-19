@@ -53,8 +53,8 @@ def _usage(response) -> Dict[str, int]:
         for generation in generations:
             usage = getattr(getattr(generation, "message", None), "usage_metadata", None)
             if usage:
-                return {"input": int(usage.get("input_tokens") or 0), "output": int(usage.get("output_tokens") or 0)}
-    return {"input": 0, "output": 0}
+                return {"input": int(usage.get("input_tokens") or 0), "output": int(usage.get("output_tokens") or 0),'usage_returned':True}
+    return {"input": 0, "output": 0,'usage_returned':False}
 
 
 def _finish_reason(response) -> str:
@@ -99,7 +99,7 @@ class LLMCallTrace(BaseCallbackHandler):
         self._close(run_id, **_usage(response), finish=_finish_reason(response))
 
     def on_llm_error(self, error: BaseException, *, run_id: UUID, **kwargs) -> None:
-        self._close(run_id, error=f"{type(error).__name__}: {str(error)[:200]}")
+        self._close(run_id, error=type(error).__name__)
 
     def summary(self) -> Dict[str, Any]:
         seconds = sorted(c["seconds"] for c in self.calls)
@@ -126,6 +126,11 @@ class LLMCallTrace(BaseCallbackHandler):
         }
 
     def dump(self, path) -> None:
+        if path.exists():
+            try:
+                prior=json.loads(path.read_text()).get('calls',[])
+                self.calls=[*prior,*self.calls]
+            except (OSError,ValueError):pass
         payload = {"summary": self.summary(), "calls": self.calls}
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")

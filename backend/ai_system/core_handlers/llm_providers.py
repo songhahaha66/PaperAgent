@@ -4,6 +4,8 @@ AI提供商抽象层
 """
 
 import logging
+import httpx
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Mapping, cast
 from urllib.parse import urlparse
@@ -75,6 +77,18 @@ class AIGWChatOpenAI(ChatOpenAI):
         return payload
 
     async def _astream(self, *args, **kwargs):
+        from ..research.runtime import ACTIVE_BUDGET
+        runtime=ACTIVE_BUDGET.get()
+        async with asyncio.timeout(runtime.status()['timeout_seconds'] if runtime else None):
+            async for chunk in self._normalized_astream(*args,**kwargs):yield chunk
+
+    async def _agenerate(self,*args,**kwargs):
+        from ..research.runtime import ACTIVE_BUDGET
+        runtime=ACTIVE_BUDGET.get()
+        async with asyncio.timeout(runtime.status()['timeout_seconds'] if runtime else None):
+            return await super()._agenerate(*args,**kwargs)
+
+    async def _normalized_astream(self,*args,**kwargs):
         final_usage = None
         async for chunk in super()._astream(*args, **kwargs):
             usage = getattr(chunk.message, 'usage_metadata', None)
@@ -154,6 +168,7 @@ class OpenAIProvider(BaseLLMProvider):
             extra_body = {"thinking": {"type": "disabled"}}
 
         model_class = AIGWChatOpenAI if gateway_host else ChatOpenAI
+        from ..research.runtime import request_hook,response_hook,async_request_hook,async_response_hook
         return model_class(
             model=self.model_id,
             api_key=self.api_key,
@@ -168,6 +183,8 @@ class OpenAIProvider(BaseLLMProvider):
             timeout=kwargs.get('timeout', 120 if step_gateway else 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
             extra_body=extra_body,
+            http_client=httpx.Client(event_hooks={'request':[request_hook],'response':[response_hook]},follow_redirects=False),
+            http_async_client=httpx.AsyncClient(event_hooks={'request':[async_request_hook],'response':[async_response_hook]},follow_redirects=False),
         )
 
     def validate_config(self) -> bool:

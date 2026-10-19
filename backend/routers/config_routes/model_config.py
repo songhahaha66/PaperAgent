@@ -57,6 +57,21 @@ class ConnectionTest(BaseModel):
     api_key: Optional[str] = None
 
 
+@router.get("/readiness")
+async def model_readiness(current_user: int = Depends(auth.get_current_user), db: Session = Depends(get_db)):
+    """Resolve the same user/env configuration as execution, returning booleans only."""
+    from ai_system.config.environment import DatabaseConfigManager
+    manager = DatabaseConfigManager(db)
+    roles = {}
+    for role in ("brain", "code", "writing"):
+        try:
+            config = manager.get_model_config(role, current_user)
+            roles[role] = bool(config.api_key and config.model_id)
+        except ValueError:
+            roles[role] = False
+    return {"roles": roles, "ready": all(roles.values())}
+
+
 @router.post("/apply-default", response_model=list[schemas.ModelConfigResponse])
 @route_guard
 async def apply_default_model(

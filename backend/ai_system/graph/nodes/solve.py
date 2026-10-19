@@ -240,6 +240,11 @@ def build_tools(
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
         code = strip_template_tokens(code)
+        if ctx.comparison_proof:
+            try:
+                if any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr in {'fit','fit_transform','partial_fit','set_params'} for node in ast.walk(ast.parse(code))):
+                    return '本任务方案已冻结；禁止重新 fit/调参。请复用 comparison_estimator、_formal_truth、_formal_pred 和已登记的 comparison 指标。'
+            except SyntaxError:pass
         if is_placeholder(code):
             return PLACEHOLDER_REPLY
         result = await kernel.execute(code)
@@ -262,6 +267,8 @@ def build_tools(
         lines = []
         for item in items:
             item = item if isinstance(item, ResultItem) else ResultItem.model_validate(item)
+            if ctx.comparison_proof and any(r['name']==item.name for r in ctx.comparison_proof['protected'].values()):
+                lines.append('- '+item.name+'：这是项目保护的冻结指标，请直接使用已有引用，不重新登记替换。');continue
             try:
                 result = ctx.registry.record_value(
                     subproblem_id, item.name, item.value, item.run_id, item.unit, item.description
@@ -354,6 +361,8 @@ def submission_schema(ctx: GraphContext, branch: BranchInput, runs: List[Dict]):
         for finding in report.key_findings:
             finding.statement = ctx.registry.ground_statement(sid, finding.statement)
         issues = report_submission_issues(ctx, branch, report.model_dump(), runs)
+        from .comparison_handoff import proof_issues
+        issues.extend(proof_issues(ctx,report.model_dump()))
         if issues:
             available = ctx.registry.to_prompt_table(sid)
             successful = [r["run_id"] for r in runs if r.get("ok")][-8:]
@@ -457,7 +466,9 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             design['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in winner.candidate.get('method_keys', []) if key in SKILL_SOURCES]
             branch = {**branch, "design": design}
             run_log.extend(winner.run_log)
-            messages = [HumanMessage(content=build_task(branch,ctx)+'\n\n'+promotion_message(exploration))]
+            from .comparison_handoff import handoff
+            handoff_text=await handoff(ctx,branch,exploration,run_log)
+            messages = [HumanMessage(content=build_task(branch,ctx)+'\n\n'+promotion_message(exploration)+handoff_text)]
         if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
             return {"solutions": {subproblem_id: {"status": "prepared", "reviews": []}},
                     "designs": {subproblem_id: design}, "log": [f"prepare {subproblem_id}: register selected premises"]}

@@ -316,8 +316,10 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
             raise HTTPException(409, '没有配置写作模型；可直接编辑候选正文')
         llm = create_llm_from_model_config(model)
     try:
-        return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
-    except (ValueError, ResearchConflict) as exc:
+        from ai_system.research.runtime import budget_scope, ResearchBudgetExhausted
+        with budget_scope(store.root,store.research_id):
+            return await paper_editor.propose(store, request.section, request.instruction, request.content, llm)
+    except (ValueError, ResearchConflict, ResearchBudgetExhausted) as exc:
         raise HTTPException(409, str(exc))
 
 
@@ -496,7 +498,9 @@ async def literature_check(work_id: str, evidence_id: str, request: LiteratureCl
         config = setup_environment_from_db(db).config_manager
         model = config.get_model_config('writing',current_user)
         text = request.claim+' {{C:'+evidence_id+'}}'
-        checks = await audit_citations(service.store.root,[text],create_llm_from_model_config(model))
+        from ai_system.research.runtime import budget_scope
+        with budget_scope(service.store.root):
+            checks = await audit_citations(service.store.root,[text],create_llm_from_model_config(model))
         row = claims_in(text,service.store)[0]
         return service.store.review(row['key']) or (checks[0] if checks else {'status':'insufficient','reason':'核查未完成'})
     except ValueError as exc:
@@ -590,3 +594,86 @@ async def comparison_policy(work_id:str,request:ComparisonPolicyRequest,db:Sessi
     try:
         return ComparisonStore(ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')).set_policy(request.enabled,request.spec)
     except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+class ResearchSetupRequest(BaseModel):
+    request_limit:int=Field(default=40,ge=1,le=40)
+    timeout_seconds:int=Field(default=90,ge=10,le=120)
+    compact_paper:bool=True
+    confirm_models:bool=True
+    reuse_experience:bool=True
+    literature_mode:Literal['off','on_request','auto']='on_request'
+    literature_query:str=Field(default='',max_length=300)
+    source_urls:list[str]=Field(default_factory=list,max_length=3)
+    skill_keys:list[str]=Field(default_factory=list,max_length=25)
+    compare:bool=False
+    comparison_spec:dict|None=None
+
+
+@router.put('/{work_id}/research-setup')
+async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    _require_workspace_access(db,work_id,current_user)
+    if task_manager.get_running_task(work_id):raise HTTPException(409,'研究执行中不能修改入口配置')
+    import json
+    from ai_system.research.store import ResearchStore
+    from ai_system.research.runtime import ResearchRuntime
+    from ai_system.research.literature import LiteratureService
+    from ai_system.research.comparison import ComparisonStore,SupervisedSpec
+    from ai_system.graph.methods import validate_skill_policy
+    from services.research_experience import ExperienceScope
+    from services.literature_fetch import public_url
+    root=workspace_file_service.get_workspace_path(work_id)
+    thread=root/'.system/graph_thread.json'
+    if thread.exists():raise HTTPException(409,'研究已经开始；入口配置不会覆盖检查点，请使用对应面板明确修订')
+    try:
+        urls=[public_url(u) for u in request.source_urls]
+        spec=SupervisedSpec.model_validate(request.comparison_spec).model_dump() if request.comparison_spec else None
+        skill=validate_skill_policy({'mode':'selected' if request.skill_keys else 'auto','selected':request.skill_keys,'disabled':[]})
+        runtime=ResearchRuntime(root)
+        runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper','confirm_models')})
+        skills=ResearchStore(root,'workspace-skills');skills.set_skill_preferences(skill,skills.skill_preferences()['version'])
+        ComparisonStore(skills).set_policy(request.compare,spec)
+        ExperienceScope(current_user,work_id).set_enabled(request.reuse_experience)
+        library=LiteratureService(root);library.store.set_policy(request.literature_mode)
+        for url in urls:
+            known=next((s for s in library.store.state()['sources'] if s['url']==url and s.get('evidence_count')),None)
+            if not known:await library.import_url(url)
+        if request.literature_query.strip() and not any(o.get('query')==request.literature_query for o in library.store.state()['operations']):
+            await library.search(request.literature_query,1,False)
+        return {'configured':True,'literature':library.store.state()}
+    except ValueError as exc:raise HTTPException(422,str(exc))
+
+
+@router.get('/{work_id}/research-overview')
+async def research_overview(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
+    _require_workspace_access(db,work_id,current_user)
+    import json
+    from ai_system.research.runtime import ResearchRuntime
+    from ai_system.research.comparison import ComparisonStore
+    from ai_system.research.literature import LiteratureStore
+    from ai_system.research.citations import citation_usage
+    from ai_system.research.store import ResearchStore
+    from services.research_experience import ExperienceScope,current_usage
+    from ai_system.research.experience import design_usage
+    from services.chat_services.research_session import research_snapshot
+    root=workspace_file_service.get_workspace_path(work_id);thread=root/'.system/graph_thread.json'
+    saved=json.loads(thread.read_text()) if thread.exists() else {};rid=saved.get('thread_id')
+    runtime=ResearchRuntime(root,rid or 'workspace-runtime');store=ResearchStore(root,rid,read_only=True) if rid else None
+    snapshot=store.snapshot() if store else None
+    library=LiteratureStore(root).state();scope=ExperienceScope(current_user,work_id)
+    usage=current_usage(store) if snapshot else []
+    citations=citation_usage(root) if rid else []
+    comparison=ComparisonStore(runtime.store)
+    comparisons=comparison.list()
+    for record in comparisons:
+        task=(snapshot or {}).get('tasks',{}).get(record['task_id'],{})
+        record['current']=task.get('revision')==record['revision'] and record['research_id']==rid
+    actual=research_snapshot(root,work_id,crud.get_work(db,work_id).status)
+    last_error=next((a.get('result',{}).get('report',{}).get('error') for a in reversed(list((snapshot or {}).get('attempts',{}).values())) if a.get('result',{}).get('report',{}).get('error')),None)
+    if not last_error and saved.get('status')=='failed':
+        last_error='研究执行失败，已保留检查点与请求计数。可查看对话中的错误后恢复。'
+    return {'settings':runtime.policy(),'budget':runtime.status(),'requests':runtime.requests() if rid else [],
+        'research':actual.model_dump(),'literature':{'sources':len(library['sources']),'evidence':sum(s.get('evidence_count',0) for s in library['sources']),'operations':library['operations'],'citations':citations},
+        'experience':{'enabled':scope.enabled(db),'usage':usage,'design_usage':design_usage(store) if store else []},'comparisons':comparisons,
+        'skills':[{ 'task_id':key,'skills':(task.get('design') or {}).get('skills',[])} for key,task in (snapshot or {}).get('tasks',{}).items()],
+        'sections':len((snapshot or {}).get('sections',{})),'last_error':last_error}

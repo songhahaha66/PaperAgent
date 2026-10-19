@@ -21,16 +21,21 @@ def is_approval(reply: str) -> bool:
     return not reply.strip() or bool(APPROVE_PATTERN.match(reply))
 
 
-def designs_summary(state: PaperState) -> str:
+def designs_summary(state: PaperState, ctx=None) -> str:
     lines = ["请确认各子问题的建模方案（回复「确认」开始求解，或直接写修改意见）：", ""]
     for sp in state["analysis"]["subproblems"]:
         design = state["designs"].get(sp["id"])
         if not design:
             continue
-        chosen = design["chosen"]
-        lines.append(f"**{sp['id']} {sp['title']}**：{chosen['name']}")
-        lines.append(f"- 思路：{chosen['idea']}")
-        lines.append(f"- 检验：{chosen['validation']}")
+        from .explore import two_candidate_mode
+        paired=ctx is not None and two_candidate_mode(ctx,{'subproblem':sp})
+        choices=design.get('candidates',[]) if paired else [design['chosen']]
+        lines.append(f"**{sp['id']} {sp['title']}**")
+        if paired:
+            lines.append('确认后两项方案使用共同冻结划分实际比较；胜者由项目计算的指标决定，当前尚无实测胜者。')
+        for chosen in choices:
+            lines.append(f"- **{chosen['name']}**：{chosen['idea']}")
+            lines.append(f"  检验：{chosen['validation']}")
         lines.append("")
     return "\n".join(lines)
 
@@ -44,7 +49,7 @@ async def confirm(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         return {"approved": True}
 
     await ctx.set_stage("confirm", "in_progress", "等待用户确认")
-    reply = interrupt({"type": "confirm_models", "message": designs_summary(state)})
+    reply = interrupt({"type": "confirm_models", "message": designs_summary(state,ctx)})
     reply = str(reply or "")
     if is_approval(reply):
         await ctx.set_stage("confirm", "completed", "用户已确认")

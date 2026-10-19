@@ -61,7 +61,9 @@ def setup(tmp_path,monkeypatch):
         content=json.loads(prompt)
         assert set(content)<={'candidate','task_type','metric','features','n_train','seed'}
         assert 'X_validation' not in content and 'y_validation' not in content
-        assert set(content['candidate'])=={'name','method_keys','variant'}
+        assert set(content['candidate'])=={'name','method_keys','idea','formulation','steps','variant','estimator_contract'}
+        chosen=next(c for c in candidates if c['name']==content['candidate']['name'])
+        assert all(content['candidate'][key]==chosen[key] for key in ('idea','formulation','steps'))
         calls.append(content['candidate']['name']);return CandidateCode(code=codes[content['candidate']['name']])
     monkeypatch.setattr(engine,'ask',ask)
     return SimpleNamespace(root=root,store=store,cfg=cfg,spec=spec,parent=parent,ctx=ctx,order=order,branch=branch,calls=calls,codes=codes)
@@ -96,6 +98,10 @@ def test_low_critic_better_measured_pipeline_wins_and_printed_score_is_ignored(s
 @pytest.mark.parametrize('first,second,status,index',[(DUMMY_A,DUMMY_B,'tied',0),(BAD_A,RIDGE,'only_valid',1),(BAD_A,BAD_B,'no_valid',None)])
 def test_tie_single_failure_and_both_failures_have_complete_records(setup,first,second,status,index):
     setup.codes.update(shallow=first,ridge=second)
+    if status=='tied':
+        # These are two constant predictors, not a Ridge implementation.
+        setup.branch['design']['candidates'][1].update(name='mean alternative',idea='training mean')
+        setup.codes['mean alternative']=second
     record=run(setup).to_record();assert record['status']==status and record['chosen_index']==index
     assert len(record['branches'])==2 and all(r['run_ids'] and r.get('elapsed_seconds') is not None for r in record['branches'])
     if index is None:
@@ -141,6 +147,8 @@ def test_protocol_and_code_cannot_be_edited_after_measurement(setup):
     with pytest.raises(ResearchConflict,match='冻结'):setup.cfg.save(altered)
     altered=copy.deepcopy(record);altered['branches'][0]['code']='different code'
     with pytest.raises(ResearchConflict,match='代码已经冻结'):setup.cfg.save(altered)
+    altered=copy.deepcopy(record);altered['branches'][1]['estimator_contract']['alpha']=2
+    with pytest.raises(ResearchConflict,match='方法契约已经冻结'):setup.cfg.save(altered)
 
 
 def test_failed_comparison_enters_existing_issue_and_planner_repair_without_budget_reset(setup):

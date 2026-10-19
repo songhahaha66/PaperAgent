@@ -65,6 +65,7 @@
               >{{ acceptedTaskCount }}/{{ researchSnapshot.tasks.length }}</span
             >
           </button>
+          <button class="progress-trigger" @click="openPanel('overview', isMobile ? 'main' : 'secondary')">{{ isZh ? '研究总览' : 'Overview' }}</button>
           <button class="progress-trigger" @click="openPanel('comparisons', isMobile ? 'main' : 'secondary')">{{ isZh ? '方案比较' : 'Experiments' }}</button>
           <button class="progress-trigger" @click="openPanel('experiences', isMobile ? 'main' : 'secondary')">{{ isZh ? '研究经验' : 'Experience' }}</button>
           <button class="progress-trigger" @click="openPanel('literature', isMobile ? 'main' : 'secondary')">{{ isZh ? '文献' : 'Literature' }}</button>
@@ -197,6 +198,7 @@
             @updated="loadResearchSnapshot"
             @resume="sendMessage('按已保存的科研技能选择继续研究', 'resume')"
           />
+          <ResearchOverview v-else-if="panel.kind === 'overview'" :work-id="workId" :running="isStreaming" :refresh-key="researchSnapshot?.commit_seq" @open="kind=>openPanel(kind,isMobile?'main':'secondary')" />
           <ResearchComparisons v-else-if="panel.kind === 'comparisons'" :work-id="workId" :disabled="isStreaming" :refresh-key="researchSnapshot?.commit_seq" />
           <ResearchExperiences v-else-if="panel.kind === 'experiences'" :work-id="workId" :refresh-key="researchSnapshot?.commit_seq" />
           <ResearchLiterature v-else-if="panel.kind === 'literature'" :work-id="workId" :disabled="isStreaming" :evidence-id="literatureEvidenceId" :refresh-key="researchSnapshot?.commit_seq" @updated="loadResearchSnapshot" @cite="citeLiterature" />
@@ -313,6 +315,7 @@ import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
+import ResearchOverview from '@/components/ResearchOverview.vue'
 import ResearchComparisons from '@/components/ResearchComparisons.vue'
 import ResearchExperiences from '@/components/ResearchExperiences.vue'
 import ResearchLiterature from '@/components/ResearchLiterature.vue'

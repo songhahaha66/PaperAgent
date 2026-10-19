@@ -10,6 +10,7 @@
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="!document && !error">{{ isZh ? '正在读取章节…' : 'Loading sections…' }}</p>
     <template v-if="document">
+      <p v-if="!document.sections.length">{{ isZh ? '论文将在研究通过验收并完成写作后显示。' : 'Sections will appear after research checks and writing complete.' }}</p>
       <label
         >{{ isZh ? '选择章节' : 'Section' }}
         <select v-model="selected" :disabled="busy">

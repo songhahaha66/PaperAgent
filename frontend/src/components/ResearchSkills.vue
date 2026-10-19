@@ -7,8 +7,8 @@
     <p>
       {{
         isZh
-          ? '按需读取方法步骤与来源。这里是项目整理的静态技能，尚未学习你的跨研究经验。'
-          : 'Method instructions and sources load on demand. These are curated static skills; cross-research learning is not enabled.'
+          ? '按需读取方法步骤与来源。这里是项目整理的静态技能；跨研究经验在研究经验面板单独管理。'
+          : 'Method instructions and sources load on demand. These are curated static skills; cross-research experience is managed separately.'
       }}
     </p>
     <p v-if="error" role="alert">{{ error }}</p>
