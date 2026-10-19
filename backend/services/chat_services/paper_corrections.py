@@ -260,8 +260,6 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         from .issue_edits import require_binding,ready
         linked=require_binding(store,source_issue)
         if keys!=[linked['section']]:raise ResearchConflict('该候选只能修改源意见对应章节')
-        from ai_system.graph.nodes.consistency import require_complete_sections
-        require_complete_sections({keys[0]:snapshot['sections'][keys[0]]['text']})
         if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
         from ai_system.research.runtime import ResearchRuntime
         budget=ResearchRuntime(store.root,store.research_id).status()
@@ -296,7 +294,7 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         'before':before[primary],'after':after[primary],'before_sections':before,'after_sections':after,
         'generation_contract':'scoped-anchored-edits-v2' if answer else 'manual-evidence-v1','generation_edits':answer.model_dump()['edits'] if answer else [],
         'scope':scope,'patch_attempt_id':attempt['id'] if attempt else None,'origin':'model' if answer else 'manual',
-        'review_kind':'issue_section' if source_issue else 'fragment_equivalence' if scope else 'full_document',
+        'review_kind':('issue_segmented' if context['extra'].get('policy')=='long-issue-edit-v1' else 'issue_section') if source_issue else 'fragment_equivalence' if scope else 'full_document',
         **({'source_issue':source_issue,'source_issue_binding':linked['binding']} if source_issue else {}),
         'base_commit':snapshot['commit_seq'],'source_hash':digest(source),'filename':filename,'status':'pending',
         'section_revision':snapshot['sections'][primary]['revision'],'citation_checks':checks,
@@ -315,6 +313,9 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
     review_issues,hit,context=await review_candidate(store,combined,llm,scope,source_issue)
     proposal.update(review_issues=issues+review_issues,review_state='completed' if hit else 'failed',
         review_id=hit[1]['id'] if hit else None,review_context_hash=digest(context))
+    if proposal['review_kind']=='issue_segmented':
+        from .long_issue_review import progress
+        proposal['review_progress']=progress(store,combined,llm,source_issue)
     with store._transaction() as db:
         latest=json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,'paper-edit:'+proposal['id'])).fetchone()[0])
         if latest['status']!='pending':return latest
@@ -346,8 +347,11 @@ async def review_pending_fragment(store,proposal_id,llm):
     issues,hit,context=await review_candidate(store,state,llm,scope,p.get('source_issue'))
     history=[*p.get('review_history',[]),{'kind':p.get('review_kind','full_document'),'context_hash':p['review_context_hash'],
         'failed_record_id':json.loads(failed[0])['id'] if failed else None,'issues':p['review_issues']}]
-    p.update(review_kind='issue_section' if p.get('source_issue') else 'fragment_equivalence' if scope else 'full_document',review_history=history,review_state='completed' if hit else 'failed',review_issues=issues,review_id=hit[1]['id'] if hit else None,
+    p.update(review_kind=('issue_segmented' if context['extra'].get('policy')=='long-issue-edit-v1' else 'issue_section') if p.get('source_issue') else 'fragment_equivalence' if scope else 'full_document',review_history=history,review_state='completed' if hit else 'failed',review_issues=issues,review_id=hit[1]['id'] if hit else None,
         review_context_hash=digest(context),review_model_id=getattr(llm,'model_name',None) or getattr(llm,'model',None))
+    if p['review_kind']=='issue_segmented':
+        from .long_issue_review import progress
+        p['review_progress']=progress(store,state,llm,p['source_issue'])
     with store._transaction() as db:
         current=store._read(db);latest=json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,'paper-edit:'+proposal_id)).fetchone()[0])
         if latest['status']!='pending':return latest

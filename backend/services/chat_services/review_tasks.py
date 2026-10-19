@@ -86,7 +86,7 @@ def adopted_review(store,current,rows):
     for p in proposals:
         row=by_id.get(p.get('review_id'))
         if p.get('status')!='applied' or not row or not valid_result(row,store) or not matches(row,current,'sections'):continue
-        if row['stage']=='sections' and p.get('review_kind')!='issue_section' and row['result'].get('issues')==[]:return row,'编辑时章节审查（完整覆盖）'
+        if row['stage']=='sections' and p.get('review_kind') not in {'issue_section','issue_segmented'} and row['result'].get('issues')==[]:return row,'编辑时章节审查（完整覆盖）'
         if row['stage']=='fragment' and row['result'].get('verdict')=='equivalent' and p.get('generation_contract')=='scoped-anchored-edits-v2':
             if any(r['stage']=='reconcile' and valid_result(r) and matches(r,current,'reconcile') and r.get('completed_at',0)>row.get('started_at',0) for r in rows):continue
             return row,'局部等义审查覆盖本次编辑；未重审全文'
@@ -97,7 +97,7 @@ def expire_leases(store):
     cache=ReviewCache(store)
     for row in records(store):
         if row['state']=='running' and row.get('lease',{}).get('expires_at',row.get('started_at',0)+120)<time.time():
-            if row['stage'] in {'section_blocks','section_global'}:
+            if row['stage'] in {'section_blocks','section_global','issue_target'}:
                 cache.failed(row,RuntimeError('interrupted'),diagnostic={'reason':'lease_expired','recoverable':True});continue
             if row['source']=='recovery-intent':current=intent_context(store,row['stage'])==row['context']
             elif row['context'].get('extra',{}).get('non_blocking',False):current=candidate_current(store,row)

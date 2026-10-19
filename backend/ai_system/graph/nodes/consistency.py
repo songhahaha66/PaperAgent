@@ -172,9 +172,13 @@ def validate_findings(issues,state,ctx):
 
 async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False) -> List[IssueReport]:
     """Completed results are reusable only for the same complete review context."""
-    prepared=section_audit_prompt(state,ctx,force=candidate)
-    if prepared is None:return []
-    prompt,keys=prepared
+    from ...research.segmented_review import needed
+    segmented=needed(state.get('sections') or {})
+    if segmented:keys=list(state['sections']);prompt=''
+    else:
+        prepared=section_audit_prompt(state,ctx,force=candidate)
+        if prepared is None:return []
+        prompt,keys=prepared
     try:
         from ...research.review_cache import run_review
         def validate(result):
@@ -183,8 +187,7 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
             validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
         async def perform():
             return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
-        from ...research.segmented_review import needed
-        if needed(state.get('sections') or {}):
+        if segmented:
             from ...research.segmented_review import audit as segmented_audit
             audit=await segmented_audit(ctx,state,candidate=candidate)
             keys=list(state['sections'])

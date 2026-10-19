@@ -120,7 +120,11 @@
           <p v-for="(check,i) in proposal.citation_checks || []" :key="i">{{ check.status }} · {{ check.reason }}</p>
           <p v-for="(issue,i) in proposal.review_issues || []" :key="i" role="alert">{{issue.section}} · {{issue.message}}</p>
           <p v-if="proposal.source_issue">源意见 {{proposal.source_issue.id}} · 原版本 {{proposal.source_issue.version.slice(0,8)}}</p>
-          <p v-if="proposal.review_id">{{proposal.review_kind==='issue_section'?'已保存源意见对应完整章节核查':proposal.review_kind==='fragment_equivalence'?(isZh?'已保存局部等义性审查记录':'Fragment equivalence review recorded'):(isZh?'已保存完整章节覆盖审查记录':'Complete section review recorded')}} · {{proposal.review_id.slice(0,10)}}</p>
+          <p v-if="proposal.review_id">{{proposal.review_kind==='issue_segmented'?'已保存完整分段覆盖与定位源意见判定':proposal.review_kind==='issue_section'?'已保存源意见对应完整章节核查':proposal.review_kind==='fragment_equivalence'?(isZh?'已保存局部等义性审查记录':'Fragment equivalence review recorded'):(isZh?'已保存完整章节覆盖审查记录':'Complete section review recorded')}} · {{proposal.review_id.slice(0,10)}}</p>
+          <div v-if="proposal.review_progress" class="candidate-review-progress">
+            <p>候选分段覆盖 {{proposal.review_progress.segmented.completed_blocks}} / {{proposal.review_progress.segmented.total_blocks}} 块 · {{proposal.review_progress.segmented.covered_chars}} / {{proposal.review_progress.segmented.total_chars}} 字符</p>
+            <p>跨节核查：{{reviewLabels[proposal.review_progress.segmented.global.state]||proposal.review_progress.segmented.global.state}} · 源意见定向判定：{{reviewLabels[proposal.review_progress.target_state]||proposal.review_progress.target_state}}<span v-if="proposal.review_progress.target_verdict">（{{verdictLabels[proposal.review_progress.target_verdict]||proposal.review_progress.target_verdict}}）</span></p>
+          </div><p v-if="proposal.review_progress_error" role="alert">{{proposal.review_progress_error}}</p>
           <div v-for="change in proposalDiffs" :key="change.key" class="section-diff">
           <h4>{{document.sections.find(s=>s.key===change.key)?.title||change.key}}</h4>
           <div class="diff">
@@ -191,6 +195,8 @@ const emit = defineEmits<{
   research: [message: string, task?: string, sourceIssue?:{id:string;version:string}]
 }>()
 const { isZh } = useStudioCopy()
+const reviewLabels:Record<string,string>={pending:'待核查',running:'进行中',failed:'中断，可恢复',completed:'已完成',superseded:'版本已失效',blocked:'尚未完成'}
+const verdictLabels:Record<string,string>={resolved:'已解决',unresolved:'仍未解决',uncertain:'尚不能确认'}
 const document = ref<PaperDocument | null>(null),
   selected = ref(''),
   instruction = ref(''),

@@ -7,7 +7,7 @@ from ai_system.research.models import ResearchConflict
 from ai_system.research.store import digest,ResearchStore
 from ai_system.graph.state import ClaimIssue
 from ai_system.research.review_cache import ReviewCache,run_review
-from ai_system.graph.nodes.consistency import AUDIT_SYSTEM,section_audit_prompt,require_complete_sections,validate_findings
+from ai_system.graph.nodes.consistency import AUDIT_SYSTEM,section_audit_prompt,validate_findings
 from ai_system.graph.llm_utils import call_structured,as_messages,cap_output
 
 TERMINAL={'resolved','dismissed','superseded'}
@@ -95,7 +95,7 @@ def ready(store):
 def review_material(store,state,llm,binding):
     from .paper_corrections import proposal_context
     value=require_binding(store,binding);key=value['section'];selected={**state,'sections':{key:state['sections'][key]}}
-    require_complete_sections(selected['sections']);ctx=proposal_context(store,selected,llm)
+    ctx=proposal_context(store,selected,llm)
     prompt=section_audit_prompt(selected,ctx,force=True)[0]
     prompt+='\n# 必须逐项核对的源意见\n'+json.dumps({'issue_id':binding['id'],'message':value['issue']['message'],'original_quote':value['quote'],
         'original_section':store.snapshot()['sections'][key]['text']},ensure_ascii=False)
@@ -104,12 +104,20 @@ def review_material(store,state,llm,binding):
 
 
 def review_context(store,state,llm,binding):
+    from ai_system.research.segmented_review import needed
+    if needed(state['sections']):
+        from .long_issue_review import material
+        return material(store,state,llm,binding)[-1]
     from ai_system.research.review_cache import review_context as make
     ctx,selected,system,prompt=review_material(store,state,llm,binding)
     return make(ctx,selected,'sections',system,prompt,IssueAudit,sections=selected['sections'],extra={'non_blocking':True,'scope':{'id':binding['id']},'source_issue':binding,'policy':'issue-section-review-v1'})
 
 
 async def review(store,state,llm,binding):
+    from ai_system.research.segmented_review import needed
+    if needed(state['sections']):
+        from .long_issue_review import review as long_review
+        return await long_review(store,state,llm,binding)
     ctx,selected,system,prompt=review_material(store,state,llm,binding)
     def validate(result):
         if result.issue_id!=binding['id']:raise ValueError('核查返回了其他意见')
@@ -142,4 +150,6 @@ def resolve(state,p,record):
     issue.update(status='resolved',review_resolution={'policy':'issue-edit-review-v1','source_version':p['source_issue']['version'],'candidate_id':p['id'],
         'review_id':record['id'],'review_context_hash':record['context_hash'],'review_result_hash':record['result_hash'],
         'section_hash':state['sections'][p['section']]['content_hash'],'section_revision':state['sections'][p['section']]['revision']})
+    if record.get('source')=='issue-long-composition':
+        issue['review_resolution'].update({k:record['provenance'][k] for k in ('coverage_review_id','target_review_id')})
     state['outcome']='completed' if ResearchStore.delivery_ready(state) else 'blocked'

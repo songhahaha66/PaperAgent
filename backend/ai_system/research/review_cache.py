@@ -7,7 +7,7 @@ from .store import ResearchStore,digest
 from .models import IssueReport
 
 POLICY='review-context-cache-v1'
-STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查','section_blocks':'正文分块核查','section_global':'跨节结论核查'}
+STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查','section_blocks':'正文分块核查','section_global':'跨节结论核查','issue_target':'定位源意见判定'}
 PROCESS_ID=uuid.uuid4().hex
 SCIENCE_FIELDS=('inputs','tasks','contract_hash','evidence_hash','claims_hash','artifact_hashes','committed_evidence_hash','configuration_hash')
 
@@ -79,7 +79,7 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
             citations['C'+cid]=digest(json.loads(row[0])) if row else None
         except (AttributeError,ValueError,KeyError):citations['C'+cid]=None
     consistency=None
-    if stage in {'sections','fragment','section_blocks','section_global'}:
+    if stage in {'sections','fragment','section_blocks','section_global','issue_target'}:
         try:consistency=digest(json.loads((root/'.system/consistency.json').read_text()))
         except (OSError,ValueError):pass
     from ..graph.nodes.consistency import section_coverage
@@ -125,6 +125,9 @@ class ReviewCache:
                 if record.get('source')=='segmented-aggregate':
                     from .segmented_review import verify_proof
                     if not verify_proof(self.store,record):continue
+                if record.get('source')=='issue-long-composition':
+                    from services.chat_services.long_issue_review import verify
+                    if not verify(self.store,record):continue
                 return schema.model_validate(record['result']),record
             except (KeyError,ValueError,TypeError):continue
         return None
@@ -181,6 +184,9 @@ class ReviewCache:
         if record.get('source')=='segmented-aggregate':
             from .segmented_review import verify_proof
             if not verify_proof(self.store,record):raise ValueError('分段覆盖证明不完整，不能登记章节审查完成')
+        if record.get('source')=='issue-long-composition':
+            from services.chat_services.long_issue_review import verify
+            if not verify(self.store,record):raise ValueError('长节候选缺少分段覆盖或源意见定向判定证明')
         stale=False
         with self.store._transaction() as db:
             row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
@@ -284,6 +290,9 @@ class ReviewCache:
             if record.get('source')=='segmented-aggregate':
                 from .segmented_review import verify_proof
                 if not verify_proof(self.store,record):raise ValueError('分段覆盖证明已失效')
+            if record.get('source')=='issue-long-composition':
+                from services.chat_services.long_issue_review import verify
+                if not verify(self.store,record):raise ValueError('长节候选覆盖或源意见判定证明已失效')
             state=self.store._read(db)
             closed=self._close_matching(state,record) if state else []
             replaced=self._supersede_services(db,state,record) if state else []
@@ -311,7 +320,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             from ..graph.nodes.consistency import require_complete_sections
             require_complete_sections(sections or {})
         answer=await perform()
-        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict','section_blocks':'issues','section_global':'issues'}[stage]
+        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict','section_blocks':'issues','section_global':'issues','issue_target':'issues'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')
         if isinstance(answer,dict) and verdict_field not in answer:raise ValueError('review_reply_missing_verdict_field')
         answer=schema.model_validate(answer.model_dump() if hasattr(answer,'model_dump') else answer)

@@ -28,8 +28,10 @@ export interface PaperProposal {
   edit_kind?:'wording'|'evidence'
   origin?:'model'|'manual'
   generation_contract?:string
-  review_kind?:'fragment_equivalence'|'full_document'|'issue_section'
+  review_kind?:'fragment_equivalence'|'full_document'|'issue_section'|'issue_segmented'
   source_issue?:{id:string;version:string}
+  review_progress?:{segmented:{completed_blocks:number;total_blocks:number;covered_chars:number;total_chars:number;global:{state:string}};target_state:string;target_verdict?:string}
+  review_progress_error?:string
   scope?:{id:string;old:string;start:number;end:number;section_hash:string}
   generation_edits?:{section:string;old:string;replacement:string}[]
 }

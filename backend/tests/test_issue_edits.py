@@ -99,7 +99,8 @@ def test_long_sections_cannot_be_declared_full_pass_or_resolve_source(linked):
         state=v.store._read(db);i=next(i for i in state['issues'] if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
     from services.chat_services.review_tasks import status
     t=next(t for t in status(v.store)['tasks'] if t['stage']=='sections');assert t['state']=='partial' and t['outcome']=='incomplete' and t['segmented']['completed_blocks']==0
-    with pytest.raises(consistency.ReviewCoverageIncomplete):propose(v)
+    from ai_system.research.segmented_review import CoverageError
+    with pytest.raises(CoverageError,match="精确原文"):propose(v)
     assert not v.model.calls and current(v)['status']=='confirmed'
     ctx=edits.proposal_context(v.store,v.state,v.model);context=review_context(ctx,v.state,'sections','system','fixture',ClaimAudit,sections=sections)
     cache=ReviewCache(v.store);r=cache.start('sections',context)
