@@ -93,7 +93,6 @@ class PaperGraphAgent:
             from ..research.runtime import ResearchRuntime
             if ResearchRuntime(Path(self.workspace_dir)).policy()['compact_paper']:
                 self.options.setdefault('max_solver_steps',12)
-                self.options.setdefault('max_planning_calls',1)
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
 
@@ -248,7 +247,7 @@ class PaperGraphAgent:
         if ctx.research.snapshot() is not None:
             ctx.research.recover()
             from ..research.loop import resume
-            resume(ctx.research)
+            resume(ctx.research,planning_limit=ctx.max_planning_calls)
             refresh_registry(ctx)
             await graph.aupdate_state(config, {"research_blocked": False}, as_node="solve_join")
         return await self._invoke(graph, None, {**config, "recursion_limit": GRAPH_RECURSION_LIMIT}, thread_id, ctx)

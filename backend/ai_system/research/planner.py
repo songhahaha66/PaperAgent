@@ -209,6 +209,14 @@ async def recover_collection(ctx, key, record):
     return False
 
 
+def evidence_frontier_ready(snapshot):
+    """Execution is settled; whether the original question is answered is separate."""
+    return all(t['retired'] or (t['acceptance']=='accepted' and t['validity']=='current')
+               for t in snapshot['tasks'].values()) and not any(
+        i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}
+        and not (i['source']=='sections' and i['action']=='rewrite') for i in research_findings(snapshot))
+
+
 async def advance_research(ctx):
     """Decide once at an accepted evidence frontier, rather than after every step."""
     store=ctx.research
@@ -216,7 +224,7 @@ async def advance_research(ctx):
         if previous.get('status')=='collecting' and not await recover_collection(ctx,previous_key,previous):
             return True
     snapshot=store.snapshot()
-    if not store.delivery_ready(snapshot):
+    if not evidence_frontier_ready(snapshot):
         return False
     key,context=decision_context(store,snapshot)
     for previous_key,previous in decision_records(store):
@@ -226,24 +234,32 @@ async def advance_research(ctx):
             previous['status']='done' if store.planning_decision(previous_key+':apply') else 'superseded'
             store.save_planning_decision(previous_key,previous)
     if not context['evidence']:
-        return False
+        await ctx.events.stage('当前没有可用于回答原要求的实际登记产物或相关原文，已保留研究并暂停交付。')
+        return True
     record=store.planning_decision(key)
-    if record and record['status'] in {'done','limited'}:
-        return record.get('blocked',False)
+    if record and record['status']=='limited':
+        # Old limit receipts could incorrectly permit writing. A limit is never
+        # a convergence verdict, including after upgrading an existing project.
+        if record.get('blocked') is not True:
+            store.save_planning_decision(key,{**record,'blocked':True})
+        return True
+    if record and record['status']=='done':
+        try:
+            completed=EvidenceDecision.model_validate(record.get('proposal'))
+            validate_decision(completed,snapshot,context)
+        except ValueError as exc:
+            store.save_planning_decision(key,{**record,'status':'planning_failed','error_type':type(exc).__name__})
+            return True
+        return completed.action!='deliver'
     if record and record['status'] not in {'planned','retry'}:
         # A previous failed/uncertain call is durable. Only explicit resume (for
         # planning) or changed evidence may request another bounded decision.
         return True
     if not record or record['status']=='retry':
-        if snapshot['planning_calls']>=ctx.max_planning_calls or not store.reserve_planning_call(key):
-            previous=decision_records(store)
-            unfinished=bool(record) or bool(previous and ((previous[0][1].get('proposal') or {}).get('action')=='literature'
-                                         or previous[0][1].get('blocked')
-                                         or previous[0][1].get('status') in {'planning','planning_failed','collection_failed'}))
-            store.save_planning_decision(key,{'status':'limited','blocked':unfinished})
-            await ctx.events.stage('已达到现有规划次数上限，仍有未完成的研究决策；已保留现状并暂停交付。' if unfinished else
-                                   '已达到现有规划次数上限，保留已验收研究，继续现有要求的交付检查，不再自动扩展研究。')
-            return unfinished
+        if not store.reserve_planning_call(key,limit=ctx.max_planning_calls):
+            store.save_planning_decision(key,{'status':'limited','blocked':True})
+            await ctx.events.stage('已达到规划或执行资源上限，当前证据尚无明确的收敛决策；已保留原要求和全部结果并暂停交付。')
+            return True
         try:
             proposal=await Planner(ctx.planner_llm).decide(snapshot,context)
             proposal=EvidenceDecision.model_validate(proposal)

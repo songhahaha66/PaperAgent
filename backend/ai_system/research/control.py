@@ -12,7 +12,7 @@ from langgraph.types import Send
 from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
 from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
-from .planner import ready_tasks, Planner
+from .planner import ready_tasks, Planner, evidence_frontier_ready
 from .store import digest
 from .assumptions import assumption_scope
 from .validation import needs_owner_review
@@ -46,7 +46,7 @@ async def observe(state, runtime):
     confirmed = {i["id"] for i in research_findings(snapshot) if i["status"] == "confirmed" and i["action"] == "recompute"}
     repair_key='planner-repair:'+digest([snapshot['revision'],sorted(confirmed),
         [(k,t['revision'],t['active_attempt'],t['acceptance']) for k,t in tasks.items()]])
-    if confirmed and snapshot["planning_calls"] < ctx.max_planning_calls and store.reserve_planning_call(repair_key):
+    if confirmed and store.reserve_planning_call(repair_key,limit=ctx.max_planning_calls):
         try:
             proposal = await Planner(ctx.planner_llm).propose(snapshot)
             if (proposal.changes or proposal.assumptions) and set(proposal.issue_ids) & confirmed:
@@ -78,9 +78,7 @@ async def observe(state, runtime):
     sections.update({key: None for key in (state.get("sections") or {}) if key not in sections})
     # Section-only repairs are retried by write/validate on an explicit resume;
     # they still block publication, without rerunning accepted computations.
-    unresolved = [i for i in research_findings(snapshot) if i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
-                  and not (i["source"] == "sections" and i["action"] == "rewrite")]
-    complete = not unresolved and all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in tasks.values())
+    complete = evidence_frontier_ready(snapshot)
     from .loop import flow
     progress = flow(store)
     blocked = decision_blocked or (not complete and not ready_tasks(snapshot)) or bool(progress.get('blocked'))

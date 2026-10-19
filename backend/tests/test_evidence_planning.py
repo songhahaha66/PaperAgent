@@ -10,7 +10,8 @@ import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
 from ai_system.research import control,loop,planner
-from ai_system.research.models import TaskChange
+from ai_system.research import DEFAULT_PLANNING_CALL_LIMIT
+from ai_system.research.models import TaskChange,IssueReport
 from ai_system.research.literature import LiteratureStore
 from test_native_latex import accepted_store
 from test_research_p2 import problem,TASK,submit
@@ -199,6 +200,7 @@ def test_planning_failure_blocks_delivery_and_explicit_resume_reuses_accepted_wo
 
 def test_exhausted_failed_decision_cannot_silently_enter_delivery(env):
     model=Model(TimeoutError('first'),TimeoutError('second'));ctx=env.context(model)
+    ctx.max_planning_calls=2
     assert observe(env,ctx)['research_blocked']
     loop.resume(env.store)
     assert observe(env,ctx)['research_blocked']
@@ -206,6 +208,83 @@ def test_exhausted_failed_decision_cannot_silently_enter_delivery(env):
         loop.resume(env.store)
         assert observe(env,ctx)['research_blocked']
     assert len(model.calls)==2 and env.store.snapshot()['planning_calls']==2
+
+
+@pytest.mark.parametrize('limit',[2,DEFAULT_PLANNING_CALL_LIMIT])
+def test_repeated_research_at_limit_never_infers_convergence_from_accepted_followups(env,monkeypatch,limit):
+    def missing(context):
+        value=proposal(context,'research')
+        value['changes'][0]['task_id']='Q'+str(max(int(t['task_id'][1:]) for t in context['tasks'])+1)
+        value['coverage'][0]['remaining']='所要求的条件敏感性仍没有对应研究结果。'
+        value['gap']=value['coverage'][0]['remaining']
+        return value
+    model=Model(*([missing]*limit));ctx=env.context(model);ctx.max_planning_calls=limit
+    before=env.store.snapshot();executed=[]
+    async def worker(branch,runtime):
+        key=branch['subproblem']['id'];executed.append(key)
+        assert submit(runtime.context.research,key,{'sample_count':8})[0]['published']
+        return {'log':['sample count saved; coverage gap still open']}
+    monkeypatch.setattr(control,'execute',worker)
+    for _ in range(limit):
+        state=observe(env,ctx);selected=loop.select(state,SimpleNamespace(context=ctx))
+        assert selected[0].arg['capability']=='experiments.execute'
+        run(loop.act(selected[0].arg,SimpleNamespace(context=ctx)))
+        assert env.store.snapshot()['tasks'][executed[-1]]['acceptance']=='accepted'
+    for _ in range(3):
+        state=observe(env,ctx)
+        assert state['research_blocked'] and loop.select(state,SimpleNamespace(context=ctx))==loop.END
+        receipt=planner.decision_records(env.store)[0][1]
+        assert receipt['status']=='limited' and receipt['blocked'] is True
+        env.store.recover();loop.resume(env.store,planning_limit=ctx.max_planning_calls)
+    after=env.store.snapshot()
+    assert len(model.calls)==limit and after['planning_calls']==limit and len(executed)==limit
+    assert all(after['tasks'][key]==task for key,task in before['tasks'].items())
+    assert all(after['attempts'][key]==attempt for key,attempt in before['attempts'].items())
+    assert all(after['evidence'][key]==evidence for key,evidence in before['evidence'].items())
+
+
+def test_old_nonblocking_limit_receipt_blocks_until_explicit_valid_deliver(env):
+    model=Model('deliver');ctx=env.context(model)
+    assert env.store.reserve_planning_call('old-limit:first',limit=2)
+    assert env.store.reserve_planning_call('old-limit:second',limit=2)
+    key,_=planner.decision_context(env.store,env.store.snapshot())
+    env.store.save_planning_decision(key,{'status':'limited','blocked':False})
+    assert observe(env,ctx)['research_blocked'] and not model.calls
+    assert env.store.planning_decision(key)['blocked'] is True
+    loop.resume(env.store,planning_limit=ctx.max_planning_calls)
+    state=observe(env,ctx)
+    assert not state['research_blocked'] and len(model.calls)==1
+    assert env.store.snapshot()['planning_calls']==3, 'Continuing uses remaining backend capacity, without resetting old usage'
+    assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
+
+
+def test_cached_deliver_with_unanswered_requirement_cannot_unlock_writing(env):
+    model=Model('deliver');ctx=env.context(model)
+    key,context=planner.decision_context(env.store,env.store.snapshot())
+    invalid=proposal(context);invalid['coverage'][0]['remaining']='尚未回答的研究目的。'
+    env.store.save_planning_decision(key,{'status':'done','proposal':invalid})
+    state=observe(env,ctx)
+    assert state['research_blocked'] and loop.select(state,SimpleNamespace(context=ctx))==loop.END
+    assert not model.calls and env.store.planning_decision(key)['status']=='planning_failed'
+
+
+def test_accepted_tasks_without_current_evidence_do_not_skip_convergence(env):
+    model=Model('deliver');ctx=env.context(model)
+    with env.store._transaction() as db:
+        snapshot=env.store._read(db)
+        for evidence in snapshot['evidence'].values():evidence['active']=False
+        env.store._save(db,snapshot,'controlled_inactive_products',{})
+    state=observe(env,ctx)
+    assert state['research_blocked'] and loop.select(state,SimpleNamespace(context=ctx))==loop.END
+    assert not model.calls and env.store.snapshot()['planning_calls']==0
+
+
+def test_pending_section_rewrite_cannot_bypass_missing_convergence_at_limit(env):
+    model=Model('deliver');ctx=env.context(model);ctx.max_planning_calls=0
+    env.store.report_issues([IssueReport(task_id='Q1',category='writing',section='evaluation',message='措辞尚需修订')],'sections')
+    state=observe(env,ctx)
+    assert state['research_blocked'] and loop.select(state,SimpleNamespace(context=ctx))==loop.END
+    assert not model.calls and env.store.snapshot()['planning_calls']==0
 
 
 def test_reserved_interrupted_planning_is_not_repeated_until_explicit_resume(env):
@@ -287,6 +366,54 @@ def test_literature_choice_invokes_registered_capability_then_redecides_from_act
     assert any('locator' in e for e in model.calls[-1]['evidence'])
     assert env.store.snapshot()['tasks']==before['tasks'] and env.store.snapshot()['attempts']==before['attempts']
     assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
+
+
+def test_default_limit_allows_literature_then_research_then_explicit_deliver(env,monkeypatch):
+    from ai_system.modules import literature as module,registry
+    from ai_system.modules.registry import CapabilityProduct
+    def targeted(context):
+        value=proposal(context,'research')
+        source=next(e for e in context['evidence'] if 'locator' in e)
+        value['basis'].append({'ref':source['id'],'quote':source['text']})
+        value['coverage'][0]['basis'].append({'ref':source['id'],'quote':source['text']})
+        return value
+    def converge(context):
+        value=proposal(context)
+        actual=[next(e for e in context['evidence'] if e.get('task_id')==key) for key in ('Q1','Q4')]
+        value['coverage'][0].update(supported='; '.join(f"{e['name']}={e['text']}" for e in actual),
+                                  basis=[{'ref':e['id'],'quote':e['text']} for e in actual],remaining='')
+        return value
+    model=Model('literature',targeted,converge);ctx=env.context(model);before=env.store.snapshot()
+    assert ctx.max_planning_calls==DEFAULT_PLANNING_CALL_LIMIT>=3
+    calls=[]
+    async def collect(ctx,inputs):
+        calls.append('literature.collect');source,_=add_passage(ctx.research)
+        return CapabilityProduct('literature',{'search':{'status':'completed','source_ids':[source['id']],'errors':[]}})
+    async def worker(branch,runtime):
+        calls.append('experiments.execute')
+        assert branch['subproblem']['id']=='Q4'
+        assert submit(runtime.context.research,'Q4',{'sensitivity':0.2})[0]['published']
+        return {'log':['targeted evidence registered']}
+    monkeypatch.setattr(registry,'_registry',None)
+    monkeypatch.setattr(module,'collect',collect)
+    monkeypatch.setattr(control,'execute',worker)
+    first=loop.select(observe(env,ctx),SimpleNamespace(context=ctx))
+    assert first.arg['capability']=='literature.collect'
+    run(loop.act(first.arg,SimpleNamespace(context=ctx)))
+    second=loop.select(observe(env,ctx),SimpleNamespace(context=ctx))
+    assert second[0].arg['capability']=='experiments.execute'
+    run(loop.act(second[0].arg,SimpleNamespace(context=ctx)))
+    for _ in range(3):
+        state=observe(env,ctx)
+        assert not state['research_blocked']
+        assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
+        env.store.recover();loop.resume(env.store,planning_limit=ctx.max_planning_calls)
+    assert calls==['literature.collect','experiments.execute'] and len(model.calls)==3
+    after=env.store.snapshot()
+    assert after['planning_calls']==3
+    assert all(after['tasks'][key]==task for key,task in before['tasks'].items())
+    assert all(after['attempts'][key]==attempt for key,attempt in before['attempts'].items())
+    assert all(after['evidence'][key]==evidence for key,evidence in before['evidence'].items())
 
 
 @pytest.mark.parametrize('status',['failed','completed'])

@@ -15,7 +15,7 @@ import uuid
 from contextlib import contextmanager, closing
 from pathlib import Path
 
-from . import ENGINE_VERSION
+from . import ENGINE_VERSION, DEFAULT_PLANNING_CALL_LIMIT
 from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord, ContentFeedback, RuntimeFault
 from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps, needs_owner_review
 from .assumptions import assumption_id, premise_definition, assumption_scope
@@ -813,14 +813,16 @@ class ResearchStore:
                 if right and not ResearchStore._reaches(state, right["task_id"], task["task_id"]):
                     raise ValueError("跨任务验收操作数必须声明任务依赖")
 
-    def reserve_planning_call(self, decision_key=None):
+    def reserve_planning_call(self, decision_key=None, *, limit=DEFAULT_PLANNING_CALL_LIMIT):
+        if type(limit) is not int or limit<0:
+            raise ValueError('规划次数上限必须是有限的非负整数')
         with self._transaction() as db:
             state = self._read(db)
             if decision_key:
                 row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(self.research_id,decision_key)).fetchone()
                 if row and json.loads(row[0]).get('status')!='retry':
                     return False
-            if state["planning_calls"] >= 2 or len(state["attempts"]) >= state["max_total_attempts"]:
+            if state["planning_calls"] >= limit or len(state["attempts"]) >= state["max_total_attempts"]:
                 return False
             state["planning_calls"] += 1
             if decision_key:

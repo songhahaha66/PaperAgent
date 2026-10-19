@@ -368,7 +368,7 @@ def test_consistency_suspicion_runs_independent_verification_then_replans_only_i
     state = store.snapshot()
     investigations = [t for t in state["tasks"].values() if t["kind"] == "verify"]
     assert len(investigations) == 1 and investigations[0]["retired"]
-    assert state["planning_calls"] == (2 if counterexample else 1)
+    assert state["planning_calls"] == (3 if counterexample else 1)  # Initial deliver, confirmed repair, then a new deliver.
     assert sum(a["task_id"] == "Q1" for a in state["attempts"].values()) == (2 if counterexample else 1)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1
     assert research_findings(state)[0]["status"] == ("resolved" if counterexample else "dismissed")

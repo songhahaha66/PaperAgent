@@ -16,6 +16,7 @@ from services.file_services.workspace_fs import WorkspaceFS
 from ..sandbox import PythonKernel
 from .llm_utils import cap_output
 from .registry import ResultRegistry
+from ..research import DEFAULT_PLANNING_CALL_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class GraphContext:
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
-    max_planning_calls: int = 2
+    max_planning_calls: int = DEFAULT_PLANNING_CALL_LIMIT
     max_design_rounds: int = 2
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)

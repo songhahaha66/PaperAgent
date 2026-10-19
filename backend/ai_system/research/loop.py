@@ -4,6 +4,7 @@ from langgraph.types import Send
 
 from ai_system.modules.registry import invoke
 from .store import digest
+from . import DEFAULT_PLANNING_CALL_LIMIT
 import json
 
 DELIVERY = ('reconcile', 'write', 'validate', 'render', 'export')
@@ -96,7 +97,7 @@ async def act(action, runtime):
     return patch
 
 
-def resume(store):
+def resume(store, *, planning_limit=DEFAULT_PLANNING_CALL_LIMIT):
     """Explicit retry unblocks delivery without discarding accepted experiments."""
     with store._transaction() as db:
         snapshot = store._read(db)
@@ -104,7 +105,8 @@ def resume(store):
         for row in db.execute("SELECT id,response FROM commands WHERE research_id=? AND (id LIKE 'research-next:%' OR id LIKE 'planner-repair:%')",
                               (store.research_id,)).fetchall():
             record=json.loads(row[1])
-            if record.get('status') in {'planning','planning_failed'}:
+            if record.get('status') in {'planning','planning_failed'} or (
+                    record.get('status')=='limited' and snapshot['planning_calls']<planning_limit):
                 record['status']='retry'
                 db.execute('UPDATE commands SET response=? WHERE research_id=? AND id=?',
                            (json.dumps(record,ensure_ascii=False),store.research_id,row[0]))
