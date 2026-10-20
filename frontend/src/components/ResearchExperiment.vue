@@ -19,11 +19,7 @@
     <p v-if="experiment.availability === 'historical'" role="alert">此处保留的是历史结果。</p>
     <MarkdownRenderer
       v-if="experiment.approach || experiment.summary"
-      :content="
-        experiment.approach ||
-        experiment.summary ||
-        (isZh ? '尚无执行说明。' : 'No execution description recorded.')
-      "
+      :content="evidenceMarkdown(experiment.summary || experiment.approach || '', snapshot || null)"
       :work-id="workId"
     />
     <details v-if="experiment.method">
@@ -191,7 +187,7 @@ import type {
 import { useStudioCopy } from '@/lang/studio'
 import { outcomeLabel } from '@/utils/outcomeLabels'
 import ResultSeries from './ResultSeries.vue'
-import { resultName } from '@/utils/researchEvidence'
+import { evidenceMarkdown, resultName } from '@/utils/researchEvidence'
 import WorkDocument from './WorkDocument.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 const props = defineProps<{

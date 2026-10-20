@@ -1,14 +1,16 @@
 import type { ResearchSnapshot } from '@/types/research'
 export function evidenceMarkdown(text: string, snapshot: ResearchSnapshot | null) {
-  return text.replace(/\{\{\s*([RF]):\s*([RF]\d+)\s*\}\}/g, (raw, _kind, id) => {
+  return text.replace(/\{\{\s*([RF]):\s*([RF]\d+)\s*\}\}/g, (raw, _kind, id, offset: number) => {
     const result =
       snapshot?.results.find((r) => r.id === id) ||
       snapshot?.issue_evidence?.find((r) => r.id === id)
     if (!result) return raw
+    const unit = result.unit.trim()
+    const suffix = text.slice(offset + raw.length).trimStart()
     const label =
       result.kind === 'figure' || result.kind === 'series'
         ? result.name
-        : `${result.value} ${result.unit}`.trim()
+        : `${result.value}${unit && !suffix.startsWith(unit) ? ' ' + unit : ''}`
     return `[${label.replace(/[\[\]\\]/g, '')}](https://paperagent.local/results/${id})`
   })
 }

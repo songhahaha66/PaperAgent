@@ -7,7 +7,7 @@
       </div>
     </header>
     <p v-if="!questions.length" class="empty">尚未建立研究问题。</p>
-    <nav v-else class="questions" aria-label="选择研究问题">
+    <nav v-else-if="questions.length > 1" class="questions" aria-label="选择研究问题">
       <button
         v-for="(question, index) in questions"
         :key="question.id"
@@ -21,25 +21,13 @@
       </button>
     </nav>
     <article v-if="selected" class="question-detail">
-      <header>
-        <h2>{{ selected.title }}</h2>
-        <details v-if="selected.question !== selected.title">
-          <summary>研究目标</summary>
-          <p>{{ selected.question }}</p>
-        </details>
-      </header>
-      <details v-if="selected.sources.length" class="source">
-        <summary>对应原题</summary>
-        <blockquote v-for="source in selected.sources" :key="source">{{ source }}</blockquote>
-      </details>
-      <section class="judgment">
+      <section v-if="selected.judgment" class="judgment">
         <h3>当前结论</h3>
         <MarkdownRenderer
           v-if="selected.judgment"
           :content="evidenceText(selected.judgment)"
           :work-id="snapshot?.work_id"
         />
-        <p v-else>尚未记录问题结论，可查看下方实验结果。</p>
         <small
           v-if="
             selected.judgment &&
@@ -66,9 +54,9 @@
           {{ judgment.statement }}
         </p>
       </details>
-      <section v-if="selected.next_step || decision" class="next-step">
+      <section v-if="selected.next_step && status !== 'completed'" class="next-step">
         <h3>后续安排</h3>
-        <p>{{ selected.next_step || decision?.reason }}</p>
+        <p>{{ selected.next_step }}</p>
       </section>
       <section>
         <h3>实验记录</h3>
@@ -82,37 +70,18 @@
             <strong>{{ methodName(task.task_id) }}</strong
             ><span class="state">{{ taskLabel(taskState(task, status), true) }}</span>
           </header>
-          <details v-if="experimentFor(task.task_id)?.experiment" class="conditions">
-            <summary>数据与评价标准</summary>
-            {{ experimentFor(task.task_id)?.experiment?.conditions }}<br />评价：{{
-              experimentFor(task.task_id)?.experiment?.evaluation
-            }}
-          </details>
-          <div v-if="experimentFor(task.task_id)?.results.length" class="measurements">
-            <button
-              v-for="result in experimentFor(task.task_id)!.results.slice(0, 4)"
-              :key="result.id"
-              @click="emit('object', { type: 'result', resultType: 'registered', id: result.id })"
-            >
-              <small>{{ resultName(result.name) }}</small
-              ><strong>{{
-                result.kind === 'figure'
-                  ? '查看图表'
-                  : result.kind === 'series'
-                    ? '查看实测序列'
-                    : `${result.value} ${result.unit}`
-              }}</strong>
-            </button>
-          </div>
+          <MarkdownRenderer
+            v-if="task.summary"
+            class="experiment-summary"
+            :content="evidenceText(task.summary)"
+            :work-id="snapshot?.work_id"
+          />
           <p v-else class="muted">
             {{
               task.execution_status === 'failed'
                 ? '本次实验未完成，代码与运行输出已保留。'
                 : task.progress.next_step || task.reason || '尚未取得实测结果。'
             }}
-          </p>
-          <p class="review-status" v-if="experimentFor(task.task_id)">
-            证据检查：{{ outcomeLabel(experimentFor(task.task_id)!.checking, true) }}
           </p>
           <div v-for="issue in issuesFor(task.task_id)" :key="issue.id" class="finding">
             <strong>待核查</strong>
@@ -130,7 +99,7 @@
             class="text-action"
             @click="emit('object', { type: 'result', resultType: 'experiment', id: task.task_id })"
           >
-            查看实验 →
+            查看图表、数据与代码 →
           </button>
           <details v-if="task.progress.executions">
             <summary>执行记录</summary>
@@ -164,8 +133,7 @@ import MarkdownRenderer from './MarkdownRenderer.vue'
 import type { ResearchSnapshot, ResearchQuestion } from '@/types/research'
 import type { WorkObject } from '@/stores/workPanels'
 import { researchQuestions, taskState, taskLabel, deliveryLabels } from '@/utils/researchProgress'
-import { outcomeLabel } from '@/utils/outcomeLabels'
-import { evidenceMarkdown, resultName } from '@/utils/researchEvidence'
+import { evidenceMarkdown } from '@/utils/researchEvidence'
 const props = defineProps<{ snapshot: ResearchSnapshot | null; workStatus?: string }>()
 const emit = defineEmits<{ object: [object: WorkObject]; issue: [id: string] }>()
 const selectedId = ref('')
@@ -190,9 +158,6 @@ const selectedExperiments = computed(
 )
 const status = computed(() => props.workStatus || props.snapshot?.work_status || '')
 const paused = computed(() => ['paused', 'failed', 'cancelled'].includes(status.value))
-const decision = computed(() =>
-  props.snapshot?.runtime?.decisions.filter((d) => d.question_id === selected.value?.id).at(-1),
-)
 const experimentFor = (id: string) => props.snapshot?.experiments?.find((o) => o.task_id === id)
 const methodName = (id: string) =>
   experimentFor(id)
@@ -237,9 +202,7 @@ const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
   margin-bottom: 6px;
 }
 .overview p,
-.muted,
-.conditions,
-.review-status {
+.muted {
   color: var(--pa-muted);
 }
 .questions {
@@ -291,14 +254,6 @@ const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
   border-top: 1px solid var(--pa-line);
   padding-top: 24px;
 }
-.question-detail > header small {
-  color: var(--pa-accent);
-}
-h2 {
-  font-size: 19px;
-  line-height: 1.6;
-  margin: 8px 0 12px;
-}
 h3 {
   font-size: 14px;
   margin: 0 0 10px;
@@ -309,19 +264,6 @@ p {
 }
 section {
   margin-top: 24px;
-}
-.source {
-  margin: 10px 0 20px;
-}
-blockquote {
-  margin: 10px 0;
-  padding: 0 14px;
-  border-left: 2px solid var(--pa-line);
-  white-space: pre-wrap;
-  line-height: 1.8;
-  color: var(--pa-muted);
-  max-height: 230px;
-  overflow: auto;
 }
 .judgment {
   background: var(--pa-surface-muted);
@@ -356,30 +298,16 @@ blockquote {
   color: var(--pa-muted);
   font-size: 12px;
 }
-.measurements {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px;
-  margin: 14px 0;
+.experiment-summary {
+  margin: 12px 0;
+  line-height: 1.85;
 }
-.measurements button {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  text-align: left;
-  border: 0;
-  border-radius: 8px;
-  background: var(--pa-surface-muted);
-  padding: 12px;
-  color: var(--pa-ink);
-  cursor: pointer;
+.experiment-summary :deep(p) {
+  margin: 10px 0;
 }
-.measurements strong {
-  font-size: 16px;
-  overflow-wrap: anywhere;
-}
-.measurements small {
-  color: var(--pa-muted);
+.experiment-summary :deep(a) {
+  color: var(--pa-accent);
+  text-underline-offset: 3px;
 }
 .finding {
   background: var(--pa-surface-muted);
