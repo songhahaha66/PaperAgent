@@ -102,14 +102,15 @@ class ChatService:
             return []
 
     def get_work_chat_history_for_frontend(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
-        """获取work的聊天记录（前端格式）"""
-        try:
-            messages = self.history_manager.get_messages(work_id, limit)
-            logger.info(f"获取聊天记录: {work_id}, 数量: {len(messages)}")
-            return messages
-        except Exception as e:
-            logger.error(f"获取聊天记录失败: {e}")
-            return []
+        """Merge persisted comment views for display only, never research context."""
+        from datetime import datetime
+        from pathlib import Path
+        from .paper_comments import chat_history
+        messages=self.history_manager.get_messages(work_id)
+        messages=messages+chat_history(Path(self.history_manager.workspace_base)/work_id)
+        messages.sort(key=lambda m:(datetime.fromisoformat(m['timestamp'].replace('Z','+00:00')).timestamp() if m.get('timestamp') else 0,
+                                    m['role']!='user',str(m.get('id',''))))
+        return messages[-limit:] if limit else messages
 
     def get_work_context(self, work_id: str) -> Dict:
         """获取work的上下文信息"""

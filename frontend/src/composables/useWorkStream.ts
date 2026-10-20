@@ -329,15 +329,28 @@ export function useWorkStream(options: {
     scrollToBottom()
   }
 
-  // 加载聊天历史（使用新API）
-  const loadChatHistory = async () => {
+  let historyGeneration = 0
+  let paperHistoryTimer: ReturnType<typeof setTimeout> | undefined
+  function schedulePaperHistory() {
+    if (!chatMessages.value.some((m) => m.paper_execution && m.isStreaming) || isDisposed()) return
+    if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
+    paperHistoryTimer = setTimeout(() => {
+      if (isStreaming.value) schedulePaperHistory()
+      else void loadChatHistory()
+    }, 1500)
+  }
+  // Read one display history; comment messages are projected by the server.
+  const loadChatHistory = async (throwOnError = false) => {
     if (isDisposed() || !authStore.token || !workId.value) return
 
+    const generation = ++historyGeneration
+    if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
     try {
       // 使用新的work聊天历史API
       const historyData = await chatAPI.getWorkChatHistory(authStore.token, workId.value)
 
-      if (isDisposed()) return
+      if (isDisposed() || generation !== historyGeneration) return
+      const hadPendingPaper = chatMessages.value.some((m) => m.paper_execution && m.isStreaming)
       // 转换消息格式
       chatMessages.value = historyData.messages.map((msg, index) => {
         return {
@@ -348,15 +361,23 @@ export function useWorkStream(options: {
           avatar: getAvatarByRole(msg.role),
           json_blocks: msg.json_blocks || [],
           message_type: msg.message_type || 'text',
-          isStreaming: false,
+          paper_execution: msg.paper_execution,
+          isStreaming:
+            msg.role === 'assistant' && ['pending', 'running'].includes(msg.paper_execution?.state),
         }
       })
 
+      schedulePaperHistory()
+      if (hadPendingPaper && !chatMessages.value.some((m) => m.paper_execution && m.isStreaming)) {
+        await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
+      }
       atBottom.value = panelSession.value.followChat
       await restorePanelScroll()
     } catch (error) {
       console.error('加载聊天历史失败:', error)
-      if (!isDisposed()) chatMessages.value = []
+      if (isDisposed() || generation !== historyGeneration) return
+      schedulePaperHistory()
+      if (throwOnError) throw error
     }
   }
 
@@ -502,6 +523,7 @@ export function useWorkStream(options: {
     }, 1000)
   })
   onUnmounted(() => {
+    if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
     if (elapsedTimer) clearInterval(elapsedTimer)
     fileRefreshTimers.forEach(clearTimeout)
     webSocketHandler.value?.disconnect()

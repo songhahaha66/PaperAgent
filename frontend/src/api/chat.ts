@@ -374,6 +374,7 @@ export interface ChatMessage {
   avatar: string
   isLoading?: boolean
   isStreaming?: boolean
+  paper_execution?: { id: string; research_id: string; state: string }
   json_blocks?: any[]
   message_type?: 'text' | 'json_card'
 }

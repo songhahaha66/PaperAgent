@@ -572,7 +572,7 @@ const {
   handleStreamMessage,
 } = stream
 const paperContexts = ref<PaperComposerContext[]>([])
-const paperSending = ref(false),
+const paperSubmitting = ref(false),
   paperCommentError = ref(''),
   paperRefresh = ref(0)
 let paperRequest: { signature: string; id: string } | null = null
@@ -581,10 +581,9 @@ watch(workId, () => {
   paperRequest = null
   paperCommentError.value = ''
 })
-let paperDisposed = false
-onUnmounted(() => {
-  paperDisposed = true
-})
+const paperSending = computed(
+  () => paperSubmitting.value || chatMessages.value.some((m) => m.paper_execution && m.isStreaming),
+)
 async function attachPaperQuote(context: PaperComposerContext) {
   if (context.work_id !== workId.value) return
   if (paperContexts.value.some((item) => JSON.stringify(item) === JSON.stringify(context))) return
@@ -620,63 +619,20 @@ async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
   }
   const signature = JSON.stringify(body)
   if (paperRequest?.signature !== signature) paperRequest = { signature, id: crypto.randomUUID() }
-  paperSending.value = true
+  paperSubmitting.value = true
   paperCommentError.value = ''
-  let accepted = false
   try {
-    const record = await paperProjectAPI.comment(work, { ...body, request_id: paperRequest.id })
-    accepted = true
+    await paperProjectAPI.comment(work, { ...body, request_id: paperRequest.id })
     paperRequest = null
     inputValue.value = ''
     paperContexts.value = paperContexts.value.filter((item) => !contexts.includes(item))
-    chatMessages.value.push({
-      id: 'paper-user-' + record.id,
-      role: 'user',
-      content:
-        contexts.map((item) => '> ' + item.quote.replace(/\n/g, '\n> ')).join('\n\n') +
-        '\n\n' +
-        text,
-      datetime: new Date().toLocaleString(),
-      avatar: '/avatar-user.svg',
-    })
-    const replyId = 'paper-reply-' + record.id
-    chatMessages.value.push({
-      id: replyId,
-      role: 'assistant',
-      content: '正在处理论文评论…',
-      datetime: new Date().toLocaleString(),
-      avatar: '/logo.png',
-      isStreaming: true,
-    })
     paperRefresh.value++
-    while (!paperDisposed && work === workId.value) {
-      const project = await paperProjectAPI.read(work)
-      const execution = project.executions.find((row) => row.id === record.id)
-      if (!execution) throw new Error('评论记录暂不可读，请在论文评论历史查看。')
-      const reply = chatMessages.value.find((row) => row.id === replyId)
-      if (reply) reply.content = execution.answer || execution.error || '正在处理论文评论…'
-      if (['completed', 'failed', 'interrupted'].includes(execution.state)) {
-        if (reply) reply.isStreaming = false
-        paperRefresh.value++
-        await refreshPaper()
-        break
-      }
-      await new Promise((resolve) => setTimeout(resolve, 1500))
-    }
+    await stream.loadChatHistory(true)
   } catch (cause) {
     paperCommentError.value =
       cause instanceof Error ? cause.message : '评论提交未确认，重试将复用同一请求。'
-    if (accepted) {
-      const reply = [...chatMessages.value]
-        .reverse()
-        .find((row) => row.id.startsWith('paper-reply-') && row.isStreaming)
-      if (reply) {
-        reply.content = paperCommentError.value
-        reply.isStreaming = false
-      }
-    }
   } finally {
-    paperSending.value = false
+    paperSubmitting.value = false
   }
 }
 const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
