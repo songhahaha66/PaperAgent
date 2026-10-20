@@ -143,12 +143,25 @@ def test_submission_requires_decisions_not_just_self_reported_residual(tmp_path)
         submission_schema(ctx, task, runs).model_validate(report(objective.id))
 
 
-def test_requirement_feedback_identifies_the_rule_and_preserves_hard_constraints():
-    from ai_system.research.models import Requirement
-    data = {'id': 'R', 'statement': '输出中文报告', 'source_quote': '中文报告', 'kind': 'constraint', 'task_ids': ['Q1']}
-    with pytest.raises(ValidationError, match='输出中文报告.*必须有可执行检查') as error:
-        Requirement.model_validate(data)
-    assert 'deliverable' in str(error.value)
-    assert Requirement.model_validate({**data, 'kind': 'deliverable'}).checks == []
-    with pytest.raises(ValidationError):
-        Requirement.model_validate({**data, 'statement': '容量不得超过8'})
+def test_requirement_feedback_identifies_the_rule_and_preserves_hard_constraints(tmp_path):
+    from ai_system.research.models import Requirement, ResearchConflict
+    data = {'id':'R', 'statement':'容量不得超过8', 'source_quote':'容量不得超过8',
+            'kind':'constraint', 'task_ids':['Q1']}
+    requirement = Requirement.model_validate(data)
+    assert requirement.kind == 'constraint' and not requirement.checks
+    store = ResearchStore(tmp_path, 'pending-constraint')
+    store.initialize(data['source_quote'], {'subproblems':[{'id':'Q1', 'question':'计算容量'}],
+        'requirements':[requirement.model_dump()], 'assumptions':[]})
+    with pytest.raises(ResearchConflict, match='操作化检查'):
+        store.claim('Q1')
+    assert not store.snapshot()['attempts']
+    requirement.checks = [DomainCheck(id='capacity', description='原题容量上限',
+        left={'task_id':'Q1', 'name':'capacity'}, operator='le', expected=8)]
+    store.apply_patch(PlanPatch(command_id='bind-capacity', base_revision=store.snapshot()['revision'],
+        reason='领取前按原题绑定容量检查', requirements=[requirement]))
+    order = store.claim('Q1')
+    assert store.snapshot()['spec']['requirements'][0]['kind'] == 'constraint'
+    from ai_system.research.validation import protocol
+    frozen = protocol(store.snapshot(), 'Q1')
+    assert frozen[0]['owner_id'] == 'R' and frozen[0]['check']['operator'] == 'le' and frozen[0]['check']['expected'] == 8
+    assert store.snapshot()['attempts'][order.attempt_id]['protocol_hash'] == order.protocol_hash

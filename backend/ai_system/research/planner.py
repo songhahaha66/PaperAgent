@@ -167,7 +167,14 @@ def validate_decision(proposal, snapshot, context):
         additions={c.task_id:c for c in proposal.changes}
         if not set(additions)<=set(proposal.task_ids):raise ValueError('只创建本次实际执行的研究')
         if not set(proposal.task_ids)<=set(context['ready_tasks']) | additions.keys():raise ValueError('不能执行非就绪或已经完成的任务')
-        if not all((set(additions[key].requirement_ids or []) if key in additions else {rid for rid,r in requirements.items() if key in r['task_ids']}) & selected for key in proposal.task_ids):
+        def related_requirements(key):
+            if key in additions:return set(additions[key].requirement_ids or [])
+            task=snapshot['tasks'][key]
+            targets={key,*task['dependencies']}
+            if task.get('verifies_issue'):
+                targets.update(i['task_id'] for i in research_findings(snapshot) if i['id']==task['verifies_issue'])
+            return {rid for rid,r in requirements.items() if targets & set(r['task_ids'])}
+        if not all(related_requirements(key) & selected for key in proposal.task_ids):
             raise ValueError('执行任务必须关联本次未解原要求')
     if proposal.action in {'research','execute'}:
         if proposal.action=='research' and (not proposal.gap.strip() or not (proposal.changes or proposal.assumptions or proposal.requirements) or proposal.query):

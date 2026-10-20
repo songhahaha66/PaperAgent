@@ -47,7 +47,7 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
     original = store.snapshot()
     original_q1 = original["tasks"]["Q1"]["active_attempt"]
     # Change the downstream task, preserving Q1's evidence and its solve section.
-    command = dict(command_id="revise-q2", research_id=agent._load_thread(), base_revision=1,
+    command = dict(command_id="revise-q2", research_id=agent._load_thread(), base_revision=original["revision"],
                    change="补充政策边界条件", scope=["Q2"])
     assert "paper.md" in asyncio.run(agent.revise_research(**command))
     revised = store.snapshot()
@@ -64,7 +64,7 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
     assert len(agent.llm.text_calls) == written
     assert store.snapshot()["commit_seq"] == commit_seq
     snapshot = research_snapshot(agent.workspace_dir, "work", "completed")
-    assert snapshot.engine_version == "research-v3" and snapshot.research_revision == 2
+    assert snapshot.engine_version == "research-v3" and snapshot.research_revision == original["revision"] + 1
     assert len(snapshot.tasks) == 3
 
 
@@ -93,11 +93,11 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     results=store.registry_payload()['results'];q2_results=[r for r in results if r['subproblem']=='Q2']
     assert q2_results and all(current['evidence'][r['id']]['producer_attempt']==active for r in q2_results)
     assert failed_refs.isdisjoint({r['id'] for r in results})
-    paper=(tmp_path/'paper.md').read_bytes();attempts=current['attempts'];written=len(agent.llm.text_calls)
+    paper=(Path(agent.workspace_dir)/'paper.md').read_bytes();attempts=current['attempts'];written=len(agent.llm.text_calls)
     assert 'paper.md' in asyncio.run(agent.resume_failed())
     after=store.snapshot()
     assert after['attempts']==attempts and after['tasks']['Q1']['active_attempt']==q1
-    assert (tmp_path/'paper.md').read_bytes()==paper and len(agent.llm.text_calls)==written
+    assert (Path(agent.workspace_dir)/'paper.md').read_bytes()==paper and len(agent.llm.text_calls)==written
 
 
 @pytest.mark.parametrize("operation", ["confirm", "resume", "revise"])

@@ -429,7 +429,10 @@ def test_graph_end_to_end_offline(tmp_path):
     assert progress["delivery_stages"]["render"]["status"] == "completed"
     assert not (ws / "plan.json").exists(), "fixed phase plans must not compete with research tasks"
     manifest = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
-    assert sum(r["status"] == "success" for r in manifest["runs"].values()) >= 5
+    assert registry.results
+    assert all(manifest['runs'][result.run_id]['status']=='success' for result in registry.results.values())
+    assert (ws/'paper.md').is_file() and (ws/'code/Q1_solution.py').is_file() and (ws/'code/Q2_solution.py').is_file()
+    assert all((ws/result.path).is_file() for result in registry.results.values() if result.path)
 
 
 def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):

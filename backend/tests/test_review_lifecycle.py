@@ -22,7 +22,7 @@ from ai_system.research.models import (
 from ai_system.research.store import ResearchStore
 from ai_system.research.validation import report_fingerprint
 from test_paper_graph import FixedJudge, _candidate
-from test_research_p2 import ClosedLoopModel, ReviewLoopModel, TASK, store_for, submit, assert_countercheck_decisions_are_evidenced_and_reusable
+from test_research_p2 import ClosedLoopModel, ReviewLoopModel, TASK, store_for, submit, assert_countercheck_decisions_are_evidenced_and_reusable, resume_saved_contract
 
 
 class AuditModel(ClosedLoopModel):
@@ -81,7 +81,7 @@ def run_agent(tmp_path, monkeypatch, model, **options):
     monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     agent = PaperGraphAgent(model, workspace_dir=str(tmp_path), judge=FixedJudge(), explore_top_k=1, n_candidates=2,
                             max_review_rounds=1, **options)
-    asyncio.run(agent.run(TASK))
+    asyncio.run(resume_saved_contract(agent))
     store = ResearchStore(tmp_path, agent._load_thread())
     return agent, store
 

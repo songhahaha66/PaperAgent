@@ -296,13 +296,14 @@ async def resume_saved_contract(agent):
     """
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from ai_system.graph.build import compile_graph
-    thread='saved-contract'
-    ResearchStore(agent.workspace_dir,thread).initialize(TASK,problem().model_dump())
-    agent._save_thread(thread,'paused')
-    async with AsyncSqliteSaver.from_conn_string(str(Path(agent.workspace_dir)/'.system/graph.sqlite')) as saver:
-        graph=compile_graph(saver)
-        await graph.aupdate_state({'configurable':{'thread_id':thread}},
-                                 {'task':TASK,'analysis':problem().model_dump()},as_node='solve_join')
+    if agent._load_thread() is None:
+        thread='saved-contract'
+        ResearchStore(agent.workspace_dir,thread).initialize(TASK,problem().model_dump())
+        agent._save_thread(thread,'paused')
+        async with AsyncSqliteSaver.from_conn_string(str(Path(agent.workspace_dir)/'.system/graph.sqlite')) as saver:
+            graph=compile_graph(saver)
+            await graph.aupdate_state({'configurable':{'thread_id':thread}},
+                                     {'task':TASK,'analysis':problem().model_dump()},as_node='solve_join')
     return await agent.resume_failed()
 
 
@@ -436,3 +437,28 @@ def test_consistency_suspicion_runs_independent_verification_then_replans_only_i
     assert all(r.id != historical[0].id for r in snapshot.results)
     if not counterexample and detection_phase == "reconcile":
         assert not json.loads((tmp_path / ".system/consistency.json").read_text())["conflicts"]
+
+
+def test_execute_countercheck_uses_its_target_and_dependencies_without_borrowing_unrelated_requirements(tmp_path):
+    from ai_system.research import planner
+    store = store_for(tmp_path)
+    submit(store, 'Q1', {'demand':8})
+    submit(store, 'Q2', {'allocation':8, 'residual':0})
+    store.report_issues([IssueReport(task_id='Q1', category='assumption', assumption_id='A1',
+        check_ids=['representative'], message='Independently verify the adopted demand premise.')], 'sections')
+    [verification] = store.schedule_investigations()
+    snapshot = store.snapshot()
+    _, context = planner.decision_context(store, snapshot)
+    assert verification in context['ready_tasks']
+    assert not snapshot['tasks'][verification]['requirement_ids']
+    assert snapshot['tasks'][verification]['dependencies'] == ['Q2']
+    proposal = planner.EvidenceDecision(action='execute', reason='Check the recorded premise using its frozen operands.',
+        task_ids=[verification], requirement_ids=['RQ1', 'RQ2', 'RQ3'])
+    planner.validate_decision(proposal, snapshot, context)
+    for requirement in ('RQ1', 'RQ2'):
+        planner.validate_decision(proposal.model_copy(update={'requirement_ids':[requirement]}), snapshot, context)
+    with pytest.raises(ValueError, match='关联本次未解原要求'):
+        planner.validate_decision(proposal.model_copy(update={'requirement_ids':['RQ3']}), snapshot, context)
+    with pytest.raises(ValueError, match='关联本次未解原要求'):
+        planner.validate_decision(proposal.model_copy(update={'task_ids':['Q3'], 'requirement_ids':['RQ2']}), snapshot, context)
+    assert store.snapshot() == snapshot
