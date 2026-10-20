@@ -384,8 +384,10 @@ def test_graph_end_to_end_offline(tmp_path):
     assert "1234.57 万千瓦时" in paper and "8.5%" in paper
     assert f"![图1 Q1 结果图]({registry.get('F1').path})" in paper
     assert "{{" not in paper and "12.345" in paper
-    for heading in ("## 摘要", "## 三、模型假设", "### Q2 政策评估", "## 七、模型的评价与推广"):
-        assert heading in paper
+    planned_titles=[section['title'] for section in result['outline']]
+    actual_titles=re.findall(r'^## (.+)$',paper,re.MULTILINE)
+    assert planned_titles and actual_titles[:len(planned_titles)]==planned_titles
+    assert "### Q2 政策评估" in paper
     assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
 
     assert not CANDIDATE_PROMPTS, "ordinary research does not generate candidates first"
