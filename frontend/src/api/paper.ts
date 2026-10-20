@@ -144,6 +144,7 @@ export interface PaperExecution {
   error?: string
   change_id?: string
   selection?: SourceSelection
+  references?: PaperReference[]
   tool_result?: {
     ok?: boolean
     stdout?: string
@@ -184,6 +185,7 @@ export interface PaperProject {
   threads: {
     id: string
     selection?: SourceSelection
+    references?: PaperReference[]
     messages: { role: string; text: string; execution_id: string }[]
   }[]
   executions: PaperExecution[]
@@ -207,12 +209,14 @@ export const paperProjectAPI = {
   compile: (work: string, research_id: string) => projectRequest(work, 'compile', { research_id }),
 }
 
-export interface PaperComposerContext {
-  work_id: string
-  research_id: string
+export interface PaperReference {
   selection: SourceSelection | null
   read_quote: string | null
   read_version: string | null
-  thread_id: string | null
   quote: string
+}
+export interface PaperComposerContext extends PaperReference {
+  work_id: string
+  research_id: string
+  thread_id: string | null
 }

@@ -64,7 +64,7 @@
             ></textarea>
           </div>
           <p v-else class="empty">这是图片或其他二进制资源，可通过“打开文件”查看。</p>
-          <p class="hint">选中文字即可评论。</p>
+          <p class="hint">选中文字可添加到对话。</p>
         </template>
         <div v-else-if="!isLatex && project.draft_sections?.length" class="read-text">
           <section
@@ -150,34 +150,21 @@
         :anchor="popoverAnchor"
         :host="manuscript"
         :compact="quickComment"
-        :width="quickComment ? 320 : 360"
+        :width="quickComment ? 120 : 360"
         :tone="side === 'sources' ? 'source' : side === 'opinions' ? 'opinion' : activeMarkKind"
         @close="side = null"
       >
         <div class="annotation-content">
-          <p v-if="error" class="error" role="alert">{{ error }}</p>
-          <div v-if="quickComment" class="inline-comment">
-            <blockquote class="inline-selection-quote" aria-label="当前选中的正文">
-              {{ readQuote || selection?.quote }}
-            </blockquote>
-            <button type="button" @click="addToChat">引用到主对话</button>
-            <p class="hint">在左侧输入要求，点击主输入框的发送后执行。</p>
-            <details v-if="readQuote && !selection" class="selection-location">
-              <summary>{{ locating ? '正在定位原文…' : '修改位置' }}</summary>
-              <p>评论已绑定阅读选区。改稿前请核对对应源码。</p>
-              <button
-                v-for="(candidate, index) in candidates"
-                :key="`${candidate.file}:${candidate.start}`"
-                class="candidate"
-                @click="confirmCandidate(candidate)"
-              >
-                {{ selectionLabel(candidate) }} · 位置 {{ index + 1 }} · 确认
-              </button>
-              <p v-if="!locating && !candidates.length">
-                未找到准确源码位置，改稿时请在源码中选择。
-              </p>
-            </details>
-          </div>
+          <p v-if="error && !quickComment" class="error" role="alert">{{ error }}</p>
+          <button
+            v-if="quickComment"
+            type="button"
+            class="selection-action"
+            @mousedown.prevent
+            @click="addToChat"
+          >
+            添加到对话
+          </button>
           <template v-else-if="side === 'comments'">
             <details class="comment-context" :open="!contextual">
               <summary>{{ selection || readQuote ? '所选原文' : '评论范围' }}</summary>
@@ -453,7 +440,7 @@ const visibleChanges = computed(() =>
 const textAnnotations = computed<TextAnnotation[]>(() => {
   const doc = project.value
   if (!doc) return []
-  const valid = (bound?: SourceSelection) => {
+  const valid = (bound?: SourceSelection | null) => {
     if (!bound || (view.value === 'source' && bound.file !== file.value)) return false
     const text = doc.files.find((row) => row.path === bound.file)?.text
     if (typeof text !== 'string') return false
@@ -461,16 +448,21 @@ const textAnnotations = computed<TextAnnotation[]>(() => {
     return bound.version === doc.version ? exact : !!uniqueTextSpan(text, bound.quote)
   }
   return [
-    ...doc.threads
-      .filter((thread) => valid(thread.selection))
-      .map((thread) => ({
-        id: 'thread:' + thread.id,
+    ...doc.threads.flatMap((thread) => {
+      const selections = thread.references?.length
+        ? thread.references.map((reference) => reference.selection).filter(valid)
+        : valid(thread.selection)
+          ? [thread.selection]
+          : []
+      return selections.map((bound, index) => ({
+        id: `thread:${thread.id}:${index}`,
         kind: 'comment' as const,
-        quote: thread.selection!.quote,
-        label: '展开评论：' + (thread.messages[0]?.text || thread.selection!.quote).slice(0, 70),
+        quote: bound!.quote,
+        label: '展开评论：' + (thread.messages[0]?.text || bound!.quote).slice(0, 70),
         threadId: thread.id,
-        selection: thread.selection!,
-      })),
+        selection: bound!,
+      }))
+    }),
     ...doc.changes
       .filter((change) => change.status === 'pending')
       .flatMap((change) =>
@@ -1143,28 +1135,17 @@ details {
   padding: 0 12px;
   overflow-wrap: anywhere;
 }
-.inline-comment {
-  padding: 12px 14px;
-}
-.inline-selection-quote {
-  margin: 0 0 10px;
+.selection-action {
+  width: 100%;
   padding: 7px 10px;
-  max-height: 84px;
-  overflow: auto;
-  border-left: 2px solid var(--pa-info);
-  border-radius: var(--pa-radius-inline);
-  background: var(--pa-info-soft);
-  color: var(--pa-ink);
-  font-size: 12px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-.selection-location {
-  font-size: 11px;
-  margin-top: 8px;
-}
-.selection-location summary {
+  border: 0;
+  border-radius: 0;
+  white-space: nowrap;
+  font-size: 13px;
   cursor: pointer;
+}
+.selection-action:hover {
+  background: var(--pa-surface-active);
 }
 .primary {
   background: var(--pa-accent);

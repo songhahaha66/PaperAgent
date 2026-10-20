@@ -133,14 +133,22 @@
               </div>
               <div class="chat-input">
                 <form class="work-composer" @submit.prevent="sendMessage()">
-                  <div v-if="paperContext" class="paper-composer-quote">
-                    <span
-                      >论文引用{{ paperContext.selection ? ' · 源码选区' : ' · 阅读范围' }}</span
+                  <div v-if="paperContexts.length" class="paper-composer-quotes">
+                    <div
+                      v-for="(context, index) in paperContexts"
+                      :key="index"
+                      class="paper-composer-quote"
                     >
-                    <button type="button" aria-label="移除论文引用" @click="paperContext = null">
-                      ×
-                    </button>
-                    <blockquote>{{ paperContext.quote }}</blockquote>
+                      <span>引用 {{ index + 1 }}</span>
+                      <button
+                        type="button"
+                        :aria-label="`移除引用 ${index + 1}`"
+                        @click="paperContexts.splice(index, 1)"
+                      >
+                        ×
+                      </button>
+                      <blockquote>{{ context.quote }}</blockquote>
+                    </div>
                   </div>
                   <p v-if="paperCommentError" role="alert">{{ paperCommentError }}</p>
                   <t-textarea
@@ -563,17 +571,28 @@ const {
   sendMessage: streamSendMessage,
   handleStreamMessage,
 } = stream
-const paperContext = ref<PaperComposerContext | null>(null)
+const paperContexts = ref<PaperComposerContext[]>([])
 const paperSending = ref(false),
   paperCommentError = ref(''),
   paperRefresh = ref(0)
 let paperRequest: { signature: string; id: string } | null = null
+watch(workId, () => {
+  paperContexts.value = []
+  paperRequest = null
+  paperCommentError.value = ''
+})
 let paperDisposed = false
 onUnmounted(() => {
   paperDisposed = true
 })
 async function attachPaperQuote(context: PaperComposerContext) {
-  paperContext.value = context
+  if (context.work_id !== workId.value) return
+  if (paperContexts.value.some((item) => JSON.stringify(item) === JSON.stringify(context))) return
+  if (paperContexts.value.length >= 24) {
+    paperCommentError.value = '一次最多添加 24 条引用。'
+    return
+  }
+  paperContexts.value.push(context)
   paperCommentError.value = ''
   layout.activateChat()
   await nextTick()
@@ -582,18 +601,22 @@ async function attachPaperQuote(context: PaperComposerContext) {
 async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
   // Explicit research actions keep their existing path. Composer references use
   // the versioned comment API and never enter research intent classification.
-  if (args.length || !paperContext.value) return streamSendMessage(...args)
+  if (args.length || !paperContexts.value.length) return streamSendMessage(...args)
   if (paperSending.value || isStreaming.value || loading.value || !inputValue.value.trim()) return
-  const context = paperContext.value,
+  const contexts = [...paperContexts.value],
+    context = contexts[0]!,
     text = inputValue.value.trim(),
     work = workId.value
   const body = {
     research_id: context.research_id,
     message: text,
-    selection: context.selection,
-    read_quote: context.read_quote,
-    read_version: context.read_version,
-    thread_id: context.thread_id,
+    references: contexts.map(({ selection, read_quote, read_version, quote }) => ({
+      selection,
+      read_quote,
+      read_version,
+      quote,
+    })),
+    thread_id: contexts.length === 1 ? context.thread_id : null,
   }
   const signature = JSON.stringify(body)
   if (paperRequest?.signature !== signature) paperRequest = { signature, id: crypto.randomUUID() }
@@ -605,11 +628,14 @@ async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
     accepted = true
     paperRequest = null
     inputValue.value = ''
-    paperContext.value = null
+    paperContexts.value = paperContexts.value.filter((item) => !contexts.includes(item))
     chatMessages.value.push({
       id: 'paper-user-' + record.id,
       role: 'user',
-      content: '> ' + context.quote.replace(/\n/g, '\n> ') + '\n\n' + text,
+      content:
+        contexts.map((item) => '> ' + item.quote.replace(/\n/g, '\n> ')).join('\n\n') +
+        '\n\n' +
+        text,
       datetime: new Date().toLocaleString(),
       avatar: '/avatar-user.svg',
     })
@@ -1294,6 +1320,12 @@ onUnmounted(() => {
 </style>
 
 <style scoped>
+.paper-composer-quotes {
+  flex-basis: 100%;
+  min-width: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
 .paper-composer-quote {
   flex-basis: 100%;
   min-width: 0;
@@ -1309,8 +1341,10 @@ onUnmounted(() => {
 }
 .paper-composer-quote blockquote {
   margin: 6px 0 0;
-  max-height: 90px;
-  overflow: auto;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   white-space: pre-wrap;
 }
 </style>

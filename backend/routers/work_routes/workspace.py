@@ -724,6 +724,13 @@ class PaperSelection(BaseModel):
     quote: str = Field(max_length=100000)
 
 
+class PaperReference(BaseModel):
+    quote: str = Field(min_length=1,max_length=100000)
+    selection: PaperSelection | None = None
+    read_version: str | None = None
+    read_quote: str | None = Field(default=None,max_length=100000)
+
+
 class PaperCommentRequest(BaseModel):
     research_id: str
     request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
@@ -732,6 +739,7 @@ class PaperCommentRequest(BaseModel):
     read_version: str | None = None
     read_quote: str | None = Field(default=None,max_length=100000)
     thread_id: str | None = Field(default=None,max_length=64)
+    references: list[PaperReference] = Field(default_factory=list,max_length=24)
 
 
 class FilePatch(PaperSelection):
@@ -836,7 +844,8 @@ async def paper_comment(work_id: str, request: PaperCommentRequest, background_t
     try:
         # Resolve configuration before recording a runnable request.
         llm=_paper_writing_model(db,current_user)
-        record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote,request.read_version)
+        record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote,request.read_version,
+                                            references=[r.model_dump() for r in request.references])
         if created:background_tasks.add_task(_execute_paper_comment,store,record['id'],llm)
         return record
     except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))

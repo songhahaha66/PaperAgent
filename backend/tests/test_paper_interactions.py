@@ -110,6 +110,29 @@ def test_explain_does_not_create_patch(paper,monkeypatch):
     assert project.read_records(store,'paper_changes')==[] and (store.root/'paper.md').read_text()==before
 
 
+
+def test_multiple_references_keep_ranges_and_produce_one_change_set(paper,monkeypatch):
+    store,_=paper
+    (store.root/'paper.md').write_text('第一段。第二段。')
+    refs=[{'selection':selection(store,quote),'quote':quote,'read_quote':None,'read_version':None}
+          for quote in ('第一段','第二段')]
+    record,created=comments.create(store,'multi','分别改进这两段',references=refs)
+    assert created and comments.create(store,'multi','分别改进这两段',references=refs)[1] is False
+    seen=[]
+    async def model(llm,schema,messages,**kwargs):
+        context=json.loads(messages[-1].content)
+        assert len(context['references'])==2
+        if schema is comments.CommentPlan:return comments.CommentPlan(intent='edit')
+        quote=context['selection']['quote'];seen.append(quote)
+        return comments.CommentReply(answer='改进'+quote,replacement=quote+'改进')
+    monkeypatch.setattr(comments,'call_structured',model)
+    result=run(comments.execute(store,record['id'],object()))
+    assert result['state']=='completed' and set(seen)=={'第一段','第二段'}
+    patches=project.read_records(store,'paper_changes')[0]['patches']
+    assert [p['quote'] for p in patches]==['第一段','第二段']
+    assert project.read_records(store,'paper_threads')[0]['references']==refs
+    assert (store.root/'paper.md').read_text()=='第一段。第二段。'
+
 def test_completed_calculation_reused_when_writing_fails(paper,monkeypatch):
     store,_=paper;bound=selection(store,'原来的表述')
     record,_=comments.create(store,'compute','计算后修改',bound)
