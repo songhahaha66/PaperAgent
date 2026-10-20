@@ -57,6 +57,9 @@ def select(state, runtime):
     ctx = runtime.context
     if state.get('research_blocked'):
         return END
+    from .feedback import report_target
+    report=report_target(ctx.research)
+    if report:return Send('act',{'capability':'research.review_report','inputs':report})
     editorial=writing_action(ctx.research)
     if editorial:return Send('act',{'capability':'writing.'+editorial,'inputs':{'state':state}})
     from .planner import literature_action,current_decision
@@ -185,6 +188,8 @@ def resume(store, *, planning_limit=DEFAULT_PLANNING_CALL_LIMIT):
     with store._transaction() as db:
         snapshot = store._read(db)
         retried=[]
+        for task in snapshot["tasks"].values():
+            if task.get("report_review"):task["report_review"]["attempt_count"]=0
         for row in db.execute("SELECT id,response FROM commands WHERE research_id=? AND (id LIKE 'research-next:%' OR id LIKE 'planner-repair:%')",
                               (store.research_id,)).fetchall():
             record=json.loads(row[1])
@@ -199,6 +204,7 @@ def resume(store, *, planning_limit=DEFAULT_PLANNING_CALL_LIMIT):
         progress = snapshot.get('workflow')
         if progress and progress.get('blocked'):
             progress['blocked'] = False
+            progress.pop('blocked_reason',None)
             progress['repairs'] = 0
             progress['repair_inputs'] = []
             ctx_step = snapshot.get('delivery_stages', {})

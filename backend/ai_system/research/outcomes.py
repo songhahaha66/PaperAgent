@@ -26,6 +26,11 @@ def check_state(task, attempt, issues):
         return 'outdated'
     reviews = (attempt.get('result') or {}).get('reviews') or []
     report = (attempt.get('result') or {}).get('report') or {}
+    revised = task.get('report_review') or {}
+    if (revised.get('report_hash') == report_fingerprint(task.get('report') or {}) and
+            revised.get('attempt_id') == task.get('active_attempt') and not revised.get('issues') and
+            task['acceptance']=='accepted' and task['validity']=='current'):
+        return 'passed'
     if (reviews and reviews[-1].get('report_hash') == report_fingerprint(report)
             and not reviews[-1].get('issues') and task.get('acceptance') == 'accepted'
             and task.get('validity') == 'current'):
@@ -82,7 +87,7 @@ def outcomes(business, registry, safe_file, current_files=None):
         inputs_match = current_files is None or frozen_files == {p: h for p, h in current_files.items() if p.startswith(('data/', 'attachment/'))}
         current = bool(active and attempt['revision'] == task['revision'] and task['validity'] == 'current' and inputs_match)
         issues = [i for i in research_findings(business) if i['task_id'] == key and i['status'] not in CLOSED]
-        report = (attempt.get('result') or {}).get('report') or {}
+        report = (task.get('report') if current else None) or (attempt.get('result') or {}).get('report') or {}
         design = (attempt.get('result') or {}).get('design') or task.get('design') or {}
         method = design.get('chosen') or {}
         sources = [{'path': path, 'hash': fingerprint,
@@ -91,7 +96,7 @@ def outcomes(business, registry, safe_file, current_files=None):
         views.append({
             'id': key, 'task_id': key, 'title': task.get('subproblem', {}).get('title') or task['objective'],
             'objective': task['objective'], 'revision': attempt.get('revision'),
-            'attempt_id': attempt.get('attempt_id'), 'computation': attempt.get('execution_status', task['execution_status']),
+            'attempt_id': attempt.get('attempt_id'), 'started_at':attempt.get('started_at'), 'computation': attempt.get('execution_status', task['execution_status']),
             'availability': ('current' if current else 'historical') if items else 'unavailable',
             'checking': check_state(task, attempt, [i for i in issues if i['category']!='writing' or task['kind']=='writing']) if inputs_match else 'outdated',
             'approach': report.get('approach') or '', 'summary': report.get('summary') or '',

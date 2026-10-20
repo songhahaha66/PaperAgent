@@ -68,6 +68,10 @@ class ResearchClaim(BaseModel):
 
 
 class ResearchSnapshot(BaseModel):
+    inputs: list[str] = Field(default_factory=list)
+    questions: list[dict] = Field(default_factory=list)
+    evidence_uses: list[dict] = Field(default_factory=list)
+    runtime: dict = Field(default_factory=dict)
     execution_reason: dict | None = None
     schema_version: int = 3
     engine_version: str | None = None
@@ -235,7 +239,11 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         status = 'paused'
     control = public_snapshot(business, work_status=status) if business else {}
     from ai_system.research.runtime import execution_reason
+    from ai_system.research.views import model_activity
     return ResearchSnapshot(
+        inputs=[p for p in store.file_inputs() if _file(root,p)] if business else [],
+        questions=control.get('questions',[]), evidence_uses=control.get('evidence_uses',[]),
+        runtime={**control.get('runtime',{}), 'models':model_activity(store,status) if business else []},
         execution_reason=execution_reason(root,status),
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),

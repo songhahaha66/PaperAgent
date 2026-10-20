@@ -16,7 +16,7 @@
               <PaperPipelineCard
                 v-if="isPipelineMessage(getJsonBlocks(message))"
                 :blocks="getJsonBlocks(message)"
-                :tasks="tasks"
+                :tasks="index === messages.length - 1 ? tasks : undefined"
                 :streaming="message.isStreaming"
                 :superseded="index < messages.length - 1"
                 :can-confirm="
@@ -48,7 +48,7 @@
                   :key="id"
                   @click="$emit('open-result', id)"
                 >
-                  查看结果 {{ id }}
+                  {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
                 </button>
               </div>
 
@@ -107,6 +107,14 @@
           </template>
         </ChatItem>
       </div>
+      <ResearchRuntime
+        v-if="snapshot?.has_research"
+        :snapshot="snapshot"
+        :work-status="workStatus"
+        compact
+        @progress="$emit('open-progress')"
+        @file="(path) => $emit('open-file', path)"
+      />
       <slot />
     </div>
   </div>
@@ -114,6 +122,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import ResearchRuntime from './ResearchRuntime.vue'
 import type { ResearchSnapshot } from '@/types/research'
 import { ChatItem } from '@tdesign-vue-next/chat'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
@@ -138,6 +147,7 @@ interface Props {
   confirmBusy?: boolean
   workStatus?: string
   tasks?: ResearchSnapshot['tasks']
+  snapshot?: ResearchSnapshot | null
 }
 
 const props = defineProps<Props>()

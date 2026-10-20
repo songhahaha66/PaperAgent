@@ -1,30 +1,33 @@
 <template>
   <section class="research-status">
     <header>
-      <h2>{{ stage || '研究进度' }}</h2>
+      <h2>研究进度</h2>
       <button v-if="actionLabel" :disabled="actionBusy" @click="emit('action')">
         {{ actionLabel }}
       </button>
     </header>
     <p v-if="workStatus === 'waiting'">研究需要补充信息，请在对话中回复。</p>
+    <ResearchRuntime
+      :snapshot="snapshot"
+      :work-status="workStatus"
+      @file="(path) => emit('object', { type: 'file', path })"
+    />
     <ResearchProgress
       :snapshot="snapshot"
       :work-status="workStatus"
       @object="(o) => emit('object', o)"
       @issue="(id) => emit('issue', id)"
     />
-    <section v-if="snapshot?.plans?.length">
-      <h3>研究方案</h3>
-      <article v-for="plan in snapshot.plans" :key="plan.id">
-        <strong>{{ plan.objective }}</strong>
-        <p v-for="method in plan.methods" :key="method.name">
-          {{ method.name }}<span v-if="method.idea">：{{ method.idea }}</span>
-        </p>
-      </article>
-    </section>
-    <ResearchReferences :work-id="workId" :snapshot="snapshot" @revise="(message, task) => emit('revise', message, task)" />
+    <details class="resources">
+      <summary>使用的研究资源</summary>
+      <ResearchReferences
+        :work-id="workId"
+        :snapshot="snapshot"
+        @revise="(message, task) => emit('revise', message, task)"
+      />
+    </details>
     <section v-if="faults.length" aria-label="运行故障">
-      <h3>运行需要处理</h3>
+      <h3>执行中断记录</h3>
       <article v-for="fault in faults" :key="fault.id">
         <p role="alert">{{ fault.message }}</p>
         <button
@@ -41,6 +44,7 @@
 </template>
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import ResearchRuntime from './ResearchRuntime.vue'
 import ResearchProgress from './ResearchProgress.vue'
 import ResearchReferences from './ResearchReferences.vue'
 import type { ResearchSnapshot } from '@/types/research'
@@ -98,6 +102,12 @@ header {
 article {
   padding: 12px 0;
   border-bottom: 1px solid var(--pa-line);
+}
+summary {
+  cursor: pointer;
+  color: var(--pa-muted);
+  font-size: 12px;
+  margin: 20px 0;
 }
 h2 {
   font-size: 20px;

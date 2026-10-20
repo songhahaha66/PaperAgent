@@ -76,6 +76,11 @@
             v-for="section in project.draft_sections"
             :key="section.key"
             :data-section="section.key"
+            :class="{
+              'evidence-section':
+                evidenceRequest?.section === section.key &&
+                evidenceRequest?.section_version === section.content_hash,
+            }"
           >
             <h2>{{ section.title }}</h2>
             <details
@@ -92,6 +97,18 @@
               此节依据正在更新，当前文字仅供参考。
             </p>
             <MarkdownRenderer :content="section.readable" :work-id="workId" />
+            <div v-if="section.evidence_refs.length" class="section-evidence">
+              <span>本节实验依据</span
+              ><button
+                v-for="ref in section.evidence_refs.filter((id) =>
+                  snapshot?.results.some((r) => r.id === id),
+                )"
+                :key="ref"
+                @click="openResult(ref)"
+              >
+                {{ snapshot?.results.find((r) => r.id === ref)?.name || '查看实验' }} ↗
+              </button>
+            </div>
           </section>
         </div>
         <template v-else-if="isLatex">
@@ -424,6 +441,7 @@ const props = defineProps<{
   snapshot?: ResearchSnapshot | null
   refreshKey?: number
   disabled?: boolean
+  evidenceRequest?: { section: string; section_version: string; at: number } | null
   citationRequest?: { id: string; at: number } | null
   issueRequest?: { id: string; at: number } | null
 }>()
@@ -794,6 +812,23 @@ async function showIssueSection(key: string, issueId?: string) {
   const target = finding || section
   target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
+function openResult(resultId: string) {
+  window.dispatchEvent(
+    new CustomEvent('paper-result-open', { detail: { workId: props.workId, resultId } }),
+  )
+}
+watch(
+  () => [props.evidenceRequest, !!project.value] as const,
+  ([request, ready]) => {
+    if (!request || !ready) return
+    const section = project.value?.draft_sections?.find((s) => s.key === request.section)
+    if (!section || section.content_hash !== request.section_version) {
+      error.value = '正文已更新，原实验引用对应旧版本。请从当前草稿重新查看实验依据。'
+      return
+    }
+    void showIssueSection(request.section)
+  },
+)
 function commentIssue(text: string) {
   message.value = text
   openPanel('comments')
@@ -1022,6 +1057,29 @@ onBeforeUnmount(() => {
 })
 </script>
 <style scoped>
+.evidence-section {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: 8px;
+}
+.section-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--pa-line);
+  font-size: 12px;
+  color: var(--pa-muted);
+}
+.section-evidence button {
+  border: 0;
+  background: var(--pa-surface-muted);
+  color: var(--pa-accent);
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
 .paper-editor {
   display: flex;
   flex: 1;

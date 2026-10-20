@@ -11,6 +11,9 @@
     <ResearchOutcome
       :work-id="workId"
       :outcome="outcome"
+      :snapshot="snapshot"
+      :focus-ref="resultType === 'registered' ? resultId : undefined"
+      @paper="(use) => emit('paper', use)"
       :runs="snapshot?.runs || []"
       @open-file="(path) => emit('open-file', path)"
       @issue="(id) => emit('issue', id)"
@@ -64,7 +67,7 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ResearchSnapshot } from '@/types/research'
+import type { ResearchSnapshot, EvidenceUse } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
 import ExperimentResult from './ExperimentResult.vue'
 import ResearchOutcome from './ResearchOutcome.vue'
@@ -74,7 +77,11 @@ const props = defineProps<{
   resultId: string
   snapshot: ResearchSnapshot | null
 }>()
-const emit = defineEmits<{ 'open-file': [path: string]; issue: [id: string] }>()
+const emit = defineEmits<{
+  'open-file': [path: string]
+  issue: [id: string]
+  paper: [use: EvidenceUse]
+}>()
 const { isZh } = useStudioCopy()
 const outcome = computed(() =>
   props.snapshot?.outcomes?.find((o) =>

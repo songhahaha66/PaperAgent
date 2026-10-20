@@ -170,7 +170,7 @@ async def document(store):
         fragment_native = native and not markdown and bool(re.search(r'\\(?:[A-Za-z]+|[%&#_])', MATH_PATTERN.sub('', text)))
         if key.startswith('solve:'):
             text = place_figures(text)
-        text = publication_text(ctx.registry.render(text, latex=fragment_native))
+        text = publication_text(ctx.registry.render(text, latex=fragment_native, links=not fragment_native))
         if fragment_native:
             text = CITATION.sub(lambda m:'PAPERAGENTCITE'+m.group(1),text)
         if fragment_native and shutil.which('pandoc'):

@@ -194,6 +194,7 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
         f"# 登记结果\n{ctx.registry.to_prompt_table(subproblem['id'])}\n\n"
         f"# 本次执行代码与输出（按时间顺序，含最初建模计算）\n{code or '（无）'}\n\n{CHECKLIST}\n\n"
         f"# 研究契约\n{branch.get('research_contract', {})}\n"
+        f"# 针对本意见的独立补充实验（只据真实结果判断，不因已执行而通过）\n{branch.get('supplementary_evidence', [])}\n"
         f"# 冻结候选及评价条件\n{branch.get('experiment') or '无额外候选协议'}\n"
         "逐项对照上述候选方法、参数、数据范围、评价条件与实际代码；执行者静默换方法或改变条件属于实质问题。不能把运行错误判成方法无效，也不能把预估评分当成实测结果。\n"
         f"# 必须逐项重新核对的先前意见\n{branch.get('review_findings', [])}\n"

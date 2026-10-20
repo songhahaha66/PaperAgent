@@ -23,6 +23,17 @@ const props = defineProps<Props>()
 const authStore = useAuthStore()
 const emit = defineEmits<{ source: [id: string, anchor: Element] }>()
 function openLiterature(event: MouseEvent) {
+  const resultLink = (event.target as Element).closest?.(
+    'a[href^="https://paperagent.local/results/"]',
+  )
+  const resultId = resultLink?.getAttribute('href')?.match(/results\/([RF][1-9]\d*)$/)?.[1]
+  if (resultId) {
+    event.preventDefault()
+    window.dispatchEvent(
+      new CustomEvent('paper-result-open', { detail: { workId: props.workId, resultId } }),
+    )
+    return
+  }
   const link = (event.target as Element).closest?.(
     'a[href^="#literature-"], a[href^="https://paperagent.local/citations/"]',
   )

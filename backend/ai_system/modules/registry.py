@@ -97,14 +97,19 @@ class ModuleRegistry:
         from ai_system.graph.tracing import CURRENT_CAPABILITY
         token = CURRENT_CAPABILITY.set(request.name)
         try:
-            with capability_span(request.name, capability.module, request.inputs) as span:
-                result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
-                if inspect.isawaitable(result):
-                    result = await result
-                if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
-                    raise TypeError(f"能力产物不符合接口：{request.name}")
-                if span is not None:
-                    span.end(outputs={'kind': result.kind, 'value': result.value})
+            from ai_system.research.views import activity
+            branch=request.inputs.get('branch') or {}
+            task_id=request.inputs.get('task_id') or branch.get('subproblem',{}).get('id')
+            with activity(ctx,request.name,task_id):
+                if ctx.events:await ctx.events.emit('research_activity',{'capability':request.name})
+                with capability_span(request.name, capability.module, request.inputs) as span:
+                    result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
+                    if inspect.isawaitable(result):
+                        result = await result
+                    if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
+                        raise TypeError(f"能力产物不符合接口：{request.name}")
+                    if span is not None:
+                        span.end(outputs={'kind': result.kind, 'value': result.value})
         finally:
             CURRENT_CAPABILITY.reset(token)
         return result
@@ -131,9 +136,10 @@ def capabilities():
     global _registry
     if _registry is None:
         from . import literature, writing, experience
+        from ai_system.research import feedback
         from .experiments import module
         registry = ModuleRegistry()
-        for owner in (literature, module, writing, experience):
+        for owner in (literature, module, writing, experience, feedback):
             owner.register(registry)
         _registry = registry
     return _registry

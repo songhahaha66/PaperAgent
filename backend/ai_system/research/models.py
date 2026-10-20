@@ -220,6 +220,9 @@ class ExperimentPlan(Contract):
 
 
 class TaskChange(Contract):
+    research_question: str | None = None
+    question_key: str | None = None
+    investigates: list[str] = Field(default_factory=list)
     action: Literal["revise", "add", "retire"] = "revise"
     task_id: str
     title: str = ""

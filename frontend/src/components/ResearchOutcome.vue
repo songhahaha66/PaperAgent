@@ -1,7 +1,9 @@
 <template>
   <article class="outcome">
     <header>
+      <small v-if="question">研究问题 · {{ question.title }}</small>
       <h2>{{ outcome.title }}</h2>
+      <small v-if="outcome.started_at">实验开始于 {{ startedAt }}</small>
     </header>
     <dl class="states">
       <div>
@@ -73,7 +75,13 @@
     <p v-if="!outcome.results.length">
       {{ isZh ? '尚未登记可读成果。' : 'No results recorded yet.' }}
     </p>
-    <section v-for="result in outcome.results" :key="result.id" class="measurement">
+    <section
+      v-for="result in outcome.results"
+      :key="result.id"
+      class="measurement"
+      :data-result="result.id"
+      :class="{ focused: focusRef === result.id }"
+    >
       <h4>
         {{ result.name }}
       </h4>
@@ -99,6 +107,12 @@
         {{ displayValue(result.value, result.kind)
         }}<span v-if="result.unit"> {{ result.unit }}</span>
       </p>
+      <div v-if="usesFor(result.id).length" class="paper-uses">
+        <span>用于正文</span
+        ><button v-for="use in usesFor(result.id)" :key="use.section" @click="emit('paper', use)">
+          {{ use.title }} ↗
+        </button>
+      </div>
       <details>
         <summary>{{ isZh ? '原始记录与计算来源' : 'Raw record and computation' }}</summary>
         <p>{{ isZh ? '结果引用：' : 'Result reference: ' }}{{ result.id }}</p>
@@ -189,14 +203,45 @@
   </article>
 </template>
 <script setup lang="ts">
-import type { ResearchOutcome, ResearchSnapshot } from '@/types/research'
+import { computed, nextTick, watch } from 'vue'
+import type { ResearchOutcome, ResearchSnapshot, EvidenceUse } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
 import { outcomeLabel } from '@/utils/outcomeLabels'
 import ResultSeries from './ResultSeries.vue'
 import WorkDocument from './WorkDocument.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
-defineProps<{ workId: string; outcome: ResearchOutcome; runs: ResearchSnapshot['runs'] }>()
-const emit = defineEmits<{ 'open-file': [path: string]; issue: [id: string] }>()
+const props = defineProps<{
+  workId: string
+  outcome: ResearchOutcome
+  runs: ResearchSnapshot['runs']
+  snapshot?: ResearchSnapshot | null
+  focusRef?: string
+}>()
+const emit = defineEmits<{
+  'open-file': [path: string]
+  issue: [id: string]
+  paper: [use: EvidenceUse]
+}>()
+const startedAt = computed(() => {
+  const raw = props.outcome.started_at
+  if (!raw) return ''
+  return new Date(typeof raw === 'number' ? raw * 1000 : raw).toLocaleString('zh-CN')
+})
+const question = computed(() =>
+  props.snapshot?.questions?.find((q) => q.task_ids.includes(props.outcome.task_id)),
+)
+const usesFor = (ref: string) => props.snapshot?.evidence_uses?.filter((u) => u.ref === ref) || []
+watch(
+  () => [props.focusRef, props.outcome] as const,
+  async () => {
+    await nextTick()
+    if (props.focusRef)
+      Array.from(document.querySelectorAll<HTMLElement>('[data-result]'))
+        .find((el) => el.dataset.result === props.focusRef)
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  },
+  { immediate: true },
+)
 const { isZh } = useStudioCopy()
 const displayValue = (value: string, kind: string) => {
   const number = Number(value)
@@ -207,6 +252,18 @@ const displayValue = (value: string, kind: string) => {
 const label = (value: string) => outcomeLabel(value, isZh.value)
 </script>
 <style scoped>
+.focused {
+  border-left: 3px solid var(--pa-accent);
+  padding-left: 16px !important;
+}
+.paper-uses {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--pa-muted);
+  gap: 8px;
+}
 .outcome {
   padding: 24px;
   color: var(--pa-ink);

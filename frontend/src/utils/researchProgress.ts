@@ -89,3 +89,33 @@ export function researchHeadline(
 export function taskName(task: Pick<ResearchTask, 'task_id' | 'objective'>) {
   return task.objective?.trim() || task.task_id
 }
+
+export function researchQuestions(snapshot: ResearchSnapshot | null) {
+  if (snapshot?.questions?.length) return snapshot.questions
+  return (snapshot?.tasks || [])
+    .filter((t) => t.kind !== 'verify')
+    .map((t) => ({
+      id: t.task_id,
+      title: t.objective,
+      question: t.objective,
+      task_ids: [t.task_id],
+      sources: (snapshot?.requirements || [])
+        .filter((r) => r.task_ids.includes(t.task_id))
+        .map((r) => r.source_quote),
+      judgment: snapshot?.outcomes?.find((o) => o.task_id === t.task_id)?.summary || '',
+      next_step: t.progress.next_step || '',
+      issues: [],
+      judgments: [],
+    }))
+}
+export const researchActionName = (action: string) =>
+  ({
+    execute: '执行实验',
+    research: '调整方法',
+    inspect: '查看材料',
+    literature: '补充文献',
+    ask: '补充必要信息',
+    deliver: '整理研究与草稿',
+    pause: '暂停研究',
+    capability: '调用研究能力',
+  })[action] || '研究判断'

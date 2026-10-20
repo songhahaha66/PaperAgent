@@ -1,427 +1,422 @@
 <template>
-  <section class="research-progress" aria-label="任务与验收">
-    <header class="progress-overview">
-      <strong>{{ isZh ? '研究任务' : 'Research tasks' }}</strong>
-      <span class="accepted-total"
-        >{{ accepted }}/{{ tasks.length }} {{ isZh ? '已完成检查' : 'checked' }}</span
-      >
+  <section class="research-progress" aria-label="研究问题与证据">
+    <header class="overview">
+      <div>
+        <h3>围绕问题推进研究</h3>
+        <p>{{ questions.length }} 个问题 · {{ snapshot?.results.length || 0 }} 项实测结果</p>
+      </div>
     </header>
-    <p v-if="!tasks.length" class="empty-progress">
-      {{
-        snapshot
-          ? isZh
-            ? '完成题目分析后，研究任务会出现在这里。'
-            : 'Tasks will appear after problem analysis.'
-          : isZh
-            ? '正在读取研究进度…'
-            : 'Loading research progress…'
-      }}
+    <p v-if="!questions.length" class="empty">
+      系统会从研究目标中提出当前需要解决的问题，方法和实验随证据逐步展开。
     </p>
-    <ol v-else class="research-task-list">
-      <li
-        v-for="task in tasks"
-        :key="task.task_id"
-        :data-task="task.task_id"
-        :data-state="taskState(task, status)"
+    <nav v-else class="questions" aria-label="选择研究问题">
+      <button
+        v-for="(question, index) in questions"
+        :key="question.id"
+        :class="{ selected: selected?.id === question.id }"
+        @click="selectedId = question.id"
       >
-        <div class="task-content">
-          <div class="task-heading">
-            <strong>{{ taskName(task) }}</strong>
-            <span class="task-state">{{ taskStatus(task) }}</span>
-          </div>
-          <p class="task-reason">{{ taskNextStep(task) }}</p>
-          <p v-for="issue in issuesFor(task)" :key="issue.id" class="step-error" role="alert">
-            {{
-              ['suspected', 'inconclusive'].includes(issue.status)
-                ? isZh
-                  ? '待核实意见：'
-                  : 'Finding to verify: '
-                : ''
-            }}{{ issue.message }}
-            <button @click="emit('issue', issue.id)">
-              {{ isZh ? '查看意见' : 'View finding' }}
-            </button>
-          </p>
-          <dl v-if="outcomeFor(task)" class="task-states">
-            <div>
-              <dt>{{ isZh ? '计算' : 'Computation' }}</dt>
-              <dd>
-                {{
-                  task.execution_status === 'failed'
-                    ? isZh
-                      ? '计算失败'
-                      : 'Computation failed'
-                    : outcomeLabel(task.execution_status, isZh)
-                }}
-              </dd>
-            </div>
-            <div>
-              <dt>{{ isZh ? '成果' : 'Availability' }}</dt>
-              <dd>{{ outcomeLabel(outcomeFor(task)!.availability, isZh) }}</dd>
-            </div>
-            <div>
-              <dt>{{ isZh ? '检查' : 'Checks' }}</dt>
-              <dd>{{ outcomeLabel(outcomeFor(task)!.checking, isZh) }}</dd>
-            </div>
-          </dl>
+        <span class="question-index">{{ index + 1 }}</span
+        ><span
+          >{{ question.title }}<small>{{ questionState(question) }}</small></span
+        >
+      </button>
+    </nav>
+    <article v-if="selected" class="question-detail">
+      <header>
+        <small>当前研究问题</small>
+        <h2>{{ selected.title }}</h2>
+        <details v-if="selected.question !== selected.title">
+          <summary>研究目标</summary>
+          <p>{{ selected.question }}</p>
+        </details>
+      </header>
+      <details v-if="selected.sources.length" class="source">
+        <summary>对应原题</summary>
+        <blockquote v-for="source in selected.sources" :key="source">{{ source }}</blockquote>
+      </details>
+      <section v-if="selected.judgments.length" class="next-step">
+        <h3>当前判断 · {{ stanceLabel(selected.judgments.at(-1)!.stance) }}</h3>
+        <p>{{ selected.judgments.at(-1)!.reason }}</p>
+        <div class="basis">
           <button
-            v-if="
-              outcomeFor(task)?.results.length ||
-              snapshot?.results.some((r) => r.subproblem_id === task.task_id)
-            "
+            v-for="ref in selected.judgments.at(-1)!.evidence_refs"
+            :key="ref"
+            @click="emit('object', { type: 'result', resultType: 'registered', id: ref })"
+          >
+            {{ snapshot?.results.find((r) => r.id === ref)?.name || '查看依据' }}
+          </button>
+        </div>
+        <details v-if="selected.judgments.length > 1">
+          <summary>判断如何变化</summary>
+          <p v-for="(judgment, index) in selected.judgments.slice(0, -1)" :key="index">
+            {{ stanceLabel(judgment.stance) }} · {{ judgment.reason }}
+          </p>
+        </details>
+      </section>
+      <section class="judgment">
+        <h3>目前知道什么</h3>
+        <MarkdownRenderer
+          v-if="selected.judgment"
+          :content="evidenceText(selected.judgment)"
+          :work-id="snapshot?.work_id"
+        />
+        <p v-else>尚未形成有结果支持的判断。方法设想与执行中的观察保留在下方。</p>
+        <small v-if="selected.judgment">这是当前实验报告的结果说明，审查与采用情况分别记录。</small>
+      </section>
+      <section v-if="selected.next_step || decision" class="next-step">
+        <h3>接下来为什么这样做</h3>
+        <p>{{ selected.next_step || decision?.reason }}</p>
+        <p v-if="paused">研究已暂停。点击“继续”后，系统从保存的执行位置恢复。</p>
+      </section>
+      <section>
+        <h3>试了什么，得到了什么</h3>
+        <article
+          v-for="task in selectedTasks"
+          :key="task.task_id"
+          class="experiment"
+          :data-task="task.task_id"
+        >
+          <header>
+            <strong>{{ methodName(task.task_id) }}</strong
+            ><span class="state">{{ taskLabel(taskState(task, status), true) }}</span>
+          </header>
+          <p v-if="outcomeFor(task.task_id)?.experiment" class="conditions">
+            {{ outcomeFor(task.task_id)?.experiment?.conditions }}<br />评价：{{
+              outcomeFor(task.task_id)?.experiment?.evaluation
+            }}
+          </p>
+          <div v-if="outcomeFor(task.task_id)?.results.length" class="measurements">
+            <button
+              v-for="result in outcomeFor(task.task_id)!.results.slice(0, 4)"
+              :key="result.id"
+              @click="emit('object', { type: 'result', resultType: 'registered', id: result.id })"
+            >
+              <small>{{ result.name }}</small
+              ><strong>{{
+                result.kind === 'figure'
+                  ? '查看图表'
+                  : result.kind === 'series'
+                    ? '查看实测序列'
+                    : `${result.value} ${result.unit}`
+              }}</strong>
+            </button>
+          </div>
+          <p v-else class="muted">
+            {{ task.progress.next_step || task.reason || '尚未取得实测结果。' }}
+          </p>
+          <p class="review-status" v-if="outcomeFor(task.task_id)">
+            证据检查：{{ outcomeLabel(outcomeFor(task.task_id)!.checking, true) }}
+          </p>
+          <div v-for="issue in issuesFor(task.task_id)" :key="issue.id" class="finding">
+            <strong>系统接下来处理</strong>
+            <p>{{ issue.next_step }}</p>
+            <details>
+              <summary>查看核查内容</summary>
+              <p>{{ issue.message }}</p>
+              <button @click="emit('issue', issue.id)">查看相关记录</button>
+            </details>
+          </div>
+          <button
+            v-if="outcomeFor(task.task_id)?.results.length || outcomeFor(task.task_id)?.summary"
+            class="text-action"
             @click="emit('object', { type: 'result', resultType: 'task', id: task.task_id })"
           >
-            {{ isZh ? '查看结果' : 'View results' }}
+            实验详情与来源 →
           </button>
-          <details class="task-details">
-            <summary>
-              {{ isZh ? '运行记录' : 'Run records' }}<span aria-hidden="true">⌄</span>
-            </summary>
-            <div class="task-detail-body">
-              <p>
-                {{ isZh ? '当前版本尝试' : 'Attempts in this revision' }}
-                {{ task.progress.attempts }} / {{ task.progress.attempt_limit }}
-              </p>
-              <p v-if="task.dependencies.length">
-                {{ isZh ? '依赖 ' : 'Depends on ' }}{{ task.dependencies.join('、') }}
-              </p>
-              <p v-if="task.progress.waiting_for.length">
-                {{ isZh ? '等待检查 ' : 'Awaiting checks for '
-                }}{{ task.progress.waiting_for.join('、') }}
-              </p>
-              <p v-if="task.kind === 'verify'">
-                {{ isZh ? '独立核验任务' : 'Independent verification' }}
-              </p>
-            </div>
+          <details v-if="task.progress.attempts">
+            <summary>执行与历史</summary>
+            <p>
+              {{ task.progress.attempts }} 次执行尝试<span v-if="task.kind === 'verify'">
+                · 独立核查</span
+              >；失败记录与已完成成果均保留。
+            </p>
+            <p v-if="task.dependencies.length">
+              依赖：{{ task.dependencies.map(taskTitle).join('、') }}
+            </p>
           </details>
-        </div>
-      </li>
-    </ol>
-    <details
-      v-if="snapshot?.requirements?.length || snapshot?.assumptions?.length"
-      class="task-details"
-    >
-      <summary>{{ isZh ? '研究计划与假设' : 'Plan and assumptions' }}</summary>
-      <p v-for="r in snapshot?.requirements || []" :key="r.id">
-        {{ r.statement }}<small v-if="r.source_quote">（{{ r.source_quote }}）</small>
-      </p>
-      <p v-for="a in snapshot?.assumptions || []" :key="a.id">
-        {{ a.statement }}（{{ a.status }}）
-      </p>
-    </details>
-    <section v-if="snapshot?.delivery" class="delivery-progress">
+        </article>
+      </section>
+    </article>
+    <section v-if="snapshot?.delivery" class="delivery">
       <header>
-        <strong>{{ isZh ? '论文交付' : 'Paper delivery' }}</strong
-        ><span class="delivery-state">{{
-          snapshot.delivery.ready
-            ? isZh
-              ? '研究已验收'
-              : 'Research accepted'
-            : isZh
-              ? '待验收'
-              : 'Pending acceptance'
-        }}</span>
+        <h3>草稿与交付</h3>
+        <button @click="emit('object', { type: 'paper' })">打开草稿 →</button>
       </header>
+      <p v-if="!Object.keys(snapshot.delivery_stages || {}).length">
+        已有章节可随时查看，文稿意见由系统继续修订与复核。
+      </p>
       <p v-for="(stage, key) in snapshot.delivery_stages" :key="key">
-        {{ stageName(String(key)) }} · {{ stageLabel(stage.status)
-        }}<span v-if="stage.note"> · {{ stage.note }}</span>
-      </p>
-      <p v-if="snapshot.artifacts.length">
-        {{ isZh ? '已发布：' : 'Published: '
-        }}{{ snapshot.artifacts.map((path) => paperLabel(path, isZh) || path).join('、') }}
-      </p>
-      <p v-if="writingBlockers.length">
-        {{ writingBlockers.length }}
-        {{
-          isZh
-            ? '项文稿意见，由系统自动改稿和复核。'
-            : 'writing findings will be revised and checked automatically.'
-        }}
+        {{ stageName(String(key)) }} · {{ stageStatus(stage.status) }}
       </p>
     </section>
   </section>
 </template>
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useStudioCopy } from '@/lang/studio'
-import { outcomeLabel } from '@/utils/outcomeLabels'
-import { paperLabel } from '@/utils/workFiles'
+import { computed, ref } from 'vue'
+import MarkdownRenderer from './MarkdownRenderer.vue'
+import type { ResearchSnapshot, ResearchQuestion } from '@/types/research'
 import type { WorkObject } from '@/stores/workPanels'
-import type { ResearchSnapshot } from '@/types/research'
-import {
-  taskState,
-  taskName,
-  taskLabel,
-  deliveryLabels,
-  orderedTasks,
-  type ResearchTask,
-} from '@/utils/researchProgress'
+import { researchQuestions, taskState, taskLabel, deliveryLabels } from '@/utils/researchProgress'
+import { outcomeLabel } from '@/utils/outcomeLabels'
+import { evidenceMarkdown } from '@/utils/researchEvidence'
 const props = defineProps<{ snapshot: ResearchSnapshot | null; workStatus?: string }>()
 const emit = defineEmits<{ object: [object: WorkObject]; issue: [id: string] }>()
-const { isZh } = useStudioCopy()
-const outcomeFor = (task: ResearchTask) =>
-  props.snapshot?.outcomes?.find((o) => o.task_id === task.task_id)
-const tasks = computed(() => orderedTasks(props.snapshot?.tasks || []))
-const status = computed(() => props.workStatus || props.snapshot?.work_status || 'created')
-const accepted = computed(
-  () => tasks.value.filter((t) => outcomeFor(t)?.checking === 'passed').length,
+const selectedId = ref('')
+const questions = computed(() => researchQuestions(props.snapshot))
+const selected = computed(
+  () =>
+    questions.value.find((q) => q.id === selectedId.value) ||
+    questions.value.find((q) =>
+      props.snapshot?.tasks?.some(
+        (t) => q.task_ids.includes(t.task_id) && t.execution_status === 'running',
+      ),
+    ) ||
+    questions.value[0],
 )
-const writingBlockers = computed(
-  () => props.snapshot?.delivery?.blockers.filter((b) => b.action === 'rewrite') || [],
+const selectedTasks = computed(
+  () =>
+    props.snapshot?.tasks?.filter(
+      (t) =>
+        selected.value?.task_ids.includes(t.task_id) ||
+        (t.kind === 'verify' && t.dependencies.some((d) => selected.value?.task_ids.includes(d))),
+    ) || [],
 )
-const issuesFor = (task: ResearchTask) =>
-  props.snapshot?.feedback?.filter(
-    (i) =>
-      task.progress.issue_ids.includes(i.id) &&
-      !['resolved', 'dismissed', 'superseded'].includes(i.status),
+const status = computed(() => props.workStatus || props.snapshot?.work_status || '')
+const paused = computed(() => ['paused', 'failed', 'cancelled'].includes(status.value))
+const decision = computed(() =>
+  props.snapshot?.runtime?.decisions
+    .filter((d) => d.task_ids.some((id) => selected.value?.task_ids.includes(id)))
+    .at(-1),
+)
+const outcomeFor = (id: string) => props.snapshot?.outcomes?.find((o) => o.task_id === id)
+const methodName = (id: string) =>
+  outcomeFor(id)
+    ?.experiment?.candidates.map((c) => c.name)
+    .join(' / ') ||
+  outcomeFor(id)?.approach ||
+  outcomeFor(id)?.method?.name ||
+  taskTitle(id)
+const taskTitle = (id: string) =>
+  props.snapshot?.outcomes?.find((t) => t.task_id === id)?.title || '前置研究'
+const issuesFor = (id: string) =>
+  selected.value?.issues.filter((i) =>
+    props.snapshot?.feedback?.some((f) => f.id === i.id && f.task_id === id),
   ) || []
-const taskStatus = (task: ResearchTask) => {
-  const count = issuesFor(task).length
-  return count
-    ? isZh.value
-      ? `${count} 项意见待系统核查`
-      : `${count} findings to verify`
-    : taskState(task, status.value) === 'accepted' && outcomeFor(task)?.checking !== 'passed'
-      ? outcomeLabel(outcomeFor(task)?.checking || 'unreviewed', isZh.value)
-      : taskLabel(taskState(task, status.value), isZh.value)
+const questionState = (question: ResearchQuestion) => {
+  const tasks = props.snapshot?.tasks?.filter((t) => question.task_ids.includes(t.task_id)) || []
+  if (tasks.some((t) => t.execution_status === 'running') && !paused.value) return '正在获取证据'
+  if (question.issues.length) return '证据与解释待核查'
+  return tasks.length && tasks.every((t) => t.acceptance === 'accepted' && t.validity === 'current')
+    ? '已有结果'
+    : '研究中'
 }
-const taskNextStep = (task: ResearchTask) => {
-  const state = taskState(task, status.value)
-  if (task.progress.next_step) {
-    const paused = ['paused', 'failed', 'cancelled'].includes(status.value)
-    return (paused ? '点击右上角“继续”，恢复自动处理。' : '') + task.progress.next_step
-  }
-  if (
-    taskState(task, status.value) === 'accepted' &&
-    outcomeFor(task)?.checking !== 'passed' &&
-    !task.reason?.trim()
-  )
-    return isZh.value
-      ? '计算与检查分别记录；已产生的成果可查看，检查状态见下方。'
-      : 'Computation and checks are recorded separately. Available results can be opened below.'
-  if (state === 'accepted') {
-    const count =
-      props.snapshot?.results.filter((r) => r.subproblem_id === task.task_id).length || 0
-    return count
-      ? isZh.value
-        ? `${count} 项结果已通过检查，可在下方打开。`
-        : `${count} results passed checks; open the paper to address them.`
-      : isZh.value
-        ? '这部分已完成检查。'
-        : 'Checks for this task are complete.'
-  }
-  if (task.reason?.trim()) return task.reason
-  const next = {
-    running: ['正在计算与检查结果。', 'Calculations and checks are running.'],
-    interrupted: [
-      '进度已保存，继续研究后恢复这部分。',
-      'Progress saved. Continue research to resume this task.',
-    ],
-    waiting: [
-      '前置任务完成检查后，再继续这部分。',
-      'Waiting for prerequisite tasks to pass their checks.',
-    ],
-    rework: [
-      '根据检查意见重新计算，再检查结果。',
-      'Recompute using the findings, then check again.',
-    ],
-    failed: ['处理这一步的问题后重试。', 'Address this step’s findings before retrying.'],
-    needs_plan: ['先调整研究计划，再继续计算。', 'Revise the research plan before continuing.'],
-    blocked: ['先修正相关假设或输入。', 'Correct the related assumptions or inputs first.'],
-    review: ['结果已生成，等待进一步检查。', 'Results are ready for further checks.'],
-    writing: ['结果将用于论文撰写。', 'These results will be used in the paper.'],
-    ready: ['前置条件已满足，等待执行。', 'Prerequisites met; waiting to run.'],
-    pending: ['尚未开始，按研究计划推进。', 'Not started; following the research plan.'],
-  }
-  return next[state as keyof typeof next]?.[isZh.value ? 0 : 1] || ''
-}
-const stageName = (key: string) =>
-  deliveryLabels[key as keyof typeof deliveryLabels]?.[isZh.value ? 0 : 1] || key
-const stageLabel = (state: string) =>
+const stanceLabel = (stance: string) =>
   ({
-    pending: ['待继续', 'Pending'],
-    in_progress: ['进行中', 'Running'],
-    completed: ['完成', 'Completed'],
-    blocked: ['需处理', 'Blocked'],
-    interrupted: ['已中断，待恢复', 'Interrupted, resume needed'],
-  })[state]?.[isZh.value ? 0 : 1] || state
+    adopt: '采用',
+    improve: '改进方法',
+    discard: '不采用此方法',
+    more_evidence: '继续补充证据',
+    inconclusive: '尚不明确',
+  })[stance] || '待判断'
+const stageName = (key: string) =>
+  deliveryLabels[key as keyof typeof deliveryLabels]?.[0] || '论文整理'
+const stageStatus = (status: string) =>
+  ({
+    pending: '待执行',
+    in_progress: '进行中',
+    completed: '完成',
+    blocked: '未完成，位置已保存',
+    interrupted: '已中断',
+  })[status] || status
+const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
 </script>
 <style scoped>
-.task-states {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18px;
-  font-size: 12px;
+.research-progress {
+  color: var(--pa-ink);
+  font-size: 13px;
 }
-.task-states dt {
+.overview h3 {
+  margin-bottom: 6px;
+}
+.overview p,
+.muted,
+.conditions,
+.review-status {
   color: var(--pa-muted);
 }
-.task-states dd {
-  margin: 4px 0;
-}
-.step-error {
-  color: var(--pa-danger);
-}
-button {
-  border: 1px solid var(--pa-line);
-  background: var(--pa-surface);
-  color: var(--pa-accent);
-  padding: 5px 9px;
-  border-radius: var(--pa-radius-control);
-  cursor: pointer;
-  margin: 4px;
-}
-
-.research-progress {
-  padding: 16px;
-  color: var(--td-text-color-primary);
-}
-.progress-overview {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-  font-size: 13px;
-  line-height: 22px;
-}
-.progress-overview strong {
-  font-weight: 600;
-}
-.accepted-total {
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-  font-variant-numeric: tabular-nums;
-}
-.research-task-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.questions {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
+  margin: 20px 0;
 }
-.research-task-list > li {
-  padding: 14px;
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-card);
-  background: var(--pa-surface);
-  overflow-wrap: anywhere;
-}
-.task-heading {
+.questions button {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 13px;
-  line-height: 20px;
+  text-align: left;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 14px;
+  color: var(--pa-ink);
+  cursor: pointer;
 }
-.task-heading strong {
-  font-weight: 600;
-}
-.task-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--pa-muted);
-}
-.task-state::before {
-  content: '';
-  width: 5px;
-  height: 5px;
-  border-radius: var(--pa-radius-circle);
+.questions button.selected {
+  border-color: var(--pa-accent);
   background: var(--pa-surface-active);
 }
-li[data-state='accepted'] .task-state,
-li[data-state='running'] .task-state {
+.question-index {
+  display: grid;
+  place-items: center;
+  background: var(--pa-surface-muted);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.questions button > span:nth-child(2) {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.questions small {
+  display: block;
+  margin-top: 5px;
+  color: var(--pa-muted);
+  font-size: 12px;
+}
+.question-detail {
+  border-top: 1px solid var(--pa-line);
+  padding-top: 24px;
+}
+.question-detail > header small {
   color: var(--pa-accent);
 }
-li[data-state='accepted'] .task-state::before,
-li[data-state='running'] .task-state::before {
-  background: var(--pa-accent);
+h2 {
+  font-size: 19px;
+  line-height: 1.6;
+  margin: 8px 0 12px;
 }
-li[data-state='failed'] .task-state,
-li[data-state='needs_plan'] .task-state,
-li[data-state='review'] .task-state,
-li[data-state='rework'] .task-state {
-  color: var(--pa-warning);
-}
-li[data-state='failed'] .task-state::before,
-li[data-state='needs_plan'] .task-state::before,
-li[data-state='review'] .task-state::before,
-li[data-state='rework'] .task-state::before {
-  background: var(--pa-warning);
+h3 {
+  font-size: 14px;
+  margin: 0 0 10px;
 }
 p {
+  line-height: 1.8;
   margin: 8px 0;
-  font-size: 13px;
+}
+section {
+  margin-top: 24px;
+}
+.source {
+  margin: 10px 0 20px;
+}
+blockquote {
+  margin: 10px 0;
+  padding: 0 14px;
+  border-left: 2px solid var(--pa-line);
+  white-space: pre-wrap;
+  line-height: 1.8;
+  color: var(--pa-muted);
+  max-height: 230px;
+  overflow: auto;
+}
+.judgment {
+  background: var(--pa-surface-muted);
+  padding: 18px;
+  border-radius: 10px;
+}
+.judgment small {
+  color: var(--pa-muted);
+}
+.next-step {
+  border-left: 3px solid var(--pa-accent);
+  padding-left: 16px;
+}
+.experiment {
+  border: 1px solid var(--pa-line);
+  border-radius: 10px;
+  padding: 18px;
+  margin-top: 12px;
+}
+.experiment header,
+.delivery header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+.experiment header strong {
+  max-width: 75%;
   line-height: 1.65;
 }
-
-.task-reason {
+.state {
   color: var(--pa-muted);
   font-size: 12px;
 }
-
-.task-details {
-  margin-top: 10px;
+.measurements {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 14px 0;
 }
-summary {
-  list-style: none;
-  display: inline-flex;
-  align-items: center;
+.measurements button {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  background: var(--pa-surface-muted);
+  padding: 12px;
+  color: var(--pa-ink);
   cursor: pointer;
-  font-size: 12px;
-  line-height: 20px;
-  color: var(--pa-muted);
 }
-summary::-webkit-details-marker {
-  display: none;
-}
-summary > span {
-  color: var(--pa-placeholder);
-}
-.task-detail-body {
-  margin-top: 8px;
-  padding-top: 4px;
-  border-top: 1px solid var(--pa-line);
-  color: var(--pa-muted);
-}
-.task-detail-body p {
-  font-size: 12px;
-  white-space: pre-wrap;
-}
-
-.delivery-progress {
-  margin-top: 16px;
-  padding: 14px;
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-card);
-  background: var(--pa-surface);
+.measurements strong {
+  font-size: 16px;
   overflow-wrap: anywhere;
 }
-.delivery-progress > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 13px;
-  line-height: 20px;
+.measurements small {
+  color: var(--pa-muted);
 }
-.delivery-progress > header strong {
-  font-weight: 600;
+.finding {
+  background: var(--pa-surface-muted);
+  padding: 12px;
+  margin-top: 12px;
+  border-radius: 6px;
 }
-.delivery-state {
+.finding > strong {
+  font-size: 12px;
+  color: var(--pa-accent);
+}
+details {
+  margin-top: 12px;
+}
+summary {
+  cursor: pointer;
   color: var(--pa-muted);
   font-size: 12px;
 }
-
-.empty-progress {
-  padding: 12px 0;
+button.text-action,
+.finding button,
+.delivery button {
+  border: 0;
+  background: transparent;
+  padding: 8px 0;
+  color: var(--pa-accent);
+  cursor: pointer;
+}
+.delivery {
+  border-top: 1px solid var(--pa-line);
+  padding: 24px 0;
+}
+.empty {
   color: var(--pa-muted);
+  padding: 24px 0;
 }
 </style>

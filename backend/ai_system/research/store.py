@@ -778,6 +778,9 @@ class ResearchStore:
                 task["objective"] = change.objective
                 task["subproblem"] = {**task["subproblem"], "question": change.objective}
                 task['method_instruction']=change.method_instruction
+                if change.research_question is not None:task['research_question']=change.research_question
+                if change.question_key is not None:task['question_key']=change.question_key
+                if change.investigates:task['investigates']=change.investigates
                 if change.experiment is not None:
                     task['experiment']=change.experiment.model_dump()
                 if change.dependencies is not None:
@@ -882,6 +885,18 @@ class ResearchStore:
             state=self._read(db)
             db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
                 (self.research_id,key,key,json.dumps(record,ensure_ascii=False)))
+            if record.get('status')=='planned' and record.get('proposal'):
+                proposal=record['proposal']
+                previous=state.get('decision_history',[])
+                if not any(d['id']==key for d in previous):
+                    for judgment in record.get('intent',{}).get('next',{}).get('assessments',[]):
+                        task=state['tasks'][judgment['task_id']]
+                        state.setdefault('judgments',[]).append({**judgment,'decision':key,
+                            'task_revision':task['revision'],'attempt_id':task['active_attempt']})
+                    state['decision_history']=[*previous,{'id':key,'action':proposal['action'],
+                        'reason':proposal['reason'],'gap':proposal.get('gap',''),
+                        'task_ids':proposal.get('task_ids',[]),
+                        'evidence_refs':[b['ref'] for b in proposal.get('basis',[])]}][-40:]
             self._save(db,state,'research_decision',{'key':key,**record})
 
     def record_proposal(self, proposal):
@@ -966,9 +981,20 @@ class ResearchStore:
                     if issue["status"] == "inconclusive":
                         task["retired"] = False
                         issue["status"] = "suspected"
+            for operation in state.get('activity',[]):
+                if operation['status']=='running':operation['status']='interrupted'
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='model_requests'").fetchone():
+                for row in db.execute('SELECT research_id,sequence,payload FROM model_requests').fetchall():
+                    request=json.loads(row['payload'])
+                    if request.get('research_id')==self.research_id and request.get('state') in {'sent','http_response'}:
+                        request['state']='recorded' if request.get('usage_recorded') else 'interrupted'
+                        db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',
+                            (json.dumps(request),row['research_id'],row['sequence']))
             pending = {key for key, task in state["tasks"].items()
                        if not task["retired"] and (task["acceptance"] != "accepted" or task["validity"] != "current")}
-            pending |= {i["task_id"] for i in research_findings(state) if needs_owner_review(i)}
+            # Artifact feedback must not invalidate accepted calculations on resume.
+            pending |= {i["task_id"] for i in research_findings(state) if needs_owner_review(i)
+                        and state["tasks"][i["task_id"]]["acceptance"] != "accepted"}
             for attempt in state["attempts"].values():
                 if attempt["execution_status"] == "running":
                     attempt["execution_status"] = "cancelled"

@@ -45,7 +45,8 @@ async def observe(state, runtime):
     store.schedule_investigations()
     from .planner import advance_research
     from .loop import flow,writing_action
-    editorial=writing_action(store)
+    from .feedback import report_target
+    editorial=report_target(store) or writing_action(store)
     decision_blocked=False if flow(store).get('blocked') or editorial else await advance_research(ctx)
     snapshot = store.snapshot()
     tasks = snapshot["tasks"]
@@ -72,7 +73,7 @@ async def observe(state, runtime):
                                 for stage in ('export', 'render', 'validate', 'write')
                                 if snapshot.get('delivery_stages', {}).get(stage, {}).get('status') == 'blocked'), None)
         await ctx.set_stage("solve", "blocked", decision_block_message(store,snapshot) if decision_blocked else
-                            (delivery_reason or "论文写作、检查或导出未完成，可恢复后继续自动处理。")+preserved_progress(snapshot))
+                            (progress.get("blocked_reason") or delivery_reason or "论文写作、检查或导出未完成，可恢复后继续自动处理。")+preserved_progress(snapshot))
     analysis = analysis_view(snapshot, state.get('analysis'))
     from .planner import current_decision
     selected=current_decision(store)
@@ -130,7 +131,10 @@ def task_dispatch(state, runtime, task_ids):
 
 def public_snapshot(snapshot, *, work_status=None):
     ready = set(ready_tasks(snapshot))
+    from .views import questions,evidence_uses,execution
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
+        "questions": questions(snapshot), "evidence_uses":evidence_uses(snapshot),
+        "runtime":execution(snapshot,work_status),
         "delivery": delivery_status(snapshot),
         "delivery_stages": {key: {**stage, "status": "interrupted" if stage["status"] == "in_progress" and
             work_status in {"paused", "cancelled", "failed"} else stage["status"]}

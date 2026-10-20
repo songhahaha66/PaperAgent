@@ -85,9 +85,9 @@ class RuntimeModelMixin:
                 runtime.usage(seq,reply_usage(result));runtime.succeeded(key)
                 return result
             except asyncio.CancelledError:
-                runtime.usage(seq);raise
+                runtime.usage(seq,state="interrupted");raise
             except Exception as exc:
-                runtime.usage(seq)
+                runtime.usage(seq,state="failed")
                 kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if not retry or attempt==2:raise ModelServiceError(message) from exc
@@ -117,9 +117,9 @@ class RuntimeModelMixin:
                         yield chunk
                 runtime.usage(seq,usage);runtime.succeeded(key);return
             except asyncio.CancelledError:
-                runtime.usage(seq,usage);raise
+                runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
-                runtime.usage(seq,usage);kind,message,retry,terminal=failure(exc)
+                runtime.usage(seq,usage,state="failed");kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if emitted or not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -137,7 +137,7 @@ class RuntimeModelMixin:
                 result=super()._generate(*args,**kwargs)
                 runtime.usage(seq,reply_usage(result));runtime.succeeded(key);return result
             except Exception as exc:
-                runtime.usage(seq);kind,message,retry,terminal=failure(exc)
+                runtime.usage(seq,state="failed");kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -162,7 +162,7 @@ class RuntimeModelMixin:
                     yield chunk
                 runtime.usage(seq,usage);runtime.succeeded(key);return
             except Exception as exc:
-                runtime.usage(seq,usage);kind,message,retry,terminal=failure(exc)
+                runtime.usage(seq,usage,state="failed");kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if emitted or not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)

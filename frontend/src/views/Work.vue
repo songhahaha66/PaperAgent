@@ -76,7 +76,7 @@
             class="progress-trigger"
             @click="openPanel('materials', isMobile ? 'main' : 'secondary')"
           >
-            {{ isZh ? '资料与成果' : 'Materials and results' }}
+            {{ isZh ? '资料与结果' : 'Materials and results' }}
           </button>
           <button class="progress-trigger" @click="handleMainPaperClick">
             {{ isZh ? '论文' : 'Paper' }}
@@ -123,6 +123,7 @@
                   v-else
                   :messages="chatMessages"
                   :tasks="researchSnapshot?.tasks"
+                  :snapshot="researchSnapshot"
                   :work-status="currentWork?.status"
                   @open-progress="openProgress"
                   @confirm-plan="replyToResearch"
@@ -211,6 +212,7 @@
             :result-id="panel.resultId || ''"
             :snapshot="researchSnapshot"
             @issue="openIssueEditor"
+            @paper="openEvidenceUse"
             @open-file="handleWorkspaceFileSelect"
           />
           <ResearchMaterials
@@ -280,6 +282,7 @@
             :disabled="isStreaming"
             @open-file="handleWorkspaceFileSelect"
             :citation-request="citationRequest"
+            :evidence-request="evidenceRequest"
             :issue-request="issueRequest"
             @updated="refreshPaper"
             @ask="askPaper"
@@ -460,7 +463,22 @@ const literatureEvidenceId = computed(
   () => panelSession.value.panels.find((p) => p.kind === 'materials')?.location || '',
 )
 const issueRequest = ref<{ id: string; at: number } | null>(null)
+const evidenceRequest = ref<{ section: string; section_version: string; at: number } | null>(null)
+function openEvidenceUse(use: { section: string; section_version: string }) {
+  evidenceRequest.value = { ...use, at: Date.now() }
+  openPanel('paper', isMobile.value ? 'main' : 'secondary')
+}
+function openRegisteredEvidence(event: Event) {
+  const detail = (event as CustomEvent).detail
+  if (detail?.workId !== workId.value || !/^[RF][1-9]\d*$/.test(detail?.resultId || '')) return
+  openObject({ type: 'result', resultType: 'registered', id: detail.resultId })
+}
 function openIssueEditor(id: string) {
+  const issue = researchSnapshot.value?.feedback?.find((i) => i.id === id)
+  if (issue && !issue.section) {
+    openObject({ type: 'result', resultType: 'task', id: issue.task_id })
+    return
+  }
   issueRequest.value = { id, at: Date.now() }
   openPanel('paper', isMobile.value ? 'main' : 'secondary')
 }
@@ -709,8 +727,12 @@ const getOutputModeText = (mode?: string) => {
 onMounted(() => {
   void loadWork()
   window.addEventListener('paper-literature-open', openLiteratureEvidence)
+  window.addEventListener('paper-result-open', openRegisteredEvidence)
 })
-onUnmounted(() => window.removeEventListener('paper-literature-open', openLiteratureEvidence))
+onUnmounted(() => {
+  window.removeEventListener('paper-literature-open', openLiteratureEvidence)
+  window.removeEventListener('paper-result-open', openRegisteredEvidence)
+})
 </script>
 <style scoped>
 .work-page {

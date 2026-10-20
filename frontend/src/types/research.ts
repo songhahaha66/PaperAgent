@@ -1,3 +1,34 @@
+export interface ResearchQuestion {
+  id: string
+  title: string
+  question: string
+  task_ids: string[]
+  sources: string[]
+  judgment: string
+  next_step: string
+  issues: { id: string; message: string; next_step: string }[]
+  judgments: { task_id: string; reason: string; stance: string; evidence_refs: string[] }[]
+}
+export interface EvidenceUse {
+  ref: string
+  section: string
+  section_version: string
+  title: string
+  task_ids: string[]
+  quote: string
+}
+export interface ResearchActivity {
+  id: string
+  task_id?: string | null
+  label: string
+  capability?: string
+  status: string
+  started_at: number
+  finished_at?: number
+  run_id?: string
+  input_tokens?: number
+  output_tokens?: number
+}
 export interface ReadableResult {
   id: string
   name: string
@@ -16,6 +47,7 @@ export interface ResearchOutcome {
   objective: string
   revision: number | null
   attempt_id: string | null
+  started_at?: number | string | null
   computation: string
   availability: string
   checking: string
@@ -65,6 +97,21 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  inputs?: string[]
+  questions?: ResearchQuestion[]
+  evidence_uses?: EvidenceUse[]
+  runtime?: {
+    actions: ResearchActivity[]
+    models?: ResearchActivity[]
+    decisions: {
+      id: string
+      action: string
+      reason: string
+      gap: string
+      task_ids: string[]
+      evidence_refs: string[]
+    }[]
+  }
   plans?: {
     id: string
     version: number
@@ -165,6 +212,7 @@ export interface ResearchSnapshot {
     id: string
     task_id: string
     task_revision: number
+    section?: string | null
     message: string
     blocking: boolean
     status: string

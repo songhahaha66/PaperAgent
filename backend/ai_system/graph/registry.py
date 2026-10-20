@@ -374,7 +374,7 @@ class ResultRegistry:
             lines.append(f"| {ref} | {r.subproblem} | {r.name} | {shown} | {r.description} |")
         return "\n".join(lines)
 
-    def render(self, text: str, *, latex: bool = False) -> str:
+    def render(self, text: str, *, latex: bool = False, links: bool = False) -> str:
         """把正文中的引用替换成真实内容
 
         - 独占一行的 {{F:F1}} 渲染为图片和图题，按图片首次出现的顺序编号；同一张图再次独占一行时整行去掉；
@@ -409,7 +409,9 @@ class ResultRegistry:
                         + r"\includegraphics[width=0.85\linewidth]{\detokenize{" + result.path + "}}\n"
                         + r"\caption{" + caption + "}\n" + r"\label{fig:" + result.id + "}\n\\end{figure}")
             label = f"图{number} {FIGURE_NAME_NUMBER.sub('', result.name)}"
-            return f"![{label}]({result.path})\n\n*{label}*"
+            image=f"![{label}]({result.path})"
+            if links:image=f"[{image}](https://paperagent.local/results/{result.id})"
+            return image+f"\n\n*{label}*"
 
         text = FIGURE_LINE.sub(figure_block, text)
 
@@ -427,7 +429,7 @@ class ResultRegistry:
                 parts.append(match.group(0))
             elif result.kind == "figure":
                 prefix = "" if re.search(r"图\s*$", text[:match.start()]) else "图~"
-                parts.append(prefix + r"\ref{fig:" + result.id + "}" if latex else f"图{figure_numbers[result.id]}")
+                parts.append(prefix + r"\ref{fig:" + result.id + "}" if latex else (f"[图{figure_numbers[result.id]}](https://paperagent.local/results/{result.id})" if links else f"图{figure_numbers[result.id]}"))
             elif latex and result.kind == "series":
                 values = numeric_series(result.value)
                 # Bound presentation precision without changing registered evidence.
@@ -451,7 +453,10 @@ class ResultRegistry:
             elif any(start <= match.start() < end for start, end in math_spans):
                 parts.append(encode(result.display(with_unit=False)))
             else:
-                parts.append(encode(result.display()))
+                if links and not latex:
+                    import html
+                    parts.append(f'<a href="https://paperagent.local/results/{result.id}" title="查看实验来源">{html.escape(result.display())}</a>')
+                else:parts.append(encode(result.display()))
                 # 写作模型常在引用后再写一遍单位，去掉重复
                 unit = result.unit.strip()
                 rest = text[cursor:]

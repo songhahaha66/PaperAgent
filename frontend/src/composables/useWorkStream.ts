@@ -97,7 +97,12 @@ export function useWorkStream(options: {
     questionScope.value = null
     activateChat()
     if (inputValue.value.trim()) void sendMessage(inputValue.value, 'run')
-    else MessagePlugin.info(isZh.value ? '请先输入新研究目标，再选择重新研究。' : 'Enter a new research goal, then choose Run research again.')
+    else
+      MessagePlugin.info(
+        isZh.value
+          ? '请先输入新研究目标，再选择重新研究。'
+          : 'Enter a new research goal, then choose Run research again.',
+      )
   }
   const stageText = computed(() =>
     isStreaming.value && runningAction.value === 'ask'
@@ -274,7 +279,7 @@ export function useWorkStream(options: {
       case 'json_block':
         const block = data.block
 
-        if (block?.type === 'research_state') {
+        if (block?.type === 'research_state' || block?.type === 'research_activity') {
           loadResearchSnapshot()
         } else if (block?.type === 'research_snapshot') {
           if (block.content?.schema_version === 3 && block.content.work_id === workId.value) {
@@ -371,7 +376,7 @@ export function useWorkStream(options: {
   const sendMessage = async (
     messageContent?: string,
     action: ResearchAction = 'auto',
-    sourceIssue?:{id:string;version:string},
+    sourceIssue?: { id: string; version: string },
   ) => {
     const content = messageContent || inputValue.value.trim()
     if (!content || isStreaming.value || isDisposed() || !authStore.token) return
@@ -395,7 +400,7 @@ export function useWorkStream(options: {
       ? questionScope.value || undefined
       : undefined
     questionScope.value = null
-    await sendRealMessage(content, resolvedAction, scope,sourceIssue)
+    await sendRealMessage(content, resolvedAction, scope, sourceIssue)
   }
 
   // 发送真实消息（WebSocket）
@@ -403,7 +408,7 @@ export function useWorkStream(options: {
     message: string,
     action: ResearchAction,
     subproblemId?: string,
-    sourceIssue?:{id:string;version:string},
+    sourceIssue?: { id: string; version: string },
   ) => {
     if (!authStore.token || isDisposed()) return
 
@@ -428,7 +433,7 @@ export function useWorkStream(options: {
 
     try {
       // 使用WebSocket发送消息
-      await sendMessageViaWebSocket(message, aiMessageId, action, subproblemId,sourceIssue)
+      await sendMessageViaWebSocket(message, aiMessageId, action, subproblemId, sourceIssue)
     } catch (error) {
       console.error('发送消息失败:', error)
       const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
@@ -449,7 +454,7 @@ export function useWorkStream(options: {
     messageId: string,
     action: ResearchAction,
     subproblemId?: string,
-    sourceIssue?:{id:string;version:string},
+    sourceIssue?: { id: string; version: string },
   ) => {
     const handler = await connectWorkSocket(messageId)
     const snapshot = researchSnapshot.value
@@ -460,7 +465,7 @@ export function useWorkStream(options: {
             research_id: snapshot.research_id,
             base_revision: snapshot.research_revision,
             scope: subproblemId ? [subproblemId] : undefined,
-            ...(sourceIssue?{source_issue:sourceIssue}:{}),
+            ...(sourceIssue ? { source_issue: sourceIssue } : {}),
           }
         : undefined
     handler?.sendMessage(message, undefined, action, subproblemId, revision)
@@ -488,6 +493,12 @@ export function useWorkStream(options: {
   onMounted(() => {
     elapsedTimer = setInterval(() => {
       clockNow.value = Date.now()
+      if (
+        clockNow.value % 5000 < 1000 &&
+        (isStreaming.value ||
+          ['in_progress', 'running', 'processing'].includes(currentWork.value?.status || ''))
+      )
+        void loadResearchSnapshot()
     }, 1000)
   })
   onUnmounted(() => {

@@ -14,17 +14,6 @@
         ><span>v{{ skill.version }}</span>
       </div>
       <p v-if="!entry.skills.length" class="references-note">此方案未记录独立的方法资源版本。</p>
-      <button
-        @click="
-          emit(
-            'revise',
-            `请修订「${taskTitle(entry.task_id)}」的研究方法，先说明影响范围及新旧方案差异。`,
-            entry.task_id,
-          )
-        "
-      >
-        提出方案变更
-      </button>
     </article>
     <article v-for="entry in usage" :key="entry.attempt_id">
       <h4>
