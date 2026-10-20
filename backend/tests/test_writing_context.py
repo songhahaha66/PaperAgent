@@ -18,7 +18,7 @@ from test_report_submission import seed
 def cited_section(tmp_path):
     from ai_system.research.literature import LiteratureStore
     from ai_system.research.store import ResearchStore
-    from test_research_p2 import problem
+    from test_research_p2 import problem,TASK
     library=LiteratureStore(tmp_path)
     background=library.upsert({'title':'Background notes','url':'https://example.org/background'})
     library.add_passages(background,[{'text':'Estimate demand using supplied observations and independent validation. '*30,
@@ -28,9 +28,9 @@ def cited_section(tmp_path):
         'locator':'Methods paragraph'}],'fulltext_xml',adopted['url'],'adopted-hash')
     passage=library.passages(adopted['id'])[0]
     assert passage['id']=='C9' and passage['id'] not in {r['id'] for r in library.retrieve('Estimate demand',6)}
-    analysis=problem().model_dump();store=ResearchStore(tmp_path,'writing-literature');store.initialize('Estimate demand',analysis)
+    analysis=problem().model_dump();store=ResearchStore(tmp_path,'writing-literature');store.initialize(TASK,analysis)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
-    state={'task':'Estimate demand','analysis':analysis,'solutions':{},'designs':{'Q1':{'chosen':{
+    state={'task':TASK,'analysis':analysis,'solutions':{},'designs':{'Q1':{'chosen':{
         'name':'Adopted procedure','idea':'Use the acquired procedure {{C:C9}}','formulation':'training transform',
         'validation':'independent observations'}}}}
     return ctx,state,library,passage
