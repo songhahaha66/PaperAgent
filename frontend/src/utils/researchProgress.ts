@@ -102,7 +102,7 @@ export const researchActionName = (action: string) =>
     inspect: '查看材料',
     literature: '补充文献',
     ask: '补充必要信息',
-    write: '整理草稿',
+    write: '撰写论文',
     pause: '暂停研究',
     tool: '调用研究能力',
   })[action] || '研究判断'

@@ -312,7 +312,7 @@
                 v-if="issue.section && project.files.some((s) => s.path === issue.section)"
                 @click="showIssueSection(issue.section)"
               >
-                查看对应草稿
+                查看对应正文
               </button>
               <button @click="commentIssue(issue.message)">在评论中讨论</button>
             </article>

@@ -116,7 +116,7 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     signature = digest({'sections': {k: state.get('sections', {}).get(k, '') for k in by_section}, 'issues': by_section})
     history = ctx.research.snapshot().get('publication', {}).get('repair_inputs', [])
     if history.count(signature) >= 3:
-        message='自动改稿反复回到同一正文和意见，未能完成修复。草稿与意见已保留；这是自动修复失败，不是等待你决定研究内容。'
+        message='自动改稿反复回到同一正文和意见，未能完成修复。正文与意见已保留；这是自动修复失败，不是等待你决定研究内容。'
         await ctx.set_stage('validate', 'blocked', message)
         return {'research_blocked': True, 'log': [message]}
 

@@ -220,8 +220,8 @@ def decision_error_summary(error):
 def action_failure_message(action):
     capability = action['capability']
     if capability.startswith('writing.'):
-        stage = {'reconcile':'结论核对','write':'草稿撰写','validate':'草稿检查',
-                 'repair':'草稿修订','render':'论文渲染','export':'论文导出'}[capability.split('.')[1]]
+        stage = {'reconcile':'结论核对','write':'论文撰写','validate':'论文检查',
+                 'repair':'论文修订','render':'论文渲染','export':'论文导出'}[capability.split('.')[1]]
         return f'{stage}未完成。实验结果、代码和图表已保存，点击继续将从此步骤重试。'
     return '当前操作执行失败，已有产物和执行记录已保存。可查看执行详情后继续。'
 

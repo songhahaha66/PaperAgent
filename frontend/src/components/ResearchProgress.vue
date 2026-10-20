@@ -117,10 +117,10 @@
     </article>
     <section v-if="snapshot?.delivery" class="delivery">
       <header>
-        <h3>草稿与交付</h3>
-        <button @click="emit('object', { type: 'paper' })">打开草稿 →</button>
+        <h3>论文</h3>
+        <button @click="emit('object', { type: 'paper' })">打开论文 →</button>
       </header>
-      <p v-if="!Object.keys(snapshot.delivery_stages || {}).length">草稿尚未生成。</p>
+      <p v-if="!Object.keys(snapshot.delivery_stages || {}).length">尚未开始撰写论文。</p>
       <p v-for="(stage, key) in snapshot.delivery_stages" :key="key">
         {{ stageName(String(key)) }} · {{ stageStatus(stage.status) }}
       </p>

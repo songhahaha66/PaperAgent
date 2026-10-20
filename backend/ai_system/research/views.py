@@ -8,8 +8,8 @@ from ai_system.graph.registry import find_refs
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.review_report':'修订与复核报告','literature.collect':'获取文献证据',
-    'writing.reconcile':'核对证据与结论','writing.write':'撰写草稿',
-    'writing.validate':'检查草稿','writing.repair':'修订草稿',
+    'writing.reconcile':'核对证据与结论','writing.write':'撰写论文',
+    'writing.validate':'检查论文','writing.repair':'修订论文',
     'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码'}
 
 
