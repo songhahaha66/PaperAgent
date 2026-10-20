@@ -114,11 +114,27 @@ export function researchHeadline(
     if (snapshot.delivery_stages?.[key]?.status === 'blocked')
       return `${label[zh ? 0 : 1]}${zh ? '需处理' : ' needs attention'}`
   }
-  if (!snapshot.delivery?.ready)
-    return zh ? '研究任务待执行或验收' : 'Research tasks pending execution or acceptance'
   if (snapshot.artifacts.length)
-    return zh ? '论文已发布，请查看交付物' : 'Paper published, review deliverables'
-  return zh ? '研究验收通过，等待生成论文' : 'Research accepted, preparing paper'
+    return zh ? '论文产物已保存，可查看' : 'Paper artifacts saved and available'
+  const questions = snapshot.questions || []
+  const missingJudgments = questions.filter((question) => !question.judgment).length
+  if (snapshot.results.length && missingJudgments)
+    return missingJudgments === questions.length
+      ? zh
+        ? '已有实验结果，问题尚未形成判断'
+        : 'Experiment results available; question judgments not yet recorded'
+      : zh
+        ? '已有实验结果，部分问题尚无判断'
+        : 'Experiment results available; some question judgments are missing'
+  if (questions.length && !missingJudgments)
+    return zh
+      ? '已记录问题判断，论文产物尚不可用'
+      : 'Question judgments recorded; paper artifacts unavailable'
+  if (snapshot.results.length)
+    return zh
+      ? '已有实验结果，论文产物尚不可用'
+      : 'Experiment results available; paper artifacts unavailable'
+  return zh ? '等待实验结果与问题判断' : 'Awaiting experiment results and question judgments'
 }
 
 export function taskName(task: Pick<ResearchTask, 'task_id' | 'objective'>) {

@@ -81,8 +81,10 @@ def context(tmp_path, model):
     events = []
     async def stage(message):
         events.append(message)
+    async def emit(kind, content):
+        pass
     return SimpleNamespace(research=store, planner_llm=model, max_planning_calls=None,
-                           events=SimpleNamespace(stage=stage)), events
+                           events=SimpleNamespace(stage=stage,emit=emit)), events
 
 
 @pytest.mark.parametrize('json_first', [True, False])

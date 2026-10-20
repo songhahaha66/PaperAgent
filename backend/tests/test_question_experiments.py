@@ -92,7 +92,7 @@ def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path
     calls=[]
     async def stage(*args):pass
     ctx=SimpleNamespace(research=store,planner_llm=None,max_planning_calls=None,
-                        events=SimpleNamespace(stage=stage))
+                        events=SimpleNamespace(stage=stage,emit=stage))
     async def decide(self,state,context):
         calls.append(context)
         action=NextAction(action='experiment',reason='方法明确，直接计算',question='怎样预测下一周需求？',

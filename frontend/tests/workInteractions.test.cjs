@@ -181,20 +181,25 @@ if (require.main === module) (async () => {
   const progressWork = await env.work('progress')
   await progressWork.state.loadWork()
   progressWork.state.researchSnapshot.value = {
+    schema_version: 4, work_id: 'progress', work_status: 'completed',
     research_id: 'study', research_revision: 1, engine_version: 'research-v3',
-    tasks: [
-      { task_id: 'Q1', progress: { state: 'accepted' } },
-      { task_id: 'Q2', progress: { state: 'rework' } },
-    ],
+    questions: [{ id: 'question:Q1', title: '需求预测', question: '怎样预测需求？',
+      experiment_ids: ['Q1'], judgment: '', artifact_refs: [], limitations: [],
+      next_step: '', judgments: [], issues: [], sources: [] }],
+    experiments: [{ task_id: 'Q1', question_id: 'question:Q1', title: '需求预测实验',
+      progress: { state: 'accepted' } }],
+    results: [{ id: 'R1', subproblem_id: 'Q1', name: '预测需求', value: '8', unit: '',
+      kind: 'number', run_id: 'run_one', figure_path: null }],
+    artifacts: [], runs: [], claims: [], delivery: { ready: true, blockers: [] }, delivery_stages: {},
   }
-  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'paper', 'desktop starts with paper beside chat')
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress', 'desktop starts with research beside chat')
   progressWork.state.openProgress()
   assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
   assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress')
   assert.equal(progressWork.state.panelSession.value.splitRatio, 0.45)
-  assert.equal(progressWork.state.acceptedTaskCount.value, 0, 'acceptance without review evidence is not shown as checked')
-  progressWork.state.researchSnapshot.value.outcomes = [{task_id:'Q1',checking:'passed'}]
-  assert.equal(progressWork.state.acceptedTaskCount.value, 1)
+  assert.equal(progressWork.state.stageText.value, '已有实验结果，问题尚未形成判断', 'available results do not imply a question judgment')
+  progressWork.state.researchSnapshot.value.questions[0].judgment = '当前样本的预测值已记录，外推范围尚待验证。'
+  assert.equal(progressWork.state.stageText.value, '已记录问题判断，论文产物尚不可用')
   progressWork.state.openProgress()
   assert.equal(
     progressWork.state.panelSession.value.panels.filter((tab) => tab.kind === 'progress').length,

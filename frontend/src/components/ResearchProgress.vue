@@ -62,9 +62,9 @@
           <button @click="emit('issue', issue.id)">查看相关记录</button>
         </div>
       </section>
-      <details v-if="selected.judgments.length > 1">
+      <details v-if="previousJudgments.length">
         <summary>之前的判断</summary>
-        <article v-for="(judgment, index) in selected.judgments.slice(0, -1)" :key="index">
+        <article v-for="(judgment, index) in previousJudgments" :key="index">
           <small>{{
             judgment.recorded_at
               ? new Date(judgment.recorded_at * 1000).toLocaleString()
@@ -147,6 +147,13 @@ const questions = computed(() => props.snapshot?.questions || [])
 const selected = computed(
   () => questions.value.find((q) => q.id === selectedId.value) || questions.value[0],
 )
+const previousJudgments = computed(() => {
+  const question = selected.value
+  const history = question?.judgments || []
+  return question?.judgment && history.at(-1)?.statement === question.judgment
+    ? history.slice(0, -1)
+    : history
+})
 const selectedExperiments = computed(
   () => props.snapshot?.experiments?.filter((e) => e.question_id === selected.value?.id) || [],
 )

@@ -28,8 +28,8 @@
       {{ snapshot?.execution_reason?.message || '研究已暂停，记录已保存。' }}
     </p>
     <p v-if="lastUpdated" class="updated">上次记录 {{ timeLabel(lastUpdated) }}</p>
-    <details v-if="!compact && history.length" class="history">
-      <summary>研究经过</summary>
+    <section v-if="!compact && history.length" class="history">
+      <h3>研究经过</h3>
       <article v-for="entry in history" :key="entry.id">
         <header>
           <strong>{{ entry.label }}</strong
@@ -76,7 +76,7 @@
           </ol>
         </details>
       </article>
-    </details>
+    </section>
     <details v-if="!compact && unlinked.length" class="history">
       <summary>未关联的执行记录</summary>
       <ol>
