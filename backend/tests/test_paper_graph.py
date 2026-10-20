@@ -273,6 +273,10 @@ class FakeModel(BaseChatModel):
             body += "\n\n" + "\n\n".join(figures)
         if "撰写「摘要」" in request and "# 当前稿" not in request and self.loose_number_once:
             body += " 另外误差约为 12.345。"
+        if "撰写「模型的评价与推广」" in request and "# 当前稿" in request and "把 C1 写成了显著" in request:
+            body = ("本节依据登记结果展开论述，" + "、".join(numbers)
+                    + "。当前证据只能统一表述为倾向性结论，尚无统计显著性检验证据。"
+                      "结论限于当前数据和已检验条件，推广到其他条件仍需独立验证。")
         return body
 
 
@@ -367,6 +371,8 @@ def test_graph_end_to_end_offline(tmp_path):
     assert not any("无矛盾" in req or "没有提到 C1" in req for req in model.text_calls)
     assert result["repair_round"] == 1
     assert result["issues"] == []
+    assert _Structured.audits == 2, "Changed evaluation text needs a new review; unchanged text must reuse the cached finding"
+    assert "尚无统计显著性检验证据" in result["sections"]["evaluation"]
 
     paper = (ws / "paper.md").read_text(encoding="utf-8")
     assert paper.startswith("# 基于时间序列的城市用电量预测与政策评估")
