@@ -309,3 +309,34 @@ def test_technical_review_failure_keeps_controller_frontier_and_completed_steps(
     assert loop.flow(study.store)['done']==['reconcile','write']
     selected=loop.select({**study.state,'research_blocked':False},SimpleNamespace(context=study.ctx))
     assert selected.arg['capability']=='writing.validate'
+
+
+
+def test_render_service_failure_pauses_without_restarting_completed_delivery(study):
+    publish(study, 'Q1', 3);publish(study, 'Q2', 4)
+    key, context = planner.decision_context(study.store, study.store.snapshot())
+    proposal = decision(context, 'deliver')
+    study.store.save_planning_decision(key, {'status':'done', 'proposal':proposal.model_dump()})
+    done = ['reconcile', 'write', 'validate']
+    with study.store._transaction() as db:
+        snapshot = study.store._read(db)
+        snapshot['workflow'] = {'epoch':key, 'done':done, 'repairs':0, 'blocked':False}
+        study.store._save(db, snapshot, 'fixture_delivery_validated', {})
+    study.store.report_issues([IssueReport(task_id='Q1', category='service',
+        message='Local review service unavailable.')], 'local_review')
+    before = study.store.snapshot()
+    assert planner.current_decision(study.store)[0] == key
+    runtime = SimpleNamespace(context=study.ctx)
+    action = loop.select(study.state, runtime)
+    assert action.arg['capability'] == 'writing.render'
+    patch = asyncio.run(loop.act(action.arg, runtime))
+    assert patch['research_blocked'] and not patch.get('research_restart')
+    assert loop.flow(study.store)['done'] == done
+    assert study.store.snapshot()['delivery_stages']['render']['status'] == 'blocked'
+    for _ in range(2):
+        state = observe(study)
+        assert state['research_blocked'] and loop.select(state, runtime) == loop.END
+    after = study.store.snapshot()
+    assert after['workflow']['epoch'] == key and after['workflow']['done'] == done
+    assert after['attempts'] == before['attempts'] and after['evidence'] == before['evidence']
+    assert after['planning_calls'] == before['planning_calls']

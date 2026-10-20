@@ -199,7 +199,11 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     if ctx.research:
         snapshot = ctx.research.refresh_inputs()
         if not ctx.research.delivery_ready(snapshot):
-            return {"research_restart": True, "log": ["render: inputs changed, returning to research control"]}
+            if any(i['category']=='service' and i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}
+                   for i in research_findings(snapshot)):
+                await ctx.set_stage('render', 'blocked', '审查服务尚未完成，保留已完成的交付步骤，恢复后重试。')
+                return {'research_blocked': True, 'log': ['render: pending service review; delivery position retained']}
+            return {"research_restart": True, "log": ["render: research evidence changed, returning to research control"]}
         ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
     native = ctx.output_mode == "latex"
     filename = "paper.tex" if native else "paper.md"
