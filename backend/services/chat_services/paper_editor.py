@@ -123,6 +123,28 @@ def empty_document(research_id=None, commit_seq=0):
             'verified_methods': [], 'verified_formula_blocks': {}, 'artifacts': []}
 
 
+async def _native_preview(text):
+    # New GFM writers need tex_math_gfm disabled for markdown-it-katex. Older
+    # distro Pandoc releases do not know that extension and already emit $ math.
+    for target in ('gfm+tex_math_dollars-tex_math_gfm','gfm+tex_math_dollars'):
+        process=await asyncio.create_subprocess_exec('pandoc','--sandbox','-f','latex','-t',target,'--wrap=none',
+            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
+        try:
+            out,error=await asyncio.wait_for(process.communicate(text.encode()),timeout=15)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return text
+        if process.returncode==0:
+            # Display math must be a separate block for markdown-it-katex.
+            return re.sub(r'(?<!\\)\$\$(.*?)(?<!\\)\$\$',
+                          lambda m:'\n\n$$\n'+m.group(1).strip()+'\n$$\n\n',out.decode(),flags=re.S)
+        error=error.lower()
+        if b'tex_math_gfm' not in error or not (b'unknown extension' in error or b'not supported' in error):
+            break
+    return text
+
+
 async def document(store):
     snapshot = store.snapshot()
     if not snapshot or not any(s.get('text', '').strip() for s in snapshot['sections'].values()):
@@ -145,18 +167,7 @@ async def document(store):
         if native:
             text = CITATION.sub(lambda m:'PAPERAGENTCITE'+m.group(1),text)
         if native and shutil.which('pandoc'):
-            process = await asyncio.create_subprocess_exec('pandoc', '--sandbox', '-f', 'latex', '-t', 'gfm+tex_math_dollars-tex_math_gfm', '--wrap=none', stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            try:
-                out, _ = await asyncio.wait_for(process.communicate(text.encode()), timeout=15)
-                if process.returncode == 0:
-                    # markdown-it-katex expects display math on its own block;
-                    # Pandoc can place $$...$$ inside a prose paragraph.
-                    text = re.sub(r'(?<!\\)\$\$(.*?)(?<!\\)\$\$',
-                                  lambda m: '\n\n$$\n' + m.group(1).strip() + '\n$$\n\n',
-                                  out.decode(), flags=re.S)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+            text = await _native_preview(text)
         readable[key] = render_citations(store.root,re.sub(r'PAPERAGENTCITE(C[1-9]\d*)',lambda m:'{{C:'+m.group(1)+'}}',text))
     with store._connect() as db:
         history = [json.loads(row[0]) for row in db.execute(

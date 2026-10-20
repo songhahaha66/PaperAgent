@@ -123,6 +123,44 @@ def test_native_preview_preserves_inline_commands_and_isolates_display_math(pape
     assert (store.root / 'paper.tex').read_bytes() == before
 
 
+@pytest.mark.parametrize('unsupported',[
+    None,
+    b'Unknown extension: tex_math_gfm',
+    b'The extension tex_math_gfm is not supported for gfm',
+])
+def test_native_preview_math_is_portable_across_supported_pandoc_extensions(monkeypatch,unsupported):
+    source=r'条件 $x+y\leq 4$，目标为 \[z=3x+2y\]，不改变原始约束。'
+    converted=r'条件 $x+y\leq 4$，目标为 $$z=3x+2y$$，不改变原始约束。'
+    calls=[]
+    async def process(*command,**kwargs):
+        assert '--sandbox' in command
+        target=command[command.index('-t')+1]
+        error=unsupported if target.endswith('-tex_math_gfm') else None
+        async def communicate(data):
+            calls.append((target,data))
+            return (b'',error) if error else (converted.encode(),b'')
+        return SimpleNamespace(returncode=1 if error else 0,communicate=communicate)
+    monkeypatch.setattr(editor.asyncio,'create_subprocess_exec',process)
+    readable=asyncio.run(editor._native_preview(source))
+    assert '$x+y\\leq 4$' in readable
+    assert '\n\n$$\nz=3x+2y\n$$\n\n' in readable
+    assert [target for target,_ in calls]==(['gfm+tex_math_dollars-tex_math_gfm','gfm+tex_math_dollars'] if unsupported else
+                                           ['gfm+tex_math_dollars-tex_math_gfm'])
+    assert all(data==source.encode() for _,data in calls), 'A compatibility retry must use the identical LaTeX source'
+
+
+def test_native_preview_does_not_retry_or_fabricate_conversion_on_real_input_error(monkeypatch):
+    source=r'原稿 \custom{宏} 与 \[x+y\]。'
+    calls=[]
+    async def process(*command,**kwargs):
+        calls.append(command)
+        async def communicate(data):return b'',b'Error at input: unexpected end of environment'
+        return SimpleNamespace(returncode=65,communicate=communicate)
+    monkeypatch.setattr(editor.asyncio,'create_subprocess_exec',process)
+    assert asyncio.run(editor._native_preview(source))==source
+    assert len(calls)==1
+
+
 def test_native_legacy_proposals_cannot_overwrite_file_project(paper):
     store, state = paper
     store.publish_paper(assemble_latex(state), filename='paper.tex')

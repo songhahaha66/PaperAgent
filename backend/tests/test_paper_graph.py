@@ -120,6 +120,9 @@ class _Structured:
                 Conflict(claims=["C1"], issue="Q1 结论强度与 Q2 不符", resolution="统一表述为倾向性结论"),
             ])
         if self.schema is ClaimAudit:
+            allowed=re.search(r'section 只能填这些 key：(\[[^\n]*\])',messages[-1].content)
+            if allowed and 'evaluation' not in json.loads(allowed[1]):
+                return ClaimAudit(issues=[])  # Custom templates have different section keys.
             _Structured.audits += 1
             if _Structured.audits == 1:
                 return ClaimAudit(issues=[

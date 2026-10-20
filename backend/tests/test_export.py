@@ -1,6 +1,7 @@
 """论文导出（LaTeX / Word）与模板章节结构"""
 
 import asyncio
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -176,6 +177,21 @@ def test_template_outline_docx_headings_and_missing_solve():
     assert template_outline("## Word 骨架\n- 第1段 [Normal]: 正文\n") == []
 
 
+def test_template_audit_fixture_respects_the_supplied_section_keys(monkeypatch):
+    from test_paper_graph import _Structured
+    from ai_system.graph.llm_utils import as_messages
+    from ai_system.graph.state import ClaimAudit
+    monkeypatch.setattr(_Structured,'audits',0)
+    keys=['abstract','restatement','solve:Q1','custom:4']
+    audit=asyncio.run(_Structured(ClaimAudit).ainvoke(as_messages('核对实际提供的章节。',
+        'section 只能填这些 key：'+json.dumps(keys,ensure_ascii=False))))
+    assert all(issue.section in keys for issue in audit.issues)
+    # The general graph fixture retains its adversarial audit for its own test.
+    normal=asyncio.run(_Structured(ClaimAudit).ainvoke(as_messages('核对实际提供的章节。',
+        'section 只能填这些 key：["evaluation"]')))
+    assert any(issue.section=='evaluation' and issue.contradicts for issue in normal.issues)
+
+
 @needs_pandoc
 def test_graph_agent_word_mode_follows_template(tmp_path):
     from docx import Document
@@ -183,14 +199,16 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     ws = _make_workspace(tmp_path)
     (ws / ".system").mkdir(parents=True, exist_ok=True)
     (ws / ".system" / "template_contract.md").write_text(MD_CONTRACT, encoding="utf-8")
-    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge(), output_mode="word")
+    # This checks template/export behavior; adversarial prose and its repair are
+    # covered by test_graph_end_to_end_offline, including the unregistered number.
+    agent = PaperGraphAgent(FakeModel(loose_number_once=False), workspace_dir=str(ws), judge=FixedJudge(), output_mode="word")
     output = asyncio.run(agent.run(TASK))
+    assert "paper.docx" in output
 
     paper = (ws / "paper.md").read_text(encoding="utf-8")
     headings = [line for line in paper.splitlines() if line.startswith("## ")]
     assert headings == ["## 摘要", "## 1 研究背景", "## 2 模型假设", "## 3 模型建立与求解", "## 4 结论与建议", "## 参考文献"]
     assert "### Q1" in paper
-    assert "paper.docx" in output
     texts = [p.text for p in Document(str(ws / "paper.docx")).paragraphs]
     assert "4 结论与建议" in texts
     from services.chat_services.research_session import research_snapshot
