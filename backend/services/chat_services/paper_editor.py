@@ -177,13 +177,6 @@ async def document(store):
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_patch_attempts'").fetchone() else [])
     from ai_system.research.method_facts import verified_methods,canonical_method_block
     from types import SimpleNamespace
-    for proposal in history:
-        if proposal.get('review_kind')=='issue_segmented' and proposal['status']=='pending':
-            try:
-                from .long_issue_review import progress
-                proposed={**state,'sections':{**state['sections'],**proposal['after_sections']}}
-                proposal['review_progress']=progress(store,proposed,SimpleNamespace(model_name=proposal['review_model_id']),proposal['source_issue'])
-            except (ValueError,ResearchConflict):proposal['review_progress_error']='候选或源意见版本已变化，请重新定位核对'
     methods=verified_methods(store)
     blocks={}
     for task in {f['task_id'] for f in methods}:

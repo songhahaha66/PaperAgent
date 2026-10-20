@@ -10,7 +10,7 @@
 1. reconcile（写作前）：审查模型通读全部结论，找出跨子问题的矛盾、以及强度与自身证据不符的结论，
    给出统一口径；写作时每一节都带着这份口径，从源头避免各写各的。
 2. audit_sections（校验时）：检查摘要、问题分析、灵敏度分析、模型评价这些汇总性章节是否与结论表一致，
-   不一致的作为校验问题交给修复环节，与数字校验走同一个修复回路。
+   实际矛盾作为校验问题交给修复环节；技术失败保留为未完成，不改判研究结论。
 """
 
 from ai_system.research.domain import findings as research_findings
@@ -22,7 +22,7 @@ from typing import Dict, List
 from langgraph.runtime import Runtime
 
 from ai_system.graph.context import GraphContext
-from ai_system.graph.llm_utils import as_messages, call_structured, clip
+from ai_system.graph.llm_utils import as_messages, call_structured
 from ai_system.graph.registry import ResultRegistry, find_refs
 from ai_system.research.models import IssueReport
 from ai_system.graph.state import ClaimAudit, ConsistencyReview, PaperState
@@ -53,31 +53,21 @@ AUDIT_SYSTEM = (
     "正文引用对应的数值和含义以登记证据表为准。主要结论表只是关键结论摘录，不是证据全集；"
     "已登记的变量或辅助结果可以用于论证，不得因为它未被主要结论表列出就判为虚构。"
     "引用格式和编号存在性由程序检查，本次只审查语义矛盾，不要要求增加内部编号、照抄数值或逐句标注证据强度。"
-    "逐句检查这些章节是否与结论表一致：结论方向、显著与否、强弱程度、适用范围是否被改写或夸大。"
+    "围绕重要结论和已知矛盾核查这些章节：结论方向、显著与否、强弱程度、适用范围是否被改写或夸大。"
     "只报告与结论表或统一口径实际矛盾的句子；一致的、或只是没有提到某条结论的都不要列入，措辞风格问题也不要报告。"
 )
 
 # 审查模型常把"核对过、一致"的句子也列成问题（v2k 的 7 条全是"……无矛盾"），每条都会触发一次无谓的章节修复
 NOT_A_CONFLICT = re.compile(r"无矛盾|没有矛盾|不矛盾|不存在矛盾|并无矛盾")
 
-# 需要与结论表保持一致的汇总性章节
-AUDITED_SECTIONS = ("abstract", "analysis", "sensitivity", "evaluation")
-AUDIT_SECTION_CHARS = 6000
-
-
 def section_coverage(sections):
-    rows={k:{'total_chars':len(v),'included_chars':min(len(v),AUDIT_SECTION_CHARS)}
-        for k,v in sections.items() if k!='references' and v}
-    return {'policy':'section-coverage-v1','limit':AUDIT_SECTION_CHARS,'sections':rows,
-        'complete':all(r['total_chars']==r['included_chars'] for r in rows.values())}
+    """Describe supplied source material; this is not proof of every sentence."""
+    rows={k:{'total_chars':len(v),'included_chars':len(v)}
+          for k,v in sections.items() if k!='references' and v}
+    return {'policy':'key-claims-v1','full_document':False,'sections':rows,'complete':True}
 
 
 class ReviewCoverageIncomplete(ValueError):pass
-
-
-def require_complete_sections(sections):
-    coverage=section_coverage(sections)
-    if not coverage['complete']:raise ReviewCoverageIncomplete('章节超过6000字符，现有审查覆盖不完整；不能视为全文通过，请缩小审查范围或等待分段核查')
 
 
 def consistency_text(ctx: GraphContext, conflicts: List[Dict]) -> str:
@@ -130,7 +120,7 @@ async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     except Exception as exc:
         from ai_system.research.review_cache import error_code
         ctx.write_json(".system/consistency.json", {"error": error_code(exc), "conflicts": []})
-        return {"consistency": [], "research_restart": True, "log": [f"reconcile: failed ({error_code(exc)})"]}
+        return {"consistency": [], "research_restart": False, "research_blocked": True, "log": [f"reconcile: incomplete ({error_code(exc)})"]}
     research_reports = [IssueReport.model_validate(c["research_issue"]) for c in conflicts if c.get("research_issue")]
     if research_reports:
         active = ctx.research.report_issues(research_reports, "reconcile")
@@ -156,7 +146,7 @@ def section_audit_prompt(state,ctx,*,force=False):
     methods=method_context(getattr(ctx,'research',None))
     if not keys or not ctx.registry.claims and not methods and not force:return None
     body = "\n\n".join(
-        f"## 章节 key: {k}\n{clip(sections[k], AUDIT_SECTION_CHARS)}" for k in keys
+        f"## 章节 key: {k}\n{sections[k]}" for k in keys
     )
     refs = set(find_refs(body)) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
     evidence = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items() if rid in refs})
@@ -178,13 +168,9 @@ def validate_findings(issues,state,ctx):
 
 async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False) -> List[IssueReport]:
     """Completed results are reusable only for the same complete review context."""
-    from ...research.segmented_review import needed
-    segmented=needed(state.get('sections') or {})
-    if segmented:keys=list(state['sections']);prompt=''
-    else:
-        prepared=section_audit_prompt(state,ctx,force=candidate)
-        if prepared is None:return []
-        prompt,keys=prepared
+    prepared=section_audit_prompt(state,ctx,force=candidate)
+    if prepared is None:return []
+    prompt,keys=prepared
     try:
         from ai_system.research.review_cache import run_review
         def validate(result):
@@ -193,11 +179,7 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
             validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
         async def perform():
             return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
-        if segmented:
-            from ai_system.research.segmented_review import audit as segmented_audit
-            audit=await segmented_audit(ctx,state,candidate=candidate)
-            keys=list(state['sections'])
-        else:audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
+        audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
     except Exception as exc:
         from ai_system.research.review_cache import error_code
         if ctx.research is not None and not candidate:

@@ -269,7 +269,10 @@ def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot) -> 
         requested='confirm' if waiting else 'resume'
     if requested == "auto":
         if waiting:
-            requested='confirm'
+            # A question about a paused plan is read-only. Other replies supply
+            # the requested information and retain the user's actual words.
+            explanation=re.search(r'解释|说明|分析|介绍|解读|讲解|为什么|为何|怎么|如何|是否|什么|[？?]|\b(?:explain|why|how|what)\b',message,re.I)
+            requested='ask' if explanation else 'confirm'
         elif snapshot.has_research and is_revision_request(message):
             requested='revise_research'
         else:

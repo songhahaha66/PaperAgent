@@ -134,7 +134,7 @@
               <p>
                 {{
                   isZh
-                    ? '依据当前已核验方法和结果修正公式或结论措辞。实验设置和实测结果保持不变；候选通过引用与全文一致性核查后才能应用。'
+                    ? '依据当前已核验方法和结果修正公式或结论措辞。实验设置和实测结果保持不变；候选通过引用与重要结论一致性核查后才能应用。'
                     : 'Correct explanations using verified methods and results. Experimental settings and results stay fixed. Source and consistency checks are required.'
                 }}
               </p>
@@ -228,8 +228,8 @@
                         ? '已保存局部等义性审查记录'
                         : 'Fragment equivalence review recorded'
                       : isZh
-                        ? '已保存完整章节覆盖审查记录'
-                        : 'Complete section review recorded'
+                        ? '已保存重要结论一致性审查记录'
+                        : 'Key conclusion review recorded'
               }}
             </p>
             <div v-if="proposal.review_progress" class="candidate-review-progress">

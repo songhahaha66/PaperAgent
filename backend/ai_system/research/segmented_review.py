@@ -1,18 +1,17 @@
-"""Deterministic coverage manifests, reusable local reviews and an independent global check.
+"""Read-only verification of historical segmented review receipts.
 
-Only review_records are durable. Core spans partition every source character;
-left-neighbour windows overlap intentionally and do not count twice as coverage.
+The old limits and prompt contract apply only to existing records. No new review
+is dispatched here; current reviews use the normal conclusion/source-issue path.
 """
 
-from ai_system.research.domain import findings as research_findings
-import asyncio,json,re,time
+import json,re
 from contextlib import closing
 from pydantic import BaseModel,Field
 from .store import digest
-from .review_cache import ReviewCache,ReviewInProgress,ReviewSuperseded,review_context,science_version
-from .runtime import ResearchRuntime,ResearchBudgetExhausted
-from ..graph.state import ClaimAudit,ClaimIssue
-from ..graph.llm_utils import as_messages,call_structured,cap_output
+from .review_cache import review_context,science_version
+from ..graph.state import ClaimIssue
+
+LEGACY_AUDIT_SYSTEM='区分实测数值差异与统计显著性：固定拆分上误差更低、相对均值基线改善，并不能单独支持统计显著。即使结论表的strength标为显著，仍要核查具体检验证据；不得把结果明确当作已做显著性检验。正文同时声明未做显著性检验却使用显著优于/显著改善时，须要求限定为该拆分上的实测差异。方法公式须对照实际核验的估计器设置：截距、是否惩罚截距、训练集中心化和标准化的拟合范围。明确的中心化方程加截距恢复，或含常数列且正确处理截距惩罚的方程均有效；不要要求固定符号写法。构造反例前先核对登记序列的对应关系：对象、日期和统计范围必须一致；逐日不等式须逐日比较，不能用某日最小值与全周均值比较来反证。若根因是数据、模型或假设错误，填写research_issue并引用登记证据和检查编号，进入研究核验；仅写作错误只填section和problem。补写没有证据支持的数值、夸大结论或遗漏适用条件，应按已有证据重写，不能为此重算原本正确的上游。research_issue只用于已有上游结果本身可能错误的情况；检查必须直接验证疑点，不能用目标值有限或其他无关检查代替。另一个例外是确实发现原题研究目的尚无实际产物回答：用research_issue.category=coverage说明缺少的原要求及实际依据，交回同一研究控制器；这不是已证明的上游错误，不虚构检查或阈值。仅文稿漏写已有结果时仍按writing处理，不要求新增实验。你是论文终审。下面给出主要结论、统一口径、已登记证据，以及保留原始引用的章节正文。正文引用对应的数值和含义以登记证据表为准。主要结论表只是关键结论摘录，不是证据全集；已登记的变量或辅助结果可以用于论证，不得因为它未被主要结论表列出就判为虚构。引用格式和编号存在性由程序检查，本次只审查语义矛盾，不要要求增加内部编号、照抄数值或逐句标注证据强度。逐句检查这些章节是否与结论表一致：结论方向、显著与否、强弱程度、适用范围是否被改写或夸大。只报告与结论表或统一口径实际矛盾的句子；一致的、或只是没有提到某条结论的都不要列入，措辞风格问题也不要报告。'
 
 POLICY='segmented-sections-v1'
 ATOM_LIMIT=3000
@@ -22,8 +21,6 @@ MAX_BLOCKS=128
 
 class CoverageError(ValueError):pass
 
-
-def needed(sections):return sum(len(text) for text in sections.values())>WINDOW_LIMIT
 
 class Statement(BaseModel):
     quote:str=Field(min_length=1,max_length=800)
@@ -85,27 +82,6 @@ def atoms(text):
     return result
 
 
-def plan_for(sections,versions=None):
-    blocks=[];metadata={};versions=versions or {}
-    for section,text in sections.items():
-        previous_version=versions.get(section,{})
-        revision=previous_version.get('revision',1)
-        if previous_version.get('content_hash') and previous_version['content_hash']!=digest(text):revision+=1
-        metadata[section]={'hash':digest(text),'length':len(text),'revision':revision}
-        previous=None
-        for start,end in atoms(text):
-            window_start=previous[0] if previous else start
-            core=text[start:end];window=text[window_start:end]
-            binding={'section':section,'section_hash':digest(text),'revision':metadata[section]['revision'],'start':start,'end':end,
-                'window_start':window_start,'window_end':end,'core_hash':digest(core),'window_hash':digest(window)}
-            blocks.append({**binding,'id':digest(binding),'text':core,'left':text[window_start:start]})
-            previous=(start,end)
-    if len(blocks)>MAX_BLOCKS:raise CoverageError('本次超过128个必需块，需先整理章节结构；未发送模型请求')
-    plan={'policy':POLICY,'atom_limit':ATOM_LIMIT,'offset_unit':'unicode_code_point','sections':metadata,'blocks':blocks}
-    plan['id']=digest(plan);validate_plan(plan)
-    return plan
-
-
 def validate_plan(plan):
     if plan.get('policy')!=POLICY or plan.get('atom_limit')!=ATOM_LIMIT or plan.get('offset_unit')!='unicode_code_point' or len(plan['blocks'])>MAX_BLOCKS or digest({k:v for k,v in plan.items() if k!='id'})!=plan.get('id'):raise CoverageError('覆盖清单校验失败')
     seen=set()
@@ -126,25 +102,14 @@ def validate_plan(plan):
     return True
 
 
-def make_plan(ctx,state):
-    snapshot=ctx.research.snapshot() if getattr(ctx,'research',None) else {}
-    return plan_for(state.get('sections') or {},(snapshot or {}).get('sections',{}))
-
-
-def aggregate_context(ctx,state,plan=None,candidate=False):
-    plan=plan or make_plan(ctx,state)
-    context=review_context(ctx,state,'sections',POLICY,plan['id'],ClaimAudit,sections=state['sections'],extra={'non_blocking':candidate,'segmented_plan':plan,'prompt_contract':{'requirements':state['analysis']['requirements'],'assumptions':state['analysis']['assumptions'],'consistency':state.get('consistency') or []}})
-    context['section_coverage']={'policy':POLICY,'complete':True,'sections':{k:{'total_chars':v['length'],'included_chars':v['length']} for k,v in plan['sections'].items()},'plan_id':plan['id']}
-    return context
-
-
 def _rows(store):
     with closing(store._connect()) as db:
         return [{**json.loads(r[1]),'state':r[0]} for r in db.execute('SELECT state,payload FROM review_records WHERE research_id=? ORDER BY rowid DESC',(store.research_id,))]
 
 
 def block_material(ctx,state,block):
-    from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt
+    from ai_system.modules.writing.consistency import section_audit_prompt
+    AUDIT_SYSTEM=LEGACY_AUDIT_SYSTEM
     selected={**state,'sections':{block['section']:block['left']+block['text']}}
     # The normal evidence/contract prompt is reused; the window never exceeds its cap.
     prompt=section_audit_prompt(selected if block['section']!='references' else {**state,'sections':{'scope':'文献列表也须逐块核查，实际原文见下方范围说明。'}},ctx,force=True)[0]
@@ -164,37 +129,9 @@ def validate_block(answer,block,ctx,state):
     validate_findings([i.research_issue for i in answer.issues if i.research_issue],state,ctx)
 
 
-def reusable(rows,stage,context,schema):
-    key=context['extra']['reuse_key']
-    for row in rows:
-        if row['stage']!=stage or row['state']!='completed' or row.get('result_hash')!=digest(row.get('result')) or row['context'].get('extra',{}).get('reuse_key')!=key:continue
-        if row['context_hash']!=digest(row['context']) or row['context'].get('model_id')!=context.get('model_id') or row['context'].get('reconcile_projection_hash')!=context.get('reconcile_projection_hash'):continue
-        if row['context']['request_hash']!=context['request_hash'] or science_version(row['context'])!=science_version(context) or row['context'].get('citation_sources')!=context.get('citation_sources'):continue
-        try:return schema.model_validate(row['result']),row
-        except ValueError:pass
-    return None
-
-
-def _budget(ctx):
-    value=ResearchRuntime(ctx.research.root,ctx.research.research_id).status()
-    if value['state']=='provider_blocked' or (value.get('request_limit') is not None and value['used']>=value['request_limit']):raise ResearchBudgetExhausted('分段审查预算不足；已完成块保留，恢复不会清零')
-
-
-async def child(ctx,state,stage,schema,context,system,prompt,validate):
-    from .review_cache import run_review
-    hit=reusable(_rows(ctx.research),stage,context,schema)
-    if hit:validate(hit[0]);return hit
-    async def perform():
-        _budget(ctx)
-        return await call_structured(cap_output(ctx.planner_llm,2600),schema,as_messages(system,prompt),validate=validate,retries=0)
-    answer=await run_review(ctx,state,stage,schema,system,prompt,perform,sections={k:v for k,v in state['sections'].items()},extra=context['extra'],validate=validate)
-    hit=reusable(_rows(ctx.research),stage,context,schema)
-    if not hit:raise CoverageError('局部核查没有可验证的完成记录')
-    return answer,hit[1]
-
-
 def global_material(ctx,state,bindings):
-    from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt
+    from ai_system.modules.writing.consistency import section_audit_prompt
+    AUDIT_SYSTEM=LEGACY_AUDIT_SYSTEM
     ledger=[]
     for index,(block,answer,row) in enumerate(bindings):
         ledger.append({'key':f'B{index+1}','section':block['section'],'core_hash':block['core_hash'],'review_key':row['context']['extra']['reuse_key'],
@@ -250,73 +187,3 @@ def verify_proof(store,record):
         if record['result']!={'issues':list({digest(i.model_dump()):i.model_dump() for i in actual}.values())}:return False
         return True
     except (KeyError,ValueError,TypeError):return False
-
-
-async def audit(ctx,state,*,candidate=False):
-    from .runtime import budget_scope
-    with budget_scope(ctx.research.root,ctx.research.research_id):
-        return await _audit(ctx,state,candidate=candidate)
-
-
-async def _audit(ctx,state,*,candidate=False):
-    plan=make_plan(ctx,state);context=aggregate_context(ctx,state,plan,candidate);cache=ReviewCache(ctx.research)
-    hit=cache.get('sections',context,ClaimAudit)
-    if hit:cache.reuse(hit[1],current_context=lambda:aggregate_context(ctx,state,candidate=candidate));return hit[0]
-    try:record=cache.start('sections',context,'segmented-aggregate')
-    except ReviewInProgress as running:return await cache.wait(running.record,ClaimAudit,lambda:aggregate_context(ctx,state,candidate=candidate))
-    heartbeat=asyncio.create_task(cache.heartbeat(record))
-    try:
-        bindings=[]
-        for block in plan['blocks']:
-            selected={**state,'sections':{block['section']:block['left']+block['text']}}
-            local,system,prompt=block_material(ctx,state,block)
-            answer,row=await child(ctx,selected,'section_blocks',BlockAudit,local,system,prompt,lambda a,b=block:validate_block(a,b,ctx,state))
-            bindings.append((block,answer,row))
-        global_context,system,prompt,ledger=global_material(ctx,state,bindings)
-        answer,global_row=await child(ctx,state,'section_global',GlobalAudit,global_context,system,prompt,lambda a:validate_global(a,ledger,ctx,state))
-        findings=[i for _,result,_ in bindings for i in result.issues]+answer.issues
-        unique={digest(i.model_dump()):i for i in findings};result=ClaimAudit(issues=list(unique.values()))
-        proof={'blocks':[{'binding_id':b['id'],'review_id':r['id'],'result_hash':r['result_hash'],'reuse_key':r['context']['extra']['reuse_key']} for b,_,r in bindings],
-            'global':{'review_id':global_row['id'],'result_hash':global_row['result_hash']},'policy':POLICY}
-        cache.complete(record,result.model_dump(),provenance=proof,current_context=lambda:aggregate_context(ctx,state,candidate=candidate));return result
-    except asyncio.CancelledError:
-        cache.failed(record,RuntimeError('interrupted'),current_context=lambda:aggregate_context(ctx,state,candidate=candidate));raise
-    except Exception as exc:
-        cache.failed(record,exc,current_context=lambda:aggregate_context(ctx,state,candidate=candidate));raise
-    finally:
-        heartbeat.cancel();await asyncio.gather(heartbeat,return_exceptions=True)
-
-
-def progress(ctx,state):
-    plan=make_plan(ctx,state);rows=_rows(ctx.research);done=0;covered=0;bindings=[];blocks=[]
-    for b in plan['blocks']:
-        context,_,_=block_material(ctx,state,b);hit=reusable(rows,'section_blocks',context,BlockAudit)
-        if hit:
-            try:validate_block(hit[0],b,ctx,state)
-            except ValueError:hit=None
-        matches=[r for r in rows if r['stage']=='section_blocks' and r['context'].get('extra',{}).get('reuse_key')==context['extra']['reuse_key']]
-        latest=matches[0] if matches else None
-        status='completed' if hit else 'running' if latest and latest['state']=='running' and latest.get('lease',{}).get('expires_at',0)>time.time() else 'failed' if latest else 'pending'
-        if hit:done+=1;covered+=b['end']-b['start'];bindings.append((b,hit[0],hit[1]))
-        blocks.append({k:b[k] for k in ('id','section','start','end','window_start','window_end','revision')}|{'state':status,'review_id':hit[1]['id'] if hit else latest['id'] if latest else None})
-    global_state='pending';global_id=None
-    global_reason=None
-    if done==len(plan['blocks']):
-        try:
-            context,_,_,ledger=global_material(ctx,state,bindings);hit=reusable(rows,'section_global',context,GlobalAudit)
-            if hit:
-                try:validate_global(hit[0],ledger,ctx,state)
-                except ValueError:hit=None
-            if hit:global_state='completed';global_id=hit[1]['id']
-            else:
-                latest=next((r for r in rows if r['stage']=='section_global' and r['context'].get('extra',{}).get('reuse_key')==context['extra']['reuse_key']),None)
-                if latest:global_state='running' if latest['state']=='running' else 'failed';global_id=latest['id']
-        except CoverageError as exc:global_state='blocked';global_reason=str(exc)
-    sections=[]
-    for key,meta in plan['sections'].items():
-        group=[b for b in blocks if b['section']==key];complete=[b for b in group if b['state']=='completed']
-        sections.append({'section':key,'revision':meta['revision'],'completed_blocks':len(complete),'total_blocks':len(group),
-            'covered_chars':sum(b['end']-b['start'] for b in complete),'total_chars':meta['length'],'local_complete':len(complete)==len(group)})
-    return {'plan_id':plan['id'],'offset_unit':'unicode_code_point','sections':sections,'total_blocks':len(blocks),'completed_blocks':done,'covered_chars':covered,'total_chars':sum(s['length'] for s in plan['sections'].values()),
-        'blocks':blocks,'global':{'state':global_state,'review_id':global_id,'scope':'全部块提取的可定位主张；独立于局部核查','reason':global_reason},
-        'remaining_requests_upper_bound':len(blocks)-done+(global_state!='completed')}

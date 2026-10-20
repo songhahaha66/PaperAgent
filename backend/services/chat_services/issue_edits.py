@@ -38,11 +38,7 @@ def bind_findings(store,ids,sections):
                 finding=next((f for f in row['result'].get('issues',[]) if f['section']==issue['section'] and f.get('problem') and (issue['message']==f['problem'] or issue['message']=='与结论表不一致：'+f['problem'])),None)
                 if not finding:continue
                 origin['review_id']=row['id'];quote=finding.get('quote') or ''
-                segmented=False
-                if row.get('source')=='segmented-aggregate':
-                    from ai_system.research.segmented_review import verify_proof
-                    segmented=verify_proof(store,row)
-                if quote and text.find(quote)>=0 and text.find(quote,text.find(quote)+1)<0 and (segmented or text.find(quote)+len(quote)<=6000):origin['quote']=quote
+                if quote and text.count(quote)==1:origin['quote']=quote
                 break
             if issue.get('paper_origin')!=origin:issue['paper_origin']=origin;changed.append(issue['id'])
         if changed:store._save(db,state,'issue_paper_context_bound',{'issue_ids':changed})
@@ -106,20 +102,12 @@ def review_material(store,state,llm,binding):
 
 
 def review_context(store,state,llm,binding):
-    from ai_system.research.segmented_review import needed
-    if needed(state['sections']):
-        from .long_issue_review import material
-        return material(store,state,llm,binding)[-1]
     from ai_system.research.review_cache import review_context as make
     ctx,selected,system,prompt=review_material(store,state,llm,binding)
     return make(ctx,selected,'sections',system,prompt,IssueAudit,sections=selected['sections'],extra={'non_blocking':True,'scope':{'id':binding['id']},'source_issue':binding,'policy':'issue-section-review-v1'})
 
 
 async def review(store,state,llm,binding):
-    from ai_system.research.segmented_review import needed
-    if needed(state['sections']):
-        from .long_issue_review import review as long_review
-        return await long_review(store,state,llm,binding)
     ctx,selected,system,prompt=review_material(store,state,llm,binding)
     def validate(result):
         if result.issue_id!=binding['id']:raise ValueError('核查返回了其他意见')

@@ -316,9 +316,6 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             if validate is not None:validate(answer)
             return answer
         heartbeat=asyncio.create_task(cache.heartbeat(record))
-        if stage=='sections':
-            from ai_system.modules.writing.consistency import require_complete_sections
-            require_complete_sections(sections or {})
         answer=await perform()
         verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict','section_blocks':'issues','section_global':'issues','issue_target':'issues'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')

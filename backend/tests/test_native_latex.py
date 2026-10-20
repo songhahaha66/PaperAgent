@@ -14,7 +14,7 @@ from ai_system.export.latex import compile_pdf, fragment_issues, native_document
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import Result
 from ai_system.modules.writing import sections as writing
-from ai_system.modules.writing.validation import assemble_latex, untracked_numbers, check_sections
+from ai_system.modules.writing.validation import assemble_latex, check_sections
 from services.file_services.workspace_structure import WorkspaceStructureManager
 from services.chat_services.research_session import research_snapshot
 from test_paper_graph import FakeModel
@@ -88,9 +88,12 @@ def test_native_style_requests_no_markdown_and_repairs_format_errors(tmp_path):
 
 
 @pytest.mark.parametrize('text', [r'\[z=4.05\]', r'\(4.05\)', r'\begin{align}z&=4.05\end{align}', r'误差为 4.05\%'])
-def test_native_math_and_escaped_percent_cannot_hide_untracked_results(text):
-    assert untracked_numbers(text, '', latex=True)
-    assert untracked_numbers(text, '4.05%', latex=True) == []
+def test_native_literal_numbers_do_not_create_a_scientific_gate(tmp_path,text):
+    from ai_system.modules.writing.sections import section_plan
+    ctx=GraphContext.create(str(tmp_path),planner_llm=FakeModel(),output_mode='latex')
+    state={'analysis':problem().model_dump(),'task':TASK,'solutions':{},'sections':{}}
+    state['sections']={key:text for key,_,_ in section_plan(state) if key!='solve_heading'}
+    assert check_sections(state,ctx)==[]
 
 
 def test_native_references_escape_registered_text_and_use_math_values(tmp_path):

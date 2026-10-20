@@ -18,8 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
 from ai_system.research.models import is_continuation as is_approval
-from ai_system.modules.experiments.review import ungrounded_findings
-from ai_system.modules.writing.validation import assemble, place_figures, untracked_numbers
+from ai_system.modules.writing.validation import assemble, place_figures
 from ai_system.graph.registry import value_in_output
 from ai_system.graph.state import (
     CandidateSet,
@@ -362,7 +361,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert [c["claims"] for c in result["consistency"]] == [["C1"]]
     assert all("全文结论表" in req and "统一表述为倾向性结论" in req for req in model.text_calls)
 
-    # 摘要第一次带了编造数字、模型评价与结论表不一致，校验后同一轮修复
+    # 模型评价与结论表存在实质矛盾，修复该节；字面数值本身不触发正则验收。
     assert any("与结论表不一致：把 C1 写成了显著" in req for req in model.text_calls)
     assert not any("无矛盾" in req or "没有提到 C1" in req for req in model.text_calls)
     assert result["repair_round"] == 1
@@ -372,7 +371,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert paper.startswith("# 基于时间序列的城市用电量预测与政策评估")
     assert "1234.57 万千瓦时" in paper and "8.5%" in paper
     assert f"![图1 Q1 结果图]({registry.get('F1').path})" in paper
-    assert "{{" not in paper and "12.345" not in paper
+    assert "{{" not in paper and "12.345" in paper
     for heading in ("## 摘要", "## 三、模型假设", "### Q2 政策评估", "## 七、模型的评价与推广"):
         assert heading in paper
     assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
@@ -524,42 +523,17 @@ def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
     assert ResultRegistry.load(fs).get("R1").value == "50%"
 
 
-def test_untracked_numbers_ignores_refs_formulas_and_allowed():
-    text = "预测值 {{R:R1}}，公式 $y = 0.5x$，题目给定 0.65，另有 3.14 与 20%。整数 2025 不检查。"
-    assert untracked_numbers(text, allowed_text="给定 0.65") == ["3.14", "20%"]
-
-
-def test_paper_accepts_rounded_registered_vectors_and_percentages():
-    allowed = "[487.51613299,505.41213299,502.896] 0.5385 [0.4605,0.4647]"
-    assert untracked_numbers("备餐量487.52、505.41，预测502.9，分位数53.85%，缺货率46%。", allowed) == []
-    assert untracked_numbers("备餐量487.53，预测502.8，分位数53.86%，缺货率48%。", allowed) == [
-        "487.53", "502.8", "53.86%", "48%"]
-    assert untracked_numbers("粗略值0.6、4%，符号错误-502.9。", allowed) == ["0.6", "4%", "-502.9"]
-
-
-def test_median_probability_is_a_shared_convention_not_a_computed_result():
-    text = "关键比率高于0.5，故分位点高于中位数；中位数累积概率为50%。"
-    assert ungrounded_findings({"summary": text}) == []
-    assert untracked_numbers(text, allowed_text="") == []
-    assert ungrounded_findings({"summary": "估计概率为0.51或51%。"})
-    assert untracked_numbers("估计概率为0.51或51%。", allowed_text="") == ["0.51", "51%"]
-    assert untracked_numbers("### 4.1 整体思路\n#### Q1.2 求解\n正文 4.5", "") == ["4.5"]
-    # 公式里单独等于一个数的是结果（Q2 把没登记的检验统计量写成 $z = 4.05$）
-    assert untracked_numbers("真实序列 $z = 4.05$，$\\hat p \\approx 0.673$，$x = {{R:R1}}$", "") == ["4.05", "0.673"]
-    assert untracked_numbers(r"降幅 $23.1\%$，近似 $r \approx 24.2\%$，比例 $0.231$，整数比例 $23\%$", "") == ["23.1%", "24.2%", "0.231", "23%"]
-    assert untracked_numbers(r"已知 $23.1\%$，真实值 ${{R:R1}}$，系数 $y=0.5x$", "23.1%") == []
-    assert untracked_numbers("```python\n# $3.14$\n``` 与 `$2.34$`", "") == []
-
-
-def test_ungrounded_findings_flags_numbers_outside_refs():
-    report = {
-        "summary": "Ljung-Box 检验 {{R:R2}}，验证集 6 场",
-        "key_findings": [{"statement": "真实序列 z=4.05，置换后 9.18，换挡率约 5%", "strength": "不显著"}],
-    }
-    issues = ungrounded_findings(report)
-    assert len(issues) == 1 and "4.05, 9.18" in issues[0] and "5%" not in issues[0]
-    report["key_findings"][0]["statement"] = "真实序列 {{R:R3}}，置换后 {{R:R4}}"
-    assert ungrounded_findings(report) == []
+def test_literal_numbers_and_short_sections_are_not_scientific_delivery_gates(tmp_path):
+    from ai_system.modules.writing.validation import check_sections
+    from ai_system.modules.writing.sections import section_plan
+    ctx=GraphContext.create(str(tmp_path),planner_llm=FakeModel())
+    state={'analysis':problem().model_dump(),'task':TASK,'solutions':{},'sections':{}}
+    state['sections']={key:'估计概率为0.51，约51%。' for key,_,_ in section_plan(state) if key!='solve_heading'}
+    assert check_sections(state,ctx)==[]
+    state['sections']['abstract']=' '
+    assert any(i['section']=='abstract' and '为空' in i['message'] for i in check_sections(state,ctx))
+    state['sections']['abstract']='未知 {{R:R999}}'
+    assert any('不存在的结果' in i['message'] for i in check_sections(state,ctx))
 
 
 def test_place_figures_inserts_inline_only_figures_after_paragraph():
@@ -814,7 +788,7 @@ def test_report_issues_requires_registered_results(tmp_path):
     issues = report_issues(ctx, stub, "Q1")
     assert len(issues) == 1 and "还没有登记任何结果" in issues[0]
     # 删掉结论来回避检查
-    assert any("概要或主要结论为空" in i for i in report_issues(ctx, {"summary": "test", "key_findings": []}, "Q1"))
+    assert any("报告概要为空" in i for i in report_issues(ctx, {"summary": "", "key_findings": []}, "Q1"))
     # 要求可视化却没登记图
     issues = report_issues(ctx, stub, "Q1", figure_required=True)
     assert any("还没有登记任何图" in i for i in issues)
@@ -852,121 +826,31 @@ def test_record_results_requires_explicit_run_even_when_recent_output_has_the_va
     assert "登记失败" in reply and len(registry.results) == 1
 
 
-def test_label_shuffle_control_flags_leakage(tmp_path):
+def test_declared_controls_keep_real_sources_without_automatic_science_verdicts(tmp_path):
     from types import SimpleNamespace
-
-    from ai_system.modules.experiments.review import baseline_gaps, control_issues
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "LogLoss 0.4934 shuffled 0.5010 baseline 0.6778\nAUC 0.71 shuffled_auc 0.502 serve_auc 0.6")
-    fs.finish_run(run_id, "success")
-    ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
-
-    def report(**control):
-        base = {"metric": "LogLoss", "run_id": run_id, "shuffled_run_id": run_id, "higher_is_better": False}
-        return {"summary": "LogLoss 优于基线", "key_findings": [], "controls": [{**base, **control}]}
-
-    # 卡尔曼滤波吸收了当期结果：打乱标签后 LogLoss 仍远低于基线，判为泄漏
-    leaky = control_issues(ctx, report(value="0.4934", shuffled_value="0.5010", chance="0.6778"))
-    assert len(leaky) == 1 and "泄漏" in leaky[0]
-    # 打乱后回到无信息水平、且优于简单基线：通过
-    auc = dict(metric="AUC", value="0.71", shuffled_value="0.502", chance="0.5", higher_is_better=True, baseline_run_id=run_id)
-    assert control_issues(ctx, report(**auc, baseline_value="0.6")) == []
-    # 未提供有信息基线限制结论强度，不凭空增加原题的验收门槛。
-    no_baseline = report(**{**auc, "baseline_run_id": ""})
-    assert control_issues(ctx, no_baseline) == []
-    assert "不能宣称" in baseline_gaps(ctx, no_baseline)[0]
-    # 没超过简单基线（Q1 的滤波势头只是复现了发球方先验）：不是返工能消掉的问题，记为基线差距
-    flat = report(**auc, baseline_value="0.71")
-    assert control_issues(ctx, flat) == [] and "没有优于基线" in baseline_gaps(ctx, flat)[0]
-    # 无信息基线可如实报告，但不能作为额外预测增益的证据。
-    null_baseline = report(**auc, baseline_value="0.502")
-    assert control_issues(ctx, null_baseline) == []
-    assert "不能据此宣称" in baseline_gaps(ctx, null_baseline)[0]
-    # 打乱后的值不在输出里：不能通过
-    assert "无法核对" in control_issues(ctx, report(value="0.4934", shuffled_value="0.6801", chance="0.6778"))[0]
-    # 指标名本身不构成强制置换实验的需求。
-    missing = control_issues(ctx, {"summary": "测试集 AUC 0.71", "key_findings": [], "controls": []})
-    assert missing == []
-    assert control_issues(ctx, {"summary": "验证集 MAE 24.6，RMSE 30.2", "controls": []}) == []
-    assert control_issues(ctx, {"summary": "检验 p 值 0.03", "key_findings": [], "controls": []}) == []
-    assert control_issues(ctx, {"summary": "检验功效 AUC 0.71", "key_findings": [], "controls": []}) == []
-    # 实际执行的置换值可用于估计无信息水平；相等不能作为伪造的证明。
-    assert control_issues(ctx, report(**{**auc, "shuffled_value": "0.6", "chance": "0.6"}, baseline_value="0.71")) == []
-
-
-def test_leaky_metric_downgrades_findings(tmp_path):
-    from types import SimpleNamespace
-
-    from ai_system.modules.experiments.review import downgrade_findings
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "auc 0.7768 shuffled 0.6440 weight 0.3416")
-    fs.finish_run(run_id, "success")
-    registry = ResultRegistry.load(fs)
-    registry.record_value("Q1", "AUC", "0.7768", run_id)
-    registry.record_value("Q1", "权重", "0.3416", run_id)
-    report = {
-        "controls": [
-            {"metric": "AUC", "value": "0.7768", "run_id": run_id, "shuffled_value": "0.6440", "chance": "0.5", "higher_is_better": True},
-            # 检验的 p 值不是预测指标，置换后仍偏小也不算泄漏
-            {"metric": "单侧p值", "value": "0.0428", "run_id": run_id, "shuffled_value": "0.1442", "chance": "0.5", "higher_is_better": False},
-        ],
-        "key_findings": [
-            {"statement": "综合动量 AUC 为 {{R:R1}}，提升来自有效信号", "strength": "显著"},
-            {"statement": "得分率权重 {{R:R2}} 最高", "strength": "显著"},
-            {"statement": "波动幅度检验 p={{R:R3}}", "strength": "显著"},
-            {"statement": "另一次运行碰巧同值 {{R:R4}}", "strength": "显著"},
-        ],
-    }
-    other = fs.create_run()
-    fs.save_run_stdout(run_id, "auc 0.7768 shuffled 0.6440 weight 0.3416 p 0.0428")
-    fs.save_run_stdout(other, "0.7768")
-    fs.finish_run(other, "success")
-    registry.record_value("Q2", "p", "0.0428", run_id)
-    registry.record_value("Q1", "另一个", "0.7768", other)
-    downgrade_findings(SimpleNamespace(registry=registry), report)
-    assert [f["strength"] for f in report["key_findings"]] == ["不显著", "显著", "显著", "显著"]
-    assert "未通过标签置换对照" in report["key_findings"][0]["statement"]
-
-
-def test_implausible_refs_catch_wrong_reference_numbers(tmp_path):
-    from types import SimpleNamespace
-
-    from ai_system.modules.experiments.review import implausible_refs
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "chi2 9.6546 p 0.0412 events 426 auc 0.5657")
-    fs.finish_run(run_id, "success")
-    registry = ResultRegistry.load(fs)
-    for name, value in [("卡方统计量", "9.6546"), ("p", "0.0412"), ("事件数", "426"), ("AUC", "0.5657")]:
-        registry.record_value("Q2", name, value, run_id)
-    ctx = SimpleNamespace(registry=registry)
-    bad = {"summary": "检验 p={{R:R1}}，AUC 为 {{R:R3}}", "key_findings": [{"statement": "q=1.5 时事件 {{R:R3}} 个"}]}
-    issues = implausible_refs(ctx, bad)
-    assert len(issues) == 1 and "{{R:R1}}" in issues[0] and "AUC 为 {{R:R3}}" in issues[0] and "卡方统计量" in issues[0]
-    good = {"summary": "卡方 {{R:R1}}，p 值为 {{R:R2}}，AUC={{R:R4}}，共 {{R:R3}} 个事件", "key_findings": []}
-    assert implausible_refs(ctx, good) == []
-
-
-def test_metric_direction_overrides_model_for_known_metrics():
-    from ai_system.modules.experiments.review import metric_direction
-
-    assert metric_direction("验证集上的对数损失（LogLoss）") is False
-    assert metric_direction("测试集 RMSE") is False
-    assert metric_direction("留出集 AUC") is True
-    assert metric_direction("宏平均 F1") is True
-    assert metric_direction("综合得分") is None
-    assert metric_direction("测试集负对数似然") is None  # 两边都命中时不覆盖
-    # 取了负号的损失越大越好
-    assert metric_direction("验证集 -LogLoss（球员1赢分）") is True
-    assert metric_direction("负对数损失") is True
+    import copy
+    from ai_system.modules.experiments.review import control_issues,report_issues
+    fs=WorkspaceFS(str(tmp_path));fs.init_structure();run=fs.create_run()
+    fs.save_run_stdout(run,'LogLoss 0.4934 shuffled 0.5010 baseline 0.6778 AUC 0.71 shuffled_auc 0.502 serve_auc 0.6')
+    fs.finish_run(run,'success');ctx=SimpleNamespace(registry=ResultRegistry.load(fs))
+    ctx.registry.record_value('Q1','LogLoss','0.4934',run)
+    report={'summary':'LogLoss为0.4934，强度待结合完整证据判断。',
+            'key_findings':[{'statement':'当前划分效果有所改善。','strength':'倾向'}],
+            'controls':[{'metric':'LogLoss','value':'0.4934','run_id':run,'shuffled_value':'0.5010',
+                         'shuffled_run_id':run,'chance':'0.6778','higher_is_better':False}]}
+    before=copy.deepcopy(report)
+    assert control_issues(ctx,report)==[] and report_issues(ctx,report,'Q1')==[]
+    assert report==before  # No leakage label, baseline cutoff or significance rewrite.
+    report['controls'][0].update(metric='AUC',value='0.71',shuffled_value='0.502',chance='0.5',
+                                 baseline_value='0.71',baseline_run_id=run,higher_is_better=False)
+    assert control_issues(ctx,report)==[]  # Metric spelling does not override declared direction.
+    report['controls'][0]['shuffled_value']='0.6801'
+    assert control_issues(ctx,report)
+    report['controls'][0]['shuffled_value']='NaN'
+    assert control_issues(ctx,report)
+    report['controls'][0].update(shuffled_value='0.502',shuffled_run_id='missing')
+    assert control_issues(ctx,report)
+    assert control_issues(ctx,{'summary':'AUC 0.71','controls':[]})==[]
 
 
 def test_strip_template_tokens_from_code():

@@ -366,7 +366,7 @@ async function environment() {
   restored.state.handleComposerKeydown('', { e: keyEvent() })
   await flush()
   assert.deepEqual(restored.sent, [
-    { workId: 'first', message: 'Unsent draft', action: 'auto', subproblemId: undefined },
+    { workId: 'first', message: 'Unsent draft', action: 'auto', subproblemId: undefined, revision: undefined },
   ])
   assert.equal(restored.state.inputValue.value, '')
   assert.equal(restored.state.isStreaming.value, true)
@@ -383,7 +383,7 @@ async function environment() {
   assert.equal(restored.state.researchSnapshot.value.work_id, 'first')
   restored.state.askSubproblem('Q2')
   await restored.state.sendMessage('解释这些结果')
-  assert.equal(restored.sent.at(-1).action, 'ask')
+  assert.equal(restored.sent.at(-1).action, 'auto')
   assert.equal(restored.sent.at(-1).subproblemId, 'Q2')
   const replyId = restored.state.chatMessages.value.at(-1).id
   restored.state.handleStreamMessage(

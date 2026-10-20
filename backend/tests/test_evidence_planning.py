@@ -307,6 +307,7 @@ def test_literature_choice_invokes_registered_capability_then_redecides_from_act
     assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
 
 
+@pytest.mark.parametrize('status',['failed','completed'])
 def test_literature_failure_or_metadata_only_result_never_claims_evidence_or_repeats(env,monkeypatch,status):
     model=Model('literature','pause');ctx=env.context(model);before=env.store.snapshot();calls=[]
     state=observe(env,ctx);selected=loop.select(state,SimpleNamespace(context=ctx))

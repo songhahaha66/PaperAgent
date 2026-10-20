@@ -95,18 +95,15 @@ def test_absent_or_inexact_quote_is_chapter_only_and_science_routes_to_research(
     assert not v.model.calls
 
 
-def test_long_sections_cannot_be_declared_full_pass_or_resolve_source(linked):
-    v=linked;sections={k:s['text'] for k,s in v.store.snapshot()['sections'].items()};sections['evaluation']=v.old+'尾部。'*2500;v.store.save_sections(sections,[])
-    with v.store._transaction() as db:
-        state=v.store._read(db);i=next(i for i in research_findings(state) if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
-    from services.chat_services.review_tasks import status
-    t=next(t for t in status(v.store)['tasks'] if t['stage']=='sections');assert t['state']=='partial' and t['outcome']=='incomplete' and t['segmented']['completed_blocks']==0
-    from ai_system.research.segmented_review import CoverageError
-    with pytest.raises(CoverageError,match="精确原文"):propose(v)
-    assert not v.model.calls and current(v)['status']=='confirmed'
-    ctx=edits.proposal_context(v.store,v.state,v.model);context=review_context(ctx,v.state,'sections','system','fixture',ClaimAudit,sections=sections)
+def test_incomplete_review_receipt_cannot_complete_or_resolve_source(linked):
+    v=linked;sections={k:s['text'] for k,s in v.store.snapshot()['sections'].items()}
+    ctx=edits.proposal_context(v.store,v.state,v.model)
+    context=review_context(ctx,v.state,'sections','system','incomplete fixture',ClaimAudit,sections=sections)
+    context['section_coverage']['complete']=False
+    context['section_coverage']['sections']['evaluation']['included_chars']=1
     cache=ReviewCache(v.store);r=cache.start('sections',context)
     with pytest.raises(consistency.ReviewCoverageIncomplete):cache.complete(r,{'issues':[]})
+    assert cache.get('sections',context,ClaimAudit) is None and current(v)['status']=='confirmed'
 
 
 def test_review_proof_cannot_be_rebound_to_different_source(linked):

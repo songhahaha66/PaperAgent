@@ -3,10 +3,9 @@
 
 每个分支是一个小的 CodeAct 循环：模型写代码 → 持久内核执行 → 看输出 → 继续，
 关键数字和图通过 record_results / record_figure 登记，登记时校验数值确实来自某次执行的输出。
-最后用结构化输出交一份求解报告，报告里的数字也只能写 {{R:Rn}} 引用。
+最后用结构化输出交一份求解报告，登记引用须有真实执行来源。
 
-正式求解之前先做执行驱动的方案搜索（explore.py）：评分靠前的几个候选各自试跑，按统一协议比较，
-胜出分支的内核和对话历史直接接着做正式求解。
+普通任务直接执行；显式多候选模式沿用冻结共同协议的比较与正式交接。
 """
 
 from ai_system.research.domain import findings as research_findings
@@ -47,9 +46,6 @@ from ai_system.research.models import IssueReport, ReviewRecord
 from ai_system.research.validation import report_fingerprint
 from ai_system.modules.experiments.exploration import explore, promotion_message
 from ai_system.modules.experiments.review import (
-    baseline_gaps,
-    control_issues,
-    downgrade_findings,
     feedback_message,
     needs_figure,
     report_issues,
@@ -536,12 +532,6 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             report = structured.model_dump()
             for finding in report.get("key_findings", []):
                 finding["statement"] = ctx.registry.ground_statement(subproblem_id, str(finding["statement"]))
-            leaks = control_issues(ctx, report)
-            report["limitations"] = list(dict.fromkeys(report["limitations"] + [
-                f"预测效果没有通过对照检查，不能作为有效结论：{issue}" for issue in leaks
-            ] + baseline_gaps(ctx, report)))
-            if leaks:
-                downgrade_findings(ctx, report)
             if unbound_assumptions(subproblem_id, report["assumptions"], branch.get("research_contract", {})):
                 break  # Register new premises before accepting/reviewing their conclusions.
             if not ctx.max_review_rounds:

@@ -275,3 +275,37 @@ def test_user_template_keeps_its_structure_while_using_the_evidence_outline(stud
     assert [s['title'] for s in result['outline']][:2]==['摘要','模型建立与求解']
     assert any('原生 LaTeX' in sections.writing_style(study.ctx) for _ in calls)
     assert any('{{R:' in prompt for _,prompt in calls)
+
+
+def test_intermediate_actions_need_goal_and_parameters_without_full_coverage(study):
+    snapshot=study.store.snapshot();_,context=planner.decision_context(study.store,snapshot)
+    proposal=planner.EvidenceDecision(action='execute',reason='Compute the unresolved demand estimate.',
+        requirement_ids=['RQ1'],task_ids=['Q1'])
+    planner.validate_decision(proposal,snapshot,context)
+    with pytest.raises(ValueError,match='原要求'):
+        planner.validate_decision(proposal.model_copy(update={'requirement_ids':['unknown']}),snapshot,context)
+    with pytest.raises(ValueError,match='就绪'):
+        planner.validate_decision(proposal.model_copy(update={'task_ids':['unknown']}),snapshot,context)
+    incomplete=planner.EvidenceDecision(action='deliver',reason='Write findings.',requirement_ids=['RQ1','RQ2'],
+        outline=[{'key':'abstract','title':'Findings','purpose':'Answer the original question.'}])
+    with pytest.raises(ValueError,match='逐项'):
+        planner.validate_decision(incomplete,snapshot,context)
+
+
+def test_technical_review_failure_keeps_controller_frontier_and_completed_steps(study,monkeypatch):
+    publish(study,'Q1',3);publish(study,'Q2',4)
+    key,context=planner.decision_context(study.store,study.store.snapshot())
+    proposal=decision(context,'deliver')
+    study.store.save_planning_decision(key,{'status':'done','proposal':proposal.model_dump()})
+    with study.store._transaction() as db:
+        snapshot=study.store._read(db);snapshot['workflow']={'epoch':key,'done':['reconcile','write'],'repairs':0,'blocked':True}
+        study.store._save(db,snapshot,'fixture_review_interrupted',{})
+    study.store.report_issues([IssueReport(task_id='Q1',category='service',message='Review transport interrupted.')],'review:sections')
+    after,_=planner.decision_context(study.store,study.store.snapshot());assert after==key
+    assert planner.current_decision(study.store)
+    planner.validate_decision(proposal,study.store.snapshot(),context)
+    assert not study.store.delivery_ready(study.store.snapshot())
+    loop.resume(study.store)
+    assert loop.flow(study.store)['done']==['reconcile','write']
+    selected=loop.select({**study.state,'research_blocked':False},SimpleNamespace(context=study.ctx))
+    assert selected.arg['capability']=='writing.validate'

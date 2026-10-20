@@ -155,7 +155,7 @@ def test_validate_keeps_scoped_gateway_failure_blocking(env,monkeypatch):
     monkeypatch.setattr('ai_system.research.citations.audit_citations',no_citations)
     monkeypatch.setattr(validate,'check_sections',lambda *args:[])
     outcome=asyncio.run(validate.validate(env.state,SimpleNamespace(context=ctx)))
-    assert outcome['issues'] and outcome['research_restart']
+    assert outcome['issues'] and outcome['research_blocked'] and not outcome['research_restart']
     assert any(i.get('review_scope',{}).get('stage')=='sections' for i in outcome['issues'])
     assert not env.store.delivery_ready(env.store.snapshot())
 
@@ -231,7 +231,7 @@ def test_unknown_review_identifiers_are_failed_not_silently_dropped(env,monkeypa
     monkeypatch.setattr(consistency,'call_structured',malformed)
     if stage=='reconcile':
         result=asyncio.run(consistency.reconcile(env.state,SimpleNamespace(context=ctx)))
-        assert result['research_restart'] is True
+        assert result['research_blocked'] is True and result['research_restart'] is False
     else:asyncio.run(consistency.audit_sections(env.state,ctx))
     issues=research_findings(env.store.snapshot())
     assert any(i['category']=='service' and i['status']=='confirmed' for i in issues)

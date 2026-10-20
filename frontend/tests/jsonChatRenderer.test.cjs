@@ -92,17 +92,17 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   state.messages[0].json_blocks.push({ type: 'confirm', content: '请确认计划' })
   await flush()
   assert.equal(
-    !!action('确认方案并继续'),
+    !!action('继续研究'),
     false,
     'an event alone cannot authorize a stale confirmation',
   )
   state.workStatus = 'waiting'
   await flush()
-  action('确认方案并继续').props.onClick()
+  action('继续研究').props.onClick()
   assert.equal(events.at(-1), 'confirm')
   state.messages.push({ id: 'm2', role: 'user', content: '已确认', datetime: '', avatar: '' })
   await flush()
-  assert.equal(!!action('确认方案并继续'), false, 'historical decisions cannot be submitted again')
+  assert.equal(!!action('继续研究'), false, 'historical decisions cannot be submitted again')
   state.messages[0].json_blocks = [
     { type: 'paper_analysis', content: '分析' },
     { type: 'future_tool', content: '不要丢掉未知记录' },

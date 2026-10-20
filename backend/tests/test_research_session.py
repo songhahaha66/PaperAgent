@@ -63,6 +63,9 @@ def seed(root):
     ("run", "重新计算", "completed", "done", "run"),
     ("auto", "确认", "waiting", "interrupted", "confirm"),
     ("auto", "解释一下这个方案", "waiting", "interrupted", "ask"),
+    ("auto", "分析一下这个方案的风险", "waiting", "interrupted", "ask"),
+    ("auto", "采用2020至2024年的数据", "waiting", "interrupted", "confirm"),
+    ("auto", "这个方案是否需要重算？", "waiting", "interrupted", "ask"),
     ("revise", "换用另一种方法", "waiting", "interrupted", "revise"),
     ("auto", "继续", "failed", "done", "resume"),
     ("auto", "失败的原因是什么", "failed", "done", "ask"),
@@ -228,7 +231,7 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     if action == "run":
         assert calls[-1][1][1] == {"new_run": True}
     if action == "confirm":
-        assert calls[-1][1][0] == "确认"
+        assert calls[-1][1][0] == "换一种方法"
     evidence = next(e["block"]["content"] for e in events if e["type"] == "json_block" and e["block"]["type"] == "research_snapshot")
     assert evidence["results"][0]["run_id"] == "run_one"
     assert statuses == ["in_progress", "completed"]
