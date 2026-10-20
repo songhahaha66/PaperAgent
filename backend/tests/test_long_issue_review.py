@@ -10,7 +10,7 @@ from ai_system.modules.writing import consistency as consistency
 from ai_system.modules.writing.validation import assemble
 from ai_system.graph.state import ClaimIssue,ClaimAudit
 from ai_system.research.models import ResearchConflict
-from services.chat_services import paper_editor as editor,paper_corrections as edits,issue_edits as issues
+from services.chat_services import paper_editor as editor,paper_corrections as edits,issue_edits as issues,review_tasks
 
 OLD='本研究显著优于所有基线。'
 NEW='当前划分上误差较低，尚未开展显著性检验。'
@@ -41,8 +41,12 @@ def longpaper(paper,monkeypatch,request):
         if validate:validate(answer)
         return answer
     monkeypatch.setattr(consistency,'call_structured',controlled);monkeypatch.setattr(issues,'call_structured',controlled);monkeypatch.setattr(edits,'call_structured',controlled)
-    # Exercise the current graph review entry with a claim after the old clip limit.
-    ctx=edits.proposal_context(store,state,model);reports=asyncio.run(consistency.audit_sections(state,ctx))
+    monkeypatch.setattr(review_tasks,'call_structured',controlled)
+    # An explicit user review uses the existing review-task entry even when
+    # the draft has no registered claims. No scientific claim is fabricated.
+    ctx=edits.proposal_context(store,state,model)
+    reports,proof=asyncio.run(review_tasks.execute(store,'sections',model))
+    assert proof
     assert any(r.section=='evaluation' for r in reports)
     recorded=store.report_issues(reports,'review-task:sections');source=next(i for i in recorded if i['section']=='evaluation');other=next(i for i in recorded if i['section']=='abstract')
     issues.bind_findings(store,[i['id'] for i in recorded],state['sections'])
@@ -136,7 +140,7 @@ def test_pdf_failure_keeps_source_pdf_and_issue(longpaper,monkeypatch):
 def test_graph_entry_can_check_known_writing_conflict_without_registered_claims(longpaper):
     v=longpaper;v.ctx.registry.claims={}
     with v.store._transaction() as db:db.execute('DELETE FROM review_records')
-    before=len(v.model.calls);reports=asyncio.run(consistency.audit_sections(v.state,v.ctx,candidate=True))
+    before=len(v.model.calls);reports=asyncio.run(consistency.audit_sections(v.state,v.ctx))
     assert any(r.section=='evaluation' for r in reports) and v.model.calls[before:]==[('claims',None)]
 
 
@@ -148,3 +152,14 @@ def test_normal_graph_validate_node_reviews_important_conclusions_once(longpaper
     assert any(i['section']=='evaluation' for i in result['issues'])
     assert v.model.calls[-1]==('claims',None) and all(k not in {'block','global'} for k,_ in v.model.calls)
     after=v.store.snapshot();assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
+
+
+def test_default_audit_without_claims_or_known_conflicts_skips(paper,monkeypatch):
+    store,state=paper;ctx=edits.proposal_context(store,state,SimpleNamespace(model_name='offline-empty-claims'))
+    assert not ctx.registry.claims and not research_findings(store.snapshot())
+    def forbidden(*args,**kwargs):raise AssertionError('No implicit review without a claim or known conflict')
+    monkeypatch.setattr(consistency,'call_structured',forbidden)
+    assert asyncio.run(consistency.audit_sections(state,ctx))==[]
+    assert consistency.section_audit_prompt(state,ctx,force=True) is not None
+    state['consistency']=[{'claims':[],'issue':'已知措辞矛盾','resolution':'保留当前数据范围'}]
+    assert consistency.section_audit_prompt(state,ctx) is not None

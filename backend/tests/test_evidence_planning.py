@@ -260,6 +260,17 @@ def test_invalid_evidence_or_requirement_weakening_never_changes_research(env,da
     assert env.store.snapshot()==snapshot
 
 
+def test_intermediate_action_may_omit_coverage_but_declared_evidence_remains_checked(env):
+    snapshot=env.store.snapshot();_,context=planner.decision_context(env.store,snapshot)
+    value=proposal(context,'research');row=value.pop('coverage')[0];value.pop('basis')
+    planner.validate_decision(planner.EvidenceDecision.model_validate(value),snapshot,context)
+    value['coverage']=[row]  # A partial coverage statement is optional mid-research.
+    planner.validate_decision(planner.EvidenceDecision.model_validate(value),snapshot,context)
+    row['basis'][0]['ref']='R999'
+    with pytest.raises(ValueError,match='实际结果'):
+        planner.validate_decision(planner.EvidenceDecision.model_validate(value),snapshot,context)
+
+
 def test_historical_inactive_evidence_cannot_justify_new_research(env):
     snapshot=env.store.snapshot();_,context=planner.decision_context(env.store,snapshot)
     value=proposal(context,'research');ref=value['basis'][0]['ref']

@@ -113,8 +113,12 @@ def validate_decision(proposal, snapshot, context):
             if row.get('task_id') and not any(snapshot['tasks'][key]['kind']!='verify' and
                     ResearchStore._reaches(snapshot,row['task_id'],key) for key in targets):
                 raise ValueError('决策结果与所选原要求无关')
+    # Optional evidence is still a provenance claim whenever it is supplied.
+    check_basis(proposal.basis,selected)
+    for item in proposal.coverage:
+        if item.requirement_id not in requirements:raise ValueError('覆盖引用必须关联原要求')
+        check_basis(item.basis,[item.requirement_id])
     if proposal.action=='deliver':
-        check_basis(proposal.basis,selected)
         covered=[c.requirement_id for c in proposal.coverage]
         if len(set(covered))!=len(covered) or set(covered)!=requirements.keys():
             raise ValueError('收敛时必须逐项核对全部原要求，不能遗漏或重复')
@@ -122,7 +126,6 @@ def validate_decision(proposal, snapshot, context):
             requirement=requirements[item.requirement_id]
             if item.requirement!=requirement['statement']:
                 raise ValueError('覆盖说明必须保留完整原要求，不能省略部分研究目的')
-            check_basis(item.basis,[item.requirement_id])
             if requirement['kind']!='deliverable':
                 if item.remaining.strip():raise ValueError('原要求仍有未回答部分，不能直接收敛写作')
                 if not item.supported.strip() or not item.basis:

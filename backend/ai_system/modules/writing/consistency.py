@@ -144,7 +144,12 @@ def section_audit_prompt(state,ctx,*,force=False):
     keys = [k for k in sections if k!='references' and sections.get(k)]
     from ai_system.research.method_facts import method_context
     methods=method_context(getattr(ctx,'research',None))
-    if not keys or not ctx.registry.claims and not methods and not force:return None
+    if not keys:return None
+    applicable=bool(ctx.registry.claims or methods or force or state.get('consistency'))
+    if not applicable and getattr(ctx,'research',None) is not None:
+        applicable=any(i['category']=='writing' and i.get('section') in keys and
+            i['status'] not in {'resolved','dismissed','superseded'} for i in research_findings(ctx.research.snapshot()))
+    if not applicable:return None
     body = "\n\n".join(
         f"## 章节 key: {k}\n{sections[k]}" for k in keys
     )

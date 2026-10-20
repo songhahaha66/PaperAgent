@@ -330,12 +330,13 @@ def test_graph_end_to_end_offline(tmp_path):
 
     # 数据概览由固定代码生成
     assert "data/power.csv" in result["data_profile"] and "2 行 x 2 列" in result["data_profile"]
-    # 方法检索过滤掉不存在的 key；评审选了分数更高的第二个候选
+    # 普通研究由执行 Agent 落实方法，不先强制生成或评选候选。
     design = result["designs"]["Q1"]
     assert design["direct_execution"] and not design["scores"]
     # This two-row legacy fixture cannot certify supervised experiments.
     # Real split/metric selection is covered with diabetes data in test_supervised_comparison.
-    assert 'exploration' not in design and design['chosen']['name']=='方案乙'
+    assert 'exploration' not in design and not CANDIDATE_PROMPTS
+    assert design['candidates']==[design['chosen']] and design['chosen_index']==0
 
     # 审查要求 Q1 返工一轮后通过；Q2 一次通过
     assert [bool(r["issues"]) for r in result["solutions"]["Q1"]["reviews"]] == [True, False]
@@ -418,7 +419,8 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
     calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
     tagged = {(c.get("capability"), c["label"]) for c in calls}
-    assert {("experiments.execute", "Q1"), ("experiments.execute", "Q2"), ("writing.write", "abstract"), ("writing.repair", "repair:abstract")} <= tagged
+    assert {("experiments.execute", "Q1"), ("experiments.execute", "Q2"), ("writing.write", "abstract")} <= tagged
+    assert ("writing.repair", "repair:abstract") not in tagged, "Literal numbers alone must not force an abstract rewrite"
 
     # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
     first_thread = json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"]
@@ -527,7 +529,7 @@ def test_literal_numbers_and_short_sections_are_not_scientific_delivery_gates(tm
     from ai_system.modules.writing.validation import check_sections
     from ai_system.modules.writing.sections import section_plan
     ctx=GraphContext.create(str(tmp_path),planner_llm=FakeModel())
-    state={'analysis':problem().model_dump(),'task':TASK,'solutions':{},'sections':{}}
+    state={'analysis':_analysis().model_dump(),'task':TASK,'solutions':{},'sections':{}}
     state['sections']={key:'估计概率为0.51，约51%。' for key,_,_ in section_plan(state) if key!='solve_heading'}
     assert check_sections(state,ctx)==[]
     state['sections']['abstract']=' '
