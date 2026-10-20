@@ -193,6 +193,12 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
             "\n\n# 用户模板的要求（章节标题和顺序已按模板安排，本节只写正文；措辞、格式、篇幅以模板为准）\n"
             f"{ctx.template_requirements}"
         )
+    from ai_system.research.citations import literature_root
+    from ai_system.research.literature import literature_context
+    if not ctx.compact_paper or key.startswith('solve:'):
+        request += literature_context(literature_root(ctx), title+'\n'+request+'\n'+state.get('task','')[:500])
+    else:
+        request += '\n本节不重复文献背景或C引用；需要的公开资料背景由求解小节集中说明。'
     return request
 
 
@@ -317,12 +323,6 @@ async def write_section(ctx: GraphContext, state: PaperState, key: str, title: s
     if key == "references":
         return reference_section(state, ctx)
     request = section_request(key, title, state, ctx)
-    from ai_system.research.citations import literature_root
-    from ai_system.research.literature import literature_context
-    if not ctx.compact_paper or key.startswith('solve:'):
-        request += literature_context(literature_root(ctx), title+' '+state.get('task','')[:500])
-    else:
-        request += '\n本节不重复文献背景或C引用；需要的公开资料背景由求解小节集中说明。'
     with labelled(key):
         return await call_text(cap_output(ctx.writer_llm, 4800) if ctx.compact_paper else ctx.writer_llm,
                                as_messages(writing_style(ctx), request))
