@@ -249,7 +249,7 @@ def propose_change(store, thread_id, execution_id, patches):
     return change
 
 
-async def decide(store, change_id, decision):
+async def decide(store, change_id, decision, *, compile_after=True, expected_version=None):
     initialize(store)
     with store._transaction() as db:
         row = db.execute('SELECT payload FROM paper_changes WHERE research_id=? AND id=?',(store.research_id,change_id)).fetchone()
@@ -263,6 +263,8 @@ async def decide(store, change_id, decision):
         expected = 'applied' if decision=='revert' else 'pending'
         if change['status'] != expected:
             return change
+        if expected_version and snapshot(store.root)['version']!=expected_version:
+            raise ResearchConflict('写作期间项目已更新，修改集已保留，未覆盖新源码')
         patches = change['undo'] if decision=='revert' else change['patches']
         grouped = validate_patches(store.root,patches)
         # Local source checks protect references without making a model judge a
@@ -308,7 +310,7 @@ async def decide(store, change_id, decision):
             (store.root/MARKER).unlink(missing_ok=True)
             raise
     (store.root/MARKER).unlink(missing_ok=True)
-    if meta(store.root).get('main','paper.tex').endswith('.tex') and (store.root/'paper.tex').exists():
+    if compile_after and meta(store.root).get('main','paper.tex').endswith('.tex') and (store.root/'paper.tex').exists():
         await compile_project(store)
     return change
 
@@ -356,68 +358,20 @@ def describe(store):
     executions=read_records(store,'paper_executions')
     executions=[{**r,'state':'interrupted'} if r['state']=='running' and not is_live(r) else r for r in executions]
     return {**doc,'compile':compile_state,'pdf_available':pdf.is_file() and bool(pdf.stat().st_size),
-            'pdf_version':data.get('pdf_version'),'feedback':[{k:r.get(k) for k in ('id','message','section','task_id','status')} for r in (store.snapshot() or {}).get('feedback',[]) if r['status'] not in {'resolved','dismissed','superseded'}],'threads':read_records(store,'paper_threads'),
+            'pdf_version':data.get('pdf_version'),'feedback':[{k:r.get(k) for k in ('id','message','section','task_id','status','paper_origin')} for r in (store.snapshot() or {}).get('feedback',[]) if r['status'] not in {'resolved','dismissed','superseded'}],'threads':read_records(store,'paper_threads'),
             'executions':executions,'changes':read_records(store,'paper_changes'),
-            'migration_notice':data.get('migration_notice',''),
-            'generated_candidates':[{'id':p.stem,'sections':json.loads(read_utf8(p))} for p in sorted((store.root/'.system/paper-project/generated').glob('*.json'),key=lambda p:p.stat().st_mtime)[-3:]]}
+            'migration_notice':data.get('migration_notice','')}
 
 
-def sync_generated(store, state, ctx):
-    from ai_system.research.citations import render_citations
-    from ai_system.graph.registry import publication_text
-    rendered={key:publication_text(render_citations(store.root,ctx.registry.render(text,latex=True),True))
-              for key,text in state.get('sections',{}).items() if text is not None}
-    with store._transaction():
-        return _sync_generated(store,state,rendered)
+def is_latex(store):
+    state = store.snapshot() or {}
+    mode = state.get('spec', {}).get('output_mode')
+    return mode == 'latex' or mode is None and (store.root/'paper.tex').is_file() or str(state.get('paper_version', '')).endswith('.tex')
 
 
-def _sync_generated(store, state, sections):
-    """Persist generated native fragments without reassembling an existing TeX file.
-
-    Existing projects preserve macros/layout exactly. If a fragment has no known
-    range, save the candidate separately and require an explicit merge.
-    """
-    from ai_system.modules.writing.validation import assemble_latex
-    data=meta(store.root);paper=store.root/'paper.tex'
-    if not paper.exists() or not read_utf8(paper).strip():
-        # Initial project: use explicit section markers once; later edits preserve
-        # everything outside the recorded ranges, including authored preambles.
-        marked={k:f'% paperagent:begin {k}\n{v}\n% paperagent:end {k}' for k,v in sections.items()}
-        atomic_text(paper,assemble_latex({**state,'sections':marked}))
-        data={'main':'paper.tex','generated_sections':sections,'migration_notice':''}
-    else:
-        original=read_utf8(paper);text=original
-        previous=data.get('generated_sections',{})
-        if not data:
-            data={'main':'paper.tex','migration_notice':'原有 LaTeX 源码已完整保留；无法可靠映射的自动写作将保存为候选，不覆盖原稿。'}
-        pending={}
-        for key,value in sections.items():
-            if previous.get(key)==value:
-                continue
-            pattern=re.compile(r'(% paperagent:begin '+re.escape(key)+r'\n)(.*?)(\n% paperagent:end '+re.escape(key)+r')',re.S)
-            match=pattern.search(text)
-            if match and (key not in previous or match.group(2)==previous[key]):
-                text=text[:match.start(2)]+value+text[match.end(2):]
-            elif not previous and original.count(value)==1:
-                # Existing exact text is already in the source; archive only.
-                continue
-            else:
-                pending[key]=value
-        if pending:
-            candidate=store.root/'.system/paper-project/generated'/f'{digest(pending)}.json'
-            atomic_text(candidate,json.dumps(pending,ensure_ascii=False))
-            data['migration_notice']='自动写作候选已保留，源码含人工编辑或缺少可靠章节映射；请在评论中比较后应用。'
-        if text!=original:
-            if read_utf8(paper)!=original:
-                # External file editors do not take the SQLite lock. Preserve a
-                # raced user write and retain the already generated native text.
-                pending.update(sections)
-                candidate=store.root/'.system/paper-project/generated'/f'{digest(pending)}.json'
-                atomic_text(candidate,json.dumps(pending,ensure_ascii=False))
-                data['migration_notice']='写作期间源码有新编辑，已保留原稿；候选等待明确合并。'
-            else:
-                atomic_text(paper,text)
-        data['generated_sections']={**previous,**{k:v for k,v in sections.items() if k not in pending}}
-    atomic_text(store.root/META,json.dumps(data,ensure_ascii=False))
-    snapshot(store.root)
-    return 'paper.tex'
+def source_state(store, state):
+    """Derive review units from exact current files, without guessing TeX structure."""
+    doc = snapshot(store.root)
+    return {**state, 'sections': {row['path']: row['text'] for row in doc['files']
+                                if row['path'].endswith('.tex') and row['text'] is not None},
+            'source_version': doc['version'], 'source_files': doc['files']}

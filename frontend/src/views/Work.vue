@@ -133,12 +133,22 @@
               </div>
               <div class="chat-input">
                 <form class="work-composer" @submit.prevent="sendMessage()">
+                  <div v-if="paperContext" class="paper-composer-quote">
+                    <span
+                      >论文引用{{ paperContext.selection ? ' · 源码选区' : ' · 阅读范围' }}</span
+                    >
+                    <button type="button" aria-label="移除论文引用" @click="paperContext = null">
+                      ×
+                    </button>
+                    <blockquote>{{ paperContext.quote }}</blockquote>
+                  </div>
+                  <p v-if="paperCommentError" role="alert">{{ paperCommentError }}</p>
                   <t-textarea
                     v-model="inputValue"
                     :placeholder="ui.inputHint"
                     :aria-label="isZh ? '研究消息' : 'Research message'"
                     :autosize="{ minRows: 1, maxRows: 6 }"
-                    :disabled="isStreaming || loading"
+                    :disabled="isStreaming || paperSending || loading"
                     class="work-message-input"
                     @keydown="handleComposerKeydown"
                   />
@@ -161,7 +171,7 @@
                       theme="default"
                       variant="text"
                       shape="circle"
-                      :disabled="isStreaming || loading"
+                      :disabled="isStreaming || paperSending || loading"
                       :aria-label="isZh ? '添加附件' : 'Add attachment'"
                       @click="chatFileInput?.click()"
                       ><t-icon name="attach"
@@ -170,7 +180,7 @@
                       type="submit"
                       theme="primary"
                       shape="circle"
-                      :disabled="isStreaming || loading || !inputValue.trim()"
+                      :disabled="isStreaming || paperSending || loading || !inputValue.trim()"
                       :aria-label="isZh ? '发送消息' : 'Send message'"
                       ><t-icon name="arrow-up"
                     /></t-button>
@@ -290,13 +300,14 @@
             :active="active"
             :work-id="workId"
             :latex="currentWork?.output_mode === 'latex'"
-            :refresh-key="researchSnapshot?.commit_seq"
+            :refresh-key="(researchSnapshot?.commit_seq || 0) + paperRefresh"
             :disabled="isStreaming"
             @open-file="handleWorkspaceFileSelect"
             :citation-request="citationRequest"
             :evidence-request="evidenceRequest"
             :issue-request="issueRequest"
             @updated="refreshPaper"
+            @quote="attachPaperQuote"
             @ask="askPaper"
             @research="revisePaper"
           />
@@ -389,6 +400,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { paperProjectAPI, type PaperComposerContext } from '@/api/paper'
 import { workspaceAPI } from '@/api/workspace'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkHistoryStore } from '@/stores/workHistory'
@@ -548,9 +560,99 @@ const {
   elapsedText,
   pauseTask,
   reconnectTask,
-  sendMessage,
+  sendMessage: streamSendMessage,
   handleStreamMessage,
 } = stream
+const paperContext = ref<PaperComposerContext | null>(null)
+const paperSending = ref(false),
+  paperCommentError = ref(''),
+  paperRefresh = ref(0)
+let paperRequest: { signature: string; id: string } | null = null
+let paperDisposed = false
+onUnmounted(() => {
+  paperDisposed = true
+})
+async function attachPaperQuote(context: PaperComposerContext) {
+  paperContext.value = context
+  paperCommentError.value = ''
+  layout.activateChat()
+  await nextTick()
+  document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
+}
+async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
+  // Explicit research actions keep their existing path. Composer references use
+  // the versioned comment API and never enter research intent classification.
+  if (args.length || !paperContext.value) return streamSendMessage(...args)
+  if (paperSending.value || isStreaming.value || loading.value || !inputValue.value.trim()) return
+  const context = paperContext.value,
+    text = inputValue.value.trim(),
+    work = workId.value
+  const body = {
+    research_id: context.research_id,
+    message: text,
+    selection: context.selection,
+    read_quote: context.read_quote,
+    read_version: context.read_version,
+    thread_id: context.thread_id,
+  }
+  const signature = JSON.stringify(body)
+  if (paperRequest?.signature !== signature) paperRequest = { signature, id: crypto.randomUUID() }
+  paperSending.value = true
+  paperCommentError.value = ''
+  let accepted = false
+  try {
+    const record = await paperProjectAPI.comment(work, { ...body, request_id: paperRequest.id })
+    accepted = true
+    paperRequest = null
+    inputValue.value = ''
+    paperContext.value = null
+    chatMessages.value.push({
+      id: 'paper-user-' + record.id,
+      role: 'user',
+      content: '> ' + context.quote.replace(/\n/g, '\n> ') + '\n\n' + text,
+      datetime: new Date().toLocaleString(),
+      avatar: '/avatar-user.svg',
+    })
+    const replyId = 'paper-reply-' + record.id
+    chatMessages.value.push({
+      id: replyId,
+      role: 'assistant',
+      content: '正在处理论文评论…',
+      datetime: new Date().toLocaleString(),
+      avatar: '/logo.png',
+      isStreaming: true,
+    })
+    paperRefresh.value++
+    while (!paperDisposed && work === workId.value) {
+      const project = await paperProjectAPI.read(work)
+      const execution = project.executions.find((row) => row.id === record.id)
+      if (!execution) throw new Error('评论记录暂不可读，请在论文评论历史查看。')
+      const reply = chatMessages.value.find((row) => row.id === replyId)
+      if (reply) reply.content = execution.answer || execution.error || '正在处理论文评论…'
+      if (['completed', 'failed', 'interrupted'].includes(execution.state)) {
+        if (reply) reply.isStreaming = false
+        paperRefresh.value++
+        await refreshPaper()
+        break
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+    }
+  } catch (cause) {
+    paperCommentError.value =
+      cause instanceof Error ? cause.message : '评论提交未确认，重试将复用同一请求。'
+    if (accepted) {
+      const reply = [...chatMessages.value]
+        .reverse()
+        .find((row) => row.id.startsWith('paper-reply-') && row.isStreaming)
+      if (reply) {
+        reply.content = paperCommentError.value
+        reply.isStreaming = false
+      }
+    }
+  } finally {
+    paperSending.value = false
+  }
+}
 const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
   workId,
   onUploaded: async (filename, size) => {
@@ -958,6 +1060,7 @@ onUnmounted(() => {
 }
 .work-composer {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 6px;
   padding: 8px;
@@ -1187,5 +1290,27 @@ onUnmounted(() => {
   font: inherit;
   font-size: 12px;
   cursor: pointer;
+}
+</style>
+
+<style scoped>
+.paper-composer-quote {
+  flex-basis: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--pa-line);
+  font-size: 12px;
+}
+.paper-composer-quote button {
+  float: right;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.paper-composer-quote blockquote {
+  margin: 6px 0 0;
+  max-height: 90px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 </style>

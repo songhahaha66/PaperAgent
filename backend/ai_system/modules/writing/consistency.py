@@ -168,7 +168,7 @@ def section_audit_prompt(state,ctx,*,force=False):
     body = "\n\n".join(
         f"## 章节 key: {k}\n{sections[k]}" for k in keys
     )
-    refs = set(find_refs(body)) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
+    refs = (set(ctx.registry.results) if state.get('source_version') else set(find_refs(body))) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
     evidence = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items() if rid in refs})
     prompt = (
         f"# 主要结论\n{ctx.registry.claims_table()}\n\n# 已登记证据（包含辅助结果）\n{evidence.to_prompt_table()}\n\n"
@@ -176,6 +176,12 @@ def section_audit_prompt(state,ctx,*,force=False):
         f"section 只能填这些 key：{json.dumps(keys)}\n"
         f"# 研究契约\n{json.dumps({'requirements': state['analysis']['requirements'], 'assumptions': state['analysis']['assumptions']}, ensure_ascii=False)}"
     )
+    if state.get('source_version'):
+        prompt += ('\n正文来自当前版本实际文件，section 填文件路径。核查完整原要求与实际实验依据。'
+                   '有具体问题时 quote 逐字复制文件中的原文；无法精确定位时留空并在 problem 说明文件范围。'
+                   '不要推测 PDF 坐标与源码位置。\n# 项目依赖文本\n'+json.dumps(
+                       {r['path']:r['text'] for r in state.get('source_files', [])
+                        if r['text'] is not None and not r['path'].endswith('.tex')}, ensure_ascii=False))
     prompt+=methods
     doubts=section_doubts(state,ctx)
     if doubts:

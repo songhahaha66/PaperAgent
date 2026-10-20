@@ -15,16 +15,16 @@ from pathlib import Path
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from ai_system.graph.build import compile_graph
 from ai_system.graph.context import GraphContext
-from ai_system.graph.registry import REF_PATTERN, MATH_PATTERN, publication_text
+from ai_system.graph.registry import REF_PATTERN, publication_text
 from ai_system.modules.writing.sections import section_plan
-from ai_system.modules.writing.validation import assemble, assemble_latex, place_figures
+from ai_system.modules.writing.validation import assemble, place_figures
 from ai_system.research.store import ResearchStore, digest
 from ai_system.research.citations import audit_citations, citation_issues, render_citations
 from ai_system.research.literature import CITATION
 from ai_system.research.models import ResearchConflict
 from ai_system.research.control import refresh_registry
-from ai_system.export.latex import compile_pdf, fragment_issues
 from ai_system.export import export_docx
+from ai_system.export.latex import fragment_issues
 
 
 PUBLICATION_MARKER = '.system/paper-publication.json'
@@ -107,7 +107,9 @@ async def paper_state(store):
 
 
 def source_info(store, snapshot):
-    filename = 'paper.tex' if str(snapshot.get('paper_version', '')).endswith('.tex') else 'paper.md'
+    from .paper_project import is_latex
+    if is_latex(store):raise ResearchConflict('LaTeX 请使用源码评论与文件修改集')
+    filename = 'paper.md'
     path = store.root / filename
     if not path.exists() or not snapshot.get('paper_hash'):
         raise ValueError('论文尚未发布，请先完成研究')
@@ -123,29 +125,10 @@ def empty_document(research_id=None, commit_seq=0):
             'verified_methods': [], 'verified_formula_blocks': {}, 'artifacts': []}
 
 
-async def _native_preview(text):
-    # New GFM writers need tex_math_gfm disabled for markdown-it-katex. Older
-    # distro Pandoc releases do not know that extension and already emit $ math.
-    for target in ('gfm+tex_math_dollars-tex_math_gfm','gfm+tex_math_dollars'):
-        process=await asyncio.create_subprocess_exec('pandoc','--sandbox','-f','latex','-t',target,'--wrap=none',
-            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
-        try:
-            out,error=await asyncio.wait_for(process.communicate(text.encode()),timeout=15)
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            return text
-        if process.returncode==0:
-            # Display math must be a separate block for markdown-it-katex.
-            return re.sub(r'(?<!\\)\$\$(.*?)(?<!\\)\$\$',
-                          lambda m:'\n\n$$\n'+m.group(1).strip()+'\n$$\n\n',out.decode(),flags=re.S)
-        error=error.lower()
-        if b'tex_math_gfm' not in error or not (b'unknown extension' in error or b'not supported' in error):
-            break
-    return text
-
-
 async def document(store):
+    from .paper_project import is_latex
+    if is_latex(store):
+        return empty_document(store.research_id, (store.snapshot() or {}).get('commit_seq',0))
     snapshot = store.snapshot()
     if not snapshot or not any(s.get('text', '').strip() for s in snapshot['sections'].values()):
         return empty_document(store.research_id, (snapshot or {}).get('commit_seq', 0))
@@ -161,21 +144,9 @@ async def document(store):
     ctx.research = store
     refresh_registry(ctx)
     readable = {}
-    native = (store.root/'paper.tex').is_file() or str(snapshot.get('paper_version', '')).endswith('.tex')
     for key, section in snapshot['sections'].items():
-        text = section['text']
-        # An empty paper.tex may accompany legacy Markdown. Converting that
-        # draft as TeX escapes headings, tables and images into literal text.
-        markdown = re.search(r'(?m)^ {0,3}#{1,6}\s|^\s*\|.+\|\s*$', text)
-        fragment_native = native and not markdown and bool(re.search(r'\\(?:[A-Za-z]+|[%&#_])', MATH_PATTERN.sub('', text)))
-        if key.startswith('solve:'):
-            text = place_figures(text)
-        text = publication_text(ctx.registry.render(text, latex=fragment_native, links=not fragment_native))
-        if fragment_native:
-            text = CITATION.sub(lambda m:'PAPERAGENTCITE'+m.group(1),text)
-        if fragment_native and shutil.which('pandoc'):
-            text = await _native_preview(text)
-        readable[key] = render_citations(store.root,re.sub(r'PAPERAGENTCITE(C[1-9]\d*)',lambda m:'{{C:'+m.group(1)+'}}',text))
+        text = place_figures(section['text']) if key.startswith('solve:') else section['text']
+        readable[key] = render_citations(store.root, publication_text(ctx.registry.render(text, links=True)))
     with store._connect() as db:
         history = [json.loads(row[0]) for row in db.execute(
             "SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 30",
@@ -189,7 +160,7 @@ async def document(store):
     for task in {f['task_id'] for f in methods}:
         try:blocks['solve:'+task]=canonical_method_block(methods,task)
         except ValueError:pass
-    source = 'paper.tex' if native else 'paper.md'
+    source = 'paper.md'
     source_path = store.root / source
     try:
         source_current = bool(snapshot.get('paper_hash') and source_path.is_file()
@@ -199,8 +170,6 @@ async def document(store):
     published = bool(source_current and not snapshot.get('paper_conflict') and store.delivery_ready(snapshot)
                      and all(section['validity'] == 'current' for section in snapshot['sections'].values()))
     available = {source, *snapshot.get('exports', [])} if published else set()
-    if (store.root/'paper.tex').is_file():
-        available.update({'paper.tex','paper.pdf'})
     return {'title': state['analysis'].get('title', ''), 'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
             'publication_notice': '源文件有人工修改，须先合并；当前目录展示登记正文，旧排版文件不作为当前版本。' if snapshot.get('paper_hash') and (not source_current or snapshot.get('paper_conflict')) else '',
             'artifacts': [p for p in ('paper.md', 'paper.tex', 'paper.pdf', 'paper.docx') if p in available and (store.root / p).is_file() and (store.root / p).stat().st_size],
@@ -309,7 +278,6 @@ async def decide(store, proposal_id, apply, output_mode):
     ctx = GraphContext.create(str(store.root), planner_llm=None, output_mode=output_mode)
     ctx.research = store
     refresh_registry(ctx)
-    native = filename.endswith('.tex')
     reference_update = None
     if 'references' not in changes and any(CITATION.search(t) for t in changes.values()) and 'references' in state['sections']:
         from ai_system.modules.writing.sections import reference_section
@@ -322,9 +290,9 @@ async def decide(store, proposal_id, apply, output_mode):
         if proposal.get('review_issues'):raise ValueError('候选尚有审查问题，不能应用')
         for key,text in changes.items():
             block=canonical_method_block(proposal['method_facts'],key.split(':',1)[1]) if key.startswith('solve:') and proposal.get('edit_kind')=='evidence' else None
-            guard_correction(snapshot['sections'][key]['text'],text,block,native)
+            guard_correction(snapshot['sections'][key]['text'],text,block,False)
         require_review(store,proposal,state)
-    rendered = publication_text(render_citations(store.root,ctx.registry.render(assemble_latex(state) if native else assemble(state), latex=native),native))
+    rendered = publication_text(render_citations(store.root,ctx.registry.render(assemble(state))))
     if REF_PATTERN.search(rendered):
         raise ValueError('论文包含未解析的引用，禁止发布')
     # Compile in isolation; a failed export must not replace a good paper/PDF.
@@ -334,12 +302,7 @@ async def decide(store, proposal_id, apply, output_mode):
         if (store.root / 'outputs').exists():
             shutil.copytree(store.root / 'outputs', staging / 'outputs')
         exports = []
-        if native:
-            result = await compile_pdf(staging)
-            if not result.pdf_path:
-                raise ValueError(result.error or 'PDF 编译失败，候选已保留')
-            exports = ['paper.pdf']
-        elif output_mode == 'word':
+        if output_mode == 'word':
             from ai_system.graph.context import TEMPLATE_DOCX
             template = store.root / TEMPLATE_DOCX
             result = await export_docx(staging, rendered, template_docx=template if template.exists() else None)

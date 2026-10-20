@@ -24,22 +24,32 @@ class IssueAudit(BaseModel):
 def route(issue):return 'writing' if issue['category']=='writing' else 'service' if issue['category']=='service' else 'research'
 
 
-def bind_findings(store,ids,sections):
+def bind_findings(store,ids,sections, *, source_version=None):
     """Capture only actual review provenance and verifiable, unique raw quotes."""
     from .review_tasks import records,valid_result
     rows=records(store)
+    from .paper_project import is_latex, source_state
+    source=source_state(store,{}) if is_latex(store) else None
+    if source and (sections!=source['sections'] or source_version and source_version!=source['source_version']):
+        from ai_system.research.review_cache import ReviewSuperseded
+        raise ReviewSuperseded('意见对应的源码已改变，未重新绑定到新正文')
     with store._transaction() as db:
         state=store._read(db);changed=[]
         for issue in research_findings(state):
             if issue['id'] not in ids or issue.get('section') not in sections:continue
             text=sections[issue['section']];origin={'section':issue['section'],'section_hash':digest(text),'review_id':None,'quote':None}
+            if source:origin.update(file=issue['section'],version=source['source_version'])
             for row in rows:
+                if source and row['context'].get('source_version')!=source['source_version']:continue
                 if row['stage']!='sections' or not valid_result(row,store) or row['context'].get('section_hashes',{}).get(issue['section'])!=digest(text):continue
                 finding=next((f for f in row['result'].get('issues',[]) if f['section']==issue['section'] and f.get('problem') and (issue['message']==f['problem'] or issue['message']=='与结论表不一致：'+f['problem'])),None)
                 if not finding:continue
                 origin['review_id']=row['id'];quote=finding.get('quote') or ''
                 if quote and text.count(quote)==1:origin['quote']=quote
                 break
+            if source and origin['quote']:
+                start=text.index(origin['quote'])
+                origin['selection']={'file':issue['section'],'version':source['source_version'],'start':start,'end':start+len(origin['quote']),'quote':origin['quote']}
             if issue.get('paper_origin')!=origin:issue['paper_origin']=origin;changed.append(issue['id'])
         if changed:store._save(db,state,'issue_paper_context_bound',{'issue_ids':changed})
 
@@ -48,6 +58,8 @@ def context(store,issue_id):
     from .review_tasks import material
     state=store.snapshot();issue=next((i for i in research_findings(state) if i['id']==issue_id),None)
     if not issue:raise ValueError('意见不存在')
+    from .paper_project import is_latex
+    if is_latex(store):return source_context(store,issue)
     key=issue.get('section');section=state['sections'].get(key);origin=issue.get('paper_origin') or {}
     same_origin=not origin.get('section_hash') or bool(section and origin['section_hash']==section['content_hash'])
     if route(issue)=='research':
@@ -143,3 +155,25 @@ def resolve(state,p,record):
     if record.get('source')=='issue-long-composition':
         issue['review_resolution'].update({k:record['provenance'][k] for k in ('coverage_review_id','target_review_id')})
     state['outcome']='completed' if ResearchStore.delivery_ready(state) else 'blocked'
+
+
+def source_context(store, issue):
+    from .paper_project import source_state
+    source=source_state(store,{})
+    origin=issue.get('paper_origin') or {}
+    key=origin.get('file') or issue.get('section')
+    text=source['sections'].get(key)
+    current=bool(origin.get('version')==source['source_version'] and text is not None and origin.get('section_hash')==digest(text))
+    selection=origin.get('selection') if current else None
+    binding={'issue_hash':digest(issue),'source_version':source['source_version'],'origin':origin}
+    from ai_system.research.views import evidence_uses
+    state=store.snapshot()
+    refs=issue.get('evidence_refs') or [u['ref'] for u in evidence_uses(state,store.root) if u['section']==key]
+    evidence=[{**{k:state['artifacts'][ref]['payload'].get(k) for k in ('id','name','value','unit','run_id')},
+               'current':state['artifacts'][ref].get('active',False)} for ref in dict.fromkeys(refs) if ref in state['artifacts']]
+    return {'issue':issue,'route':route(issue),'version':digest(binding),'binding':binding,
+            'section':key if text is not None else None,'selection':selection,
+            'quote':selection['quote'] if selection else None,'origin_current':current,
+            'active':issue['status'] not in TERMINAL,
+            'location':'文件原文选区' if selection else '仅文件范围，未提供可验证的精确原文' if current else '意见对应旧源码或未绑定源码，请重新检查',
+            'evidence':evidence, 'evidence_note':'意见登记依据' if issue.get('evidence_refs') else '文件级实验关联，不代表逐句支持；实际来源可在论文来源面板查看'}

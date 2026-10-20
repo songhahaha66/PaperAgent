@@ -67,9 +67,9 @@ def save_execution(store, record):
             project.put(db,store,'paper_threads',thread)
 
 
-def create(store, request_id, message, selection=None, thread_id=None, read_quote=None):
+def create(store, request_id, message, selection=None, thread_id=None, read_quote=None, read_version=None):
     project.initialize(store)
-    payload={'message':message,'selection':selection,'thread_id':thread_id,'read_quote':read_quote}
+    payload={'message':message,'selection':selection,'thread_id':thread_id,'read_quote':read_quote,'read_version':read_version}
     signature=digest(payload)
     with store._transaction() as db:
         row=db.execute('SELECT payload FROM paper_executions WHERE research_id=? AND id=?',(store.research_id,request_id)).fetchone()
@@ -89,7 +89,7 @@ def create(store, request_id, message, selection=None, thread_id=None, read_quot
             thread={'id':uuid.uuid4().hex,'selection':selection,'messages':[],'created_at':time.time()}
         thread['messages'].append({'role':'user','text':message,'execution_id':request_id,'at':time.time()})
         record={'id':request_id,'thread_id':thread['id'],'message':message,'selection':selection or thread.get('selection'),
-                'read_quote':read_quote,'request_hash':signature,'state':'pending','phase':'plan','created_at':time.time()}
+                'read_quote':read_quote,'read_version':read_version,'source_version':project.snapshot(store.root)['version'],'request_hash':signature,'state':'pending','phase':'plan','created_at':time.time()}
         project.put(db,store,'paper_threads',thread)
         project.put(db,store,'paper_executions',record)
     return record,True
@@ -167,7 +167,9 @@ async def _execute(store, execution_id, llm, *, resume=False):
     try:
         # Follow-up comments bind a fresh explicit selection. Old targets that
         # changed after apply need re-selection; explanation still stays possible.
-        context={'comment':record['message'],'selection':selection,'reading_quote':record.get('read_quote'),'sources':cards(store)}
+        context={'read_version':record.get('read_version'),'project':project.snapshot(store.root),'comment':record['message'],'selection':selection,'reading_quote':record.get('read_quote'),'sources':cards(store)}
+        if record.get('read_quote') and record.get('read_version')!=context['project']['version']:
+            context['reading_status']='阅读引用对应历史或未核验版本；不要视为当前源码精确位置。修改必须使用已确认的文件选区。'
         context['sources']=[{k:v for k,v in r.items() if k in {'key','title','excerpt','boundary','locator','paths'}} for r in context['sources']][:20]
         context['input_files']=[p.relative_to(store.root).as_posix() for folder in ('data','attachment') for p in (store.root/folder).rglob('*') if p.is_file() and not p.is_symlink()][:100]
         thread=next(r for r in project.read_records(store,'paper_threads') if r['id']==record['thread_id'])

@@ -211,22 +211,31 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         artifacts = []
     issues = [i for i in visible_issues if i.get("source")=="sections" and i["status"] not in {"resolved","dismissed","superseded"}]
     if business:
-        # Native projects no longer publish the legacy section-based paper_hash.
-        # Their durable render stage marks delivery; mere draft existence does not.
-        native_rendered = (_read_json(root, '.system/paper-project.json').get('main') == 'paper.tex'
-                           and business.get('delivery_stages', {}).get('render', {}).get('status') == 'completed')
-        current = (business.get("paper_hash") or native_rendered) and store.delivery_ready(business) and all(s["validity"] == "current" for s in business["sections"].values())
-        source = 'paper.tex' if native_rendered else "paper" + Path(business.get("paper_version", "")).suffix
-        artifacts = [p for p in artifacts if p in {source, *business.get("exports", [])}] if current else []
-        if current and business.get("paper_conflict"):
-            artifacts = [business["paper_version"]] if _file(root, business.get("paper_version")) else []
+        from .paper_project import is_latex, snapshot as source_snapshot
+        native=is_latex(store)
+        if native:
+            project=source_snapshot(root)
+            checked=_read_json(root,'.system/validation.json')
+            data=_read_json(root,'.system/paper-project.json')
+            current=(checked.get('source_version')==project['version'] and not checked.get('issues')
+                     and business.get('delivery_stages',{}).get('render',{}).get('status')=='completed'
+                     and store.delivery_ready(business))
+            allowed={'paper.tex'}
+            if data.get('pdf_version')==project['version']:allowed.add('paper.pdf')
+            artifacts=[p for p in artifacts if p in allowed] if current else []
+        else:
+            current=business.get('paper_hash') and store.delivery_ready(business) and all(s['validity']=='current' for s in business['sections'].values())
+            source='paper'+Path(business.get('paper_version','')).suffix
+            artifacts=[p for p in artifacts if p in {source,*business.get('exports',[])}] if current else []
+            if current and business.get('paper_conflict'):
+                artifacts=[business['paper_version']] if _file(root,business['paper_version']) else []
         if not current:
             issues = []
     # Business invalidation can make a previously completed work resumable before
     # the outer work metadata is updated (e.g. a saved skill selection).
     if business and status == 'completed' and any(t['validity'] == 'stale' and not t['retired'] for t in business['experiments'].values()):
         status = 'paused'
-    control = public_snapshot(business, work_status=status) if business else {}
+    control = public_snapshot(business, work_status=status,source_root=root) if business else {}
     from ai_system.research.runtime import execution_reason
     from ai_system.research.views import model_activity, model_usage
     return ResearchSnapshot(

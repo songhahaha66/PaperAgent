@@ -166,14 +166,20 @@ export interface PaperProject {
   main: string
   version: string
   has_source: boolean
-  draft_sections?: PaperSection[]
+  draft_sections?: PaperSection[] // Word/Markdown only
   files: { path: string; version: string; text: string | null; size: number }[]
   compile: { state: string; message: string; warnings?: string[] }
   pdf_available: boolean
   pdf_version?: string
   migration_notice?: string
-  feedback?: { id: string; message: string; section?: string; task_id?: string; status: string }[]
-  generated_candidates?: { id: string; sections: Record<string, string> }[]
+  feedback?: {
+    id: string
+    message: string
+    section?: string
+    task_id?: string
+    status: string
+    paper_origin?: { version?: string; selection?: SourceSelection }
+  }[]
   sources: PaperSource[]
   threads: {
     id: string
@@ -199,4 +205,14 @@ export const paperProjectAPI = {
   decide: (work: string, id: string, research_id: string, decision: string) =>
     projectRequest<PaperChange>(work, `changes/${id}`, { research_id, decision }),
   compile: (work: string, research_id: string) => projectRequest(work, 'compile', { research_id }),
+}
+
+export interface PaperComposerContext {
+  work_id: string
+  research_id: string
+  selection: SourceSelection | null
+  read_quote: string | null
+  read_version: string | null
+  thread_id: string | null
+  quote: string
 }

@@ -23,14 +23,17 @@ def paper_state(store):
         'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if not t['retired']]},
         'sections':{k:v['text'] for k,v in snapshot['sections'].items()},'consistency':[]}
     state['consistency']=snapshot.get('consistency',[])
-    return state
+    from .paper_project import is_latex, source_state
+    return source_state(store,state) if is_latex(store) else state
 
 
 def material(store,stage):
     state=paper_state(store);ctx=context_from_store(store,'version-only')
     context=review_context(ctx,state,stage,'','',ClaimAudit,sections=state['sections'])
     snapshot=store.snapshot();sections={k:{p:v.get(p) for p in ('revision','content_hash','context_hash','validity')} for k,v in snapshot['sections'].items()}
-    publication={k:snapshot.get(k) for k in ('paper_hash','paper_version','paper_conflict')}
+    native=bool(state.get('source_version'))
+    if native:sections={}
+    publication={} if native else {k:snapshot.get(k) for k in ('paper_hash','paper_version','paper_conflict')}
     filename='paper.tex' if str(snapshot.get('paper_version','')).endswith('.tex') else 'paper.md'
     path=store.root/filename
     actual=digest(path.read_text()) if path.is_file() else None
@@ -40,10 +43,10 @@ def material(store,stage):
         prompt=section_audit_prompt(state,ctx,force=True)
         if prompt:request_hash=digest({'system':AUDIT_SYSTEM,'prompt':prompt[0],'schema':ClaimAudit.model_json_schema()})
     elif stage=='reconcile':request_hash=digest({'system':RECONCILE_SYSTEM,'prompt':reconcile_prompt(state,ctx),'schema':ConsistencyReview.model_json_schema()})
-    return {'science':science_version(context),'request_hash':request_hash,'sections':sections if stage!='reconcile' else {},
+    return {'source_version':context.get('source_version'),'science':science_version(context),'request_hash':request_hash,'sections':sections if stage!='reconcile' else {},
         'section_hashes':context['section_hashes'] if stage!='reconcile' else {},
         'citation_sources':context['citation_sources'] if stage!='reconcile' else {},
-        'publication':publication if stage!='reconcile' else {},'source_conflict':bool(snapshot.get('paper_hash') and actual!=snapshot['paper_hash'])}
+        'publication':publication if stage!='reconcile' else {},'source_conflict':not native and bool(snapshot.get('paper_hash') and actual!=snapshot['paper_hash'])}
 
 
 def records(store):
@@ -65,6 +68,7 @@ def matches(row,current,stage):
     ctx=row.get('context',{})
     if science_version(ctx)!=current['science']:return False
     if stage=='reconcile':return True
+    if ctx.get('source_version')!=current.get('source_version'):return False
     if stage=='sections' and row['stage']=='sections' and ctx.get('request_hash')!=current['request_hash']:return False
     if ctx.get('citation_sources',{})!=current['citation_sources']:return False
     hashes=ctx.get('section_hashes',{})
@@ -167,7 +171,7 @@ def status(store):
     with closing(store._connect()) as db:
         for r in db.execute("SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 10",(store.research_id,)):
             p=json.loads(r[0])
-            if p.get('status')=='pending':pending_candidates.append({'id':p['id'],'section':p['section'],'review_kind':p.get('review_kind','full_document'),
+            if not state.get('source_version') and p.get('status')=='pending':pending_candidates.append({'id':p['id'],'section':p['section'],'review_kind':p.get('review_kind','full_document'),
                 'state':'failed' if p.get('review_issues') else 'completed','issues':p.get('review_issues',[]),'origin':p.get('origin','manual')})
     return {'research_id':store.research_id,'research_revision':snapshot['revision'],'tasks':tasks,'history':history[:12],
         'issues':[{k:i.get(k) for k in ('id','category','section','status','message')} for i in research_findings(snapshot) if i['status'] not in {'resolved','dismissed','superseded'}],
@@ -237,7 +241,7 @@ async def _run_owned(store,stage,record,llm):
         finding_ids=_save_findings(store,stage,reports,context)
         if reports:
             from .issue_edits import bind_findings
-            bind_findings(store,finding_ids,paper_state(store)['sections'])
+            bind_findings(store,finding_ids,paper_state(store)['sections'],source_version=context.get('version_material',{}).get('source_version'))
         cache.complete(record,{'outcome':'findings' if reports else 'passed','finding_count':len(reports)},provenance={'verified_records':proof},current_context=lambda:intent_context(store,stage))
     except ReviewSuperseded:
         try:cache.complete(record,{'discarded':True},current_context=lambda:intent_context(store,stage))

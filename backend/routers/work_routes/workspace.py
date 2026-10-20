@@ -362,6 +362,8 @@ async def recover_review_task(work_id:str,request:ReviewTaskRequest,db:Session=D
 @router.post('/{work_id}/paper/proposals')
 async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
     store = _paper_store(db, work_id, current_user, mutation=True)
+    if crud.get_work(db, work_id).output_mode == 'latex':
+        raise HTTPException(409, 'LaTeX 请使用源码评论与文件修改集')
     if request.research_id != store.research_id or request.base_commit != store.snapshot()['commit_seq']:
         raise HTTPException(409, '研究版本已改变，请刷新论文')
     llm = None
@@ -398,6 +400,8 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
 @router.post('/{work_id}/paper/proposals/{proposal_id}')
 async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecision, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
     store = _paper_store(db, work_id, current_user, mutation=True)
+    if crud.get_work(db, work_id).output_mode == 'latex':
+        raise HTTPException(409, 'LaTeX 请使用源码评论与文件修改集')
     if request.research_id != store.research_id:
         raise HTTPException(409, '研究标识已改变，请刷新论文')
     try:
@@ -725,6 +729,7 @@ class PaperCommentRequest(BaseModel):
     request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
     message: str = Field(min_length=1,max_length=20000)
     selection: PaperSelection | None = None
+    read_version: str | None = None
     read_quote: str | None = Field(default=None,max_length=100000)
     thread_id: str | None = Field(default=None,max_length=64)
 
@@ -756,16 +761,10 @@ async def paper_project_state(work_id: str, db: Session = Depends(get_db), curre
     try:
         project=paper_project.describe(store)
         main=next((f for f in project['files'] if f['path']==project['main']), {})
-        # Reading a draft does not require publication, compilation or a second
-        # manuscript store. Reuse the existing ordered section projection.
-        has_source=bool((main.get('text') or '').strip())
-        draft=None
-        if not has_source or project['main'].endswith('.tex') and (not project['pdf_available'] or project['compile']['state']!='current'):
-            from services.chat_services.paper_editor import document
-            draft=await document(store)
+        draft = await paper_editor.document(store) if crud.get_work(db,work_id).output_mode != 'latex' else None
         return {**project,'research_id':store.research_id,'sources':paper_sources.cards(store),
-                'draft_sections':draft['sections'] if draft else [],
-                'has_source':has_source}
+                **({'draft_sections':draft['sections']} if draft else {}),
+                'has_source':bool((main.get('text') or '').strip())}
     except (ValueError,ResearchConflict,OSError) as exc:
         raise HTTPException(409,str(exc))
 
@@ -837,7 +836,7 @@ async def paper_comment(work_id: str, request: PaperCommentRequest, background_t
     try:
         # Resolve configuration before recording a runnable request.
         llm=_paper_writing_model(db,current_user)
-        record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote)
+        record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote,request.read_version)
         if created:background_tasks.add_task(_execute_paper_comment,store,record['id'],llm)
         return record
     except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))

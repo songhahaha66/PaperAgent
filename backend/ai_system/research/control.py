@@ -4,6 +4,7 @@ from .domain import experiment_report, experiment_design
 
 from ai_system.research.domain import findings as research_findings
 import asyncio
+import json
 import shutil
 from dataclasses import asdict
 from pathlib import Path
@@ -55,7 +56,7 @@ async def observe(state, runtime):
     elif snapshot['outcome'] not in {'completed','needs_attention'}:
         store.set_outcome('running')
     snapshot = store.snapshot()
-    await ctx.events.emit('research_state', public_snapshot(snapshot))
+    await ctx.events.emit('research_state', public_snapshot(snapshot,source_root=ctx.research.root))
     view = graph_view(snapshot)
     # Checkpoint reducers need explicit tombstones for invalidated projections.
     for name in ('solutions','designs','sections'):
@@ -70,8 +71,8 @@ def graph_view(snapshot):
         'solutions':{key:experiment_report(snapshot, t) for key,t in snapshot['experiments'].items()
                      if t['acceptance']=='accepted' and t['validity']=='current' and not t['retired']},
         'designs':{key:experiment_design(snapshot, t) for key,t in snapshot['experiments'].items() if experiment_design(snapshot, t)},
-        'sections':{key:s['text'] for key,s in snapshot['sections'].items() if s['validity']=='current'},
-        'section_contexts':{key:s.get('context_hash') for key,s in snapshot['sections'].items() if s['validity']=='current'},
+        'sections':{} if snapshot['spec'].get('output_mode')=='latex' else {key:s['text'] for key,s in snapshot['sections'].items() if s['validity']=='current'},
+        'section_contexts':{} if snapshot['spec'].get('output_mode')=='latex' else {key:s.get('context_hash') for key,s in snapshot['sections'].items() if s['validity']=='current'},
         'data_profile':snapshot['materials']['profile'],
         'outline':publication.get('outline',[]), 'consistency':snapshot.get('consistency',[]),
         'repair_round':publication.get('repairs',0),
@@ -107,21 +108,31 @@ def experiment_dispatch(ctx, key):
         'dependencies':{dep:experiment_report(snapshot,snapshot['experiments'][dep]) for dep in task['dependencies']}}
 
 
-def public_snapshot(snapshot, *, work_status=None):
+def public_snapshot(snapshot, *, work_status=None, source_root=None):
     ready = set(ready_tasks(snapshot))
     from .views import questions,evidence_uses,execution
+    stages=snapshot.get('delivery_stages',{})
+    if snapshot['spec'].get('output_mode')=='latex' and source_root is not None:
+        from pathlib import Path
+        from services.chat_services.paper_project import snapshot as source_snapshot
+        path=Path(source_root)/'.system/validation.json'
+        checked=json.loads(path.read_text()) if path.exists() else {}
+        if checked.get('source_version')!=source_snapshot(source_root)['version']:
+            stages={k:({**stage,'status':'pending','note':'源码已更新，需检查当前版本'}
+                       if k in {'validate','render','export'} and stage['status']=='completed' else stage)
+                    for k,stage in stages.items()}
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
-        "questions": questions(snapshot), "evidence_uses":evidence_uses(snapshot),
+        "questions": questions(snapshot), "evidence_uses":evidence_uses(snapshot,source_root),
         "runtime":execution(snapshot,work_status),
         "delivery": delivery_status(snapshot),
         "delivery_stages": {key: {**stage, "status": "interrupted" if stage["status"] == "in_progress" and
             work_status in {"paused", "cancelled", "failed"} else stage["status"]}
-            for key, stage in snapshot.get("delivery_stages", {}).items()},
+            for key, stage in stages.items()},
         "experiments": [public_task(snapshot, task, ready, work_status) for task in snapshot["experiments"].values() if not task["retired"]],
         "feedback": [i for i in snapshot['feedback'] if i['status'] not in {'resolved', 'dismissed'}],
         "faults": [i for i in snapshot['faults'] if i['status'] not in {'resolved', 'dismissed', 'superseded'}],
         "requirements": [{**r, "status": "accepted" if r["task_ids"] and snapshot["outcome"]=="completed" and any(snapshot["experiments"][key]["acceptance"] == "accepted" and
-            snapshot["experiments"][key]["validity"] == "current" and (snapshot["experiments"][key]["kind"] != "writing" or
+            snapshot["experiments"][key]["validity"] == "current" and (snapshot["experiments"][key]["kind"] != "writing" or snapshot["spec"].get("output_mode")=="latex" or
             snapshot["sections"].get(f"solve:{key}", {}).get("validity") == "current") for key in r["task_ids"]) else "pending"}
             for r in snapshot["spec"]["requirements"]], "assumptions": list(snapshot["assumptions"].values()),
     }
@@ -226,7 +237,7 @@ async def execute(branch, runtime):
     except ResearchConflict as exc:
         await ctx.events.stage(str(exc))
         return {}
-    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
+    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
     local = None
     receipt = None
     try:
@@ -279,7 +290,7 @@ async def execute(branch, runtime):
         refresh_registry(ctx)
         snapshot = ctx.research.snapshot()
         committed = snapshot["experiments"][key]
-        await ctx.events.emit("research_state", public_snapshot(snapshot))
+        await ctx.events.emit("research_state", public_snapshot(snapshot,source_root=ctx.research.root))
         accepted = (receipt["published"] and committed["acceptance"] == "accepted"
                     and committed["validity"] == "current")
         if accepted:
@@ -305,7 +316,7 @@ async def execute(branch, runtime):
             return {"log": [f"projection {key} failed after commit: {exc}"]}
         ctx.research.commit(WorkerResult(order=order, execution_status="failed", acceptance="inconclusive",
             report={"status": "failed", "error": str(exc)}, issues=[IssueReport(task_id=key, category="execution", message=str(exc))]))
-        await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
+        await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
         await ctx.events.stage(f"{key} 执行失败：{exc}")
         return {"log": [f"attempt {key} failed: {exc}"]}
     finally:

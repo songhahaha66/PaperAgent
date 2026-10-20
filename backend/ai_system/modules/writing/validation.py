@@ -24,6 +24,11 @@ from ai_system.modules.writing.sections import writing_style, section_plan, sect
 def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]:
     sections = state.get("sections") or {}
     registry = ctx.registry
+    if ctx.output_mode == 'latex' and ctx.research:
+        # Syntax, cross-references and layout are checked by the compiler.
+        from ai_system.research.citations import citation_issues
+        return [{'section':key, 'message':message} for key,text in sections.items()
+                for message in [*citation_issues(ctx.research.root,text), *(['正文仍有未解析的结果引用，请基于登记证据修复源码'] if REF_PATTERN.search(text) else [])]]
     issues: List[Dict[str, str]] = []
     labels = {label for body in sections.values() for label in re.findall(r"\\label\{([^{}]+)\}", body)}
 
@@ -55,6 +60,11 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
 
 async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
+    if ctx.output_mode == 'latex' and ctx.research:
+        from services.chat_services.paper_project import source_state
+        state = source_state(ctx.research,state)
+        if not state['sections'] or not any(t.strip() for t in state['sections'].values()):
+            raise ValueError('当前 LaTeX 项目没有正文，请先写入源码')
     await ctx.set_stage("validate", "in_progress")
     from ai_system.modules.registry import invoke
     await invoke(ctx, 'literature.verify', texts=list((state.get('sections') or {}).values()))
@@ -64,24 +74,30 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         reports += await audit_sections(state, ctx)
     review_failed=any(r.category=='service' for r in reports) or any(i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
         and i.get('review_scope',{}).get('stage')=='sections' for i in research_findings(ctx.research.snapshot()))
+    if state.get('source_version'):
+        from services.chat_services.paper_project import snapshot as source_snapshot
+        from ai_system.research.review_cache import ReviewSuperseded
+        if source_snapshot(ctx.research.root)['version'] != state['source_version']:
+            raise ReviewSuperseded('内容检查期间源码已改变，请检查当前版本')
     issues = ctx.research.report_issues(reports, "sections", close_writing=not review_failed)
     active_service=[i for i in research_findings(ctx.research.snapshot()) if i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
                     and (i.get('review_scope',{}).get('stage') in {'sections','citations'} or i['source']=='sections')]
     issues=list({i['id']:i for i in [*issues,*active_service]}.values())
     research_restart = any(i['category']=='coverage' or i['category']!='service' and i["blocking"] and i["action"] != "rewrite" for i in issues)
     blocked = bool(active_service) or any(i["category"]=="service" for i in issues)
-    ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"), verified=False)
+    if ctx.output_mode != 'latex':
+        ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"), verified=False)
     from services.chat_services.issue_edits import bind_findings
-    bind_findings(ctx.research,[i['id'] for i in issues],state.get('sections') or {})
+    bind_findings(ctx.research,[i['id'] for i in issues],state.get('sections') or {},source_version=state.get('source_version'))
     if blocked:
         reason='；'.join(dict.fromkeys(i['message'] for i in issues if i['category']=='service'))
-        await ctx.set_stage("validate", "blocked", "审查服务未完成："+reason+"。草稿已保留；恢复后继续检查，无需人工修改研究意见。")
+        await ctx.set_stage("validate", "blocked", "审查服务未完成："+reason+"。正文已保留；恢复后继续检查，无需人工修改研究意见。")
     else:
         await ctx.set_stage('validate', 'in_progress' if issues else 'completed',
-                            '发现文稿意见，接下来自动改稿并复核。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前草稿检查通过。')
+                            '发现文稿意见，接下来自动改稿并复核。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前正文检查通过。')
     from ai_system.research.control import public_snapshot
-    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
-    ctx.write_json(".system/validation.json", {"round": state.get("repair_round", 0), "issues": issues})
+    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
+    ctx.write_json(".system/validation.json", {"source_version":state.get("source_version"), "round": state.get("repair_round", 0), "issues": issues})
     note = f"第 {state.get('repair_round', 0)} 轮：{len(issues)} 个问题"
     await ctx.events.emit("paper_validation", note if issues else "校验通过")
     return {"issues": issues, "research_restart": research_restart, "research_blocked": blocked,
@@ -211,14 +227,18 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
                 await ctx.set_stage('render', 'blocked', '审查服务尚未完成，保留已完成的交付步骤，恢复后重试。')
                 return {'research_blocked': True, 'log': ['render: pending service review; delivery position retained']}
             return {"research_restart": True, "log": ["render: research evidence changed, returning to research control"]}
-        ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
+        if ctx.output_mode != 'latex':
+            ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
     native = ctx.output_mode == "latex"
     filename = "paper.tex" if native else "paper.md"
     if native and ctx.research:
-        from services.chat_services.paper_project import sync_generated
-        from services.chat_services.paper_sources import write_bibliography
-        sync_generated(ctx.research,state,ctx)
-        write_bibliography(ctx.workspace)
+        import json
+        from services.chat_services.paper_project import snapshot as source_snapshot, source_state
+        state=source_state(ctx.research,state)
+        checked = json.loads((ctx.workspace/'.system/validation.json').read_text())
+        if checked.get('source_version') != source_snapshot(ctx.workspace)['version']:
+            from ai_system.research.review_cache import ReviewSuperseded
+            raise ReviewSuperseded('源码已更新，需重新检查当前正文')
         # Read the actual project source, preserving its preamble and user edits.
         raw = (ctx.workspace / 'paper.tex').read_text(encoding='utf-8')
     else:
@@ -229,7 +249,8 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     from ai_system.research.citations import render_citations, literature_root,citation_issues
     if native and ctx.research:
         from services.chat_services.paper_sources import validate_references
-        validate_references(ctx.workspace,raw,raw)
+        for text in state.get('sections',{}).values():
+            validate_references(ctx.workspace,text,text)
         problems=[]
     else:
         problems=citation_issues(literature_root(ctx),raw)

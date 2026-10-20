@@ -25,12 +25,24 @@ def questions(snapshot):
     return rows
 
 
-def evidence_uses(snapshot):
+def evidence_uses(snapshot, source_root=None):
     uses = []
-    for key, section in snapshot['sections'].items():
+    native=snapshot['spec'].get('output_mode')=='latex'
+    sections=snapshot['sections']
+    if native:
+        if source_root is None:return []
+        from services.chat_services.paper_project import files
+        sections={name:{'text':row['text'],'content_hash':row['version'],'validity':'current'}
+                  for name,row in files(source_root,main='paper.tex').items() if name.endswith('.tex')}
+    for key, section in sections.items():
         if section['validity']!='current':continue
         text=section['text']
         refs=list(dict.fromkeys(find_refs(text)))
+        if native:
+            refs += re.findall(r'paperagent\.local/results/([RF]\d+)',text)
+            refs += re.findall(r'\\label\{fig:(F\d+)\}',text)
+            refs += [ref for group in re.findall(r'(?m)^% paperagent:evidence ([RF\d,]+)$',text) for ref in group.split(',')]
+            refs=list(dict.fromkeys(refs))
         for ref in refs:
             entry = snapshot['artifacts'].get(ref)
             claim = snapshot['claims'].get(ref)
@@ -39,8 +51,8 @@ def evidence_uses(snapshot):
             elif claim:task_ids=[claim['payload']['subproblem']]
             else:continue
             uses.append({'ref':ref,'section':key,'section_version':section['content_hash'],
-                'title':snapshot['experiments'].get(key.removeprefix('solve:'),{}).get('subproblem',{}).get('title') or {'abstract':'摘要','restatement':'问题重述','analysis':'问题分析','assumptions':'研究假设','symbols':'符号说明','sensitivity':'敏感性分析','evaluation':'评价与局限','references':'参考文献'}.get(key,'研究正文'),'task_ids':task_ids,
-                'quote':next((line.strip() for line in text.splitlines() if ref in line),'')[:600]})
+                'title':key if native else snapshot['experiments'].get(key.removeprefix('solve:'),{}).get('subproblem',{}).get('title') or {'abstract':'摘要','restatement':'问题重述','analysis':'问题分析','assumptions':'研究假设','symbols':'符号说明','sensitivity':'敏感性分析','evaluation':'评价与局限','references':'参考文献'}.get(key,'研究正文'),'task_ids':task_ids,
+                'quote':'文件级实验依据，未定位到具体句子。' if native else next((line.strip() for line in text.splitlines() if ref in line),'')[:600]})
     return uses
 
 

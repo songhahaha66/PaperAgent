@@ -2,7 +2,8 @@
   <section class="paper-editor">
     <header class="toolbar">
       <nav aria-label="论文视图">
-        <button :aria-pressed="view === 'read'" @click="setView('read')">草稿</button
+        <button :aria-pressed="view === 'read'" @click="setView('read')">
+          {{ isLatex ? 'PDF 预览' : '阅读' }}</button
         ><button
           :aria-pressed="view === 'source'"
           :disabled="!project?.has_source"
@@ -26,10 +27,10 @@
     </p>
     <div v-if="!project && loading" class="empty"><t-loading text="正在读取论文项目…" /></div>
     <div
-      v-else-if="!project || (!project.has_source && !project.draft_sections?.length)"
+      v-else-if="!project || (!project.has_source && (isLatex || !project.draft_sections?.length))"
       class="empty"
     >
-      <h2>论文草稿尚未生成</h2>
+      <h2>论文源码尚未生成</h2>
       <p>写作产生源码后，可在这里阅读、编辑和评论；无需等待整项研究审查完成。</p>
     </div>
     <div v-else class="workspace">
@@ -44,11 +45,7 @@
             ><span v-if="dirty">有未保存的编辑</span
             ><button v-if="dirty" @click="discardDraft">放弃本地编辑</button
             ><button :disabled="!dirty || busy" @click="saveDraft">保存修改集</button
-            ><button
-              :disabled="!selection"
-              @click="openPanel('comments', elementAnchor($event.currentTarget as Element))"
-            >
-              评论选区</button
+            ><button :disabled="!selection" @click="addToChat">评论选区</button
             ><button :disabled="!selectedFile" @click="$emit('open-file', file)">打开文件</button>
           </header>
           <div v-if="selectedFile?.text !== null" ref="sourceSurface" class="source-surface">
@@ -69,7 +66,7 @@
           <p v-else class="empty">这是图片或其他二进制资源，可通过“打开文件”查看。</p>
           <p class="hint">选中文字即可评论。</p>
         </template>
-        <div v-else-if="project.draft_sections?.length" class="read-text">
+        <div v-else-if="!isLatex && project.draft_sections?.length" class="read-text">
           <section
             v-for="section in project.draft_sections"
             :key="section.key"
@@ -163,39 +160,8 @@
             <blockquote class="inline-selection-quote" aria-label="当前选中的正文">
               {{ readQuote || selection?.quote }}
             </blockquote>
-            <textarea
-              v-model="message"
-              class="inline-comment-input"
-              rows="2"
-              data-autofocus
-              placeholder="评论这段文字，或提出修改…"
-              aria-label="评论所选文字"
-              @keydown="submitOnEnter"
-            />
-            <footer>
-              <span>{{
-                busy
-                  ? '正在提交…'
-                  : `已选 ${Array.from(readQuote || selection?.quote || '').length} 字`
-              }}</span>
-              <button
-                type="button"
-                class="dismiss-comment"
-                aria-label="关闭评论"
-                @click="side = null"
-              >
-                ×
-              </button>
-              <button
-                type="button"
-                class="send-comment"
-                aria-label="发送评论"
-                :disabled="busy || !message.trim()"
-                @click="send"
-              >
-                ↑
-              </button>
-            </footer>
+            <button type="button" @click="addToChat">引用到主对话</button>
+            <p class="hint">在左侧输入要求，点击主输入框的发送后执行。</p>
             <details v-if="readQuote && !selection" class="selection-location">
               <summary>{{ locating ? '正在定位原文…' : '修改位置' }}</summary>
               <p>评论已绑定阅读选区。改稿前请核对对应源码。</p>
@@ -297,41 +263,9 @@
                   查看实际输出
                 </button></template
               >
-              <details>
-                <summary>技术详情</summary>
-                <p>请求：{{ execution.id }}</p>
-                <p>阶段：{{ execution.phase }}</p>
-              </details>
             </article>
-            <textarea
-              v-model="message"
-              class="comment-input"
-              rows="4"
-              placeholder="解释这里的依据、查询文献、补充计算，或明确提出修改…"
-              aria-label="评论内容"
-              @keydown="submitOnEnter"
-            ></textarea>
-            <button class="primary" :disabled="busy || !message.trim()" @click="send">
-              {{ busy ? '正在提交…' : '发送评论' }}
-            </button>
-            <p class="hint">提出补丁后由你接受或拒绝。来源关联和辅助计算不会自动关闭研究意见。</p>
-            <div v-if="project.generated_candidates?.length" class="changes">
-              <h3>自动写作候选 · 尚未合入源码</h3>
-              <p class="hint">
-                原文件缺少可靠章节映射，需选择源码范围后明确合并；导言区、宏和其他文件保持原样。
-              </p>
-              <template v-for="batch in project.generated_candidates" :key="batch.id"
-                ><article v-for="(text, key) in batch.sections" :key="key" class="change">
-                  <details>
-                    <summary>{{ sectionLabel(String(key)) }} · 查看候选</summary>
-                    <pre>{{ text }}</pre>
-                  </details>
-                  <button :disabled="!selection || busy" @click="mergeGenerated(text)">
-                    以候选替换当前选区（先看差异）
-                  </button>
-                </article></template
-              >
-            </div>
+            <button @click="addToChat">在主对话中回复</button>
+            <p class="hint">提出补丁后由你接受或拒绝。</p>
             <details class="changes" :open="activeMarkKind === 'change'">
               <summary>
                 修改集 <span v-if="visibleChanges.length">· {{ visibleChanges.length }}</span>
@@ -373,7 +307,10 @@
             <article v-for="source in project.sources" :key="source.key" class="source-row">
               <button @click="openSource(source, $event.currentTarget as Element)">
                 <strong>{{ source.title }}</strong
-                ><span>{{ source.boundary }} · {{ source.locator }}</span>
+                ><span
+                  >{{ source.boundary }} ·
+                  {{ source.paths?.length ? '代码与实际输出' : source.locator }}</span
+                >
               </button>
             </article>
             <p v-if="!project.sources.length">尚未获取可定位的来源。可在评论中请求检索。</p>
@@ -381,8 +318,11 @@
           <template v-else>
             <article v-for="issue in visibleFeedback" :key="issue.id" class="opinion">
               <p>{{ issue.message }}</p>
+              <p v-if="isLatex && issue.paper_origin?.version !== project.version" class="hint">
+                此意见尚未在当前源码版本核实，请重新检查。
+              </p>
               <button
-                v-if="issue.section && project.draft_sections?.some((s) => s.key === issue.section)"
+                v-if="issue.section && project.files.some((s) => s.path === issue.section)"
                 @click="showIssueSection(issue.section)"
               >
                 查看对应草稿
@@ -414,6 +354,7 @@ import {
   type PaperProject,
   type PaperSource,
   type SourceSelection,
+  type PaperComposerContext,
 } from '@/api/paper'
 import type { ResearchSnapshot } from '@/types/research'
 import { selectionLabel, sourceSelection, sourceKey } from '@/utils/paperSelection'
@@ -448,6 +389,7 @@ const emit = defineEmits<{
   artifact: []
   ask: [message: string, task?: string]
   research: [message: string, task?: string, issue?: { id: string; version: string }]
+  quote: [context: PaperComposerContext]
 }>()
 const project = ref<PaperProject | null>(null)
 const view = ref<'read' | 'source'>('read'),
@@ -476,13 +418,10 @@ const loading = ref(false),
   compiling = ref(false),
   error = ref(''),
   threadId = ref(''),
-  message = ref(''),
   sourceCard = ref<PaperSource | null>(null)
 let generation = 0,
   locateGeneration = 0,
   timer: ReturnType<typeof setTimeout> | undefined
-// Retain one request ID across network uncertainty; new comments get new IDs.
-let pendingRequest: { id: string; signature: string } | null = null
 const selectedFile = computed(() => project.value?.files.find((row) => row.path === file.value))
 const dirty = computed(() => draft.value !== draftBase.value)
 const isLatex = computed(() => project.value?.main.endsWith('.tex') ?? props.latex)
@@ -778,91 +717,86 @@ function readClick(event: MouseEvent) {
     openCitation(link.getAttribute('href')!, link)
   }
 }
-function sectionLabel(key: string) {
-  const names: Record<string, string> = {
-    abstract: '摘要',
-    restatement: '问题重述',
-    assumptions: '模型假设',
-    symbols: '符号说明',
-    analysis: '问题分析',
-    sensitivity: '灵敏度分析',
-    evaluation: '评价与局限',
-    references: '参考文献',
-  }
-  return names[key] || (key.startsWith('solve:') ? `问题 ${key.slice(6)} 的求解` : '章节候选')
-}
 const visibleFeedback = computed(() => {
   const rows = project.value?.feedback || []
   const selected = rows.find((issue) => issue.id === props.issueRequest?.id)
   return selected ? [selected] : rows
 })
 async function showIssueSection(key: string, issueId?: string) {
-  setView('read')
+  const issue = project.value?.feedback?.find((row) => row.id === issueId)
+  const origin = issue?.paper_origin
+  if (!isLatex.value) {
+    setView('read')
+    await nextTick()
+    const node = Array.from(
+      manuscript.value?.querySelectorAll<HTMLElement>('[data-section]') || [],
+    ).find((node) => node.dataset.section === key)
+    node?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+  const row = project.value?.files.find((row) => row.path === key)
+  if (!row) {
+    openPanel('opinions')
+    return
+  }
+  file.value = key
+  setView('source')
   await nextTick()
-  const section = Array.from(
-    manuscript.value?.querySelectorAll<HTMLElement>('[data-section]') || [],
-  ).find((node) => node.dataset.section === key)
-  const finding = Array.from(
-    section?.querySelectorAll<HTMLDetailsElement>('[data-issue]') || [],
-  ).find((node) => node.dataset.issue === issueId)
-  if (finding) finding.open = true
-  const target = finding || section
-  target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
-function openResult(resultId: string) {
-  window.dispatchEvent(
-    new CustomEvent('paper-result-open', { detail: { workId: props.workId, resultId } }),
-  )
+  if (origin && origin.version === project.value?.version && origin.selection) {
+    selection.value = origin.selection
+    const text = row.text || ''
+    sourceEditor.value?.setSelectionRange(
+      Array.from(text).slice(0, origin.selection.start).join('').length,
+      Array.from(text).slice(0, origin.selection.end).join('').length,
+    )
+  }
+  openPanel('opinions', elementAnchor(manuscript.value))
 }
 watch(
   () => [props.evidenceRequest, !!project.value] as const,
   ([request, ready]) => {
     if (!request || !ready) return
-    const section = project.value?.draft_sections?.find((s) => s.key === request.section)
-    if (!section || section.content_hash !== request.section_version) {
-      error.value = '正文已更新，原实验引用对应旧版本。请从当前草稿重新查看实验依据。'
+    const row = project.value?.files.find((row) => row.path === request.section)
+    const legacy =
+      !isLatex.value && project.value?.draft_sections?.find((row) => row.key === request.section)
+    if (
+      legacy
+        ? legacy.content_hash !== request.section_version
+        : !row || row.version !== request.section_version
+    ) {
+      error.value = '正文已更新，原引用对应旧版本。请从当前源码查看依据。'
       return
     }
     void showIssueSection(request.section)
   },
 )
-function commentIssue(text: string) {
-  message.value = text
-  openPanel('comments')
+function openResult(resultId: string) {
+  window.dispatchEvent(
+    new CustomEvent('paper-result-open', { detail: { workId: props.workId, resultId } }),
+  )
 }
-async function send() {
-  if (!project.value || !message.value.trim()) return
-  const body = {
+function addToChat(quote?: string | Event) {
+  if (!project.value) return
+  emit('quote', {
+    work_id: props.workId,
     research_id: project.value.research_id,
-    message: message.value,
     selection: selection.value,
     read_quote: readQuote.value || null,
+    read_version: view.value === 'read' && isLatex.value ? project.value.pdf_version || null : null,
     thread_id: threadId.value || null,
-  }
-  const signature = JSON.stringify(body)
-  if (pendingRequest?.signature !== signature)
-    pendingRequest = { id: crypto.randomUUID(), signature }
-  busy.value = true
-  error.value = ''
-  try {
-    const result = await paperProjectAPI.comment(props.workId, {
-      ...body,
-      request_id: pendingRequest.id,
-    })
-    threadId.value = result.thread_id
-    message.value = ''
-    pendingRequest = null
-    await load()
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '提交未确认，可重试同一评论。'
-  } finally {
-    busy.value = false
-  }
+    quote:
+      (typeof quote === 'string' ? quote : '') ||
+      selection.value?.quote ||
+      readQuote.value ||
+      activeThread.value?.messages[0]?.text ||
+      '当前论文',
+  })
+  side.value = null
 }
-function submitOnEnter(event: KeyboardEvent) {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-  event.preventDefault()
-  if (!busy.value && message.value.trim()) void send()
+function commentIssue(text: string) {
+  readQuote.value = ''
+  selection.value = null
+  addToChat('研究意见：' + text)
 }
 async function saveDraft() {
   if (!project.value || draft.value === draftBase.value) return
@@ -908,22 +842,7 @@ async function saveDraft() {
     busy.value = false
   }
 }
-async function mergeGenerated(text: string) {
-  if (!project.value || !selection.value) return
-  busy.value = true
-  try {
-    await paperProjectAPI.propose(props.workId, {
-      research_id: project.value.research_id,
-      thread_id: threadId.value || null,
-      patches: [{ ...selection.value, replacement: text }],
-    })
-    await load()
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '未能建立修改集。'
-  } finally {
-    busy.value = false
-  }
-}
+
 async function decide(id: string, decision: string) {
   if (!project.value) return
   busy.value = true
@@ -1011,7 +930,6 @@ watch(
     sourceCard.value = null
     popoverAnchor.value = null
     error.value = ''
-    pendingRequest = null
     try {
       view.value = sessionStorage.getItem(locationKey()) === 'source' ? 'source' : 'read'
     } catch {
@@ -1036,7 +954,7 @@ watch(
   ([request, ready]) => {
     if (request && ready) {
       const section = project.value?.feedback?.find((issue) => issue.id === request.id)?.section
-      if (section && project.value?.draft_sections?.some((row) => row.key === section))
+      if (section && project.value?.files.some((row) => row.path === section))
         void showIssueSection(section, request.id)
       else if (section)
         void showIssueSection(section).then(() =>
@@ -1225,18 +1143,6 @@ details {
   padding: 0 12px;
   overflow-wrap: anywhere;
 }
-.comment-input {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 10px;
-  margin: 14px 0 8px;
-  background: var(--pa-surface);
-  color: var(--pa-ink);
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-card);
-  resize: vertical;
-  font: 13px/1.7 inherit;
-}
 .inline-comment {
   padding: 12px 14px;
 }
@@ -1252,48 +1158,6 @@ details {
   font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
-}
-.inline-comment-input {
-  display: block;
-  width: 100%;
-  min-height: 42px;
-  max-height: 140px;
-  resize: vertical;
-  padding: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--pa-ink);
-  font: inherit;
-  line-height: 1.6;
-}
-.inline-comment footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-.inline-comment footer span {
-  margin-right: auto;
-  font-size: 11px;
-  color: var(--pa-muted);
-}
-.inline-comment .send-comment {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--pa-radius-circle);
-  padding: 0;
-  background: var(--pa-ink);
-  color: var(--pa-surface);
-  font-size: 20px;
-  line-height: 1;
-}
-.inline-comment .dismiss-comment {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--pa-muted);
-  font-size: 18px;
 }
 .selection-location {
   font-size: 11px;

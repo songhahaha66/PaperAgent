@@ -57,7 +57,8 @@ async function pdfFixture() {
   const scope = vue.effectScope()
   const mod = await loadModule('src/components/PaperEditor.vue', {vue,'@/api/paper':{paperAPI:{read:async()=>({feedback:[]})},paperProjectAPI:api}}, {sessionStorage, setTimeout, clearTimeout, crypto:require('node:crypto').webcrypto})
   const props = vue.reactive({workId:'A',latex:true})
-  const editor = scope.run(() => mod.default.setup(props,{emit(){},expose(){}}))
+  const emitted=[]
+  const editor = scope.run(() => mod.default.setup(props,{emit:(...args)=>emitted.push(args),expose(){}}))
   const doc = {research_id:'study',main:'paper.tex',version:'v',files:[{path:'paper.tex',text:'unique target',version:'f'}],threads:[],executions:[],changes:[],sources:[],compile:{state:'stale',message:'旧 PDF 已保留'}}
   reads[0].resolve(doc);await flush()
   assert.equal(editor.draft.value,'unique target')
@@ -65,10 +66,15 @@ async function pdfFixture() {
   const refresh=editor.load();reads[1].resolve({...doc,version:'new'});await refresh
   assert.equal(editor.draft.value,'unsaved manual edit','Refreshing must retain unsaved user edits')
   await editor.captureRead('target')
-  assert.equal(editor.quickComment.value,true,'Selecting a passage opens the compact composer in the paper')
+  assert.equal(editor.quickComment.value,true,'Selecting a passage opens the quote action without a submit form')
   assert.equal(editor.selection.value,null,'Reading text is not an automatic edit target')
   assert.equal(editor.candidates.value.length,1)
   assert.equal(editor.threadId.value,'','A new selection must not reply to a previously opened thread')
+  editor.addToChat()
+  assert.equal(comments.length,0,'Adding a quotation does not execute a comment')
+  assert.equal(emitted.at(-1)[0],'quote')
+  assert.equal(emitted.at(-1)[1].read_quote,'target')
+  assert.equal(emitted.at(-1)[1].selection,null,'PDF/read quotes must not invent source offsets')
   props.workId='B';await flush();props.workId='C';await flush()
   reads[3].resolve({...doc,version:'C'});await flush();reads[2].resolve({...doc,version:'B'});await flush()
   assert.equal(editor.project.value.version,'C','Cross-project stale responses are discarded')

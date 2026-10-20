@@ -261,22 +261,6 @@ def test_malformed_offset_and_path_are_rejected(paper):
     with pytest.raises(ValueError):project.safe_path(store.root,'.system/private.tex')
 
 
-def test_empty_tex_scaffold_becomes_native_source_and_updates_preserve_macros(paper):
-    from ai_system.graph.context import GraphContext
-    store,state=paper;path=store.root/'paper.tex';path.touch()
-    ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
-    project.sync_generated(store,state,ctx)
-    assert '% paperagent:begin abstract' in path.read_text()
-    path.write_text(path.read_text().replace(r'\begin{document}',r'\newcommand{\mine}{kept}'+'\n'+r'\begin{document}'))
-    state['sections']['abstract']='这是新的原生摘要。'
-    project.sync_generated(store,state,ctx)
-    assert '这是新的原生摘要。' in path.read_text() and r'\newcommand{\mine}{kept}' in path.read_text()
-    path.write_text(path.read_text().replace('这是新的原生摘要。','人工修改摘要。'))
-    state['sections']['abstract']='随后生成的候选摘要。'
-    project.sync_generated(store,state,ctx)
-    assert '人工修改摘要。' in path.read_text() and '随后生成的候选摘要。' not in path.read_text()
-    assert project.describe(store)['generated_candidates'][-1]['sections']['abstract']=='随后生成的候选摘要。'
-
 
 def test_native_dependency_snapshot_includes_registered_detokenize_figure(paper):
     store,_=paper;(store.root/'outputs').mkdir(exist_ok=True)

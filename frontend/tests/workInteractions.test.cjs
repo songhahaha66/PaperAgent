@@ -14,7 +14,7 @@ async function environment() {
     const cleanup = [],
       sockets = [],
       sent = [],
-      connected = []
+      connected = [], paperComments = []
     const scope = vue.effectScope()
     class Socket {
       constructor(workId) {
@@ -68,6 +68,7 @@ async function environment() {
         '@/composables/useBreakpoint': {
           useBreakpoint: () => ({ isMobile, width }),
         },
+        '@/api/paper':{paperProjectAPI:{comment:async(_work,body)=>{paperComments.push(body);return {id:body.request_id,thread_id:'thread'}},read:async()=>({executions:paperComments.map(body=>({id:body.request_id,state:'completed',answer:'基于当前原文的回复'}))})}},
         '@/api/researchSetup': {researchSetupAPI:{settings:async()=>({})}},
         '@/api/chat': {
           WebSocketChatHandler: Socket,
@@ -142,6 +143,7 @@ async function environment() {
       sent,
       route,
       connected,
+      paperComments,
       stop() {
         cleanup.forEach((callback) => callback())
         scope.stop()
@@ -150,7 +152,8 @@ async function environment() {
   }
   return { store, work, width, isMobile }
 }
-;(async () => {
+module.exports={environment}
+if (require.main === module) (async () => {
   const env = await environment()
   for (const [status, expected] of [
     [403, 'forbidden'],

@@ -22,7 +22,7 @@ def coverage_material(stage,context):
         material=context['version_material'];science=material['science'];sections=material.get('section_hashes',{});sources=material.get('citation_sources',{});request=material.get('request_hash')
     else:science=science_version(context);sections=context.get('section_hashes',{});sources=context.get('citation_sources',{});request=context.get('request_hash')
     return digest({'science':science,'sections':sorted(sections.values()) if stage=='citations' else sections,
-        'sources':sources,'request':request if stage!='citations' else None})
+        'source_version':(context.get('version_material') or context).get('source_version') if stage!='reconcile' else None,'sources':sources,'request':request if stage!='citations' else None})
 
 
 class ReviewInProgress(RuntimeError):
@@ -73,7 +73,8 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
                 row=db.execute('SELECT version,payload FROM experiment_policy WHERE id=1').fetchone()
                 if row:configuration['comparison']={'version':row[0],'policy':json.loads(row[1])}
     citations={}
-    for cid in set(re.findall(r'\{\{C:C(\d+)\}\}', '\n'.join((sections or {}).values()))):
+    from ai_system.research.citations import citation_text
+    for cid in set(re.findall(r'\{\{C:C(\d+)\}\}', citation_text('\n'.join((sections or {}).values())))):
         try:
             with closing(store._connect()) as db:
                 exists=db.execute("SELECT 1 FROM sqlite_master WHERE name='literature_passages'").fetchone()
@@ -82,7 +83,9 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
         except (AttributeError,ValueError,KeyError):citations['C'+cid]=None
     consistency=digest(snapshot.get('consistency', [])) if stage in {'sections','fragment','section_blocks','section_global','issue_target'} else None
     from ai_system.modules.writing.consistency import section_coverage
-    return {'policy':POLICY,'stage':stage,'request_hash':digest({'system':system,'prompt':prompt,'schema':schema.model_json_schema()}),'reconcile_projection_hash':consistency,
+    from services.chat_services.paper_project import is_latex, snapshot as source_snapshot
+    source_version = source_snapshot(root)['version'] if store and is_latex(store) and stage!='reconcile' else None
+    return {'source_version':source_version,'policy':POLICY,'stage':stage,'request_hash':digest({'system':system,'prompt':prompt,'schema':schema.model_json_schema()}),'reconcile_projection_hash':consistency,
         'section_coverage':section_coverage(sections or {}) if stage=='sections' else None,
         'model_id':getattr(ctx.planner_llm,'model_name',None) or getattr(ctx.planner_llm,'model',None),
         'inputs':store.file_inputs() if store else {},
@@ -93,7 +96,7 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
         'committed_evidence_hash':digest({'evidence':snapshot.get('artifacts',{}),'claims':snapshot.get('claims',{})}),
         'configuration_hash':digest(configuration),
         'section_hashes':{k:digest(v) for k,v in (sections or {}).items()},
-        'committed_section_hashes':{k:{p:v.get(p) for p in ('content_hash','context_hash','revision','validity')} for k,v in snapshot.get('sections',{}).items()} if sections is not None else {},
+        'committed_section_hashes':{} if source_version else {k:{p:v.get(p) for p in ('content_hash','context_hash','revision','validity')} for k,v in snapshot.get('sections',{}).items()} if sections is not None else {},
         'citation_sources':citations,'extra':extra or {}}
 
 
@@ -301,6 +304,8 @@ class ReviewCache:
 async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=None,extra=None,validate=None):
     def context():return review_context(ctx,state,stage,system,prompt,schema,sections=sections,extra=extra)
     before=context();store=getattr(ctx,'research',None)
+    if stage!='reconcile' and state.get('source_version') and state['source_version']!=before.get('source_version'):
+        raise ReviewSuperseded('所检查的源码版本已改变')
     if store is None:
         return await perform()
     cache=ReviewCache(store);record=None;joined=False;heartbeat=None

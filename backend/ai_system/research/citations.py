@@ -17,8 +17,17 @@ def literature_root(ctx):
     return getattr(ctx,'source_workspace',None) or getattr(getattr(ctx,'research',None),'root',ctx.workspace)
 
 
+def citation_text(text):
+    """Normalize supported native citation syntax only for source-support review."""
+    text = re.sub(r'\\href\{https://paperagent\.local/citations/(C[1-9]\d*)\}\{[^{}]*\}',
+                  lambda m:'{{C:'+m[1]+'}}', text)
+    return re.sub(r'\\cite\w*\*?(?:\[[^\]]*\])*\{(C[1-9]\d*)\}',
+                  lambda m:'{{C:'+m[1]+'}}', text)
+
+
 def claims_in(text, store):
     rows = []
+    text = citation_text(text)
     for match in CITATION.finditer(text):
         # A citation may follow the sentence punctuation rather than precede it.
         prefix = text[:match.start()].rstrip(' \t\r\n。！？.!?；;，,、”’"\'')
@@ -181,6 +190,10 @@ async def audit_citations(workspace, texts, llm,*,active=False):
 def citation_issues(workspace, text):
     store = LiteratureStore(workspace)
     issues = []
+    native_keys = {k.strip() for group in re.findall(r'\\cite\w*\*?(?:\[[^\]]*\])*\{([^{}]+)\}', text) for k in group.split(',')}
+    if any(not re.fullmatch(r'C[1-9]\d*', key) for key in native_keys):
+        issues.append('当前文献引用尚无登记原文支持记录；书目存在不代表引用句已获核实')
+    text = citation_text(text)
     if re.search(r'\\cite\w*\*?\{',text):
         issues.append('原始 cite 书目键尚未绑定原文证据，请使用真实的 {{C:C编号}}')
     if re.search(r'\{\{\s*C:',CITATION.sub('',text)):
@@ -241,11 +254,14 @@ def citation_usage(workspace):
     if not path.exists():
         return []
     thread = json.loads(path.read_text())
-    snapshot = ResearchStore(store.root,thread['thread_id'],read_only=True).snapshot()
+    research=ResearchStore(store.root,thread['thread_id'],read_only=True)
+    snapshot=research.snapshot()
     rows = []
-    for section,value in (snapshot or {}).get('sections',{}).items():
+    from services.chat_services.paper_project import is_latex, source_state
+    sections=source_state(research,{})['sections'] if is_latex(research) else {k:v['text'] for k,v in (snapshot or {}).get('sections',{}).items()}
+    for section,text in sections.items():
         try:
-            for row in claims_in(value['text'],store):
+            for row in claims_in(text,store):
                 review = _saved_verdict(store,row)
                 rows.append({'section':section,'claim':row['claim'],'evidence_id':row['evidence']['id'],
                              'status':review['status'] if review else 'unverified','reason':review.get('reason','') if review else ''})

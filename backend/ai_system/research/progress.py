@@ -26,7 +26,7 @@ def task_progress(snapshot, task, ready, work_status=None):
     exhausted = attempts >= snapshot["max_attempts"] or len(snapshot["executions"]) >= snapshot["max_total_attempts"]
     if task["acceptance"] == "accepted" and task["validity"] == "current" and not issues:
         section = snapshot["sections"].get(f"solve:{key}")
-        state = "writing" if task["kind"] == "writing" and (not section or section["validity"] != "current") else "accepted"
+        state = "writing" if snapshot["spec"].get("output_mode") != "latex" and task["kind"] == "writing" and (not section or section["validity"] != "current") else "accepted"
     elif task["execution_status"] == "running":
         state = "interrupted" if work_status in {"paused", "cancelled", "failed"} else "running"
     elif exhausted or any(i["status"] == "confirmed" and i["action"] == "recompute" for i in issues):

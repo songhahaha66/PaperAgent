@@ -164,7 +164,7 @@ class GraphContext:
         if self.research and key in {"write", "validate", "render", "export"}:
             self.research.set_delivery_stage(key, status, note)
             from ..research.control import public_snapshot
-            await self.events.emit("research_state", public_snapshot(self.research.snapshot()))
+            await self.events.emit("research_state", public_snapshot(self.research.snapshot(),source_root=self.research.root))
         await self.events.emit("paper_phase", {"stage": key, "status": status, "note": note})
 
     def write_json(self, rel_path: str, data: Any) -> None:

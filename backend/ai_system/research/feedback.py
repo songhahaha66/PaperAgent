@@ -121,7 +121,7 @@ async def repair_report(ctx, inputs):
         store._save(db,state,'report_reviewed',{'task_id':task['task_id'],'version':version['revision'],
             'report_hash':version['report_hash'],'remaining':remaining})
     from .control import public_snapshot
-    await ctx.events.emit('research_state',public_snapshot(store.snapshot()))
+    await ctx.events.emit('research_state',public_snapshot(store.snapshot(),source_root=store.root))
     return CapabilityProduct('research_state',{'log':['report updated and reviewed without repeating computation']})
 
 
