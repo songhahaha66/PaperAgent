@@ -77,9 +77,11 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     initial = store.snapshot()
     q1 = initial['tasks']['Q1']['active_attempt']
     failed=[a for a in initial['attempts'].values() if a['task_id']=='Q2' and a['execution_status']=='failed']
-    assert len(failed)==1 and not failed[0]['commit']['published']
+    assert len(failed)==1 and failed[0]['execution_status']=='failed' and failed[0]['acceptance']!='accepted'
     failed_ids={a['attempt_id'] for a in failed}
-    assert all(e['producer_attempt'] not in failed_ids for e in initial['evidence'].values() if e['active'])
+    failed_refs={ref for ref,e in initial['evidence'].items() if e['producer_attempt'] in failed_ids}
+    assert all(not initial['evidence'][ref]['active'] for ref in failed_refs)
+    assert failed_refs.isdisjoint({r['id'] for r in store.registry_payload()['results']})
     assert len([a for a in initial['attempts'].values() if a['task_id']=='Q1'])==1
     # The controller may already have repaired Q2. Resume only if work remains.
     output = asyncio.run(agent.resume_failed() if mode == 'direct' else agent.run('继续')) if '研究已暂停' in first_output else first_output
@@ -87,8 +89,11 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     current=store.snapshot();active=current['tasks']['Q2']['active_attempt']
     assert current['tasks']['Q1']['active_attempt']==q1 and current['tasks']['Q2']['acceptance']=='accepted'
     assert len([a for a in current['attempts'].values() if a['task_id']=='Q1'])==1
-    assert all(current['evidence'][r['id']]['producer_attempt']==active
-               for r in store.registry_payload()['results'] if r['subproblem']=='Q2')
+    assert active not in failed_ids and current['attempts'][active]['execution_status']=='succeeded'
+    assert current['attempts'][active]['acceptance']=='accepted'
+    results=store.registry_payload()['results'];q2_results=[r for r in results if r['subproblem']=='Q2']
+    assert q2_results and all(current['evidence'][r['id']]['producer_attempt']==active for r in q2_results)
+    assert failed_refs.isdisjoint({r['id'] for r in results})
     assert all(not e['active'] for e in current['evidence'].values() if e['producer_attempt'] in failed_ids)
     paper=(tmp_path/'paper.md').read_bytes();attempts=current['attempts'];written=len(agent.llm.text_calls)
     assert 'paper.md' in asyncio.run(agent.resume_failed())

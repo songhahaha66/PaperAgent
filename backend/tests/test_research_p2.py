@@ -359,6 +359,38 @@ class ReviewLoopModel(ClosedLoopModel):
         return reply
 
 
+def assert_countercheck_decisions_are_evidenced_and_reusable(agent,store,counterexample):
+    from ai_system.research.planner import decision_records
+    state=store.snapshot();[verification]=[t for t in state['tasks'].values() if t['kind']=='verify']
+    records=decision_records(store)
+    actions=[(key,row) for key,row in reversed(records) if row.get('proposal')]
+    assert actions and all(row['status']=='done' for _,row in actions)
+    assert state['planning_calls']==len(actions), 'Each planning call must leave an actual action record'
+    assert actions[-1][1]['proposal']['action']=='deliver'
+    executions=[(index,key,row['proposal']) for index,(key,row) in enumerate(actions) if row['proposal']['action']=='execute']
+    assert {'Q1','Q2','Q3',verification['task_id']} <= {task for _,_,p in executions for task in p['task_ids']}
+    for _,key,proposal in executions:
+        for task in proposal['task_ids']:
+            receipt=store.planning_decision(key+':execute:'+task)
+            assert receipt['status']=='done' and receipt['capability']=='experiments.execute'
+    [check_action]=[index for index,_,p in executions if verification['task_id'] in p['task_ids']]
+    [check_attempt]=[a for a in state['attempts'].values() if a['task_id']==verification['task_id']]
+    assert check_attempt['execution_status']=='succeeded'
+    assert check_attempt['validation']['outcome']==('rejected' if counterexample else 'accepted')
+    revisions=[(index,key,row['proposal']) for index,(key,row) in enumerate(actions) if row['proposal']['action']=='research']
+    assert bool(revisions)==counterexample, 'A dismissed suspicion must not trigger research revision'
+    for index,key,proposal in revisions:
+        assert check_action<index<len(actions)-1
+        assert verification['verifies_issue'] in proposal['issue_ids']
+        assert store.planning_decision(key+':apply'), 'The confirmed counterexample must have an applied revision receipt'
+    assert {row['proposal']['action'] for _,row in actions}<={'execute','research','deliver'}
+    for _ in range(2):  # Explicit resume re-enters observe, without requesting another research decision.
+        assert 'paper.md' in asyncio.run(agent.resume_failed())
+        after=store.snapshot()
+        assert after['planning_calls']==state['planning_calls'] and decision_records(store)==records
+        assert after['attempts']==state['attempts']
+
+
 @pytest.mark.parametrize("counterexample", [True, False])
 @pytest.mark.parametrize("detection_phase", ["reconcile", "sections"])
 def test_consistency_suspicion_runs_independent_verification_then_replans_only_if_confirmed(tmp_path, monkeypatch, counterexample, detection_phase):
@@ -371,7 +403,7 @@ def test_consistency_suspicion_runs_independent_verification_then_replans_only_i
     state = store.snapshot()
     investigations = [t for t in state["tasks"].values() if t["kind"] == "verify"]
     assert len(investigations) == 1 and investigations[0]["retired"]
-    assert state["planning_calls"] == (3 if counterexample else 1)  # Initial deliver, confirmed repair, then a new deliver.
+    assert_countercheck_decisions_are_evidenced_and_reusable(agent,store,counterexample)
     assert sum(a["task_id"] == "Q1" for a in state["attempts"].values()) == (2 if counterexample else 1)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1
     assert research_findings(state)[0]["status"] == ("resolved" if counterexample else "dismissed")

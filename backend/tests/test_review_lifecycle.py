@@ -22,7 +22,7 @@ from ai_system.research.models import (
 from ai_system.research.store import ResearchStore
 from ai_system.research.validation import report_fingerprint
 from test_paper_graph import FixedJudge, _candidate
-from test_research_p2 import ClosedLoopModel, ReviewLoopModel, TASK, store_for, submit
+from test_research_p2 import ClosedLoopModel, ReviewLoopModel, TASK, store_for, submit, assert_countercheck_decisions_are_evidenced_and_reusable
 
 
 class AuditModel(ClosedLoopModel):
@@ -400,11 +400,11 @@ class LocalCountercheckModel(ReviewLoopModel):
 
 @pytest.mark.parametrize("counterexample", [True, False])
 def test_local_findings_use_independent_counterchecks_and_only_replan_after_confirmation(tmp_path, monkeypatch, counterexample):
-    _, store = run_agent(tmp_path, monkeypatch, LocalCountercheckModel(counterexample=counterexample, loose_number_once=False))
+    agent, store = run_agent(tmp_path, monkeypatch, LocalCountercheckModel(counterexample=counterexample, loose_number_once=False))
     state = store.snapshot()
     [issue] = [i for i in research_findings(state) if i["source"] == "local_review"]
     assert issue["status"] == ("resolved" if counterexample else "dismissed")
-    assert state["planning_calls"] == (2 if counterexample else 1)
+    assert_countercheck_decisions_are_evidenced_and_reusable(agent,store,counterexample)
     assert sum(a["task_id"] == "Q3" for a in state["attempts"].values()) == 1
     assert len([t for t in state["tasks"].values() if t["kind"] == "verify"]) == 1
     assert store.delivery_ready(state) and (tmp_path / "paper.md").exists()
