@@ -12,6 +12,7 @@ import logging
 from ai_system.config.logging_config import setup_simple_logging
 # 导入异步配置管理器
 from ai_system.config.async_config import initialize_async_config, shutdown_async_config
+from ai_system.config.observability import tracing_status
 from config.paths import get_project_root, get_pa_data_base, get_workspaces_path, get_templates_path
 
 # 设置日志系统（只显示在终端，关闭LiteLLM日志）
@@ -38,6 +39,11 @@ async def lifespan(app: FastAPI):
     """应用生命周期事件处理器"""
     # 启动时执行
     logger.info("应用启动中...")
+    status = tracing_status()
+    if status == 'missing_key':
+        logger.warning('LangSmith 追踪未启用：缺少 LANGSMITH_API_KEY')
+    else:
+        logger.info('LangSmith 追踪：%s', status)
     
     # 显示路径配置
     logger.info(f"项目根目录: {get_project_root()}")

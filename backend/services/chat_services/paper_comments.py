@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from langsmith import trace
+from ai_system.config.observability import research_tracing
 from ai_system.graph.llm_utils import as_messages, call_structured, cap_output
 from ai_system.research.models import ResearchConflict
 from ai_system.research.store import digest
@@ -137,6 +139,14 @@ async def calculate(ctx, inputs):
 
 
 async def execute(store, execution_id, llm, *, resume=False):
+    with research_tracing(store.root.name, store.research_id, 'comment', execution_id=execution_id), \
+            trace('PaperAgent.comment', inputs={'execution_id': execution_id, 'resume': resume}) as span:
+        result = await _execute(store, execution_id, llm, resume=resume)
+        span.end(outputs=result)
+        return result
+
+
+async def _execute(store, execution_id, llm, *, resume=False):
     project.initialize(store)
     with store._transaction() as db:
         row=db.execute('SELECT payload FROM paper_executions WHERE research_id=? AND id=?',(store.research_id,execution_id)).fetchone()

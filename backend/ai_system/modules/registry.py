@@ -8,6 +8,7 @@ from typing import Any, Awaitable, Callable, Literal
 import inspect
 
 from pydantic import BaseModel, ConfigDict, Field
+from ai_system.config.observability import capability_span
 
 
 class CapabilityRequest(BaseModel):
@@ -96,13 +97,16 @@ class ModuleRegistry:
         from ai_system.graph.tracing import CURRENT_CAPABILITY
         token = CURRENT_CAPABILITY.set(request.name)
         try:
-            result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
-            if inspect.isawaitable(result):
-                result = await result
+            with capability_span(request.name, capability.module, request.inputs) as span:
+                result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
+                if inspect.isawaitable(result):
+                    result = await result
+                if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
+                    raise TypeError(f"能力产物不符合接口：{request.name}")
+                if span is not None:
+                    span.end(outputs={'kind': result.kind, 'value': result.value})
         finally:
             CURRENT_CAPABILITY.reset(token)
-        if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
-            raise TypeError(f"能力产物不符合接口：{request.name}")
         return result
 
     def invoke_sync(self, request: CapabilityRequest, ctx):
@@ -111,9 +115,12 @@ class ModuleRegistry:
             raise ValueError(f"未注册能力：{request.name}")
         if inspect.iscoroutinefunction(capability.execute):
             raise TypeError(f"异步能力不能同步调用：{request.name}")
-        result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
-        if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
-            raise TypeError(f"能力产物不符合接口：{request.name}")
+        with capability_span(request.name, capability.module, request.inputs) as span:
+            result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
+            if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
+                raise TypeError(f"能力产物不符合接口：{request.name}")
+            if span is not None:
+                span.end(outputs={'kind': result.kind, 'value': result.value})
         return result
 
 

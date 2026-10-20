@@ -16,7 +16,9 @@ from typing import Any, Dict, Optional
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
+from langsmith import trace as remote_trace
 
+from ..config.observability import research_tracing
 from ..judge import JevJudge, LLMJudge, jev_available
 from ..research import ENGINE_VERSION
 from ..research.store import ResearchStore
@@ -187,7 +189,10 @@ class PaperGraphAgent:
             callbacks=getattr(self.llm,'callbacks',None)
             model=self.llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]}) if hasattr(self.llm,'model_copy') else self.llm
             try:
-                with budget_scope(Path(self.workspace_dir), research_id),labelled('amendment'):
+                with research_tracing(self.work_id or Path(self.workspace_dir).name, research_id, 'revise',
+                                      command_id=command_id, base_revision=base_revision), \
+                        remote_trace('PaperAgent.revise', inputs={'change': change, 'scope': scope}), \
+                        budget_scope(Path(self.workspace_dir), research_id), labelled('amendment'):
                     requirements = await Planner(model).amendment(snapshot, change, scope)
             except Exception:
                 self._save_thread(research_id,'failed')
@@ -259,9 +264,17 @@ class PaperGraphAgent:
         log_offset = len(before.values.get("log") or [])
         try:
             from ..research.runtime import budget_scope
-            with budget_scope(Path(self.workspace_dir),thread_id) as runtime:
+            operation = 'resume' if graph_input is None or isinstance(graph_input, Command) else 'research'
+            with research_tracing(self.work_id or Path(self.workspace_dir).name, thread_id, operation,
+                                  output_mode=ctx.output_mode, engine_version=self.engine_version), \
+                    budget_scope(Path(self.workspace_dir),thread_id) as runtime:
                 runtime.note_stop('running','研究执行中')
-                result = await graph.ainvoke(graph_input, {**config, "callbacks": [trace]}, context=ctx)
+                callbacks = config.get('callbacks') or []
+                callbacks = [*callbacks, trace] if isinstance(callbacks, list) else callbacks.copy()
+                if not isinstance(callbacks, list):
+                    callbacks.add_handler(trace)
+                result = await graph.ainvoke(graph_input, {**config, 'run_name': f'PaperAgent.{operation}',
+                                                          'callbacks': callbacks}, context=ctx)
         except asyncio.CancelledError:
             self._save_thread(thread_id, 'paused')
             raise
