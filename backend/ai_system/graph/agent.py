@@ -266,7 +266,7 @@ class PaperGraphAgent:
             from ..research.runtime import budget_scope
             operation = 'resume' if graph_input is None or isinstance(graph_input, Command) else 'research'
             with research_tracing(self.work_id or Path(self.workspace_dir).name, thread_id, operation,
-                                  output_mode=ctx.output_mode, engine_version=self.engine_version), \
+                                  output_mode=self.options['output_mode'], engine_version=self.engine_version), \
                     budget_scope(Path(self.workspace_dir),thread_id) as runtime:
                 runtime.note_stop('running','研究执行中')
                 callbacks = config.get('callbacks') or []
