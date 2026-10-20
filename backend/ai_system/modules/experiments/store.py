@@ -102,7 +102,7 @@ class ExperimentStore:
             if attempt.get('execution_status')!='succeeded' or attempt.get('acceptance')!='accepted' or not attempt.get('commit',{}).get('published'):
                 continue
             record=self.read(key,task['revision'])
-            if not record or record.get('status') not in {'winner','only_valid','tied'} or record.get('protocol_error') or record.get('provider_unavailable'):
+            if not record or record.get('status') not in {'winner','only_valid','tied','no_valid','budget_exhausted'} or record.get('protocol_error'):
                 continue
             try:
                 from .supervised import current,choose
@@ -113,6 +113,10 @@ class ExperimentStore:
                 ctx=SimpleNamespace(research=self.store,experience_store=None,experience_order=order)
                 design=task.get('design') or {};candidates=design.get('candidates',[])[:2]
                 if record.get('research_id')!=self.store.research_id or record.get('task_id')!=key or not current(ctx,record,{'subproblem':task['subproblem'],'design':design}):
+                    continue
+                if record.get('measurements'):
+                    summary=self.measured_summary(snapshot,task,attempt,record)
+                    if summary:summaries.append(summary)
                     continue
                 protocol=record['protocol'];rows=record['branches'];chosen=record['chosen_index']
                 if record.get('implementation_contract_version')!=VERSION or digest(protocol)!=record['protocol_hash']:
@@ -168,11 +172,48 @@ class ExperimentStore:
                         'protocol_hash':record['protocol_hash'],'contract_hash':record['contract_hash'],'policy_version':record['policy_version'],
                         'formal_run_id':handoff['run_id'],'formal_artifact_hash':handoff['artifact_hash'],
                         'formal_evidence_refs':handoff['evidence_refs']}})
-            except (KeyError,ValueError,TypeError,IndexError):
+            except (KeyError,ValueError,TypeError,IndexError,OSError,StopIteration):
                 # Incomplete/old records remain inspectable in ExperimentStore;
                 # they cannot become current completed evidence by inference.
                 continue
         return summaries
+
+    def measured_summary(self,snapshot,task,attempt,record):
+        """Read the existing comparison and published evidence, including ties.
+
+        Candidate failures stay observations. Only the accepted measurement
+        receipt can expose a comparison as evidence to the controller.
+        """
+        import hashlib,math
+        from .contracts import candidate_contract,VERSION
+        from .supervised import choose
+        if record.get('implementation_contract_version')!=VERSION or digest(record['protocol'])!=record['protocol_hash']:
+            return None
+        proof=next((p for p in reversed(record['measurements']) if p.get('attempt_id')==attempt['attempt_id']),None)
+        if not proof or proof['protocol_hash']!=record['protocol_hash']:return None
+        if choose(record)[:2]!=(record['status'],record.get('chosen_index')):return None
+        evidence=[snapshot['evidence'].get(ref,{}) for ref in proof['evidence_refs']]
+        if not all(e.get('active') and e.get('producer_attempt')==attempt['attempt_id'] and
+                   e.get('payload',{}).get('run_id')==proof['run_id'] for e in evidence):return None
+        actual={e['payload']['name']:e['payload']['value'] for e in evidence if e['payload']['kind']!='figure'}
+        if any(name not in actual or not math.isclose(float(actual[name]),value,rel_tol=1e-9,abs_tol=1e-10)
+               for name,value in proof['values'].items()):return None
+        folder=self.store.root/'.system/attempts'/record['owner_attempt']/'workspace/outputs/intermediate/comparisons'/record['id']
+        for measured in proof['measurements']:
+            row=next(r for r in record['branches'] if r['index']==measured['index'])
+            candidate=task['design']['candidates'][row['index']]
+            if row.get('candidate_hash')!=digest(candidate) or row.get('estimator_contract')!=candidate_contract(candidate):return None
+            if row.get('estimator_contract') and not row.get('implementation_audit',{}).get('checked'):return None
+            if not row.get('code_hash') or hashlib.sha256(row['code'].encode()).hexdigest()!=row['code_hash']:return None
+            if hashlib.sha256((folder/f"predictions-{row['index']}.json").read_bytes()).hexdigest()!=measured['prediction_hash']:return None
+            if row.get('prediction_hash')!=measured['prediction_hash'] or not math.isclose(row['metric'],measured['metric'],rel_tol=1e-9,abs_tol=1e-10):return None
+        return {'id':record['id'],'task_id':task['task_id'],'revision':task['revision'],'status':record['status'],
+            'chosen_index':record.get('chosen_index'),'reason':record['reason'],
+            'conditions':task['experiment']['conditions'],'evaluation':task['experiment']['evaluation'],
+            'protocol':{k:v for k,v in record['protocol'].items() if k not in {'train_ids','validation_ids'}},
+            'branches':[{k:r.get(k) for k in ('name','status','metric','baseline','improvement','error','run_ids','code_hash','prediction_hash')} for r in record['branches']],
+            'provenance':{'record_id':record['id'],'protocol_hash':record['protocol_hash'],
+                          'formal_run_id':proof['run_id'],'formal_evidence_refs':proof['evidence_refs']}}
 
     def create(self,task_id,revision,record):
         with self.store._transaction() as db:
@@ -188,9 +229,11 @@ class ExperimentStore:
             row=db.execute('SELECT payload FROM experiment_comparisons WHERE id=?',(record['id'],)).fetchone()
             if not row:raise ResearchConflict('比较记录不存在')
             old=json.loads(row[0])
-            for key in ('protocol','protocol_hash','candidate_hashes','task_hash','input_refs','file_inputs','input_digest','contract_hash','policy_version','revision','implementation_contract_version'):
+            for key in ('protocol','protocol_hash','candidate_hashes','task_hash','input_refs','file_inputs','input_digest','contract_hash','policy_version','revision','implementation_contract_version','intent_hash','conditions','evaluation'):
                 if key in old and old[key]!=record.get(key):raise ResearchConflict('比较协议或候选已冻结，不能修改')
             for before,after in zip(old['branches'],record['branches']):
+                if any(before.get(k)!=after.get(k) for k in ('name','instruction')):
+                    raise ResearchConflict('候选方法声明已冻结')
                 if 'estimator_contract' in before and before['estimator_contract']!=after.get('estimator_contract'):
                     raise ResearchConflict('候选方法契约已经冻结')
                 if before.get('code_hash') and any(before.get(k)!=after.get(k) for k in ('code','code_hash','ast_hash')):

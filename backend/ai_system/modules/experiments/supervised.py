@@ -113,9 +113,11 @@ def choose(record):
         return 'no_valid',None,'两支均未产生满足冻结规则的指标；未使用模型自评分选择'
     eligible=[r for r in valid if r['improvement']>=protocol['minimum_improvement']]
     if not eligible:return 'no_valid',None,'两支均未达到共同基线的最低改善量；这是分数结果，不证明方法错误'
-    if len(eligible)==1:return 'only_valid',eligible[0]['index'],'仅此支满足冻结规则和基线门槛，不能据此宣称普遍更优'
+    # Old formal handoff receipts retain their representative index. New task
+    # intents return all observations to observe without promoting a candidate.
+    if len(eligible)==1:return 'only_valid',None if record.get('intent_hash') else eligible[0]['index'],'仅一支满足冻结规则和基线门槛；保留候选，不把另一支执行失败视为方法无效，也不据此判定赢家'
     a,b=sorted(eligible,key=lambda r:r['index']);delta=abs(a['metric']-b['metric'])
-    if delta<=protocol['tie_tolerance']:return 'tied',a['index'],'实测差异在冻结容差内；按冻结候选顺序继续代表方案，无实测优胜者'
+    if delta<=protocol['tie_tolerance']:return 'tied',None if record.get('intent_hash') else a['index'],'实测差异在冻结容差内；保留两个候选，可继续补实验，无实测优胜者'
     best=max(eligible,key=lambda r:r['metric']) if protocol['higher_is_better'] else min(eligible,key=lambda r:r['metric'])
     return 'winner',best['index'],f"按项目重算 {protocol['metric']} 选择候选 {best['index']+1}，未使用 critic 或 stdout 分数"
 
@@ -128,6 +130,7 @@ def current(ctx,record,branch):
     store=root_store(ctx);state=store.snapshot();order=ctx.experience_order
     candidates=branch['design'].get('candidates',[])[:2]
     if [digest(c) for c in candidates]!=record['candidate_hashes']:return False
+    if record.get('intent_hash') and digest(branch.get('experiment') or branch['design'].get('experiment'))!=record['intent_hash']:return False
     if record.get('task_hash',digest(branch['subproblem']))!=digest(branch['subproblem']):return False
     if store.file_inputs()!=record['file_inputs']:return False
     if state and order:
@@ -135,7 +138,7 @@ def current(ctx,record,branch):
         if task['revision']!=record['revision'] or digest(research_protocol(state,order.task_id))!=record['contract_hash']:return False
         if task['active_attempt']!=order.attempt_id or state['attempts'][order.attempt_id]['lease']!=order.lease:return False
         if store._inputs(state,task,store.file_inputs())!=order.input_refs:return False
-    if ExperimentStore(store).policy()['version']!=record['policy_version']:return False
+    if record.get('policy_version') is not None and ExperimentStore(store).policy()['version']!=record['policy_version']:return False
     return True
 
 
@@ -194,6 +197,7 @@ async def compare(ctx,branch):
     candidates=branch['design'].get('candidates',[])[:2];hashes=[digest(c) for c in candidates]
     scores=branch['design'].get('scores') or []
     record=db.read(tid,revision);policy=db.policy()
+    intent=branch.get('experiment') or branch['design'].get('experiment') or {}
     if record:
         if not current(ctx,record,branch):
             record.update(status='input_changed',chosen_index=None,reason='输入、契约、候选或配置已改变，旧比较不晋升');db.save(record);return record
@@ -208,7 +212,10 @@ async def compare(ctx,branch):
             'candidate_hashes':hashes,'task_hash':digest(branch['subproblem']),'file_inputs':files,'input_refs':order.input_refs if order else files,
             'input_digest':order.input_digest if order else digest(store.file_inputs()),
             'contract_hash':digest(research_protocol(state,tid)) if state else digest(branch.get('research_contract',{})),
-            'policy_version':policy['version'],'branches':[{'index':i,'name':c['name'],'candidate_hash':hashes[i],
+            'policy_version':None if intent.get('csv') else policy['version'],
+            'intent_hash':digest(intent) if intent.get('csv') else None,
+            'conditions':intent.get('conditions'),'evaluation':intent.get('evaluation'),
+            'branches':[{'index':i,'name':c['name'],'instruction':c.get('idea',''),'candidate_hash':hashes[i],
                 'prior':scores[i].get('total') if i<len(scores) else None,'estimator_contract':candidate_contract(c),
                 'status':'pending','run_ids':[]} for i,c in enumerate(candidates)],'implementation_contract_version':CONTRACT_VERSION})
     if not current(ctx,record,branch):
@@ -225,7 +232,8 @@ async def compare(ctx,branch):
         record.update(status='no_valid',chosen_index=None,reason='候选方法配置不匹配，需要重新设计');db.save(record);return record
     try:
         if 'protocol' not in record:
-            if policy.get('spec'):spec=SupervisedSpec.model_validate(policy['spec'])
+            if intent.get('csv'):spec=SupervisedSpec.model_validate(intent['csv'])
+            elif policy.get('spec'):spec=SupervisedSpec.model_validate(policy['spec'])
             else:
                 if not db.reserve(tid,'model_calls',20,record['id']+':protocol'):
                     record.update(status='budget_exhausted',reason='协议生成额度已消耗，未重置或重试',chosen_index=None);db.save(record);return record
@@ -245,6 +253,7 @@ async def compare(ctx,branch):
     directory=ctx.workspace/'outputs/intermediate/comparisons'/record['id'];directory.mkdir(parents=True,exist_ok=True)
     for row,candidate in zip(record['branches'],candidates):
         if row['status']!='pending':continue
+        await ctx.events.stage('正在准备候选实验：'+candidate['name'])
         key=f"{record['id']}:code:{row['index']}"
         if not db.reserve(tid,'model_calls',25,key,candidate=True):row.update(status='budget_exhausted',error='候选生成预算不足');db.save(record);continue
         row['status']='generating';db.save(record);started=time.monotonic()
@@ -313,6 +322,6 @@ async def compare(ctx,branch):
     if any(r['status']=='budget_exhausted' for r in record['branches']):status,index,reason='budget_exhausted',None,'比较预算耗尽，未回退模型自评选择胜者'
     record.update(status=status,chosen_index=index,reason=reason)
     for row in record['branches']:
-        row['selection_reason']=reason if row['index']==index else row.get('error') or ('未达到最低改善量' if row.get('improvement',float('-inf'))<record['protocol']['minimum_improvement'] else '依据冻结指标与平局规则保留另一方案')
+        row['selection_reason']=row.get('error') or reason if index is None else reason if row['index']==index else row.get('error') or '保留同一条件下的实测结果，不宣称该方法无效'
     if not current(ctx,record,branch):record.update(status='input_changed',chosen_index=None,reason='执行期间输入已改变，比较结果仅作历史，不晋升')
     db.save(record);return record

@@ -26,6 +26,11 @@ export interface ResearchOutcome {
     steps?: string[]
     validation?: string
   } | null
+  experiment?: {
+    conditions: string
+    evaluation: string
+    candidates: { name: string; instruction: string }[]
+  } | null
   results: ReadableResult[]
   claims: { id: string; statement: string; strength: string; evidence: string[] }[]
   issues: { id: string; message: string; category: string; status: string; action: string }[]

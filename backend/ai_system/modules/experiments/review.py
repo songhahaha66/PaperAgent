@@ -157,6 +157,9 @@ def report_submission_issues(ctx: GraphContext, branch: BranchInput, report: Dic
     sid = subproblem["id"]
     deps = subproblem.get("depends_on") or []
     issues = submission_issues(ctx, report, sid, deps)
+    plan=branch.get('experiment')
+    if plan and not plan.get('csv') and report.get('approach')!=plan['candidates'][0]['name']:
+        issues.append('本次只执行已冻结候选，报告approach须使用其原名称；若无法实现应如实失败，由控制器修订方法')
     issues += submission_inventory_issues(ctx, branch, runs)
     issues += control_issues(ctx,report)
     available = {r.id for r in ctx.registry.results.values() if r.subproblem in {sid, *deps}}
@@ -191,6 +194,8 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
         f"# 登记结果\n{ctx.registry.to_prompt_table(subproblem['id'])}\n\n"
         f"# 本次执行代码与输出（按时间顺序，含最初建模计算）\n{code or '（无）'}\n\n{CHECKLIST}\n\n"
         f"# 研究契约\n{branch.get('research_contract', {})}\n"
+        f"# 冻结候选及评价条件\n{branch.get('experiment') or '无额外候选协议'}\n"
+        "逐项对照上述候选方法、参数、数据范围、评价条件与实际代码；执行者静默换方法或改变条件属于实质问题。不能把运行错误判成方法无效，也不能把预估评分当成实测结果。\n"
         f"# 必须逐项重新核对的先前意见\n{branch.get('review_findings', [])}\n"
         "只返回仍未解决的问题，填写目标任务、实际证据引用、适用的check_ids和assumption_id。"
         "问题没有验证依据时保留疑点；不能仅因求解者称已修复就清空。全部有依据地解决后issues留空。"

@@ -1,4 +1,4 @@
-"""Experiment capabilities own planning, exploration, comparison and execution."""
+"""Execution tools used by the single research controller."""
 from types import SimpleNamespace
 from pydantic import Field
 from ai_system.modules.registry import Inputs
@@ -15,19 +15,9 @@ async def comment(ctx, inputs):
 from ai_system.modules.registry import CapabilityProduct, BranchInputs
 
 
-async def explore(ctx, inputs):
-    from .exploration import explore
-    return CapabilityProduct("experiment", await explore(ctx, inputs["branch"]))
-
-
 async def compare(ctx, inputs):
     from .supervised import compare
     return CapabilityProduct("experiment", await compare(ctx, inputs["branch"]))
-
-
-async def design(ctx, inputs):
-    from ai_system.modules.experiments.planning import make_design
-    return CapabilityProduct("experiment", await make_design(ctx, inputs["branch"]))
 
 
 async def execute(ctx, inputs):
@@ -44,6 +34,5 @@ def register(registry):
     registry.register("experiments", "experiments.comment", "experiment", comment, CommentInputs)
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
                       purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览不是本研究已验收数值成果。',model_callable=True)
-    for name, product, handler in (("explore", "experiment", explore), ("compare", "experiment", compare),
-                                    ("design", "experiment", design), ("execute", "research_state", execute)):
+    for name, product, handler in (("compare", "experiment", compare), ("execute", "research_state", execute)):
         registry.register("experiments", f"experiments.{name}", product, handler, BranchInputs)

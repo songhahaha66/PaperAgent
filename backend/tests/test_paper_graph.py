@@ -605,12 +605,6 @@ def test_assemble_keeps_figures_out_of_summary_sections():
     assert "曲线见 {{F:F1}}。\n\n{{F:F1}}" in raw
 
 
-def test_hypothesis_test_subproblems_skip_exploration():
-    from ai_system.modules.experiments.exploration import is_hypothesis_test
-
-    assert is_hypothesis_test({"title": "检验势头是否随机(教练假说检验)", "question": "检验比赛中的波动是否随机"})
-    assert not is_hypothesis_test({"title": "换挡点预测", "question": "预测转折并检验泛化性"})
-    assert not is_hypothesis_test({"title": "政策评估", "question": "评估节能政策"})
 
 
 def test_is_approval():

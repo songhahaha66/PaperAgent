@@ -84,7 +84,6 @@ def _sum_usage(usage_by_model: Dict[str, Dict]) -> Dict[str, int]:
 # All evaluation variants use the same versioned research engine.
 RESEARCH_VARIANTS = {
     "research": {},
-    "research-no-explore": {"explore_top_k": 1},
     "research-no-review": {"max_review_rounds": 0},
     "research-no-consistency": {"check_claims": False},
     "research-no-planner": {"max_planning_calls": 0},

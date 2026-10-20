@@ -4,6 +4,8 @@
     <template v-if="record"
       ><h2>方案比较实验</h2>
       <p>{{ record.reason }}</p>
+      <p v-if="record.conditions">实验条件：{{ record.conditions }}</p>
+      <p v-if="record.evaluation">评价依据：{{ record.evaluation }}</p>
       <p v-if="!record.input_current">本实验对应的输入已变化，保留供查阅。</p>
       <p v-if="record.protocol">
         评价指标：{{ record.protocol.metric }}；验证集比例
@@ -11,14 +13,17 @@
       </p>
       <article v-for="branch in record.branches" :key="branch.index">
         <h3>
-          {{ branch.name }} <small v-if="branch.index === record.chosen_index">采用方案</small>
+          {{ branch.name }} <small v-if="record.status === 'winner' && branch.index === record.chosen_index">本次实测较优</small>
+          <small v-else-if="record.status === 'tied' && branch.status === 'valid'">保留候选</small>
         </h3>
+        <p v-if="branch.instruction">{{ branch.instruction }}</p>
         <p>{{ statusLabel(branch.status) }}</p>
         <p v-if="branch.metric != null">
           验证集 {{ record.protocol?.metric }}：{{ branch.metric }}
         </p>
         <p v-if="branch.baseline != null">基线：{{ branch.baseline }}</p>
         <p v-if="branch.error">{{ branch.error }}</p>
+        <p v-if="branch.error">本次执行未完成有效验证，不据此判定方法无效。</p>
         <ResultSeries
           v-if="branch.predictions?.length"
           :values="branch.predictions.map((p) => p.observed)"

@@ -119,59 +119,18 @@ def test_dispatch_uses_committed_original_source_for_initial_and_recovered_worke
     assert all(s.arg['source']==original for s in dispatch(state,runtime,['Q1','Q3']))
 
 
-def test_inline_source_data_reaches_design_exploration_solver_and_local_review(tmp_path):
-    from ai_system.modules.experiments.planning import pick_methods,propose,critique
+def test_inline_source_data_reaches_solver_and_local_review(tmp_path):
     from ai_system.modules.experiments.execution import build_task
     from ai_system.modules.experiments.review import review_prompt
     from test_report_submission import branch
-    from test_paper_graph import _Structured,_candidate
     source='销量依次为：420、435、410、460、475。售价 15 元、成本 8 元、剩余残值 2 元。'
-    observed=[]
-    class Model:
-        def with_structured_output(self,schema,**kwargs):
-            async def invoke(messages):
-                assert source in messages[-1].content
-                observed.append(schema.__name__)
-                return await _Structured(schema).ainvoke(messages)
-            return SimpleNamespace(ainvoke=invoke)
-    class Judge(FixedJudge):
-        async def ask(self,state,questions):
-            assert state['原题']==source
-            observed.append('judge')
-            return await super().ask(state,questions)
-    ctx=GraphContext.create(str(tmp_path),planner_llm=Model(),judge=Judge())
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     task={**branch(),'source':source,'analysis':_analysis().model_dump()}
-    candidates=[_candidate('one').model_dump(),_candidate('two').model_dump()]
-    async def run():
-        await pick_methods(ctx,task)
-        await propose(ctx,task,['regression'])
-        await critique(ctx,task,candidates)
-    asyncio.run(run())
-    assert {'MethodPick','CandidateSet','judge'}<=set(observed)
     assert source in build_task(task,ctx)
     assert source in review_prompt(task,{},ctx,[])
 
 
-@pytest.mark.parametrize('reported_works,run_ok',[(False,True),(True,False),(True,True)])
-def test_failed_or_ungrounded_explorations_release_kernels_without_promoting_state(tmp_path,monkeypatch,reported_works,run_ok):
-    import importlib
-    mod=importlib.import_module('ai_system.modules.experiments.exploration')
-    from test_report_submission import branch
-    task=branch()
-    task['design'].update(candidates=[task['design']['chosen']]*2,scores=[{'total':1}]*2,chosen_index=0)
-    released=[]
-    class Kernels:
-        def promote(self,*args):pytest.fail('a failed exploration must never become the formal solver kernel')
-        async def release(self,key):released.append(key)
-    async def protocol(*args):return {'applicable':True}
-    async def probe(ctx,branch,p,protocol):
-        p.report={'works':reported_works,'problems':['failed or ungrounded execution']}
-        p.messages=[AIMessage(content='broken code context')]
-        p.run_log=[{'ok':run_ok}]
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None,explore_top_k=2)
-    ctx.kernels=Kernels()
-    assert asyncio.run(mod.explore(ctx,task)) is None
-    assert released==[], 'unsupported non-CSV tasks never open experiment kernels'
+
 
 
 @pytest.mark.parametrize('quote,expected,valid',[

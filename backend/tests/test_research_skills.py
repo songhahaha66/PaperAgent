@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from ai_system.modules.methods import skill_catalog, skill_detail, describe, methods_catalog, validate_skill_policy
 from ai_system.graph.context import GraphContext
-from ai_system.modules.experiments.planning import pick_methods, propose, make_design
+from ai_system.modules.experiments.planning import experiment_design
 from ai_system.modules.experiments.execution import build_task
 from ai_system.graph.state import MethodPick, CandidateSet, ModelCandidate
 from ai_system.research.models import ResearchConflict
@@ -75,28 +75,17 @@ def test_selection_invalidates_existing_evidence_without_relaxing_contract(tmp_p
     assert order.input_refs['skills:policy'] == store.file_inputs()['skills:policy']
 
 
-def test_design_and_solver_receive_selected_skill_and_source(tmp_path, monkeypatch):
-    import ai_system.modules.experiments.planning as design_module
-    ctx = GraphContext.create(str(tmp_path), planner_llm=None, skill_policy=SELECTED)
-    branch = {'source':TASK, 'analysis':problem().model_dump(), 'subproblem':problem().model_dump()['subproblems'][0], 'data_profile':'columns x, y'}
-    prompts = []
-    async def structured(_llm, schema, messages, **kwargs):
-        prompts.append('\n'.join(str(m.content) for m in messages))
-        if schema is MethodPick:
-            return MethodPick(method_keys=['arima','regression'], reason='test')
-        result = CandidateSet(candidates=[ModelCandidate(name='线性回归',method_keys=['regression'],idea='检验变量关系',formulation='y=a+bx',steps=['拟合并检查残差'],validation='报告残差与验证误差')])
-        kwargs['validate'](result)
-        return result
-    monkeypatch.setattr(design_module, 'call_structured', structured)
-    record, _ = asyncio.run(make_design(ctx, branch))
-    assert record['methods'] == ['regression']
-    assert record['skills'] == [{'key':'regression','version':1}]
-    task = build_task({**branch,'design':record}, ctx)
-    assert '回归建模技能' in prompts[-1] and '回归建模技能' in task
-    assert 'https://www.statsmodels.org/stable/regression.html' in task
-    assert '禁用：arima' in task
-    with pytest.raises(ValueError, match='禁用'):
-        build_task({**branch,'design':{'chosen':{**record['chosen'],'method_keys':['arima']}}}, ctx)
+def test_controller_method_and_solver_receive_selected_skill_and_source(tmp_path):
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None,skill_policy=SELECTED)
+    branch={'source':TASK,'analysis':problem().model_dump(),'subproblem':problem().model_dump()['subproblems'][0],'data_profile':'columns x, y'}
+    plan={'conditions':'给定数据','evaluation':'验证误差','candidates':[{'name':'线性回归','instruction':'检验变量关系','method_keys':['regression']}]}
+    record=experiment_design(plan)
+    text=build_task({**branch,'design':record,'experiment':plan},ctx)
+    assert '回归建模技能' in text and 'https://www.statsmodels.org/stable/regression.html' in text
+    assert '禁用：arima' in text and '检验变量关系' in text
+    with pytest.raises(ValueError,match='禁用'):
+        build_task({**branch,'design':{'chosen':{**record['chosen'],'method_keys':['arima']}}},ctx)
+
 
 
 def test_skill_api_persists_selection_and_checks_owner_and_version(tmp_path, monkeypatch):

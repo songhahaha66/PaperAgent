@@ -5,7 +5,7 @@
     uv run python -m evals run   --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/research
     uv run python -m evals score --bench /path/to/LLM-MM-Agent/MMBench --out eval_runs/research
     uv run python -m evals all   --bench ... --out ...        # run + score + 汇总（默认 research 版本化研究引擎）
-    uv run python -m evals all   --pipeline research-no-explore ...                   # 消融：关掉方案探索（另有 research-no-review / research-no-consistency）
+    uv run python -m evals all   --pipeline research-no-review ...                    # 消融：关掉局部审查（另有 research-no-consistency）
 
 生成模型：EVAL_MODEL / EVAL_API_KEY / EVAL_PROVIDER(默认 openai) / EVAL_BASE_URL / EVAL_EXTRA_BODY（JSON，如 {"thinking": {"type": "disabled"}}）
 判分：--judge jev（需要 TYPESAFE_API_KEY，--jev-model 固定版本）

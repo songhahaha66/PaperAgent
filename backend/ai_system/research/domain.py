@@ -18,6 +18,9 @@ def findings(state):
 
 def plan_view(task):
     design = task.get("design") or {}
+    if not design and task.get('experiment'):
+        from ai_system.modules.experiments.planning import experiment_design
+        design=experiment_design(task['experiment'])
     return {"id": task["task_id"], "version": task["revision"],
             "objective": task["objective"], "dependencies": task["dependencies"],
             "methods": design.get("candidates", []), "selected": design.get("chosen_index"),

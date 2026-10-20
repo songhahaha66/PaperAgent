@@ -18,6 +18,7 @@ export interface ComparisonSpec {
 export interface ComparisonBranch {
   index: number
   name: string
+  instruction?: string
   status: string
   selection_reason?: string
   prior?: number
@@ -44,6 +45,8 @@ export interface ComparisonRecord {
   status: string
   input_current: boolean
   reason?: string
+  conditions?: string
+  evaluation?: string
   chosen_index?: number | null
   protocol_hash?: string
   protocol?: ComparisonSpec & {

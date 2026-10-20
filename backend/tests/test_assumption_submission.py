@@ -11,7 +11,6 @@ from pydantic import ValidationError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph import llm_utils
 from ai_system.graph.context import GraphContext
-from ai_system.modules.experiments.planning import propose
 from ai_system.modules.experiments.execution import submission_schema
 from ai_system.graph.state import CandidateSet
 from ai_system.research.assumptions import unbound_assumptions, premise_definition
@@ -60,64 +59,8 @@ def test_duplicate_check_ids_rejected_but_real_cross_task_checks_preserved():
         unbound_assumptions("Q1", [value], contract())
 
 
-def test_design_retries_the_actual_bad_premise_before_any_execution(tmp_path, monkeypatch):
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
-    invalid = _candidate("线性趋势").model_dump()
-    invalid["assumptions"] = [draft("q1")]
-    class Model:
-        calls = 0
-        def with_structured_output(self, *args, **kwargs):
-            return self
-        async def ainvoke(self, messages):
-            self.calls += 1
-            assert "assumption_task_ids" in messages[1].content
-            if self.calls == 1:
-                return CandidateSet.model_validate({"candidates": [invalid]})
-            assert "q1" in messages[-1].content and "trend_detection" in messages[-1].content
-            assert json.loads(messages[-2].content) == CandidateSet.model_validate({"candidates": [invalid]}).model_dump()
-            corrected = {**invalid, "assumptions": [draft()]}
-            return AIMessage(content=json.dumps({"candidates": [corrected]}))
-    model = Model()
-    ctx = GraphContext.create(str(tmp_path), planner_llm=model)
-    task = {**branch(), "analysis": _analysis().model_dump()}
-    task["research_contract"].update(contract())
-    result = asyncio.run(propose(ctx, task, ["regression"]))
-    assert model.calls == 2
-    assert result[0]["assumptions"][0]["checks"][0]["left"]["task_id"] == "Q1"
-    assert not ctx.registry.results
 
 
-@pytest.mark.parametrize("field", ["statement", "checks"])
-def test_repeated_premise_feedback_identifies_key_and_repairs_without_new_staging(tmp_path, monkeypatch, field):
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
-    registered = draft()
-    existing = {"id": "A:Q1:linear_trend", **premise_definition("Q1", AssumptionDraft.model_validate(registered))}
-    repeated = draft()
-    if field == "statement":
-        repeated["statement"] = "重新改写同一趋势前提"
-    else:
-        repeated["checks"][0]["description"] = "改写原检查"
-    candidate = _candidate("线性趋势").model_dump()
-    candidate["assumptions"] = [repeated]
-    class Model:
-        calls = 0
-        def with_structured_output(self, *args, **kwargs):
-            return self
-        async def ainvoke(self, messages):
-            self.calls += 1
-            if self.calls == 1:
-                return CandidateSet.model_validate({"candidates": [candidate]})
-            feedback = messages[-1].content
-            assert "A:Q1:linear_trend" in feedback and field in feedback
-            assert existing["statement"] in feedback and "删除这条重复声明" in feedback
-            return AIMessage(content=json.dumps({"candidates": [{**candidate, "assumptions": []}]}))
-    model = Model()
-    ctx = GraphContext.create(str(tmp_path), planner_llm=model)
-    task = {**branch(), "analysis": _analysis().model_dump()}
-    task["research_contract"].update({**contract(), "assumptions": [existing]})
-    result = asyncio.run(propose(ctx, task, ["regression"]))
-    assert model.calls == 2 and result[0]["assumptions"] == []
-    assert not ctx.registry.results
 
 
 def test_dispatched_premise_scope_matches_central_dependency_scope(tmp_path):
@@ -128,20 +71,3 @@ def test_dispatched_premise_scope_matches_central_dependency_scope(tmp_path):
     assert scopes["Q1"]["assumption_task_ids"] == ["Q1", "Q2"]
     assert scopes["Q3"]["assumption_task_ids"] == ["Q3"]
     assert set(scopes["Q1"]["task_ids"]) == {"Q1", "Q2", "Q3"}
-
-
-def test_default_design_executes_one_route_without_judging_or_probing(tmp_path):
-    from ai_system.modules.experiments.planning import make_design
-    from ai_system.modules.experiments.exploration import explore
-    from test_paper_graph import FakeModel
-    class UnexpectedJudge:
-        async def ask(self, *args, **kwargs):
-            raise AssertionError("a direct route must not launch candidate scoring")
-    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), judge=UnexpectedJudge())
-    task = {**branch(), "analysis": _analysis().model_dump(), "design": None}
-    async def go():
-        design, _ = await make_design(ctx, task)
-        assert len(design["candidates"]) == 1 and design["scores"] == [{"total": None}]
-        assert await explore(ctx, {**task, "design": design}) is None
-    asyncio.run(go())
-    assert ctx.n_candidates == ctx.explore_top_k == 1

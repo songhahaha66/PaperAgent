@@ -5,7 +5,7 @@
 关键数字和图通过 record_results / record_figure 登记，登记时校验数值确实来自某次执行的输出。
 最后用结构化输出交一份求解报告，登记引用须有真实执行来源。
 
-普通任务直接执行；显式多候选模式沿用冻结共同协议的比较与正式交接。
+候选意图由研究控制器按任务版本冻结；普通实验直接执行，CSV比较是显式执行方式。
 """
 
 from ai_system.research.domain import findings as research_findings
@@ -44,7 +44,6 @@ from ai_system.graph.tracing import labelled, set_label
 from ai_system.research.assumptions import unbound_assumptions
 from ai_system.research.models import IssueReport, ReviewRecord
 from ai_system.research.validation import report_fingerprint
-from ai_system.modules.experiments.exploration import explore, promotion_message
 from ai_system.modules.experiments.review import (
     feedback_message,
     needs_figure,
@@ -59,6 +58,7 @@ logger = logging.getLogger(__name__)
 SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的建模方案用 Python 实现并求出结果。
 
 工作方式：
+- 有冻结候选实验时，只执行所记录的方法和参数，SolveReport.approach逐字使用候选名称。无法实现时如实提交失败与原因，不自行改用其他算法或改变评价条件；由研究控制器记录修订后再试。
 - 用 run_python 执行代码。内核是持久的：前面定义的变量、读入的数据后面都能直接用，不要每次重新读数据。
 - 每次写一段完整的代码（读数据、计算、打印关键结果可以放在一起），看到输出再决定下一步；出错就读回溯修正。
 - run_python 只做读取、计算和绘图。record_results、record_figure、SolveReport 是外部工具，不能在 Python 代码里当函数调用；登记与报告分别通过工具提交，不在计算代码中编写整篇报告。
@@ -309,6 +309,7 @@ def build_task(
         f"步骤：\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(chosen["steps"]))
         + f"\n检验：{chosen['validation']}",
         literature_context(literature_root(ctx), json.dumps(subproblem, ensure_ascii=False)+'\n'+json.dumps(chosen, ensure_ascii=False)),
+        '# 本次冻结实验（方法、参数、数据范围与评价条件不得静默更换）\n'+json.dumps(branch['experiment'],ensure_ascii=False) if branch.get('experiment') else '',
         f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}",
         f"# 方法参考\n{describe(chosen.get('method_keys') or [], ctx.skill_policy)}",
         prompt_context(ctx,branch,chosen.get('method_keys') or [],'solve') if chosen.get('method_keys') else '',
@@ -417,7 +418,10 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         return update
 
     run_log: List[Dict] = []
-    exploration = None
+    if branch.get('experiment'):
+        from .planning import experiment_design
+        branch={**branch,'design':experiment_design(branch['experiment'])}
+        branch['design']['clarification_refs']=[r['ref'] for r in branch.get('clarifications',[])]
     designed_here = branch.get("design") is None
     if designed_here:
         # 按需设计：轮到这个子问题时才设计，候选方案能参考已经求解完的前序结论
@@ -427,9 +431,6 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
                 "formulation": "", "steps": ["读取冻结输入", "独立复算并登记指定指标"], "assumptions": [], "validation": "提交固定检查所需证据"}
             record = {"methods": [], "candidates": [chosen], "scores": [{"total": None}], "chosen": chosen,
                 "chosen_index": 0, "critic": None, "critic_error": None}
-        elif ctx.explore_top_k>1:
-            from ai_system.modules.registry import invoke
-            record, _ = await invoke(ctx, 'experiments.design', branch=branch)
         else:
             chosen={'name':'执行当前研究问题','method_keys':sorted(allowed_method_keys(ctx.skill_policy)) if ctx.skill_policy and ctx.skill_policy['mode']=='selected' else [],
                     'idea':branch.get('feedback') or '根据已有材料和当前问题落实方法，如实说明选择、证据和局限。',
@@ -440,35 +441,28 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
                     'clarification_refs':[r['ref'] for r in branch.get('clarifications',[])]}
         branch = {**branch, "design": record}
     design = branch["design"]
-    messages = None
     try:
-        if ctx.explore_top_k > 1 and branch["subproblem"].get("kind") != "verify":
-            with labelled(f"{subproblem_id}:explore"):
-                from ai_system.modules.registry import invoke
-                exploration = await invoke(ctx, 'experiments.explore', branch=branch)
-        if exploration is not None:
-            if exploration.winner is None:
-                design={**design,'experiment_id':exploration.record['id']}
-                if ctx.experience_store is not None and ctx.experience_order is not None:
-                    ctx.experience_store.report_comparison_failure(exploration.record,ctx.experience_order)
-                return {'solutions':{subproblem_id:{'status':'comparison_blocked','error':exploration.reason,
-                    'summary':exploration.reason,'reviews':[],'comparison_id':exploration.record['id']}},
-                    'designs':{subproblem_id:design},'log':[f"comparison {exploration.record['status']}"]}
-            winner = exploration.winner
-            design = {**design, "chosen": winner.candidate, "chosen_index": winner.candidate_index,
-                      'experiment_id': exploration.record['id']}
-            design['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in winner.candidate.get('method_keys', []) if key in SKILL_SOURCES]
-            branch = {**branch, "design": design}
-            run_log.extend(winner.run_log)
-            from ai_system.modules.experiments.handoff import handoff
-            handoff_text=await handoff(ctx,branch,exploration,run_log)
-            messages = [HumanMessage(content=build_task(branch,ctx)+'\n\n'+promotion_message(exploration)+handoff_text)]
+        if (branch.get('experiment') or {}).get('csv'):
+            from ai_system.modules.registry import invoke
+            from .handoff import publish_comparison
+            record=await invoke(ctx,'experiments.compare',branch=branch)
+            report=await publish_comparison(ctx,branch,record,run_log)
+            if report['status']=='completed' and ctx.max_review_rounds>0:
+                try:
+                    review=await review_solution(ctx,branch,report,run_log)
+                except Exception as exc:
+                    review=ResultReview(issues=[IssueReport(task_id=subproblem_id,category='service',message=f'局部审查未完成：{exc}')])
+                cited={ref for issue in review.issues for ref in issue.evidence_refs}
+                report['reviews']=[ReviewRecord(report_hash=report_fingerprint(report),issues=review.issues,
+                    evidence=[asdict(r) for r in ctx.registry.for_subproblem(subproblem_id) if r.id in cited]).model_dump()]
+            return {'solutions':{subproblem_id:report},'designs':{subproblem_id:design},
+                    'log':['comparison measurements returned to observe']}
         if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
             return {"solutions": {subproblem_id: {"status": "prepared", "reviews": []}},
                     "designs": {subproblem_id: design}, "log": [f"prepare {subproblem_id}: register selected premises"]}
         await ctx.events.stage(f"{subproblem_id}：开始编码求解「{design['chosen']['name']}」")
         status, error, report, reviews = await _solve_loop(
-            ctx, branch, run_log, messages or [HumanMessage(content=build_task(branch, ctx))]
+            ctx, branch, run_log, [HumanMessage(content=build_task(branch, ctx))]
         )
     finally:
         await ctx.kernels.release(subproblem_id)
@@ -493,11 +487,9 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
         "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],
     }
-    if exploration is not None or designed_here:
+    if branch.get('experiment') or designed_here:
         # 写作阶段按实际求解的方案描述模型
         update["designs"] = {subproblem_id: design}
-    if exploration is not None:
-        update["log"].append(f"explore {subproblem_id}: -> {exploration.chosen_index} ({exploration.reason})")
     return update
 
 

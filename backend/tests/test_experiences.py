@@ -104,18 +104,8 @@ def test_A_failure_repair_then_B_uses_advice_but_generates_new_kernel_evidence(e
     b=env.store('B');order=b.claim('Q1')
     ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'),experience_store=b,experience_order=order)
     branch={'source':TASK,'subproblem':analysis()['subproblems'][0],'data_profile':'self-contained','design':DESIGN}
-    from ai_system.modules.experiments import planning as design
-    from ai_system.graph.state import CandidateSet,ModelCandidate
-    async def structured(_llm,schema,messages,**kwargs):
-        assert counter['id'] in messages[-1].content
-        result=CandidateSet(candidates=[ModelCandidate(**DESIGN['chosen'])])
-        kwargs['validate'](result)
-        return result
-    monkeypatch.setattr(design,'call_structured',structured)
-    branch['analysis']=analysis()
-    asyncio.run(design.propose(ctx,branch,['linear_programming']))
     text=build_task(branch,ctx)
-    assert {r['stage'] for r in order.experience_refs}=={'design','solve'}
+    assert {r['stage'] for r in order.experience_refs}=={'solve'}
     assert '历史研究经验' in text and counter['id'] in text and '独立执行并登记新证据' in text
     assert not b.registry_payload()['results']
     assert order.experience_refs and order.input_digest==digest({'inputs':order.input_refs,'experiences':order.experience_refs})

@@ -637,7 +637,7 @@ async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:in
     for record in records:
         source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
         task=(source or {}).get('tasks',{}).get(record['task_id'])
-        record['input_current']=files==record['file_inputs'] and policy['version']==record['policy_version'] and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'])
+        record['input_current']=files==record['file_inputs'] and (record.get('policy_version') is None or policy['version']==record['policy_version']) and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'] and (not record.get('intent_hash') or digest(task.get('experiment'))==record['intent_hash']))
     return {'policy':policy,'files':metadata(store.root),'comparisons':records}
 
 

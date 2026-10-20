@@ -94,6 +94,7 @@ def outcomes(business, registry, safe_file, current_files=None):
             'availability': ('current' if current else 'historical') if items else 'unavailable',
             'checking': check_state(task, attempt, issues) if inputs_match else 'outdated',
             'method': {k: method[k] for k in ('name', 'idea', 'formulation', 'steps', 'validation') if method.get(k)} or None,
+            'experiment':attempt.get('experiment') or task.get('experiment'),
             'results': [result_view(item, safe_file) for item in items[:500]],
             'claims': [claim_view(c['payload'], [e['payload'] for e in business['evidence'].values()]) for c in business['claims'].values()
                        if c['producer_attempt'] == attempt.get('attempt_id')],

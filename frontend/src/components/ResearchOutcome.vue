@@ -48,6 +48,16 @@
     <p v-else>
       {{ isZh ? '未登记方案说明；不从变量名称推断方法。' : 'No method description was recorded.' }}
     </p>
+    <section v-if="outcome.experiment">
+      <h3>{{ isZh ? '本次试验' : 'This experiment' }}</h3>
+      <template v-if="outcome.experiment.candidates.length > 1">
+        <p v-for="candidate in outcome.experiment.candidates" :key="candidate.name">
+          <strong>{{ candidate.name }}</strong>：{{ candidate.instruction }}
+        </p>
+      </template>
+      <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ outcome.experiment.conditions }}</p>
+      <p>{{ isZh ? '评价依据：' : 'Evaluation: ' }}{{ outcome.experiment.evaluation }}</p>
+    </section>
     <h3>{{ isZh ? '图表与指标' : 'Figures and measurements' }}</h3>
     <p v-if="!outcome.results.length">
       {{ isZh ? '尚未登记可读成果。' : 'No results recorded yet.' }}

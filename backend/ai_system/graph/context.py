@@ -101,11 +101,9 @@ class GraphContext:
     comparison_proof: Any = None
     skill_policy: Any = None
     judge: Any = None
-    n_candidates: int = 1
     max_solver_steps: int = 40
     max_repair_rounds: int = 2
     max_review_rounds: int = 1
-    explore_top_k: int = 1
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
@@ -135,10 +133,6 @@ class GraphContext:
             from ai_system.modules.methods import DEFAULT_SKILL_POLICY
             options['skill_policy'] = (ResearchStore(workspace, 'workspace-skills', read_only=True).skill_preferences()['policy']
                                        if (workspace / DB_PATH).exists() else dict(DEFAULT_SKILL_POLICY))
-        if 'explore_top_k' not in options and (workspace/'.system/research.sqlite').exists():
-            from ..research.store import ResearchStore
-            from ai_system.modules.experiments.store import ExperimentStore
-            options['explore_top_k']=2 if ExperimentStore(ResearchStore(workspace,'workspace-comparisons')).policy()['enabled'] else 1
         if (workspace/'.system/research.sqlite').exists():
             from ..research.runtime import ResearchRuntime
             settings=ResearchRuntime(workspace).policy()
@@ -147,6 +141,8 @@ class GraphContext:
         # executor in the graph. Missing information uses controller questions.
         options.pop('confirm_models',None)
         options.pop('max_design_rounds',None)
+        options.pop('explore_top_k',None)
+        options.pop('n_candidates',None)
         return cls(
             workspace=workspace,
             fs=fs,

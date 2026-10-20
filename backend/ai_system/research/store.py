@@ -272,6 +272,8 @@ class ResearchStore:
                      'conditions':conditions(self.root,state['spec']['requirement']+' '+task['objective'])}
             state["attempts"][order.attempt_id] = {**order.model_dump(), "execution_status": "running", "started_at": time.time(),
                                                  'experience_basis':basis}
+            if task.get('experiment'):
+                state['attempts'][order.attempt_id]['experiment']=task['experiment']
             task.update(execution_status="running", active_attempt=order.attempt_id)
             self._save(db, state, "claimed", order.model_dump())
             return order
@@ -762,6 +764,8 @@ class ResearchStore:
                 if change.task_id not in state["tasks"]:
                     raise ValueError("计划修订指向未知任务")
                 task = state["tasks"][change.task_id]
+                if change.action=='revise' and task.get('experiment') and change.experiment is None and change.method_instruction:
+                    raise ValueError('候选方法修订必须记录新版实验条件，不能仅替换执行指令')
                 if change.requirement_ids is not None:
                     known = {r["id"] for r in state["spec"]["requirements"]}
                     if not set(task["requirement_ids"]) <= set(change.requirement_ids) or not set(change.requirement_ids) <= known:
@@ -774,6 +778,8 @@ class ResearchStore:
                 task["objective"] = change.objective
                 task["subproblem"] = {**task["subproblem"], "question": change.objective}
                 task['method_instruction']=change.method_instruction
+                if change.experiment is not None:
+                    task['experiment']=change.experiment.model_dump()
                 if change.dependencies is not None:
                     task["dependencies"] = change.dependencies
                     task["subproblem"]["depends_on"] = change.dependencies

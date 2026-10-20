@@ -82,8 +82,8 @@ class PaperGraphAgent:
         self.codeagent_llm = codeagent_llm
         self.writer_llm = writer_llm
         self.judge = default_judge(llm) if judge == "default" else judge
-        if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
-            options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
+        options.pop('explore_top_k',None)
+        options.pop('n_candidates',None)
         self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
         if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
             from ..research.runtime import ResearchRuntime

@@ -145,14 +145,14 @@ def test_real_langchain_transport_hook_and_total_timeout(tmp_path):
 def test_formal_handoff_protects_frozen_metrics_and_rejects_new_fit(tmp_path,monkeypatch):
     # Reuse the real-data/real-kernel fixture, while model code replies stay deterministic.
     from test_supervised_comparison import setup as fixture
-    from ai_system.modules.experiments.exploration import explore
+    from test_supervised_comparison import observe_comparison
     from ai_system.modules.experiments.handoff import handoff,proof_issues
     from ai_system.modules.experiments.execution import build_tools
     from langchain_core.tools import StructuredTool
     setup=fixture.__wrapped__(tmp_path,monkeypatch)
     async def work():
         try:
-            exploration=await explore(setup.ctx,setup.branch);runs=[]
+            exploration=await observe_comparison(setup.ctx,setup.branch);runs=[]
             text=await handoff(setup.ctx,setup.branch,exploration,runs)
             assert 'comparison_estimator' in text and setup.ctx.comparison_proof['protected']
             assert proof_issues(setup.ctx,{'requirement_evidence':[]})

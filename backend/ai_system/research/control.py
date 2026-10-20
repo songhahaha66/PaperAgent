@@ -111,7 +111,7 @@ def task_dispatch(state, runtime, task_ids):
     for key in ready:
         task = snapshot["tasks"][key]
         sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": analysis_view(snapshot, state.get("analysis")),
-            'task_revision':task['revision'],
+            'task_revision':task['revision'], 'experiment':task.get('experiment'),
             "data_profile": state.get("data_profile", ""),
             'feedback':task.get('method_instruction',''),
             'clarifications':[r for r in replies if set(r['requirement_ids']) & set(task['requirement_ids'])],
@@ -217,8 +217,7 @@ def worker_context(ctx, order):
         copy_dependency(dep)
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
         writer_llm=ctx.writer_llm, judge=ctx.judge, stream_manager=ctx.events.stream_manager,
-        n_candidates=ctx.n_candidates, max_solver_steps=ctx.max_solver_steps,
-        max_review_rounds=ctx.max_review_rounds, explore_top_k=ctx.explore_top_k,
+        max_solver_steps=ctx.max_solver_steps, max_review_rounds=ctx.max_review_rounds,
         template_requirements=ctx.template_requirements, check_claims=ctx.check_claims, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
         source_workspace=ctx.workspace)
@@ -245,6 +244,8 @@ async def execute(branch, runtime):
         task=ctx.research.snapshot()['tasks'][key]
         if branch.get('task_revision',task['revision'])!=task['revision'] or branch['subproblem']!=task['subproblem']:
             raise ResearchConflict('行动所依据的研究版本已改变，请重新观察')
+        if branch.get('experiment')!=task.get('experiment'):
+            raise ResearchConflict('候选方法或评价条件与当前任务记录不符，请重新观察')
         order = ctx.research.claim(key, review_required=ctx.max_review_rounds > 0 and branch["subproblem"].get("kind") != "writing")
     except ResearchConflict as exc:
         await ctx.events.stage(str(exc))
@@ -260,6 +261,8 @@ async def execute(branch, runtime):
             ctx.research.bind_experiences(order,prepared['experience_refs'])
         local = worker_context(ctx, order)
         update = await solve(branch, SimpleNamespace(context=local))
+        if task.get('experiment') and ((update.get('designs') or {}).get(key) or branch.get('design') or {}).get('experiment')!=task['experiment']:
+            raise ResearchConflict('执行报告中的候选方法或评价条件与冻结任务不符')
         report = update["solutions"][key]
         checks = [] if report["status"] in {"prepared","comparison_blocked"} or branch["subproblem"].get("kind") in {"writing", "verify"} else report_issues(
             local, report, key, branch["subproblem"].get("depends_on") or [],

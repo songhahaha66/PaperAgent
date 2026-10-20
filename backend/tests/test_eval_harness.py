@@ -424,8 +424,8 @@ def test_research_ablation_variants_pass_options(tmp_path, monkeypatch):
     from evals.runner import PIPELINES, _build_agent
 
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    assert {"research", "research-no-explore", "research-no-review", "research-no-consistency"} <= set(PIPELINES)
-    assert _build_agent("research-no-explore", object(), tmp_path).options["explore_top_k"] == 1
+    assert {"research", "research-no-review", "research-no-consistency"} <= set(PIPELINES)
+    assert 'research-no-explore' not in PIPELINES
     assert _build_agent("research-no-review", object(), tmp_path).options["max_review_rounds"] == 0
     assert _build_agent("research-no-consistency", object(), tmp_path).options["check_claims"] is False
     assert "explore_top_k" not in _build_agent("research", object(), tmp_path).options

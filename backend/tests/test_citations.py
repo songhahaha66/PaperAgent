@@ -93,16 +93,11 @@ def test_design_solver_and_writing_receive_fetched_evidence_without_result_regis
     branch={'source':TASK,'analysis':problem().model_dump(),
             'subproblem':problem().model_dump()['subproblems'][0],'data_profile':'self-contained'}
     prompts=[]
-    async def structured(_llm,schema,messages,**kwargs):
-        prompts.append(messages[-1].content)
-        return CandidateSet(candidates=[ModelCandidate(name='Linear model',method_keys=[],idea='Use supplied data',
-            formulation='linear constraints',steps=['solve'],validation='check feasibility')])
     async def text(_llm,messages):
         prompts.append(messages[-1].content)
         return 'Background based on the acquired source.'
-    monkeypatch.setattr(design,'call_structured',structured)
     monkeypatch.setattr(write,'call_text',text)
-    candidates=asyncio.run(design.propose(ctx,branch,[]))
+    candidates=[{'name':'Linear model','idea':'Use supplied data','formulation':'linear constraints','steps':['solve'],'validation':'check feasibility','method_keys':[]}]
     prompts.append(build_task({**branch,'design':{'chosen':candidates[0]}},ctx))
     asyncio.run(write.write_section(ctx,{'task':TASK,'analysis':branch['analysis']},'restatement','Background'))
     for prompt in prompts:

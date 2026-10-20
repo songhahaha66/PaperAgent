@@ -111,6 +111,9 @@ def prepare_decision(proposal, snapshot, context):
     if proposal.action=='research' and not proposal.gap.strip():
         proposal.gap=proposal.reason[:2000]
     assign_task_ids(proposal,snapshot)
+    for change in proposal.changes:
+        if change.experiment and not change.method_instruction:
+            change.method_instruction='；'.join(c.instruction for c in change.experiment.candidates)[:3000]
     # Filling an omitted execution list must still honor schema limits.
     EvidenceDecision.model_validate(proposal.model_dump())
     validate_decision(proposal,snapshot,context)
@@ -165,7 +168,7 @@ def decision_context(store, snapshot):
     research_tasks=list(snapshot['tasks'].values())
     # Status/failure records steer actions; they are never scientific evidence.
     tasks=[{**{k:t.get(k) for k in ('task_id','objective','dependencies','requirement_ids','kind','revision',
-            'execution_status','acceptance','validity','retired','method_instruction')},
+            'execution_status','acceptance','validity','retired','method_instruction','experiment')},
             'limitations':(t.get('report') or {}).get('limitations',[])} for t in research_tasks]
     assumptions={key:{**{k:a[k] for k in ('statement','task_ids','checks')},'refuted':a['status']=='refuted'}
                  for key,a in snapshot['assumptions'].items() if a['status']!='retired'}
@@ -182,8 +185,29 @@ def decision_context(store, snapshot):
              'materials':materials.get('profile','') if materials.get('inputs')==files else '材料已变更或尚未查看，可选择inspect；不把文件存在当成分析结果。',
              'ready_tasks':ready_tasks(snapshot),'attempts':attempts,'recent_actions':actions,
              'issues':[i for i in research_findings(snapshot) if i['category'] not in {'writing','service'} and i['status'] not in {'resolved','dismissed','superseded'}]}
+    context['experiments']=[]
+    for task in research_tasks:
+        if not task.get('experiment'):continue
+        attempt=snapshot['attempts'].get(task.get('active_attempt'),{})
+        inputs=attempt.get('input_refs',{})
+        plan=task['experiment']
+        comparison=ExperimentStore(store).read(task['task_id'],task['revision']) if plan.get('csv') else None
+        context['experiments'].append({'task_id':task['task_id'],'revision':task['revision'],
+            'comparison_scope':digest([task['objective'],plan['conditions'],plan['evaluation'],plan.get('csv'),inputs]),
+            'conditions':plan['conditions'],'evaluation':plan['evaluation'],'candidates':plan['candidates'],
+            'measured':task['acceptance']=='accepted' and task['validity']=='current',
+            'result_refs':[e['id'] for e in evidence if e.get('task_id')==task['task_id']],
+            'execution_status':task['execution_status'],
+            'observations':{'status':comparison['status'],'reason':comparison.get('reason'),
+                'branches':[{k:r.get(k) for k in ('name','status','error')} for r in comparison['branches']]} if comparison else None,
+            'limitations':(task.get('report') or {}).get('limitations',[]),
+            'decision_reason':task.get('reason','')})
+    if any(name.lower().endswith('.csv') for name in files):
+        from ai_system.modules.experiments.store import SupervisedSpec
+        context['csv_comparison_protocol']=SupervisedSpec.model_json_schema()
     from ai_system.modules.registry import capabilities
     context['capabilities']=capabilities().research_tools()
+    context['skill_policy']=store.skill_preferences()['policy']
     from ai_system.graph.context import TEMPLATE_CONTRACT,TEMPLATE_REQUIREMENTS_CHARS
     template=store.root/TEMPLATE_CONTRACT
     context['template_requirements']=template.read_text(encoding='utf-8')[:TEMPLATE_REQUIREMENTS_CHARS] if template.is_file() else ''
@@ -273,6 +297,13 @@ def validate_decision(proposal, snapshot, context):
         if sum(c.action!='retire' for c in proposal.changes)>snapshot['max_total_attempts']-len(snapshot['attempts']):
             raise ValueError('现有执行次数不足以完成所提后续研究')
         for change in proposal.changes:
+            if change.experiment:
+                from ai_system.modules.methods import allowed_method_keys
+                # The same policy is checked again in the worker against its live configuration.
+                policy=context.get('skill_policy')
+                if policy and any(not set(c.method_keys)<=allowed_method_keys(policy) for c in change.experiment.candidates):
+                    raise ValueError('候选方法使用了当前不允许的技能')
+                if change.kind!='compute':raise ValueError('候选实验必须是计算任务，独立核查仍沿用问题协议')
             if change.action!='add':
                 task=snapshot['tasks'].get(change.task_id)
                 if not task or task['kind']=='verify' or task['retired'] or task['acceptance']=='accepted':
@@ -280,6 +311,8 @@ def validate_decision(proposal, snapshot, context):
                 if change.objective!=task['objective'] or change.dependencies is not None or change.requirement_ids is not None:
                     raise ValueError('调整方法或停止尝试不能改写研究问题、依赖和原要求')
                 if change.action=='revise' and not change.method_instruction.strip():raise ValueError('须明确新的尝试策略')
+                if change.action=='revise' and task.get('experiment') and change.experiment is None:
+                    raise ValueError('修订候选实验须记录新版候选方法与评价条件，不能静默替换原方法')
                 if not set(task['requirement_ids']) & selected:raise ValueError('方法调整必须对应当前研究缺口')
                 continue
             if change.kind=='verify':
@@ -565,6 +598,12 @@ class Planner:
             '新增任务在RQ0存在时绑定它及相关requirement_ids，依赖只列本次真实使用的已验收成果，不为完整计划预建下游任务。'
             '新增任务编号由后端分配；changes(add).task_id仅是本次决策内唯一的临时标识（例如demand、T1），不要与已有任务编号重名；引用新任务时使用同一临时标识。'
             '新增任务也可省略task_id；execute未填写task_ids时执行本次所有新增任务。已有任务的执行、修订和停止仍使用其真实编号。'
+            '方法已明确时直接execute，不为每题额外生成两案。方法不确定、证据不足或出现反证时，按需提出候选：在本次changes的experiment填写候选name/instruction/method_keys、conditions和evaluation。'
+            '普通代码、算法、参数、仿真或假设实验，每个任务记录一个候选；可在后续观察中继续添加、改进或停止未验收候选。共同研究问题与条件相同的候选使用相同objective、conditions、evaluation；不要预建完整搜索树。'
+            '只有确实适用CSV监督学习时才在experiment.csv填写共同数据/划分/指标协议并提供两项候选，系统构建执行上下文；普通实验csv留空，不需要CSV。'
+            'CSV工具登记的指标名称为“候选名称 · 验证指标”（例如OLS · 验证RMSE）以及“共同基线 · 指标”；绑定原题检查时使用这些真实名称。'
+            'experiment记录的方法和条件在该任务版本内冻结；执行者不能自行换法，修订时须显式提供新版experiment。候选模型预估仅为选实验的理由，不是实测结果。'
+            'experiments中只有measured且comparison_scope相同的记录可直接比较；不同条件须保留边界，不能硬排名。执行失败不证明方法无效，平局、证据不足可保留多个候选或补实验；不强行选赢家。'
             '启动时优先execute创建并执行下一项研究，不输出完整后续计划，不枚举未实际创建的任务编号。'
             'action=inspect用现有确定性工具查看材料；文件存在不等于已分析，不固定先检索再实验。'
             'action=capability从capabilities选明确开放的能力，按其inputs schema填写capability和inputs；'

@@ -194,6 +194,31 @@ def is_revision_request(message: str) -> bool:
                         r'(?:继续|恢复|重试)[，,\s]*(?:并|同时|但).*(?:改为|改成|修改|调整|换用))',message,re.S))
 
 
+class CandidateMethod(Contract):
+    name: str = Field(min_length=1, max_length=120, description='用户可读的方法名称，不使用任务编号或内部变量名')
+    instruction: str = Field(min_length=1, max_length=3000, description='实际要执行的方法、参数或假设；不能由执行者静默换成其他候选')
+    method_keys: list[str] = Field(default_factory=list, max_length=4)
+
+
+class ExperimentPlan(Contract):
+    conditions: str = Field(min_length=1, max_length=2000, description='比较前固定的数据范围、输入、实验条件与适用边界')
+    evaluation: str = Field(min_length=1, max_length=2000, description='共同评价标准、指标方向及平局/不可比时的处理；不能用模型预估分冒充实测')
+    candidates: list[CandidateMethod] = Field(min_length=1, max_length=2)
+    csv: dict | None = Field(default=None, description='仅适用CSV监督学习比较时填写SupervisedSpec；普通代码和仿真留空，每个任务执行一个候选')
+
+    @model_validator(mode='after')
+    def execution_contract(self):
+        if len({c.name for c in self.candidates})!=len(self.candidates):raise ValueError('候选方法名称不能重复')
+        if self.csv is None:
+            if len(self.candidates)!=1:raise ValueError('普通实验每个任务执行一个候选，其他候选按需建立独立任务')
+        else:
+            from ai_system.modules.experiments.store import SupervisedSpec
+            self.csv=SupervisedSpec.model_validate(self.csv).model_dump()
+            if not self.csv['applicable'] or len(self.candidates)!=2:
+                raise ValueError('CSV比较工具需要适用的共同协议及两项候选；其他研究使用普通实验')
+        return self
+
+
 class TaskChange(Contract):
     action: Literal["revise", "add", "retire"] = "revise"
     task_id: str
@@ -201,6 +226,8 @@ class TaskChange(Contract):
     kind: Literal["compute", "writing", "verify"] = "compute"
     objective: str = Field(min_length=1)
     method_instruction: str = Field(default='',max_length=3000)
+    experiment: ExperimentPlan | None = Field(default=None, exclude_if=lambda value:value is None,
+        description='按需冻结候选方法及评价条件；新实验或方法修订在此记录，非实验任务可省略')
     dependencies: list[str] | None = None
     requirement_ids: list[str] | None = None
 
