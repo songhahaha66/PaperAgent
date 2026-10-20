@@ -219,6 +219,21 @@ def test_global_finding_with_executable_check_keeps_independent_investigation(tm
 def test_adopted_premises_are_versioned_before_publishing_and_frozen_on_rerun(tmp_path, monkeypatch, source):
     events=[]
     published=[]
+    requested_designs=[]
+    if source=='design':
+        # This case explicitly requests the optional design capability. Ordinary
+        # execution remains direct; only the selected candidate's premise enters
+        # the existing prepare/commit/rerun protocol.
+        from ai_system.modules.experiments import execution
+        from ai_system.modules.registry import invoke
+        solve=execution.solve
+        async def with_requested_design(branch,runtime):
+            if branch['subproblem']['id']=='Q1' and branch.get('design') is None:
+                design,_=await invoke(runtime.context,'experiments.design',branch=branch)
+                requested_designs.append(branch['subproblem']['id'])
+                branch={**branch,'design':design}
+            return await solve(branch,runtime)
+        monkeypatch.setattr(execution,'solve',with_requested_design)
     class Stream:
         async def send_json_block(self,kind,content):
             if kind=='file_changed' and content.startswith('outputs/'):
@@ -235,6 +250,7 @@ def test_adopted_premises_are_versioned_before_publishing_and_frozen_on_rerun(tm
     aid = assumption_id("Q1", "representative")
     premise = state["assumptions"][aid]
     assert premise["revision"] == 1 and premise["source"] == source
+    assert requested_designs==(['Q1'] if source=='design' else [])
     assert premise["task_ids"] == ["Q1", "Q2"]
     assert assumption_id("Q1", "discarded") not in state["assumptions"]
     attempts = [a for a in state["attempts"].values() if a["task_id"] == "Q1"]

@@ -346,5 +346,5 @@ class PaperGraphAgent:
             count = len(ctx.registry.for_subproblem(sp["id"]))
             lines.append(f"- {sp['id']} {sp['title']}：{'完成' if status == 'completed' else status}，登记结果 {count} 项")
         lines.append("")
-        lines.append(f"校验剩余问题 {len(issues)} 个。" if issues else "引用与数字校验全部通过。")
+        lines.append(f"校验剩余问题 {len(issues)} 个。" if issues else "引用有效性与文稿结构校验已完成。")
         return "\n".join(lines)

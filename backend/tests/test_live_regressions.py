@@ -104,18 +104,16 @@ class BrokenWriter(FakeModel):
         return text + " 见 {{F:F999}}。" if self.broken else text
 
 
-class MathLeakWriter(BrokenWriter):
+class LiteralNumberWriter(FakeModel):
     def _write(self, request):
-        text = FakeModel._write(self, request)
-        return text + r" 降幅约为 $23.1\%$。" if self.broken else text
+        return super()._write(request) + r" 降幅约为 $23.1\%$。"
 
 
-@pytest.mark.parametrize("writer", [BrokenWriter, MathLeakWriter])
-def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputing(tmp_path, monkeypatch, writer):
+def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputing(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     monkeypatch.setattr(_Structured, "reviewed_q1", True)
     monkeypatch.setattr(_Structured, "audits", 10)
-    model = writer(loose_number_once=False)
+    model = BrokenWriter(loose_number_once=False)
     events = []
 
     class Recorder:
@@ -142,4 +140,17 @@ def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputin
     assert all(i["status"] in {"resolved", "dismissed"} for i in research_findings(after))
     assert store.delivery_ready(after) and (tmp_path / "paper.md").exists()
     assert "F999" not in (tmp_path / "paper.md").read_text()
-    assert "23.1" not in (tmp_path / "paper.md").read_text()
+
+
+def test_literal_numbers_are_allowed_without_regex_writing_repairs(tmp_path,monkeypatch):
+    monkeypatch.setattr(_Structured,'reviewed_q1',True)
+    monkeypatch.setattr(_Structured,'audits',10)
+    model=LiteralNumberWriter(loose_number_once=False);start=len(model.text_calls)
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),judge=FixedJudge(),
+        explore_top_k=1,max_review_rounds=0,max_repair_rounds=1)
+    output=asyncio.run(agent.run(TASK))
+    assert 'paper.md' in output and '引用有效性与文稿结构校验已完成' in output
+    assert '数字校验' not in output
+    assert '23.1' in (tmp_path/'paper.md').read_text()
+    assert agent.last_result.get('repair_round',0)==0 and not agent.last_result.get('issues')
+    assert not any('# 当前稿' in request for request in model.text_calls[start:])

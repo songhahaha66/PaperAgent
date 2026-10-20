@@ -111,6 +111,11 @@ def controller_reply(context):
         for row in coverage:
             if row['requirement_id'] in value['requirement_ids']:row['remaining']='存在尚待核查的问题。'
     else:value['outline']=decision_outline(context,coverage)
+    if value['action']!='deliver':
+        # Intermediate actions need no evidence assertion. Do not attach the
+        # whole study's results to an independent task selected for execution.
+        value.pop('basis')
+        value.pop('coverage')
     return value
 
 

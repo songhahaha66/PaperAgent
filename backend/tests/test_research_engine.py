@@ -75,12 +75,26 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     first_output = asyncio.run(agent.run(TASK))
     store = ResearchStore(agent.workspace_dir, agent._load_thread())
     initial = store.snapshot()
-    q1 = initial["tasks"]["Q1"]["active_attempt"]
-    assert not any(r["subproblem"] == "Q2" for r in store.registry_payload()["results"])
-    output = asyncio.run(agent.resume_failed() if mode == "direct" else agent.run("继续")) if "研究已暂停" in first_output else first_output
-    assert "paper.md" in output
-    assert store.snapshot()["tasks"]["Q1"]["active_attempt"] == q1
-    assert store.snapshot()["tasks"]["Q2"]["acceptance"] == "accepted"
+    q1 = initial['tasks']['Q1']['active_attempt']
+    failed=[a for a in initial['attempts'].values() if a['task_id']=='Q2' and a['execution_status']=='failed']
+    assert len(failed)==1 and not failed[0]['commit']['published']
+    failed_ids={a['attempt_id'] for a in failed}
+    assert all(e['producer_attempt'] not in failed_ids for e in initial['evidence'].values() if e['active'])
+    assert len([a for a in initial['attempts'].values() if a['task_id']=='Q1'])==1
+    # The controller may already have repaired Q2. Resume only if work remains.
+    output = asyncio.run(agent.resume_failed() if mode == 'direct' else agent.run('继续')) if '研究已暂停' in first_output else first_output
+    assert 'paper.md' in output
+    current=store.snapshot();active=current['tasks']['Q2']['active_attempt']
+    assert current['tasks']['Q1']['active_attempt']==q1 and current['tasks']['Q2']['acceptance']=='accepted'
+    assert len([a for a in current['attempts'].values() if a['task_id']=='Q1'])==1
+    assert all(current['evidence'][r['id']]['producer_attempt']==active
+               for r in store.registry_payload()['results'] if r['subproblem']=='Q2')
+    assert all(not e['active'] for e in current['evidence'].values() if e['producer_attempt'] in failed_ids)
+    paper=(tmp_path/'paper.md').read_bytes();attempts=current['attempts'];written=len(agent.llm.text_calls)
+    assert 'paper.md' in asyncio.run(agent.resume_failed())
+    after=store.snapshot()
+    assert after['attempts']==attempts and after['tasks']['Q1']['active_attempt']==q1
+    assert (tmp_path/'paper.md').read_bytes()==paper and len(agent.llm.text_calls)==written
 
 
 @pytest.mark.parametrize("operation", ["confirm", "resume", "revise"])
