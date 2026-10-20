@@ -3,24 +3,25 @@ import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
+import { pdfAssets } from './build/pdfAssets'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    vue(),
-    vueDevTools(),
-  ],
+  plugins: [pdfAssets(), vue(), vueDevTools()],
   resolve: {
     alias: [
       { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
       // Keep the math plugin on KaTeX's browser ESM build. The optimized CJS
       // bundle corrupts its command lexer (e.g. \\le becomes an unknown \\l).
-      { find: /^katex$/, replacement: fileURLToPath(new URL('./node_modules/katex/dist/katex.mjs', import.meta.url)) },
+      {
+        find: /^katex$/,
+        replacement: fileURLToPath(new URL('./node_modules/katex/dist/katex.mjs', import.meta.url)),
+      },
     ],
   },
   server: {
     host: '0.0.0.0', // 允许局域网访问
-    port: 5173,       // 明确指定端口
+    port: 5173, // 明确指定端口
     strictPort: true, // 如果端口被占用则失败而不是尝试下一个端口
   },
   build: {

@@ -15,7 +15,7 @@
   </section>
 </template>
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import {
   getDocument,
   GlobalWorkerOptions,
@@ -71,9 +71,11 @@ async function render() {
     const source = await pdf.getPage(page.value)
     await nextTick()
     const root = pageElement.value
-    if (!root || seq !== renderGeneration) return
+    const width = scroller.value?.clientWidth || 0
+    if (!root || !width || seq !== renderGeneration) return
     root.replaceChildren()
-    const viewport = source.getViewport({ scale: zoom.value })
+    const fit = Math.min(1, (width - 30) / source.getViewport({ scale: 1 }).width)
+    const viewport = source.getViewport({ scale: fit * zoom.value })
     root.style.width = viewport.width + 'px'
     root.style.height = viewport.height + 'px'
     root.style.setProperty('--total-scale-factor', String(viewport.scale))
@@ -158,7 +160,14 @@ async function load() {
     if (!response.ok) throw new Error('download')
     const bytes = new Uint8Array(await response.arrayBuffer())
     if (seq !== generation) return
-    task = getDocument({ data: bytes })
+    const resources = `${import.meta.env.BASE_URL}pdfjs/`
+    task = getDocument({
+      data: bytes,
+      cMapUrl: `${resources}cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${resources}standard_fonts/`,
+      wasmUrl: `${resources}wasm/`,
+    })
     const document = await task.promise
     if (seq !== generation) return
     pdf = document
@@ -174,7 +183,19 @@ async function load() {
 }
 watch(() => [props.workId, props.version], load, { immediate: true })
 watch([page, zoom], render)
+let observer: ResizeObserver | undefined
+onMounted(() => {
+  let width = 0
+  observer = new ResizeObserver(([entry]) => {
+    if (entry && entry.contentRect.width !== width) {
+      width = entry.contentRect.width
+      void render()
+    }
+  })
+  observer.observe(scroller.value!)
+})
 onBeforeUnmount(() => {
+  observer?.disconnect()
   generation++
   renderGeneration++
   renderTask?.cancel()
