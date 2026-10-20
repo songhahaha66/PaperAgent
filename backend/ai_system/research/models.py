@@ -86,6 +86,15 @@ class DomainCheck(Contract):
 
 
 class Requirement(Contract):
+    # Export the same cross-field rule used by constraint_check to model tools.
+    # A default_factory alone makes checks look optional in their JSON Schema.
+    model_config = ConfigDict(json_schema_extra={
+        'anyOf': [
+            {'properties': {'kind': {'enum': ['constraint']}, 'checks': {'minItems': 1}},
+             'required': ['checks']},
+            {'properties': {'kind': {'enum': ['goal', 'deliverable']}}},
+        ],
+    })
     id: str
     statement: str = Field(min_length=1)
     source_quote: str = Field(min_length=1, description="原题逐字摘录，必须能在用户需求中找到")

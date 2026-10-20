@@ -161,6 +161,77 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
     assert model.calls==3 and result==_analysis()
 
 
+def test_model_tool_schema_exposes_conditional_constraint_checks():
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+    schema=convert_to_openai_tool(ProblemAnalysis)['function']['parameters']
+    requirement=schema['properties']['requirements']['items']
+    # Verify the schema actually sent to the provider, after LangChain removes
+    # Pydantic definitions/references. Optional goals must remain supported.
+    variants=requirement['anyOf']
+    constraint=next(v for v in variants if v['properties']['kind']['enum']==['constraint'])
+    assert 'checks' in constraint['required']
+    assert constraint['properties']['checks']['minItems']==1
+    optional=next(v for v in variants if set(v['properties']['kind']['enum'])=={'goal','deliverable'})
+    assert 'checks' not in optional.get('required',[])
+    assert requirement['additionalProperties'] is False
+
+
+def test_missing_checks_from_analysis_trace_repair_preserves_numeric_constraints(tmp_path,monkeypatch):
+    """Two omitted checks caused requirements.2 / .4 in the canteen trace."""
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    task='请计算预测和备餐。售价15元，成本8元，残值2元。预测5天，需求非负。保留代码、图表和论文。'
+    first={
+        'title':'预测与备餐','restatement':task,'overall_analysis':'先预测再备餐',
+        'subproblems':[
+            {'id':'Q1','title':'预测','question':'预测需求','kind':'compute','depends_on':[]},
+            {'id':'Q2','title':'备餐','question':'基于Q1决策','kind':'compute','depends_on':['Q1']},
+        ],
+        'requirements':[
+            {'id':'R1','kind':'goal','statement':'预测需求','source_quote':'请计算预测和备餐','task_ids':['Q1']},
+            {'id':'R2','kind':'goal','statement':'备餐决策','source_quote':'请计算预测和备餐','task_ids':['Q2']},
+            {'id':'R3','kind':'constraint','statement':'固定经济参数','source_quote':'售价15元，成本8元，残值2元','task_ids':['Q2']},
+            {'id':'R4','kind':'deliverable','statement':'代码图表论文','source_quote':'保留代码、图表和论文','task_ids':['Q1','Q2']},
+            {'id':'R5','kind':'constraint','statement':'预测5天且非负','source_quote':'预测5天，需求非负','task_ids':['Q1']},
+        ],'assumptions':[],
+    }
+    repaired=json.loads(json.dumps(first))
+    def check(key,task_id,name,operator,expected):
+        return {'id':key,'description':name,'left':{'task_id':task_id,'name':name},'operator':operator,'expected':expected}
+    repaired['requirements'][2]['checks']=[
+        check('price','Q2','price_param','eq',15),check('cost','Q2','cost_param','eq',8),
+        check('salvage','Q2','salvage_param','eq',2),
+    ]
+    repaired['requirements'][4]['checks']=[
+        check('length','Q1','forecast_length','eq',5),check('nonnegative','Q1','forecast_min','ge',0),
+    ]
+
+    class Model:
+        calls=0
+        def with_structured_output(self,schema,**kwargs):
+            assert kwargs['include_raw'] is True
+            return self
+        async def ainvoke(self,messages):
+            self.calls+=1
+            if self.calls==1:
+                try:ProblemAnalysis.model_validate(first)
+                except ValueError as error:
+                    return {'raw':AIMessage(content='',tool_calls=[{'id':'analysis','name':'ProblemAnalysis','args':first}]),
+                            'parsed':None,'parsing_error':error}
+            assert self.calls==2
+            assert json.loads(messages[-2].content)==first
+            assert 'requirements.2' in messages[-1].content and 'requirements.4' in messages[-1].content
+            return AIMessage(content=json.dumps(repaired,ensure_ascii=False))
+
+    model=Model()
+    ctx=GraphContext.create(str(tmp_path),planner_llm=model)
+    result=asyncio.run(analyze({'task':task},SimpleNamespace(context=ctx)))
+    constraints={r['id']:r for r in result['analysis']['requirements'] if r['kind']=='constraint'}
+    assert model.calls==2 and ctx.stage_status['analyze']=='completed'
+    assert set(constraints)=={'R3','R5'}
+    assert [c['expected'] for c in constraints['R3']['checks']]==[15,8,2]
+    assert [c['left']['name'] for c in constraints['R5']['checks']]==['forecast_length','forecast_min']
+
+
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
     from ai_system.research.control import task_dispatch as dispatch
     from test_research_p2 import store_for,problem,TASK as original
