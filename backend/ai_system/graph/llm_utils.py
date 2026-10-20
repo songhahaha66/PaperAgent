@@ -87,9 +87,9 @@ def as_messages(system: str, user: str) -> List[BaseMessage]:
     return [SystemMessage(content=system), HumanMessage(content=user)]
 
 
-async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None,retries: int=RETRIES) -> T:
+async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None,retries: int=RETRIES,json_first: bool=False) -> T:
     llm = cap_output(llm, STRUCTURED_MAX_TOKENS)
-    model = structured_model(llm, schema, include_raw=True)
+    model = None if json_first else structured_model(llm, schema, include_raw=True)
     last_error: Exception | None = None
     retry_messages = messages
     from ..research.runtime import ACTIVE_BUDGET,ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
@@ -103,7 +103,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
         try:
             # 工具调用的参数不合 schema（如必填列表给了空数组）时，再用同样的方式问往往还是一样，
             # 重试改走纯文本 JSON
-            result = await model.ainvoke(messages) if attempt == 0 else await _ask_json(llm, schema, retry_messages, last_error)
+            result = await model.ainvoke(messages) if attempt == 0 and not json_first else await _ask_json(llm, schema, retry_messages, last_error)
             if isinstance(result, dict) and "raw" in result and "parsed" in result:
                 if (getattr(result["raw"], "response_metadata", {}) or {}).get("finish_reason") == "length":
                     raise InvalidStructuredReply(ValueError("被截断"), result["raw"])
@@ -133,7 +133,8 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
                 # from an error message with no associated task/check IDs.
                 retry_messages = [*messages, AIMessage(content=parsed.model_dump_json())]
             elif isinstance(exc, InvalidStructuredReply):
-                retry_messages = [*messages, exc.candidate]
+                # A truncated repetitive list is not a useful repair candidate.
+                retry_messages = messages if exc.truncated else [*messages, exc.candidate]
             logger.warning("结构化输出 %s 第 %d 次失败: %s", schema.__name__, attempt + 1, type(exc).__name__)
             if attempt < retries:
                 await asyncio.sleep(RETRY_DELAY * (attempt + 1))
