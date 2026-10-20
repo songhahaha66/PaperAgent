@@ -56,7 +56,7 @@ def citation_input_scope(root):
     store=citation_research_store(root);state=store.snapshot() or {}
     return {'inputs':store.file_inputs(),'requirements':state.get('spec',{}).get('requirements',[]),
             'assumptions':state.get('assumptions',{}),
-            'tasks':{k:{p:t.get(p) for p in ('revision','active_attempt','subproblem')} for k,t in state.get('tasks',{}).items()}}
+            'experiments':{k:{p:t.get(p) for p in ('revision','execution_id','subproblem')} for k,t in state.get('experiments',{}).items()}}
 
 
 def _citation_context(workspace,texts,llm,rows,system,prompt,active=False):

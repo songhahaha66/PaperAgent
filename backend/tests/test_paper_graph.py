@@ -33,7 +33,7 @@ from ai_system.graph.state import (
 )
 from ai_system.research import ENGINE_VERSION
 from ai_system.research.models import Requirement, Assumption, IssueReport
-from ai_system.research.planner import AmendmentSpec, EvidenceDecision
+from ai_system.research.planner import AmendmentSpec, NextAction
 from ai_system.research.store import ResearchStore
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
@@ -57,6 +57,12 @@ class ProblemAnalysis(BaseModel):
     subproblems: list[Subproblem] = Field(min_length=1)
     requirements: list[Requirement] = Field(min_length=1)
     assumptions: list[Assumption]
+
+    def model_dump(self, **kwargs):
+        value=super().model_dump(**kwargs)
+        value['questions']=[{'id':'question:'+sp.id,'title':sp.title,'question':sp.question,
+            'experiment_ids':[sp.id],'judgment':'','limitations':[]} for sp in self.subproblems]
+        return value
 
 
 def _analysis() -> ProblemAnalysis:
@@ -92,69 +98,21 @@ def decision_outline(context,coverage):
 
 
 def controller_reply(context, plan=None):
-    # The fixture controller creates only the next needed problem. Dependencies
-    # are actual completed inputs; no ProblemAnalysis model call precedes it.
-    plan = plan or _analysis()
-    if any(r['id']=='RQ0' for r in context['spec']['requirements']):
-        existing={t['task_id']:t for t in context['tasks']}
-        for sp in plan.subproblems:
-            if sp.id in existing:continue
-            if not all(d in existing and existing[d]['acceptance']=='accepted' and existing[d]['validity']=='current' for d in sp.depends_on):continue
-            requirements=[]
-            for r in plan.requirements:
-                if sp.id not in r.task_ids:continue
-                row=r.model_dump();row['task_ids']=[sp.id]
-                row['checks']=[c for c in row['checks'] if c['left']['task_id']==sp.id]
-                if row['source_quote'] not in context['spec']['requirement']:row['source_quote']=context['spec']['requirement']
-                previous=next((r for r in context['spec']['requirements'] if r['id']==row['id']),None)
-                if previous:
-                    row['task_ids']=list(dict.fromkeys(previous['task_ids']+[sp.id]))
-                    row['checks']=previous['checks']+row['checks']
-                requirements.append(row)
-            ids=['RQ0']+[r['id'] for r in requirements]
-            return {'action':'execute','reason':'Execute the next needed research using actual predecessor results.',
-                    'requirement_ids':ids,'task_ids':[sp.id],'requirements':requirements,
-                    'changes':[{'action':'add','task_id':sp.id,'title':sp.title,'kind':sp.kind,'objective':sp.question,
-                                'dependencies':sp.depends_on,'requirement_ids':ids}]}
-    coverage=[]
-    for requirement in context['spec']['requirements']:
-        actual=next((e for task in reversed(requirement['task_ids']) for e in context['evidence'] if e.get('task_id')==task),None)
-        coverage.append({'requirement_id':requirement['id'],'requirement':requirement['statement'],
-            'supported':f"{actual['name']}={actual['text']}" if actual else '',
-            'basis':[{'ref':actual['id'],'quote':actual['text']}] if actual else [],
-            'remaining':'' if actual else '由后续写作和导出实施。' if requirement['kind']=='deliverable' else '尚无对应研究产物。'})
-    value={'action':'deliver','reason':'按实际证据和原要求选择下一步。','coverage':coverage,
-           'requirement_ids':[r['id'] for r in context['spec']['requirements']],
-           'basis':[b for c in coverage for b in c['basis']][:12]}
-    confirmed=[i for i in context.get('issues',[]) if i['status']=='confirmed' and i['action']=='recompute']
-    failed=[t for t in context['tasks'] if not t['retired'] and t['kind']!='verify' and t['execution_status'] in {'failed','cancelled'}]
-    if confirmed:
-        value.update(action='research',gap='依据已确认问题修正失败方法，保留原问题及检查。',issue_ids=[i['id'] for i in confirmed],
-            changes=[{'task_id':key,'objective':next(t['objective'] for t in context['tasks'] if t['task_id']==key),
-                      'method_instruction':'使用完整材料重新核对，并保留冻结检查。'} for key in dict.fromkeys(i['task_id'] for i in confirmed)])
-        for row in coverage:row['remaining']='需修复已确认问题后核对。'
-    elif failed:
-        value.update(action='research',gap='Use the actual failure to choose a new attempt.',changes=[{
-            'task_id':t['task_id'],'objective':t['objective'],'method_instruction':'Repair the failed execution using the same source and fixed checks.'} for t in failed])
-        for row in coverage:row['remaining']='Complete the repaired attempt.'
-    elif context['ready_tasks']:
-        task=next(t for t in context['tasks'] if t['task_id']==context['ready_tasks'][0])
-        value.update(action='execute',task_ids=[task['task_id']],requirement_ids=task['requirement_ids'] or value['requirement_ids'])
-        for row in coverage:
-            if row['requirement_id'] in value['requirement_ids']:row['remaining']='执行该问题所需的研究。'
-    elif context.get('issues'):
-        value.update(action='pause',gap='保留实际问题，等待可行修复。')
-        for row in coverage:
-            if row['requirement_id'] in value['requirement_ids']:row['remaining']='存在尚待核查的问题。'
-    else:
-        value['outline']=decision_outline(context,coverage)
-        value['title']=plan.title
-    if value['action']!='deliver':
-        # Intermediate actions need no evidence assertion. Do not attach the
-        # whole study's results to an independent task selected for execution.
-        value.pop('basis')
-        value.pop('coverage')
-    return value
+    plan=plan or _analysis()
+    existing={e['objective']:e for e in context['experiments']}
+    for problem in plan.subproblems:
+        if problem.kind=='writing':continue
+        current=existing.get(problem.question)
+        if current and current['acceptance']=='accepted' and current['validity']=='current':continue
+        if current and current['execution_status'] in {'failed','cancelled'}:
+            return {'action':'experiment','reason':'重试执行故障','experiment_id':current['task_id']}
+        dependencies=[next((e for e in context['experiments'] if e['objective']==sp.question),None)
+                      for sp in plan.subproblems if sp.id in problem.depends_on]
+        if any(e is None or e['acceptance']!='accepted' for e in dependencies):continue
+        return {'action':'experiment','reason':'验证明确方法','question':problem.question,'title':problem.title,
+            'method':problem.title,'conditions':'使用当前原题数据','evaluation':'核对实测结果与原题要求',
+            'artifact_refs':[r['id'] for r in context['artifacts'] if any(r['subproblem']==e['task_id'] for e in dependencies)]}
+    return {'action':'write','reason':'实际结果已经回答原题，开始整理草稿','title':plan.title}
 
 
 class _Structured:
@@ -165,9 +123,9 @@ class _Structured:
         self.schema = schema
 
     async def ainvoke(self, messages):
-        if self.schema is EvidenceDecision:
+        if self.schema is NextAction:
             context=json.loads(messages[-1].content)
-            return EvidenceDecision.model_validate(controller_reply(context))
+            return NextAction.model_validate(controller_reply(context))
         if self.schema is AmendmentSpec:
             data = json.loads(messages[-1].content)
             number = max(int(r[2:]) for r in data["used_requirement_ids"]) + 1
@@ -250,7 +208,7 @@ class FakeModel(BaseChatModel):
         return AIMessage(content=self._write(first))
 
     def _solver_step(self, task: str, messages: List[BaseMessage]) -> AIMessage:
-        sid = re.search(r"# 子问题 (Q\d)", task).group(1)
+        sid = re.search(r"# 子问题 ([QE]\d+)", task).group(1)
         tool_results = [m for m in messages if isinstance(m, ToolMessage)]
         last = tool_results[-1].content if tool_results else ""
         found = re.search(r"\[run_id: (\S+)\]", last)
@@ -259,11 +217,11 @@ class FakeModel(BaseChatModel):
         if step == 2 and sid in FAIL_ONCE:
             FAIL_ONCE.discard(sid)
             raise RuntimeError("403 real_name_required")
-        value = "1234.57" if sid == "Q1" else "8.5%"
+        value = "1234.57" if sid in {"Q1","E1"} else "8.5%"
         script = [
             ("run_python", {"code": "forecast = 1234.5678\nprint('forecast', forecast)\nprint('saving', 0.085)"}),
             ("record_results", {"items": [
-                {"name": "预测值" if sid == "Q1" else "节电比例", "value": value, "run_id": run_id, "unit": "万千瓦时" if sid == "Q1" else ""},
+                {"name": "预测值" if sid in {"Q1","E1"} else "节电比例", "value": value, "run_id": run_id, "unit": "万千瓦时" if sid in {"Q1","E1"} else ""},
                 {"name": "编造值", "value": "99.99", "run_id": run_id},
             ]}),
             ("run_python", {"code": "import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])"}),
@@ -285,7 +243,7 @@ class FakeModel(BaseChatModel):
 
     def _probe_step(self, task: str, messages: List[BaseMessage]) -> AIMessage:
         # 方案甲真实 AUC 0.71；方案乙打印 0.65 却报告 0.99（编造），核对后不参与比较
-        sid = re.search(r"# 子问题 (Q\d)", task).group(1)
+        sid = re.search(r"# 子问题 ([QE]\d+)", task).group(1)
         name = re.search(r"# 选定的建模方案：(\S+)", task).group(1)
         tool_results = [m for m in messages if isinstance(m, ToolMessage)]
         if not tool_results:
@@ -425,7 +383,7 @@ def test_graph_end_to_end_offline(tmp_path):
     # 依赖：Q2 的求解任务里带上了 Q1 的结论
     from ai_system.research.control import public_snapshot
     progress = public_snapshot(ctx.research.snapshot())
-    assert all(t["progress"]["state"] == "accepted" for t in progress["tasks"])
+    assert all(t["progress"]["state"] == "accepted" for t in progress["experiments"])
     assert progress["delivery_stages"]["render"]["status"] == "completed"
     assert not (ws / "plan.json").exists(), "fixed phase plans must not compete with research tasks"
     manifest = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
@@ -447,7 +405,7 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
             if block_type == "paper_phase":
                 phases.append((content["stage"], content["status"]))
             if block_type == "research_state":
-                snapshots.append({t["task_id"]: t["progress"]["state"] for t in content["tasks"]})
+                snapshots.append({t["task_id"]: t["progress"]["state"] for t in content["experiments"]})
 
     agent = PaperGraphAgent(FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), judge=FixedJudge())
     output = asyncio.run(agent.run(TASK))

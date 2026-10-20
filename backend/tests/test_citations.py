@@ -61,7 +61,7 @@ def test_cited_edit_publishes_traceable_markers_and_bibliography_without_recalcu
     assert not proposal['citation_issues']
     asyncio.run(editor.decide(store,proposal['id'],True,'markdown'))
     current=store.snapshot()
-    assert current['attempts']==before['attempts'] and current['tasks']==before['tasks']
+    assert current['executions']==before['executions'] and current['experiments']==before['experiments']
     assert '#literature-'+e['id'] in (store.root/'paper.md').read_text()
     assert e['source']['title'] in current['sections']['references']['text']
     assert current['sections']['references']['revision']>before['sections']['references']['revision']

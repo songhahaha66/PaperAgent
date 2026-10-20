@@ -16,7 +16,7 @@ from services.chat_services.chat_service import ChatService
 from services.chat_services.task_manager import task_manager
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
-from ai_system.graph import PaperGraphAgent
+from ai_system.graph.agent import PaperGraphAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
 from config.paths import get_workspace_path
@@ -244,12 +244,6 @@ async def get_task_status(
     return task_manager.get_task_status(work_id)
 
 
-@router.get("/work/{work_id}/outcomes")
-async def get_research_outcomes(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
-    snapshot = await get_research_snapshot(work_id, current_user_id=current_user, db=db)
-    return {"schema_version": 1, "work_id": work_id, "outcomes": snapshot.outcomes, "runs": snapshot.runs}
-
-
 @router.get("/work/{work_id}/research")
 async def get_research_snapshot(
     work_id: str,
@@ -431,7 +425,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except ValidationError:
                         raise ValueError("增量修改需要有效的命令标识、研究标识和基础版本")
                     if revision_command.scope is not None and (len(set(revision_command.scope)) != len(revision_command.scope) or
-                            not set(revision_command.scope) <= {t["task_id"] for t in snapshot.tasks}):
+                            not set(revision_command.scope) <= {t["task_id"] for t in snapshot.experiments}):
                         raise ValueError("修改范围包含未知或重复任务")
                     if revision_command.research_id != snapshot.research_id:
                         raise ValueError("研究标识已改变，请刷新后重试")

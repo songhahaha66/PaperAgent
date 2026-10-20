@@ -32,25 +32,6 @@
         <summary>对应原题</summary>
         <blockquote v-for="source in selected.sources" :key="source">{{ source }}</blockquote>
       </details>
-      <section v-if="selected.judgments.length" class="next-step">
-        <h3>当前判断 · {{ stanceLabel(selected.judgments.at(-1)!.stance) }}</h3>
-        <p>{{ selected.judgments.at(-1)!.reason }}</p>
-        <div class="basis">
-          <button
-            v-for="ref in selected.judgments.at(-1)!.evidence_refs"
-            :key="ref"
-            @click="emit('object', { type: 'result', resultType: 'registered', id: ref })"
-          >
-            {{ snapshot?.results.find((r) => r.id === ref)?.name || '查看依据' }}
-          </button>
-        </div>
-        <details v-if="selected.judgments.length > 1">
-          <summary>判断如何变化</summary>
-          <p v-for="(judgment, index) in selected.judgments.slice(0, -1)" :key="index">
-            {{ stanceLabel(judgment.stance) }} · {{ judgment.reason }}
-          </p>
-        </details>
-      </section>
       <section class="judgment">
         <h3>当前结论</h3>
         <MarkdownRenderer
@@ -58,15 +39,33 @@
           :content="evidenceText(selected.judgment)"
           :work-id="snapshot?.work_id"
         />
-        <p v-else>暂无结论。</p>
+        <p v-else>实验结果尚不足以形成判断。</p>
         <small
           v-if="
             selected.judgment &&
-            selectedTasks.some((t) => outcomeFor(t.task_id)?.checking !== 'passed')
+            selectedExperiments.some((t) => experimentFor(t.task_id)?.checking !== 'passed')
           "
           >结论仍在核查。</small
         >
       </section>
+      <div v-if="selected.artifact_refs.length" class="basis">
+        <button
+          v-for="ref in selected.artifact_refs"
+          :key="ref"
+          @click="emit('object', { type: 'result', resultType: 'registered', id: ref })"
+        >
+          {{ snapshot?.results.find((r) => r.id === ref)?.name || '查看依据' }}
+        </button>
+      </div>
+      <p v-for="limitation in selected.limitations" :key="limitation" class="muted">
+        {{ limitation }}
+      </p>
+      <details v-if="selected.judgments.length > 1">
+        <summary>之前的判断</summary>
+        <p v-for="(judgment, index) in selected.judgments.slice(0, -1)" :key="index">
+          {{ judgment.statement }}
+        </p>
+      </details>
       <section v-if="selected.next_step || decision" class="next-step">
         <h3>后续安排</h3>
         <p>{{ selected.next_step || decision?.reason }}</p>
@@ -75,7 +74,7 @@
       <section>
         <h3>实验记录</h3>
         <article
-          v-for="task in selectedTasks"
+          v-for="task in selectedExperiments"
           :key="task.task_id"
           class="experiment"
           :data-task="task.task_id"
@@ -84,14 +83,14 @@
             <strong>{{ methodName(task.task_id) }}</strong
             ><span class="state">{{ taskLabel(taskState(task, status), true) }}</span>
           </header>
-          <p v-if="outcomeFor(task.task_id)?.experiment" class="conditions">
-            {{ outcomeFor(task.task_id)?.experiment?.conditions }}<br />评价：{{
-              outcomeFor(task.task_id)?.experiment?.evaluation
+          <p v-if="experimentFor(task.task_id)?.experiment" class="conditions">
+            {{ experimentFor(task.task_id)?.experiment?.conditions }}<br />评价：{{
+              experimentFor(task.task_id)?.experiment?.evaluation
             }}
           </p>
-          <div v-if="outcomeFor(task.task_id)?.results.length" class="measurements">
+          <div v-if="experimentFor(task.task_id)?.results.length" class="measurements">
             <button
-              v-for="result in outcomeFor(task.task_id)!.results.slice(0, 4)"
+              v-for="result in experimentFor(task.task_id)!.results.slice(0, 4)"
               :key="result.id"
               @click="emit('object', { type: 'result', resultType: 'registered', id: result.id })"
             >
@@ -108,8 +107,8 @@
           <p v-else class="muted">
             {{ task.progress.next_step || task.reason || '尚未取得实测结果。' }}
           </p>
-          <p class="review-status" v-if="outcomeFor(task.task_id)">
-            证据检查：{{ outcomeLabel(outcomeFor(task.task_id)!.checking, true) }}
+          <p class="review-status" v-if="experimentFor(task.task_id)">
+            证据检查：{{ outcomeLabel(experimentFor(task.task_id)!.checking, true) }}
           </p>
           <div v-for="issue in issuesFor(task.task_id)" :key="issue.id" class="finding">
             <strong>待核查</strong>
@@ -121,16 +120,18 @@
             </details>
           </div>
           <button
-            v-if="outcomeFor(task.task_id)?.results.length || outcomeFor(task.task_id)?.summary"
+            v-if="
+              experimentFor(task.task_id)?.results.length || experimentFor(task.task_id)?.summary
+            "
             class="text-action"
-            @click="emit('object', { type: 'result', resultType: 'task', id: task.task_id })"
+            @click="emit('object', { type: 'result', resultType: 'experiment', id: task.task_id })"
           >
             查看实验 →
           </button>
-          <details v-if="task.progress.attempts">
+          <details v-if="task.progress.executions">
             <summary>执行记录</summary>
             <p>
-              {{ task.progress.attempts }} 次执行尝试<span v-if="task.kind === 'verify'">
+              {{ task.progress.executions }} 次执行尝试<span v-if="task.kind === 'verify'">
                 · 独立核查</span
               >。
             </p>
@@ -169,57 +170,48 @@ const selected = computed(
   () =>
     questions.value.find((q) => q.id === selectedId.value) ||
     questions.value.find((q) =>
-      props.snapshot?.tasks?.some(
-        (t) => q.task_ids.includes(t.task_id) && t.execution_status === 'running',
+      props.snapshot?.experiments?.some(
+        (t) => q.experiment_ids.includes(t.task_id) && t.execution_status === 'running',
       ),
     ) ||
     questions.value[0],
 )
-const selectedTasks = computed(
+const selectedExperiments = computed(
   () =>
-    props.snapshot?.tasks?.filter(
+    props.snapshot?.experiments?.filter(
       (t) =>
-        selected.value?.task_ids.includes(t.task_id) ||
-        (t.kind === 'verify' && t.dependencies.some((d) => selected.value?.task_ids.includes(d))),
+        selected.value?.experiment_ids.includes(t.task_id) ||
+        (t.kind === 'verify' && t.question_id === selected.value?.id),
     ) || [],
 )
 const status = computed(() => props.workStatus || props.snapshot?.work_status || '')
 const paused = computed(() => ['paused', 'failed', 'cancelled'].includes(status.value))
 const decision = computed(() =>
-  props.snapshot?.runtime?.decisions
-    .filter((d) => d.task_ids.some((id) => selected.value?.task_ids.includes(id)))
-    .at(-1),
+  props.snapshot?.runtime?.decisions.filter((d) => d.question_id === selected.value?.id).at(-1),
 )
-const outcomeFor = (id: string) => props.snapshot?.outcomes?.find((o) => o.task_id === id)
+const experimentFor = (id: string) => props.snapshot?.experiments?.find((o) => o.task_id === id)
 const methodName = (id: string) =>
-  outcomeFor(id)
+  experimentFor(id)
     ?.experiment?.candidates.map((c) => c.name)
     .join(' / ') ||
-  outcomeFor(id)?.approach ||
-  outcomeFor(id)?.method?.name ||
+  experimentFor(id)?.approach ||
+  experimentFor(id)?.method?.name ||
   taskTitle(id)
 const taskTitle = (id: string) =>
-  props.snapshot?.outcomes?.find((t) => t.task_id === id)?.title || '前置研究'
+  props.snapshot?.experiments?.find((t) => t.task_id === id)?.title || '前置研究'
 const issuesFor = (id: string) =>
   selected.value?.issues.filter((i) =>
     props.snapshot?.feedback?.some((f) => f.id === i.id && f.task_id === id),
   ) || []
 const questionState = (question: ResearchQuestion) => {
-  const tasks = props.snapshot?.tasks?.filter((t) => question.task_ids.includes(t.task_id)) || []
+  const tasks =
+    props.snapshot?.experiments?.filter((t) => question.experiment_ids.includes(t.task_id)) || []
   if (tasks.some((t) => t.execution_status === 'running') && !paused.value) return '正在获取证据'
-  if (question.issues.length) return '证据与解释待核查'
-  return tasks.length && tasks.every((t) => t.acceptance === 'accepted' && t.validity === 'current')
+  if (question.judgment) return '已有判断'
+  return tasks.length && tasks.some((t) => t.acceptance === 'accepted' && t.validity === 'current')
     ? '已有结果'
     : '研究中'
 }
-const stanceLabel = (stance: string) =>
-  ({
-    adopt: '采用',
-    improve: '改进方法',
-    discard: '不采用此方法',
-    more_evidence: '继续补充证据',
-    inconclusive: '尚不明确',
-  })[stance] || '待判断'
 const stageName = (key: string) =>
   deliveryLabels[key as keyof typeof deliveryLabels]?.[0] || '论文整理'
 const stageStatus = (status: string) =>

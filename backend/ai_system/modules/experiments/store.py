@@ -1,3 +1,4 @@
+from ai_system.research.domain import experiment_design
 """Frozen supervised comparison protocols and durable, shared exploration budgets."""
 import json
 import time
@@ -95,10 +96,10 @@ class ExperimentStore:
         from types import SimpleNamespace
         from ai_system.research.models import WorkOrder
         summaries=[]
-        for key,task in snapshot['tasks'].items():
+        for key,task in snapshot['experiments'].items():
             if task['retired'] or task['kind']=='verify' or task['acceptance']!='accepted' or task['validity']!='current':
                 continue
-            attempt=snapshot['attempts'].get(task['active_attempt']) or {}
+            attempt=snapshot['executions'].get(task['execution_id']) or {}
             if attempt.get('execution_status')!='succeeded' or attempt.get('acceptance')!='accepted' or not attempt.get('commit',{}).get('published'):
                 continue
             record=self.read(key,task['revision'])
@@ -108,10 +109,10 @@ class ExperimentStore:
                 from .supervised import current,choose
                 from .contracts import VERSION,candidate_contract
                 order=WorkOrder.model_validate(attempt['result']['order'])
-                if order.attempt_id!=task['active_attempt'] or order.task_id!=key or order.revision!=task['revision']:
+                if order.attempt_id!=task['execution_id'] or order.task_id!=key or order.revision!=task['revision']:
                     continue
                 ctx=SimpleNamespace(research=self.store,experience_store=None,experience_order=order)
-                design=task.get('design') or {};candidates=design.get('candidates',[])[:2]
+                design=experiment_design(snapshot,task) or {};candidates=design.get('candidates',[])[:2]
                 if record.get('research_id')!=self.store.research_id or record.get('task_id')!=key or not current(ctx,record,{'subproblem':task['subproblem'],'design':design}):
                     continue
                 if record.get('measurements'):
@@ -144,7 +145,7 @@ class ExperimentStore:
                     refs=proof.get('evidence_refs') or []
                     if not refs or proof.get('protocol_hash')!=record['protocol_hash'] or proof.get('code_hash')!=winner['code_hash'] or not proof.get('artifact_hash'):
                         continue
-                    evidence=[snapshot['evidence'].get(ref,{}) for ref in refs]
+                    evidence=[snapshot['artifacts'].get(ref,{}) for ref in refs]
                     if not all(e.get('active') and e.get('producer_attempt')==order.attempt_id and
                                e.get('payload',{}).get('run_id')==proof.get('run_id') for e in evidence):
                         continue
@@ -192,7 +193,7 @@ class ExperimentStore:
         proof=next((p for p in reversed(record['measurements']) if p.get('attempt_id')==attempt['attempt_id']),None)
         if not proof or proof['protocol_hash']!=record['protocol_hash']:return None
         if choose(record)[:2]!=(record['status'],record.get('chosen_index')):return None
-        evidence=[snapshot['evidence'].get(ref,{}) for ref in proof['evidence_refs']]
+        evidence=[snapshot['artifacts'].get(ref,{}) for ref in proof['evidence_refs']]
         if not all(e.get('active') and e.get('producer_attempt')==attempt['attempt_id'] and
                    e.get('payload',{}).get('run_id')==proof['run_id'] for e in evidence):return None
         actual={e['payload']['name']:e['payload']['value'] for e in evidence if e['payload']['kind']!='figure'}
@@ -201,7 +202,7 @@ class ExperimentStore:
         folder=self.store.root/'.system/attempts'/record['owner_attempt']/'workspace/outputs/intermediate/comparisons'/record['id']
         for measured in proof['measurements']:
             row=next(r for r in record['branches'] if r['index']==measured['index'])
-            candidate=task['design']['candidates'][row['index']]
+            candidate=experiment_design(snapshot,task)['candidates'][row['index']]
             if row.get('candidate_hash')!=digest(candidate) or row.get('estimator_contract')!=candidate_contract(candidate):return None
             if row.get('estimator_contract') and not row.get('implementation_audit',{}).get('checked'):return None
             if not row.get('code_hash') or hashlib.sha256(row['code'].encode()).hexdigest()!=row['code_hash']:return None

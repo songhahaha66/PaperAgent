@@ -73,7 +73,7 @@ def test_tail_edit_reviews_full_target_once_and_publishes_with_source_verdict(lo
     result=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert result['status']=='applied'
     after=v.store.snapshot();assert current(v)['status']=='resolved' and current(v)['review_resolution']['review_id']==r['id']
     assert next(i for i in research_findings(after) if i['id']==v.other['id'])['status']=='confirmed'
-    assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
+    assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
     assert NEW in (v.store.root/'paper.md').read_text() and OLD not in (v.store.root/'paper.md').read_text()
 
 def test_interrupted_candidate_restores_without_regeneration(longpaper):
@@ -151,7 +151,7 @@ def test_normal_graph_validate_node_reviews_important_conclusions_once(longpaper
     result=asyncio.run(validate_node.validate(v.state,SimpleNamespace(context=v.ctx)))
     assert any(i['section']=='evaluation' for i in result['issues'])
     assert v.model.calls[-1]==('claims',None) and all(k not in {'block','global'} for k,_ in v.model.calls)
-    after=v.store.snapshot();assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
+    after=v.store.snapshot();assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
 
 
 def test_default_audit_without_claims_or_known_conflicts_skips(paper,monkeypatch):

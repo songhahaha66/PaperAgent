@@ -61,7 +61,7 @@ export const asText = (content: unknown): string => {
 
 export const deriveSubproblems = (
   blocks: PipelineBlock[],
-  tasks: Pick<NonNullable<ResearchSnapshot['tasks']>[number], 'task_id' | 'objective'>[] = [],
+  tasks: Pick<NonNullable<ResearchSnapshot['experiments']>[number], 'task_id' | 'objective'>[] = [],
 ): SubproblemProgress[] => {
   const byId = new Map<string, SubproblemProgress>()
   const names = new Map(

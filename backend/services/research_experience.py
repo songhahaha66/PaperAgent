@@ -58,7 +58,7 @@ class ExperienceScope:
         count=0
         with self.sessions() as db:
             self.authorize(db)
-            for aid in state['attempts']:
+            for aid in state['executions']:
                 card=card_for(state,aid,store.root)
                 if card is None:continue
                 card['source']['work_id']=self.work_id
@@ -104,15 +104,15 @@ class ExperienceScope:
             if card['evidence_refs'] and not card.get('evidence_provenance'):return False
             if not (root/DB_PATH).is_file():return False
             store=ResearchStore(root,source['research_id'],read_only=True);state=store.snapshot()
-            if state is None or source['attempt_id'] not in state['attempts']:return False
+            if state is None or source['attempt_id'] not in state['executions']:return False
             actual=card_for(state,source['attempt_id'],store.root)
             if actual is None:return False
-            frozen=state['attempts'][source['attempt_id']].get('experience_evidence')
+            frozen=state['executions'][source['attempt_id']].get('experience_evidence')
             if frozen and actual['evidence_provenance']!=frozen:return False
             actual['source']['work_id']=row.source_work_id
             if digest(actual)!=row.content_hash:return False
             for ref in card['evidence_refs']:
-                entry=state['evidence'][ref]
+                entry=state['artifacts'][ref]
                 if store._artifact_hash(entry['payload'])!=entry.get('artifact_hash'):return False
             files={k:v for k,v in source['input_refs'].items() if not k.startswith(('task:','assumption:'))}
             return store.file_inputs()==files and source['published']
@@ -219,4 +219,4 @@ def current_usage(store):
     state=store.snapshot() or {}
     return [{'attempt_id':aid,'task_id':a['task_id'],'revision':a['revision'],
              'published':a.get('commit',{}).get('published',False),'refs':a.get('experience_refs',[])}
-            for aid,a in state.get('attempts',{}).items() if a.get('experience_refs')]
+            for aid,a in state.get('executions',{}).items() if a.get('experience_refs')]

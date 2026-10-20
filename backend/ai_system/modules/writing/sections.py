@@ -78,9 +78,11 @@ def section_plan(state: PaperState) -> List[Tuple[str, str, int]]:
     for key, title in top:
         plan.append((key, title, 2))
         if key == "solve_heading":
-            for sp in state["analysis"]["subproblems"]:
-                if not any(k==solve_key(sp['id']) for k,_ in top):
-                    plan.append((solve_key(sp["id"]), f"{sp['id']} {sp['title']}", 3))
+            for question in state['analysis']['questions']:
+                if not question['experiment_ids']:continue
+                anchor=question['experiment_ids'][0]
+                if not any(k==solve_key(anchor) for k,_ in top):
+                    plan.append((solve_key(anchor), question['title'], 3))
     if not any("参考文献" in title or "reference" in title.lower() for _, title, _ in plan):
         plan.append(("references", "参考文献", 2))
     return plan
@@ -216,7 +218,9 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     if key.startswith("solve:"):
         sid = key.split(":", 1)[1]
         sp = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
-        allowed = {sid, *(sp.get("depends_on") or [])}
+        question=next(q for q in state['analysis']['questions'] if sid in q['experiment_ids'])
+        allowed=set(question['experiment_ids']) | {dep for item in state['analysis']['subproblems']
+            if item['id'] in question['experiment_ids'] for dep in item.get('depends_on') or []}
     references = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items()
                                                if allowed is None or r.subproblem in allowed})
     request += _comparison_context(ctx,references,allowed)
@@ -229,7 +233,7 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
         from dataclasses import replace
         sid = key.split(":", 1)[1]
         subproblem = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
-        source_ids = {sid, *(subproblem.get("depends_on") or [])}
+        source_ids = allowed
         own_claims = {c.id for c in ctx.registry.claims.values() if c.subproblem in source_ids}
         conflicts = [c for c in conflicts if own_claims & set(c["claims"])]
         related = own_claims | {cid for c in conflicts for cid in c["claims"]}
@@ -267,8 +271,13 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
     if key.startswith("solve:"):
         sid = key.split(":", 1)[1]
         subproblem = next(sp for sp in subproblems if sp["id"] == sid)
+        question=next(q for q in analysis['questions'] if sid in q['experiment_ids'])
+        experiments=[sp for sp in subproblems if sp['id'] in question['experiment_ids']]
         return (
-            f"撰写「{title}」的建模与求解小节，一般依次包含：模型的建立（变量、公式推导）、求解过程与算法、"
+            '围绕同一研究问题综合描述下面各实验的方法、条件、结果及判断。不要把每个方法写成不同研究问题；'
+            '条件不同的结果说明边界，不能硬排名；无赢家时保留多个候选。\n'
+            +json.dumps({k:question[k] for k in ('question','judgment','limitations')},ensure_ascii=False)+'\n'
+            +f"撰写「{title}」的建模与求解小节，一般依次包含：模型的建立（变量、公式推导）、求解过程与算法、"
             f"结果与图表、结果检验。如果这一问的交付物是备忘录、信件、建议书等文体，"
             f"就按交付物要求的文体和篇幅直接写成正文，不要套用上面的结构。"
             + ("篇幅控制在600~900字，" if ctx.compact_paper else "篇幅控制在1500~3000字，")
@@ -276,7 +285,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             + ("合并交代问题与数据、采用前提及无新增假设的边界、符号定义、模型公式、共同划分、"
                "方法参数、实测结果与图、已完成检查及恢复边界。只在此节集中引用一句有公开原文支持的背景，"
                "不得把文献当成本研究结果或添加实验。" if ctx.compact_paper else "")
-            + f"\n\n{subproblem_brief(state, ctx, subproblem)}"
+            + "\n\n"+"\n\n".join(subproblem_brief(state,ctx,item) for item in experiments)
         )
 
     if key == "restatement":

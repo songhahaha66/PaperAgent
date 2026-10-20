@@ -46,7 +46,10 @@ export interface ReviewTaskItem {
   coverage_detail?: {
     policy: string
     complete: boolean
-    sections: Record<string, { total_chars: number; included_chars: number; local_complete?: boolean }>
+    sections: Record<
+      string,
+      { total_chars: number; included_chars: number; local_complete?: boolean }
+    >
   }
   segmented?: {
     sections?: {
@@ -105,28 +108,5 @@ export const reviewTasksAPI = {
     apiClient.request<{ id: string; state: string; deduplicated: boolean }>(
       `/api/workspace/${work}/review-tasks`,
       { method: 'POST', body: JSON.stringify(body) },
-    ),
-}
-export interface ExecutionRecoveryProof {
-  proof_hash: string
-  issue_id: string
-  task_id: string
-  revision: number
-  attempt_id: string
-  policy: string
-  refusal: { tool_call_id: string; kernel_executed: boolean }
-  successful_computation: { run_id: string; metric_outputs: Record<string, string> }
-  validation: { checks: { check_id: string; outcome: string }[] }
-  registered_evidence: Record<string, { ref: string; run_id: string; value: string }>
-}
-export const executionRecoveryAPI = {
-  preview: (work: string, issue: string) =>
-    apiClient.request<ExecutionRecoveryProof>(
-      `/api/workspace/${work}/research/issues/${issue}/execution-recovery`,
-    ),
-  resolve: (work: string, issue: string, proof_hash: string) =>
-    apiClient.request<ExecutionRecoveryProof>(
-      `/api/workspace/${work}/research/issues/${issue}/execution-recovery`,
-      { method: 'POST', body: JSON.stringify({ proof_hash }) },
     ),
 }

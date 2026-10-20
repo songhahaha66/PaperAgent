@@ -18,7 +18,7 @@ export interface WorkPanel {
   kind: PanelKind
   group: PanelGroup
   path?: string
-  resultType?: 'experiment' | 'registered' | 'task'
+  resultType?: 'comparison' | 'registered' | 'experiment'
   resultId?: string
   location?: string
 }
@@ -39,7 +39,7 @@ export type WorkObject =
   | { type: 'file'; path: string }
   | { type: 'paper' }
   | { type: 'literature'; evidenceId?: string }
-  | { type: 'result'; resultType: 'experiment' | 'registered' | 'task'; id: string }
+  | { type: 'result'; resultType: 'comparison' | 'registered' | 'experiment'; id: string }
 
 // Tab-scoped, per-user UI state survives refresh; no credentials are stored here.
 export const useWorkPanelsStore = defineStore('work-panels', () => {
@@ -52,11 +52,29 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
     },
     { flush: 'sync' },
   )
-  const storageKey = () => `paperagent:workspace:${auth.currentUser?.id || 'anonymous'}`
+  const storageKey = () => `paperagent:workspace:v4:${auth.currentUser?.id || 'anonymous'}`
   try {
     if (auth.token && typeof sessionStorage !== 'undefined') {
-      const cached = JSON.parse(sessionStorage.getItem(storageKey()) || '{}')
-      if (cached && typeof cached === 'object' && !Array.isArray(cached)) sessions.value = cached
+      const saved = sessionStorage.getItem(storageKey())
+      const cached = JSON.parse(
+        saved || sessionStorage.getItem(storageKey().replace(':v4:', ':')) || '{}',
+      )
+      if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
+        if (!saved)
+          for (const session of Object.values(cached) as WorkPanelSession[]) {
+            for (const panel of session.panels) {
+              const old = panel.resultType as string
+              if (panel.kind === 'result' && (old === 'task' || old === 'experiment')) {
+                panel.resultType = old === 'task' ? 'experiment' : 'comparison'
+                const id = `result:${panel.resultType}:${panel.resultId}`
+                if (session.activeId === panel.id) session.activeId = id
+                if (session.secondaryActiveId === panel.id) session.secondaryActiveId = id
+                panel.id = id
+              }
+            }
+          }
+        sessions.value = cached
+      }
     }
   } catch {
     /* Storage may be unavailable or from an older browser session. */

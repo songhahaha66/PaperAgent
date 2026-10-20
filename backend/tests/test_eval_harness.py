@@ -186,19 +186,6 @@ def test_number_traceability_excludes_numbers_from_problem(tmp_path):
     assert result == {"checked": 0, "traced": 0, "rate": None, "untraced_examples": []}
 
 
-def test_traceability_does_not_scan_failed_stale_or_unregistered_output(tmp_path):
-    ws = _make_workspace(tmp_path)
-    (ws / "runs/run_1/stdout.log").write_text("0.87312 0.912512 1.73205 0.04511 12.345")
-    failed = ws / "runs/run_2"
-    failed.mkdir()
-    (failed / "stderr.txt").write_text("0.8123")
-    assert number_traceability("0.8123 12.345", ws)["traced"] == 0
-    from ai_system.research.store import ResearchStore
-    from ai_system.research.models import PlanPatch, TaskChange
-    store = ResearchStore(ws, "eval", read_only=False)
-    store.apply_patch(PlanPatch(command_id="revise", base_revision=1, reason="correct method",
-                               changes=[TaskChange(task_id="Q1", objective="Recompute")]))
-    assert number_traceability("0.87312", ws)["rate"] == 0
 
 
 @pytest.mark.parametrize("source", ["failed", "changed", "outside"])

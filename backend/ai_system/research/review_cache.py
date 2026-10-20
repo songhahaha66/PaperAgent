@@ -86,11 +86,11 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
         'section_coverage':section_coverage(sections or {}) if stage=='sections' else None,
         'model_id':getattr(ctx.planner_llm,'model_name',None) or getattr(ctx.planner_llm,'model',None),
         'inputs':store.file_inputs() if store else {},
-        'tasks':{k:{p:v.get(p) for p in ('revision','active_attempt','validity','subproblem','dependencies')} for k,v in snapshot.get('tasks',{}).items()},
+        'experiments':{k:{p:v.get(p) for p in ('revision','execution_id','validity','subproblem','dependencies')} for k,v in snapshot.get('experiments',{}).items()},
         'contract_hash':digest({'requirements':snapshot.get('spec',{}).get('requirements',state.get('analysis',{}).get('requirements',[])),
                               'assumptions':snapshot.get('assumptions',state.get('analysis',{}).get('assumptions',[]))}),
         'evidence_hash':digest(results),'claims_hash':digest(claims),'artifact_hashes':artifacts,
-        'committed_evidence_hash':digest({'evidence':snapshot.get('evidence',{}),'claims':snapshot.get('claims',{})}),
+        'committed_evidence_hash':digest({'evidence':snapshot.get('artifacts',{}),'claims':snapshot.get('claims',{})}),
         'configuration_hash':digest(configuration),
         'section_hashes':{k:digest(v) for k,v in (sections or {}).items()},
         'committed_section_hashes':{k:{p:v.get(p) for p in ('content_hash','context_hash','revision','validity')} for k,v in snapshot.get('sections',{}).items()} if sections is not None else {},
@@ -258,8 +258,8 @@ class ReviewCache:
             db.execute('UPDATE review_records SET state=?,payload=? WHERE id=?',('superseded' if stale else 'failed',json.dumps(record,ensure_ascii=False),record['id']))
             if stale:return record
             state=self.store._read(db)
-            if state and state.get('tasks') and not record['context'].get('extra',{}).get('non_blocking',False):
-                task=next(iter(state['tasks']));label=STAGE_LABELS[record['stage']]
+            if state and state.get('experiments') and not record['context'].get('extra',{}).get('non_blocking',False):
+                task=next(iter(state['experiments']));label=STAGE_LABELS[record['stage']]
                 issue=self.store._record_issue(state,IssueReport(task_id=task,category='service',message=f'{label}未完成：{code}',section=f"review:{record['stage']}:{record['context_hash']}"),'confirmed',source='review:'+record['stage'])
                 issue['review_scope']={'stage':record['stage'],'context_hash':record['context_hash'],'failed_review_id':record['id']}
                 self.store._save(db,state,'review_failed',{'review_id':record['id'],'issue_id':issue['id'],'stage':record['stage'],'context_hash':record['context_hash'],'error_code':code})

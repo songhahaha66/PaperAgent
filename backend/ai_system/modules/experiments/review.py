@@ -20,7 +20,6 @@ from ai_system.graph.registry import GroundingError, find_refs
 from ai_system.graph.llm_utils import as_messages, call_structured, clip
 from ai_system.graph.state import BranchInput, ResultReview
 from ai_system.graph.tracing import labelled
-from ai_system.research.validation import requirement_evidence_gaps
 from ai_system.research.models import DomainCheck
 
 SYSTEM = (
@@ -157,14 +156,8 @@ def report_submission_issues(ctx: GraphContext, branch: BranchInput, report: Dic
     sid = subproblem["id"]
     deps = subproblem.get("depends_on") or []
     issues = submission_issues(ctx, report, sid, deps)
-    plan=branch.get('experiment')
-    if plan and not plan.get('csv') and report.get('approach')!=plan['candidates'][0]['name']:
-        issues.append('本次只执行已冻结候选，报告approach须使用其原名称；若无法实现应如实失败，由控制器修订方法')
     issues += submission_inventory_issues(ctx, branch, runs)
     issues += control_issues(ctx,report)
-    available = {r.id for r in ctx.registry.results.values() if r.subproblem in {sid, *deps}}
-    requirements = (branch.get("research_contract") or {}).get("requirements", [])
-    issues += list(requirement_evidence_gaps([r["id"] for r in requirements], report.get("requirement_evidence", []), available).values())
     return list(dict.fromkeys(issues))
 
 

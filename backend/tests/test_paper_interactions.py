@@ -332,7 +332,7 @@ def test_real_auxiliary_calculation_freezes_inputs_and_keeps_run_provenance(pape
     (store.root/'data/value.txt').write_text('100')
     frozen=store.root/result['folder']/'data/value.txt'
     assert frozen.read_text()=='4' and result['inputs'][0]['hash']
-    assert store.snapshot()['attempts']==before['attempts']
+    assert store.snapshot()['executions']==before['executions']
 
 
 def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monkeypatch):

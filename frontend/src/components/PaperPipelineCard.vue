@@ -103,7 +103,7 @@ const props = defineProps<{
   streaming?: boolean
   superseded?: boolean
   canConfirm?: boolean
-  tasks?: ResearchSnapshot['tasks']
+  tasks?: ResearchSnapshot['experiments']
 }>()
 
 defineEmits<{ 'confirm-plan': []; 'open-progress': [] }>()

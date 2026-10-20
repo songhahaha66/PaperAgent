@@ -25,9 +25,9 @@ def verified_paper(paper,monkeypatch):
     store,state=paper
     candidates=[{'name':'OLS'},{'name':'Ridge'}]
     with store._transaction() as db:
-        snapshot=store._read(db);snapshot['tasks']['Q1']['design']={'candidates':candidates}
+        snapshot=store._read(db);snapshot['experiments']['Q1']['design']={'candidates':candidates}
         store._save(db,snapshot,'fixture-methods',{})
-    snapshot=store.snapshot();task=snapshot['tasks']['Q1'];comparison=ExperimentStore(store);comparison.set_policy(True)
+    snapshot=store.snapshot();task=snapshot['experiments']['Q1'];comparison=ExperimentStore(store);comparison.set_policy(True)
     branches=[];runs={}
     for i,(model,family,pre) in enumerate([(LinearRegression(),'ols',[]),(Ridge(alpha=1),'ridge',[])]):
         contract={'family':family,'standardize':False,'alpha':1.0 if family=='ridge' else None};audit=check_estimator(model,contract)
@@ -38,10 +38,10 @@ def verified_paper(paper,monkeypatch):
             'implementation_audit':audit,'estimator_contract':contract,'run_ids':[run_id],
             'driver_hash':hashlib.sha256(driver.encode()).hexdigest(),'stdout_hash':hashlib.sha256(stdout.encode()).hexdigest()})
     record=comparison.create('Q1',task['revision'],{'branches':branches,'implementation_contract_version':1,'file_inputs':store.file_inputs(),
-        'input_refs':snapshot['attempts'][task['active_attempt']]['input_refs'],'policy_version':comparison.policy()['version'],
+        'input_refs':snapshot['executions'][task['execution_id']]['input_refs'],'policy_version':comparison.policy()['version'],
         'candidate_hashes':[digest(c) for c in candidates],'contract_hash':digest(protocol(snapshot,'Q1')),'task_hash':digest(task['subproblem']), 'protocol_hash':'fixture-protocol'})
     for b in record['branches']:
-        target=store.root/'.system/attempts'/task['active_attempt']/'workspace/outputs/intermediate/comparisons'/record['id']/f"predictions-{b['index']}.json"
+        target=store.root/'.system/attempts'/task['execution_id']/'workspace/outputs/intermediate/comparisons'/record['id']/f"predictions-{b['index']}.json"
         target.parent.mkdir(parents=True,exist_ok=True);target.write_text(json.dumps({'estimator_audit':b['implementation_audit']}));b['prediction_hash']=hashlib.sha256(target.read_bytes()).hexdigest()
     comparison.save(record);(store.root/'manifest.json').write_text(json.dumps({'runs':runs}))
     for key in state['sections']:
@@ -70,7 +70,7 @@ def test_reviewed_multi_section_candidate_and_atomic_apply_leave_experiments_unc
     assert not p['review_issues'] and p['review_id'] and v.store.snapshot()==before
     result=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));after=v.store.snapshot()
     assert result['status']=='applied' and set(result['applied_revisions'])=={'solve:Q1','abstract'}
-    for key in ['tasks','attempts','evidence','claims','validations']:assert before[key]==after[key]
+    for key in ['experiments','attempts','evidence','claims','validations']:assert before[key]==after[key]
     assert v.comparison.read('Q1',1)==v.record
     assert after['sections']['evaluation']==before['sections']['evaluation']
     assert v.block in after['sections']['solve:Q1']['text']
@@ -96,7 +96,7 @@ def test_manual_multi_section_candidate_uses_same_guards_and_real_review_contrac
     assert p['generation_contract']=='manual-evidence-v1' and p['review_id'] and not p['review_issues']
     assert v.store.snapshot()==before
     result=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert result['status']=='applied'
-    assert v.store.snapshot()['attempts']==before['attempts']
+    assert v.store.snapshot()['executions']==before['executions']
 
 
 def test_failed_candidate_review_is_not_a_success_or_global_service_issue(verified_paper,monkeypatch):
@@ -113,7 +113,7 @@ def test_unverified_or_stale_method_records_never_authorize_formula_corrections(
     v=verified_paper;row=v.record
     if change=='input':(v.store.root/'data').mkdir(exist_ok=True);(v.store.root/'data/new.csv').write_text('x\n1\n')
     elif change=='artifact':
-        root=v.store.root/'.system/attempts'/v.store.snapshot()['tasks']['Q1']['active_attempt']/'workspace/outputs/intermediate/comparisons'/row['id'];(root/'predictions-0.json').write_text('{}');(root/'predictions-1.json').write_text('{}')
+        root=v.store.root/'.system/attempts'/v.store.snapshot()['experiments']['Q1']['execution_id']/'workspace/outputs/intermediate/comparisons'/row['id'];(root/'predictions-0.json').write_text('{}');(root/'predictions-1.json').write_text('{}')
     else:
         if change=='protocol':row['contract_hash']='changed'
         for branch in row['branches']:

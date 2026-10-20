@@ -4,6 +4,8 @@ A bare JSON file, an empty legacy result, or a gateway response alone is not
 sufficient. This module never constructs a model client or invokes a model.
 """
 
+from .domain import experiment_report, experiment_design
+
 from ai_system.research.domain import findings as research_findings
 import json
 from pathlib import Path
@@ -27,22 +29,22 @@ def validate_scientific_checkpoint(store,values):
     snapshot=store.snapshot();analysis=values.get('analysis') or {}
     if analysis.get('requirements')!=snapshot['spec']['requirements']:raise ValueError('检查点契约与当前研究不一致')
     if analysis.get('assumptions')!=[a for a in snapshot['assumptions'].values() if a['status']!='retired']:raise ValueError('检查点假设已变化')
-    if analysis.get('subproblems')!=[t['subproblem'] for t in snapshot['tasks'].values() if t['kind']!='verify']:raise ValueError('检查点研究任务已变化')
-    for key,task in snapshot['tasks'].items():
+    if analysis.get('subproblems')!=[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify']:raise ValueError('检查点研究任务已变化')
+    for key,task in snapshot['experiments'].items():
         if task['retired'] or task['kind']=='verify':continue
-        if task['acceptance']!='accepted' or task['validity']!='current' or (values.get('solutions') or {}).get(key)!=task['report']:raise ValueError('检查点求解结果与当前验收不一致')
-        if (values.get('designs') or {}).get(key)!=task.get('design'):raise ValueError('检查点设计/冻结方案已变化')
+        if task['acceptance']!='accepted' or task['validity']!='current' or (values.get('solutions') or {}).get(key)!=experiment_report(snapshot, task):raise ValueError('检查点求解结果与当前验收不一致')
+        if (values.get('designs') or {}).get(key)!=experiment_design(snapshot, task):raise ValueError('检查点设计/冻结方案已变化')
         from ai_system.modules.experiments.store import ExperimentStore
-        exploration=ExperimentStore(store).read(key,task['revision']) if (task.get('design') or {}).get('experiment_id') else None
+        exploration=ExperimentStore(store).read(key,task['revision']) if (experiment_design(snapshot, task) or {}).get('experiment_id') else None
         if exploration:
             from ai_system.modules.experiments.store import ExperimentStore
             if ExperimentStore(store).policy()['version']!=exploration['policy_version']:raise ValueError('旧审查之后比较配置已变化')
-        attempt=snapshot['attempts'][task['active_attempt']]
+        attempt=snapshot['executions'][task['execution_id']]
         if store._inputs(snapshot,task,store.file_inputs())!=attempt['input_refs'] or digest(protocol(snapshot,key))!=attempt['protocol_hash']:raise ValueError('检查点对应输入/冻结验收已变化')
         original={r['id']:r for r in attempt['result']['results']}
-        if any(original.get(rid)!=entry['payload'] for rid,entry in snapshot['evidence'].items() if entry['active'] and entry['producer_attempt']==task['active_attempt']):raise ValueError('检查点证据已变化')
+        if any(original.get(rid)!=entry['payload'] for rid,entry in snapshot['artifacts'].items() if entry['active'] and entry['producer_attempt']==task['execution_id']):raise ValueError('检查点证据已变化')
         originals={c['id']:c for c in attempt['result']['claims']}
-        if any(originals.get(cid)!=entry['payload'] for cid,entry in snapshot['claims'].items() if entry['producer_attempt']==task['active_attempt']):raise ValueError('检查点结论已变化')
+        if any(originals.get(cid)!=entry['payload'] for cid,entry in snapshot['claims'].items() if entry['producer_attempt']==task['execution_id']):raise ValueError('检查点结论已变化')
     return snapshot
 
 

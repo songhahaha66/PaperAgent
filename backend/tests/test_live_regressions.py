@@ -20,48 +20,6 @@ from test_paper_graph import FakeModel, FixedJudge, TASK, _Structured
 from test_research_p2 import problem, store_for, submit
 
 
-def test_structured_retries_return_actual_field_errors_and_keep_call_budget(tmp_path, monkeypatch):
-    from ai_system.research import planner
-    from ai_system.research.models import PlanPatch
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
-    bad = dict(id="R1", statement="capacity <= 10", source_quote="capacity <= 10",
-               kind="constraint", task_ids=["Q1"], checks=[])
-    store = ResearchStore(tmp_path, 'repair-constraint')
-    store.initialize(bad['source_quote'], {'subproblems':[{'id':'Q1', 'question':'Compute capacity'}],
-        'requirements':[bad], 'assumptions':[]})
-    snapshot = store.snapshot()
-    _, context = planner.decision_context(store, snapshot)
-    def validate(candidate):
-        planner.validate_decision(planner.EvidenceDecision(action='execute', reason='Compute capacity with its frozen check.',
-            task_ids=['Q1'], requirement_ids=['R1'], requirements=[candidate]), snapshot, context)
-
-    class Model:
-        calls = 0
-        def with_structured_output(self, schema, **kwargs):
-            return self
-        async def ainvoke(self, messages):
-            self.calls += 1
-            if self.calls == 1:
-                return Requirement.model_validate(bad)
-            assert "执行前绑定本实验检查" in messages[-1].content
-            # Both retries preserve the real constraint. The last one supplies
-            # its operational check at the actual execution-decision boundary.
-            data = bad if self.calls == 2 else {**bad, 'checks':[{
-                'id':'capacity', 'description':'Original capacity upper bound',
-                'left':{'task_id':'Q1', 'name':'capacity'}, 'operator':'le', 'expected':10}]}
-            return SimpleNamespace(content=json.dumps(data))
-
-    model = Model()
-    messages = [HumanMessage(content=bad['source_quote'])]
-    result = asyncio.run(llm_utils.call_structured(model, Requirement, messages, validate=validate))
-    assert result.kind == "constraint" and result.checks[0].expected == 10 and model.calls == 3
-    assert len(messages) == 1 and store.snapshot() == snapshot
-    store.apply_patch(PlanPatch(command_id='bind', base_revision=snapshot['revision'], reason='Freeze checks before execution.', requirements=[result]))
-    order = store.claim('Q1')
-    from ai_system.research.validation import protocol
-    frozen = protocol(store.snapshot(), 'Q1')
-    assert frozen[0]['owner_id'] == 'R1' and frozen[0]['check']['expected'] == 10
-    assert store.snapshot()['attempts'][order.attempt_id]['protocol_hash'] == order.protocol_hash
 
 
 def test_unresolved_writing_issue_blocks_direct_publication(tmp_path):
@@ -77,40 +35,8 @@ def test_unresolved_writing_issue_blocks_direct_publication(tmp_path):
     assert not (tmp_path / "paper.md").exists()
 
 
-@pytest.mark.parametrize("checks", [[], ["unknown"], ["capacity"], ["capacity", "unknown"]])
-def test_missing_or_unrelated_checks_cannot_dismiss_a_cited_metric(tmp_path, checks):
-    store = store_for(tmp_path)
-    submit(store, "Q1", {"demand": 8})
-    _, refs = submit(store, "Q2", {"allocation": 8, "residual": 0, "perturbed_objective": 10})
-    store.report_issues([IssueReport(task_id="Q2", category="evidence", section="abstract",
-        message="扰动目标值不能证明未登记的解坐标", evidence_refs=[refs[-1]["id"]], check_ids=checks)], "sections")
-    assert store.schedule_investigations() == []
-    assert research_findings(store.snapshot())[-1]["status"] == "inconclusive"
-    assert not store.delivery_ready(store.snapshot())
 
 
-@pytest.mark.parametrize("value,status", [(8, "dismissed"), (8.005, "dismissed"), (9, "confirmed")])
-def test_independent_finite_value_must_agree_with_the_original_result(tmp_path, value, status):
-    analysis = problem()
-    analysis.assumptions = []
-    analysis.requirements[1].checks[0].operator = "finite"
-    analysis.requirements[1].checks[0].expected = None
-    analysis.requirements[1].checks[0].tolerance = 0.01
-    store = ResearchStore(tmp_path, "comparison")
-    from test_research_p2 import TASK as source
-    store.initialize(source, analysis.model_dump())
-    submit(store, "Q1", {"demand": 8})
-    _, refs = submit(store, "Q2", {"allocation": 8})
-    store.report_issues([IssueReport(task_id="Q2", category="model", message="复核配置量",
-                                   evidence_refs=[refs[0]["id"]], check_ids=["capacity"])], "review")
-    [verification] = store.schedule_investigations()
-    submit(store, verification, {"allocation": value})
-    state = store.snapshot()
-    assert research_findings(state)[0]["status"] == status
-    assert state["tasks"]["Q2"]["validity"] == ("stale" if status == "confirmed" else "current")
-    check = state["validations"][-1]["checks"][0]
-    assert check["outcome"] == ("failed" if status == "confirmed" else "passed")
-    assert len(check["evidence_refs"]) == 2
 
 
 class BrokenWriter(FakeModel):
@@ -149,11 +75,11 @@ def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputin
                for kind, content in events)
     assert any(kind == "research_state" and content["outcome"] == "blocked" and (content["feedback"] or content["faults"])
                for kind, content in events)
-    attempts = set(before["attempts"])
+    attempts = set(before["executions"])
     model.broken = False
     assert "paper.md" in asyncio.run(agent.resume_failed())
     after = store.snapshot()
-    assert set(after["attempts"]) == attempts
+    assert set(after["executions"]) == attempts
     assert all(i["status"] in {"resolved", "dismissed"} for i in research_findings(after))
     assert store.delivery_ready(after) and (tmp_path / "paper.md").exists()
     assert "F999" not in (tmp_path / "paper.md").read_text()

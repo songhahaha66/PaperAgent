@@ -15,7 +15,7 @@ from ai_system.modules.experiments.execution import submission_schema
 from ai_system.graph.state import CandidateSet
 from ai_system.research.assumptions import unbound_assumptions, premise_definition
 from ai_system.research.models import AssumptionDraft
-from ai_system.research.control import task_dispatch as dispatch
+from ai_system.research.control import experiment_dispatch as dispatch
 from test_paper_graph import _analysis, _candidate
 from test_report_submission import branch, report
 from test_research_p2 import store_for
@@ -66,8 +66,8 @@ def test_duplicate_check_ids_rejected_but_real_cross_task_checks_preserved():
 def test_dispatched_premise_scope_matches_central_dependency_scope(tmp_path):
     store = store_for(tmp_path)
     runtime = SimpleNamespace(context=SimpleNamespace(research=store))
-    branches = dispatch({"analysis": _analysis().model_dump()}, runtime,['Q1','Q3'])
-    scopes = {send.arg["subproblem"]["id"]: send.arg["research_contract"] for send in branches}
+    branches = [dispatch(runtime.context,key) for key in ['Q1','Q3']]
+    scopes = {send["subproblem"]["id"]: send["research_contract"] for send in branches}
     assert scopes["Q1"]["assumption_task_ids"] == ["Q1", "Q2"]
     assert scopes["Q3"]["assumption_task_ids"] == ["Q3"]
     assert set(scopes["Q1"]["task_ids"]) == {"Q1", "Q2", "Q3"}

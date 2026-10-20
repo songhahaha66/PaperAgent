@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.types import Command
 from langsmith import trace as remote_trace
 
 from ..config.observability import research_tracing
@@ -264,7 +263,7 @@ class PaperGraphAgent:
         log_offset = len(before.values.get("log") or [])
         try:
             from ..research.runtime import budget_scope
-            operation = 'resume' if graph_input is None or isinstance(graph_input, Command) else 'research'
+            operation = 'resume' if graph_input is None else 'research'
             with research_tracing(self.work_id or Path(self.workspace_dir).name, thread_id, operation,
                                   output_mode=self.options['output_mode'], engine_version=self.engine_version), \
                     budget_scope(Path(self.workspace_dir),thread_id) as runtime:
@@ -317,7 +316,15 @@ class PaperGraphAgent:
             snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
             if snapshot.interrupts and snapshot.next==('act',):
                 logger.info("恢复等待确认的 thread %s", thread_id)
-                return Command(resume=user_input), thread_id
+                store=ResearchStore(self.workspace_dir,thread_id)
+                question=snapshot.interrupts[0].value
+                message=question['message'] if isinstance(question,dict) else str(question)
+                with store._transaction() as db:
+                    state=store._read(db)
+                    state.setdefault('clarifications',[]).append({'ref':'clarification:'+str(len(state.get('clarifications',[]))+1),'question':message,'response':user_input})
+                    if state['action']:state['action']['status']='done'
+                    store._save(db,state,'clarification_received',{'question':message,'response':user_input})
+                return None, thread_id
             if snapshot.interrupts or is_continuation(user_input) and (snapshot.next or snapshot.values.get("research_blocked")):
                 logger.info("从断点继续 thread %s，下一步 %s", thread_id, snapshot.next)
                 return None, thread_id

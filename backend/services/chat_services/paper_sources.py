@@ -26,7 +26,7 @@ def cards(store):
     snapshot=store.snapshot() or {}
     manifest_path=store.root/'manifest.json'
     manifest=json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
-    for key,row in snapshot.get('evidence',{}).items():
+    for key,row in snapshot.get('artifacts',{}).items():
         payload=row.get('payload',{});run=payload.get('run_id','')
         if not re.fullmatch(r'run_[A-Za-z0-9_]+',run):
             continue

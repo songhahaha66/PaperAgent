@@ -134,9 +134,9 @@ def current(ctx,record,branch):
     if record.get('task_hash',digest(branch['subproblem']))!=digest(branch['subproblem']):return False
     if store.file_inputs()!=record['file_inputs']:return False
     if state and order:
-        task=state['tasks'][order.task_id]
+        task=state['experiments'][order.task_id]
         if task['revision']!=record['revision'] or digest(research_protocol(state,order.task_id))!=record['contract_hash']:return False
-        if task['active_attempt']!=order.attempt_id or state['attempts'][order.attempt_id]['lease']!=order.lease:return False
+        if task['execution_id']!=order.attempt_id or state['executions'][order.attempt_id]['lease']!=order.lease:return False
         if store._inputs(state,task,store.file_inputs())!=order.input_refs:return False
     if record.get('policy_version') is not None and ExperimentStore(store).policy()['version']!=record['policy_version']:return False
     return True

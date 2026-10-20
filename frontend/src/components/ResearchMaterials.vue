@@ -19,35 +19,35 @@
         <option value="">全部研究问题</option>
         <option v-for="q in questions" :key="q.id" :value="q.id">{{ q.title }}</option>
       </select>
-      <p v-if="!outcomes.length" class="empty">暂无实验结果。</p>
-      <article v-for="outcome in outcomes" :key="outcome.id" class="evidence-card">
+      <p v-if="!researchExperiments.length" class="empty">暂无实验结果。</p>
+      <article v-for="experiment in researchExperiments" :key="experiment.id" class="evidence-card">
         <header>
-          <small>{{ questionFor(outcome.task_id)?.title || outcome.title }}</small
+          <small>{{ questionFor(experiment.task_id)?.title || experiment.title }}</small
           ><span>{{
-            outcome.availability === 'historical'
+            experiment.availability === 'historical'
               ? '历史结果'
-              : outcome.results.length
+              : experiment.results.length
                 ? '实测证据'
                 : '尚无实测证据'
           }}</span>
         </header>
         <h3>
           {{
-            outcome.experiment?.candidates.map((c) => c.name).join(' / ') ||
-            outcome.approach ||
-            outcome.method?.name ||
-            outcome.title
+            experiment.experiment?.candidates.map((c) => c.name).join(' / ') ||
+            experiment.approach ||
+            experiment.method?.name ||
+            experiment.title
           }}
         </h3>
         <p class="check">
-          {{ outcomeLabel(outcome.checking, true)
-          }}<span v-if="outcome.issues.length && outcome.next_step">
-            · {{ outcome.next_step }}</span
+          {{ outcomeLabel(experiment.checking, true)
+          }}<span v-if="experiment.issues.length && experiment.next_step">
+            · {{ experiment.next_step }}</span
           >
         </p>
         <div class="key-results">
           <button
-            v-for="result in outcome.results.filter((r) => !r.figure_path).slice(0, 4)"
+            v-for="result in experiment.results.filter((r) => !r.figure_path).slice(0, 4)"
             :key="result.id"
             @click="openResult(result.id)"
           >
@@ -58,7 +58,7 @@
           </button>
         </div>
         <button
-          v-for="figure in outcome.results.filter((r) => r.figure_path).slice(0, 1)"
+          v-for="figure in experiment.results.filter((r) => r.figure_path).slice(0, 1)"
           :key="figure.id"
           class="figure"
           @click="openResult(figure.id)"
@@ -70,30 +70,32 @@
             :active="true"
           /><span>{{ figure.name }} · 查看来源与实验</span>
         </button>
-        <p v-if="outcome.experiment" class="conditions">
-          实验范围：{{ outcome.experiment.conditions }}<br />评价标准：{{
-            outcome.experiment.evaluation
+        <p v-if="experiment.experiment" class="conditions">
+          实验范围：{{ experiment.experiment.conditions }}<br />评价标准：{{
+            experiment.experiment.evaluation
           }}
         </p>
         <footer>
           <button
             class="quiet"
-            @click="emit('object', { type: 'result', resultType: 'task', id: outcome.id })"
+            @click="emit('object', { type: 'result', resultType: 'experiment', id: experiment.id })"
           >
             查看完整实验 →</button
-          ><small>{{ outcome.results.length }} 项结果 · {{ outcome.sources.length }} 份输入</small>
+          ><small
+            >{{ experiment.results.length }} 项结果 · {{ experiment.sources.length }} 份输入</small
+          >
         </footer>
       </article>
-      <details v-if="experiments.length" class="comparison">
-        <summary>共同条件下的比较实验 · {{ experiments.length }}</summary>
+      <details v-if="comparisons.length" class="comparison">
+        <summary>共同条件下的比较实验 · {{ comparisons.length }}</summary>
         <button
-          v-for="experiment in experiments"
-          :key="experiment.id"
+          v-for="comparison in comparisons"
+          :key="comparison.id"
           class="resource"
-          @click="emit('object', { type: 'result', resultType: 'experiment', id: experiment.id })"
+          @click="emit('object', { type: 'result', resultType: 'comparison', id: comparison.id })"
         >
-          <strong>{{ experiment.branches.map((b) => b.name).join(' / ') }}</strong
-          ><span>{{ experiment.reason || '查看固定评价条件与实测结果' }}</span>
+          <strong>{{ comparison.branches.map((b) => b.name).join(' / ') }}</strong
+          ><span>{{ comparison.reason || '查看固定评价条件与实测结果' }}</span>
         </button>
       </details>
       <section v-if="snapshot?.artifacts.length">
@@ -151,28 +153,28 @@ const emit = defineEmits<{ object: [object: WorkObject]; updated: []; cite: [id:
 const view = ref<'results' | 'sources'>('results'),
   questionId = ref('')
 const questions = computed(() => researchQuestions(props.snapshot))
-const questionFor = (id: string) => questions.value.find((q) => q.task_ids.includes(id))
-const outcomes = computed(() =>
-  (props.snapshot?.outcomes || []).filter(
+const questionFor = (id: string) => questions.value.find((q) => q.experiment_ids.includes(id))
+const researchExperiments = computed(() =>
+  (props.snapshot?.experiments || []).filter(
     (o) => !questionId.value || questionFor(o.task_id)?.id === questionId.value,
   ),
 )
 const inputs = computed(() => [
   ...new Set([
     ...(props.snapshot?.inputs || []),
-    ...(props.snapshot?.outcomes || []).flatMap((o) =>
+    ...(props.snapshot?.experiments || []).flatMap((o) =>
       o.sources.filter((s) => s.available).map((s) => s.path),
     ),
   ]),
 ])
 const inputUse = (path: string) => {
-  const used = (props.snapshot?.outcomes || []).filter((o) =>
+  const used = (props.snapshot?.experiments || []).filter((o) =>
     o.sources.some((s) => s.path === path),
   )
   return used.length ? `用于 ${used.length} 项实验` : '尚未用于实验'
 }
 const openResult = (id: string) => emit('object', { type: 'result', resultType: 'registered', id })
-const experiments = ref<ComparisonRecord[]>([]),
+const comparisons = ref<ComparisonRecord[]>([]),
   error = ref('')
 let version = 0
 async function load() {
@@ -180,7 +182,7 @@ async function load() {
   try {
     const result = await experimentAPI.read(props.workId)
     if (request === version) {
-      experiments.value = result.comparisons
+      comparisons.value = result.comparisons
       error.value = ''
     }
   } catch (e) {

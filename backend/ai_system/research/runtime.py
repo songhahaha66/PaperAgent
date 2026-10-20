@@ -218,10 +218,12 @@ def execution_reason(root,status):
             thread=root/'.system/graph_thread.json'
             if thread.is_file():
                 research_id=json.loads(thread.read_text()).get('thread_id')
-                latest=db.execute("SELECT response FROM commands WHERE research_id=? AND id LIKE 'research-next:%' ORDER BY rowid DESC LIMIT 1",(research_id,)).fetchone()
+                latest=db.execute('SELECT payload FROM research WHERE id=?',(research_id,)).fetchone()
                 if latest:
-                    record=json.loads(latest[0])
-                    if record.get('status')=='planning_failed':preparation=record.get('error','')
+                    action=json.loads(latest[0]).get('action') or {}
+                    if action.get('status')=='failed':
+                        return {'kind':action.get('error_type','action_failed'),
+                                'message':action.get('message') or action.get('error') or action['reason']}
         reason=json.loads(row[0]) if row else None
         if reason and reason.get('kind')=='invalid_response':
             reason={**reason,'message':f'下一步操作准备失败：{decision_error_summary(preparation) if preparation else "模型返回的信息未通过校验"}。可继续重试。'}

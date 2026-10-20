@@ -58,7 +58,7 @@ def test_issue_candidate_review_diff_and_apply_close_only_verified_source(linked
     applied=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert applied['status']=='applied'
     source=current(v);assert source['status']=='resolved' and source['review_resolution']['candidate_id']==p['id'] and source['review_resolution']['review_id']==p['review_id']
     assert v.new in (v.store.root/'paper.md').read_text() and v.old not in (v.store.root/'paper.md').read_text()
-    after=v.store.snapshot();assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
+    after=v.store.snapshot();assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
     assert next(i for i in research_findings(after) if i['id']==other['id'])['status']=='confirmed' and not v.store.delivery_ready(after)
     assert v.model.calls==(['FragmentReplacement','IssueAudit'] if automatic else ['IssueAudit'])
 

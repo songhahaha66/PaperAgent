@@ -282,7 +282,7 @@ export function useWorkStream(options: {
         if (block?.type === 'research_state' || block?.type === 'research_activity') {
           loadResearchSnapshot()
         } else if (block?.type === 'research_snapshot') {
-          if (block.content?.schema_version === 3 && block.content.work_id === workId.value) {
+          if (block.content?.schema_version === 4 && block.content.work_id === workId.value) {
             invalidateSnapshot()
             applyResearchSnapshot(block.content as ResearchSnapshot)
           }

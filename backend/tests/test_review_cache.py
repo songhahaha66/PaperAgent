@@ -37,8 +37,8 @@ def env(tmp_path):
     report={'status':'completed','summary':'完成','requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':['R1']}]}
     store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',results=results,claims=claims,report=report,
         reviews=[ReviewRecord(report_hash=report_fingerprint(report),issues=[])]))
-    snapshot=store.snapshot();state={'analysis':{'subproblems':[t['subproblem'] for t in snapshot['tasks'].values()],
-        'requirements':snapshot['spec']['requirements'],'assumptions':[]},'solutions':{'Q1':snapshot['tasks']['Q1']['report']},
+    snapshot=store.snapshot();state={'analysis':{'subproblems':[t['subproblem'] for t in snapshot['experiments'].values()],
+        'requirements':snapshot['spec']['requirements'],'assumptions':[]},'solutions':{'Q1':snapshot['experiments']['Q1']['report']},
         'sections':{'abstract':'摘要正文。'*30,'evaluation':'证据局限。'*30},'consistency':[]}
     ctx=context_from_store(store,'offline-model');return SimpleNamespace(store=store,state=state,ctx=ctx)
 

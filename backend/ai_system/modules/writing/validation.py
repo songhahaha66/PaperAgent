@@ -11,7 +11,6 @@ import re
 from typing import Dict, List
 
 from langgraph.runtime import Runtime
-from langgraph.graph import END
 
 from ai_system.graph.context import GraphContext
 from ai_system.graph.llm_utils import as_messages, call_text
@@ -89,16 +88,6 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             "log": [f"validate: {len(issues)} issues"]}
 
 
-def route_after_validate(state: PaperState, runtime: Runtime[GraphContext]) -> str:
-    if state.get("research_blocked"):
-        return END
-    if state.get("research_restart"):
-        return "observe"
-    if state.get("issues"):
-        return "repair"
-    return "render"
-
-
 async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
     titles = {key: title for key, title, _ in section_plan(state)}
@@ -109,7 +98,7 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     # Stop a repeated identical repair input, not a fixed number of improving edits.
     from ai_system.research.store import digest
     signature = digest({'sections': {k: state.get('sections', {}).get(k, '') for k in by_section}, 'issues': by_section})
-    history = ctx.research.snapshot().get('workflow', {}).get('repair_inputs', [])
+    history = ctx.research.snapshot().get('publication', {}).get('repair_inputs', [])
     if history.count(signature) >= 3:
         message='自动改稿反复回到同一正文和意见，未能完成修复。草稿与意见已保留；这是自动修复失败，不是等待你决定研究内容。'
         await ctx.set_stage('validate', 'blocked', message)

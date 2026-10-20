@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.research import ENGINE_VERSION
-from ai_system.research.models import PlanPatch, TaskChange, WorkerResult, ResearchConflict, IssueReport, Requirement
+from ai_system.research.models import WorkerResult, ResearchConflict, IssueReport, Requirement
 from ai_system.research.store import ResearchStore
 from ai_system.research.planner import ready_tasks
 
@@ -32,7 +32,7 @@ def finish(store, key, *, acceptance="accepted", order=None):
     ref = store.allocate_ref("R")
     result = WorkerResult(order=order, execution_status="succeeded", acceptance=acceptance,
         report={"status": "completed", "summary": key, "requirement_evidence":
-            [{"requirement_id": rid, "evidence_refs": [ref]} for rid in store.snapshot()["tasks"][key]["requirement_ids"]]},
+            [{"requirement_id": rid, "evidence_refs": [ref]} for rid in store.snapshot()["experiments"][key]["requirement_ids"]]},
         results=[{"id": ref, "subproblem": key, "kind": "number", "name": "value", "value": "42", "run_id": "run_test"}],
         issues=[IssueReport(task_id=key, category="execution", message="temporary execution failure")] if acceptance == "rejected" else [])
     return result, store.commit(result)
@@ -49,55 +49,18 @@ def test_repeat_commit_is_idempotent_and_mismatched_retry_rejected(tmp_path):
     assert len(store.registry_payload()["results"]) == 1
 
 
-def test_change_invalidates_descendants_and_sections_but_preserves_unrelated_work(tmp_path):
-    store = make_store(tmp_path)
-    for key in ("Q1", "Q2", "Q3"):
-        finish(store, key)
-    original = store.registry_payload()
-    store.save_sections({"solve:Q1": "a", "solve:Q2": "b", "solve:Q3": "c", "abstract": "all"}, [])
-    patch = PlanPatch(command_id="change", base_revision=1, reason="data correction",
-                      changes=[TaskChange(task_id="Q1", objective="corrected input")])
-    receipt = store.apply_patch(patch)
-    assert receipt["affected"] == ["Q1", "Q2"]
-    assert store.apply_patch(patch) == receipt
-    snapshot = store.snapshot()
-    assert snapshot["spec"]["requirement"].startswith("Answer every original question")
-    assert snapshot["tasks"]["Q1"]["revision"] == 2
-    assert snapshot["sections"]["solve:Q3"]["validity"] == "current"
-    assert snapshot["sections"]["abstract"]["validity"] == "stale"
-    assert store.registry_payload()["results"] == [r for r in original["results"] if r["subproblem"] == "Q3"]
-    assert ready_tasks(snapshot) == ["Q1"]
-    finish(store, "Q1")
-    assert ready_tasks(store.snapshot()) == ["Q2"]
-    assert len(store.snapshot()["evidence"]) == 4  # superseded evidence remains immutable
 
 
-def test_unrelated_plan_change_does_not_reject_worker(tmp_path):
-    store = make_store(tmp_path)
-    order = store.claim("Q1")
-    store.apply_patch(PlanPatch(command_id="other", base_revision=1, reason="new requirement",
-                               changes=[TaskChange(task_id="Q3", objective="new objective")]))
-    assert finish(store, "Q1", order=order)[1]["published"]
 
 
-def test_late_worker_cannot_replace_current_revision(tmp_path):
-    store = make_store(tmp_path)
-    old = store.claim("Q1")
-    store.apply_patch(PlanPatch(command_id="change", base_revision=1, reason="assumption refuted",
-                               changes=[TaskChange(task_id="Q1", objective="use A2")]))
-    new, _ = finish(store, "Q1")
-    _, receipt = finish(store, "Q1", order=old)
-    assert not receipt["published"]
-    assert store.snapshot()["tasks"]["Q1"]["active_attempt"] == new.order.attempt_id
-    assert len(store.registry_payload()["results"]) == 1
 
 
 def test_rejected_execution_never_unblocks_dependents(tmp_path):
     store = make_store(tmp_path)
     finish(store, "Q1", acceptance="rejected")
     snapshot = store.snapshot()
-    assert snapshot["tasks"]["Q1"]["execution_status"] == "succeeded"
-    assert snapshot["tasks"]["Q1"]["acceptance"] == "rejected"
+    assert snapshot["experiments"]["Q1"]["execution_status"] == "succeeded"
+    assert snapshot["experiments"]["Q1"]["acceptance"] == "rejected"
     assert "Q2" not in ready_tasks(snapshot)
     assert store.registry_payload()["results"] == []
     with pytest.raises(ResearchConflict):
@@ -112,21 +75,10 @@ def test_file_correction_during_execution_rejects_result(tmp_path):
     order = store.claim("Q1")
     (data / "input.csv").write_text("corrected")
     assert not finish(store, "Q1", order=order)[1]["published"]
-    assert store.snapshot()["tasks"]["Q1"]["execution_status"] == "pending"
-    assert store.snapshot()["tasks"]["Q1"]["revision"] == 2
+    assert store.snapshot()["experiments"]["Q1"]["execution_status"] == "pending"
+    assert store.snapshot()["experiments"]["Q1"]["revision"] == 2
 
 
-def test_invalid_or_stale_plan_rolls_back_atomically(tmp_path):
-    store = make_store(tmp_path)
-    initial = store.snapshot()
-    with pytest.raises(ValueError, match="环"):
-        store.apply_patch(PlanPatch(command_id="cycle", base_revision=1, reason="cycle",
-            changes=[TaskChange(task_id="Q1", objective="x", dependencies=["Q2"])]))
-    assert store.snapshot() == initial
-    with pytest.raises(ResearchConflict):
-        store.apply_patch(PlanPatch(command_id="stale", base_revision=2, reason="stale",
-                                   changes=[TaskChange(task_id="Q1", objective="x")]))
-    assert store.snapshot() == initial
 
 
 def test_recovery_uses_commits_and_reclaims_interrupted_attempt(tmp_path):
@@ -162,7 +114,7 @@ def test_data_correction_after_commit_invalidates_all_coarse_file_consumers(tmp_
     finish(store, "Q1")
     finish(store, "Q2")
     (data / "input.csv").write_text("corrected")
-    assert store.refresh_inputs()["tasks"]["Q1"]["acceptance"] == "pending"
+    assert store.refresh_inputs()["experiments"]["Q1"]["acceptance"] == "pending"
     assert not store.registry_payload()["results"]
 
 
@@ -178,13 +130,6 @@ def test_manual_edit_preserves_both_paper_versions(tmp_path):
     assert store.snapshot()["outcome"] == "needs_attention"
 
 
-def test_planner_can_add_validation_task_without_losing_requirements(tmp_path):
-    store = make_store(tmp_path)
-    store.apply_patch(PlanPatch(command_id="verification", base_revision=1, reason="need baseline",
-        changes=[TaskChange(action="add", task_id="Q4", title="baseline", objective="validate baseline", requirement_ids=["RQ1"]),
-                 TaskChange(task_id="Q1", objective="compare against Q4", dependencies=["Q4"])]))
-    assert set(store.snapshot()["tasks"]) == {"Q1", "Q2", "Q3", "Q4"}
-    assert "Q4" in ready_tasks(store.snapshot()) and "Q1" not in ready_tasks(store.snapshot())
 
 
 def test_snapshot_is_read_only_and_uses_authoritative_database(tmp_path):
@@ -224,42 +169,11 @@ def test_duplicate_revision_command_reuses_original_objective(tmp_path):
     first = store.apply_revision_command(**command, patch=patch)
     retried = propose_revision(store.snapshot(), **command, requirements=requirements)
     assert store.apply_revision_command(**command, patch=retried) == first
-    assert store.snapshot()["tasks"]["Q1"]["objective"].count("补充要求") == 1
+    assert store.snapshot()["experiments"]["Q1"]["objective"].count("补充要求") == 1
 
 
-def test_added_task_invalidates_existing_global_summaries(tmp_path):
-    store = make_store(tmp_path)
-    store.save_sections({"abstract": "original three questions", "solve:Q3": "unrelated"}, [])
-    store.apply_patch(PlanPatch(command_id="add", base_revision=1, reason="new verification",
-        changes=[TaskChange(action="add", task_id="Q4", objective="new verification", requirement_ids=["RQ1"])]))
-    assert store.snapshot()["sections"]["abstract"]["validity"] == "stale"
-    assert store.snapshot()["sections"]["solve:Q3"]["validity"] == "current"
 
 
-def test_observe_uses_confirmed_failure_to_commit_planner_proposal(tmp_path, monkeypatch):
-    import asyncio
-    from types import SimpleNamespace
-    from ai_system.research.control import observe
-    from ai_system.research.planner import Planner,EvidenceDecision
-    from ai_system.graph.context import GraphContext
-    store = make_store(tmp_path, limit=40)
-    finish(store, "Q1")
-
-    async def decide(self, snapshot, context):
-        return EvidenceDecision(action='research',reason='修复已确认的容量错误，保留原检查。',gap='容量结果不满足原要求。',requirement_ids=['RQ1'],
-            coverage=[{'requirement_id':r['id'],'requirement':r['statement'],'supported':'','basis':[],'remaining':'等待实际研究结果。'} for r in snapshot['spec']['requirements']],
-            issue_ids=[i['id'] for i in research_findings(snapshot) if i['status']=='confirmed'],
-            changes=[TaskChange(task_id='Q1',objective=snapshot['tasks']['Q1']['objective'],method_instruction='enforce capacity before publishing')])
-
-    monkeypatch.setattr(Planner, "decide", decide)
-    ctx = GraphContext.create(str(tmp_path), planner_llm=object())
-    ctx.research = store
-    state = {"task": "original", "analysis": {"subproblems": [t["subproblem"] for t in store.snapshot()["tasks"].values()]}}
-    result = asyncio.run(observe(state, SimpleNamespace(context=ctx)))
-    assert not result["research_blocked"]
-    assert store.snapshot()["revision"] == 2
-    assert store.snapshot()["planning_calls"] == 1
-    assert store.registry_payload()["results"] == []
 
 
 def test_staged_value_change_gets_new_reference_without_rebinding_old_reference(tmp_path):

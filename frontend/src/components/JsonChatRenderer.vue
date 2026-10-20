@@ -155,7 +155,7 @@ interface Props {
   messages: ChatMessage[]
   confirmBusy?: boolean
   workStatus?: string
-  tasks?: ResearchSnapshot['tasks']
+  tasks?: ResearchSnapshot['experiments']
   snapshot?: ResearchSnapshot | null
 }
 

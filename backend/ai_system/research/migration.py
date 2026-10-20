@@ -74,32 +74,82 @@ def migrate_workspace(store):
             state = json.loads(row[1])
             if state.get("schema_version") == SCHEMA_VERSION:
                 continue
-            if state.get("schema_version") != 2:
+            if state.get("schema_version") not in {2, 3}:
                 db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)', (f'research/{row[0]}', row[1].encode('utf-8')))
                 db.execute('DELETE FROM research WHERE id=?', (row[0],))
                 continue
-            state["feedback"], state["faults"] = [], []
-            state.setdefault("legacy_records", [])
-            for item in state.pop("issues", []):
-                category = item.get("category") if isinstance(item, dict) else None
-                from .models import ContentFeedback, RuntimeFault
-                model = RuntimeFault if category in FAULT_CATEGORIES else ContentFeedback
-                try:
-                    if not isinstance(item, dict) or item.get('task_id') not in state.get('tasks', {}):
-                        raise ValueError('历史记录没有可核对的方案关联')
-                    normalized = model.model_validate({key:value for key,value in item.items() if key in model.model_fields})
-                except (ValueError, TypeError):
-                    state["legacy_records"].append({"source": f"research/{row[0]}/issues", "raw": item})
-                else:
-                    state['faults' if category in FAULT_CATEGORIES else 'feedback'].append({**normalized.model_dump(), **item})
-            for task in state.get('tasks', {}).values():
-                design = task.get('design') or {}
-                original = design.pop('exploration', None)
-                if original:
-                    if isinstance(original, dict) and original.get('id'):
-                        design['experiment_id'] = original['id']
+            db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',
+                       (f'research/{row[0]}/v{state["schema_version"]}', row[1].encode('utf-8')))
+            if state['schema_version'] == 2:
+                state["feedback"], state["faults"] = [], []
+                state.setdefault("legacy_records", [])
+                for item in state.pop("issues", []):
+                    category = item.get("category") if isinstance(item, dict) else None
+                    from .models import ContentFeedback, RuntimeFault
+                    model = RuntimeFault if category in FAULT_CATEGORIES else ContentFeedback
+                    try:
+                        if not isinstance(item, dict) or item.get('task_id') not in state.get('tasks', {}):
+                            raise ValueError('历史记录没有可核对的方案关联')
+                        normalized = model.model_validate({key:value for key,value in item.items() if key in model.model_fields})
+                    except (ValueError, TypeError):
+                        state["legacy_records"].append({"source": f"research/{row[0]}/issues", "raw": item})
                     else:
-                        state['legacy_records'].append({'source':f"research/{row[0]}/design/exploration",'raw':original})
+                        state['faults' if category in FAULT_CATEGORIES else 'feedback'].append({**normalized.model_dump(), **item})
+                for task in state.get('tasks', {}).values():
+                    design = task.get('design') or {}
+                    original = design.pop('exploration', None)
+                    if original:
+                        if isinstance(original, dict) and original.get('id'):
+                            design['experiment_id'] = original['id']
+                        else:
+                            state['legacy_records'].append({'source':f"research/{row[0]}/design/exploration",'raw':original})
+            state['experiments'] = state.pop('tasks')
+            state['executions'] = state.pop('attempts')
+            state['artifacts'] = state.pop('evidence')
+            state['questions'] = {}
+            from .domain import attach_question
+            groups = {}
+            for key, experiment in state['experiments'].items():
+                experiment['execution_id'] = experiment.pop('active_attempt')
+                group = experiment.pop('question_key', None) or key
+                statement = experiment.pop('research_question', None)
+                if group in groups:
+                    attach_question(state, experiment, question_id=groups[group])
+                else:
+                    question = attach_question(state, experiment, statement=statement,
+                        title=statement or experiment['subproblem'].get('title'))
+                    groups[group] = question['id']
+                if experiment.get('report'):
+                    question = state['questions'][experiment['question_id']]
+                    question['judgment'] = experiment['report'].get('summary', '')
+            for artifact in state['artifacts'].values():
+                execution = state['executions'][artifact['producer_attempt']]
+                artifact.update(experiment_id=execution['task_id'], type='result')
+            from .domain import save_report_artifact
+            for experiment in state['experiments'].values():
+                report=experiment.pop('report',None)
+                experiment.pop('design',None)
+                experiment['report_ref']=None
+                if report and experiment['execution_id']:
+                    save_report_artifact(state,store.root,experiment,report)
+                    artifact=state['artifacts'][experiment['report_ref']]
+                    artifact['review']=experiment.pop('report_review',None)
+                    artifact['versions']=experiment.pop('report_versions',[])
+            from .domain import register_execution_artifacts
+            for execution in state['executions'].values():
+                register_execution_artifacts(state, store.root, execution)
+            for claim in state['claims'].values():
+                claim['experiment_id']=state['executions'][claim['producer_attempt']]['task_id']
+            state.pop('workflow', None)
+            state.pop('proposal_hashes', None)
+            # Old proposals are archived with their original bytes, never recompiled.
+            state['action'] = None
+            state['publication'] = None
+            for command in db.execute('SELECT id,digest,response FROM commands WHERE research_id=?',(row[0],)).fetchall():
+                if command[0].startswith(('research-next:','planner-repair:','revision:')):
+                    db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',
+                        (f'commands/{row[0]}/{command[0]}',json.dumps(list(command),ensure_ascii=False).encode()))
+                    db.execute('DELETE FROM commands WHERE research_id=? AND id=?',(row[0],command[0]))
             state["schema_version"] = SCHEMA_VERSION
             db.execute("UPDATE research SET payload=? WHERE id=?", (json.dumps(state, ensure_ascii=False), row[0]))
         names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}

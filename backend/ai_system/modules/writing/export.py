@@ -16,14 +16,6 @@ from ai_system.graph.state import PaperState
 EXPORT_MODES = ("latex", "word")
 
 
-def route_after_render(state: PaperState, runtime: Runtime[GraphContext]) -> str:
-    if state.get("research_restart"):
-        return "observe"
-    if state.get("artifact_conflict"):
-        return "__end__"
-    return "export" if runtime.context.output_mode in EXPORT_MODES else "__end__"
-
-
 async def _latex(ctx: GraphContext) -> dict:
     if ctx.research:
         from services.chat_services.paper_project import compile_project, meta

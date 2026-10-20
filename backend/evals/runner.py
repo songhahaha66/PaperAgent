@@ -94,7 +94,7 @@ PIPELINES = tuple(RESEARCH_VARIANTS)
 def _build_agent(pipeline: str, llm, workspace: Path):
     if pipeline not in RESEARCH_VARIANTS:
         raise ValueError(f"未知 pipeline: {pipeline}")
-    from ai_system.graph import PaperGraphAgent
+    from ai_system.graph.agent import PaperGraphAgent
 
     return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False, **RESEARCH_VARIANTS[pipeline])
 

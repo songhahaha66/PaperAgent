@@ -1,16 +1,16 @@
 <template>
   <ExperimentResult
-    v-if="resultType === 'experiment'"
+    v-if="resultType === 'comparison'"
     :work-id="workId"
     :record-id="resultId"
     :runs="snapshot?.runs"
     @open-file="(path) => emit('open-file', path)"
     :refresh-key="snapshot?.commit_seq"
   />
-  <section v-else-if="outcome" class="result-viewer readable-result">
-    <ResearchOutcome
+  <section v-else-if="experiment" class="result-viewer readable-result">
+    <ResearchExperiment
       :work-id="workId"
-      :outcome="outcome"
+      :experiment="experiment"
       :snapshot="snapshot"
       :focus-ref="resultType === 'registered' ? resultId : undefined"
       @paper="(use) => emit('paper', use)"
@@ -70,10 +70,10 @@ import { computed } from 'vue'
 import type { ResearchSnapshot, EvidenceUse } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
 import ExperimentResult from './ExperimentResult.vue'
-import ResearchOutcome from './ResearchOutcome.vue'
+import ResearchExperiment from './ResearchExperiment.vue'
 const props = defineProps<{
   workId: string
-  resultType: 'experiment' | 'registered' | 'task'
+  resultType: 'comparison' | 'registered' | 'experiment'
   resultId: string
   snapshot: ResearchSnapshot | null
 }>()
@@ -83,9 +83,9 @@ const emit = defineEmits<{
   paper: [use: EvidenceUse]
 }>()
 const { isZh } = useStudioCopy()
-const outcome = computed(() =>
-  props.snapshot?.outcomes?.find((o) =>
-    props.resultType === 'task'
+const experiment = computed(() =>
+  props.snapshot?.experiments?.find((o) =>
+    props.resultType === 'experiment'
       ? o.id === props.resultId
       : o.results.some((r) => r.id === props.resultId),
   ),
@@ -96,7 +96,7 @@ const result = computed(
     props.snapshot?.issue_evidence?.find((r) => r.id === props.resultId),
 )
 const task = computed(() =>
-  props.snapshot?.tasks?.find((t) => t.task_id === result.value?.subproblem_id),
+  props.snapshot?.experiments?.find((t) => t.task_id === result.value?.subproblem_id),
 )
 const run = computed(() => props.snapshot?.runs.find((r) => r.id === result.value?.run_id))
 const claims = computed(

@@ -146,12 +146,12 @@ def section_doubts(state, ctx):
     store=getattr(ctx, 'research', None)
     if not store:return {}
     snapshot=store.snapshot()
-    investigated={t.get('verifies_issue') for t in snapshot['tasks'].values()}
+    investigated={t.get('verifies_issue') for t in snapshot['experiments'].values()}
     return {i['id']:i for i in research_findings(snapshot)
             if i['source'] in {'sections','review-task:sections'} and i['section'] in (state.get('sections') or {})
             and i['category'] not in {'writing','service','execution','coverage'}
             and i['status'] in {'suspected','inconclusive'} and not i['repair_targets'] and i['id'] not in investigated
-            and snapshot['tasks'][i['task_id']]['acceptance']=='accepted' and snapshot['tasks'][i['task_id']]['validity']=='current'}
+            and snapshot['experiments'][i['task_id']]['acceptance']=='accepted' and snapshot['experiments'][i['task_id']]['validity']=='current'}
 
 
 def section_audit_prompt(state,ctx,*,force=False):

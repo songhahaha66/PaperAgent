@@ -25,7 +25,7 @@ def setup(env,monkeypatch):
     return env
 
 def model(**kwargs):return SimpleNamespace(**{'model_name':'offline-controlled','calls':0,'gate':None,'error':None,'answer':None,**kwargs})
-def item(store,stage='sections'):return next(t for t in tasks.status(store)['tasks'] if t['stage']==stage)
+def item(store,stage='sections'):return next(t for t in tasks.status(store)['experiments'] if t['stage']==stage)
 async def drain():
     workers=list(tasks.ACTIVE)
     if workers:await asyncio.wait_for(asyncio.gather(*workers),3)
@@ -164,7 +164,7 @@ def test_api_owner_research_and_budget_guards(setup,monkeypatch):
     monkeypatch.setattr(workspace,'_paper_writing_model',forbidden)
     with TestClient(app) as client:
         response=client.get('/api/workspace/work/review-tasks');assert response.status_code==200
-        t=next(t for t in response.json()['tasks'] if t['stage']=='sections')
+        t=next(t for t in response.json()['experiments'] if t['stage']=='sections')
         body={'research_id':store.research_id,'stage':'sections','version':t['version'],'command_id':'retry'}
         assert client.post('/api/workspace/work/review-tasks',json=body).status_code==409
         assert client.post('/api/workspace/work/review-tasks',json={**body,'research_id':'other'}).status_code==409

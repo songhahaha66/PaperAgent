@@ -1,5 +1,7 @@
 """Adapters between checkpoint execution and committed research state."""
 
+from .domain import experiment_report, experiment_design
+
 from ai_system.research.domain import findings as research_findings
 import asyncio
 import shutil
@@ -40,53 +42,41 @@ async def observe(state, runtime):
     if 'materials' not in snapshot:
         with store._transaction() as db:
             saved=store._read(db)
-            saved['materials']={'inputs':store.file_inputs(),'profile':state.get('data_profile','') if not saved['attempts'] else ''}
+            saved['materials']={'inputs':store.file_inputs(),'profile':state.get('data_profile','') if not saved['executions'] else ''}
             store._save(db,saved,'materials_profiled',saved['materials'])
-    store.schedule_investigations()
-    from .planner import advance_research
-    from .loop import flow,writing_action
-    from .feedback import report_target
-    editorial=report_target(store) or writing_action(store)
-    decision_blocked=False if flow(store).get('blocked') or editorial else await advance_research(ctx)
+    from .loop import prepare_action
+    blocked = await prepare_action(ctx)
     snapshot = store.snapshot()
-    tasks = snapshot["tasks"]
     refresh_registry(ctx)
-    # Explicit tombstones remove stale entries via the existing parallel reducer.
-    solutions = {key: (task["report"] if task["acceptance"] == "accepted" and task["validity"] == "current" else None)
-                 for key, task in tasks.items()}
-    designs = {key: task["design"] if task["design"] else
-               None if task["validity"] == "stale" else (state.get("designs") or {}).get(key)
-               for key, task in tasks.items()}
-    sections = {key: section["text"] if section["validity"] == "current" else None
-                for key, section in snapshot["sections"].items()}
-    sections.update({key: None for key in (state.get("sections") or {}) if key not in sections})
-    progress = flow(store)
-    blocked = decision_blocked or bool(progress.get('blocked'))
-    next_outcome = "blocked" if blocked else snapshot["outcome"] if snapshot["outcome"] in {"completed", "needs_attention"} else "running"
-    if next_outcome != snapshot["outcome"]:
-        store.set_outcome(next_outcome)
-    snapshot = store.snapshot()
-    await ctx.events.emit("research_state", public_snapshot(snapshot))
     if blocked:
-        from .planner import decision_block_message, preserved_progress
-        delivery_reason = next((snapshot.get('delivery_stages', {}).get(stage, {}).get('note')
-                                for stage in ('export', 'render', 'validate', 'write')
-                                if snapshot.get('delivery_stages', {}).get(stage, {}).get('status') == 'blocked'), None)
-        await ctx.set_stage("solve", "blocked", decision_block_message(store,snapshot) if decision_blocked else
-                            (progress.get("blocked_reason") or delivery_reason or "论文写作、检查或导出未完成，可恢复后继续自动处理。")+preserved_progress(snapshot))
-    analysis = analysis_view(snapshot, state.get('analysis'))
-    from .planner import current_decision
-    selected=current_decision(store)
-    outline=(selected[1]['proposal'].get('outline') or []) if selected and selected[1]['proposal']['action']=='deliver' else []
-    if selected and selected[1]['proposal']['action']=='deliver' and selected[1]['proposal'].get('title'):
-        analysis['title']=selected[1]['proposal']['title']
-    if 'write' in progress['done'] and state.get('outline'):outline=state['outline']
-    return {"analysis": analysis, "solutions": solutions, "designs": designs,"outline":outline,
-            'data_profile':snapshot.get('materials',{}).get('profile','') if snapshot.get('materials',{}).get('inputs')==store.file_inputs() else '材料已变化，旧概览不能作为当前证据，请查看当前文件。',
-            "sections": sections, "research_blocked": blocked, "research_restart": False,
-            "issues": [i for i in snapshot['feedback'] if i['source'] == 'sections'
-                       and i['action'] == 'rewrite' and i['status'] not in {'resolved', 'dismissed'}],
-            "repair_round": progress['repairs'], "log": [f"observe: commit {snapshot['commit_seq']}"]}
+        store.set_outcome('blocked')
+        from .planner import decision_block_message
+        await ctx.set_stage('solve','blocked',decision_block_message(store,snapshot))
+    elif snapshot['outcome'] not in {'completed','needs_attention'}:
+        store.set_outcome('running')
+    snapshot = store.snapshot()
+    await ctx.events.emit('research_state', public_snapshot(snapshot))
+    view = graph_view(snapshot)
+    # Checkpoint reducers need explicit tombstones for invalidated projections.
+    for name in ('solutions','designs','sections'):
+        view[name].update({key:None for key in state.get(name,{}) if key not in view[name]})
+    return {**view, 'research_blocked':blocked, 'research_restart':False,
+            'log':[f"observe: commit {snapshot['commit_seq']}"]}
+
+
+def graph_view(snapshot):
+    publication=snapshot['publication'] or {}
+    return {'task':snapshot['spec']['requirement'], 'analysis':{**analysis_view(snapshot),'title':publication.get('title') or snapshot['spec']['requirement'].splitlines()[0][:80]},
+        'solutions':{key:experiment_report(snapshot, t) for key,t in snapshot['experiments'].items()
+                     if t['acceptance']=='accepted' and t['validity']=='current' and not t['retired']},
+        'designs':{key:experiment_design(snapshot, t) for key,t in snapshot['experiments'].items() if experiment_design(snapshot, t)},
+        'sections':{key:s['text'] for key,s in snapshot['sections'].items() if s['validity']=='current'},
+        'section_contexts':{key:s.get('context_hash') for key,s in snapshot['sections'].items() if s['validity']=='current'},
+        'data_profile':snapshot['materials']['profile'],
+        'outline':publication.get('outline',[]), 'consistency':snapshot.get('consistency',[]),
+        'repair_round':publication.get('repairs',0),
+        'issues':[i for i in snapshot['feedback'] if i.get('section') and i['action']=='rewrite'
+                  and i['status'] not in {'resolved','dismissed','superseded'}]}
 
 
 def analysis_view(snapshot, previous=None):
@@ -94,39 +84,27 @@ def analysis_view(snapshot, previous=None):
     source = snapshot['spec']['requirement']
     return {'title':source.splitlines()[0][:80], 'restatement':source, 'overall_analysis':'',
             **(previous or {}),
-            'subproblems':[t['subproblem'] for t in snapshot['tasks'].values() if t['kind']!='verify' and not t['retired']],
+            'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify' and not t['retired']],
+            'questions':[{**q,'experiment_ids':[key for key,e in snapshot['experiments'].items() if e['question_id']==q['id'] and e['acceptance']=='accepted' and e['validity']=='current' and not e['retired']]} for q in snapshot['questions'].values()],
             'requirements':snapshot['spec']['requirements'],
             'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired']}
 
 
-def task_dispatch(state, runtime, task_ids):
-    snapshot = runtime.context.research.snapshot()
-    if state.get("research_blocked"):
-        return []
-    ready = ready_tasks(snapshot)
-    ready=[key for key in ready if key in task_ids]
-    if not ready:
-        return []
-    sends = []
+def experiment_dispatch(ctx, key):
+    """Workers receive system-built context, never a model-supplied branch."""
+    snapshot=ctx.research.snapshot()
+    task=snapshot['experiments'][key]
     from .validation import protocol
-    from .planner import decision_records
-    replies=[{'ref':ref,'question':row['proposal']['question'],'response':row['response'],
-              'requirement_ids':row['proposal']['requirement_ids']} for ref,row in decision_records(runtime.context.research)
-             if row.get('status')=='replied' and row.get('proposal',{}).get('action')=='ask']
-    for key in ready:
-        task = snapshot["tasks"][key]
-        sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": analysis_view(snapshot, state.get("analysis")),
-            'task_revision':task['revision'], 'experiment':task.get('experiment'),
-            "data_profile": state.get("data_profile", ""),
-            'feedback':task.get('method_instruction',''),
-            'clarifications':[r for r in replies if set(r['requirement_ids']) & set(task['requirement_ids'])],
-            "research_contract": {"requirements": [r for r in snapshot["spec"]["requirements"] if r["id"] in task["requirement_ids"]],
-                "task_ids": list(snapshot["tasks"]), "assumption_task_ids": assumption_scope(snapshot["tasks"], key),
-                "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},
-            "design": (state.get("designs") or {}).get(key),
-            "review_findings": [i for i in research_findings(snapshot) if needs_owner_review(i) and i["task_id"] == key],
-            "dependencies": {dep: snapshot["tasks"][dep]["report"] for dep in task["dependencies"]}}))
-    return sends
+    return {'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
+        'analysis':analysis_view(snapshot), 'task_revision':task['revision'], 'experiment':task.get('experiment'),
+        'data_profile':snapshot['materials']['profile'], 'feedback':task.get('method_instruction',''),
+        'clarifications':snapshot.get('clarifications',[]),
+        'research_contract':{'requirements':[r for r in snapshot['spec']['requirements'] if r['id'] in task['requirement_ids']],
+            'task_ids':list(snapshot['experiments']), 'assumption_task_ids':assumption_scope(snapshot['experiments'],key),
+            'assumptions':[snapshot['assumptions'][aid] for aid in task['assumption_ids']], 'checks':protocol(snapshot,key)},
+        'design':experiment_design(snapshot, task),
+        'review_findings':[i for i in research_findings(snapshot) if needs_owner_review(i) and i['task_id']==key],
+        'dependencies':{dep:experiment_report(snapshot,snapshot['experiments'][dep]) for dep in task['dependencies']}}
 
 
 def public_snapshot(snapshot, *, work_status=None):
@@ -139,18 +117,18 @@ def public_snapshot(snapshot, *, work_status=None):
         "delivery_stages": {key: {**stage, "status": "interrupted" if stage["status"] == "in_progress" and
             work_status in {"paused", "cancelled", "failed"} else stage["status"]}
             for key, stage in snapshot.get("delivery_stages", {}).items()},
-        "tasks": [public_task(snapshot, task, ready, work_status) for task in snapshot["tasks"].values() if not task["retired"]],
+        "experiments": [public_task(snapshot, task, ready, work_status) for task in snapshot["experiments"].values() if not task["retired"]],
         "feedback": [i for i in snapshot['feedback'] if i['status'] not in {'resolved', 'dismissed'}],
         "faults": [i for i in snapshot['faults'] if i['status'] not in {'resolved', 'dismissed', 'superseded'}],
-        "requirements": [{**r, "status": "accepted" if r["task_ids"] and snapshot["outcome"]=="completed" and all(snapshot["tasks"][key]["acceptance"] == "accepted" and
-            snapshot["tasks"][key]["validity"] == "current" and (snapshot["tasks"][key]["kind"] != "writing" or
+        "requirements": [{**r, "status": "accepted" if r["task_ids"] and snapshot["outcome"]=="completed" and any(snapshot["experiments"][key]["acceptance"] == "accepted" and
+            snapshot["experiments"][key]["validity"] == "current" and (snapshot["experiments"][key]["kind"] != "writing" or
             snapshot["sections"].get(f"solve:{key}", {}).get("validity") == "current") for key in r["task_ids"]) else "pending"}
             for r in snapshot["spec"]["requirements"]], "assumptions": list(snapshot["assumptions"].values()),
     }
 
 
 def public_task(snapshot, task, ready=None, work_status=None):
-    result = {key: task.get(key) for key in ("task_id", "revision", "objective", "dependencies",
+    result = {key: task.get(key) for key in ("task_id", "question_id", "revision", "objective", "dependencies",
               "execution_status", "acceptance", "validity", "reason", "kind")}
     result["validation"] = current_validation(snapshot, task)
     result["progress"] = task_progress(snapshot, task, set(ready_tasks(snapshot)) if ready is None else ready, work_status)
@@ -160,34 +138,24 @@ def public_task(snapshot, task, ready=None, work_status=None):
 def current_validation(snapshot, task):
     # Rejected work is invalidated immediately; retain its verdict for this
     # revision, but never label an older revision's checks as current.
-    attempt = next((a for a in reversed(snapshot["attempts"].values())
+    attempt = next((a for a in reversed(snapshot["executions"].values())
                     if a["task_id"] == task["task_id"] and a["revision"] == task["revision"]), {})
     return attempt.get("validation")
 
 
 def delivery_status(snapshot):
-    """Explain the existing delivery gate; this projection never changes scheduling."""
     from .store import ResearchStore
-    issues = [i for i in research_findings(snapshot) if i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}]
-    blockers = [{"task_id": i["task_id"], "message": i["message"], "action": i["action"]} for i in issues]
-    covered = {i["task_id"] for i in issues}
-    for key, task in snapshot["tasks"].items():
-        if task["retired"] or (task["acceptance"] == "accepted" and task["validity"] == "current"):
-            continue
-        checks = [c["message"] for c in (current_validation(snapshot, task) or {}).get("checks", []) if c["outcome"] != "passed"]
-        message = "; ".join(checks) or task.get("reason") or (task.get("report") or {}).get("error")
-        action = "retry" if task["execution_status"] in {"failed", "cancelled"} else "wait"
-        if task["validity"] == "stale":
-            action = "recompute"
-        exhausted = len(snapshot["attempts"]) >= snapshot["max_total_attempts"] or sum(
-            a["task_id"] == key and a["revision"] == task["revision"] for a in snapshot["attempts"].values()) >= snapshot["max_attempts"]
-        if key in covered and not exhausted:
-            continue
-        if exhausted and task["execution_status"] != "running":
-            message = (message + "；" if message else "") + "当前尝试预算已耗尽，需要调整研究计划"
-            action = "recompute"
-        blockers.append({"task_id": key, "message": message or ("任务正在执行" if task["execution_status"] == "running" else "任务等待执行或依赖验收"), "action": action})
-    return {"ready": ResearchStore.delivery_ready(snapshot), "blockers": blockers}
+    supported={key for key,e in snapshot['experiments'].items() if not e['retired']
+        and e['acceptance']=='accepted' and e['validity']=='current'
+        and any(a['type']=='result' and a['active'] and a['experiment_id']==key for a in snapshot['artifacts'].values())}
+    answered={snapshot['experiments'][key]['question_id'] for key in supported}
+    active_questions={e['question_id'] for e in snapshot['experiments'].values() if not e['retired'] and e['kind']!='verify'}
+    blockers=[{'task_id':qid,'message':'该问题尚缺可用实验结果','action':'research'}
+              for qid in snapshot['questions'] if qid in active_questions and qid not in answered]
+    blockers += [{'task_id':i['task_id'],'message':i['message'],'action':i['action']}
+        for i in research_findings(snapshot) if i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}
+        and (i.get('section') or i['task_id'] in supported)]
+    return {'ready':ResearchStore.delivery_ready(snapshot),'blockers':blockers}
 
 
 def _copy_tree(source, target):
@@ -213,15 +181,15 @@ def worker_context(ctx, order):
     def copy_dependency(key):
         if key in copied:
             return
-        task = snapshot["tasks"][key]
+        task = snapshot["experiments"][key]
         for dep in task["dependencies"]:
             copy_dependency(dep)
         copied.add(key)
-        source = ctx.workspace / ".system" / "attempts" / task["active_attempt"] / "workspace"
+        source = ctx.workspace / ".system" / "attempts" / task["execution_id"] / "workspace"
         _copy_tree(source / "outputs" / "intermediate", work / "outputs" / "intermediate")
         _copy_tree(source / "code", work / "code")
 
-    for dep in snapshot["tasks"][order.task_id]["dependencies"]:
+    for dep in snapshot["experiments"][order.task_id]["dependencies"]:
         copy_dependency(dep)
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
         writer_llm=ctx.writer_llm, judge=ctx.judge, stream_manager=ctx.events.stream_manager,
@@ -249,7 +217,7 @@ async def execute(branch, runtime):
     ctx = runtime.context
     key = branch["subproblem"]["id"]
     try:
-        task=ctx.research.snapshot()['tasks'][key]
+        task=ctx.research.snapshot()['experiments'][key]
         if branch.get('task_revision',task['revision'])!=task['revision'] or branch['subproblem']!=task['subproblem']:
             raise ResearchConflict('行动所依据的研究版本已改变，请重新观察')
         if branch.get('experiment')!=task.get('experiment'):
@@ -310,7 +278,7 @@ async def execute(branch, runtime):
         receipt = ctx.research.commit(result)
         refresh_registry(ctx)
         snapshot = ctx.research.snapshot()
-        committed = snapshot["tasks"][key]
+        committed = snapshot["experiments"][key]
         await ctx.events.emit("research_state", public_snapshot(snapshot))
         accepted = (receipt["published"] and committed["acceptance"] == "accepted"
                     and committed["validity"] == "current")

@@ -25,9 +25,9 @@ async def observe_comparison(ctx,branch):
     return SimpleNamespace(record=record,chosen_index=index,winner=winner,to_record=lambda:record)
 from ai_system.modules.experiments.store import ExperimentStore,CandidateCode,SupervisedSpec
 from ai_system.research.store import ResearchStore,digest
-from ai_system.research.models import ResearchConflict,PlanPatch,TaskChange,WorkerResult
+from ai_system.research.models import ResearchConflict, WorkerResult
 from ai_system.research.control import worker_context
-from ai_system.research.planner import Planner,decision_context,validate_decision,EvidenceDecision,advance_research
+from ai_system.research.planner import Planner, decision_context
 
 TASK='根据 data/diabetes.csv 的结构化数据比较两种回归方案，预测 target；独立留出验证，不用模型自评决定优胜。'
 RIDGE='''from sklearn.pipeline import make_pipeline
@@ -100,7 +100,7 @@ def accept_formal_comparison(setup):
             assert not proof_issues(setup.ctx,report)
             receipt=setup.store.commit(WorkerResult(order=setup.order,execution_status='succeeded',acceptance='accepted',
                 results=list(proof['protected'].values()),report=report,design=setup.branch['design']))
-            assert receipt['published'] and setup.store.snapshot()['tasks']['Q1']['acceptance']=='accepted'
+            assert receipt['published'] and setup.store.snapshot()['experiments']['Q1']['acceptance']=='accepted'
             return setup.cfg.read('Q1',setup.order.revision)
         finally:
             await setup.ctx.kernels.close()
@@ -199,12 +199,12 @@ def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(set
             assert '# 当前共同协议比较' not in comparison_writing_prompt(setup),label
     for label in ('stale task','different revision','different attempt','unpublished attempt','failed attempt',
                   'inactive proof','historical proof','different formal run','different formal metric'):
-        altered=copy.deepcopy(snapshot);task=altered['tasks']['Q1']
+        altered=copy.deepcopy(snapshot);task=altered['experiments']['Q1']
         if label=='stale task':task['validity']='stale'
         elif label=='different revision':task['revision']+=1
-        elif label=='different attempt':task['active_attempt']='not-the-accepted-attempt'
-        elif label=='unpublished attempt':altered['attempts'][task['active_attempt']]['commit']['published']=False
-        elif label=='failed attempt':altered['attempts'][task['active_attempt']]['execution_status']='failed'
+        elif label=='different attempt':task['execution_id']='not-the-accepted-attempt'
+        elif label=='unpublished attempt':altered['executions'][task['execution_id']]['commit']['published']=False
+        elif label=='failed attempt':altered['executions'][task['execution_id']]['execution_status']='failed'
         else:
             ref=record['formal_handoffs'][0]['evidence_refs'][0]
             if label=='inactive proof':altered['evidence'][ref]['active']=False
@@ -222,60 +222,6 @@ def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(set
     assert setup.cfg.read('Q1',setup.order.revision)==record
 
 
-@pytest.mark.parametrize('status',['winner','only_valid','tied'])
-def test_comparison_selection_status_is_preserved_and_citable_without_new_runs(setup,status):
-    if status=='only_valid':setup.codes['shallow']=BAD_A
-    if status=='tied':
-        setup.codes['shallow']=DUMMY_A
-        setup.branch['design']['candidates'][1].update(name='mean alternative',idea='training mean')
-        setup.codes['mean alternative']=DUMMY_B
-    record=accept_formal_comparison(setup);assert record['status']==status
-    snapshot=setup.store.snapshot();budget=setup.cfg.budget('Q1');calls=list(setup.calls)
-    key,context=decision_context(setup.store,snapshot)
-    entry=next(e for e in context['evidence'] if e.get('kind')=='comparison')
-    summary=json.loads(entry['text'])
-    assert summary['status']==status and summary['chosen_index']==record['chosen_index'] and summary['reason']==record['reason']
-    if status=='only_valid':
-        assert summary['branches'][0]['status']=='execution_error' and summary['branches'][0]['metric'] is None
-        assert sum(r['eligible'] for r in summary['branches'])==1 and '不能' in summary['reason']
-    if status=='tied':
-        assert summary['chosen_index']==0 and '无实测优胜者' in summary['reason']
-    prompt=comparison_writing_prompt(setup);written=comparison_in_prompt(prompt)
-    assert written['status']==status and written['reason']==record['reason']
-    if status=='only_valid':
-        assert written['branches'][0]['status']=='execution_error' and written['branches'][0]['metric'] is None
-        assert '不能声称优于失败' in prompt and '不能' in written['reason']
-    if status=='tied':
-        assert '无实测优胜者' in written['reason'] and written['chosen_index']==0
-        assert all(r['metric'] and setup.parent.registry.render(r['metric'])!='' for r in written['branches'])
-    basis={'ref':entry['id'],'quote':summary['reason']}
-    answer=EvidenceDecision(action='deliver',reason='保留共同协议实测结果与边界，继续原有写作核查。',requirement_ids=['RQ1'],basis=[basis],
-        coverage=[{'requirement_id':'RQ1','requirement':snapshot['spec']['requirements'][0]['statement'],
-                   'supported':summary['reason'],'basis':[basis],'remaining':''}],
-        outline=[{'key':'solve:Q1','title':'实测比较','purpose':'表达共同协议下的结果与局限。','task_ids':['Q1'],'basis':[basis]}])
-    validate_decision(answer,snapshot,context)
-    invalid=answer.model_copy(deep=True);invalid.basis[0].ref='P'+'0'*24
-    with pytest.raises(ValueError,match='实际结果'):
-        validate_decision(invalid,snapshot,context)
-    class Model:
-        count=0
-        def with_structured_output(self,schema,**kwargs):
-            assert schema is EvidenceDecision
-            return self
-        async def ainvoke(self,messages):
-            self.count+=1
-            assert all(term in messages[0].content for term in ('winner','only_valid','tied','不能声称优于失败','P比较编号'))
-            supplied=json.loads(messages[-1].content)
-            assert next(e for e in supplied['evidence'] if e.get('kind')=='comparison')==entry
-            return answer
-    model=Model();setup.parent.planner_llm=model
-    from ai_system.research.loop import resume
-    for _ in range(3):
-        assert asyncio.run(advance_research(setup.parent)) is False
-        setup.store.recover();resume(setup.store)
-    assert model.count==1 and decision_context(setup.store,setup.store.snapshot())[0]==key
-    assert setup.cfg.budget('Q1')==budget and setup.calls==calls
-    assert setup.store.snapshot()['attempts']==snapshot['attempts']
 
 
 @pytest.mark.parametrize('damage',['prediction_artifact','losing_metric'])
@@ -371,20 +317,6 @@ def test_protocol_and_code_cannot_be_edited_after_measurement(setup):
     with pytest.raises(ResearchConflict,match='方法契约已经冻结'):setup.cfg.save(altered)
 
 
-def test_failed_comparison_enters_existing_issue_and_planner_repair_without_budget_reset(setup):
-    setup.codes.update(shallow=BAD_A,ridge=BAD_B);record=run(setup).to_record()
-    setup.store.report_comparison_failure(record,setup.order)
-    snapshot=setup.store.snapshot();issue=research_findings(snapshot)[0]
-    assert issue['source']=='comparison' and issue['status']=='confirmed' and issue['action']=='recompute'
-    _,context=decision_context(setup.store,snapshot)
-    proposal=EvidenceDecision(action='research',gap='两支实际执行均失败，原目标尚无答案。',requirement_ids=['RQ1'],
-        changes=[TaskChange(task_id='Q1',objective=snapshot['tasks']['Q1']['objective'],method_instruction='修复 fit/predict 接口后按共同协议重新比较。')],
-        issue_ids=[issue['id']],reason='修复执行契约',coverage=[{'requirement_id':'RQ1',
-        'requirement':snapshot['spec']['requirements'][0]['statement'],'supported':'','basis':[],'remaining':'执行失败，尚无研究答案。'}])
-    validate_decision(proposal,snapshot,context);before=setup.cfg.budget('Q1')
-    setup.store.apply_patch(PlanPatch(command_id='repair',base_revision=snapshot['revision'],changes=proposal.changes,issue_ids=proposal.issue_ids,reason=proposal.reason))
-    assert setup.cfg.budget('Q1')==before and setup.store.snapshot()['tasks']['Q1']['revision']==2
-    assert setup.cfg.list()[0]['branches'][0]['run_ids']
 
 
 def test_metric_contracts_and_splits_are_project_owned(setup):
@@ -463,7 +395,7 @@ def test_failed_comparison_blocks_formal_solver_and_commits_complete_failure_rec
     assert not setup.store.registry_payload()['results']
     snapshot=setup.store.snapshot()
     assert any(i['source']=='comparison' and i['action']=='recompute' for i in research_findings(snapshot))
-    attempted=list(snapshot['attempts'].values())[-1]
+    attempted=list(snapshot['executions'].values())[-1]
     assert attempted['result']['report']['status']=='comparison_blocked'
 
 

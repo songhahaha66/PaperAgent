@@ -1,3 +1,4 @@
+from .domain import experiment_report, experiment_design, report_artifact
 """Read-only, task-oriented views of retained computation evidence.
 
 This deliberately does not widen the publication registry or change the planner.
@@ -12,7 +13,7 @@ from .progress import issue_next_step
 CLOSED = {'resolved', 'dismissed', 'superseded'}
 
 
-def check_state(task, attempt, issues):
+def check_state(snapshot, task, attempt, issues):
     validation = attempt.get('validation') or {}
     if any(c['outcome'] == 'failed' for c in validation.get('checks', [])):
         return 'failed'
@@ -22,13 +23,13 @@ def check_state(task, attempt, issues):
         return 'findings'
     if any(c['outcome'] != 'passed' for c in validation.get('checks', [])):
         return 'pending_check'
-    if attempt and (attempt.get('revision') != task.get('revision') or attempt.get('attempt_id') != task.get('active_attempt')):
+    if attempt and (attempt.get('revision') != task.get('revision') or attempt.get('attempt_id') != task.get('execution_id')):
         return 'outdated'
     reviews = (attempt.get('result') or {}).get('reviews') or []
     report = (attempt.get('result') or {}).get('report') or {}
-    revised = task.get('report_review') or {}
-    if (revised.get('report_hash') == report_fingerprint(task.get('report') or {}) and
-            revised.get('attempt_id') == task.get('active_attempt') and not revised.get('issues') and
+    revised = (report_artifact(snapshot,task) or {}).get('review') or {}
+    if (revised.get('report_hash') == report_fingerprint(experiment_report(snapshot,task) or {}) and
+            revised.get('attempt_id') == task.get('execution_id') and not revised.get('issues') and
             task['acceptance']=='accepted' and task['validity']=='current'):
         return 'passed'
     if (reviews and reviews[-1].get('report_hash') == report_fingerprint(report)
@@ -64,49 +65,51 @@ def claim_view(claim, items):
     return {**claim, 'statement': REF_PATTERN.sub(replace, claim.get('statement', ''))}
 
 
-def outcomes(business, registry, safe_file, current_files=None):
+def experiments_view(business, safe_file, current_files=None):
     """Project persisted reports, never infer labels, units, decisions or sources."""
     if not business:
         return []
     views = []
-    for key, task in business['tasks'].items():
+    for key, task in business['experiments'].items():
         if task['retired']:
             continue
-        attempts = [a for a in business['attempts'].values() if a['task_id'] == key]
+        attempts = [a for a in business['executions'].values() if a['task_id'] == key]
         retained = []
         for attempt in reversed(attempts):
             aid = attempt['attempt_id']
-            items = [e['payload'] for e in business['evidence'].values()
-                     if e['producer_attempt'] == aid and e['active']]
+            items = [e['payload'] for e in business['artifacts'].values()
+                     if e['producer_attempt'] == aid and e['active'] and e['type']=='result']
             if items:
                 retained.append((attempt, items))
-        active = next((p for p in retained if p[0]['attempt_id'] == task.get('active_attempt')), None)
+        active = next((p for p in retained if p[0]['attempt_id'] == task.get('execution_id')), None)
         selected = active or (retained[0] if retained else (attempts[-1] if attempts else {}, []))
         attempt, items = selected
         frozen_files = {p: h for p, h in attempt.get('input_refs', {}).items() if p.startswith(('data/', 'attachment/'))}
         inputs_match = current_files is None or frozen_files == {p: h for p, h in current_files.items() if p.startswith(('data/', 'attachment/'))}
         current = bool(active and attempt['revision'] == task['revision'] and task['validity'] == 'current' and inputs_match)
         issues = [i for i in research_findings(business) if i['task_id'] == key and i['status'] not in CLOSED]
-        report = (task.get('report') if current else None) or (attempt.get('result') or {}).get('report') or {}
-        design = (attempt.get('result') or {}).get('design') or task.get('design') or {}
+        report = (experiment_report(business,task) if current else None) or (attempt.get('result') or {}).get('report') or {}
+        design = (attempt.get('result') or {}).get('design') or experiment_design(business,task) or {}
         method = design.get('chosen') or {}
         sources = [{'path': path, 'hash': fingerprint,
                     'available': bool(safe_file(path))}
                    for path, fingerprint in attempt.get('input_refs', {}).items() if path.startswith(('data/', 'attachment/'))]
         views.append({
-            'id': key, 'task_id': key, 'title': task.get('subproblem', {}).get('title') or task['objective'],
+            'id': key, 'task_id': key, 'question_id':task['question_id'], 'title': task.get('subproblem', {}).get('title') or task['objective'],
             'objective': task['objective'], 'revision': attempt.get('revision'),
             'attempt_id': attempt.get('attempt_id'), 'started_at':attempt.get('started_at'), 'computation': attempt.get('execution_status', task['execution_status']),
             'availability': ('current' if current else 'historical') if items else 'unavailable',
-            'checking': check_state(task, attempt, [i for i in issues if i['category']!='writing' or task['kind']=='writing']) if inputs_match else 'outdated',
+            'checking': check_state(business, task, attempt, [i for i in issues if i['category']!='writing' or task['kind']=='writing']) if inputs_match else 'outdated',
             'approach': report.get('approach') or '', 'summary': report.get('summary') or '',
             'method': {k: method[k] for k in ('name', 'idea', 'formulation', 'steps', 'validation') if method.get(k)} or None,
             'experiment':attempt.get('experiment') or task.get('experiment'),
             'results': [result_view(item, safe_file) for item in items[:500]],
-            'claims': [claim_view(c['payload'], [e['payload'] for e in business['evidence'].values()]) for c in business['claims'].values()
+            'claims': [claim_view(c['payload'], [e['payload'] for e in business['artifacts'].values()]) for c in business['claims'].values()
                        if c['producer_attempt'] == attempt.get('attempt_id')],
             'issues': issues, 'sources': sources,
             'next_step': ' '.join(dict.fromkeys(issue_next_step(i,business) for i in issues)) or task.get('reason') or report.get('next_step') or None,
+            'artifacts': [{'id':ref,'kind':e['type'],'path':safe_file(e['payload'].get('path')),'run_id':e['payload']['run_id']}
+                          for ref,e in business['artifacts'].items() if e['experiment_id']==key and e['type']!='result'],
             'history': [{'attempt_id': a['attempt_id'], 'revision': a['revision'],
                          'execution_status': a['execution_status'], 'acceptance': a.get('acceptance'),
                          'results': [result_view(item, safe_file) for item in records[:500]]}

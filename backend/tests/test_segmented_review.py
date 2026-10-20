@@ -60,26 +60,26 @@ def test_changed_source_invalidates_review_and_keeps_evidence(long):
     update(v,v.state['sections']['evaluation']+'新增适用范围。');run(v)
     assert len(v.model.calls)==2
     after=v.store.snapshot()
-    assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations'))
+    assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
 
 
 def test_interruption_is_incomplete_then_explicit_resume_reuses_the_same_draft(long):
     v=long;v.model.failure=True;before=v.store.snapshot();run(v)
     record=review_tasks.records(v.store)[0]
     assert record['state']=='failed' and record['error_code']=='TimeoutError'
-    task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
+    task=next(t for t in review_tasks.status(v.store)['experiments'] if t['stage']=='sections')
     assert task['state']=='failed' and task['can_resume'] and 'segmented' not in task
     v.model.failure=False
     async def scenario():
         review_tasks.start(v.store,'sections',task['version'],'resume-current-review',v.model)
         if review_tasks.ACTIVE:await asyncio.wait_for(asyncio.gather(*list(review_tasks.ACTIVE)),3)
     asyncio.run(scenario())
-    task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
+    task=next(t for t in review_tasks.status(v.store)['experiments'] if t['stage']=='sections')
     assert task['state']=='completed' and task['outcome']=='findings' and len(v.model.calls)==2
     finding=next(i for i in review_tasks.status(v.store)['issues'] if i['category']=='writing')
     assert issue_edits.context(v.store,finding['id'])['quote']==TAIL
     after=v.store.snapshot()
-    assert all(before[k]==after[k] for k in ('tasks','attempts','evidence','claims','validations','sections'))
+    assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations','sections'))
 
 
 def test_concurrent_same_review_has_one_owner(long):

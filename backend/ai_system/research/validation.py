@@ -107,7 +107,7 @@ def bind_requirements(state, requirements, amendment=None):
     """
     bound = {r['id']:dict(r) for r in state['spec']['requirements']}
     source = amendment or state['spec']['requirement'] + "\n" + "\n".join(state['spec']['amendments'])
-    attempted = {a['task_id'] for a in state['attempts'].values() if a['revision']==state['tasks'][a['task_id']]['revision']}
+    attempted = {a['task_id'] for a in state['executions'].values() if a['revision']==state['experiments'][a['task_id']]['revision']}
     for requirement in requirements:
         incoming = requirement.model_dump()
         previous = bound.get(requirement.id)
@@ -128,7 +128,7 @@ def bind_requirements(state, requirements, amendment=None):
 
 
 def protocol(state, task_id):
-    task = state["tasks"][task_id]
+    task = state["experiments"][task_id]
     if task.get("verifies_issue"):
         return task["verification_protocol"]
     checks = []
@@ -166,10 +166,10 @@ def requirement_evidence_gaps(requirement_ids, proofs, available_refs):
 
 def evaluate(state, task_id, results):
     rules = protocol(state, task_id)
-    task = state["tasks"][task_id]
-    current_attempts = {t["active_attempt"] for t in state["tasks"].values()
+    task = state["experiments"][task_id]
+    current_attempts = {t["execution_id"] for t in state["experiments"].values()
                         if t["acceptance"] == "accepted" and t["validity"] == "current"}
-    available = [entry["payload"] for entry in state["evidence"].values() if entry["producer_attempt"] in current_attempts and entry["active"]]
+    available = [entry["payload"] for entry in state["artifacts"].values() if entry["producer_attempt"] in current_attempts and entry["active"]]
     available += results
     checks = []
     for rule in rules:

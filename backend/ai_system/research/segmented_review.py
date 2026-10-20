@@ -162,7 +162,7 @@ def verify_proof(store,record):
         if record['context_hash']!=digest(record['context']):return False
         if {k:v['hash'] for k,v in plan['sections'].items()}!=record['context']['section_hashes']:return False
         contract=record['context']['extra']['prompt_contract']
-        state={'analysis':{'requirements':contract['requirements'],'assumptions':contract['assumptions'],'subproblems':[t['subproblem'] for t in store.snapshot()['tasks'].values() if not t['retired']]},'consistency':contract['consistency'],
+        state={'analysis':{'requirements':contract['requirements'],'assumptions':contract['assumptions'],'subproblems':[t['subproblem'] for t in store.snapshot()['experiments'].values() if not t['retired']]},'consistency':contract['consistency'],
             'sections':{k:''.join(b['text'] for b in plan['blocks'] if b['section']==k) for k in plan['sections']}}
         ctx=context_from_store(store,record['context']['model_id'])
         proofs=record['provenance']['blocks']

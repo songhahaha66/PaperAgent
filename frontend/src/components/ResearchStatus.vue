@@ -30,26 +30,17 @@
       <h3>执行中断记录</h3>
       <article v-for="fault in faults" :key="fault.id">
         <p role="alert">{{ fault.message }}</p>
-        <button
-          v-if="fault.category === 'execution' && fault.status === 'confirmed'"
-          :disabled="running || busy"
-          @click="recover(fault.id)"
-        >
-          核验并记录恢复
-        </button>
       </article>
-      <p v-if="error" role="alert">{{ error }}</p>
     </section>
   </section>
 </template>
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import ResearchRuntime from './ResearchRuntime.vue'
 import ResearchProgress from './ResearchProgress.vue'
 import ResearchReferences from './ResearchReferences.vue'
 import type { ResearchSnapshot } from '@/types/research'
 import type { WorkObject } from '@/stores/workPanels'
-import { executionRecoveryAPI } from '@/api/researchSetup'
 const props = defineProps<{
   workId: string
   snapshot: ResearchSnapshot | null
@@ -72,21 +63,6 @@ const faults = computed(
       (f) => !['resolved', 'dismissed', 'superseded'].includes(f.status),
     ) || [],
 )
-const busy = ref(false),
-  error = ref('')
-async function recover(id: string) {
-  busy.value = true
-  error.value = ''
-  try {
-    const proof = await executionRecoveryAPI.preview(props.workId, id)
-    await executionRecoveryAPI.resolve(props.workId, id, proof.proof_hash)
-    emit('resolved')
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : '恢复核验未通过'
-  } finally {
-    busy.value = false
-  }
-}
 </script>
 <style scoped>
 .research-status {

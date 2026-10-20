@@ -51,7 +51,7 @@ def context(store,issue_id):
     key=issue.get('section');section=state['sections'].get(key);origin=issue.get('paper_origin') or {}
     same_origin=not origin.get('section_hash') or bool(section and origin['section_hash']==section['content_hash'])
     if route(issue)=='research':
-        task=state['tasks'].get(issue['task_id'],{})
+        task=state['experiments'].get(issue['task_id'],{})
         expected=issue.get('repair_targets',{}).get(issue['task_id'],issue.get('task_revision'))
         same_origin=same_origin and task.get('revision')==expected and not task.get('retired',True)
     quote=origin.get('quote') if same_origin and section else None
@@ -64,7 +64,7 @@ def context(store,issue_id):
     try:manifest=json.loads((store.root/'manifest.json').read_text()).get('runs',{})
     except (OSError,ValueError):manifest={}
     for ref in dict.fromkeys(refs):
-        row=state['evidence'].get(ref)
+        row=state['artifacts'].get(ref)
         if not row:continue
         value=row['payload'];run=manifest.get(value.get('run_id'),{})
         evidence.append({**{k:value.get(k) for k in ('id','name','value','unit','run_id')},'current':row.get('active',False),'stdout_path':run.get('stdout')})
@@ -86,7 +86,7 @@ def require_binding(store,request,*,writing=True):
 
 def ready(store):
     state=store.snapshot()
-    return all(t['retired'] or t['acceptance']=='accepted' and t['validity']=='current' for t in state['tasks'].values()) and not any(
+    return all(t['retired'] or t['acceptance']=='accepted' and t['validity']=='current' for t in state['experiments'].values()) and not any(
         i['blocking'] and i['status'] not in TERMINAL and (i['category']!='writing' or i.get('section')=='paper') for i in research_findings(state))
 
 

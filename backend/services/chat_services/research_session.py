@@ -4,7 +4,7 @@ Questions never enter the graph or receive tools. Registry/manifest data is
 projected through an allowlist; model configuration and raw transcripts stay out.
 """
 
-from ai_system.research.domain import findings as research_findings, plan_view
+from ai_system.research.domain import findings as research_findings
 import json
 import os
 import re
@@ -73,23 +73,19 @@ class ResearchSnapshot(BaseModel):
     evidence_uses: list[dict] = Field(default_factory=list)
     runtime: dict = Field(default_factory=dict)
     execution_reason: dict | None = None
-    schema_version: int = 3
+    schema_version: int = 4
     engine_version: str | None = None
     research_revision: int = 0
     commit_seq: int = 0
     outcome: str | None = None
     delivery: dict | None = None
     delivery_stages: dict = Field(default_factory=dict)
-    outcomes: list[dict] = Field(default_factory=list)
     requirements: list[dict] = Field(default_factory=list)
     assumptions: list[dict] = Field(default_factory=list)
     validations: list[dict] = Field(default_factory=list)
-    tasks: list[dict] = Field(default_factory=list)
     feedback: list[dict] = Field(default_factory=list)
     faults: list[dict] = Field(default_factory=list)
-    plans: list[dict] = Field(default_factory=list)
     experiments: list[dict] = Field(default_factory=list)
-    legacy_records: list[dict] = Field(default_factory=list)
     consistency: list[dict] = Field(default_factory=list)
     issue_evidence: list[ResearchResult] = Field(default_factory=list)
     work_id: str
@@ -143,14 +139,6 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         registry = store.registry_payload(snapshot=business)
     else:
         registry = {}
-    legacy_records = list(business.get('legacy_records', [])) if business else []
-    if (root / '.system/research.sqlite').is_file():
-        from ai_system.research.store import ResearchStore
-        with ResearchStore(root, 'legacy-reader', read_only=True)._connect() as db:
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='legacy_records'").fetchone():
-                for row in db.execute('SELECT source,raw FROM legacy_records ORDER BY source'):
-                    raw = row[1].decode('utf-8', errors='replace') if isinstance(row[1],bytes) else row[1]
-                    legacy_records.append({'source':row[0], 'raw':raw})
     manifest = _read_json(root, "manifest.json")
 
     raw_results = registry.get("results") or []
@@ -170,7 +158,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     visible_issues = [issue for index, issue in enumerate(research_findings(business))
                       if issue["status"] not in {"resolved", "dismissed", "superseded"} or index >= len(research_findings(business)) - 30] if business else []
     issue_refs = {ref for issue in visible_issues for ref in issue["evidence_refs"]}
-    historical = [entry["payload"] for rid, entry in business["evidence"].items() if rid in issue_refs] if business else []
+    historical = [entry["payload"] for rid, entry in business["artifacts"].items() if rid in issue_refs] if business else []
     issue_evidence = [ResearchResult(id=str(item["id"]), subproblem_id=str(item["subproblem"]),
         name=str(item.get("name", "")), value=str(item.get("value", "")), unit=str(item.get("unit", "")),
         kind=str(item.get("kind", "number")), run_id=str(item.get("run_id", "")), figure_path=_file(root, item.get("path"), "outputs/"))
@@ -184,8 +172,8 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         )
         for item in raw_claims[:200] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
-    from ai_system.research.outcomes import outcomes
-    readable_outcomes = outcomes(business, registry, lambda path, prefix="": _file(root, path, prefix),
+    from ai_system.research.experiment_views import experiments_view
+    readable_outcomes = experiments_view(business, lambda path, prefix="": _file(root, path, prefix),
                                  current_files=store.file_inputs() if business else None)
     used_runs = {r.run_id for r in [*results, *issue_evidence]}
     for outcome in readable_outcomes:
@@ -235,7 +223,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             issues = []
     # Business invalidation can make a previously completed work resumable before
     # the outer work metadata is updated (e.g. a saved skill selection).
-    if business and status == 'completed' and any(t['validity'] == 'stale' and not t['retired'] for t in business['tasks'].values()):
+    if business and status == 'completed' and any(t['validity'] == 'stale' and not t['retired'] for t in business['experiments'].values()):
         status = 'paused'
     control = public_snapshot(business, work_status=status) if business else {}
     from ai_system.research.runtime import execution_reason
@@ -247,21 +235,19 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         execution_reason=execution_reason(root,status),
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),
-        outcome=control.get("outcome"), delivery=control.get("delivery"), tasks=control.get("tasks", []),
+        outcome=control.get("outcome"), delivery=control.get("delivery"),
         delivery_stages=control.get("delivery_stages", {}),
         requirements=control.get("requirements", []), assumptions=control.get("assumptions", []),
         validations=business["validations"][-20:] if business else [],
         feedback=[i for i in visible_issues if i['category'] not in {'execution','service'}],
         faults=[i for i in visible_issues if i['category'] in {'execution','service'}],
-        plans=[plan_view(t) for t in business['tasks'].values()] if business else [],
-        experiments=[{'id':a['attempt_id'],'plan_id':a['task_id'],'plan_version':a['revision'],
-            'status':a['execution_status'],'acceptance':a.get('acceptance','pending'),
-            'experience_versions':a.get('experience_refs',[])} for a in business['attempts'].values()] if business else [],
-        legacy_records=legacy_records, consistency=business.get("consistency",[]) if business else [], issue_evidence=issue_evidence,
+        experiments=[{**view, **next(e for e in control['experiments'] if e['task_id']==view['task_id'])}
+                     for view in readable_outcomes],
+        consistency=business.get("consistency",[]) if business else [], issue_evidence=issue_evidence,
         work_id=work_id, work_status=status, research_id=thread.get("thread_id"),
         graph_status=thread.get("status"),
         has_research=bool(thread or registry or artifacts),
-        results=results, runs=runs, claims=claims, artifacts=artifacts, outcomes=readable_outcomes,
+        results=results, runs=runs, claims=claims, artifacts=artifacts,
         validation_count=len(issues) if isinstance(issues, list) else 0,
         truncated=len(raw_results) > 500 or len(raw_claims) > 200,
     )
@@ -293,7 +279,7 @@ def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot) -> 
         raise ValueError("当前等待必要信息，请在对话中回复")
     if requested == "resume" and (not snapshot.research_id or snapshot.work_status == "completed"):
         raise ValueError("当前没有可恢复的研究任务")
-    if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.tasks or waiting):
+    if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.experiments or waiting):
         raise ValueError("当前研究不能修订，请先回复待补充信息")
     return requested
 
@@ -334,7 +320,7 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
     root = Path(workspace).resolve()
     snapshot = scoped_snapshot(snapshot, subproblem_id)
     # Bounded context, with an explicit record of exactly which evidence was included.
-    context = snapshot.model_dump(exclude={"outcomes", "legacy_records"})
+    context = snapshot.model_dump(exclude={"experiments"})
     # A long Q1 must not crowd out every later question in an unscoped answer.
     buckets = {}
     for result in context["results"]:

@@ -119,7 +119,7 @@ def source_info(store, snapshot):
 
 def empty_document(research_id=None, commit_seq=0):
     return {'research_id': research_id, 'commit_seq': commit_seq, 'source_hash': None,
-            'sections': [], 'outline': [], 'feedback': [], 'history': [], 'tasks': [], 'patch_attempts': [],
+            'sections': [], 'outline': [], 'feedback': [], 'history': [], 'experiments': [], 'patch_attempts': [],
             'verified_methods': [], 'verified_formula_blocks': {}, 'artifacts': []}
 
 
@@ -211,8 +211,8 @@ async def document(store):
                          for k in keys if snapshot['sections'][k].get('text', '').strip()],
             'feedback': [{field: item.get(field) for field in ('id', 'message', 'category', 'section', 'task_id', 'status')}
                          for item in snapshot['feedback'] if item['status'] not in {'resolved', 'dismissed', 'superseded'}],
-            'history': history, 'tasks': [{'id': k, 'title': v['objective'], 'dependencies': v['dependencies']}
-                                        for k, v in snapshot['tasks'].items() if not v['retired']]}
+            'history': history, 'experiments': [{'id': k, 'title': v['objective'], 'dependencies': v['dependencies']}
+                                        for k, v in snapshot['experiments'].items() if not v['retired']]}
 
 
 def guard_wording(before, after, latex):

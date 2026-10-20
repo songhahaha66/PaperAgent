@@ -3,6 +3,8 @@
 Never infer an estimator from its display name or execute frozen model code here.
 Unverified, stale and unsupported model families yield no correction authority.
 """
+
+from .domain import experiment_design
 import hashlib,json
 from contextlib import closing
 from .store import digest
@@ -21,13 +23,13 @@ def verified_methods(store):
     try:manifest=json.loads((store.root/'manifest.json').read_text()).get('runs',{})
     except (OSError,ValueError):return []
     for row in records:
-        task=state['tasks'].get(row['task_id'])
+        task=state['experiments'].get(row['task_id'])
         if not task or task['retired'] or task['revision']!=row['revision'] or task['validity']!='current' or task['acceptance']!='accepted':continue
         if row.get('implementation_contract_version')!=1 or row.get('file_inputs')!=files or not policy or row.get('policy_version')!=policy[0]:continue
         if row.get('contract_hash')!=digest(protocol(state,row['task_id'])) or row.get('task_hash')!=digest(task['subproblem']):continue
-        attempt=state['attempts'].get(task['active_attempt'])
+        attempt=state['executions'].get(task['execution_id'])
         if not attempt or row.get('input_refs')!=attempt['input_refs'] or store._inputs(state,task,files)!=attempt['input_refs']:continue
-        candidates=(task.get('design') or {}).get('candidates',[])[:2]
+        candidates=(experiment_design(state, task) or {}).get('candidates',[])[:2]
         if row.get('candidate_hashes')!=[digest(c) for c in candidates]:continue
         for branch in row['branches']:
             audit=branch.get('implementation_audit') or {};contract=branch.get('estimator_contract') or {}
@@ -40,7 +42,7 @@ def verified_methods(store):
             expected='LinearRegression' if audit['family']=='ols' else 'Ridge'
             if not audit.get('estimator','').startswith('sklearn.') or not audit['estimator'].endswith('.'+expected):continue
             try:
-                artifact=store.root/'.system/attempts'/task['active_attempt']/'workspace/outputs/intermediate/comparisons'/row['id']/f"predictions-{branch['index']}.json"
+                artifact=store.root/'.system/attempts'/task['execution_id']/'workspace/outputs/intermediate/comparisons'/row['id']/f"predictions-{branch['index']}.json"
                 if not artifact.resolve().is_relative_to(store.root.resolve()):continue
                 raw=artifact.read_bytes()
                 if hashlib.sha256(raw).hexdigest()!=branch['prediction_hash'] or json.loads(raw)['estimator_audit']!=audit:continue
@@ -49,7 +51,7 @@ def verified_methods(store):
                 if run['status']!='success' or any(not p.is_relative_to(store.root.resolve()) for p in paths):continue
                 if any(hashlib.sha256(p.read_bytes()).hexdigest()!=h for p,h in zip(paths,[branch['driver_hash'],branch['stdout_hash']])):continue
             except (OSError,KeyError,ValueError,IndexError):continue
-            facts.append({'task_id':row['task_id'],'revision':task['revision'],'attempt_id':task['active_attempt'],
+            facts.append({'task_id':row['task_id'],'revision':task['revision'],'attempt_id':task['execution_id'],
                 'comparison_id':row['id'],'branch_index':branch['index'],'code_hash':branch['code_hash'],'protocol_hash':row['protocol_hash'],
                 'family':audit['family'],'fit_intercept':audit['fit_intercept'],'standardize':bool(preprocess),'alpha':audit.get('alpha'),
                 'estimator':audit['estimator'],'audit_artifact_sha256':branch['prediction_hash'],'run_id':branch['run_ids'][-1],

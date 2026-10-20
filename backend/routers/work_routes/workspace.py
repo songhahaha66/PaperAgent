@@ -440,8 +440,9 @@ async def get_research_skills(work_id: str, db: Session = Depends(get_db), curre
     from ai_system.modules.methods import skill_catalog
     store = _skill_store(db, work_id, current_user)
     snapshot = store.snapshot()
-    usage = [{'task_id': key, 'skills': task.get('design', {}).get('skills', []), 'validity': task['validity']}
-             for key, task in (snapshot or {}).get('tasks', {}).items() if task.get('design') and not task['retired']]
+    from ai_system.research.domain import experiment_design
+    usage = [{'task_id': key, 'skills': experiment_design(snapshot,task)['skills'], 'validity': task['validity']}
+             for key, task in (snapshot or {}).get('experiments', {}).items() if experiment_design(snapshot,task) and not task['retired']]
     return {**store.skill_preferences(), 'catalog': skill_catalog(), 'usage': usage,
             'has_research': bool(snapshot)}
 
@@ -636,7 +637,7 @@ async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:in
     files=store.file_inputs()
     for record in records:
         source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
-        task=(source or {}).get('tasks',{}).get(record['task_id'])
+        task=(source or {}).get('experiments',{}).get(record['task_id'])
         record['input_current']=files==record['file_inputs'] and (record.get('policy_version') is None or policy['version']==record['policy_version']) and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'] and (not record.get('intent_hash') or digest(task.get('experiment'))==record['intent_hash']))
     return {'policy':policy,'files':metadata(store.root),'comparisons':records}
 
@@ -653,40 +654,6 @@ class ResearchSetupRequest(BaseModel):
     skill_keys:list[str]=Field(default_factory=list,max_length=25)
     compare:bool=False
     comparison_spec:dict|None=None
-
-
-class ExecutionRecoveryDecision(BaseModel):
-    proof_hash:str=Field(min_length=64,max_length=64)
-
-
-def _execution_recovery_store(db,work_id,current_user):
-    _require_workspace_access(db,work_id,current_user)
-    if task_manager.get_running_task(work_id):raise HTTPException(409,'研究执行中不能关闭执行问题')
-    import json
-    from ai_system.research.store import ResearchStore
-    root=workspace_file_service.get_workspace_path(work_id)
-    try:
-        thread=json.loads((root/'.system/graph_thread.json').read_text())
-        store=ResearchStore(root,thread['thread_id'])
-        if not store.snapshot():raise ValueError('研究尚未初始化')
-        return store
-    except (OSError,ValueError,KeyError):raise HTTPException(409,'没有可核验的当前研究')
-
-
-@router.get('/{work_id}/research/issues/{issue_id}/execution-recovery')
-async def preview_execution_recovery(work_id:str,issue_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    store=_execution_recovery_store(db,work_id,current_user)
-    from ai_system.research.execution_recovery import preview
-    try:return await asyncio.to_thread(preview,store,issue_id)
-    except (ValueError,KeyError,OSError) as exc:raise HTTPException(409,str(exc))
-
-
-@router.post('/{work_id}/research/issues/{issue_id}/execution-recovery')
-async def close_recovered_execution(work_id:str,issue_id:str,request:ExecutionRecoveryDecision,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    store=_execution_recovery_store(db,work_id,current_user)
-    from ai_system.research.execution_recovery import resolve
-    try:return await asyncio.to_thread(resolve,store,issue_id,request.proof_hash,actor_id=current_user)
-    except (ValueError,KeyError,OSError) as exc:raise HTTPException(409,str(exc))
 
 
 @router.put('/{work_id}/research-setup')

@@ -68,7 +68,7 @@ def test_review_apply_is_section_local_versioned_and_idempotent(paper):
     result = asyncio.run(editor.decide(store, p['id'], True, 'markdown'))
     assert result['status'] == 'applied'
     after = store.snapshot()
-    assert after['attempts'] == before['attempts'] and after['tasks'] == before['tasks']
+    assert after['executions'] == before['executions'] and after['experiments'] == before['experiments']
     for key in before['sections']:
         if key != 'solve:Q1':
             assert after['sections'][key] == before['sections'][key]
@@ -245,7 +245,7 @@ def test_data_change_invalidates_pending_wording_candidate(paper):
     with pytest.raises(ResearchConflict):
         asyncio.run(editor.decide(store, proposal['id'], True, 'markdown'))
     assert (store.root / 'paper.md').read_text() == source
-    assert any(t['validity'] == 'stale' for t in store.snapshot()['tasks'].values())
+    assert any(t['validity'] == 'stale' for t in store.snapshot()['experiments'].values())
 
 
 @pytest.mark.parametrize('failure', ['source_replace', 'save'])

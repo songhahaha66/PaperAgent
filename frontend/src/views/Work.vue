@@ -61,9 +61,9 @@
           >
             <t-icon name="task" />
             <span>{{ isZh ? '研究进度' : 'Research progress' }}</span>
-            <span v-if="researchSnapshot?.tasks?.length" class="progress-count"
-              >{{ acceptedTaskCount }}/{{ researchSnapshot.tasks.length }}
-              {{ isZh ? '已审查' : 'reviewed' }}</span
+            <span v-if="researchSnapshot?.experiments?.length" class="progress-count"
+              >{{ acceptedTaskCount }}/{{ researchSnapshot.questions?.length || 0 }}
+              {{ isZh ? '已有结果' : 'reviewed' }}</span
             >
           </button>
           <button
@@ -122,7 +122,7 @@
                 <JsonChatRenderer
                   v-else
                   :messages="chatMessages"
-                  :tasks="researchSnapshot?.tasks"
+                  :tasks="researchSnapshot?.experiments"
                   :snapshot="researchSnapshot"
                   :work-status="currentWork?.status"
                   @open-progress="openProgress"
@@ -476,7 +476,7 @@ function openRegisteredEvidence(event: Event) {
 function openIssueEditor(id: string) {
   const issue = researchSnapshot.value?.feedback?.find((i) => i.id === id)
   if (issue && !issue.section) {
-    openObject({ type: 'result', resultType: 'task', id: issue.task_id })
+    openObject({ type: 'result', resultType: 'experiment', id: issue.task_id })
     return
   }
   issueRequest.value = { id, at: Date.now() }
@@ -564,8 +564,11 @@ async function replyToResearch() {
 }
 const acceptedTaskCount = computed(
   () =>
-    researchSnapshot.value?.outcomes?.filter((outcome) => outcome.checking === 'passed').length ||
-    0,
+    researchSnapshot.value?.questions?.filter((q) =>
+      researchSnapshot.value?.experiments?.some(
+        (e) => e.question_id === q.id && e.acceptance === 'accepted' && e.validity === 'current',
+      ),
+    ).length || 0,
 )
 const primaryAction = computed(() => {
   if (!currentWork.value) return null

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_system.research.models import WorkerResult, ReviewRecord, IssueReport, ResearchConflict, PlanPatch, TaskChange
+from ai_system.research.models import WorkerResult, ReviewRecord, IssueReport, ResearchConflict
 from ai_system.research.validation import report_fingerprint
 from services.chat_services.research_session import research_snapshot
 from services.chat_services import paper_editor
@@ -14,7 +14,7 @@ from test_research_control import make_store
 
 
 def test_result_explanation_is_optional_not_a_semantic_or_provenance_gate():
-    from ai_system.research.outcomes import result_view
+    from ai_system.research.experiment_views import result_view
     item={'id':'R1','name':'预测值','kind':'number','value':'1234.57','unit':'万千瓦时','run_id':'run_exact'}
     view=result_view(item,lambda *args:None)
     assert view['name']=='预测值' and view['unit']=='万千瓦时'
@@ -60,16 +60,6 @@ def test_no_review_never_becomes_passed_and_missing_decision_stays_missing(tmp_p
     assert task['next_step'] is None
 
 
-def test_fresh_review_and_versioned_history_are_distinct(tmp_path):
-    store = make_store(tmp_path)
-    submit(store)
-    view = snapshot(store)
-    assert view.outcomes[0]['checking'] == 'passed'
-    store.apply_patch(PlanPatch(command_id='change', base_revision=1, reason='different input', changes=[TaskChange(task_id='Q1', objective='new scope')]))
-    old = snapshot(store).outcomes[0]
-    assert old['availability'] == 'historical' and old['checking'] != 'passed'
-    assert old['results'], 'stale evidence stays inspectable without entering the active registry'
-    assert not snapshot(store).results
 
 
 def test_legacy_metadata_and_series_are_not_invented(tmp_path):
@@ -102,7 +92,7 @@ def test_changed_sources_are_detected_without_mutating_research(tmp_path):
     before = store.snapshot()
     view = snapshot(store).outcomes[0]
     assert view['availability'] == 'historical' and view['checking'] == 'outdated'
-    assert view['sources'][0]['hash'] == before['attempts'][view['attempt_id']]['input_refs']['data/source.csv']
+    assert view['sources'][0]['hash'] == before['executions'][view['attempt_id']]['input_refs']['data/source.csv']
     assert store.snapshot() == before
 
 

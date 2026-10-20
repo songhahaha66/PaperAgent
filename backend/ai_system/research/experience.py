@@ -45,7 +45,7 @@ def grounded(root,state,refs):
         from ..graph.registry import value_in_output
         result=[]
         for ref in refs:
-            row=state['evidence'][ref]['payload'];run=manifest['runs'][row['run_id']]
+            row=state['artifacts'][ref]['payload'];run=manifest['runs'][row['run_id']]
             if run['status']!='success':return []
             path=(root/run['stdout']).resolve()
             if not path.is_relative_to(root) or path.stat().st_size>4_000_000:return []
@@ -57,9 +57,9 @@ def grounded(root,state,refs):
 
 
 def card_for(state, attempt_id, root=None):
-    a=state['attempts'][attempt_id]
+    a=state['executions'][attempt_id]
     if not a.get('commit'):return None
-    result=a.get('result',{});task=state['tasks'][a['task_id']]
+    result=a.get('result',{});task=state['experiments'][a['task_id']]
     frozen=a.get('experience_basis',{})
     question=frozen.get('question',task['objective'])
     design=result.get('design') or {}
@@ -78,15 +78,15 @@ def card_for(state, attempt_id, root=None):
     empirical=bool(checks and rules and provenance and provenance==a.get('experience_evidence')
         and validation.get('protocol_hash')==a['protocol_hash']==digest(rules)
         and len(checks)==len(expected) and check_keys(checks)==expected
-        and all(c['evidence_refs'] and all(ref in state['evidence'] and
-            state['evidence'][ref]['producer_attempt'] in producers and
-            state['evidence'][ref]['content_hash']==digest(state['evidence'][ref]['payload'])
+        and all(c['evidence_refs'] and all(ref in state['artifacts'] and
+            state['artifacts'][ref]['producer_attempt'] in producers and
+            state['artifacts'][ref]['content_hash']==digest(state['artifacts'][ref]['payload'])
             for ref in c['evidence_refs']) for c in checks))
-    current=bool(a['commit']['published'] and task['revision']==a['revision'] and task['active_attempt']==attempt_id
+    current=bool(a['commit']['published'] and task['revision']==a['revision'] and task['execution_id']==attempt_id
         and task['validity']=='current' and a.get('validity','current')=='current' and not task['retired'])
     related={a['task_id']}
     while True:
-        expanded=related|{dep for key in related for dep in state['tasks'][key]['dependencies']}
+        expanded=related|{dep for key in related for dep in state['experiments'][key]['dependencies']}
         if expanded==related:break
         related=expanded
     blocking=any(i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'} and

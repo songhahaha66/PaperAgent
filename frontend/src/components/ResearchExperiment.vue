@@ -1,33 +1,36 @@
 <template>
-  <article class="outcome">
+  <article class="experiment">
     <header>
       <small v-if="question">研究问题 · {{ question.title }}</small>
-      <h2>{{ outcome.title }}</h2>
-      <small v-if="outcome.started_at">实验开始于 {{ startedAt }}</small>
+      <h2>{{ experiment.title }}</h2>
+      <small v-if="experiment.started_at">实验开始于 {{ startedAt }}</small>
     </header>
     <dl class="states">
       <div>
         <dt>{{ isZh ? '计算' : 'Computation' }}</dt>
         <dd>
           {{
-            outcome.computation === 'failed'
+            experiment.computation === 'failed'
               ? isZh
                 ? '计算失败'
                 : 'Computation failed'
-              : label(outcome.computation)
+              : label(experiment.computation)
           }}
         </dd>
       </div>
       <div>
         <dt>{{ isZh ? '成果' : 'Availability' }}</dt>
-        <dd>{{ label(outcome.availability) }}</dd>
+        <dd>{{ label(experiment.availability) }}</dd>
       </div>
       <div>
         <dt>{{ isZh ? '检查' : 'Checks' }}</dt>
-        <dd>{{ label(outcome.checking) }}</dd>
+        <dd>{{ label(experiment.checking) }}</dd>
       </div>
     </dl>
-    <p v-if="outcome.availability === 'historical' || outcome.checking === 'failed'" role="alert">
+    <p
+      v-if="experiment.availability === 'historical' || experiment.checking === 'failed'"
+      role="alert"
+    >
       {{
         isZh
           ? '这是历史结果，仍需核查。'
@@ -37,22 +40,22 @@
     <h3>{{ isZh ? '实际执行' : 'Actual execution' }}</h3>
     <MarkdownRenderer
       :content="
-        outcome.approach ||
-        outcome.summary ||
+        experiment.approach ||
+        experiment.summary ||
         (isZh ? '尚无执行说明。' : 'No execution description recorded.')
       "
       :work-id="workId"
     />
-    <details v-if="outcome.method">
+    <details v-if="experiment.method">
       <summary>{{ isZh ? '最初的方法设想' : 'Initial method proposal' }}</summary>
       <MarkdownRenderer
         :content="
           [
-            outcome.method.name,
-            outcome.method.idea,
-            outcome.method.formulation,
-            ...(outcome.method.steps || []),
-            outcome.method.validation,
+            experiment.method.name,
+            experiment.method.idea,
+            experiment.method.formulation,
+            ...(experiment.method.steps || []),
+            experiment.method.validation,
           ]
             .filter(Boolean)
             .join('\n\n')
@@ -60,23 +63,23 @@
         :work-id="workId"
       />
     </details>
-    <section v-if="outcome.experiment">
+    <section v-if="experiment.experiment">
       <h3>{{ isZh ? '本次试验' : 'This experiment' }}</h3>
-      <template v-if="outcome.experiment.candidates.length > 1">
-        <p v-for="candidate in outcome.experiment.candidates" :key="candidate.name">
+      <template v-if="experiment.experiment.candidates.length > 1">
+        <p v-for="candidate in experiment.experiment.candidates" :key="candidate.name">
           <strong>{{ candidate.name }}</strong
           >：{{ candidate.instruction }}
         </p>
       </template>
-      <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ outcome.experiment.conditions }}</p>
-      <p>{{ isZh ? '评价依据：' : 'Evaluation: ' }}{{ outcome.experiment.evaluation }}</p>
+      <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ experiment.experiment.conditions }}</p>
+      <p>{{ isZh ? '评价依据：' : 'Evaluation: ' }}{{ experiment.experiment.evaluation }}</p>
     </section>
     <h3>{{ isZh ? '图表与指标' : 'Figures and measurements' }}</h3>
-    <p v-if="!outcome.results.length">
+    <p v-if="!experiment.results.length">
       {{ isZh ? '尚未登记可读成果。' : 'No results recorded yet.' }}
     </p>
     <section
-      v-for="result in outcome.results"
+      v-for="result in experiment.results"
       :key="result.id"
       class="measurement"
       :data-result="result.id"
@@ -128,30 +131,48 @@
         >
       </details>
     </section>
+    <section v-if="experiment.artifacts.length">
+      <h3>{{ isZh ? '实验文件' : 'Experiment files' }}</h3>
+      <button
+        v-for="artifact in experiment.artifacts.filter((a) => a.path)"
+        :key="artifact.id"
+        @click="emit('open-file', artifact.path!)"
+      >
+        {{
+          {
+            code: '执行代码',
+            stdout: '运行输出',
+            stderr: '错误输出',
+            data: '生成数据',
+            report: '实验报告',
+          }[artifact.kind] || '查看文件'
+        }}
+      </button>
+    </section>
     <h3>{{ isZh ? '结论' : 'Conclusions' }}</h3>
-    <p v-if="!outcome.claims.length">
+    <p v-if="!experiment.claims.length">
       {{ isZh ? '尚未登记有证据关联的结论。' : 'No evidence-linked conclusions recorded.' }}
     </p>
-    <div v-for="claim in outcome.claims" :key="claim.id">
+    <div v-for="claim in experiment.claims" :key="claim.id">
       <p>{{ claim.statement }}</p>
       <small>{{ claim.strength }} · {{ claim.evidence.join(', ') }}</small>
     </div>
     <h3>{{ isZh ? '来源' : 'Sources' }}</h3>
-    <p v-if="!outcome.sources.length">
+    <p v-if="!experiment.sources.length">
       {{
         isZh
           ? '未记录独立资料文件。'
           : 'No separate data source was recorded. Computation records are available with each result.'
       }}
     </p>
-    <p v-if="outcome.sources.length" class="note">
+    <p v-if="experiment.sources.length" class="note">
       {{
         isZh
           ? '本次实验使用的输入文件。'
           : 'These inputs were frozen for this attempt; per-result file attribution was not separately recorded.'
       }}
     </p>
-    <div v-for="source in outcome.sources" :key="source.path">
+    <div v-for="source in experiment.sources" :key="source.path">
       <button v-if="source.available" @click="emit('open-file', source.path)">
         {{ source.path }}
       </button>
@@ -164,13 +185,13 @@
     <h3>{{ isZh ? '后续安排' : 'Next step and reason' }}</h3>
     <p>
       {{
-        outcome.next_step ||
+        experiment.next_step ||
         (isZh ? '暂无后续安排。' : 'No next-step decision or reason was recorded.')
       }}
     </p>
-    <section v-if="outcome.issues.length">
+    <section v-if="experiment.issues.length">
       <h3>{{ isZh ? '待处理事项' : 'Findings' }}</h3>
-      <p v-for="issue in outcome.issues" :key="issue.id">
+      <p v-for="issue in experiment.issues" :key="issue.id">
         {{
           issue.category === 'service'
             ? isZh
@@ -187,11 +208,11 @@
         </button>
       </p>
     </section>
-    <details v-if="outcome.history.length">
+    <details v-if="experiment.history.length">
       <summary>
-        {{ isZh ? '保留的历史成果' : 'Retained history' }} ({{ outcome.history.length }})
+        {{ isZh ? '保留的历史成果' : 'Retained history' }} ({{ experiment.history.length }})
       </summary>
-      <section v-for="previous in outcome.history" :key="previous.attempt_id">
+      <section v-for="previous in experiment.history" :key="previous.attempt_id">
         <p>v{{ previous.revision }} · {{ previous.attempt_id }}</p>
         <p v-for="item in previous.results" :key="item.id">
           {{ item.id }} · {{ item.name }} · {{ item.value }} {{ item.unit
@@ -205,7 +226,11 @@
 </template>
 <script setup lang="ts">
 import { computed, nextTick, watch } from 'vue'
-import type { ResearchOutcome, ResearchSnapshot, EvidenceUse } from '@/types/research'
+import type {
+  ResearchExperiment as Experiment,
+  ResearchSnapshot,
+  EvidenceUse,
+} from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
 import { outcomeLabel } from '@/utils/outcomeLabels'
 import ResultSeries from './ResultSeries.vue'
@@ -214,7 +239,7 @@ import WorkDocument from './WorkDocument.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 const props = defineProps<{
   workId: string
-  outcome: ResearchOutcome
+  experiment: Experiment
   runs: ResearchSnapshot['runs']
   snapshot?: ResearchSnapshot | null
   focusRef?: string
@@ -225,16 +250,16 @@ const emit = defineEmits<{
   paper: [use: EvidenceUse]
 }>()
 const startedAt = computed(() => {
-  const raw = props.outcome.started_at
+  const raw = props.experiment.started_at
   if (!raw) return ''
   return new Date(typeof raw === 'number' ? raw * 1000 : raw).toLocaleString('zh-CN')
 })
 const question = computed(() =>
-  props.snapshot?.questions?.find((q) => q.task_ids.includes(props.outcome.task_id)),
+  props.snapshot?.questions?.find((q) => q.id === props.experiment.question_id),
 )
 const usesFor = (ref: string) => props.snapshot?.evidence_uses?.filter((u) => u.ref === ref) || []
 watch(
-  () => [props.focusRef, props.outcome] as const,
+  () => [props.focusRef, props.experiment] as const,
   async () => {
     await nextTick()
     if (props.focusRef)
@@ -266,7 +291,7 @@ const label = (value: string) => outcomeLabel(value, isZh.value)
   color: var(--pa-muted);
   gap: 8px;
 }
-.outcome {
+.experiment {
   padding: 24px;
   color: var(--pa-ink);
   max-width: 980px;

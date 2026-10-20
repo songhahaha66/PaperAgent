@@ -96,7 +96,9 @@ const history = computed(() =>
 const latestDecision = computed(() => props.snapshot?.runtime?.decisions.at(-1))
 const currentQuestion = computed(() => {
   const task = active.value.find((a) => a.task_id)?.task_id
-  return props.snapshot?.questions?.find((q) => task && q.task_ids.includes(task))?.title || ''
+  return (
+    props.snapshot?.questions?.find((q) => task && q.experiment_ids.includes(task))?.title || ''
+  )
 })
 const headline = computed(() =>
   waiting.value
@@ -117,8 +119,8 @@ const duration = (row: ResearchActivity) => {
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
 }
 const taskTitle = (id: string) =>
-  props.snapshot?.outcomes?.find((t) => t.task_id === id)?.title ||
-  props.snapshot?.questions?.find((q) => q.task_ids.includes(id))?.title ||
+  props.snapshot?.experiments?.find((t) => t.task_id === id)?.title ||
+  props.snapshot?.questions?.find((q) => q.experiment_ids.includes(id))?.title ||
   '相关研究'
 const statusLabel = (status: string) =>
   ({

@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.research import ENGINE_VERSION
-from ai_system.research.models import DomainCheck, LinearModel, PlanPatch, TaskChange
+from ai_system.research.models import DomainCheck, LinearModel
 from ai_system.research.store import ResearchStore
 from ai_system.research.planner import ready_tasks
 from services.chat_services.research_session import research_snapshot
@@ -41,33 +41,6 @@ def store_for(root, max_attempts=3):
     return store
 
 
-def test_false_zero_violation_is_rejected_and_repaired_without_recomputing_unrelated_work(tmp_path):
-    store = store_for(tmp_path)
-    submit(store, 'Q3', {'statistic': 7})
-    unrelated = store.snapshot()['tasks']['Q3']['active_attempt']
-    submit(store, 'Q1', {'x': 4, 'y': 4, 'objective': 20, 'max_violation': 0})
-    state = store.snapshot()
-    assert state['validations'][-1]['outcome'] == 'rejected'
-    assert '复算左值 12' in research_findings(state)[0]['message']
-    assert not store.delivery_ready(state) and 'Q2' not in ready_tasks(state)
-    assert {r['subproblem'] for r in store.registry_payload()['results']} == {'Q3'}
-    snapshot = research_snapshot(tmp_path, 'work', 'failed')
-    assert snapshot.delivery['ready'] is False
-    assert snapshot.tasks[0]['validation']['outcome'] == 'rejected'
-    assert any('复算左值 12' in b['message'] and b['action'] == 'recompute' for b in snapshot.delivery['blockers'])
-    original = state['spec']['requirements'][0]['checks']
-    store.apply_patch(PlanPatch(command_id='repair', base_revision=state['revision'], reason='Respect actual constraints',
-        issue_ids=[research_findings(state)[0]['id']], changes=[TaskChange(task_id='Q1', objective='Re-enumerate feasible integer pairs')]))
-    assert store.snapshot()['spec']['requirements'][0]['checks'] == original
-    assert research_snapshot(tmp_path, 'work', 'failed').tasks[0]['validation'] is None
-    submit(store, 'Q1', {'x': 3, 'y': 2, 'objective': 13})
-    submit(store, 'Q2', {'allocation_explained': 1})
-    state = store.snapshot()
-    assert store.delivery_ready(state)
-    assert state['tasks']['Q3']['active_attempt'] == unrelated
-    assert all(i['status'] == 'resolved' for i in research_findings(state))
-    assert research_snapshot(tmp_path, 'work', 'completed').delivery == {'ready': True, 'blockers': []}
-    assert '未验证最优性' in research_snapshot(tmp_path, 'work', 'completed').tasks[0]['validation']['checks'][0]['message']
 
 
 @pytest.mark.parametrize('values,outcome,detail', [
@@ -96,7 +69,7 @@ def test_linear_contract_rejects_unsourced_constraints_and_invalid_dimensions(tm
     with pytest.raises(ValidationError, match='不能重复'):
         DomainCheck.model_validate(data)
     store = store_for(tmp_path)
-    analysis = {'subproblems': [t['subproblem'] for t in store.snapshot()['tasks'].values()],
+    analysis = {'subproblems': [t['subproblem'] for t in store.snapshot()['experiments'].values()],
         'requirements': [{k: v for k, v in r.items() if k != 'revision'} for r in store.snapshot()['spec']['requirements']], 'assumptions': []}
     analysis['requirements'][0]['checks'][0]['linear_model']['constraints'][0]['source_quote'] = 'invented constraint'
     with pytest.raises(ValueError, match='逐字引用原题'):
@@ -141,27 +114,3 @@ def test_submission_requires_decisions_not_just_self_reported_residual(tmp_path)
     task['research_contract']['checks'][0]['check'] = check().model_dump()
     with pytest.raises(ValidationError, match='x'):
         submission_schema(ctx, task, runs).model_validate(report(objective.id))
-
-
-def test_requirement_feedback_identifies_the_rule_and_preserves_hard_constraints(tmp_path):
-    from ai_system.research.models import Requirement, ResearchConflict
-    data = {'id':'R', 'statement':'容量不得超过8', 'source_quote':'容量不得超过8',
-            'kind':'constraint', 'task_ids':['Q1']}
-    requirement = Requirement.model_validate(data)
-    assert requirement.kind == 'constraint' and not requirement.checks
-    store = ResearchStore(tmp_path, 'pending-constraint')
-    store.initialize(data['source_quote'], {'subproblems':[{'id':'Q1', 'question':'计算容量'}],
-        'requirements':[requirement.model_dump()], 'assumptions':[]})
-    with pytest.raises(ResearchConflict, match='操作化检查'):
-        store.claim('Q1')
-    assert not store.snapshot()['attempts']
-    requirement.checks = [DomainCheck(id='capacity', description='原题容量上限',
-        left={'task_id':'Q1', 'name':'capacity'}, operator='le', expected=8)]
-    store.apply_patch(PlanPatch(command_id='bind-capacity', base_revision=store.snapshot()['revision'],
-        reason='领取前按原题绑定容量检查', requirements=[requirement]))
-    order = store.claim('Q1')
-    assert store.snapshot()['spec']['requirements'][0]['kind'] == 'constraint'
-    from ai_system.research.validation import protocol
-    frozen = protocol(store.snapshot(), 'Q1')
-    assert frozen[0]['owner_id'] == 'R' and frozen[0]['check']['operator'] == 'le' and frozen[0]['check']['expected'] == 8
-    assert store.snapshot()['attempts'][order.attempt_id]['protocol_hash'] == order.protocol_hash

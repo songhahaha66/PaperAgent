@@ -171,15 +171,6 @@ class ReviewRecord(Contract):
     evidence: list[dict[str, Any]] = Field(default_factory=list, description="审查实际引用的本次尝试证据，保留返工前已被替换的值")
 
 
-class AssumptionChange(Contract):
-    assumption_id: str
-    base_revision: int = Field(ge=1)
-    statement: str = Field(min_length=1)
-    task_ids: list[str] = Field(min_length=1)
-    checks: list[DomainCheck] = Field(default_factory=list)
-    status: Literal["active", "retired"] = "active"
-
-
 def is_continuation(message: str) -> bool:
     """Exact control replies only; mixed instructions retain their substance."""
     import re
@@ -219,37 +210,12 @@ class ExperimentPlan(Contract):
         return self
 
 
-class TaskChange(Contract):
-    research_question: str | None = None
-    question_key: str | None = None
-    investigates: list[str] = Field(default_factory=list)
-    action: Literal["revise", "add", "retire"] = "revise"
-    task_id: str
-    title: str = ""
-    kind: Literal["compute", "writing", "verify"] = "compute"
-    objective: str = Field(min_length=1)
-    method_instruction: str = Field(default='',max_length=3000)
-    experiment: ExperimentPlan | None = Field(default=None, exclude_if=lambda value:value is None,
-        description='按需冻结候选方法及评价条件；新实验或方法修订在此记录，非实验任务可省略')
-    dependencies: list[str] | None = None
-    requirement_ids: list[str] | None = None
-
-
-class PlanPatch(Contract):
-    command_id: str = Field(min_length=1)
+class ResearchRevision(Contract):
+    command_id: str
     base_revision: int = Field(ge=1)
-    reason: str = Field(min_length=1)
-    changes: list[TaskChange] = Field(default_factory=list)
-    assumptions: list[AssumptionChange] = Field(default_factory=list)
-    issue_ids: list[str] = Field(default_factory=list)
-    requirements: list[Requirement] = Field(default_factory=list)
-    amendment: str | None = None
-
-    @model_validator(mode="after")
-    def changes_something(self):
-        if not self.changes and not self.assumptions and not self.requirements:
-            raise ValueError("计划修改不能为空")
-        return self
+    change: str = Field(min_length=1)
+    experiment_ids: list[str] = Field(min_length=1)
+    requirements: list[Requirement]
 
 
 class WorkOrder(Contract):
@@ -280,10 +246,3 @@ class WorkerResult(Contract):
 
 class ResearchConflict(ValueError):
     """A command or attempt was based on state which is no longer current."""
-
-
-class PlanProposal(Contract):
-    reason: str
-    changes: list[TaskChange] = Field(default_factory=list, max_length=6)
-    assumptions: list[AssumptionChange] = Field(default_factory=list)
-    issue_ids: list[str] = Field(default_factory=list)

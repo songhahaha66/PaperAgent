@@ -2,12 +2,20 @@ export interface ResearchQuestion {
   id: string
   title: string
   question: string
-  task_ids: string[]
+  experiment_ids: string[]
   sources: string[]
   judgment: string
   next_step: string
   issues: { id: string; message: string; next_step: string }[]
-  judgments: { task_id: string; reason: string; stance: string; evidence_refs: string[] }[]
+  artifact_refs: string[]
+  limitations: string[]
+  judgments: {
+    question_id: string
+    statement: string
+    artifact_refs: string[]
+    limitations: string[]
+    next_step: string
+  }[]
 }
 export interface EvidenceUse {
   ref: string
@@ -40,7 +48,28 @@ export interface ReadableResult {
   figure_path: string | null
   series: number[] | null
 }
-export interface ResearchOutcome {
+export interface ResearchExperiment {
+  question_id: string
+  kind: string
+  dependencies: string[]
+  execution_status: string
+  acceptance: string
+  validity: string
+  reason?: string
+  progress: {
+    state: string
+    waiting_for: string[]
+    issue_ids: string[]
+    executions: number
+    attempt_limit: number
+    rework: boolean
+    next_step?: string
+  }
+  validation?: {
+    outcome: string
+    checks: { check_id: string; outcome: string; message: string }[]
+  } | null
+  artifacts: { id: string; kind: string; path: string | null; run_id: string }[]
   id: string
   task_id: string
   title: string
@@ -107,29 +136,12 @@ export interface ResearchSnapshot {
       id: string
       action: string
       reason: string
-      gap: string
-      task_ids: string[]
-      evidence_refs: string[]
+      question_id?: string | null
+      artifact_refs: string[]
+      issue_ids: string[]
     }[]
   }
-  plans?: {
-    id: string
-    version: number
-    objective: string
-    dependencies: string[]
-    methods: { name: string; idea?: string }[]
-    selected: number | null
-    status: string
-    current: boolean
-  }[]
-  experiments?: {
-    id: string
-    plan_id: string
-    plan_version: number
-    status: string
-    acceptance: string
-    experience_versions: { id: string; version: number }[]
-  }[]
+  experiments?: ResearchExperiment[]
   faults?: {
     id: string
     task_id: string
@@ -138,10 +150,8 @@ export interface ResearchSnapshot {
     action: string
     category: string
   }[]
-  legacy_records?: { source: string; raw: unknown }[]
-  outcomes?: ResearchOutcome[]
   execution_reason?: { kind: string; message: string } | null
-  schema_version: 3
+  schema_version: 4
   engine_version?: string | null
   research_revision?: number
   commit_seq?: number
@@ -151,42 +161,6 @@ export interface ResearchSnapshot {
     ready: boolean
     blockers: { task_id: string; message: string; action: string }[]
   } | null
-  tasks?: {
-    task_id: string
-    kind: string
-    revision: number
-    objective: string
-    dependencies: string[]
-    execution_status: string
-    acceptance: string
-    validity: string
-    reason?: string
-    progress: {
-      state:
-        | 'accepted'
-        | 'running'
-        | 'interrupted'
-        | 'needs_plan'
-        | 'failed'
-        | 'waiting'
-        | 'blocked'
-        | 'rework'
-        | 'ready'
-        | 'review'
-        | 'pending'
-        | 'writing'
-      waiting_for: string[]
-      issue_ids: string[]
-      attempts: number
-      attempt_limit: number
-      rework: boolean
-      next_step?: string
-    }
-    validation?: {
-      outcome: string
-      checks: { check_id: string; outcome: string; message: string }[]
-    } | null
-  }[]
   requirements?: {
     id: string
     statement: string

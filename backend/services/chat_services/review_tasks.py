@@ -20,7 +20,7 @@ def paper_state(store):
     snapshot=store.snapshot()
     state={'task':snapshot['spec']['requirement'],'analysis':{'title':'研究','requirements':snapshot['spec']['requirements'],
         'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired'],
-        'subproblems':[t['subproblem'] for t in snapshot['tasks'].values() if not t['retired']]},
+        'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if not t['retired']]},
         'sections':{k:v['text'] for k,v in snapshot['sections'].items()},'consistency':[]}
     state['consistency']=snapshot.get('consistency',[])
     return state
@@ -120,7 +120,7 @@ def status(store):
     store.refresh_inputs();expire_leases(store);rows=records(store);snapshot=store.snapshot();runtime=ResearchRuntime(store.root,store.research_id);budget=runtime.status();tasks=[]
     from ai_system.research.citations import citation_issues
     state=paper_state(store)
-    prerequisites=all(t['retired'] or t['acceptance']=='accepted' and t['validity']=='current' for t in snapshot['tasks'].values())
+    prerequisites=bool(store.registry_payload(snapshot)['results'])
     for stage,label in LABELS.items():
         current=material(store,stage);context={'policy':'review-recovery-intent-v1','stage':stage,'version_material':current,'extra':{'non_blocking':True}}
         version=digest(context);same=[r for r in rows if r['source']=='recovery-intent' and r['context_hash']==version]
@@ -192,7 +192,7 @@ async def execute(store,stage,llm):
     if stage=='citations':
         from ai_system.research.citations import audit_citations,citation_issues
         await audit_citations(store.root,list(state['sections'].values()),llm,active=True)
-        reports=[IssueReport(task_id=next(iter(store.snapshot()['tasks'])),category='writing',section=k,message=m) for k,t in state['sections'].items() for m in citation_issues(store.root,t)]
+        reports=[IssueReport(task_id=next(iter(store.snapshot()['experiments'])),category='writing',section=k,message=m) for k,t in state['sections'].items() for m in citation_issues(store.root,t)]
     else:
         schema=ConsistencyReview if stage=='reconcile' else ClaimAudit
         system=RECONCILE_SYSTEM if stage=='reconcile' else AUDIT_SYSTEM
@@ -207,7 +207,7 @@ async def execute(store,stage,llm):
         async def perform():return await call_structured(llm,schema,as_messages(system,prompt),validate=validate,retries=0)
         result=await run_review(ctx,state,stage,schema,system,prompt,perform,sections=None if stage=='reconcile' else state['sections'],validate=validate)
         if stage=='reconcile':reports=[c.research_issue for c in result.conflicts if c.research_issue]
-        else:reports=[i.research_issue or IssueReport(task_id=next(iter(store.snapshot()['tasks'])),category='writing',section=i.section,message=i.problem) for i in result.issues if i.contradicts and not NOT_A_CONFLICT.search(i.problem)]
+        else:reports=[i.research_issue or IssueReport(task_id=next(iter(store.snapshot()['experiments'])),category='writing',section=i.section,message=i.problem) for i in result.issues if i.contradicts and not NOT_A_CONFLICT.search(i.problem)]
     current=material(store,stage)
     proof=[r['id'] for r in records(store) if r['source']!='recovery-intent' and r['stage']==stage and valid_result(r,store) and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
     if not proof:raise RuntimeError('没有当前版本实际完成的审查记录')
@@ -265,7 +265,7 @@ def start(store,stage,version,command_id,llm=None,*,model_factory=None):
     except ReviewInProgress as active:return {'id':active.record['id'],'state':'running','deduplicated':True}
     with store._transaction() as db:
         state=store._read(db)
-        issue=store._record_issue(state,IssueReport(task_id=next(iter(state['tasks'])),category='service',section='review-task:'+record['id'],message=LABELS[stage]+'待完成；恢复不会清零预算'),'confirmed',source='review-task:'+stage)
+        issue=store._record_issue(state,IssueReport(task_id=next(iter(state['experiments'])),category='service',section='review-task:'+record['id'],message=LABELS[stage]+'待完成；恢复不会清零预算'),'confirmed',source='review-task:'+stage)
         issue['review_scope']={'stage':stage,'context_hash':record['context_hash'],'failed_review_id':record['id']}
         store._save(db,state,'review_task_started',{'review_id':record['id'],'version':version,'stage':stage,'issue_id':issue['id']})
     worker=asyncio.create_task(_run(store,stage,record,llm));ACTIVE.add(worker);worker.add_done_callback(ACTIVE.discard)

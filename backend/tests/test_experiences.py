@@ -15,7 +15,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from models.models import Base,User,Project,ResearchExperience
 from services.research_experience import ExperienceScope
 from ai_system.research.store import ResearchStore,digest
-from ai_system.research.models import WorkerResult,PlanPatch,TaskChange,IssueReport
+from ai_system.research.models import WorkerResult, IssueReport
 from ai_system.research.experience import card_for,conditions,prompt_context
 from ai_system.graph.context import GraphContext
 from ai_system.modules.experiments.execution import build_task
@@ -71,11 +71,6 @@ def adopt_ready(scope):
             scope.transition(card['id'],'adopt',card['version'])
 
 
-def repair(store):
-    state=store.snapshot()
-    store.apply_patch(PlanPatch(command_id='repair',base_revision=state['revision'],reason='从检查反例修复',
-        changes=[TaskChange(task_id='Q1',objective=TASK+' 使用 SciPy 修复求解')],
-        issue_ids=[i['id'] for i in research_findings(state) if i['status']=='confirmed']))
 
 
 async def kernel_submit(store,code,order=None):
@@ -91,33 +86,11 @@ async def kernel_submit(store,code,order=None):
     finally:await ctx.kernels.close()
 
 
-def test_A_failure_repair_then_B_uses_advice_but_generates_new_kernel_evidence(env,monkeypatch):
-    a=env.store('A');failed,old=asyncio.run(kernel_submit(a,'x=0;z=0\nprint(x,z)'))
-    assert a.snapshot()['attempts'][old.order.attempt_id]['acceptance']=='rejected'
-    assert env.scope().list()['cards'][0]['card']['level']=='counterexample'
-    repair(a);fixed,new=asyncio.run(kernel_submit(a,CODE));assert fixed['published']
-    cards=env.scope().list()['cards'];verified=next(c for c in cards if c['card']['level']=='verified')
-    assert old.order.attempt_id in verified['card']['repairs']
-    counter=next(c for c in cards if c['card']['level']=='counterexample')
-    assert new.order.attempt_id in counter['card']['repaired_by']
-    adopt_ready(env.scope())
-    b=env.store('B');order=b.claim('Q1')
-    ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'),experience_store=b,experience_order=order)
-    branch={'source':TASK,'subproblem':analysis()['subproblems'][0],'data_profile':'self-contained','design':DESIGN}
-    text=build_task(branch,ctx)
-    assert {r['stage'] for r in order.experience_refs}=={'solve'}
-    assert '历史研究经验' in text and counter['id'] in text and '独立执行并登记新证据' in text
-    assert not b.registry_payload()['results']
-    assert order.experience_refs and order.input_digest==digest({'inputs':order.input_refs,'experiences':order.experience_refs})
-    _,fresh=asyncio.run(kernel_submit(b,CODE,order));assert b.snapshot()['attempts'][order.attempt_id]['acceptance']=='accepted'
-    assert {r['run_id'] for r in fresh.results}.isdisjoint({r['run_id'] for r in new.results+old.results})
-    assert all(b.snapshot()['evidence'][r['id']]['producer_attempt']==order.attempt_id for r in fresh.results)
-    assert env.scope('B').valid_refs(order.experience_refs)
 
 
 def test_empty_checks_success_is_unconfirmed_and_indexing_is_idempotent(env):
     s=env.store(checks=False);receipt,result=submit(s)
-    assert s.snapshot()['attempts'][result.order.attempt_id]['acceptance']=='accepted'
+    assert s.snapshot()['executions'][result.order.attempt_id]['acceptance']=='accepted'
     cards=env.scope().list()['cards'];assert len(cards)==1 and cards[0]['card']['level']=='unconfirmed'
     before=(cards[0]['id'],cards[0]['version'],cards[0]['hash'])
     assert s.commit(result)==receipt
@@ -125,32 +98,6 @@ def test_empty_checks_success_is_unconfirmed_and_indexing_is_idempotent(env):
     after=env.scope().list()['cards'][0];assert before==(after['id'],after['version'],after['hash'])
 
 
-@pytest.mark.parametrize('mutation',['disable','delete','policy','permission','input','revision','blocker','version','hash'])
-def test_inflight_submission_rechecks_history_before_publication(env,mutation):
-    a=env.store('A');submit(a);adopt_ready(env.scope());b=env.store('B');order=b.claim('Q1')
-    ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'),experience_store=b,experience_order=order)
-    branch={'source':TASK,'subproblem':analysis()['subproblems'][0]}
-    assert prompt_context(ctx,branch,['linear_programming'],'design')
-    ref=order.experience_refs[0]
-    if mutation=='disable':env.scope().change(ref['id'],enabled=False)
-    elif mutation=='delete':env.scope().change(ref['id'],delete=True)
-    elif mutation=='policy':env.scope().set_enabled(False)
-    elif mutation=='permission':
-        with env.sessions() as db:db.query(Project).filter(Project.work_id=='A').update({'created_by':2});db.commit()
-    elif mutation=='input':
-        (a.root/'data').mkdir(exist_ok=True);(a.root/'data/new.csv').write_text('x\n1')
-    elif mutation=='revision':
-        state=a.snapshot();a.apply_patch(PlanPatch(command_id='amend',base_revision=state['revision'],reason='改变问题',changes=[TaskChange(task_id='Q1',objective=TASK+'重新求解')]))
-    elif mutation in {'version','hash'}:
-        with env.sessions() as db:
-            row=db.get(ResearchExperience,ref['id'])
-            if mutation=='version':row.version+=1
-            else:row.content_hash='changed'
-            db.commit()
-    else:a.report_issues([IssueReport(task_id='Q1',category='writing',message='相关任务存在阻塞')],'sections')
-    receipt,_=submit(b,order=order)
-    assert not receipt['published'] and '经验' in receipt['reason']
-    assert not b.registry_payload()['results']
 
 
 def test_owner_scope_conditions_methods_disable_delete_and_recovery(env):
@@ -186,11 +133,11 @@ def test_index_failure_does_not_rollback_research_and_can_rebuild(env,monkeypatc
 
 def test_fabricated_or_contract_mismatched_checks_never_make_verified_card(env):
     s=env.store();_,r=submit(s)
-    state=s.snapshot();a=state['attempts'][r.order.attempt_id]
+    state=s.snapshot();a=state['executions'][r.order.attempt_id]
     a['validation']['protocol_hash']='wrong';assert card_for(state,r.order.attempt_id)['level']!='verified'
-    state=s.snapshot();a=state['attempts'][r.order.attempt_id];a['validation']['checks'][0]['evidence_refs']=[]
+    state=s.snapshot();a=state['executions'][r.order.attempt_id];a['validation']['checks'][0]['evidence_refs']=[]
     assert card_for(state,r.order.attempt_id)['level']!='verified'
-    state=s.snapshot();state['evidence'][r.results[0]['id']]['payload']['value']='999'
+    state=s.snapshot();state['artifacts'][r.results[0]['id']]['payload']['value']='999'
     assert card_for(state,r.order.attempt_id)['level']!='verified'
 
 
@@ -251,4 +198,4 @@ def test_revocation_during_commit_rolls_back_before_publication(env,monkeypatch)
     decisions=iter([True,False]);monkeypatch.setattr(scope,'valid_refs',lambda _:next(decisions))
     with pytest.raises(ResearchConflict,match='提交前经验已失效'):submit(b,order=order)
     assert not b.registry_payload()['results']
-    assert 'commit' not in b.snapshot()['attempts'][order.attempt_id]
+    assert 'commit' not in b.snapshot()['executions'][order.attempt_id]

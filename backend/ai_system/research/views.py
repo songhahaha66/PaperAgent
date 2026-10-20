@@ -14,28 +14,15 @@ LABELS = {'research.observe':'判断下一步','experiments.inspect':'查看输�
 
 
 def questions(snapshot):
-    groups = {}
-    for key, task in snapshot['tasks'].items():
-        if task['retired'] or task['kind']=='verify':continue
-        # Historical tasks are not guessed into one problem. New experiments
-        # explicitly share research_question via the intent compiler.
-        statement = task.get('research_question') or task['objective']
-        identity = digest(task.get('question_key') or key)[:24]
-        row = groups.setdefault(identity,{'id':identity,'question':statement,
-            'title':statement if task.get('research_question') else task['subproblem'].get('title',statement),
-            'task_ids':[],'sources':[],'judgment':'','next_step':'','issues':[],'judgments':[]})
-        row['task_ids'].append(key)
-        for req in snapshot['spec']['requirements']:
-            if key in req['task_ids'] and req['source_quote'] not in row['sources']:row['sources'].append(req['source_quote'])
-        report = task.get('report') or {}
-        if report.get('summary'):row['judgment']=report['summary']
-        issues = [i for i in findings(snapshot) if i['task_id']==key and i['status'] not in CLOSED]
-        row['issues'] += [{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues]
-        row['judgments'] += [j for j in snapshot.get('judgments',[]) if j['task_id']==key]
-    for row in groups.values():
-        row['next_step']=' '.join(dict.fromkeys(i['next_step'] for i in row['issues']))
-        row['judgments']=row['judgments'][-8:]
-    return list(groups.values())
+    rows=[]
+    for question in snapshot['questions'].values():
+        experiments=[e for e in snapshot['experiments'].values() if e['question_id']==question['id'] and not e['retired']]
+        ids={e['task_id'] for e in experiments}
+        issues=[i for i in findings(snapshot) if i['task_id'] in ids and i['status'] not in CLOSED]
+        rows.append({**question, 'experiment_ids':[e['task_id'] for e in experiments],
+            'sources':list(dict.fromkeys(r['source_quote'] for r in snapshot['spec']['requirements'] if ids.intersection(r['task_ids']))),
+            'issues':[{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues]})
+    return rows
 
 
 def evidence_uses(snapshot):
@@ -45,14 +32,14 @@ def evidence_uses(snapshot):
         text=section['text']
         refs=list(dict.fromkeys(find_refs(text)))
         for ref in refs:
-            entry = snapshot['evidence'].get(ref)
+            entry = snapshot['artifacts'].get(ref)
             claim = snapshot['claims'].get(ref)
             task_ids = list(section.get('task_refs') or [])
             if entry:task_ids=[entry['payload']['subproblem']]
             elif claim:task_ids=[claim['payload']['subproblem']]
             else:continue
             uses.append({'ref':ref,'section':key,'section_version':section['content_hash'],
-                'title':snapshot['tasks'].get(key.removeprefix('solve:'),{}).get('subproblem',{}).get('title') or {'abstract':'摘要','restatement':'问题重述','analysis':'问题分析','assumptions':'研究假设','symbols':'符号说明','sensitivity':'敏感性分析','evaluation':'评价与局限','references':'参考文献'}.get(key,'研究正文'),'task_ids':task_ids,
+                'title':snapshot['experiments'].get(key.removeprefix('solve:'),{}).get('subproblem',{}).get('title') or {'abstract':'摘要','restatement':'问题重述','analysis':'问题分析','assumptions':'研究假设','symbols':'符号说明','sensitivity':'敏感性分析','evaluation':'评价与局限','references':'参考文献'}.get(key,'研究正文'),'task_ids':task_ids,
                 'quote':next((line.strip() for line in text.splitlines() if ref in line),'')[:600]})
     return uses
 

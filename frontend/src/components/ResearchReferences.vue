@@ -48,7 +48,7 @@ const methods = ref<SkillState | null>(null),
   usageError = ref(''),
   error = ref('')
 const taskTitle = (id: string) =>
-  props.snapshot?.tasks?.find((task) => task.task_id === id)?.objective || '研究方案'
+  props.snapshot?.experiments?.find((task) => task.task_id === id)?.objective || '研究方案'
 const stageLabel = (stage: string) =>
   ({ design: '方案制定', solve: '实验求解', repair: '问题修复' })[stage] || '本次研究'
 const source = (entry: NonNullable<ExperienceState['usage']>[number], ref: ExperienceRef) =>

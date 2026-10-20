@@ -29,8 +29,10 @@ def _project_progress(work):
         saved=json.loads(thread.read_text())
         if saved.get('engine_version')=='research-v3':
             snapshot=ResearchStore(root,saved['thread_id'],read_only=True).snapshot()
-            tasks=[t for t in (snapshot or {}).get('tasks',{}).values() if not t['retired']]
-            if tasks:progress=round(100*sum(t['acceptance']=='accepted' and t['validity']=='current' for t in tasks)/len(tasks))
+            questions=(snapshot or {}).get('questions',{})
+            answered={t['question_id'] for t in (snapshot or {}).get('experiments',{}).values()
+                      if not t['retired'] and t['acceptance']=='accepted' and t['validity']=='current'}
+            if questions:progress=round(100*len(answered)/len(questions))
     # A read projection must not dirty the ORM session or infer scientific
     # completion from a document's size or an old Markdown status label.
     return schemas.WorkResponse.model_validate(work).model_copy(update={
