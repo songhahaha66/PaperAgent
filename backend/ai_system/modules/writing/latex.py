@@ -36,13 +36,18 @@ async def _update(state, runtime, *, repairing=False):
         state = project.source_state(store, state)
     current = {r['path']:r['text'] for r in state['source_files'] if r['text'] is not None}
     evidence = '\n\n'.join(subproblem_brief(state, ctx, sp) for sp in state['analysis']['subproblems'])
+    from ai_system.research.views import questions, question_context
+    research_questions = question_context(questions(store.snapshot()))
     prompt = ('直接更新当前 LaTeX 项目。返回文件局部修改 edits，每项 file、old、replacement；'
               'old 必须是该文件中唯一出现的逐字原文，不能猜选区。只改实际受影响部分，保留人工编辑、宏和版式。'
               '正文直接使用原生 LaTeX。可按研究成果与用户模板组织、增删或调整结构；旧数据库章节不是约束。'
               '数值与图使用给定的 {{R:Rn}} / {{F:Fn}}，文献使用已核实 {{C:Cn}}；系统在写入前解析。'
               '不得编造结果、来源、引用键或实验。没有需要修改时返回空 edits。\n'
+              '问题判断为空时如实说明尚无判断；实验结果可用不等于研究问题已回答。'
+              '保留问题判断的局限、未解决意见和后续待研究部分，不把缺失判断补写成肯定结论。\n'
               '# 原要求\n'+state.get('task', '')+'\n# 用户模板\n'+(ctx.template_requirements or '')+
               '\n# 研究大纲（可按表达需要调整）\n'+json.dumps(state.get('outline', []), ensure_ascii=False)+
+              '\n# 研究问题、已有判断与未解决部分\n'+json.dumps(research_questions, ensure_ascii=False)+
               '\n# 实际研究成果\n'+evidence+'\n'+ctx.registry.to_prompt_table()+'\n'+consistency_text(ctx, state.get('consistency') or [])+
               '\n# 当前项目文件（唯一当前正文）\n'+json.dumps(current, ensure_ascii=False))
     from ai_system.research.literature import literature_context

@@ -9,6 +9,31 @@ def findings(state):
     return list(chain(state["feedback"], state["faults"]))
 
 
+def experiment_scope(experiments, experiment_ids):
+    """An explicit experiment scope plus its existing recursive dependencies."""
+    scope = set(experiment_ids)
+    pending = list(scope)
+    while pending:
+        experiment = experiments.get(pending.pop())
+        if experiment is None:
+            continue
+        for dependency in experiment.get('dependencies', []):
+            if dependency in experiments and dependency not in scope:
+                scope.add(dependency)
+                pending.append(dependency)
+    return scope
+
+
+def current_result_refs(state, experiment_ids):
+    """Usable evidence is distinct from whether a research question is answered."""
+    executions = {key: experiment['execution_id'] for key, experiment in state['experiments'].items()
+                  if key in experiment_ids and not experiment['retired'] and experiment['kind'] != 'verify'
+                  and experiment['acceptance'] == 'accepted' and experiment['validity'] == 'current'}
+    return {ref for ref, artifact in state['artifacts'].items()
+            if artifact['experiment_id'] in executions and artifact['type'] == 'result' and artifact['active']
+            and artifact['producer_attempt'] == executions[artifact['experiment_id']]}
+
+
 def attach_question(state, experiment, *, question_id=None, statement=None, title=None):
     """Attach once, including imported experiments. A method never owns a question."""
     questions = state['questions']

@@ -1,7 +1,7 @@
 """Shared read-only question, provenance and execution projections."""
 import re
 from .store import digest
-from .domain import findings
+from .domain import findings, experiment_scope, current_result_refs
 from .progress import issue_next_step
 from ai_system.graph.registry import find_refs
 
@@ -14,15 +14,34 @@ LABELS = {'research.observe':'判断下一步','experiments.inspect':'查看输�
 
 
 def questions(snapshot):
+    """Read-only question projection; preserve history for existing clients.
+
+    Empty judgments stay empty. Available results never imply an answer, and
+    recorded judgments retain their limitations and unresolved issues.
+    """
     rows=[]
     for question in snapshot['questions'].values():
         experiments=[e for e in snapshot['experiments'].values() if e['question_id']==question['id'] and not e['retired']]
         ids={e['task_id'] for e in experiments}
+        scope=experiment_scope(snapshot['experiments'], ids)
+        available=current_result_refs(snapshot, scope)
         issues=[i for i in findings(snapshot) if i['task_id'] in ids and i['status'] not in CLOSED]
-        rows.append({**question, 'experiment_ids':[e['task_id'] for e in experiments],
+        rows.append({**question,
+            'experiment_ids':[e['task_id'] for e in experiments],
+            'dependency_experiment_ids':sorted(scope - ids),
+            'available_artifact_refs':sorted(available),
+            'unavailable_artifact_refs':[ref for ref in question['artifact_refs'] if ref not in available],
             'sources':list(dict.fromkeys(r['source_quote'] for r in snapshot['spec']['requirements'] if ids.intersection(r['task_ids']))),
             'issues':[{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues]})
     return rows
+
+
+def question_context(rows):
+    """Share current judgments and their evidence scope without report/history copies."""
+    fields = ('id', 'title', 'question', 'judgment', 'artifact_refs', 'limitations', 'next_step',
+              'experiment_ids', 'dependency_experiment_ids', 'available_artifact_refs',
+              'unavailable_artifact_refs', 'sources', 'issues')
+    return [{key: row[key] for key in fields if key in row} for row in rows]
 
 
 def evidence_uses(snapshot, source_root=None):

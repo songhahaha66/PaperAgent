@@ -16,6 +16,13 @@ from routers.chat_routes import chat
 from services.chat_services.research_session import (
     research_snapshot, resolve_action, answer_research_question, scoped_snapshot, infer_question_scope,
 )
+from ai_system.judge.base import Answers, ChoiceAnswer
+
+
+class ReadOnlyChoice:
+    async def ask(self, state, questions):
+        return Answers(judge='jev:offline', choices={
+            'intent': ChoiceAnswer('question', {'question': 1}, None)})
 
 
 def seed(root):
@@ -193,7 +200,9 @@ def exchange(client, payload):
         return events
 
 
-def test_websocket_followup_never_constructs_graph_or_changes_research_status(web):
+def test_websocket_followup_never_constructs_graph_or_changes_research_status(web, monkeypatch):
+    monkeypatch.setattr('services.chat_services.research_session.jev_available', lambda: True)
+    monkeypatch.setattr('services.chat_services.research_session.JevJudge', lambda **kwargs: ReadOnlyChoice())
     client, work, calls, statuses, saved, root = web
     original = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     events = exchange(client, {"problem": "解释 Q1 的结果", "subproblem_id": "Q1"})
@@ -219,7 +228,7 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     assert events[0]["action"] == action and events[-1]["type"] == "complete"
     assert [name for name, _ in calls] == ["graph", expected]
     if action == "run":
-        assert calls[-1][1][1] == {"new_run": True}
+        assert calls[-1][1][1] == {"action": "run", "new_run": True}
     if action == "confirm":
         assert calls[-1][1][0] == "换一种方法"
     evidence = next(e["block"]["content"] for e in events if e["type"] == "json_block" and e["block"]["type"] == "research_snapshot")
@@ -296,7 +305,9 @@ def test_question_failure_preserves_research_status_and_hides_provider_error(web
     assert (root / "paper.md").read_text() == "# 研究\n已有报告，不得改写"
 
 
-def test_asking_about_waiting_plan_does_not_confirm_or_redesign(web):
+def test_asking_about_waiting_plan_does_not_confirm_or_redesign(web, monkeypatch):
+    monkeypatch.setattr('services.chat_services.research_session.jev_available', lambda: True)
+    monkeypatch.setattr('services.chat_services.research_session.JevJudge', lambda **kwargs: ReadOnlyChoice())
     client, work, calls, statuses, saved, root = web
     work.status = "waiting"
     (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "interrupted"}))

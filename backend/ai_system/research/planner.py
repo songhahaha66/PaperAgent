@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, model_validator
 from pydantic_core import PydanticCustomError
 from .models import Contract, ExperimentPlan, Requirement, ResearchRevision
-from .domain import findings, experiment_report
+from .domain import findings, experiment_report, experiment_scope, current_result_refs
 from .store import digest
 
 
@@ -97,7 +97,7 @@ PROMPT = """根据原题、研究问题、实验及真实产物决定下一步�
 普通代码、推导、仿真使用experiment；CSV双模型比较仅在适用时提供experiment协议，不能决定其他研究的主流程。
 已有产物通过artifact_refs引用；补充实验关联issue_ids。执行失败不是方法被证伪，可重试故障实验或新增方法，不能重跑已完成实验冒充新证据。
 模型估计、审查意见与实测产物必须区分。只有同条件结果才可比较；不强行选优，无赢家时保留多个候选或补实验。
-judgments记录基于实际产物的判断与局限。正文常规意见自动修；只有缺必要信息或真实用户取舍才ask。
+judgments记录基于实际产物的判断与局限，可引用本问题实验及已有递归依赖的当前有效结果，不能引用无依赖的其他问题结果。没有判断时可留空。正文常规意见自动修；只有缺必要信息或真实用户取舍才ask。
 已有材料未查看且需要读取时inspect。文献不足时literature。工具入口只使用给定能力及其参数，不传复杂内部状态。
 当实际成果足以回答原题时write，可提供简洁大纲；写作直接更新当前论文，科学验收和发布由现有写作检查负责。
 不要复制完整原要求、分配编号、构造执行上下文或要求用户修模型格式。完整原题始终保留，方法必须落实其要求。
@@ -153,10 +153,11 @@ def validate_action(action, snapshot, context):
     for judgment in action.judgments:
         if judgment.question_id not in snapshot['questions'] or not set(judgment.artifact_refs)<=known:
             raise ValueError('问题判断必须关联已有问题和实际产物')
-        if any(snapshot['artifacts'][ref]['experiment_id'] not in {
-                e['task_id'] for e in snapshot['experiments'].values() if e['question_id']==judgment.question_id}
-               for ref in judgment.artifact_refs):
-            raise ValueError('问题判断引用了其他问题的产物，请说明实际依赖后安排相应实验')
+        own = {key for key, experiment in snapshot['experiments'].items()
+               if experiment['question_id'] == judgment.question_id and not experiment['retired']}
+        scope = experiment_scope(snapshot['experiments'], own)
+        if not set(judgment.artifact_refs) <= current_result_refs(snapshot, scope):
+            raise ValueError('问题判断只能引用本问题实验及已有依赖的当前有效产物')
     if action.action=='experiment':
         if action.experiment_id:
             experiment=snapshot['experiments'].get(action.experiment_id)
