@@ -48,6 +48,11 @@ class AdjustIntent(Intent):
     assumptions: list[AssumptionChange] = Field(default_factory=list)
 
 
+class StopIntent(Intent):
+    action: Literal['stop']
+    task: str
+
+
 class Answer(Contract):
     requirement_id: str
     answer: str = Field(max_length=3000)
@@ -95,7 +100,7 @@ class ToolIntent(Intent):
 
 
 class ResearchIntent(Contract):
-    next: Annotated[ExperimentIntent | RunIntent | AdjustIntent | DeliverIntent | InspectIntent |
+    next: Annotated[ExperimentIntent | RunIntent | AdjustIntent | StopIntent | DeliverIntent | InspectIntent |
                     LiteratureIntent | AskIntent | PauseIntent | ToolIntent, Field(discriminator='action')]
 
 
@@ -104,7 +109,7 @@ def compile_intent(intent, snapshot, context):
     choice = intent.next
     requirements = {r['id']: r for r in snapshot['spec']['requirements']}
     # No duplicated statement or source quote is requested from the model.
-    targets = choice.tasks if isinstance(choice, RunIntent) else [choice.task] if isinstance(choice, AdjustIntent) else [choice.question_task] if isinstance(choice, ExperimentIntent) and choice.question_task else []
+    targets = choice.tasks if isinstance(choice, RunIntent) else [choice.task] if isinstance(choice, (AdjustIntent, StopIntent)) else [choice.question_task] if isinstance(choice, ExperimentIntent) and choice.question_task else []
     related = list(dict.fromkeys(r for key in targets if key in snapshot['tasks'] for r in snapshot['tasks'][key]['requirement_ids']))
     selected = list(choice.requirement_ids or related or (['RQ0'] if 'RQ0' in requirements else requirements))
     if isinstance(choice, ExperimentIntent):selected=list(dict.fromkeys([*selected,*(r.id for r in choice.requirements)]))
@@ -145,13 +150,13 @@ def compile_intent(intent, snapshot, context):
             requirements=choice.requirements)
     elif isinstance(choice, RunIntent):
         command.update(action='execute', task_ids=choice.tasks)
-    elif isinstance(choice, AdjustIntent):
+    elif isinstance(choice, (AdjustIntent, StopIntent)):
         task = snapshot['tasks'].get(choice.task)
         if not task:raise ValueError('方法调整引用了不存在的任务')
-        command.update(action='research', gap=choice.reason, issue_ids=choice.issue_ids,
-            assumptions=choice.assumptions, changes=[dict(action='revise', task_id=choice.task,
-            objective=task['objective'], kind=task['kind'], method_instruction=choice.method,
-            experiment=choice.experiment)])
+        command.update(action='research', gap=choice.reason, issue_ids=choice.issue_ids if isinstance(choice,AdjustIntent) else [],
+            assumptions=choice.assumptions if isinstance(choice,AdjustIntent) else [], changes=[dict(action='revise' if isinstance(choice,AdjustIntent) else 'retire', task_id=choice.task,
+            objective=task['objective'], kind=task['kind'], method_instruction=choice.method if isinstance(choice,AdjustIntent) else '',
+            experiment=choice.experiment if isinstance(choice,AdjustIntent) else None)])
     elif isinstance(choice, DeliverIntent):
         command.update(requirement_ids=list(requirements), title=choice.title,
             coverage=[dict(requirement_id=a.requirement_id, requirement=requirements[a.requirement_id]['statement'],
@@ -181,7 +186,7 @@ def compile_intent(intent, snapshot, context):
 
 PROMPT = '''围绕原题、当前材料和实际证据选择下一行动，只输出ResearchIntent。
 研究以单个问题为单位，按需提出方法、执行、获得证据、修正判断。方法明确直接experiment；不确定时逐步试候选，不固定生成两案，不预建完整计划。继续同一个问题时用question_task绑定已有任务；针对未确认的科研疑点做补充实验时用investigates关联意见，已有成果保留，只有复核后才能关闭意见；problem说明这次具体要补什么。
-experiment创建并执行一项研究；run只选择ready_tasks。已验收计算不能重复执行，报告文字意见由系统自动处理。adjust仅修改未验收任务的方法，原问题、依赖和版本由后端绑定。确认反证沿用issue_ids/assumptions协议，不放宽原题。
+experiment创建并执行一项研究；run只选择ready_tasks。已验收计算不能重复执行，报告文字意见由系统自动处理。stop可停止没有继续价值的未验收尝试，保留失败和成果，不表示原问题已解决；adjust仅修改未验收任务的方法，原问题、依赖和版本由后端绑定。确认反证沿用issue_ids/assumptions协议，不放宽原题。
 普通代码、参数、仿真使用现有执行器。experiment可冻结候选、conditions及evaluation；普通实验一个候选。只有CSV监督学习比较才填写csv（schema见csv_comparison_protocol）和两个候选。模型预估不算实测，条件不同不能硬排名；无赢家可继续补证或保留多个方法。method_keys只引用available_method_keys中的资源，算法写入method。
 原题完整保留。按需在requirements摘录原题硬约束、绑定必要检查；新任务局部引用用next。没有题内阈值不能虚构。requirement_ids省略时关联已有原要求。
 evidence_refs只能选evidence的真实结果或文献引用；不要复制原文，不引用审查意见作为科学证据。失败不等于方法无效，文件存在或任务验收不等于原题已回答。
