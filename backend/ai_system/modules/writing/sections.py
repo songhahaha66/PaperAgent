@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import json
 import re
 from typing import Dict, List, Tuple
 
@@ -152,6 +153,50 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
     )
 
 
+def _comparison_context(ctx: GraphContext, references, allowed) -> str:
+    """Current comparison facts, with measured quantities bound to real R refs."""
+    if ctx.research is None:return ''
+    import math
+    from ai_system.modules.experiments.store import ExperimentStore
+    summaries=[]
+    for summary in ExperimentStore(ctx.research).accepted_summaries(ctx.research.snapshot()):
+        if allowed is not None and summary['task_id'] not in allowed:continue
+        proof=summary['provenance'];metric=summary['protocol']['metric'].lower()
+        def reference(name,value):
+            for result in references.results.values():
+                if (result.id in proof['formal_evidence_refs'] and result.subproblem==summary['task_id'] and
+                    result.run_id==proof['formal_run_id'] and result.name==name):
+                    try:
+                        if math.isclose(float(result.value),value,rel_tol=1e-9,abs_tol=1e-10):
+                            return '{{R:'+result.id+'}}'
+                    except (ValueError,TypeError):pass
+            return None
+        protocol=dict(summary['protocol'])
+        protocol['baseline_value']=reference('comparison_baseline_'+metric,protocol['baseline_value'])
+        protocol.pop('negative_baseline_value',None)
+        for field in ('train_count','validation_count'):
+            protocol[field]=reference('comparison_'+field,protocol[field])
+        branches=[]
+        for row in summary['branches']:
+            candidate={k:row[k] for k in ('index','name','method_keys','status','eligible','selection_reason','error',
+                                        'estimator_contract','implementation_audit','candidate_hash','code_hash','prediction_hash','run_ids')}
+            for field in ('metric','baseline'):
+                name=f"comparison_candidate_{row['index']+1}_"+('baseline_' if field=='baseline' else '')+metric
+                ref=reference(name,row[field])
+                if ref is None and row['index']==summary['chosen_index']:
+                    ref=reference('comparison_'+('baseline_' if field=='baseline' else '')+metric,row[field])
+                candidate[field]=ref
+            branches.append(candidate)
+        summaries.append({**summary,'protocol':protocol,'branches':branches})
+    return ('\n\n# 当前共同协议比较（按本节任务范围提供；内部编号仅供追溯）\n'
+        '候选名称和方法是方案声明，implementation_audit说明实际核查边界。metric、baseline及样本数只能使用所给R引用；'
+        'null表示没有可用的正式登记引用，不得补造数值。共同协议参数是冻结设置，不是额外实测结论。'
+        'winner仅表示冻结数据、划分、指标和容差下优胜，不证明统计显著或跨条件更优；'
+        'only_valid仅表示一支满足规则和基线，不能声称优于失败、未完成或不合格的另一支；'
+        'tied表示容差内无实测优胜者，chosen_index只按冻结顺序选择代表。必须如实保留失败、置换对照和适用边界。\n'
+        +json.dumps(summaries,ensure_ascii=False,sort_keys=True)) if summaries else ''
+
+
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
     """每一节都带上全文结论表和统一口径，各节结论口径一致"""
     if key == "references":
@@ -167,6 +212,7 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
         allowed = {sid, *(sp.get("depends_on") or [])}
     references = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items()
                                                if allowed is None or r.subproblem in allowed})
+    request += _comparison_context(ctx,references,allowed)
     request += "\n\n# 本节可用引用（仅可复制这里的编号）\n" + references.to_prompt_table()
     if not any(r.kind == "figure" for r in references.results.values()):
         request += "\n本节没有可用图表，只能用文字、公式或基于已登记结果的表格说明，不得引用图。"

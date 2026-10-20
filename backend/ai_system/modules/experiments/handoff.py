@@ -20,6 +20,18 @@ async def handoff(ctx,branch,exploration,run_log):
     if not current(ctx,record,branch):raise ValueError('正式求解前冻结输入失效')
     frozen,payload,truth,_,train,_=prepare(ctx.workspace,record['protocol'])
     if digest(frozen)!=record['protocol_hash']:raise ValueError('正式求解协议不匹配')
+    # Reuse frozen project predictions, never a candidate's printed score. This
+    # also works when the comparison was completed by an earlier attempt.
+    comparison_workspace=(root_store(ctx).root/'.system/attempts'/record['owner_attempt']/'workspace'
+                          if record.get('owner_attempt') else ctx.workspace)
+    candidate_predictions={}
+    for item in record['branches']:
+        if item['status'] not in {'valid','control_inconclusive'}:continue
+        path=comparison_workspace/'outputs/intermediate/comparisons'/record['id']/f"predictions-{item['index']}.json"
+        raw=path.read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=item['prediction_hash']:
+            raise ValueError('比较预测产物已改变，禁止登记候选指标')
+        candidate_predictions[str(item['index'])]=json.loads(raw)['prediction']
     sid=branch['subproblem']['id'];live=sid in ctx.kernels._kernels
     folder=ctx.workspace/'outputs/intermediate/comparisons'/record['id'];folder.mkdir(parents=True,exist_ok=True)
     module=folder/'formal_estimator.py';inputs=folder/'formal_inputs.json';output=folder/'formal_metrics.json'
@@ -50,19 +62,36 @@ def _formal_score(y,p):
     return float(roc_auc_score(y,p) if {frozen['metric']!r}=='AUC' else mean_absolute_error(y,p) if {frozen['metric']!r}=='MAE' else math.sqrt(mean_squared_error(y,p)))
 _formal_baseline=np.full(len(_formal_truth),np.median(_formal_train) if {frozen['metric']!r}=='MAE' else np.mean(_formal_train))
 _formal_values={{'metric':_formal_score(_formal_truth,_formal_pred),'baseline':_formal_score(_formal_truth,_formal_baseline),'train_count':len(_formal_train),'validation_count':len(_formal_truth),'total_count':len(_formal_train)+len(_formal_truth)}}
-Path({rel(output)!r}).write_text(json.dumps({{'values':_formal_values,'predictions':np.asarray(_formal_pred).tolist()}},allow_nan=False))
+_formal_candidates={{}}
+for _index,_predictions in {candidate_predictions!r}.items():
+    _predictions=np.asarray(_predictions)
+    if _predictions.shape!=_formal_truth.shape or not np.isfinite(_predictions).all():
+        raise ValueError('冻结候选预测不满足指标契约')
+    _formal_candidates[_index]={{'metric':_formal_score(_formal_truth,_predictions),'baseline':_formal_values['baseline']}}
+Path({rel(output)!r}).write_text(json.dumps({{'values':_formal_values,'predictions':np.asarray(_formal_pred).tolist(),'candidates':_formal_candidates}},allow_nan=False))
 for _name,_value in _formal_values.items():print(_name,_value)
+for _index,_values in _formal_candidates.items():
+    for _name,_value in _values.items():print('candidate',_index,_name,_value)
 '''
     result=await ctx.kernels.get(sid).execute(code);run_log.append({'run_id':result.run_id,'code':code,'ok':result.ok})
     if not result.ok:raise ValueError('冻结模型的正式证据复核执行失败')
     actual=json.loads(output.read_text());expected=[p['prediction'] for p in row['predictions']]
     if not np.allclose(actual['predictions'],expected,rtol=1e-9,atol=1e-10) or not np.isclose(actual['values']['metric'],row['metric'],rtol=1e-9,atol=1e-10) or not np.isclose(actual['values']['baseline'],row['baseline'],rtol=1e-9,atol=1e-10):
         raise ValueError('正式模型与冻结胜者的预测不一致，禁止沿用比较结论')
+    for item in record['branches']:
+        if str(item['index']) not in candidate_predictions:continue
+        if not all(np.isclose(actual['candidates'][str(item['index'])][field],item[field],rtol=1e-9,atol=1e-10) for field in ('metric','baseline')):
+            raise ValueError('候选正式指标与项目冻结比较不一致，禁止登记')
     metric_name='comparison_'+frozen['metric'].lower();protected={}
     names={'metric':metric_name,'baseline':'comparison_baseline_'+frozen['metric'].lower(),'train_count':'comparison_train_count','validation_count':'comparison_validation_count','total_count':'comparison_total_count'}
     for key,name in names.items():
         entry=ctx.registry.record_value(sid,name,str(actual['values'][key]),result.run_id,description='冻结方案的项目独立正式复核')
         protected[entry.id]=asdict(entry)
+    for index,values in actual['candidates'].items():
+        for field,value in values.items():
+            name=f"comparison_candidate_{int(index)+1}_"+('baseline_' if field=='baseline' else '')+frozen['metric'].lower()
+            entry=ctx.registry.record_value(sid,name,str(value),result.run_id,description='冻结比较预测的项目指标复核，不重新训练')
+            protected[entry.id]=asdict(entry)
     proof={'comparison_id':record['id'],'code_hash':row['code_hash'],'protocol_hash':record['protocol_hash'],'run_id':result.run_id,
         'artifact_hash':hashlib.sha256(output.read_bytes()).hexdigest(),'protected':protected,'fresh_fit':not live}
     ctx.comparison_proof=proof

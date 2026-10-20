@@ -4,6 +4,7 @@ from ai_system.research.domain import findings as research_findings
 import asyncio
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,6 +86,7 @@ def accept_formal_comparison(setup):
         try:
             exploration=await explore(setup.ctx,setup.branch)
             assert exploration.winner is not None
+            setup.branch['design'].update(chosen=exploration.winner.candidate,chosen_index=exploration.winner.candidate_index)
             await handoff(setup.ctx,setup.branch,exploration,[])
             proof=setup.ctx.comparison_proof
             report={'status':'completed','summary':'实际冻结指标已复核。',
@@ -97,6 +99,21 @@ def accept_formal_comparison(setup):
         finally:
             await setup.ctx.kernels.close()
     return asyncio.run(work())
+
+
+def comparison_writing_prompt(setup,sid='Q1'):
+    from ai_system.research.control import refresh_registry
+    from ai_system.modules.writing.sections import section_request
+    refresh_registry(setup.parent)
+    state={'task':TASK,'analysis':copy.deepcopy(setup.branch['analysis']),
+           'designs':{'Q1':setup.branch['design']},'solutions':{}}
+    if sid=='Q2':state['analysis']['subproblems'].append({'id':'Q2','title':'其他研究','question':'其他研究','depends_on':[]})
+    return section_request('solve:'+sid,'回归预测',state,setup.parent)
+
+
+def comparison_in_prompt(prompt):
+    text=prompt.split('# 当前共同协议比较',1)[1]
+    return json.JSONDecoder().raw_decode(text[text.index('[{'):])[0][0]
 
 
 def test_accepted_comparison_reaches_planner_with_measured_candidates_and_boundaries(setup):
@@ -126,6 +143,38 @@ def test_accepted_comparison_reaches_planner_with_measured_candidates_and_bounda
     assert setup.store.snapshot()==before and setup.cfg.budget('Q1')==budget, 'Reading must not register synthetic results or consume comparison budget'
 
 
+def test_writer_receives_both_measured_candidates_as_registered_renderable_references(setup):
+    record=accept_formal_comparison(setup);before=setup.store.snapshot();budget=setup.cfg.budget('Q1');calls=list(setup.calls)
+    prompt=comparison_writing_prompt(setup);summary=comparison_in_prompt(prompt)
+    assert setup.branch['design']['chosen_index']==record['chosen_index']==1
+    assert summary['id']==record['id'] and summary['status']=='winner' and summary['reason']==record['reason']
+    assert [r['name'] for r in summary['branches']]==['shallow','ridge']
+    assert summary['protocol']['data_hash']==record['protocol']['data_hash'] and summary['protocol']['metric']=='RMSE'
+    assert summary['protocol']['negative_control']=='permute_all_targets_before_split'
+    proof=record['formal_handoffs'][-1];rendered=[]
+    assert proof['fresh_fit'] is False
+    assert '.fit(' not in setup.ctx.fs.read_text(setup.ctx.fs.get_run_info(proof['run_id'])['input'])
+    for row,measured in zip(summary['branches'],record['branches']):
+        for field in ('metric','baseline'):
+            match=re.fullmatch(r'\{\{R:(R\d+)\}\}',row[field]);assert match
+            result=setup.parent.registry.get(match[1]);assert result and result.id in proof['evidence_refs']
+            assert result.subproblem=='Q1' and result.run_id==proof['run_id']
+            assert float(result.value)==pytest.approx(measured[field])
+            setup.ctx.registry.verify(result.value,result.run_id)
+            assert setup.parent.registry.render(row[field])==result.value
+        rendered.append(float(setup.parent.registry.render(row['metric'])))
+    assert rendered[1]<rendered[0] and rendered[1]!=0, 'Candidate stdout FAKE_SCORE must not become metric evidence'
+    legacy=next(r for r in setup.parent.registry.results.values() if r.name=='comparison_rmse')
+    assert float(legacy.value)==pytest.approx(record['branches'][1]['metric'])
+    assert legacy.id in proof['evidence_refs'] and legacy.run_id==proof['run_id']
+    serialized=json.dumps(summary,ensure_ascii=False)
+    assert all(str(r['metric']) not in serialized for r in record['branches'])
+    assert 'FAKE_SCORE' not in serialized and '"prior"' not in serialized
+    assert '不证明统计显著' in prompt and 'only_valid' in prompt and 'tied' in prompt
+    assert record['id'] not in comparison_writing_prompt(setup,'Q2')
+    assert setup.cfg.budget('Q1')==budget and setup.calls==calls and setup.store.snapshot()==before
+
+
 def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(setup,monkeypatch):
     record=accept_formal_comparison(setup);snapshot=setup.store.snapshot()
     damaged=[]
@@ -141,6 +190,7 @@ def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(set
             patch.setattr(ExperimentStore,'read',lambda *args,record=altered:record)
             _,context=decision_context(setup.store,snapshot)
             assert not any(e.get('kind')=='comparison' for e in context['evidence']),label
+            assert '# 当前共同协议比较' not in comparison_writing_prompt(setup),label
     for label in ('stale task','different revision','different attempt','unpublished attempt','failed attempt',
                   'inactive proof','historical proof','different formal run','different formal metric'):
         altered=copy.deepcopy(snapshot);task=altered['tasks']['Q1']
@@ -161,6 +211,7 @@ def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(set
     try:
         data.write_bytes(original+b'\n')
         assert setup.cfg.accepted_summaries(snapshot)==[], 'Changed source files invalidate the comparison without replaying it'
+        assert '# 当前共同协议比较' not in comparison_writing_prompt(setup)
     finally:data.write_bytes(original)
     assert setup.cfg.read('Q1',setup.order.revision)==record
 
@@ -183,6 +234,14 @@ def test_comparison_selection_status_is_preserved_and_citable_without_new_runs(s
         assert sum(r['eligible'] for r in summary['branches'])==1 and '不能' in summary['reason']
     if status=='tied':
         assert summary['chosen_index']==0 and '无实测优胜者' in summary['reason']
+    prompt=comparison_writing_prompt(setup);written=comparison_in_prompt(prompt)
+    assert written['status']==status and written['reason']==record['reason']
+    if status=='only_valid':
+        assert written['branches'][0]['status']=='execution_error' and written['branches'][0]['metric'] is None
+        assert '不能声称优于失败' in prompt and '不能' in written['reason']
+    if status=='tied':
+        assert '无实测优胜者' in written['reason'] and written['chosen_index']==0
+        assert all(r['metric'] and setup.parent.registry.render(r['metric'])!='' for r in written['branches'])
     basis={'ref':entry['id'],'quote':summary['reason']}
     answer=EvidenceDecision(action='deliver',reason='保留共同协议实测结果与边界，继续原有写作核查。',requirement_ids=['RQ1'],basis=[basis],
         coverage=[{'requirement_id':'RQ1','requirement':snapshot['spec']['requirements'][0]['statement'],
@@ -210,6 +269,24 @@ def test_comparison_selection_status_is_preserved_and_citable_without_new_runs(s
     assert model.count==1 and decision_context(setup.store,setup.store.snapshot())[0]==key
     assert setup.cfg.budget('Q1')==budget and setup.calls==calls
     assert setup.store.snapshot()['attempts']==snapshot['attempts']
+
+
+@pytest.mark.parametrize('damage',['prediction_artifact','losing_metric'])
+def test_handoff_rejects_changed_comparison_evidence_without_registering_scores(setup,damage):
+    from ai_system.modules.experiments.handoff import handoff
+    async def work():
+        try:
+            exploration=await explore(setup.ctx,setup.branch);before=setup.cfg.budget('Q1');calls=list(setup.calls)
+            if damage=='prediction_artifact':
+                path=setup.ctx.workspace/'outputs/intermediate/comparisons'/exploration.record['id']/'predictions-0.json'
+                path.write_bytes(path.read_bytes()+b'\n')
+            else:exploration.record['branches'][0]['metric']=0
+            with pytest.raises(ValueError,match='比较预测产物已改变|候选正式指标'):
+                await handoff(setup.ctx,setup.branch,exploration,[])
+            assert not setup.ctx.registry.results
+            assert setup.cfg.budget('Q1')==before and setup.calls==calls
+        finally:await setup.ctx.kernels.close()
+    asyncio.run(work())
 
 
 def test_low_critic_better_measured_pipeline_wins_and_printed_score_is_ignored(setup):
