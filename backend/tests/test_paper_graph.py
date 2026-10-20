@@ -28,7 +28,6 @@ from ai_system.graph.state import (
     ConsistencyReview,
     MethodPick,
     ModelCandidate,
-    ProblemAnalysis,
     ResultReview,
     Subproblem,
 )
@@ -45,6 +44,19 @@ TASK = "某城市给出 2015-2024 年用电量数据。问题一：建立模型�
 # ----------------------------------------------------------------------
 # 假模型：按调用内容返回固定输出，覆盖结构化输出、工具调用循环和纯文本写作
 # ----------------------------------------------------------------------
+
+
+from pydantic import BaseModel, Field
+
+
+class ProblemAnalysis(BaseModel):
+    """Saved full-analysis fixture; no production startup schema remains."""
+    title: str
+    restatement: str
+    overall_analysis: str
+    subproblems: list[Subproblem] = Field(min_length=1)
+    requirements: list[Requirement] = Field(min_length=1)
+    assumptions: list[Assumption]
 
 
 def _analysis() -> ProblemAnalysis:
@@ -79,7 +91,31 @@ def decision_outline(context,coverage):
         ('symbols','符号说明'),('solve_heading','模型建立与求解'),('sensitivity','灵敏度分析'),('evaluation','模型评价')]]
 
 
-def controller_reply(context):
+def controller_reply(context, plan=None):
+    # The fixture controller creates only the next needed problem. Dependencies
+    # are actual completed inputs; no ProblemAnalysis model call precedes it.
+    plan = plan or _analysis()
+    if any(r['id']=='RQ0' for r in context['spec']['requirements']):
+        existing={t['task_id']:t for t in context['tasks']}
+        for sp in plan.subproblems:
+            if sp.id in existing:continue
+            if not all(d in existing and existing[d]['acceptance']=='accepted' and existing[d]['validity']=='current' for d in sp.depends_on):continue
+            requirements=[]
+            for r in plan.requirements:
+                if sp.id not in r.task_ids:continue
+                row=r.model_dump();row['task_ids']=[sp.id]
+                row['checks']=[c for c in row['checks'] if c['left']['task_id']==sp.id]
+                if row['source_quote'] not in context['spec']['requirement']:row['source_quote']=context['spec']['requirement']
+                previous=next((r for r in context['spec']['requirements'] if r['id']==row['id']),None)
+                if previous:
+                    row['task_ids']=list(dict.fromkeys(previous['task_ids']+[sp.id]))
+                    row['checks']=previous['checks']+row['checks']
+                requirements.append(row)
+            ids=['RQ0']+[r['id'] for r in requirements]
+            return {'action':'execute','reason':'Execute the next needed research using actual predecessor results.',
+                    'requirement_ids':ids,'task_ids':[sp.id],'requirements':requirements,
+                    'changes':[{'action':'add','task_id':sp.id,'title':sp.title,'kind':sp.kind,'objective':sp.question,
+                                'dependencies':sp.depends_on,'requirement_ids':ids}]}
     coverage=[]
     for requirement in context['spec']['requirements']:
         actual=next((e for task in reversed(requirement['task_ids']) for e in context['evidence'] if e.get('task_id')==task),None)
@@ -110,7 +146,9 @@ def controller_reply(context):
         value.update(action='pause',gap='保留实际问题，等待可行修复。')
         for row in coverage:
             if row['requirement_id'] in value['requirement_ids']:row['remaining']='存在尚待核查的问题。'
-    else:value['outline']=decision_outline(context,coverage)
+    else:
+        value['outline']=decision_outline(context,coverage)
+        value['title']=plan.title
     if value['action']!='deliver':
         # Intermediate actions need no evidence assertion. Do not attach the
         # whole study's results to an independent task selected for execution.
@@ -130,13 +168,6 @@ class _Structured:
         if self.schema is EvidenceDecision:
             context=json.loads(messages[-1].content)
             return EvidenceDecision.model_validate(controller_reply(context))
-        if self.schema is ProblemAnalysis:
-            analysis = _analysis()
-            source = messages[-1].content.split("# 题目\n", 1)[1].split("\n\n# 数据概览", 1)[0]
-            for requirement in analysis.requirements:
-                if requirement.source_quote not in source:
-                    requirement.source_quote = source
-            return analysis
         if self.schema is AmendmentSpec:
             data = json.loads(messages[-1].content)
             number = max(int(r[2:]) for r in data["used_requirement_ids"]) + 1
@@ -337,8 +368,8 @@ def test_graph_end_to_end_offline(tmp_path):
 
     result = asyncio.run(go())
 
-    # 数据概览由固定代码生成
-    assert "data/power.csv" in result["data_profile"] and "2 行 x 2 列" in result["data_profile"]
+    # 首次研究可以直接执行；概览不再是必经入口。
+    assert result["data_profile"] == "", "material inspection is chosen on demand, not forced before research"
     # 普通研究由执行 Agent 落实方法，不先强制生成或评选候选。
     design = result["designs"]["Q1"]
     assert design["direct_execution"] and not design["scores"]
@@ -426,7 +457,7 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     assert any(s.get("Q1") == "running" for s in snapshots), "claim must publish progress before model execution"
     assert any(s.get("Q1") == "accepted" and s.get("Q2") == "running" for s in snapshots)
     # 前端阶段卡片依赖的结构化阶段事件
-    assert phases[0] == ("analyze", "in_progress") and ("render", "completed") in phases
+    assert not any(stage == "analyze" for stage, _ in phases) and ("render", "completed") in phases
     # markdown 输出不排版
     assert not any(stage == "export" for stage, _ in phases) and not (ws / "paper.tex").exists()
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
@@ -746,17 +777,6 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     assert len(seen) == 3, "invalid final reports cannot keep calling the model past the step budget"
 
 
-def test_normalize_plan_fills_writing_kind_and_dependencies():
-    from ai_system.modules.experiments.analysis import normalize_plan
-
-    plan = normalize_plan([
-        {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []},
-        {"id": "Q2", "kind": "compute", "title": "随机性检验", "question": "用Q1建立的指标检验，不涉及 Q12", "depends_on": ["Q9"]},
-        {"id": "Q3", "kind": "compute", "title": "给教练的备忘录", "question": "总结建议", "depends_on": []},
-    ])
-    assert [(sp["kind"], sp["depends_on"]) for sp in plan] == [
-        ("compute", []), ("compute", ["Q1"]), ("writing", ["Q1", "Q2"]),
-    ]
 
 
 def test_model_candidate_rejects_empty_placeholder():
@@ -770,25 +790,8 @@ def test_model_candidate_rejects_empty_placeholder():
     ModelCandidate(name="逻辑回归", method_keys=[], idea="用前序得分预测下一分", formulation="", steps=["拟合"], validation="")
 
 
-def test_normalize_plan_drops_paper_writing_subproblem():
-    from ai_system.modules.experiments.analysis import normalize_plan
-
-    plan = normalize_plan([
-        {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []},
-        {"id": "Q2", "kind": "writing", "title": "给教练的备忘录与报告整理", "question": "总结建议", "depends_on": []},
-        {"id": "Q3", "kind": "writing", "title": "完整建模论文撰写", "question": "整合 Q1、Q2", "depends_on": ["Q1", "Q2"]},
-    ])
-    assert [sp["id"] for sp in plan] == ["Q1", "Q2"]
 
 
-def test_normalize_plan_drops_duplicate_ids():
-    from ai_system.modules.experiments.analysis import normalize_plan
-
-    first = {"id": "Q1", "kind": "compute", "title": "动量模型", "question": "建立模型", "depends_on": []}
-    second = {"id": "Q2", "kind": "compute", "title": "检验", "question": "用 Q1 的模型检验", "depends_on": []}
-    plan = normalize_plan([first, second, {**first, "title": "重复的 Q1"}, second])
-    assert [sp["id"] for sp in plan] == ["Q1", "Q2"]
-    assert plan[0]["title"] == "动量模型" and plan[1]["depends_on"] == ["Q1"]
 
 
 def test_report_issues_requires_registered_results(tmp_path):

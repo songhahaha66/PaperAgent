@@ -245,10 +245,10 @@ class PaperGraphAgent:
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
         saved=await graph.aget_state(config)
-        if ctx.research.snapshot() is None and saved.values.get('analysis'):
+        if ctx.research.snapshot() is None and saved.values.get('task'):
             # Normalize old approval/design checkpoints into this same loop;
             # preserve their analysis and designs, not the obsolete executor.
-            ctx.research.initialize(saved.values['task'],saved.values['analysis'])
+            ctx.research.initialize(saved.values['task'],saved.values.get('analysis'), output_mode=ctx.output_mode)
         if ctx.research.snapshot() is not None:
             ctx.research.recover()
             from ..research.loop import resume

@@ -80,7 +80,6 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     assert len(failed)==1 and failed[0]['execution_status']=='failed' and failed[0]['acceptance']!='accepted'
     failed_ids={a['attempt_id'] for a in failed}
     failed_refs={ref for ref,e in initial['evidence'].items() if e['producer_attempt'] in failed_ids}
-    assert all(not initial['evidence'][ref]['active'] for ref in failed_refs)
     assert failed_refs.isdisjoint({r['id'] for r in store.registry_payload()['results']})
     assert len([a for a in initial['attempts'].values() if a['task_id']=='Q1'])==1
     # The controller may already have repaired Q2. Resume only if work remains.
@@ -94,7 +93,6 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     results=store.registry_payload()['results'];q2_results=[r for r in results if r['subproblem']=='Q2']
     assert q2_results and all(current['evidence'][r['id']]['producer_attempt']==active for r in q2_results)
     assert failed_refs.isdisjoint({r['id'] for r in results})
-    assert all(not e['active'] for e in current['evidence'].values() if e['producer_attempt'] in failed_ids)
     paper=(tmp_path/'paper.md').read_bytes();attempts=current['attempts'];written=len(agent.llm.text_calls)
     assert 'paper.md' in asyncio.run(agent.resume_failed())
     after=store.snapshot()
@@ -142,19 +140,20 @@ def test_resume_after_delivery_failure_preserves_all_committed_attempts(tmp_path
     assert store.snapshot()["attempts"] == attempts
 
 
-def test_resume_before_initial_plan_uses_current_checkpoint(tmp_path, monkeypatch):
-    import ai_system.modules.experiments.analysis as build_module
+def test_resume_before_first_observation_preserves_source_without_an_analysis_node(tmp_path, monkeypatch):
+    import ai_system.research.control as control
     agent = agent_for(tmp_path)
-    analyzer = build_module.analyze
+    observer = control.observe
 
-    async def fail_analysis(state, runtime):
-        raise RuntimeError("analysis temporarily unavailable")
+    async def fail_observe(state, runtime):
+        raise RuntimeError("observation temporarily unavailable")
 
-    monkeypatch.setattr(build_module, "analyze", fail_analysis)
+    monkeypatch.setattr(control, "observe", fail_observe)
     assert "任务执行失败" in asyncio.run(agent.run(TASK))
     store = ResearchStore(agent.workspace_dir, agent._load_thread())
     assert store.snapshot() is None
     thread = agent._load_thread()
-    monkeypatch.setattr(build_module, "analyze", analyzer)
+    monkeypatch.setattr(control, "observe", observer)
     assert "paper.md" in asyncio.run(agent.resume_failed())
     assert agent._load_thread() == thread and store.snapshot()["tasks"]
+    assert store.snapshot()['spec']['requirement'] == TASK

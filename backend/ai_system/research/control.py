@@ -27,7 +27,7 @@ def refresh_registry(ctx):
 async def observe(state, runtime):
     ctx = runtime.context
     store = ctx.research
-    store.initialize(state["task"], state["analysis"])
+    store.initialize(state["task"], output_mode=ctx.output_mode)
     snapshot = store.refresh_inputs()
     if ctx.experience_scope is not None:
         try:
@@ -68,12 +68,12 @@ async def observe(state, runtime):
     if blocked:
         await ctx.set_stage("solve", "blocked", "下一步研究决策或资料查证尚未完成，原要求与已验收结果已保留。" if decision_blocked else
                             "存在未关闭的研究或审查问题、未验收任务，或尝试预算已耗尽")
-    analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values() if t["kind"] != "verify" and not t['retired']],
-                "requirements": snapshot["spec"]["requirements"],
-                "assumptions": [a for a in snapshot["assumptions"].values() if a["status"] != "retired"]}
+    analysis = analysis_view(snapshot, state.get('analysis'))
     from .planner import current_decision
     selected=current_decision(store)
     outline=(selected[1]['proposal'].get('outline') or []) if selected and selected[1]['proposal']['action']=='deliver' else []
+    if selected and selected[1]['proposal']['action']=='deliver' and selected[1]['proposal'].get('title'):
+        analysis['title']=selected[1]['proposal']['title']
     if 'write' in progress['done'] and state.get('outline'):outline=state['outline']
     return {"analysis": analysis, "solutions": solutions, "designs": designs,"outline":outline,
             'data_profile':snapshot.get('materials',{}).get('profile','') if snapshot.get('materials',{}).get('inputs')==store.file_inputs() else '材料已变化，旧概览不能作为当前证据，请查看当前文件。',
@@ -81,6 +81,16 @@ async def observe(state, runtime):
             "issues": [i for i in snapshot['feedback'] if i['source'] == 'sections'
                        and i['action'] == 'rewrite' and i['status'] not in {'resolved', 'dismissed'}],
             "repair_round": progress['repairs'], "log": [f"observe: commit {snapshot['commit_seq']}"]}
+
+
+def analysis_view(snapshot, previous=None):
+    """Existing workers/writing consume a projection, never a startup plan."""
+    source = snapshot['spec']['requirement']
+    return {'title':source.splitlines()[0][:80], 'restatement':source, 'overall_analysis':'',
+            **(previous or {}),
+            'subproblems':[t['subproblem'] for t in snapshot['tasks'].values() if t['kind']!='verify' and not t['retired']],
+            'requirements':snapshot['spec']['requirements'],
+            'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired']}
 
 
 def task_dispatch(state, runtime, task_ids):
@@ -99,7 +109,7 @@ def task_dispatch(state, runtime, task_ids):
              if row.get('status')=='replied' and row.get('proposal',{}).get('action')=='ask']
     for key in ready:
         task = snapshot["tasks"][key]
-        sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": state["analysis"],
+        sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": analysis_view(snapshot, state.get("analysis")),
             'task_revision':task['revision'],
             "data_profile": state.get("data_profile", ""),
             'feedback':task.get('method_instruction',''),
@@ -123,7 +133,7 @@ def public_snapshot(snapshot, *, work_status=None):
         "tasks": [public_task(snapshot, task, ready, work_status) for task in snapshot["tasks"].values() if not task["retired"]],
         "feedback": [i for i in snapshot['feedback'] if i['status'] not in {'resolved', 'dismissed'}],
         "faults": [i for i in snapshot['faults'] if i['status'] not in {'resolved', 'dismissed', 'superseded'}],
-        "requirements": [{**r, "status": "accepted" if all(snapshot["tasks"][key]["acceptance"] == "accepted" and
+        "requirements": [{**r, "status": "accepted" if r["task_ids"] and snapshot["outcome"]=="completed" and all(snapshot["tasks"][key]["acceptance"] == "accepted" and
             snapshot["tasks"][key]["validity"] == "current" and (snapshot["tasks"][key]["kind"] != "writing" or
             snapshot["sections"].get(f"solve:{key}", {}).get("validity") == "current") for key in r["task_ids"]) else "pending"}
             for r in snapshot["spec"]["requirements"]], "assumptions": list(snapshot["assumptions"].values()),

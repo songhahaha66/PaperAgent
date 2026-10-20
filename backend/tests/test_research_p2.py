@@ -19,8 +19,8 @@ from ai_system.research.models import (
 from ai_system.research.store import ResearchStore
 from ai_system.research.planner import ready_tasks
 from ai_system.graph.agent import PaperGraphAgent
-from ai_system.graph.state import ProblemAnalysis, Subproblem, ConsistencyReview, ClaimAudit, ResultReview
-from test_paper_graph import FakeModel, FixedJudge
+from ai_system.graph.state import Subproblem, ConsistencyReview, ClaimAudit, ResultReview
+from test_paper_graph import ProblemAnalysis, FakeModel, FixedJudge
 
 TASK = "Estimate demand; optimize allocation with capacity <= 10; also compute an independent statistic."
 
@@ -157,8 +157,9 @@ def test_source_and_check_contracts_fail_closed(tmp_path):
         ResearchStore(tmp_path, "invalid").initialize(TASK, analysis)
     with pytest.raises(ValueError):
         DomainCheck(id="bad", description="bad", left=ResultSelector(task_id="Q1", name="x"), operator="le")
-    with pytest.raises(ValueError):
-        Requirement(id="bad", statement="capacity", source_quote="capacity", kind="constraint", task_ids=["Q1"])
+    # A source constraint can exist before a concrete experiment/check.
+    requirement = Requirement(id="pending", statement="capacity", source_quote="capacity", kind="constraint")
+    assert not requirement.task_ids and not requirement.checks
 
 
 @pytest.mark.parametrize("operator,value,expected,right,tolerance,outcome", [
@@ -242,8 +243,6 @@ class ClosedLoopModel(FakeModel):
         outer = self
         class Bound:
             async def ainvoke(self, messages):
-                if schema is ProblemAnalysis:
-                    return problem()
                 from ai_system.research.planner import EvidenceDecision
                 if schema is EvidenceDecision:
                     context = json.loads(messages[-1].content)
@@ -289,12 +288,30 @@ class ClosedLoopModel(FakeModel):
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{sid}_{len(results)}"}])
 
 
+async def resume_saved_contract(agent):
+    """Counterevidence fixtures import a saved full contract at the recovery boundary.
+
+    New-run lightweight decisions are exercised separately; these cases retain
+    their original assumption IDs to verify repair and independent counterchecks.
+    """
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from ai_system.graph.build import compile_graph
+    thread='saved-contract'
+    ResearchStore(agent.workspace_dir,thread).initialize(TASK,problem().model_dump())
+    agent._save_thread(thread,'paused')
+    async with AsyncSqliteSaver.from_conn_string(str(Path(agent.workspace_dir)/'.system/graph.sqlite')) as saver:
+        graph=compile_graph(saver)
+        await graph.aupdate_state({'configurable':{'thread_id':thread}},
+                                 {'task':TASK,'analysis':problem().model_dump()},as_node='solve_join')
+    return await agent.resume_failed()
+
+
 def test_real_graph_automatically_repairs_upstream_and_downstream_and_delivers(tmp_path, monkeypatch):
     from ai_system.graph import llm_utils
     monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     agent = PaperGraphAgent(ClosedLoopModel(loose_number_once=False), workspace_dir=str(tmp_path), judge=FixedJudge(),
                            explore_top_k=1, max_review_rounds=0)
-    output = asyncio.run(agent.run(TASK))
+    output = asyncio.run(resume_saved_contract(agent))
     assert "paper.md" in output
     state = ResearchStore(tmp_path, agent._load_thread()).snapshot()
     assert state['planning_calls']>4  # Initial actions, counterevidence repair and result-based convergence share one controller.
@@ -398,7 +415,7 @@ def test_consistency_suspicion_runs_independent_verification_then_replans_only_i
     monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     agent = PaperGraphAgent(ReviewLoopModel(counterexample=counterexample, detection_phase=detection_phase, loose_number_once=False), workspace_dir=str(tmp_path),
                            judge=FixedJudge(), explore_top_k=1, max_review_rounds=0)
-    assert "paper.md" in asyncio.run(agent.run(TASK))
+    assert "paper.md" in asyncio.run(resume_saved_contract(agent))
     store = ResearchStore(tmp_path, agent._load_thread())
     state = store.snapshot()
     investigations = [t for t in state["tasks"].values() if t["kind"] == "verify"]

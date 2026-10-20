@@ -12,7 +12,7 @@ async def comment(ctx, inputs):
     from services.chat_services.paper_comments import calculate
     return await calculate(ctx, inputs)
 
-from ai_system.modules.registry import CapabilityProduct, StateInputs, BranchInputs
+from ai_system.modules.registry import CapabilityProduct, BranchInputs
 
 
 async def explore(ctx, inputs):
@@ -35,11 +35,6 @@ async def execute(ctx, inputs):
     return CapabilityProduct("research_state", await execute(inputs["branch"], SimpleNamespace(context=ctx)))
 
 
-async def analyze(ctx, inputs):
-    from ai_system.modules.experiments.analysis import analyze
-    return CapabilityProduct("research_state", await analyze(inputs["state"], SimpleNamespace(context=ctx)))
-
-
 async def inspect_materials(ctx, inputs):
     from .analysis import profile_data
     return CapabilityProduct('research_state',{'inputs':ctx.research.file_inputs(),'profile':await profile_data(ctx)})
@@ -50,6 +45,5 @@ def register(registry):
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
                       purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览不是本研究已验收数值成果。',model_callable=True)
     for name, product, handler in (("explore", "experiment", explore), ("compare", "experiment", compare),
-                                    ("design", "experiment", design), ("execute", "research_state", execute),
-                                    ("analyze", "research_state", analyze)):
-        registry.register("experiments", f"experiments.{name}", product, handler, StateInputs if name=='analyze' else BranchInputs)
+                                    ("design", "experiment", design), ("execute", "research_state", execute)):
+        registry.register("experiments", f"experiments.{name}", product, handler, BranchInputs)

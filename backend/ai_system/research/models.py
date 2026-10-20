@@ -86,28 +86,12 @@ class DomainCheck(Contract):
 
 
 class Requirement(Contract):
-    # Export the same cross-field rule used by constraint_check to model tools.
-    # A default_factory alone makes checks look optional in their JSON Schema.
-    model_config = ConfigDict(json_schema_extra={
-        'anyOf': [
-            {'properties': {'kind': {'enum': ['constraint']}, 'checks': {'minItems': 1}},
-             'required': ['checks']},
-            {'properties': {'kind': {'enum': ['goal', 'deliverable']}}},
-        ],
-    })
     id: str
     statement: str = Field(min_length=1)
     source_quote: str = Field(min_length=1, description="原题逐字摘录，必须能在用户需求中找到")
-    kind: Literal["goal", "constraint", "deliverable"] = Field(description="goal=研究目标；constraint=必须满足且有可执行检查的数学/领域约束；deliverable=报告、语言、格式、引用等交付要求。不要为文书要求伪造满足指标")
-    task_ids: list[str] = Field(min_length=1)
-    checks: list[DomainCheck] = Field(default_factory=list, description="constraint至少一项可执行检查；goal或deliverable按实际需要可留空，文书要求由章节校验处理")
-
-    @model_validator(mode="after")
-    def constraint_check(self):
-        if self.kind == "constraint" and not self.checks:
-            raise ValueError(f"硬约束「{self.statement}」必须有可执行检查。数学/领域约束保持constraint并补检查；"
-                             "报告格式、语言、引用规则属于deliverable，研究目标属于goal，不要为文书要求编造布尔指标")
-        return self
+    kind: Literal["goal", "constraint", "deliverable"] = Field(description="goal=研究目标；constraint=必须保留的数学/领域约束，相关实验执行前绑定具体检查；deliverable=报告、语言、格式、引用等交付要求。不要为文书要求伪造满足指标")
+    task_ids: list[str] = Field(default_factory=list)
+    checks: list[DomainCheck] = Field(default_factory=list, description="原题要求可先保留而不绑定实验；相关实验领取前冻结操作化检查。文书要求由章节校验处理")
 
 
 class Assumption(Contract):
@@ -233,7 +217,7 @@ class PlanPatch(Contract):
 
     @model_validator(mode="after")
     def changes_something(self):
-        if not self.changes and not self.assumptions:
+        if not self.changes and not self.assumptions and not self.requirements:
             raise ValueError("计划修改不能为空")
         return self
 

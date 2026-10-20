@@ -100,6 +100,33 @@ def validate_spec(source, analysis):
     return requirements, assumptions
 
 
+def bind_requirements(state, requirements, amendment=None):
+    """Append source requirements/checks without rewriting executed contracts.
+
+    Both decision repair and transactional application use this same boundary.
+    """
+    bound = {r['id']:dict(r) for r in state['spec']['requirements']}
+    source = amendment or state['spec']['requirement'] + "\n" + "\n".join(state['spec']['amendments'])
+    attempted = {a['task_id'] for a in state['attempts'].values() if a['revision']==state['tasks'][a['task_id']]['revision']}
+    for requirement in requirements:
+        incoming = requirement.model_dump()
+        previous = bound.get(requirement.id)
+        if requirement.source_quote not in source:
+            raise ValueError('要求必须逐字追溯原题或明确用户修订')
+        scope = set(previous['task_ids']) if previous else set()
+        if not amendment and (set(requirement.task_ids)-scope) & attempted:
+            raise ValueError('不能在执行后追加原题要求绑定；须另建研究')
+        if previous:
+            if amendment or any(incoming[k]!=previous[k] for k in ('statement','source_quote','kind')):
+                raise ValueError('不能覆盖或放宽原题要求')
+            if not scope<=set(requirement.task_ids) or any(c not in incoming['checks'] for c in previous['checks']):
+                raise ValueError('不能移除原要求的任务绑定或冻结检查')
+            if any(c['left']['task_id'] in attempted for c in incoming['checks'] if c not in previous['checks']):
+                raise ValueError('执行后不能改写检查；须另建研究并保留原实验')
+        bound[requirement.id] = {**incoming, 'revision':previous['revision'] if previous else 1}
+    return list(bound.values())
+
+
 def protocol(state, task_id):
     task = state["tasks"][task_id]
     if task.get("verifies_issue"):

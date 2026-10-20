@@ -9,7 +9,7 @@ import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, Field, model_validator
-from ..research.models import Contract, Requirement, Assumption, AssumptionDraft, IssueReport
+from ..research.models import Contract, AssumptionDraft, IssueReport
 
 
 def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
@@ -38,16 +38,6 @@ class Subproblem(BaseModel):
     question: str = Field(min_length=1, description="子问题要回答的具体内容，忠实于原题")
     deliverables: List[str] = Field(default_factory=list, description="这一问需要给出的结果，如某个预测值、排序、方案、图")
     depends_on: List[str] = Field(default_factory=list, description="依赖哪些子问题的结果（编号），没有依赖则为空")
-
-
-class ProblemAnalysis(BaseModel):
-    title: str = Field(description="论文标题，概括研究对象和主要方法")
-    restatement: str = Field(description="用自己的话重述题目背景和要求")
-    overall_analysis: str = Field(description="整体思路：各子问题之间的关系、数据如何使用")
-    # 空列表能通过类型校验，DeepSeek 偶尔这样返回；要求至少一个，校验失败会进入重试
-    subproblems: List[Subproblem] = Field(min_length=1)
-    requirements: List[Requirement] = Field(min_length=1, description="逐条提取原题目标、交付物、硬约束，写明原文摘录、承担任务与可执行验收条件")
-    assumptions: List[Assumption] = Field(description="有编号、任务范围和可证伪检查的建模假设；不要把用户给定事实写成假设")
 
 
 class MethodPick(BaseModel):

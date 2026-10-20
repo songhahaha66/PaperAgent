@@ -11,20 +11,14 @@ def solve_join(state: PaperState) -> dict:
     return {}
 
 
-async def analyze_capability(state, runtime):
-    from ai_system.modules.registry import invoke
-    return await invoke(runtime.context, 'experiments.analyze', state=state)
-
-
 def build_graph():
     from ..research.control import observe
     from ..research.loop import select, act
 
     graph = StateGraph(PaperState, context_schema=GraphContext)
-    for name, node in (("analyze", analyze_capability), ("observe", observe), ("act", act), ("solve_join", solve_join)):
+    for name, node in (("observe", observe), ("act", act), ("solve_join", solve_join)):
         graph.add_node(name, node)
-    graph.add_edge(START, "analyze")
-    graph.add_edge("analyze", "observe")
+    graph.add_edge(START, "observe")
     graph.add_conditional_edges("observe", select, ["act", "observe", END])
     graph.add_edge("act", "solve_join")
     graph.add_edge("solve_join", "observe")

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import ENGINE_VERSION, DEFAULT_PLANNING_CALL_LIMIT
 from .models import Assumption, DomainCheck, PlanPatch, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord, ContentFeedback, RuntimeFault
-from .validation import validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps, needs_owner_review
+from .validation import bind_requirements, validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps, needs_owner_review
 from .assumptions import assumption_id, premise_definition, assumption_scope
 
 DB_PATH = ".system/research.sqlite"
@@ -114,11 +114,17 @@ class ResearchStore:
         db.execute("INSERT INTO journal VALUES (?, ?, ?, ?)",
                    (self.research_id, state["commit_seq"], kind, json.dumps(payload, ensure_ascii=False)))
 
-    def initialize(self, requirement: str, analysis: dict, max_attempts: int = 3):
+    def initialize(self, requirement: str, analysis: dict | None = None, max_attempts: int = 3, *, output_mode="markdown"):
         with self._transaction() as db:
             state = self._read(db)
             if state:
                 return state
+            # Saved full analyses are accepted only at this import boundary.
+            # New runs retain the entire source, without guessing a question graph.
+            if analysis is None:
+                analysis = {"subproblems": [], "assumptions": [], "requirements": [
+                    {"id": "RQ0", "statement": requirement, "source_quote": requirement,
+                     "kind": "goal", "task_ids": [], "checks": []}]}
             requirements, assumptions = validate_spec(requirement, analysis)
             tasks = {sp["id"]: {
                 "task_id": sp["id"], "revision": 1, "objective": sp["question"],
@@ -132,12 +138,13 @@ class ResearchStore:
             validate_dependencies(tasks)
             state = {"schema_version": 3, "engine_version": ENGINE_VERSION,
                      "research_id": self.research_id, "revision": 1, "commit_seq": 0,
-                     "spec": {"requirement": requirement, "amendments": [],
+                     "spec": {"requirement": requirement, "amendments": [], "output_mode": output_mode,
                               "requirements": [{**r.model_dump(), "revision": 1} for r in requirements]},
                      "assumptions": {a.id: {**a.model_dump(), "revision": 1, "status": "active", "source": "analysis", "producer_attempt": None} for a in assumptions},
                      "assumption_history": [], "validations": [],
                      "tasks": tasks, "attempts": {}, "evidence": {}, "claims": {},
                      "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running", "max_attempts": max_attempts,
+                     "materials": {"inputs": self.file_inputs(), "profile": ""},
                      "planning_calls": 0, "proposal_hashes": [], "max_total_attempts": len(tasks) * max_attempts + 6}
             self._validate_contracts(state)
             self._bind_assumption_inputs(state)
@@ -251,6 +258,10 @@ class ResearchStore:
             attempts = [a for a in state["attempts"].values() if a["task_id"] == task_id and a["revision"] == task["revision"]]
             if len(attempts) >= state["max_attempts"] or len(state["attempts"]) >= state["max_total_attempts"]:
                 raise ResearchConflict(f"任务 {task_id} 已达到尝试预算")
+            for requirement in state["spec"]["requirements"]:
+                if requirement['kind']=='constraint' and task_id in requirement['task_ids'] and not any(
+                        c['left']['task_id']==task_id for c in requirement['checks']):
+                    raise ResearchConflict('相关原题约束尚未绑定本实验的操作化检查')
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
@@ -705,15 +716,9 @@ class ResearchStore:
                     change.assumption_id == issue["assumption_id"] for change in patch.assumptions):
                     raise ValueError("计划没有修复触发问题的任务或其上游")
             if patch.requirements:
-                if not patch.amendment:
-                    raise ValueError("新增要求必须来自明确的用户修改")
-                known = {r["id"] for r in state["spec"]["requirements"]}
-                for requirement in patch.requirements:
-                    if requirement.id in known or requirement.source_quote not in patch.amendment:
-                        raise ValueError("新增要求编号或来源无效，原题要求不能覆盖")
-                    state["spec"]["requirements"].append({**requirement.model_dump(), "revision": 1})
-                    known.add(requirement.id)
-                state["spec"]["amendments"].append(patch.amendment)
+                state['spec']['requirements'] = bind_requirements(state, patch.requirements, patch.amendment)
+                if patch.amendment:
+                    state['spec']['amendments'].append(patch.amendment)
             assumption_roots = set()
             for change in patch.assumptions:
                 previous = state["assumptions"].get(change.assumption_id)
@@ -777,6 +782,10 @@ class ResearchStore:
                                           if key in assumption["task_ids"] and assumption["status"] != "retired"]
                 if key in assumption_roots and key not in ids:
                     task["revision"] += 1
+            for task in state['tasks'].values():
+                if task['kind']!='verify':
+                    task['requirement_ids'] = [r['id'] for r in state['spec']['requirements'] if task['task_id'] in r['task_ids']]
+            state['max_total_attempts'] = max(state['max_total_attempts'], len(state['tasks']) * state['max_attempts'] + 6)
             validate_dependencies(state["tasks"])
             self._bind_assumption_inputs(state)
             self._validate_contracts(state)

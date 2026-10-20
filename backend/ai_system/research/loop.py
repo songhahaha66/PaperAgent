@@ -32,6 +32,12 @@ def select(state, runtime):
     if not selected:return 'observe'
     key,record=selected;proposal=record['proposal']
     if proposal['action']=='execute':
+        if proposal.get('changes') or proposal.get('requirements'):
+            from .models import PlanPatch
+            # One controller call can create the first task and execute it.
+            # The patch receipt makes a repeated dispatch idempotent.
+            ctx.research.apply_patch(PlanPatch(command_id=key+':apply',base_revision=record['base_revision'],
+                reason=proposal['reason'],changes=proposal.get('changes',[]),requirements=proposal.get('requirements',[])))
         work=task_dispatch(state,runtime,proposal['task_ids'])
         return [Send('act', {'capability': 'experiments.execute', 'inputs': {'branch': item.arg},
                             'decision_key':key,'task_id':item.arg['subproblem']['id']})
