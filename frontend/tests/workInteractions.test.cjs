@@ -74,12 +74,19 @@ async function environment() {
           WebSocketChatHandler: Socket,
           chatAPI: {
             getResearchSnapshot: async () => ({
-              schema_version: 3,
+              schema_version: 4,
               work_id: id,
               work_status: 'completed',
               has_research: true,
               research_id: 'research-1',
               graph_status: 'done',
+              engine_version: 'research-v3',
+              research_revision: 1,
+              commit_seq: 0,
+              snapshot_at: 1,
+              questions: [],
+              experiments: [],
+              runtime: { actions: [], models: [], decisions: [], history: [], models_updated_at: 0, updated_at: 1 },
               results: [],
               runs: [],
               claims: [],
@@ -234,9 +241,11 @@ if (require.main === module) (async () => {
   let pauseCount = 0
   const primary = await env.work('primary-action', false, [], {
     getResearchSnapshot: async () => ({
-      schema_version: 3, work_id: 'primary-action', work_status: actionStatus,
+      schema_version: 4, work_id: 'primary-action', work_status: actionStatus,
       has_research: true, research_id: 'research-1', engine_version: 'research-v3',
-      artifacts: ['paper.pdf'], tasks: [], results: [], runs: [], claims: [],
+      artifacts: ['paper.pdf'], questions: [], experiments: [], results: [], runs: [], claims: [],
+      research_revision: 1, commit_seq: 0, snapshot_at: 1,
+      runtime: { actions: [], models: [], decisions: [], history: [], models_updated_at: 0, updated_at: 1 },
     }),
     pauseWork: async () => {
       pauseCount++
@@ -302,7 +311,7 @@ if (require.main === module) (async () => {
     { type: 'file', path: 'paper.tex', name: 'paper.tex', size: 500 },
     { type: 'file', path: 'paper.pdf', name: 'paper.pdf', size: 800 },
   ]
-  native.state.researchSnapshot.value = { has_research: true, artifacts: ['paper.tex'] }
+  native.state.researchSnapshot.value = { ...native.state.researchSnapshot.value, has_research: true, artifacts: ['paper.tex'] }
   assert.equal(
     native.state.primaryArtifact.value.path,
     'paper.tex',
@@ -397,7 +406,7 @@ if (require.main === module) (async () => {
   restored.state.handleStreamMessage(
     {
       type: 'json_block',
-      block: { type: 'research_snapshot', content: { schema_version: 3, work_id: 'another-work' } },
+      block: { type: 'research_snapshot', content: { schema_version: 4, work_id: 'another-work' } },
     },
     replyId,
   )
@@ -474,35 +483,68 @@ if (require.main === module) (async () => {
   const snapshot = {
     ...progress.state.researchSnapshot.value,
     commit_seq: 10,
+    snapshot_at: 102,
     work_status: 'in_progress',
-    tasks: [{ task_id: 'Q2', progress: { state: 'running' } }],
+    questions: [{ id: 'question:E2', title: '验证预测误差', question: '固定区间的预测误差是多少？',
+      experiment_ids: ['E2'], sources: [], judgment: '', next_step: '', issues: [],
+      artifact_refs: [], limitations: [], judgments: [] }],
+    experiments: [{ id: 'E2', task_id: 'E2', question_id: 'question:E2', title: '固定区间误差验证',
+      objective: '计算固定区间的预测误差', kind: 'compute', revision: 1, dependencies: [],
+      execution_status: 'running', acceptance: 'pending', validity: 'current',
+      progress: { state: 'running', waiting_for: [], issue_ids: [], executions: 1, attempt_limit: 3, rework: false },
+      results: [], artifacts: [], summary: '', reason: '验证误差', history: [] }],
+    runtime: {
+      actions: [{ id: 'call-validation', action_id: 'action-validation', observation_id: 'observation-validation',
+        question_id: 'question:E2', experiment_id: 'E2', task_id: 'E2', parent_call_id: null,
+        capability: 'experiments.execute', label: '执行实验', status: 'running', started_at: 100 }],
+      models: [{ id: 'model:2', action_id: 'action-validation', observation_id: 'observation-validation',
+        question_id: 'question:E2', experiment_id: 'E2', task_id: 'E2', parent_call_id: 'call-validation',
+        kind: 'model', label: '等待模型响应', status: 'sent', started_at: 101, updated_at: 101 }],
+      decisions: [], history: [], updated_at: 100, models_updated_at: 101,
+    },
   }
   progress.state.currentWork.value.status = 'in_progress'
   progress.state.applyResearchSnapshot(snapshot)
-  assert.equal(progress.state.stageText.value, '正在执行 Q2')
+  assert.equal(progress.state.stageText.value, '正在执行实验')
+  assert.equal(progress.state.researchSnapshot.value.runtime.current.label, '等待模型响应')
+  assert.equal(progress.state.researchSnapshot.value.runtime.current.question_id, 'question:E2')
+  assert.equal(progress.state.researchSnapshot.value.experiments[0].title, '固定区间误差验证')
+  assert.doesNotMatch(progress.state.stageText.value, /Q2|E2/)
   progress.state.chatMessages.value = [
     {
-      role: 'assistant',
+      id: 'progress-message', role: 'assistant', content: '',
       json_blocks: [{ type: 'paper_phase', content: { stage: 'analyze', status: 'in_progress' } }],
     },
   ]
   assert.equal(
     progress.state.stageText.value,
-    '正在执行 Q2',
-    'old phase events cannot reset committed task progress',
+    '正在执行实验',
+    'old phase events cannot reset recorded experiment progress',
   )
-  progress.state.applyResearchSnapshot({ ...snapshot, commit_seq: 9, tasks: [] })
+  const olderSnapshot = {
+    ...snapshot, commit_seq: 9, snapshot_at: 99, work_status: 'completed',
+    questions: [], experiments: [],
+    runtime: { actions: [], models: [], decisions: [], history: [], updated_at: 90, models_updated_at: 90 },
+  }
+  progress.state.handleStreamMessage({
+    type: 'json_block', block: { type: 'research_snapshot', content: olderSnapshot },
+  }, 'progress-message')
+  assert.equal(progress.state.researchSnapshot.value.commit_seq, 10, 'an older streamed snapshot cannot rewind progress')
+  assert.equal(progress.state.currentWork.value.status, 'in_progress', 'a stale snapshot cannot end active research')
+  assert.equal(progress.state.researchSnapshot.value.runtime.current.id, 'model:2')
   await progress.state.loadResearchSnapshot()
   assert.equal(
     progress.state.researchSnapshot.value.commit_seq,
     10,
     'older HTTP/stream snapshots cannot rewind progress',
   )
+  assert.equal(progress.state.researchSnapshot.value.runtime.current.id, 'model:2', 'an older HTTP snapshot cannot remove the current model request')
+  assert.equal(progress.state.currentWork.value.status, 'in_progress')
   progress.state.currentWork.value.status = 'paused'
   assert.equal(progress.state.stageText.value, '研究已暂停，进度已保留')
   progress.stop()
   console.log(
-    'PASS: work progress uses committed tasks and rejects stale snapshots across recovery',
+    'PASS: work progress uses experiment and model records and rejects stale snapshots across recovery',
   )
 
   const leaving = await env.work('leaving', true)
