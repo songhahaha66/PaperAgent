@@ -42,7 +42,9 @@
         </h3>
         <p class="check">
           {{ outcomeLabel(outcome.checking, true)
-          }}<span v-if="outcome.next_step"> · {{ outcome.next_step }}</span>
+          }}<span v-if="outcome.issues.length && outcome.next_step">
+            · {{ outcome.next_step }}</span
+          >
         </p>
         <div class="key-results">
           <button
@@ -50,7 +52,7 @@
             :key="result.id"
             @click="openResult(result.id)"
           >
-            <small>{{ result.name }}</small
+            <small>{{ resultName(result.name) }}</small
             ><strong>{{
               result.kind === 'series' ? '查看实测序列' : `${result.value} ${result.unit}`
             }}</strong>
@@ -62,9 +64,12 @@
           class="figure"
           @click="openResult(figure.id)"
         >
-          <WorkDocument :work-id="workId" :path="figure.figure_path!" :active="true" /><span
-            >{{ figure.name }} · 查看来源与实验</span
-          >
+          <WorkDocument
+            :work-id="workId"
+            :path="figure.figure_path!"
+            :show-toolbar="false"
+            :active="true"
+          /><span>{{ figure.name }} · 查看来源与实验</span>
         </button>
         <p v-if="outcome.experiment" class="conditions">
           实验范围：{{ outcome.experiment.conditions }}<br />评价标准：{{
@@ -132,6 +137,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import ResearchLiterature from './ResearchLiterature.vue'
+import { resultName } from '@/utils/researchEvidence'
 import WorkDocument from './WorkDocument.vue'
 import { experimentAPI, type ComparisonRecord } from '@/api/experiments'
 import type { ResearchSnapshot } from '@/types/research'

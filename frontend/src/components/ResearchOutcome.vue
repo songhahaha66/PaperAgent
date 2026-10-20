@@ -83,7 +83,7 @@
       :class="{ focused: focusRef === result.id }"
     >
       <h4>
-        {{ result.name }}
+        {{ resultName(result.name) }}
       </h4>
       <p v-if="result.description">{{ result.description }}</p>
       <ResultSeries
@@ -98,6 +98,7 @@
         v-else-if="result.figure_path"
         :work-id="workId"
         :path="result.figure_path"
+        :show-toolbar="false"
         :active="true"
       />
       <p v-else-if="result.kind === 'figure'">
@@ -208,6 +209,7 @@ import type { ResearchOutcome, ResearchSnapshot, EvidenceUse } from '@/types/res
 import { useStudioCopy } from '@/lang/studio'
 import { outcomeLabel } from '@/utils/outcomeLabels'
 import ResultSeries from './ResultSeries.vue'
+import { resultName } from '@/utils/researchEvidence'
 import WorkDocument from './WorkDocument.vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 const props = defineProps<{

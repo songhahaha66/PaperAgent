@@ -10,7 +10,16 @@
           <template #content>
             <div class="chat-markdown">
               <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
-              <MarkdownRenderer v-if="getTextContent(message)" :content="getTextContent(message)" />
+              <template v-if="technicalReceipt(message)"
+                ><p>这次操作未完成，已保存当时的研究成果与执行位置。</p>
+                <details class="technical-receipt">
+                  <summary>查看当时的技术记录</summary>
+                  <MarkdownRenderer :content="getTextContent(message)" /></details
+              ></template>
+              <MarkdownRenderer
+                v-else-if="getTextContent(message)"
+                :content="getTextContent(message)"
+              />
 
               <!-- 保留每次研究运行的过程记录 -->
               <PaperPipelineCard
@@ -151,6 +160,9 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const technicalReceipt = (message: ChatMessage) =>
+  message.role === 'assistant' &&
+  /EvidenceDecision|ResearchIntent|结构化输出.*失败/.test(getTextContent(message))
 defineEmits<{
   'open-file': [path: string]
   'open-progress': []

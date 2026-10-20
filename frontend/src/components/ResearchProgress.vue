@@ -92,7 +92,7 @@
               :key="result.id"
               @click="emit('object', { type: 'result', resultType: 'registered', id: result.id })"
             >
-              <small>{{ result.name }}</small
+              <small>{{ resultName(result.name) }}</small
               ><strong>{{
                 result.kind === 'figure'
                   ? '查看图表'
@@ -159,7 +159,7 @@ import type { ResearchSnapshot, ResearchQuestion } from '@/types/research'
 import type { WorkObject } from '@/stores/workPanels'
 import { researchQuestions, taskState, taskLabel, deliveryLabels } from '@/utils/researchProgress'
 import { outcomeLabel } from '@/utils/outcomeLabels'
-import { evidenceMarkdown } from '@/utils/researchEvidence'
+import { evidenceMarkdown, resultName } from '@/utils/researchEvidence'
 const props = defineProps<{ snapshot: ResearchSnapshot | null; workStatus?: string }>()
 const emit = defineEmits<{ object: [object: WorkObject]; issue: [id: string] }>()
 const selectedId = ref('')
