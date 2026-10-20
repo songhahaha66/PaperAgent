@@ -115,6 +115,13 @@ def prepare_decision(proposal, snapshot, context):
     for basis in [*proposal.basis,*(b for c in proposal.coverage for b in c.basis),*(b for s in proposal.outline for b in s.basis)]:
         if not basis.quote and basis.ref in evidence:basis.quote=evidence[basis.ref]['text'][:2000]
     for change in proposal.changes:
+        if change.experiment and context.get('skill_policy',{}).get('mode','auto')=='auto':
+            from ai_system.modules.methods import METHOD_INDEX
+            # Unknown resource tags are not an algorithm or an executable skill.
+            # Keep the candidate instruction intact and never claim to load a
+            # nonexistent resource. Explicitly disabled, known keys still fail.
+            for candidate in change.experiment.candidates:
+                candidate.method_keys=[key for key in candidate.method_keys if key in METHOD_INDEX]
         if change.experiment and not change.method_instruction:
             change.method_instruction='；'.join(c.instruction for c in change.experiment.candidates)[:3000]
     # Filling an omitted execution list must still honor schema limits.
@@ -211,6 +218,8 @@ def decision_context(store, snapshot):
     from ai_system.modules.registry import capabilities
     context['capabilities']=capabilities().research_tools()
     context['skill_policy']=store.skill_preferences()['policy']
+    from ai_system.modules.methods import allowed_method_keys
+    context['available_method_keys']=sorted(allowed_method_keys(context['skill_policy']))
     from ai_system.graph.context import TEMPLATE_CONTRACT,TEMPLATE_REQUIREMENTS_CHARS
     template=store.root/TEMPLATE_CONTRACT
     context['template_requirements']=template.read_text(encoding='utf-8')[:TEMPLATE_REQUIREMENTS_CHARS] if template.is_file() else ''
@@ -606,6 +615,7 @@ class Planner:
             '只有确实适用CSV监督学习时才在experiment.csv填写共同数据/划分/指标协议并提供两项候选，系统构建执行上下文；普通实验csv留空，不需要CSV。'
             'CSV工具登记的指标名称为“候选名称 · 验证指标”（例如OLS · 验证RMSE）以及“共同基线 · 指标”；绑定原题检查时使用这些真实名称。'
             'experiment记录的方法和条件在该任务版本内冻结；执行者不能自行换法，修订时须显式提供新版experiment。候选模型预估仅为选实验的理由，不是实测结果。'
+            'method_keys仅用于真实的方法资源引用，只能取available_method_keys中的编号；算法名称、参数和步骤写入instruction，普通代码实验可用method_keys=[]，不得编造技能编号。'
             'experiments中只有measured且comparison_scope相同的记录可直接比较；不同条件须保留边界，不能硬排名。执行失败不证明方法无效，平局、证据不足可保留多个候选或补实验；不强行选赢家。'
             '启动时优先execute创建并执行下一项研究，不输出完整后续计划，不枚举未实际创建的任务编号。'
             'action=inspect用现有确定性工具查看材料；文件存在不等于已分析，不固定先检索再实验。'

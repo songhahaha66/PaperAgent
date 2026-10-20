@@ -197,7 +197,7 @@ def is_revision_request(message: str) -> bool:
 class CandidateMethod(Contract):
     name: str = Field(min_length=1, max_length=120, description='用户可读的方法名称，不使用任务编号或内部变量名')
     instruction: str = Field(min_length=1, max_length=3000, description='实际要执行的方法、参数或假设；不能由执行者静默换成其他候选')
-    method_keys: list[str] = Field(default_factory=list, max_length=4)
+    method_keys: list[str] = Field(default_factory=list, max_length=4, description='可选的方法资源引用，仅使用available_method_keys中的真实编号；普通代码算法可留空，不把算法名称编造成资源编号')
 
 
 class ExperimentPlan(Contract):
