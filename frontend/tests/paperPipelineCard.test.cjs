@@ -94,6 +94,13 @@ const { hostRenderer } = require('./vueHost.cjs')
     record().parent,
     'errors remain visible without expanding technical history',
   )
+  state.blocks = [{
+    type: 'paper_phase',
+    content: { stage: 'solve', status: 'blocked', note: '下一步研究决策未完成，尚未开始实验计算。' },
+  }]
+  await flush()
+  assert.match(text(record()), /下一步研究决策未完成，尚未开始实验计算/)
+  assert.doesNotMatch(text(record()), /操作已记录|阶段状态已更新/)
   app.unmount()
   console.log(
     'PASS: historical research folds away while results, errors, live progress and pending decisions remain visible',

@@ -66,8 +66,9 @@ async def observe(state, runtime):
     snapshot = store.snapshot()
     await ctx.events.emit("research_state", public_snapshot(snapshot))
     if blocked:
-        await ctx.set_stage("solve", "blocked", "下一步研究决策或资料查证尚未完成，原要求与已验收结果已保留。" if decision_blocked else
-                            "存在未关闭的研究或审查问题、未验收任务，或尝试预算已耗尽")
+        from .planner import decision_block_message, preserved_progress
+        await ctx.set_stage("solve", "blocked", decision_block_message(store,snapshot) if decision_blocked else
+                            "论文写作、检查或导出尚未完成，请查看对应阶段的具体原因。"+preserved_progress(snapshot))
     analysis = analysis_view(snapshot, state.get('analysis'))
     from .planner import current_decision
     selected=current_decision(store)

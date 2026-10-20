@@ -203,6 +203,44 @@ def test_planning_failure_blocks_delivery_and_explicit_resume_reuses_accepted_wo
     assert env.store.snapshot()['tasks']==before['tasks']
 
 
+def test_backend_allocation_preserves_existing_work_and_only_dispatches_new_tasks(env):
+    before=env.store.snapshot()
+    def next_work(context):
+        return {'action':'execute','reason':'补充检验稳定性','requirement_ids':['RQ1'],
+                'task_ids':['T1','T2'], 'changes':[
+                    {'action':'add','task_id':key,'objective':'检验估计稳定性',
+                     'dependencies':['Q1'],'requirement_ids':['RQ1']} for key in ('T1','T2')]}
+    model=Model(next_work);ctx=env.context(model)
+    state=observe(env,ctx)
+    actions=loop.select(state,SimpleNamespace(context=ctx))
+    assert not state['research_blocked'] and len(model.calls)==1
+    assert [a.arg['task_id'] for a in actions]==['Q4','Q5']
+    after=env.store.snapshot()
+    assert all(after['tasks'][key]==task for key,task in before['tasks'].items())
+    assert after['attempts']==before['attempts']
+    assert all(after['tasks'][key]['dependencies']==['Q1'] for key in ('Q4','Q5'))
+
+
+@pytest.mark.parametrize('aliases', [('T1','T1'), ('Q1','T1')])
+def test_ambiguous_new_task_aliases_do_not_redirect_existing_evidence(env, aliases):
+    snapshot=env.store.snapshot();_,context=planner.decision_context(env.store,snapshot)
+    value=proposal(context,'research')
+    value['changes']=[{**value['changes'][0],'task_id':key} for key in aliases]
+    with pytest.raises(ValueError,match='临时标识'):
+        planner.prepare_decision(planner.EvidenceDecision.model_validate(value),snapshot,context)
+    assert env.store.snapshot()==snapshot
+
+
+def test_failed_decision_message_keeps_actual_accepted_progress(env):
+    from ai_system.graph.agent import PaperGraphAgent
+    ctx=env.context(Model(TimeoutError('规划请求超时')))
+    state=observe(env,ctx)
+    message=PaperGraphAgent._final_message(state,ctx)
+    accepted=sum(t['acceptance']=='accepted' and t['validity']=='current' for t in env.store.snapshot()['tasks'].values())
+    assert '规划请求超时' in message and f'已保留 {accepted} 项已验收任务' in message
+    assert '存在未关闭' not in message and '尚未开始实验计算' not in message
+
+
 def test_exhausted_failed_decision_cannot_silently_enter_delivery(env):
     model=Model(TimeoutError('first'),TimeoutError('second'));ctx=env.context(model)
     ctx.max_planning_calls=2

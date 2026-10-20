@@ -104,7 +104,8 @@ const recordText = (content: unknown) =>
       ? String(
           (content as Record<string, unknown>).message ||
             (content as Record<string, unknown>).summary ||
-            '操作已记录',
+            (content as Record<string, unknown>).note ||
+            '阶段状态已更新',
         )
       : ''
 const recordOpen = ref(false)

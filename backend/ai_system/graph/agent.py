@@ -330,7 +330,8 @@ class PaperGraphAgent:
                 source = "paper.tex" if ctx.output_mode == "latex" else "paper.md"
                 target = "PDF 编译" if ctx.output_mode == "latex" else "Word 导出"
                 return f"论文源码 {source} 已保存，{target}未完成：{ctx.stage_notes.get('export', '')}。修正源码或导出环境后可继续。"
-            return "研究已暂停：存在未关闭的研究或审查问题，或任务尚未通过验收。已有结果已保留，可查看问题记录、修改要求或继续重试。"
+            reason=ctx.stage_notes.get('solve') or '当前研究尚未满足交付条件，请查看具体步骤的运行记录。'
+            return '研究已暂停：'+reason
         analysis = result.get("analysis") or {}
         solutions = result.get("solutions") or {}
         issues = result.get("issues") or []
