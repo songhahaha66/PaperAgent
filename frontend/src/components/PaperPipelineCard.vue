@@ -76,7 +76,12 @@
     <t-alert v-if="error" theme="error" :message="error" class="pipeline-error" />
 
     <div v-if="result" class="pipeline-section pipeline-result">
-      <MarkdownRenderer :content="result" />
+      <template v-if="/EvidenceDecision|ResearchIntent|结构化输出.*失败/.test(result)"
+        ><p>本次操作未完成，已保存当时的研究成果与执行位置。</p>
+        <details>
+          <summary>查看当时的技术记录</summary>
+          <MarkdownRenderer :content="result" /></details></template
+      ><MarkdownRenderer v-else :content="result" />
     </div>
   </div>
 </template>
