@@ -645,7 +645,7 @@ class ResearchSetupRequest(BaseModel):
     request_limit:int|None=Field(default=None,ge=1)
     timeout_seconds:float|None=Field(default=None,gt=0)
     compact_paper:bool=True
-    confirm_models:bool=True
+    confirm_models:bool=False
     reuse_experience:bool=True
     literature_mode:Literal['off','on_request','auto']='on_request'
     literature_query:str=Field(default='',max_length=300)

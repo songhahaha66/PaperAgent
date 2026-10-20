@@ -61,12 +61,12 @@
       </div>
     </details>
     <t-alert v-if="waitingConfirm" theme="warning" class="pipeline-confirm">
-      <template #title>请确认建模方案</template>
+      <template #title>研究需要你的输入</template>
       <template #message
         ><MarkdownRenderer :content="confirm" />
-        <p class="confirm-hint">核对方案后确认继续，也可以在输入框写下修改意见。</p>
+        <p class="confirm-hint">请在输入框补充必要信息或说明研究调整。</p>
         <button v-if="canConfirm" class="pipeline-action" @click="$emit('confirm-plan')">
-          确认方案并继续
+          继续研究
         </button></template
       >
     </t-alert>

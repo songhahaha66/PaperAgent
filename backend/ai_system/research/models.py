@@ -187,12 +187,27 @@ class AssumptionChange(Contract):
     status: Literal["active", "retired"] = "active"
 
 
+def is_continuation(message: str) -> bool:
+    """Exact control replies only; mixed instructions retain their substance."""
+    import re
+    return bool(re.fullmatch(r'\s*(?:请)?(?:继续|恢复|重试|接着|继续研究|恢复研究|继续执行|继续运行|恢复执行|确认|同意|可以|好的?|开始|没问题|行|ok(?:ay)?|yes|y|go|lgtm|resume|continue|retry)[\s。.!！]*',message,re.I))
+
+
+def is_revision_request(message: str) -> bool:
+    """Explicit change imperatives; a continuation with substance is not resume."""
+    import re
+    if is_continuation(message) or re.search(r'为什么|为何|怎么|怎样|如何|解释|是什么|哪些|是否|能否|吗|[?？]',message):return False
+    return bool(re.match(r'^\s*(?:请)?(?:(?:修改|调整|改用|换用|补充研究|修正)|(?:将|把).{1,200}(?:改为|改成|调整为|换成)|'
+                        r'(?:继续|恢复|重试)[，,\s]*(?:并|同时|但).*(?:改为|改成|修改|调整|换用))',message,re.S))
+
+
 class TaskChange(Contract):
-    action: Literal["revise", "add"] = "revise"
+    action: Literal["revise", "add", "retire"] = "revise"
     task_id: str
     title: str = ""
     kind: Literal["compute", "writing", "verify"] = "compute"
     objective: str = Field(min_length=1)
+    method_instruction: str = Field(default='',max_length=3000)
     dependencies: list[str] | None = None
     requirement_ids: list[str] | None = None
 

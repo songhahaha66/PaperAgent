@@ -240,17 +240,18 @@ def test_observe_uses_confirmed_failure_to_commit_planner_proposal(tmp_path, mon
     import asyncio
     from types import SimpleNamespace
     from ai_system.research.control import observe
-    from ai_system.research.models import PlanProposal
-    from ai_system.research.planner import Planner
+    from ai_system.research.planner import Planner,EvidenceDecision
     from ai_system.graph.context import GraphContext
     store = make_store(tmp_path, limit=40)
     finish(store, "Q1")
 
-    async def propose(self, snapshot):
-        return PlanProposal(reason="add capacity check", issue_ids=[i["id"] for i in research_findings(snapshot) if i["status"] == "confirmed"],
-                            changes=[TaskChange(task_id="Q1", objective="enforce capacity before publishing")])
+    async def decide(self, snapshot, context):
+        return EvidenceDecision(action='research',reason='修复已确认的容量错误，保留原检查。',gap='容量结果不满足原要求。',requirement_ids=['RQ1'],
+            coverage=[{'requirement_id':r['id'],'requirement':r['statement'],'supported':'','basis':[],'remaining':'等待实际研究结果。'} for r in snapshot['spec']['requirements']],
+            issue_ids=[i['id'] for i in research_findings(snapshot) if i['status']=='confirmed'],
+            changes=[TaskChange(task_id='Q1',objective=snapshot['tasks']['Q1']['objective'],method_instruction='enforce capacity before publishing')])
 
-    monkeypatch.setattr(Planner, "propose", propose)
+    monkeypatch.setattr(Planner, "decide", decide)
     ctx = GraphContext.create(str(tmp_path), planner_llm=object())
     ctx.research = store
     state = {"task": "original", "analysis": {"subproblems": [t["subproblem"] for t in store.snapshot()["tasks"].values()]}}

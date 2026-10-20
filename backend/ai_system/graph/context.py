@@ -102,7 +102,6 @@ class GraphContext:
     skill_policy: Any = None
     judge: Any = None
     n_candidates: int = 1
-    confirm_models: bool = False
     max_solver_steps: int = 40
     max_repair_rounds: int = 2
     max_review_rounds: int = 1
@@ -110,8 +109,7 @@ class GraphContext:
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
-    max_planning_calls: int = DEFAULT_PLANNING_CALL_LIMIT
-    max_design_rounds: int = 2
+    max_planning_calls: int | None = DEFAULT_PLANNING_CALL_LIMIT
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)
 
@@ -145,7 +143,10 @@ class GraphContext:
             from ..research.runtime import ResearchRuntime
             settings=ResearchRuntime(workspace).policy()
             options.setdefault('compact_paper',settings['compact_paper'])
-            options.setdefault('confirm_models',settings['confirm_models'])
+        # Old request settings are decoded here, without retaining an approval
+        # executor in the graph. Missing information uses controller questions.
+        options.pop('confirm_models',None)
+        options.pop('max_design_rounds',None)
         return cls(
             workspace=workspace,
             fs=fs,

@@ -62,16 +62,28 @@ class Capability:
     product: str
     execute: Callable[..., Awaitable[CapabilityProduct]]
     inputs: type[BaseModel]
+    purpose: str = ''
+    model_callable: bool = False
 
 
 class ModuleRegistry:
     def __init__(self):
         self._capabilities = {}
 
-    def register(self, module, name, product, handler, inputs=Inputs):
+    def register(self, module, name, product, handler, inputs=Inputs, *, purpose='', model_callable=False):
         if name in self._capabilities:
             raise ValueError(f"重复能力：{name}")
-        self._capabilities[name] = Capability(name, module, product, handler, inputs)
+        if model_callable and not purpose.strip():raise ValueError('模型可调用能力必须声明用途和产物边界')
+        self._capabilities[name] = Capability(name, module, product, handler, inputs,purpose,model_callable)
+
+    def research_tools(self):
+        return [{'name':c.name,'purpose':c.purpose,'inputs':c.inputs.model_json_schema(),'product':c.product}
+                for c in self._capabilities.values() if c.model_callable]
+
+    def validate_research_tool(self,name,inputs):
+        capability=self._capabilities.get(name)
+        if not capability or not capability.model_callable:raise ValueError('该能力未显式开放给研究控制器')
+        return capability.inputs.model_validate(inputs)
 
     def describe(self):
         return [{"name": c.name, "module": c.module, "product": c.product, "inputs": c.inputs.model_json_schema()}

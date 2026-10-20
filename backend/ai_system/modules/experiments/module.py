@@ -40,14 +40,16 @@ async def analyze(ctx, inputs):
     return CapabilityProduct("research_state", await analyze(inputs["state"], SimpleNamespace(context=ctx)))
 
 
-async def plan(ctx, inputs):
-    from .planning import design
-    return CapabilityProduct('research_state', await design(inputs['branch'], SimpleNamespace(context=ctx)))
+async def inspect_materials(ctx, inputs):
+    from .analysis import profile_data
+    return CapabilityProduct('research_state',{'inputs':ctx.research.file_inputs(),'profile':await profile_data(ctx)})
 
 
 def register(registry):
     registry.register("experiments", "experiments.comment", "experiment", comment, CommentInputs)
-    for name, product, handler in (("plan", "research_state", plan), ("explore", "experiment", explore), ("compare", "experiment", compare),
+    registry.register('experiments','experiments.inspect','research_state',inspect_materials,
+                      purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览不是本研究已验收数值成果。',model_callable=True)
+    for name, product, handler in (("explore", "experiment", explore), ("compare", "experiment", compare),
                                     ("design", "experiment", design), ("execute", "research_state", execute),
                                     ("analyze", "research_state", analyze)):
         registry.register("experiments", f"experiments.{name}", product, handler, StateInputs if name=='analyze' else BranchInputs)

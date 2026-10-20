@@ -157,20 +157,20 @@ def test_known_legacy_token_usage_is_imported_once_before_new_requests(tmp_path)
     assert rt.status()['input_tokens']==18
 
 
-def test_new_default_does_not_override_explicit_confirmation_environment(tmp_path,monkeypatch):
+def test_obsolete_confirmation_setting_does_not_reinstall_an_approval_executor(tmp_path,monkeypatch):
     from ai_system.graph.agent import PaperGraphAgent
     monkeypatch.setenv('AI_CONFIRM_MODELS','true')
     agent=PaperGraphAgent(None,workspace_dir=str(tmp_path),judge=None)
-    assert agent.options['confirm_models'] is True
+    assert 'confirm_models' not in agent.options
     ResearchRuntime(tmp_path).configure({'confirm_models':False})
     agent=PaperGraphAgent(None,workspace_dir=str(tmp_path),judge=None)
-    assert agent.options['confirm_models'] is False
+    assert 'confirm_models' not in agent.options
 
 
 def test_resume_cannot_bypass_pending_confirmation():
     from services.chat_services.research_session import ResearchSnapshot,resolve_action
     snapshot=ResearchSnapshot(work_id='pending',work_status='waiting',research_id='study',engine_version='research-v3',graph_status='interrupted')
-    with pytest.raises(ValueError,match='等待方案确认'):resolve_action('resume','继续',snapshot)
+    assert resolve_action('resume','继续',snapshot)=='confirm'
     assert resolve_action('confirm','确认方案',snapshot)=='confirm'
 
 

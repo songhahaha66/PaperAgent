@@ -16,7 +16,7 @@ export interface ResearchSetup {
 export const defaultResearchSetup = (): ResearchSetup => ({
   request_limit: null,
   compact_paper: true,
-  confirm_models: true,
+  confirm_models: false,
   reuse_experience: true,
   literature_mode: 'on_request',
   literature_query: '',

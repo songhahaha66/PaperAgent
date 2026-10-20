@@ -33,8 +33,8 @@ async function environment() {
       connect() {
         return deferred ? new Promise((resolve) => connected.push(resolve)) : Promise.resolve()
       }
-      sendMessage(message, _model, action, subproblemId) {
-        sent.push({ workId: this.workId, message, action, subproblemId })
+      sendMessage(message, _model, action, subproblemId, revision) {
+        sent.push({ workId: this.workId, message, action, subproblemId, revision })
       }
       disconnect() {
         this.closed = true
@@ -132,6 +132,7 @@ async function environment() {
         setInterval,
         clearInterval,
         URL,
+        crypto: require('node:crypto').webcrypto,
       },
     )
     const state = scope.run(() => module.default.setup({}, { expose() {} }))
@@ -177,6 +178,7 @@ async function environment() {
   const progressWork = await env.work('progress')
   await progressWork.state.loadWork()
   progressWork.state.researchSnapshot.value = {
+    research_id: 'study', research_revision: 1, engine_version: 'research-v3',
     tasks: [
       { task_id: 'Q1', progress: { state: 'accepted' } },
       { task_id: 'Q2', progress: { state: 'rework' } },
@@ -196,12 +198,15 @@ async function environment() {
     1,
   )
   assert.equal(progressWork.sent.length, 0, 'viewing progress never resumes research')
-  progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
-  assert.equal(progressWork.state.inputValue.value, '先比较新方法的影响')
-  assert.equal(progressWork.state.questionScope.value, 'Q1')
-  assert.equal(progressWork.state.messageAction.value, 'revise_research')
-  assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
-  assert.equal(progressWork.sent.length, 0, 'preparing a method change must not invalidate or execute research')
+  await progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
+  assert.equal(progressWork.sent.at(-1).action, 'revise_research')
+  assert.equal(progressWork.sent.at(-1).revision.scope[0], 'Q1')
+  assert.equal(progressWork.state.messageAction, undefined, 'the composer has no persistent revision mode')
+  assert.equal(progressWork.state.questionScope.value, null)
+  progressWork.state.handleStreamMessage({ type: 'complete', work_status: 'paused' }, progressWork.state.chatMessages.value.at(-1).id)
+  await progressWork.state.sendMessage('继续')
+  assert.equal(progressWork.sent.at(-1).action, 'auto', 'ordinary continuation cannot inherit the preceding revision action')
+  assert.equal(progressWork.sent.at(-1).revision, undefined)
   progressWork.stop()
   env.width.value = 620
   env.isMobile.value = true
@@ -249,7 +254,9 @@ async function environment() {
   actionStatus='waiting'
   primary.state.currentWork.value.status='waiting'
   await primary.state.handlePrimaryAction()
-  assert.equal(primary.sent.at(-1).action, 'confirm')
+  assert.equal(primary.sent.length, 0, 'missing information requires an actual user reply, never a synthesized confirmation')
+  await primary.state.sendMessage('Necessary information supplied.', 'auto')
+  assert.equal(primary.sent.at(-1).action, 'auto')
   assert.equal(primary.state.primaryAction.value.kind, 'pause', 'execution takes precedence over confirmation and existing output')
   assert.equal(primary.state.primaryAction.value.label, '暂停')
   primary.state.pausing.value = true
@@ -272,7 +279,7 @@ async function environment() {
   const restart = primary.state.workActionOptions.value.find((option) => option.value === 'restart')
   const sentBeforeRestart = primary.sent.length
   restart.onClick()
-  assert.equal(primary.state.messageAction.value, 'run')
+  assert.equal(primary.state.messageAction, undefined)
   assert.equal(primary.sent.length, sentBeforeRestart, 'secondary restart only prepares a new research')
   primary.state.workspaceFiles.value = []
   assert.equal(primary.state.primaryAction.value, null, 'missing output cannot offer a download')
@@ -392,8 +399,7 @@ async function environment() {
     'other work evidence is ignored',
   )
   restored.state.handleStreamMessage({ type: 'complete', work_status: 'completed' }, replyId)
-  restored.state.messageAction.value = 'run'
-  await restored.state.sendMessage('重新研究这个问题')
+  await restored.state.sendMessage('重新研究这个问题', 'run')
   assert.equal(restored.sent.at(-1).action, 'run')
   restored.stop()
   console.log('PASS: one-line submission respects IME and streaming continues across split tabs')
@@ -437,7 +443,7 @@ async function environment() {
   )
   recovery.state.questionScope.value = 'Q1'
   recovery.state.prepareNewResearch()
-  assert.equal(recovery.state.messageAction.value, 'run')
+  assert.equal(recovery.state.messageAction, undefined)
   assert.equal(recovery.state.questionScope.value, null)
   assert.equal(
     recovery.sent.length,

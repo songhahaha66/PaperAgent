@@ -528,7 +528,7 @@ class ResearchStore:
         identity = digest({**report.model_dump(), "revision": revision, "source": source})[:24]
         previous = next((i for i in research_findings(state) if i["id"] == identity), None)
         if previous:
-            if (report.category in {"writing", "service"} or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
+            if (report.category in {"writing", "service"} or report.category=='coverage' and source=='sections' or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
                 previous["status"] = status
                 previous['blocking']=report.category!='writing' or report.section!='paper'
             return previous
@@ -571,16 +571,25 @@ class ResearchStore:
             state = self._read(db)
             if source == "sections":
                 for issue in research_findings(state):
-                    if issue["source"] == "sections" and issue["category"] == "writing" and issue.get("section") != "paper":
+                    if issue["source"] == "sections" and issue["category"] in {"writing",'coverage'} and issue.get("section") != "paper":
                         issue["status"] = "resolved"
             recorded = [self._record_issue(state, report, "confirmed" if report.category in {"writing", "service"} else "suspected", source=source)
                         for report in reports]
+            for issue in recorded:
+                if source=='sections' and issue['category']=='coverage':issue['blocking']=False
             self._save(db, state, "issues_reported", {"source": source, "issues": recorded})
             return [i for i in recorded if i["status"] not in {"resolved", "dismissed", "superseded"}]
 
     @staticmethod
     def delivery_ready(state):
-        return all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in state["tasks"].values()) and not any(
+        # Stopping an attempt never answers the requirement it was meant to
+        # investigate. The controller additionally validates substantive coverage.
+        covered=all(r['kind']=='deliverable' or any(
+            not state['tasks'][key]['retired'] and state['tasks'][key]['acceptance']=='accepted' and
+            state['tasks'][key]['validity']=='current' and any(e['active'] and
+                e['producer_attempt']==state['tasks'][key]['active_attempt'] for e in state['evidence'].values())
+            for key in r['task_ids']) for r in state['spec']['requirements'])
+        return covered and all(t["retired"] or (t["acceptance"] == "accepted" and t["validity"] == "current") for t in state["tasks"].values()) and not any(
             i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"} for i in research_findings(state))
 
     def schedule_investigations(self):
@@ -589,6 +598,7 @@ class ResearchStore:
             created = []
             changed = False
             for issue in research_findings(state):
+                if issue['source']=='sections' and issue['category']=='coverage':continue
                 if issue["status"] != "suspected" or any(t.get("verifies_issue") == issue["id"] for t in state["tasks"].values()):
                     continue
                 if not issue["check_ids"]:
@@ -671,7 +681,12 @@ class ResearchStore:
         return sorted(affected)
 
     def apply_patch(self, patch: PlanPatch):
-        signature = digest(patch.model_dump())
+        payload=patch.model_dump()
+        for change in payload['changes']:
+            # Empty optional method metadata must not change the identity of a
+            # pre-controller revision command restored from schema 3 history.
+            if not change.get('method_instruction'):change.pop('method_instruction',None)
+        signature = digest(payload)
         with self._transaction() as db:
             old = db.execute("SELECT digest, response FROM commands WHERE research_id=? AND id=?",
                              (self.research_id, patch.command_id)).fetchone()
@@ -716,6 +731,15 @@ class ResearchStore:
             if len(set(ids)) != len(ids):
                 raise ValueError("计划修订包含重复任务")
             for change in patch.changes:
+                if change.action=='retire':
+                    task=state['tasks'].get(change.task_id)
+                    if not task or task['kind']=='verify' or task['retired'] or task['acceptance']=='accepted':
+                        raise ValueError('只能停止尚未验收的研究分支，已完成成果和独立核查必须保留')
+                    task.update(retired=True,reason=patch.reason)
+                    for issue in research_findings(state):
+                        if issue['task_id']==change.task_id and issue['category']=='execution':
+                            issue.update(blocking=False,stop_reason=patch.reason)
+                    continue
                 if change.action == "add":
                     if change.kind == "verify" or not change.requirement_ids:
                         raise ValueError("新增研究任务必须绑定现有要求，验证任务由问题协议调度")
@@ -744,6 +768,7 @@ class ResearchStore:
                 task["revision"] += 1
                 task["objective"] = change.objective
                 task["subproblem"] = {**task["subproblem"], "question": change.objective}
+                task['method_instruction']=change.method_instruction
                 if change.dependencies is not None:
                     task["dependencies"] = change.dependencies
                     task["subproblem"]["depends_on"] = change.dependencies
@@ -766,7 +791,8 @@ class ResearchStore:
                         task["retired"] = True
             for issue in research_findings(state):
                 related_assumption = issue["assumption_id"] in changed_assumptions and issue["status"] not in {"resolved", "dismissed", "superseded"}
-                if issue not in issues and not related_assumption and not (patch.amendment and issue["task_id"] in affected and issue["status"] in {"confirmed", "inconclusive"}):
+                retry_fault=issue['category']=='execution' and issue['task_id'] in affected and not state['tasks'][issue['task_id']]['retired'] and issue['status'] in {'confirmed','inconclusive'}
+                if issue not in issues and not related_assumption and not retry_fault and not (patch.amendment and issue["task_id"] in affected and issue["status"] in {"confirmed", "inconclusive"}):
                     continue
                 if issue["assumption_id"] and state["assumptions"][issue["assumption_id"]]["status"] == "refuted":
                     continue
@@ -814,15 +840,15 @@ class ResearchStore:
                     raise ValueError("跨任务验收操作数必须声明任务依赖")
 
     def reserve_planning_call(self, decision_key=None, *, limit=DEFAULT_PLANNING_CALL_LIMIT):
-        if type(limit) is not int or limit<0:
-            raise ValueError('规划次数上限必须是有限的非负整数')
+        if limit is not None and (type(limit) is not int or limit<0):
+            raise ValueError('显式规划次数上限必须是非负整数')
         with self._transaction() as db:
             state = self._read(db)
             if decision_key:
                 row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(self.research_id,decision_key)).fetchone()
                 if row and json.loads(row[0]).get('status')!='retry':
                     return False
-            if state["planning_calls"] >= limit or len(state["attempts"]) >= state["max_total_attempts"]:
+            if limit is not None and state["planning_calls"] >= limit:
                 return False
             state["planning_calls"] += 1
             if decision_key:
@@ -889,6 +915,9 @@ class ResearchStore:
             return PlanPatch.model_validate_json(row[1])
 
     def apply_revision_command(self, command_id, base_revision, change, scope, patch, *, source_issue=None):
+        from .models import is_continuation
+        if not change.strip() or is_continuation(change):
+            raise ValueError('继续/恢复不是研究修订，不能改变版本或作废成果')
         from .models import PlanPatch
         signature = digest({"base_revision": base_revision, "change": change, "scope": scope,**({'source_issue':source_issue} if source_issue else {})})
         # The command's original patch is retained; a retry must not append the

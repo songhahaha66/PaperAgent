@@ -15,7 +15,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai_system.graph.confirm import is_approval
+from ai_system.research.models import is_continuation,is_revision_request
 from ai_system.research import ENGINE_VERSION
 
 ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "revise_research"]
@@ -263,23 +263,27 @@ def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot) -> 
     if not isinstance(requested, str) or requested not in ACTIONS:
         raise ValueError("不支持的消息操作")
     waiting = snapshot.graph_status == "interrupted" or snapshot.work_status == "waiting"
+    # Normalize even stale clients' explicit revision mode before constructing
+    # a revision command or mutating work status.
+    if requested!='ask' and is_continuation(message) and (snapshot.has_research or snapshot.research_id):
+        requested='confirm' if waiting else 'resume'
     if requested == "auto":
-        if waiting and is_approval(message):
-            requested = "confirm"
-        elif snapshot.has_research and snapshot.work_status in {"paused", "cancelled", "failed"} and is_approval(message):
-            requested = "resume"
+        if waiting:
+            requested='confirm'
+        elif snapshot.has_research and is_revision_request(message):
+            requested='revise_research'
         else:
             requested = "ask" if snapshot.has_research else "run"
     if requested in {"confirm", "revise", "resume"} and snapshot.engine_version != ENGINE_VERSION:
         raise ValueError("该研究记录不支持恢复，请重新研究")
     if requested in {"confirm", "revise"} and not waiting:
-        raise ValueError("当前没有等待确认的建模方案")
+        raise ValueError("当前没有等待补充信息的研究")
     if requested == "resume" and waiting:
-        raise ValueError("当前等待方案确认，请先明确确认或修改方案")
+        raise ValueError("当前等待必要信息，请在对话中回复")
     if requested == "resume" and (not snapshot.research_id or snapshot.work_status == "completed"):
         raise ValueError("当前没有可恢复的研究任务")
     if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.tasks or waiting):
-        raise ValueError("当前研究不支持增量修改，请先完成方案确认")
+        raise ValueError("当前研究不能修订，请先回复待补充信息")
     return requested
 
 

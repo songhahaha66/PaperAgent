@@ -86,7 +86,7 @@
             class="work-primary-action"
             theme="primary"
             :title="primaryAction.title"
-            :loading="pausing || downloadLoading || confirmingPlan"
+            :loading="pausing || downloadLoading"
             :disabled="loading"
             @click="handlePrimaryAction"
           >
@@ -125,8 +125,8 @@
                   :tasks="researchSnapshot?.tasks"
                   :work-status="currentWork?.status"
                   @open-progress="openProgress"
-                  @confirm-plan="confirmCurrentPlan"
-                  :confirm-busy="isStreaming || loading || confirmingPlan"
+                  @confirm-plan="replyToResearch"
+                  :confirm-busy="isStreaming || loading"
                   @open-result="
                     (id) => openObject({ type: 'result', resultType: 'registered', id })
                   "
@@ -148,15 +148,6 @@
                     @keydown="handleComposerKeydown"
                   />
                   <div class="composer-controls">
-                    <t-dropdown :options="messageActionOptions" trigger="click">
-                      <button
-                        type="button"
-                        class="message-action-select"
-                        :disabled="isStreaming || loading"
-                      >
-                        {{ messageActionLabel }}<t-icon name="chevron-down" />
-                      </button>
-                    </t-dropdown>
                     <button
                       v-if="questionScope"
                       type="button"
@@ -380,7 +371,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { workspaceAPI } from '@/api/workspace'
@@ -503,20 +494,15 @@ function revisePaper(
 }
 function preparePlanRevision(message: string, task: string) {
   questionScope.value = task
-  inputValue.value = message
-  messageAction.value = 'revise_research'
   layout.activateChat()
+  return sendMessage(message, 'revise_research')
 }
 const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
 const {
   chatMessages,
   isStreaming,
-  messageAction,
   runningAction,
   questionScope,
-  messageActionLabel,
-  messageActionOptions,
-  reviseSubproblem,
   askSubproblem,
   pausing,
   connectionState,
@@ -552,41 +538,11 @@ watch(settingsOpen, async (open) => {
     settingsError.value = e instanceof Error ? e.message : '设置暂不可用'
   }
 })
-const confirmingPlan = ref(false)
-async function confirmCurrentPlan() {
-  if (
-    confirmingPlan.value ||
-    isStreaming.value ||
-    loading.value ||
-    currentWork.value?.status !== 'waiting'
-  )
-    return
-  confirmingPlan.value = true
-  const before = researchSnapshot.value
-  try {
-    const fresh = await loadResearchSnapshot()
-    if (!fresh) {
-      MessagePlugin.error(
-        isZh.value ? '无法核对当前方案，请重试。' : 'Could not check the current plan. Retry.',
-      )
-      return
-    }
-    if (
-      fresh.research_id !== before?.research_id ||
-      fresh.research_revision !== before?.research_revision ||
-      fresh.commit_seq !== before?.commit_seq
-    ) {
-      MessagePlugin.info(
-        isZh.value
-          ? '方案已更新，请查看后重新确认。'
-          : 'The plan changed. Review it before confirming.',
-      )
-      return
-    }
-    if (currentWork.value?.status === 'waiting') return await sendMessage('确认', 'confirm')
-  } finally {
-    confirmingPlan.value = false
-  }
+async function replyToResearch() {
+  if (isStreaming.value || loading.value || currentWork.value?.status !== 'waiting') return
+  layout.activateChat()
+  await nextTick()
+  document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
 }
 const acceptedTaskCount = computed(
   () =>
@@ -601,7 +557,7 @@ const primaryAction = computed(() => {
     return { kind: 'pause', icon: 'pause', label, title: label } as const
   }
   if (currentWork.value.status === 'waiting') {
-    const label = isZh.value ? '确认方案' : 'Confirm plan'
+    const label = isZh.value ? '补充信息' : 'Provide input'
     return { kind: 'confirm', icon: 'check', label, title: label } as const
   }
   if (canResume.value) {
@@ -628,7 +584,7 @@ async function handlePrimaryAction() {
     case 'pause':
       return pauseTask()
     case 'confirm':
-      return confirmCurrentPlan()
+      return replyToResearch()
     case 'resume':
       return sendMessage('继续', 'resume')
     case 'download':
@@ -1168,19 +1124,6 @@ onUnmounted(() => window.removeEventListener('paper-literature-open', openLitera
   }
 }
 
-.message-action-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 0;
-  background: transparent;
-  color: var(--pa-ink);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  padding: 5px 3px;
-  white-space: nowrap;
-}
 .question-scope {
   display: inline-flex;
   align-items: center;

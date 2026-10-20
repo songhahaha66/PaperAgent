@@ -163,17 +163,15 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
 
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
     from ai_system.research.control import task_dispatch as dispatch
-    from ai_system.graph.build import send_designs
     from test_research_p2 import store_for,problem,TASK as original
     store=store_for(tmp_path)
     runtime=SimpleNamespace(context=SimpleNamespace(research=store))
     state={'task':'shortened summary without source data','analysis':problem().model_dump()}
-    for sends in [dispatch(state,runtime)]:
+    for sends in [dispatch(state,runtime,['Q1','Q3'])]:
         assert sends and all(s.arg['source']==original for s in sends)
     store.claim('Q1')
     store.recover()
-    assert all(s.arg['source']==original for s in dispatch(state,runtime))
-    assert all(s.arg['source']==original for s in send_designs({**state,'task':original}))
+    assert all(s.arg['source']==original for s in dispatch(state,runtime,['Q1','Q3']))
 
 
 def test_inline_source_data_reaches_design_exploration_solver_and_local_review(tmp_path):

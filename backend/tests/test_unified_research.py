@@ -80,17 +80,6 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     assert (tmp_path/'.system/paper_raw.md').exists()
 
 
-def test_paired_confirmation_lists_both_and_does_not_announce_a_winner(tmp_path,monkeypatch):
-    from ai_system.graph.confirm import designs_summary
-    from ai_system.modules.experiments import exploration as explore
-    monkeypatch.setattr(explore,'two_candidate_mode',lambda *args:True)
-    choices=[{'name':name,'idea':'使用当前数据','validation':'真实指标'} for name in ['OLS','Ridge']]
-    state={'analysis':{'subproblems':[{'id':'Q1','title':'回归'}]},
-           'designs':{'Q1':{'chosen':choices[1],'candidates':choices}}}
-    summary=designs_summary(state,object())
-    assert 'OLS' in summary and 'Ridge' in summary and '尚无实测胜者' in summary
-
-
 def test_actual_estimator_guard_rejects_misnamed_methods_and_parameters():
     from sklearn.linear_model import LinearRegression,Ridge
     from sklearn.pipeline import make_pipeline

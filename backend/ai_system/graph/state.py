@@ -171,16 +171,12 @@ class PaperState(TypedDict, total=False):
     data_profile: str
     analysis: Dict[str, Any]
     # 子问题编号 -> {"methods", "candidates", "scores", "chosen", "critic"}
-    plan_ahead: bool  # True：全部子问题先设计再统一确认；False：每个子问题轮到求解时才设计
     designs: Annotated[Dict[str, Dict[str, Any]], merge_dict]
-    confirmation_feedback: str
-    approved: bool
-    design_round: int
     # 子问题编号 -> SolveReport dict + status
     solutions: Annotated[Dict[str, Dict[str, Any]], merge_dict]
-    # 用户模板的最上层章节 [{"key", "title"}]，没有模板时为空（用默认数模结构）
+    # 收敛决策的结果大纲（含范围/依据）；用户模板结构优先。
     section_contexts: Dict[str, str]
-    outline: List[Dict[str, str]]
+    outline: List[Dict[str, Any]]
     # 章节 key -> 带引用的 markdown 正文
     sections: Annotated[Dict[str, str], merge_dict]
     # 跨子问题的结论冲突及统一口径
@@ -195,11 +191,12 @@ class BranchInput(TypedDict, total=False):
     """Send 给单个子问题分支的输入"""
 
     source: str
+    task_revision: int
+    clarifications: List[Dict[str, Any]]
     research_contract: Dict[str, Any]
     review_findings: List[Dict[str, Any]]
     subproblem: Dict[str, Any]
     analysis: Dict[str, Any]
     data_profile: str
-    confirmation_feedback: str
     design: Dict[str, Any]
     dependencies: Dict[str, Dict[str, Any]]

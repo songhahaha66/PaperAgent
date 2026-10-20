@@ -55,13 +55,13 @@ export function researchHeadline(
   workStatus: string,
   zh: boolean,
 ) {
-  if (workStatus === 'waiting') return zh ? '等待确认研究方案' : 'Waiting for plan confirmation'
+  if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
   if (['paused', 'failed', 'cancelled'].includes(workStatus) && snapshot?.execution_reason)
     return snapshot.execution_reason.message
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
   if (!snapshot?.tasks?.length) {
-    if (workStatus === 'waiting') return zh ? '等待确认研究方案' : 'Waiting for plan confirmation'
+    if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
     if (workStatus === 'in_progress')
       return zh ? '正在分析并建立研究任务' : 'Preparing research tasks'
     if (workStatus === 'failed')

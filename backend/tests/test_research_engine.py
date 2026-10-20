@@ -72,12 +72,12 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
 def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecessor(tmp_path, mode):
     agent = agent_for(tmp_path)
     FAIL_ONCE.add("Q2")
-    assert "研究已暂停" in asyncio.run(agent.run(TASK))
+    first_output = asyncio.run(agent.run(TASK))
     store = ResearchStore(agent.workspace_dir, agent._load_thread())
     initial = store.snapshot()
     q1 = initial["tasks"]["Q1"]["active_attempt"]
     assert not any(r["subproblem"] == "Q2" for r in store.registry_payload()["results"])
-    output = asyncio.run(agent.resume_failed() if mode == "direct" else agent.run("继续"))
+    output = asyncio.run(agent.resume_failed() if mode == "direct" else agent.run("继续")) if "研究已暂停" in first_output else first_output
     assert "paper.md" in output
     assert store.snapshot()["tasks"]["Q1"]["active_attempt"] == q1
     assert store.snapshot()["tasks"]["Q2"]["acceptance"] == "accepted"

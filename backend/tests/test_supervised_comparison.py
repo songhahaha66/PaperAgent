@@ -19,7 +19,7 @@ from ai_system.modules.experiments import supervised as engine
 from ai_system.modules.experiments.exploration import explore
 from ai_system.modules.experiments.store import ExperimentStore,CandidateCode,SupervisedSpec
 from ai_system.research.store import ResearchStore,digest
-from ai_system.research.models import ResearchConflict,PlanPatch,TaskChange,PlanProposal,WorkerResult
+from ai_system.research.models import ResearchConflict,PlanPatch,TaskChange,WorkerResult
 from ai_system.research.control import worker_context
 from ai_system.research.planner import Planner,decision_context,validate_decision,EvidenceDecision,advance_research
 
@@ -245,7 +245,8 @@ def test_comparison_selection_status_is_preserved_and_citable_without_new_runs(s
     basis={'ref':entry['id'],'quote':summary['reason']}
     answer=EvidenceDecision(action='deliver',reason='保留共同协议实测结果与边界，继续原有写作核查。',requirement_ids=['RQ1'],basis=[basis],
         coverage=[{'requirement_id':'RQ1','requirement':snapshot['spec']['requirements'][0]['statement'],
-                   'supported':summary['reason'],'basis':[basis],'remaining':''}])
+                   'supported':summary['reason'],'basis':[basis],'remaining':''}],
+        outline=[{'key':'solve:Q1','title':'实测比较','purpose':'表达共同协议下的结果与局限。','task_ids':['Q1'],'basis':[basis]}])
     validate_decision(answer,snapshot,context)
     invalid=answer.model_copy(deep=True);invalid.basis[0].ref='P'+'0'*24
     with pytest.raises(ValueError,match='实际结果'):
@@ -369,12 +370,12 @@ def test_failed_comparison_enters_existing_issue_and_planner_repair_without_budg
     setup.store.report_comparison_failure(record,setup.order)
     snapshot=setup.store.snapshot();issue=research_findings(snapshot)[0]
     assert issue['source']=='comparison' and issue['status']=='confirmed' and issue['action']=='recompute'
-    class Model:
-        def with_structured_output(self,*a,**k):return self
-        async def ainvoke(self,messages):
-            assert record['id'] in messages[-1].content
-            return PlanProposal(changes=[TaskChange(task_id='Q1',objective='修复 fit/predict 接口后继续独立比较')],issue_ids=[issue['id']],reason='修复执行契约')
-    proposal=asyncio.run(Planner(Model()).propose(snapshot));before=setup.cfg.budget('Q1')
+    _,context=decision_context(setup.store,snapshot)
+    proposal=EvidenceDecision(action='research',gap='两支实际执行均失败，原目标尚无答案。',requirement_ids=['RQ1'],
+        changes=[TaskChange(task_id='Q1',objective=snapshot['tasks']['Q1']['objective'],method_instruction='修复 fit/predict 接口后按共同协议重新比较。')],
+        issue_ids=[issue['id']],reason='修复执行契约',coverage=[{'requirement_id':'RQ1',
+        'requirement':snapshot['spec']['requirements'][0]['statement'],'supported':'','basis':[],'remaining':'执行失败，尚无研究答案。'}])
+    validate_decision(proposal,snapshot,context);before=setup.cfg.budget('Q1')
     setup.store.apply_patch(PlanPatch(command_id='repair',base_revision=snapshot['revision'],changes=proposal.changes,issue_ids=proposal.issue_ids,reason=proposal.reason))
     assert setup.cfg.budget('Q1')==before and setup.store.snapshot()['tasks']['Q1']['revision']==2
     assert setup.cfg.list()[0]['branches'][0]['run_ids']

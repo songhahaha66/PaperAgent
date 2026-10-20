@@ -47,6 +47,8 @@ AUDIT_SYSTEM = (
     "若根因是数据、模型或假设错误，填写research_issue并引用登记证据和检查编号，进入研究核验；仅写作错误只填section和problem。"
     "补写没有证据支持的数值、夸大结论或遗漏适用条件，应按已有证据重写，不能为此重算原本正确的上游。"
     "research_issue只用于已有上游结果本身可能错误的情况；检查必须直接验证疑点，不能用目标值有限或其他无关检查代替。"
+    "另一个例外是确实发现原题研究目的尚无实际产物回答：用research_issue.category=coverage说明缺少的原要求及实际依据，"
+    "交回同一研究控制器；这不是已证明的上游错误，不虚构检查或阈值。仅文稿漏写已有结果时仍按writing处理，不要求新增实验。"
     "你是论文终审。下面给出主要结论、统一口径、已登记证据，以及保留原始引用的章节正文。"
     "正文引用对应的数值和含义以登记证据表为准。主要结论表只是关键结论摘录，不是证据全集；"
     "已登记的变量或辅助结果可以用于论证，不得因为它未被主要结论表列出就判为虚构。"
@@ -206,5 +208,6 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
         issue.research_issue or IssueReport(task_id=issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
                     category="writing", section=issue.section, message=f"与结论表不一致：{issue.problem}")
         for issue in audit.issues
-        if issue.section in keys and issue.contradicts and not NOT_A_CONFLICT.search(issue.problem)
+        if issue.section in keys and ((issue.research_issue and issue.research_issue.category=='coverage') or
+                                     issue.contradicts and not NOT_A_CONFLICT.search(issue.problem))
     ]

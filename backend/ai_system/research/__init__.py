@@ -2,6 +2,6 @@
 
 ENGINE_VERSION = "research-v3"
 
-# One finite backend default shared by the coordinator and atomic reservations:
-# literature -> targeted experiment -> convergence, with room for one repair.
-DEFAULT_PLANNING_CALL_LIMIT = 4
+# Main-loop decisions share the existing overall request budget and operation
+# guards. An explicitly configured planning limit remains supported.
+DEFAULT_PLANNING_CALL_LIMIT = None

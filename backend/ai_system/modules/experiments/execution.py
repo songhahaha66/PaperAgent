@@ -307,6 +307,7 @@ def build_task(
         f"# 原题（含题内数据；不得用模拟数据替代）\n{branch['source']}",
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n交付物：{'；'.join(subproblem.get('deliverables') or [])}",
         f"# 数据文件\n{files}\n\n# 数据概览\n{branch['data_profile']}",
+        '# 用户对必要信息的回复（保留来源；不是计算成果，不得借此放宽冻结契约）\n'+json.dumps(branch['clarifications'],ensure_ascii=False) if branch.get('clarifications') else '',
         f"# 选定的建模方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"
         f"步骤：\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(chosen["steps"]))
         + f"\n检验：{chosen['validation']}",
@@ -429,9 +430,17 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
                 "formulation": "", "steps": ["读取冻结输入", "独立复算并登记指定指标"], "assumptions": [], "validation": "提交固定检查所需证据"}
             record = {"methods": [], "candidates": [chosen], "scores": [{"total": None}], "chosen": chosen,
                 "chosen_index": 0, "critic": None, "critic_error": None}
-        else:
+        elif ctx.explore_top_k>1:
             from ai_system.modules.registry import invoke
             record, _ = await invoke(ctx, 'experiments.design', branch=branch)
+        else:
+            chosen={'name':'执行当前研究问题','method_keys':sorted(allowed_method_keys(ctx.skill_policy)) if ctx.skill_policy and ctx.skill_policy['mode']=='selected' else [],
+                    'idea':branch.get('feedback') or '根据已有材料和当前问题落实方法，如实说明选择、证据和局限。',
+                    'formulation':'','steps':['读取相关材料并选择适用方法','完成本问所需计算与检验，登记实际结果'],
+                    'assumptions':[],'validation':'保留原问题及冻结验收契约，不虚构数据或阈值'}
+            record={'methods':chosen['method_keys'],'candidates':[chosen],'chosen':chosen,'chosen_index':0,'scores':[],
+                    'critic':None,'critic_error':None,'direct_execution':True,
+                    'clarification_refs':[r['ref'] for r in branch.get('clarifications',[])]}
         branch = {**branch, "design": record}
     design = branch["design"]
     messages = None

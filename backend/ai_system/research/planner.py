@@ -23,12 +23,28 @@ class RequirementCoverage(Contract):
 
 
 class EvidenceDecision(PlanProposal):
-    action: Literal['deliver','research','literature']
+    action: Literal['execute','inspect','capability','research','literature','ask','pause','deliver']
     requirement_ids: list[str] = Field(min_length=1)
-    basis: list[DecisionBasis] = Field(min_length=1, max_length=12)
+    basis: list[DecisionBasis] = Field(default_factory=list, max_length=12)
     coverage: list[RequirementCoverage] = Field(min_length=1, description='逐项核对全部原要求，每项恰好一次；先核对实际产物，再决定下一步')
     gap: str = Field(default='', max_length=2000)
     query: str = Field(default='', max_length=300)
+    task_ids: list[str] = Field(default_factory=list,max_length=3)
+    question: str = Field(default='',max_length=2000)
+    outline: list['EvidenceSection'] = Field(default_factory=list,max_length=16)
+    capability: str = ''
+    inputs: dict = Field(default_factory=dict)
+
+
+class EvidenceSection(Contract):
+    key: str
+    title: str = Field(min_length=1,max_length=120)
+    purpose: str = Field(min_length=1,max_length=1500)
+    task_ids: list[str] = Field(default_factory=list)
+    basis: list[DecisionBasis] = Field(default_factory=list,max_length=12)
+
+
+EvidenceDecision.model_rebuild()
 
 
 def decision_context(store, snapshot):
@@ -48,15 +64,31 @@ def decision_context(store, snapshot):
                   'name':' / '.join(row['name'] for row in summary['branches'])+' 共同协议实测比较',
                   'text':json.dumps(summary,ensure_ascii=False,sort_keys=True)}
                  for summary in ExperimentStore(store).accepted_summaries(snapshot)]
-    research_tasks=[t for t in snapshot['tasks'].values() if t['kind']!='verify']
-    # Execution labels and report-level claims of completion are scheduler facts,
-    # not evidence that every purpose in the original question was answered.
-    tasks=[{**{k:t[k] for k in ('task_id','objective','dependencies','requirement_ids')},
-            'limitations':(t.get('report') or {}).get('limitations',[])} for t in research_tasks if not t['retired']]
+    research_tasks=list(snapshot['tasks'].values())
+    # Status/failure records steer actions; they are never scientific evidence.
+    tasks=[{**{k:t.get(k) for k in ('task_id','objective','dependencies','requirement_ids','kind','revision',
+            'execution_status','acceptance','validity','retired','method_instruction')},
+            'limitations':(t.get('report') or {}).get('limitations',[])} for t in research_tasks]
     assumptions={key:{**{k:a[k] for k in ('statement','task_ids','checks')},'refuted':a['status']=='refuted'}
                  for key,a in snapshot['assumptions'].items() if a['status']!='retired'}
-    context={'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
-             'evidence':evidence,'inputs':store.file_inputs(),'literature_mode':literature.policy()}
+    actions=[{'action':r['proposal']['action'],'reason':r['proposal'].get('reason',''),
+              'status':r['status'],'result':r.get('result',{}),'response':r.get('response','')}
+             for _,r in decision_records(store) if r.get('proposal') and r['proposal'].get('action') not in {'deliver','pause'} and
+             r.get('status') in {'done','collected','collection_failed','replied','operation_uncertain'}][:12]
+    files=store.file_inputs();materials=snapshot.get('materials') or {}
+    attempts=[{**{k:a.get(k) for k in ('attempt_id','task_id','revision','execution_status','acceptance')},
+               'error':str((a.get('result',{}).get('report') or {}).get('error',''))[:1500],
+               'published':a.get('commit',{}).get('published',False)} for a in snapshot['attempts'].values()]
+    context={'controller_version':2,'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
+             'evidence':evidence,'inputs':files,'literature_mode':literature.policy(),
+             'materials':materials.get('profile','') if materials.get('inputs')==files else '材料已变更或尚未查看，可选择inspect；不把文件存在当成分析结果。',
+             'ready_tasks':ready_tasks(snapshot),'attempts':attempts,'recent_actions':actions,
+             'issues':[i for i in research_findings(snapshot) if i['category']!='writing' and i['status'] not in {'resolved','dismissed','superseded'}]}
+    from ai_system.modules.registry import capabilities
+    context['capabilities']=capabilities().research_tools()
+    from ai_system.graph.context import TEMPLATE_CONTRACT,TEMPLATE_REQUIREMENTS_CHARS
+    template=store.root/TEMPLATE_CONTRACT
+    context['template_requirements']=template.read_text(encoding='utf-8')[:TEMPLATE_REQUIREMENTS_CHARS] if template.is_file() else ''
     # Keep version/attempt identity for deduplication without offering completion
     # labels to the model as an answer to the research question.
     versions=[{k:t.get(k) for k in ('task_id','revision','active_attempt','acceptance','validity','retired')}
@@ -98,36 +130,90 @@ def validate_decision(proposal, snapshot, context):
                 raise ValueError('声称研究要求已回答时必须给出实质答案及本项实际依据')
     if proposal.action=='deliver' and gaps:
         raise ValueError('原要求仍有未回答部分，不能直接收敛写作')
-    if proposal.action!='deliver' and not selected<=gaps:
+    pending=gaps | {c.requirement_id for c in proposal.coverage if c.remaining.strip() and requirements[c.requirement_id]['kind']=='deliverable'}
+    stopping=proposal.action=='research' and bool(proposal.changes) and all(c.action=='retire' for c in proposal.changes)
+    if proposal.action!='deliver' and not stopping and not selected<=pending:
         raise ValueError('补充行动必须针对覆盖核对中尚未回答的研究要求')
-    if not proposal.reason.strip() or proposal.assumptions or proposal.issue_ids:
-        raise ValueError('正常研究决策不能代替既有反证修复或修改假设')
-    if proposal.action=='research':
-        if not proposal.gap.strip() or not proposal.changes or proposal.query:
+    if not proposal.reason.strip():raise ValueError('必须说明本次行动的目的')
+    if proposal.action!='research' and (proposal.assumptions or proposal.issue_ids):
+        raise ValueError('只有定向研究修订可以进入既有反证修复协议')
+    if proposal.action!='execute' and proposal.task_ids:raise ValueError('只有执行行动能派出任务')
+    if proposal.action!='deliver' and proposal.outline:raise ValueError('仅在实际证据已能回答原题时组织交付大纲')
+    if proposal.action!='ask' and proposal.question:raise ValueError('只有缺少必要信息时询问用户')
+    if proposal.action!='capability' and (proposal.capability or proposal.inputs):raise ValueError('能力参数只能用于通用能力行动')
+    if proposal.action=='capability':
+        from ai_system.modules.registry import capabilities
+        capabilities().validate_research_tool(proposal.capability,proposal.inputs)
+        if proposal.changes or proposal.query:raise ValueError('工具调用不能同时修改原问题或方法')
+    elif proposal.action=='execute':
+        if proposal.changes or proposal.query or not proposal.task_ids or len(set(proposal.task_ids))!=len(proposal.task_ids):
+            raise ValueError('执行须选择当前就绪任务，不同时改方法或检索')
+        if not set(proposal.task_ids)<=set(context['ready_tasks']):raise ValueError('不能执行非就绪或已经完成的任务')
+        if not all((set(snapshot['tasks'][key]['requirement_ids']) | {rid for dep in snapshot['tasks'][key]['dependencies']
+            for rid in snapshot['tasks'][dep]['requirement_ids']}) & selected for key in proposal.task_ids):
+            raise ValueError('执行任务必须关联本次未解原要求')
+    elif proposal.action=='research':
+        if not proposal.gap.strip() or not (proposal.changes or proposal.assumptions) or proposal.query:
             raise ValueError('补充研究必须说明实际缺口及后续任务')
         if len({c.task_id for c in proposal.changes})!=len(proposal.changes):
             raise ValueError('后续研究任务不能重复')
-        if len(proposal.changes)>snapshot['max_total_attempts']-len(snapshot['attempts']):
+        if sum(c.action!='retire' for c in proposal.changes)>snapshot['max_total_attempts']-len(snapshot['attempts']):
             raise ValueError('现有执行次数不足以完成所提后续研究')
         for change in proposal.changes:
-            if change.action!='add' or change.kind=='verify' or change.task_id in snapshot['tasks'] or not re.fullmatch(r'Q[0-9]+[a-z]?',change.task_id):
-                raise ValueError('补充研究只能增加范围内任务，保留已验收工作')
+            if change.action!='add':
+                task=snapshot['tasks'].get(change.task_id)
+                if not task or task['kind']=='verify' or task['retired'] or task['acceptance']=='accepted':
+                    raise ValueError('方法调整只针对未验收分支，不能重跑或停止已验收成果')
+                if change.objective!=task['objective'] or change.dependencies is not None or change.requirement_ids is not None:
+                    raise ValueError('调整方法或停止尝试不能改写研究问题、依赖和原要求')
+                if change.action=='revise' and not change.method_instruction.strip():raise ValueError('须明确新的尝试策略')
+                if not set(task['requirement_ids']) & selected:raise ValueError('方法调整必须对应当前研究缺口')
+                continue
+            if change.kind=='verify' or change.task_id in snapshot['tasks'] or not re.fullmatch(r'Q[0-9]+[a-z]?',change.task_id):
+                raise ValueError('新增研究必须使用新编号，独立核查沿用问题协议')
             if not change.requirement_ids or not set(change.requirement_ids)<=selected:
                 raise ValueError('后续任务必须绑定本次决策的原要求')
-            if not change.dependencies or not set(change.dependencies)<=snapshot['tasks'].keys():
-                raise ValueError('后续研究必须依赖已有研究结果')
+            if not set(change.dependencies or [])<=snapshot['tasks'].keys():
+                raise ValueError('后续研究依赖未知任务')
             if not all(snapshot['tasks'][key]['acceptance']=='accepted' and snapshot['tasks'][key]['validity']=='current'
-                       for key in change.dependencies):
+                       for key in change.dependencies or []):
                 raise ValueError('后续研究依赖尚未验收')
-            if not any(set(snapshot['tasks'][key]['requirement_ids']) & set(change.requirement_ids) for key in change.dependencies):
+            if change.dependencies and not any(set(snapshot['tasks'][key]['requirement_ids']) & set(change.requirement_ids) for key in change.dependencies):
                 raise ValueError('后续研究依赖与原要求无关')
+        # The store retains the existing counterevidence/assumption contracts.
+        known_issues={i['id']:i for i in research_findings(snapshot)}
+        if any(i not in known_issues or known_issues[i]['status']!='confirmed' or known_issues[i]['action']!='recompute' for i in proposal.issue_ids):
+            raise ValueError('反证修复只能关联当前已确认问题')
+        if proposal.assumptions and not proposal.issue_ids:raise ValueError('不能无反证修改冻结假设')
     elif proposal.action=='literature':
         if context['literature_mode']=='off':
             raise ValueError('项目已关闭外部文献检索，不能自动查找')
         if not proposal.gap.strip() or len(proposal.query.strip())<2 or proposal.changes:
             raise ValueError('文献补证必须说明缺口和检索问题，不能同时改研究')
-    elif proposal.changes or proposal.query or proposal.gap.strip() or selected!=requirements.keys():
-        raise ValueError('仍有未解决缺口或未覆盖原要求时不能直接收敛写作')
+    elif proposal.action in {'inspect','ask','pause'}:
+        if proposal.changes or proposal.query:raise ValueError('查看材料、询问和暂停不能偷偷修改研究')
+        if proposal.action=='ask' and not proposal.question.strip():raise ValueError('须说明缺少哪些必要信息')
+    else:
+        if proposal.changes or proposal.query or proposal.gap.strip() or selected!=requirements.keys():
+            raise ValueError('仍有未解决缺口或未覆盖原要求时不能直接收敛写作')
+        delivery={**snapshot,'feedback':[i for i in snapshot['feedback'] if not (i['category']=='writing' and i['source']=='sections')]}
+        if not ResearchStore.delivery_ready(delivery):raise ValueError('仍有未停止的尝试或未解决的实质问题，不能交付')
+        if not proposal.outline:raise ValueError('收敛决策必须按实际结果组织论文大纲')
+        keys=[s.key for s in proposal.outline]
+        if len(set(keys))!=len(keys):raise ValueError('大纲章节不能重复')
+        known_keys={'abstract','restatement','analysis','assumptions','symbols','sensitivity','evaluation','references','solve_heading'}
+        for section in proposal.outline:
+            if section.key not in known_keys and not re.fullmatch(r'(?:solve:Q[0-9]+[a-z]?|custom:[a-z0-9_-]+)',section.key):
+                raise ValueError('大纲需使用现有写作章节入口')
+            if not set(section.task_ids)<=snapshot['tasks'].keys():raise ValueError('大纲关联未知研究')
+            if section.key.startswith('solve:'):
+                task=snapshot['tasks'].get(section.key.split(':',1)[1])
+                if not task or task['retired'] or task['acceptance']!='accepted' or task['validity']!='current':
+                    raise ValueError('求解章节只能表达当前已验收成果')
+            check_basis(section.basis,requirements.keys())
+        cited={b.ref for s in proposal.outline for b in s.basis}
+        if not {b.ref for c in proposal.coverage if requirements[c.requirement_id]['kind']!='deliverable' for b in c.basis}<=cited:
+            raise ValueError('结果驱动大纲必须承接逐项覆盖所依据的实际证据')
 
 
 class AmendmentSpec(Contract):
@@ -135,7 +221,9 @@ class AmendmentSpec(Contract):
 
 
 def propose_revision(snapshot, command_id, base_revision, change, scope, requirements):
-    selected = list(snapshot["tasks"]) if scope is None else scope
+    from .models import is_continuation
+    if is_continuation(change):raise ValueError('继续/恢复不是实质修订，不得生成要求或作废成果')
+    selected = sorted({key for r in requirements for key in r.task_ids}) if scope is None else scope
     selected = [key for key in selected if snapshot["tasks"][key]["kind"] != "verify"]
     if not change.strip() or not selected or len(set(selected)) != len(selected):
         raise ValueError("修改内容和范围必须有效")
@@ -166,12 +254,16 @@ def decision_records(store):
 
 
 def literature_action(store):
-    for key,record in decision_records(store):
-        proposal=record.get('proposal') or {}
-        if record.get('status')=='planned' and proposal.get('action')=='literature':
-            return {'capability':'literature.collect','inputs':{'query':proposal['query'],'limit':3,'fetch_open_access':True},
-                    'decision_key':key}
+    current=current_decision(store)
+    if current and current[1]['proposal']['action']=='literature' and current[1]['status']=='planned':
+        key,record=current;proposal=record['proposal']
+        return {'capability':'literature.collect','inputs':{'query':proposal['query'],'limit':3,'fetch_open_access':True},'decision_key':key}
     return None
+
+
+def current_decision(store):
+    key,_=decision_context(store,store.snapshot());record=store.planning_decision(key)
+    return (key,record) if record and record.get('status') in {'planned','done'} else None
 
 
 def begin_collection(store, key):
@@ -214,23 +306,13 @@ async def recover_collection(ctx, key, record):
     return False
 
 
-def evidence_frontier_ready(snapshot):
-    """Execution is settled; whether the original question is answered is separate."""
-    return all(t['retired'] or (t['acceptance']=='accepted' and t['validity']=='current')
-               for t in snapshot['tasks'].values()) and not any(
-        i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}
-        and not (i['source']=='sections' and i['action']=='rewrite') for i in research_findings(snapshot))
-
-
 async def advance_research(ctx):
-    """Decide once at an accepted evidence frontier, rather than after every step."""
+    """One decision at each changed material/action/attempt/evidence state."""
     store=ctx.research
     for previous_key,previous in decision_records(store):
         if previous.get('status')=='collecting' and not await recover_collection(ctx,previous_key,previous):
             return True
     snapshot=store.snapshot()
-    if not evidence_frontier_ready(snapshot):
-        return False
     key,context=decision_context(store,snapshot)
     for previous_key,previous in decision_records(store):
         if previous.get('status')=='planned' and previous_key!=key:
@@ -238,9 +320,8 @@ async def advance_research(ctx):
             # old candidates may not be executed against a different frontier.
             previous['status']='done' if store.planning_decision(previous_key+':apply') else 'superseded'
             store.save_planning_decision(previous_key,previous)
-    if not context['evidence']:
-        await ctx.events.stage('当前没有可用于回答原要求的实际登记产物或相关原文，已保留研究并暂停交付。')
-        return True
+    snapshot=store.snapshot()
+    key,context=decision_context(store,snapshot)
     record=store.planning_decision(key)
     if record and record['status']=='limited':
         # Old limit receipts could incorrectly permit writing. A limit is never
@@ -283,18 +364,19 @@ async def advance_research(ctx):
         names.update({t['task_id']:t['subproblem'].get('title','相关研究') for t in snapshot['tasks'].values()})
         names.update({e['id']:e['name'] for e in context['evidence']})
         human=lambda text:re.sub(r'\b(?:RQ\d+|Q\d+[a-z]?|[RFC]\d+|P[a-f0-9]{24})\b',lambda m:names.get(m[0],'相关证据'),text)
-        action={'deliver':'继续核查和写作','research':'补充针对性研究','literature':'查找相关文献原文'}[proposal.action]
+        action={'deliver':'按结果组织论文','research':'调整研究尝试','literature':'查找相关文献原文',
+                'execute':'执行下一项研究','inspect':'查看已有材料','capability':'调用已注册研究能力','ask':'询问必要信息','pause':'暂停并保留研究'}[proposal.action]
         await ctx.events.stage(f"发现：{human(proposal.gap or proposal.reason)}。接下来：{action}。依据：{human(proposal.reason)}")
     proposal=EvidenceDecision.model_validate(record['proposal'])
-    if proposal.action=='literature':
+    if proposal.action in {'execute','inspect','capability','ask','literature'}:
         return False
     try:
         if proposal.action=='research':
             store.apply_patch(PlanPatch(command_id=key+':apply',base_revision=record['base_revision'],
-                reason=proposal.reason,changes=proposal.changes))
+                reason=proposal.reason,changes=proposal.changes,assumptions=proposal.assumptions,issue_ids=proposal.issue_ids))
         record['status']='done'
         store.save_planning_decision(key,record)
-        return False
+        return proposal.action=='pause'
     except Exception as exc:
         # Keep the saved proposal for idempotent recovery; don't spend another
         # model call or let an unapplied research decision fall into writing.
@@ -309,7 +391,9 @@ class Planner:
     async def decide(self, snapshot, context):
         from ..graph.llm_utils import call_structured, as_messages, cap_output
         return await call_structured(cap_output(self.llm,4800),EvidenceDecision,as_messages(
-            '从原题逐项核对研究问题与实际登记产物，再在同一次决策中选择下一步。'
+            '你是同一个研究控制器：围绕原始目标、当前材料、已取得证据与失败记录，选择下一项最有价值的行动。'
+            '初始没有结果也能execute、inspect、literature或ask，basis可为空，不得编造证据。'
+            '每个小批次结果或失败后都可改路，不必等全部任务验收；不为每次print另作决策。'
             '先前执行通过只说明当时的检查通过，不证明原题每一部分已回答；禁止用接受状态、任务数或报告自称完成作为依据。'
             '先逐字读取每项原要求的完整statement和source_quote，核对其中每个研究目的和需要的输出；不能忽略并列目的。'
             'coverage每条原要求恰好一项：requirement复制完整statement，supported给出实际产物回答了哪些部分及具体答案，'
@@ -323,8 +407,20 @@ class Planner:
             'goal和constraint的全部研究目的都有实际依据才可deliver；某一项研究要求仍有未回答部分，就选择解决它的最小补充行动。'
             'deliverable的格式和文书工作由既有写作/导出阶段实施，在coverage中说明，不把待排版当成新的科学研究缺口。'
             '只在影响原题答案的关键缺口仍未解决时补研究；证据已足够回答原题时选deliver，不作无目的扩展。'
-            'action=research时用changes增加有目的的任务：绑定已有requirement_ids、依赖相关已验收任务，'
-            'objective明确要查明什么以及怎样判定答案；不重做已有任务，不删除或放宽原要求、检查和假设。'
+            'action=execute从ready_tasks选择1项，确实相互独立时最多3项；直接执行研究，不先强制生成多个候选。'
+            'action=inspect用现有确定性工具查看材料；文件存在不等于已分析，不固定先检索再实验。'
+            'action=capability从capabilities选明确开放的能力，按其inputs schema填写capability和inputs；'
+            '用途及产物边界以注册契约为准，工具观察不是已验收研究结果，不能将工具自述当R证据。'
+            'action=research可add范围内问题（绑定现有要求，依赖只能是已验收结果）；'
+            '或revise未验收分支的方法：objective逐字保留原问题，仅用method_instruction说明修复/换法；'
+            'revise/retire的dependencies与requirement_ids填null，不改变其原绑定。'
+            '或retire停止无价值的未验收分支，保留原问题和失败，不把停止视为原要求已回答。'
+            '已验收工作不可重跑、停止或改写；被冻结比较的评估条件不得暗改，需修订尝试并保留旧记录。'
+            '有已确认反证时同一次research决策用既有issue_ids/assumptions修复；不能放宽原要求或凭空加阈值。'
+            'action=ask仅询问真实缺失且影响下一行动的必要信息，不审批每个方法；pause明确资源或其他实际阻碍。'
+            'action=deliver必须逐项有实际依据并在outline组织结果、来源与局限，每节给key/title/purpose/task_ids/basis。'
+            '优先采用与结果匹配的solve:Q编号及custom:短键，不机械凑默认章节；本研究结果仍用真实R/F引用，文献用真实C引用。'
+            '存在用户模板时保留其必需结构，outline表达内容安排；没有结果的停止分支不得写成完成章节。'
             '需要外部资料时选literature，query写具体查证问题，不能用无关计算替代文献；literature_mode=off时不能选。'
             '每项决策填写requirement_ids，basis逐项引用实际evidence的id，quote逐字摘录其text。'
             'gap说明影响原要求的剩余缺口；只有deliver的gap为空。reason说明发现什么、为何这样继续。'
@@ -335,41 +431,27 @@ class Planner:
     async def amendment(self, snapshot, change, scope):
         from ..graph.llm_utils import call_structured, as_messages, cap_output
         from .validation import validate_spec,source_excerpt
-        selected = scope if scope is not None else [key for key, t in snapshot["tasks"].items() if t["kind"] != "verify"]
-        payload = {"change": change, "scope": selected, "used_requirement_ids": [r["id"] for r in snapshot["spec"]["requirements"]]}
+        from .models import is_continuation
+        if is_continuation(change):raise ValueError('继续/恢复不是实质修改')
+        selected = scope if scope is not None else [key for key, t in snapshot["tasks"].items() if t["kind"] != "verify" and not t['retired']]
+        payload = {"change": change, "scope": selected,'tasks':[{k:t[k] for k in ('task_id','objective')} for t in snapshot['tasks'].values() if t['task_id'] in selected],
+                   "used_requirement_ids": [r["id"] for r in snapshot["spec"]["requirements"]]}
         def validate(contract):
             for requirement in contract.requirements:
                 requirement.source_quote=source_excerpt(change,requirement.source_quote) or requirement.source_quote
-            validate_spec(change,{'subproblems':[{'id':key} for key in selected],
+            affected={key for r in contract.requirements for key in r.task_ids}
+            if not affected or not affected<=set(selected):raise ValueError('修订只能关联实际受影响的已知任务')
+            validate_spec(change,{'subproblems':[{'id':key} for key in affected],
                 'requirements':[r.model_dump() for r in contract.requirements],'assumptions':[]})
             if any(r.id in payload['used_requirement_ids'] for r in contract.requirements):
                 raise ValueError('补充要求编号与原要求重复')
         response = await call_structured(cap_output(self.llm,4800), AmendmentSpec,as_messages(
             "把用户补充要求转成结构化要求，使用新的RQ编号，source_quote逐字摘录change，task_ids只取scope中的任务。"
+            "只关联change实际影响的问题，不把缺省scope当作修改所有问题；继续/恢复不是新要求。"
             "合并相同任务的要求，简短输出。方法选择或实现纠错作为goal，不虚构0/1自报检查。"
             "硬约束必须有可执行检查，数值阈值必须出现在本项逐字摘录内；检查编号全局唯一。"
             "原题约束保持不变；不要悄悄删除或放宽。", json.dumps(payload, ensure_ascii=False)),validate=validate)
         contract = response if isinstance(response, AmendmentSpec) else AmendmentSpec.model_validate(response)
-        if not contract.requirements or {key for r in contract.requirements for key in r.task_ids} != set(selected):
+        if not contract.requirements or scope is not None and {key for r in contract.requirements for key in r.task_ids} != set(scope):
             raise ValueError("补充要求未覆盖修改范围")
         return contract.requirements
-
-    async def propose(self, snapshot):
-        from ..graph.llm_utils import structured_model, as_messages
-        context = {"spec": snapshot["spec"], "revision": snapshot["revision"], "assumptions": snapshot["assumptions"],
-            "tasks": [{k: t[k] for k in ("task_id", "revision", "objective", "dependencies", "requirement_ids", "assumption_ids", "acceptance")}
-                      for t in snapshot["tasks"].values() if not t["retired"]],
-            "issues": [i for i in research_findings(snapshot) if i["status"] == "confirmed" and i["action"] == "recompute"],
-            "validations": snapshot["validations"][-8:],
-            "evidence": [{"id": k, **v["payload"]} for k, v in snapshot["evidence"].items()
-                         if any(k in i["evidence_refs"] for i in research_findings(snapshot) if i["status"] == "confirmed")],
-            "remaining_attempts": snapshot["max_total_attempts"] - len(snapshot["attempts"])}
-        prompt = (
-            "你是研究全局规划器。仅修复已确认的研究问题，issue_ids必须引用上下文问题编号。"
-            "可以修改上游任务并重算其下游，或增加绑定现有requirement_ids的研究工作。"
-            "被反证的假设必须用assumptions修订，指定base_revision和替代前提/可证伪检查，或显式retired；不能继续沿用。"
-            "不得删除任何原题要求、放宽要求的检查、把疑点当成事实、或仅改写文字掩盖模型错误。"
-            "revise.objective写补充研究策略，保留原始目标。证据不足或没有可行路线时changes与assumptions留空。"
-        )
-        response = await structured_model(self.llm, PlanProposal).ainvoke(as_messages(prompt, json.dumps(context, ensure_ascii=False)))
-        return response if isinstance(response, PlanProposal) else PlanProposal.model_validate(response)

@@ -422,7 +422,12 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 if action == "revise_research":
                     from pydantic import ValidationError
                     try:
-                        revision_command = ResearchRevisionCommand.model_validate(message_data.get("revision"))
+                        revision=message_data.get('revision')
+                        if revision is None and message_data.get('action','auto')=='auto':
+                            from uuid import uuid4
+                            revision={'command_id':uuid4().hex,'research_id':snapshot.research_id,
+                                      'base_revision':snapshot.research_revision,'scope':[subproblem_id] if subproblem_id else None}
+                        revision_command = ResearchRevisionCommand.model_validate(revision)
                     except ValidationError:
                         raise ValueError("增量修改需要有效的命令标识、研究标识和基础版本")
                     if revision_command.scope is not None and (len(set(revision_command.scope)) != len(revision_command.scope) or
@@ -612,7 +617,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         elif action == "resume":
                             await main_agent.resume_failed()
                         else:
-                            graph_input = "确认" if action == "confirm" else problem
+                            graph_input = problem
                             if action == "run" and snapshot.has_research:
                                 await main_agent.run(graph_input, new_run=True)
                             else:

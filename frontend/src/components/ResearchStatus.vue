@@ -6,7 +6,7 @@
         {{ actionLabel }}
       </button>
     </header>
-    <p v-if="workStatus === 'waiting'">方案等待确认，请在对话中核对后继续。</p>
+    <p v-if="workStatus === 'waiting'">研究需要补充信息，请在对话中回复。</p>
     <ResearchProgress
       :snapshot="snapshot"
       :work-status="workStatus"

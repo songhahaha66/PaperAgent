@@ -98,7 +98,7 @@
                     type="button"
                     @click="$emit('confirm-plan')"
                   >
-                    确认方案并继续
+                    继续研究
                   </button>
                   <button type="button" @click="$emit('open-progress')">查看运行状态</button>
                 </div>
@@ -173,7 +173,7 @@ const eventLabels: Record<string, [string, string]> = {
   word_tool_result: ['Word 编辑结果', '本次文档编辑的返回结果。'],
   word_tool_error: ['Word 编辑遇到问题', '请查看错误说明。'],
   generate_figure: ['生成图表', '本次图表生成记录。'],
-  confirm: ['需要确认方案', '核对方案后确认继续，或在输入框提出修改意见。'],
+  confirm: ['研究需要你的输入', '请在输入框补充必要信息或说明研究调整。'],
 }
 const knownEvent = (block: PipelineBlock) => Object.hasOwn(eventLabels, block.type)
 const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {

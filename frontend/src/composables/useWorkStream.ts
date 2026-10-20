@@ -55,80 +55,10 @@ export function useWorkStream(options: {
 
   // 聊天相关状态
   const isStreaming = ref(false)
-  const messageAction = ref<ResearchAction>('auto')
   const runningAction = ref<ResearchAction>('auto')
   const questionScope = ref<string | null>(null)
-  const messageActionLabel = computed(() =>
-    messageAction.value === 'revise_research'
-      ? isZh.value
-        ? '增量修改研究'
-        : 'Revise research'
-      : messageAction.value === 'run'
-        ? isZh.value
-          ? '重新研究'
-          : 'Run research'
-        : messageAction.value === 'revise'
-          ? isZh.value
-            ? '修改方案'
-            : 'Revise plan'
-          : researchSnapshot.value?.has_research || currentWork.value?.status !== 'created'
-            ? isZh.value
-              ? '追问结果'
-              : 'Ask about results'
-            : isZh.value
-              ? '开始研究'
-              : 'Start research',
-  )
-  const messageActionOptions = computed(() => [
-    {
-      content: isZh.value ? '追问已有结果' : 'Ask about existing results',
-      value: 'ask',
-      onClick: () => {
-        messageAction.value = 'ask'
-      },
-    },
-    {
-      content: isZh.value ? '重新研究' : 'Run research again',
-      value: 'run',
-      onClick: () => {
-        messageAction.value = 'run'
-        questionScope.value = null
-      },
-    },
-    ...(researchSnapshot.value?.engine_version === 'research-v3' &&
-    researchSnapshot.value?.tasks?.length &&
-    currentWork.value?.status !== 'waiting'
-      ? [
-          {
-            content: isZh.value ? '增量修改研究' : 'Revise research',
-            value: 'revise_research',
-            onClick: () => {
-              messageAction.value = 'revise_research'
-            },
-          },
-        ]
-      : []),
-    ...(currentWork.value?.status === 'waiting'
-      ? [
-          {
-            content: isZh.value ? '修改建模方案' : 'Revise modeling plan',
-            value: 'revise',
-            onClick: () => {
-              messageAction.value = 'revise'
-              questionScope.value = null
-            },
-          },
-        ]
-      : []),
-  ])
-  function reviseSubproblem(id: string) {
-    questionScope.value = id
-    messageAction.value = 'revise_research'
-    activateChat()
-  }
   function askSubproblem(id: string) {
     questionScope.value = id
-    messageAction.value = 'ask'
     activateChat()
     nextTick(() =>
       document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
@@ -164,12 +94,10 @@ export function useWorkStream(options: {
         : ui.value.pausedHint,
   )
   function prepareNewResearch() {
-    messageAction.value = 'run'
     questionScope.value = null
     activateChat()
-    nextTick(() =>
-      document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
-    )
+    if (inputValue.value.trim()) void sendMessage(inputValue.value, 'run')
+    else MessagePlugin.info(isZh.value ? '请先输入新研究目标，再选择重新研究。' : 'Enter a new research goal, then choose Run research again.')
   }
   const stageText = computed(() =>
     isStreaming.value && runningAction.value === 'ask'
@@ -442,7 +370,7 @@ export function useWorkStream(options: {
   // 发送消息
   const sendMessage = async (
     messageContent?: string,
-    action: ResearchAction = messageAction.value,
+    action: ResearchAction = 'auto',
     sourceIssue?:{id:string;version:string},
   ) => {
     const content = messageContent || inputValue.value.trim()
@@ -462,12 +390,11 @@ export function useWorkStream(options: {
     inputValue.value = ''
 
     activateChat()
-    const resolvedAction = action === 'auto' && questionScope.value ? 'ask' : action
-    const scope = ['ask', 'revise_research'].includes(resolvedAction)
+    const resolvedAction = action
+    const scope = ['auto', 'ask', 'revise_research'].includes(resolvedAction)
       ? questionScope.value || undefined
       : undefined
-    if (resolvedAction !== 'ask') questionScope.value = null
-    messageAction.value = 'auto'
+    questionScope.value = null
     await sendRealMessage(content, resolvedAction, scope,sourceIssue)
   }
 
@@ -587,12 +514,8 @@ export function useWorkStream(options: {
   return {
     chatMessages,
     isStreaming,
-    messageAction,
     runningAction,
     questionScope,
-    messageActionLabel,
-    messageActionOptions,
-    reviseSubproblem,
     askSubproblem,
     pausing,
     connectionState,

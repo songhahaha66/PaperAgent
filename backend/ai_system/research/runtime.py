@@ -197,7 +197,7 @@ async def async_response_hook(response):response_hook(response)
 
 def execution_reason(root,status):
     """Read-only projection for recent work and snapshots; never starts/migrates a run."""
-    if status=='waiting':return {'kind':'waiting_confirmation','message':'等待确认研究方案'}
+    if status=='waiting':return {'kind':'waiting_confirmation','message':'等待补充必要研究信息'}
     if status not in {'paused','failed','cancelled'}:return None
     import sqlite3
     path=root/'.system/research.sqlite'

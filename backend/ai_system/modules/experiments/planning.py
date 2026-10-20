@@ -1,18 +1,11 @@
 """
-阶段 2：建模方案（每个子问题一个并行分支）
-
-1. 从方法库检索 2~4 种适用方法；
-2. 基于这些方法生成 n 个候选方案（actor）；
-3. 判分器按三条标准给每个方案打分（critic，有 Jev 时一次请求完成），选期望分最高的。
-
-参考 MM-Agent 的 actor-critic 与 ModelingAgent 的"多候选 + 评审筛选"。
+按需候选方法工具；普通研究由执行 Agent 直接落实。
+共同协议比较必须准备两项实质不同的方法，最终选择由项目实测指标决定。
 """
 
 import asyncio
 import json
 from typing import Dict, List, Tuple
-
-from langgraph.runtime import Runtime
 
 from ai_system.judge import Score
 from ai_system.graph.context import GraphContext
@@ -109,6 +102,7 @@ async def propose(ctx: GraphContext, branch: BranchInput, method_keys: List[str]
 
     # 按需设计时前序子问题已经求解完，方案可以建立在它们的实际结论上
     dependency_text = _dependency_text(branch.get("dependencies") or {}, ctx)
+    if branch.get('clarifications'):dependency_text+='\n用户补充信息（非计算成果）：'+json.dumps(branch['clarifications'],ensure_ascii=False)
     from ai_system.research.citations import literature_root
     from ai_system.research.literature import literature_context
     from ai_system.research.experience import prompt_context
@@ -197,23 +191,11 @@ WRITING_DESIGN = {
 }
 
 
-# 候选方案生成多次失败时的退路：交给求解者结合数据自行确定方法，
-# 一个子问题的设计失败不应让整篇论文中止
-SELF_DESIGN = {
-    "name": "求解时自行设计",
-    "method_keys": [],
-    "idea": "候选方案生成失败，由求解者根据子问题要求和数据先做探索，再自行确定建模方法。",
-    "formulation": "",
-    "steps": ["探索相关数据列", "选择并说明建模方法", "求解并检验", "灵敏度分析"],
-    "assumptions": [],
-    "validation": "给出检验结果和灵敏度分析",
-}
-
-
 async def make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, str]:
     """为一个子问题产出方案记录，返回 (记录, 日志)"""
     with labelled(f"{branch['subproblem']['id']}:design"):
         record, log = await _make_design(ctx, branch)
+        record['clarification_refs']=[r['ref'] for r in branch.get('clarifications',[])]
         keys = record['chosen'].get('method_keys') or []
         record['skills'] = [{'key': key, 'version': SKILL_VERSION} for key in keys if key in SKILL_SOURCES]
         from ai_system.research.literature import CITATION
@@ -234,21 +216,9 @@ async def _make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, st
         record = {"methods": [], "candidates": [WRITING_DESIGN], "scores": [{"total": None}],
                   "chosen": WRITING_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None}
         return record, f"design {subproblem['id']}: writing"
-    await ctx.events.stage(f"{subproblem['id']}：检索方法并设计候选方案")
-
-    try:
-        method_keys = await pick_methods(ctx, branch)
-    except Exception:  # 方法检索失败时不给参考方法，候选方案照常生成
-        method_keys = sorted(allowed_method_keys(ctx.skill_policy))[:4] if ctx.skill_policy and ctx.skill_policy['mode'] == 'selected' else []
-    try:
-        candidates = await propose(ctx, branch, method_keys)
-    except Exception as exc:
-        await ctx.events.emit("paper_design", f"{subproblem['id']} 候选方案生成失败，改由求解时自行设计")
-        fallback = {**SELF_DESIGN, 'method_keys': method_keys}
-        record = {"methods": method_keys, "candidates": [fallback], "scores": [{"total": None}],
-                  "chosen": fallback, "chosen_index": 0, "critic": None, "critic_error": None,
-                  "design_error": str(exc)}
-        return record, f"design {subproblem['id']}: fallback ({exc})"
+    await ctx.events.stage(f"{subproblem['id']}：为本次比较准备候选方法")
+    method_keys = await pick_methods(ctx, branch)
+    candidates = await propose(ctx, branch, method_keys)
     try:
         scores = await critique(ctx, branch, candidates)
         critic_error = None
@@ -274,11 +244,3 @@ async def _make_design(ctx: GraphContext, branch: BranchInput) -> Tuple[Dict, st
         "critic_error": critic_error,
     }
     return record, f"design {subproblem['id']}: {json.dumps(totals)} -> {chosen_index}"
-
-
-async def design(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
-    """需要人工确认方案时，全部子问题先并行设计，再统一交给 confirm"""
-    ctx = runtime.context
-    await ctx.set_stage("design", "in_progress")
-    record, log = await make_design(ctx, branch)
-    return {"designs": {branch["subproblem"]["id"]: record}, "log": [log]}

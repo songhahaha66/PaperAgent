@@ -17,7 +17,7 @@ from langgraph.types import Command
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
-from ai_system.graph.confirm import is_approval
+from ai_system.research.models import is_continuation as is_approval
 from ai_system.modules.experiments.review import ungrounded_findings
 from ai_system.modules.writing.validation import assemble, place_figures, untracked_numbers
 from ai_system.graph.registry import value_in_output
@@ -72,6 +72,49 @@ def _candidate(name: str) -> ModelCandidate:
     )
 
 
+def decision_outline(context,coverage):
+    basis=[b for c in coverage for b in c['basis']]
+    return [{'key':key,'title':title,'purpose':'按当前实际证据表达研究结果、来源与局限。',
+             'task_ids':[],'basis':basis[:12]} for key,title in [
+        ('abstract','摘要'),('restatement','问题重述'),('analysis','问题分析'),('assumptions','模型假设'),
+        ('symbols','符号说明'),('solve_heading','模型建立与求解'),('sensitivity','灵敏度分析'),('evaluation','模型评价')]]
+
+
+def controller_reply(context):
+    coverage=[]
+    for requirement in context['spec']['requirements']:
+        actual=next((e for task in reversed(requirement['task_ids']) for e in context['evidence'] if e.get('task_id')==task),None)
+        coverage.append({'requirement_id':requirement['id'],'requirement':requirement['statement'],
+            'supported':f"{actual['name']}={actual['text']}" if actual else '',
+            'basis':[{'ref':actual['id'],'quote':actual['text']}] if actual else [],
+            'remaining':'' if actual else '由后续写作和导出实施。' if requirement['kind']=='deliverable' else '尚无对应研究产物。'})
+    value={'action':'deliver','reason':'按实际证据和原要求选择下一步。','coverage':coverage,
+           'requirement_ids':[r['id'] for r in context['spec']['requirements']],
+           'basis':[b for c in coverage for b in c['basis']][:12]}
+    confirmed=[i for i in context.get('issues',[]) if i['status']=='confirmed' and i['action']=='recompute']
+    failed=[t for t in context['tasks'] if not t['retired'] and t['kind']!='verify' and t['execution_status'] in {'failed','cancelled'}]
+    if confirmed:
+        value.update(action='research',gap='依据已确认问题修正失败方法，保留原问题及检查。',issue_ids=[i['id'] for i in confirmed],
+            changes=[{'task_id':key,'objective':next(t['objective'] for t in context['tasks'] if t['task_id']==key),
+                      'method_instruction':'使用完整材料重新核对，并保留冻结检查。'} for key in dict.fromkeys(i['task_id'] for i in confirmed)])
+        for row in coverage:row['remaining']='需修复已确认问题后核对。'
+    elif failed:
+        value.update(action='research',gap='Use the actual failure to choose a new attempt.',changes=[{
+            'task_id':t['task_id'],'objective':t['objective'],'method_instruction':'Repair the failed execution using the same source and fixed checks.'} for t in failed])
+        for row in coverage:row['remaining']='Complete the repaired attempt.'
+    elif context['ready_tasks']:
+        task=next(t for t in context['tasks'] if t['task_id']==context['ready_tasks'][0])
+        value.update(action='execute',task_ids=[task['task_id']],requirement_ids=task['requirement_ids'] or value['requirement_ids'])
+        for row in coverage:
+            if row['requirement_id'] in value['requirement_ids']:row['remaining']='执行该问题所需的研究。'
+    elif context.get('issues'):
+        value.update(action='pause',gap='保留实际问题，等待可行修复。')
+        for row in coverage:
+            if row['requirement_id'] in value['requirement_ids']:row['remaining']='存在尚待核查的问题。'
+    else:value['outline']=decision_outline(context,coverage)
+    return value
+
+
 class _Structured:
     reviewed_q1 = False
     audits = 0
@@ -82,17 +125,7 @@ class _Structured:
     async def ainvoke(self, messages):
         if self.schema is EvidenceDecision:
             context=json.loads(messages[-1].content)
-            evidence=context['evidence'][0]
-            coverage=[]
-            for requirement in context['spec']['requirements']:
-                actual=next((e for task in reversed(requirement['task_ids']) for e in context['evidence'] if e.get('task_id')==task),None)
-                coverage.append({'requirement_id':requirement['id'],'requirement':requirement['statement'],
-                    'supported':f"{actual['name']}={actual['text']}" if actual else '',
-                    'basis':[{'ref':actual['id'],'quote':actual['text']}] if actual else [],
-                    'remaining':'' if actual else '由后续写作和导出完成。'})
-            return EvidenceDecision(action='deliver',reason='已有结果足够回答原要求，保留局限并继续原有交付检查。',
-                requirement_ids=[r['id'] for r in context['spec']['requirements']],
-                basis=[{'ref':evidence['id'],'quote':evidence['text']}],coverage=coverage)
+            return EvidenceDecision.model_validate(controller_reply(context))
         if self.schema is ProblemAnalysis:
             analysis = _analysis()
             source = messages[-1].content.split("# 题目\n", 1)[1].split("\n\n# 数据概览", 1)[0]
@@ -275,6 +308,7 @@ def _context(ws: Path, model: FakeModel, **options) -> GraphContext:
 
 
 def test_graph_end_to_end_offline(tmp_path):
+    CANDIDATE_PROMPTS.clear()
     _Structured.reviewed_q1 = False
     _Structured.audits = 0
     FakeModel.text_calls = []
@@ -299,8 +333,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert "data/power.csv" in result["data_profile"] and "2 行 x 2 列" in result["data_profile"]
     # 方法检索过滤掉不存在的 key；评审选了分数更高的第二个候选
     design = result["designs"]["Q1"]
-    assert design["methods"] == ["arima", "regression"]
-    assert design["scores"][1]["total"] == 12.0
+    assert design["direct_execution"] and not design["scores"]
     # This two-row legacy fixture cannot certify supervised experiments.
     # Real split/metric selection is covered with diabetes data in test_supervised_comparison.
     assert 'exploration' not in design and design['chosen']['name']=='方案乙'
@@ -344,9 +377,7 @@ def test_graph_end_to_end_offline(tmp_path):
         assert heading in paper
     assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
 
-    # 按需设计（默认不提前设计）：Q2 设计时 Q1 已经求解完，候选方案的请求里带着 Q1 的结论
-    q2_design = next(p for p in CANDIDATE_PROMPTS if "# 子问题\nQ2 " in p)
-    assert "前序子问题的结论" in q2_design and "## Q1" in q2_design
+    assert not CANDIDATE_PROMPTS, "ordinary research does not generate candidates first"
     # 依赖：Q2 的求解任务里带上了 Q1 的结论
     from ai_system.research.control import public_snapshot
     progress = public_snapshot(ctx.research.snapshot())
@@ -355,33 +386,6 @@ def test_graph_end_to_end_offline(tmp_path):
     assert not (ws / "plan.json").exists(), "fixed phase plans must not compete with research tasks"
     manifest = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
     assert sum(r["status"] == "success" for r in manifest["runs"].values()) >= 5
-
-
-def test_confirm_interrupt_and_feedback(tmp_path):
-    ws = _make_workspace(tmp_path)
-    model = FakeModel()
-    ctx = _context(ws, model, confirm_models=True)
-    ctx.research = ResearchStore(ws, "t")
-    config = {"configurable": {"thread_id": "t"}, "recursion_limit": 100}
-
-    async def go():
-        graph = compile_graph(InMemorySaver())
-        try:
-            first = await graph.ainvoke({"task": TASK}, config, context=ctx)
-            second = await graph.ainvoke(Command(resume="问题二请用双重差分"), config, context=ctx)
-            third = await graph.ainvoke(Command(resume="确认"), config, context=ctx)
-            return first, second, third
-        finally:
-            await ctx.kernels.close()
-
-    first, second, third = asyncio.run(go())
-    assert first["__interrupt__"][0].value["type"] == "confirm_models"
-    assert "方案乙" in first["__interrupt__"][0].value["message"]
-    # 修改意见触发重新设计，再次等待确认
-    assert second["confirmation_feedback"] == "问题二请用双重差分" and second["design_round"] == 1
-    assert "__interrupt__" in second
-    assert third["approved"] is True
-    assert (ws / "paper.md").exists()
 
 
 def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
@@ -587,7 +591,7 @@ def test_hypothesis_test_subproblems_skip_exploration():
 
 
 def test_is_approval():
-    assert is_approval("确认") and is_approval("OK!") and is_approval("")
+    assert is_approval("确认") and is_approval("OK!") and not is_approval("")
     assert not is_approval("问题二换成双重差分")
 
 
@@ -751,23 +755,6 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     with pytest.raises(GraphRecursionError):
         asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=history(0, 12), tools=[]), handler))
     assert len(seen) == 3, "invalid final reports cannot keep calling the model past the step budget"
-
-
-def test_design_falls_back_when_candidates_keep_failing(tmp_path, monkeypatch):
-    from ai_system.graph import llm_utils
-
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
-    _Structured.reviewed_q1 = True
-    ws = _make_workspace(tmp_path)
-    NO_CANDIDATES.add("Q2")
-    try:
-        agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge())
-        message = asyncio.run(agent.run(TASK))
-    finally:
-        NO_CANDIDATES.clear()
-    # 一个子问题设计失败不应中止整篇，改由求解者自行设计
-    assert "Q2 政策评估：完成" in message
-    assert (ws / "paper.md").exists()
 
 
 def test_normalize_plan_fills_writing_kind_and_dependencies():
@@ -1203,7 +1190,7 @@ def test_explicit_new_run_does_not_resume_an_interrupted_plan(tmp_path):
     agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge(), confirm_models=True)
     asyncio.run(agent.run(TASK))
     first_thread = agent._load_thread()
-    assert agent.waiting_confirm
+    assert not agent.waiting_confirm
     asyncio.run(agent.run("另一项研究", new_run=True))
-    assert agent.waiting_confirm
+    assert not agent.waiting_confirm
     assert agent._load_thread() != first_thread

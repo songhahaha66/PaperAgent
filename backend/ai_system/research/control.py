@@ -6,14 +6,12 @@ import shutil
 from dataclasses import asdict
 from pathlib import Path
 
-from langgraph.graph import END
 from langgraph.types import Send
 
 from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
-from .models import WorkerResult, ResearchConflict, PlanPatch, IssueReport
-from .planner import ready_tasks, Planner, evidence_frontier_ready
-from .store import digest
+from .models import WorkerResult, ResearchConflict, IssueReport
+from .planner import ready_tasks
 from .assumptions import assumption_scope
 from .validation import needs_owner_review
 from .progress import task_progress
@@ -39,29 +37,12 @@ async def observe(state, runtime):
             await ctx.events.stage('经验索引暂不可用，研究继续；可在经验面板补建')
     ctx.skill_policy = store.skill_preferences()['policy']
     refresh_registry(ctx)
-    tasks = snapshot["tasks"]
+    if 'materials' not in snapshot:
+        with store._transaction() as db:
+            saved=store._read(db)
+            saved['materials']={'inputs':store.file_inputs(),'profile':state.get('data_profile','') if not saved['attempts'] else ''}
+            store._save(db,saved,'materials_profiled',saved['materials'])
     store.schedule_investigations()
-    snapshot = store.snapshot()
-    tasks = snapshot["tasks"]
-    confirmed = {i["id"] for i in research_findings(snapshot) if i["status"] == "confirmed" and i["action"] == "recompute"}
-    repair_key='planner-repair:'+digest([snapshot['revision'],sorted(confirmed),
-        [(k,t['revision'],t['active_attempt'],t['acceptance']) for k,t in tasks.items()]])
-    if confirmed and store.reserve_planning_call(repair_key,limit=ctx.max_planning_calls):
-        try:
-            proposal = await Planner(ctx.planner_llm).propose(snapshot)
-            if (proposal.changes or proposal.assumptions) and set(proposal.issue_ids) & confirmed:
-                store.record_proposal({"changes": [c.model_dump() for c in proposal.changes],
-                    "assumptions": [a.model_dump() for a in proposal.assumptions], "issue_ids": sorted(proposal.issue_ids)})
-                changes = [change.model_copy(update={"objective": tasks[change.task_id]["objective"] +
-                           "\n\n补充研究策略：" + change.objective}) if change.action == "revise" and change.task_id in tasks
-                           else change for change in proposal.changes]
-                store.apply_patch(PlanPatch(command_id=repair_key+':apply',
-                    base_revision=snapshot["revision"], reason=proposal.reason or "修复研究问题", changes=changes,
-                    assumptions=proposal.assumptions, issue_ids=proposal.issue_ids))
-            store.save_planning_decision(repair_key,{'status':'done'})
-        except Exception as exc:
-            store.save_planning_decision(repair_key,{'status':'planning_failed','error_type':type(exc).__name__})
-            await ctx.events.stage(f"规划未提交，保留已验收证据：{exc}")
     from .planner import advance_research
     decision_blocked=await advance_research(ctx)
     snapshot = store.snapshot()
@@ -76,45 +57,53 @@ async def observe(state, runtime):
     sections = {key: section["text"] if section["validity"] == "current" else None
                 for key, section in snapshot["sections"].items()}
     sections.update({key: None for key in (state.get("sections") or {}) if key not in sections})
-    # Section-only repairs are retried by write/validate on an explicit resume;
-    # they still block publication, without rerunning accepted computations.
-    complete = evidence_frontier_ready(snapshot)
     from .loop import flow
     progress = flow(store)
-    blocked = decision_blocked or (not complete and not ready_tasks(snapshot)) or bool(progress.get('blocked'))
+    blocked = decision_blocked or bool(progress.get('blocked'))
     next_outcome = "blocked" if blocked else snapshot["outcome"] if snapshot["outcome"] in {"completed", "needs_attention"} else "running"
     if next_outcome != snapshot["outcome"]:
         store.set_outcome(next_outcome)
     snapshot = store.snapshot()
     await ctx.events.emit("research_state", public_snapshot(snapshot))
-    if complete:
-        await ctx.set_stage("design", "completed")
     if blocked:
         await ctx.set_stage("solve", "blocked", "下一步研究决策或资料查证尚未完成，原要求与已验收结果已保留。" if decision_blocked else
                             "存在未关闭的研究或审查问题、未验收任务，或尝试预算已耗尽")
-    analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values() if t["kind"] != "verify"],
+    analysis = {**state["analysis"], "subproblems": [t["subproblem"] for t in tasks.values() if t["kind"] != "verify" and not t['retired']],
                 "requirements": snapshot["spec"]["requirements"],
                 "assumptions": [a for a in snapshot["assumptions"].values() if a["status"] != "retired"]}
-    return {"analysis": analysis, "solutions": solutions, "designs": designs,
+    from .planner import current_decision
+    selected=current_decision(store)
+    outline=(selected[1]['proposal'].get('outline') or []) if selected and selected[1]['proposal']['action']=='deliver' else []
+    if 'write' in progress['done'] and state.get('outline'):outline=state['outline']
+    return {"analysis": analysis, "solutions": solutions, "designs": designs,"outline":outline,
+            'data_profile':snapshot.get('materials',{}).get('profile','') if snapshot.get('materials',{}).get('inputs')==store.file_inputs() else '材料已变化，旧概览不能作为当前证据，请查看当前文件。',
             "sections": sections, "research_blocked": blocked, "research_restart": False,
             "issues": [i for i in snapshot['feedback'] if i['source'] == 'sections'
                        and i['action'] == 'rewrite' and i['status'] not in {'resolved', 'dismissed'}],
             "repair_round": progress['repairs'], "log": [f"observe: commit {snapshot['commit_seq']}"]}
 
 
-def task_dispatch(state, runtime):
+def task_dispatch(state, runtime, task_ids):
     snapshot = runtime.context.research.snapshot()
     if state.get("research_blocked"):
-        return END
+        return []
     ready = ready_tasks(snapshot)
+    ready=[key for key in ready if key in task_ids]
     if not ready:
         return []
     sends = []
     from .validation import protocol
+    from .planner import decision_records
+    replies=[{'ref':ref,'question':row['proposal']['question'],'response':row['response'],
+              'requirement_ids':row['proposal']['requirement_ids']} for ref,row in decision_records(runtime.context.research)
+             if row.get('status')=='replied' and row.get('proposal',{}).get('action')=='ask']
     for key in ready:
         task = snapshot["tasks"][key]
         sends.append(Send("solve", {"source": snapshot["spec"]["requirement"], "subproblem": task["subproblem"], "analysis": state["analysis"],
+            'task_revision':task['revision'],
             "data_profile": state.get("data_profile", ""),
+            'feedback':task.get('method_instruction',''),
+            'clarifications':[r for r in replies if set(r['requirement_ids']) & set(task['requirement_ids'])],
             "research_contract": {"requirements": [r for r in snapshot["spec"]["requirements"] if r["id"] in task["requirement_ids"]],
                 "task_ids": list(snapshot["tasks"]), "assumption_task_ids": assumption_scope(snapshot["tasks"], key),
                 "assumptions": [snapshot["assumptions"][aid] for aid in task["assumption_ids"]], "checks": protocol(snapshot, key)},
@@ -242,6 +231,9 @@ async def execute(branch, runtime):
     ctx = runtime.context
     key = branch["subproblem"]["id"]
     try:
+        task=ctx.research.snapshot()['tasks'][key]
+        if branch.get('task_revision',task['revision'])!=task['revision'] or branch['subproblem']!=task['subproblem']:
+            raise ResearchConflict('行动所依据的研究版本已改变，请重新观察')
         order = ctx.research.claim(key, review_required=ctx.max_review_rounds > 0 and branch["subproblem"].get("kind") != "writing")
     except ResearchConflict as exc:
         await ctx.events.stage(str(exc))

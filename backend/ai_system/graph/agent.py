@@ -2,8 +2,8 @@
 PaperGraphAgent：状态图流水线的入口（构造参数 + async run），聊天接口和评测共用
 
 - 每次运行对应一个 thread；业务状态在 .system/research.sqlite，执行位置在 .system/graph.sqlite；
-- 图在"确认建模方案"处 interrupt 时，run 返回待确认内容，用户下一条消息作为回复恢复运行；
-- 进程中断后，用户发"继续"会先补跑失败子问题，再从断点完成写作和导出。
+- 仅在缺少必要信息时 interrupt；用户回复进入同一研究循环；
+- 恢复观察已提交成果与行动记录，由同一控制器选择下一步，不自动改写原目标。
 """
 
 import json
@@ -24,7 +24,7 @@ from ..research.control import refresh_registry
 from ..research.planner import propose_revision, Planner
 from .build import compile_graph
 from .context import GraphContext
-from ai_system.graph.confirm import is_approval
+from ai_system.research.models import is_continuation
 from .tracing import LLMCallTrace,labelled
 
 logger = logging.getLogger(__name__)
@@ -80,15 +80,9 @@ class PaperGraphAgent:
         self.codeagent_llm = codeagent_llm
         self.writer_llm = writer_llm
         self.judge = default_judge(llm) if judge == "default" else judge
-        if confirm_models is None:
-            confirm_models = os.getenv("AI_CONFIRM_MODELS", "").lower() in ("1", "true", "yes")
-            if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
-                from ..research.runtime import ResearchRuntime
-                settings=ResearchRuntime(Path(self.workspace_dir)).policy()
-                if settings.get('preference_source')!='default':confirm_models=settings['confirm_models']
         if "explore_top_k" not in options and os.getenv("AI_EXPLORE_TOPK"):
             options["explore_top_k"] = int(os.environ["AI_EXPLORE_TOPK"])
-        self.options: Dict[str, Any] = {"confirm_models": confirm_models, "output_mode": output_mode, **options}
+        self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
         if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
             from ..research.runtime import ResearchRuntime
             if ResearchRuntime(Path(self.workspace_dir)).policy()['compact_paper']:
@@ -170,6 +164,7 @@ class PaperGraphAgent:
     async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
                               change: str, scope: list[str] | None = None, source_issue:dict|None=None) -> str:
         """Apply an idempotent revision, then selectively resume this research."""
+        if is_continuation(change):return await self.resume_failed()
         if research_id != self._load_thread():
             raise ValueError("研究标识已改变，请刷新后重试")
         self._require_current_thread()
@@ -244,6 +239,11 @@ class PaperGraphAgent:
 
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
+        saved=await graph.aget_state(config)
+        if ctx.research.snapshot() is None and saved.values.get('analysis'):
+            # Normalize old approval/design checkpoints into this same loop;
+            # preserve their analysis and designs, not the obsolete executor.
+            ctx.research.initialize(saved.values['task'],saved.values['analysis'])
         if ctx.research.snapshot() is not None:
             ctx.research.recover()
             from ..research.loop import resume
@@ -302,10 +302,10 @@ class PaperGraphAgent:
         if thread_id:
             self._require_current_thread()
             snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
-            if snapshot.interrupts:
+            if snapshot.interrupts and snapshot.next==('act',):
                 logger.info("恢复等待确认的 thread %s", thread_id)
                 return Command(resume=user_input), thread_id
-            if is_approval(user_input) and (snapshot.next or snapshot.values.get("research_blocked")):
+            if snapshot.interrupts or is_continuation(user_input) and (snapshot.next or snapshot.values.get("research_blocked")):
                 logger.info("从断点继续 thread %s，下一步 %s", thread_id, snapshot.next)
                 return None, thread_id
         return {"task": user_input}, uuid.uuid4().hex

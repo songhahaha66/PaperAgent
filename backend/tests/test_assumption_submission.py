@@ -123,7 +123,7 @@ def test_repeated_premise_feedback_identifies_key_and_repairs_without_new_stagin
 def test_dispatched_premise_scope_matches_central_dependency_scope(tmp_path):
     store = store_for(tmp_path)
     runtime = SimpleNamespace(context=SimpleNamespace(research=store))
-    branches = dispatch({"analysis": _analysis().model_dump()}, runtime)
+    branches = dispatch({"analysis": _analysis().model_dump()}, runtime,['Q1','Q3'])
     scopes = {send.arg["subproblem"]["id"]: send.arg["research_contract"] for send in branches}
     assert scopes["Q1"]["assumption_task_ids"] == ["Q1", "Q2"]
     assert scopes["Q3"]["assumption_task_ids"] == ["Q3"]

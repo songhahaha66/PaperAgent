@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.research.models import (
-    Assumption, AssumptionChange, DomainCheck, IssueReport, PlanPatch, PlanProposal,
+    Assumption, AssumptionChange, DomainCheck, IssueReport, PlanPatch,
     Requirement, ResultSelector, TaskChange, WorkerResult, ResearchConflict,
 )
 from ai_system.research.store import ResearchStore
@@ -244,14 +244,17 @@ class ClosedLoopModel(FakeModel):
             async def ainvoke(self, messages):
                 if schema is ProblemAnalysis:
                     return problem()
-                if schema is PlanProposal:
+                from ai_system.research.planner import EvidenceDecision
+                if schema is EvidenceDecision:
                     context = json.loads(messages[-1].content)
-                    assert any(v["checks"] for v in context["validations"])
-                    return PlanProposal(reason="counterexample requires upstream correction",
-                        issue_ids=[i["id"] for i in context["issues"]],
-                        changes=[TaskChange(task_id="Q1", objective="Use median demand")],
-                        assumptions=[AssumptionChange(assumption_id="A1", base_revision=1, statement="Median demand is representative",
-                            task_ids=["Q1", "Q2"], checks=problem().assumptions[0].checks)])
+                    from test_paper_graph import controller_reply
+                    value=controller_reply(context)
+                    if value['action']=='research' and context['assumptions'].get('A1',{}).get('refuted'):
+                        value['changes']=[TaskChange(task_id='Q1',objective=next(t['objective'] for t in context['tasks'] if t['task_id']=='Q1'),
+                            method_instruction='Use median demand').model_dump()]
+                        value['assumptions']=[AssumptionChange(assumption_id='A1',base_revision=1,statement='Median demand is representative',
+                            task_ids=['Q1','Q2'],checks=problem().assumptions[0].checks).model_dump()]
+                    return EvidenceDecision.model_validate(value)
                 if schema is ConsistencyReview:
                     return ConsistencyReview(conflicts=[])
                 if schema is ClaimAudit:
@@ -294,7 +297,7 @@ def test_real_graph_automatically_repairs_upstream_and_downstream_and_delivers(t
     output = asyncio.run(agent.run(TASK))
     assert "paper.md" in output
     state = ResearchStore(tmp_path, agent._load_thread()).snapshot()
-    assert state["planning_calls"] == 2  # Confirmed repair, then evidence-based convergence.
+    assert state['planning_calls']>4  # Initial actions, counterevidence repair and result-based convergence share one controller.
     assert [sum(a["task_id"] == key for a in state["attempts"].values()) for key in ("Q1", "Q2", "Q3")] == [2, 2, 1]
     assert state["assumptions"]["A1"]["revision"] == 2
     assert state["assumption_history"][0]["status"] == "refuted"

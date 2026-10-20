@@ -79,7 +79,8 @@ def section_plan(state: PaperState) -> List[Tuple[str, str, int]]:
         plan.append((key, title, 2))
         if key == "solve_heading":
             for sp in state["analysis"]["subproblems"]:
-                plan.append((solve_key(sp["id"]), f"{sp['id']} {sp['title']}", 3))
+                if not any(k==solve_key(sp['id']) for k,_ in top):
+                    plan.append((solve_key(sp["id"]), f"{sp['id']} {sp['title']}", 3))
     if not any("参考文献" in title or "reference" in title.lower() for _, title, _ in plan):
         plan.append(("references", "参考文献", 2))
     return plan
@@ -202,10 +203,16 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     if key == "references":
         return reference_section(state, ctx)
     request = _section_body(key, title, state, ctx)
+    planned=next((s for s in state.get('outline',[]) if s['key']==key),{})
+    if planned.get('purpose'):
+        request+='\n\n# 本节研究表达目的与已核对依据\n'+json.dumps(planned,ensure_ascii=False)
+        citations=' '.join('{{C:'+b['ref']+'}}' for b in planned.get('basis',[]) if re.fullmatch(r'C[1-9]\d*',b['ref']))
+        if citations:request+='\n本节已核对的文献引用：'+citations
     from ai_system.research.method_facts import method_context
     request+=method_context(getattr(ctx,'research',None))
     from ai_system.graph.registry import ResultRegistry
     allowed = None
+    if planned.get('task_ids'):allowed=set(planned['task_ids'])
     if key.startswith("solve:"):
         sid = key.split(":", 1)[1]
         sp = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
@@ -249,6 +256,10 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
 
 
 def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
+    planned=next((s for s in state.get('outline',[]) if s['key']==key),{})
+    if planned.get('task_ids') and not key.startswith('solve:'):
+        state={**state,'analysis':{**state['analysis'],'subproblems':[
+            sp for sp in state['analysis']['subproblems'] if sp['id'] in planned['task_ids']]}}
     analysis = state["analysis"]
     subproblems = analysis["subproblems"]
     sections = state.get("sections") or {}
@@ -317,7 +328,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
     if key.startswith("custom:"):
         guard = "只列出题目和数据来源，不要编造文献。" if any(w in title for w in ("参考文献", "文献", "引用")) else ""
         return (
-            f"撰写用户模板要求的「{title}」一节，内容依据题目和各子问题的结论，必须引用登记结果。{guard}\n\n"
+            f"撰写「{title}」一节，按本节研究表达目的组织已取得的结果、来源和局限，必须引用登记结果。{guard}\n\n"
             f"题目：\n{clip(state['task'], 3000)}\n\n"
             + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )
@@ -394,13 +405,22 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await ctx.set_stage("write", "in_progress", "撰写求解章节")
     await ctx.events.stage("开始撰写论文")
 
-    outline = template_outline(ctx.template_requirements) if ctx.template_requirements else []
+    outline = state.get('outline') or []
+    if ctx.template_requirements:
+        supplied=template_outline(ctx.template_requirements)
+        if supplied:
+            chosen={s['key']:s for s in outline};combined=[]
+            for item in supplied:
+                combined.append({**chosen.get(item['key'],{}),**item})
+                if item['key']=='solve_heading':combined.extend(s for s in outline if s['key'].startswith('solve:'))
+            outline=combined
     if not outline and ctx.compact_paper:
         outline = COMPACT_OUTLINE
     state = {**state, "outline": outline}
     plan = section_plan(state)
     solve_items = [(key, title) for key, title, _ in plan if key.startswith("solve:")]
     sections: Dict[str, str] = dict(state.get("sections") or {}) if ctx.research else {}
+    sections={k:v for k,v in sections.items() if k in {key for key,_,_ in plan}}
     contexts = {}
     if ctx.research:
         from ai_system.research.store import digest

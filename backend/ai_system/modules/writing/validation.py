@@ -144,7 +144,7 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     active_service=[i for i in research_findings(ctx.research.snapshot()) if i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
                     and (i.get('review_scope',{}).get('stage') in {'sections','citations'} or i['source']=='sections')]
     issues=list({i['id']:i for i in [*issues,*active_service]}.values())
-    research_restart = any(i["blocking"] and i["action"] != "rewrite" for i in issues)
+    research_restart = any(i['category']=='coverage' or i["blocking"] and i["action"] != "rewrite" for i in issues)
     blocked = bool(issues) and not research_restart and state.get("repair_round", 0) >= ctx.max_repair_rounds
     ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"))
     from services.chat_services.issue_edits import bind_findings

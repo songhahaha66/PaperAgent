@@ -84,6 +84,16 @@ def test_section_cache_tracks_the_final_literature_prompt(cited_section,monkeypa
     assert write()['sections']==second['sections'] and len(prompts)==2
 
 
+def test_result_outline_citation_also_brings_original_passage_and_source(cited_section):
+    ctx,state,_,passage=cited_section
+    state={**state,'designs':{},'outline':[{'key':'custom:method','title':'Estimate demand','purpose':'Explain the adopted source boundary.',
+        'task_ids':['Q1'],'basis':[{'ref':passage['id'],'quote':passage['text'][:100]}]}]}
+    request=section_request('custom:method','Estimate demand',state,ctx)
+    rows=json.loads(request.rsplit('\n',1)[1])
+    assert rows[0]['id']==passage['id'] and rows[0]['source_url']==passage['source_url']
+    assert rows[0]['excerpt']==passage['text'][:800] and '{{C:C9}}' in request
+
+
 def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(tmp_path):
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
     own = seed(ctx, [], name='answer')

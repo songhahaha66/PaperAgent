@@ -181,17 +181,10 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
                    "用户仅指定一项实验时只列Q1；没有新增关键前提时assumptions为空。")
     analysis = await call_structured(cap_output(ctx.planner_llm, 4800) if ctx.compact_paper else ctx.planner_llm,
                                     ProblemAnalysis, as_messages(system, prompt), validate=validate_analysis)
-    from ai_system.modules.registry import invoke
-    literature = await invoke(ctx, 'literature.search', question=state['task'], title=analysis.title)
-    if literature:
-        await ctx.events.emit('literature_updated', literature['search'])
-
     plan = analysis.model_dump()
     plan["subproblems"] = normalize_plan(plan["subproblems"])
     ids = [sp["id"] for sp in plan["subproblems"]]
     await ctx.set_stage("analyze", "completed", f"{len(ids)} 个子问题：{'、'.join(ids)}")
-    if not ctx.confirm_models:
-        await ctx.set_stage("confirm", "completed", "自动通过")
     await ctx.events.emit(
         "paper_analysis",
         "\n".join([f"**{analysis.title}**", ""] + [f"- {sp['id']} {sp['title']}" for sp in plan["subproblems"]]),
@@ -199,10 +192,6 @@ async def analyze(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     return {
         "data_profile": data_profile,
         "analysis": plan,
-        # 需要人工确认方案时才提前把所有子问题设计完；否则按需设计，
-        # 先就绪的子问题不用等其他子问题的设计，后面的子问题还能参考前序结论
-        "plan_ahead": bool(ctx.confirm_models),
-        "design_round": 0,
         "repair_round": 0,
         "log": [f"analyze: {len(ids)} subproblems"],
     }
