@@ -165,6 +165,9 @@ export interface PaperProject {
   research_id: string
   main: string
   version: string
+  has_source: boolean
+  draft_notice?: string
+  draft_sections?: PaperSection[]
   files: { path: string; version: string; text: string | null; size: number }[]
   compile: { state: string; message: string; warnings?: string[] }
   pdf_available: boolean

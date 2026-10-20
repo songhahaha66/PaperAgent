@@ -56,8 +56,6 @@ def select(state, runtime):
         if step in progress['done']:
             continue
         if step == 'render' and state.get('issues'):
-            if progress['repairs'] >= ctx.max_repair_rounds:
-                return END
             step = 'repair'
         if step == 'export' and ctx.output_mode == 'markdown':
             return END
@@ -131,13 +129,17 @@ async def act(action, runtime):
                 progress = {'epoch': signature, 'done': [], 'repairs': 0}
             if patch.get('research_restart'):
                 progress['done']=[]
-            elif step == 'repair':
+            elif step == 'repair' and not patch.get('research_blocked'):
                 progress['repairs'] += 1
+                progress['repair_inputs'] = [*progress.get('repair_inputs', []), patch.pop('repair_input')][-12:]
                 progress['done'] = [s for s in progress['done'] if s != 'validate']
             elif not patch.get('research_restart') and not patch.get('research_blocked'):
                 if step not in progress['done']:
                     progress['done'].append(step)
             progress['blocked'] = bool(patch.get('research_blocked'))
+            if not progress['blocked'] and (step == 'export' or step == 'render' and ctx.output_mode == 'markdown'):
+                if ctx.research.delivery_ready(snapshot):
+                    snapshot['outcome'] = 'needs_attention' if patch.get('artifact_conflict') else 'completed'
             if 'consistency' in patch:
                 snapshot['consistency'] = patch['consistency']
             snapshot['workflow'] = progress
@@ -165,6 +167,7 @@ def resume(store, *, planning_limit=DEFAULT_PLANNING_CALL_LIMIT):
         if progress and progress.get('blocked'):
             progress['blocked'] = False
             progress['repairs'] = 0
+            progress['repair_inputs'] = []
             ctx_step = snapshot.get('delivery_stages', {})
             for stage in DELIVERY:
                 if ctx_step.get(stage, {}).get('status') == 'blocked':

@@ -52,7 +52,8 @@
       <h3>{{ isZh ? '本次试验' : 'This experiment' }}</h3>
       <template v-if="outcome.experiment.candidates.length > 1">
         <p v-for="candidate in outcome.experiment.candidates" :key="candidate.name">
-          <strong>{{ candidate.name }}</strong>：{{ candidate.instruction }}
+          <strong>{{ candidate.name }}</strong
+          >：{{ candidate.instruction }}
         </p>
       </template>
       <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ outcome.experiment.conditions }}</p>
@@ -156,7 +157,9 @@
                 : 'Finding to verify: '
               : ''
         }}{{ issue.message
-        }}<button @click="emit('issue', issue.id)">{{ isZh ? '查看与处理' : 'Address' }}</button>
+        }}<button @click="emit('issue', issue.id)">
+          {{ isZh ? '查看意见与原文' : 'View finding and text' }}
+        </button>
       </p>
     </section>
     <details v-if="outcome.history.length">

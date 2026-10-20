@@ -38,7 +38,9 @@
                   : 'Finding to verify: '
                 : ''
             }}{{ issue.message }}
-            <button @click="emit('issue', issue.id)">{{ isZh ? '处理' : 'Address' }}</button>
+            <button @click="emit('issue', issue.id)">
+              {{ isZh ? '查看意见' : 'View finding' }}
+            </button>
           </p>
           <dl v-if="outcomeFor(task)" class="task-states">
             <div>

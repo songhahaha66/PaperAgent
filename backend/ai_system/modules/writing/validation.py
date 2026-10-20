@@ -69,12 +69,13 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
                     and (i.get('review_scope',{}).get('stage') in {'sections','citations'} or i['source']=='sections')]
     issues=list({i['id']:i for i in [*issues,*active_service]}.values())
     research_restart = any(i['category']=='coverage' or i['category']!='service' and i["blocking"] and i["action"] != "rewrite" for i in issues)
-    blocked = bool(active_service) or any(i["category"]=="service" for i in issues) or bool(issues) and not research_restart and state.get("repair_round", 0) >= ctx.max_repair_rounds
-    ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"))
+    blocked = bool(active_service) or any(i["category"]=="service" for i in issues)
+    ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"), verified=False)
     from services.chat_services.issue_edits import bind_findings
     bind_findings(ctx.research,[i['id'] for i in issues],state.get('sections') or {})
     if blocked:
-        await ctx.set_stage("validate", "blocked", "审查未完成或章节修复尚未解决，保留草稿，等待恢复")
+        reason='；'.join(dict.fromkeys(i['message'] for i in issues if i['category']=='service'))
+        await ctx.set_stage("validate", "blocked", "审查服务未完成："+reason+"。草稿已保留；恢复后继续检查，无需人工修改研究意见。")
     from ai_system.research.control import public_snapshot
     await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
     ctx.write_json(".system/validation.json", {"round": state.get("repair_round", 0), "issues": issues})
@@ -101,6 +102,14 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     for issue in state.get("issues") or []:
         by_section.setdefault(issue["section"], []).append(issue["message"])
     await ctx.set_stage("validate", "in_progress", f"修复 {len(by_section)} 个章节")
+    # Stop a repeated identical repair input, not a fixed number of improving edits.
+    from ai_system.research.store import digest
+    signature = digest({'sections': {k: state.get('sections', {}).get(k, '') for k in by_section}, 'issues': by_section})
+    history = ctx.research.snapshot().get('workflow', {}).get('repair_inputs', [])
+    if history.count(signature) >= 3:
+        message='自动改稿反复回到同一正文和意见，未能完成修复。草稿与意见已保留；这是自动修复失败，不是等待你决定研究内容。'
+        await ctx.set_stage('validate', 'blocked', message)
+        return {'research_blocked': True, 'log': [message]}
 
     async def fix(key: str, problems: List[str]) -> str:
         current = (state.get("sections") or {}).get(key, "")
@@ -108,6 +117,8 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         prompt = (
             f"{request}\n\n# 当前稿\n{current or '（空）'}\n\n# 校验发现的问题（必须全部修正）\n"
             + "\n".join(f"- {p}" for p in problems)
+            + "\n依据现有登记结果直接修复，无需用户确认。没有依据的数字或因果解释应删除或收窄为有依据的描述；"
+              "不得编造证据、改变上游实测结果或掩盖尚待研究的问题。只改受影响内容，保留已正确的论证。"
             + "\n\n请输出修正后的完整本节正文。"
         )
         with labelled(f"repair:{key}"):
@@ -117,6 +128,7 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     texts = await asyncio.gather(*(fix(k, by_section[k]) for k in keys))
     return {
         "sections": dict(zip(keys, texts)),
+        "repair_input": signature,
         "repair_round": state.get("repair_round", 0) + 1,
         "log": [f"repair: {', '.join(keys)}"],
     }

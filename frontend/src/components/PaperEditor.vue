@@ -3,16 +3,23 @@
     <header class="toolbar">
       <nav aria-label="论文视图">
         <button :aria-pressed="view === 'read'" @click="setView('read')">阅读</button
-        ><button :aria-pressed="view === 'source'" @click="setView('source')">源码</button>
+        ><button
+          :aria-pressed="view === 'source'"
+          :disabled="!project?.has_source"
+          @click="setView('source')"
+        >
+          源码
+        </button>
       </nav>
-      <button v-if="isLatex" :disabled="compiling" @click="compile">
+      <button v-if="isLatex && project?.has_source" :disabled="compiling" @click="compile">
         {{ compiling ? '正在编译…' : '编译 PDF' }}
       </button>
     </header>
     <p v-if="error && !side && !sourceCard" class="error" role="alert">{{ error }}</p>
     <p v-if="project?.migration_notice" class="notice">{{ project.migration_notice }}</p>
+    <p v-if="project?.draft_notice" class="notice" role="status">{{ project.draft_notice }}</p>
     <p
-      v-if="isLatex && project"
+      v-if="isLatex && project?.has_source"
       class="notice"
       :class="{ stale: project.compile.state !== 'current' }"
       role="status"
@@ -20,7 +27,10 @@
       {{ project.compile.message }}
     </p>
     <div v-if="!project && loading" class="empty"><t-loading text="正在读取论文项目…" /></div>
-    <div v-else-if="!project?.files.length" class="empty">
+    <div
+      v-else-if="!project || (!project.has_source && !project.draft_sections?.length)"
+      class="empty"
+    >
       <h2>论文草稿尚未生成</h2>
       <p>写作产生源码后，可在这里阅读、编辑和评论；无需等待整项研究审查完成。</p>
     </div>
@@ -63,6 +73,27 @@
             选区绑定文件、版本与准确范围。手工编辑先保存为修改集，再在同一版本上评论。
           </p>
         </template>
+        <div v-else-if="project.draft_sections?.length" class="read-text">
+          <p class="hint">以下为已保存的章节草稿，供审查完成前阅读；修复后的内容会在这里更新。</p>
+          <section
+            v-for="section in project.draft_sections"
+            :key="section.key"
+            :data-section="section.key"
+          >
+            <h2>{{ section.title }}</h2>
+            <p v-if="section.validity !== 'current'" class="notice">
+              此节依据正在更新，当前文字仅供参考。
+            </p>
+            <MarkdownRenderer :content="section.readable" :work-id="workId" />
+            <p
+              v-for="issue in project.feedback?.filter((item) => item.section === section.key)"
+              :key="issue.id"
+              class="notice"
+            >
+              审查意见：{{ issue.message }}
+            </p>
+          </section>
+        </div>
         <template v-else-if="isLatex">
           <PaperPdfReader
             v-if="project.pdf_available"
@@ -333,8 +364,15 @@
             <p v-if="!project.sources.length">尚未获取可定位的来源。可在评论中请求检索。</p>
           </template>
           <template v-else>
-            <article v-for="issue in project.feedback" :key="issue.id" class="opinion">
+            <p class="hint">常规意见由研究流程自动修复和复核，无需逐条人工确认。</p>
+            <article v-for="issue in visibleFeedback" :key="issue.id" class="opinion">
               <p>{{ issue.message }}</p>
+              <button
+                v-if="issue.section && project.draft_sections?.some((s) => s.key === issue.section)"
+                @click="showIssueSection(issue.section)"
+              >
+                查看对应草稿
+              </button>
               <button @click="commentIssue(issue.message)">在评论中讨论</button>
             </article>
             <p v-if="!project.feedback?.length">当前没有待处理的正文意见。</p>
@@ -738,6 +776,19 @@ function sectionLabel(key: string) {
   }
   return names[key] || (key.startsWith('solve:') ? `问题 ${key.slice(6)} 的求解` : '章节候选')
 }
+const visibleFeedback = computed(() => {
+  const rows = project.value?.feedback || []
+  const selected = rows.find((issue) => issue.id === props.issueRequest?.id)
+  return selected ? [selected] : rows
+})
+async function showIssueSection(key: string) {
+  setView('read')
+  await nextTick()
+  const section = Array.from(
+    manuscript.value?.querySelectorAll<HTMLElement>('[data-section]') || [],
+  ).find((node) => node.dataset.section === key)
+  section?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 function commentIssue(text: string) {
   message.value = text
   openPanel('comments')
@@ -894,6 +945,7 @@ async function load() {
     if (seq !== generation || work !== props.workId) return
     const wasDirty = dirty.value
     project.value = value
+    if (!value.has_source) view.value = 'read'
     if (!value.files.some((row) => row.path === file.value)) {
       file.value = value.main
       loadDraft()
@@ -943,10 +995,18 @@ watch(
   },
 )
 watch(
-  () => props.issueRequest,
-  (request) => {
-    if (request) openPanel('opinions', elementAnchor(manuscript.value))
+  () => [props.issueRequest, !!project.value] as const,
+  ([request, ready]) => {
+    if (request && ready) {
+      const section = project.value?.feedback?.find((issue) => issue.id === request.id)?.section
+      if (section)
+        void showIssueSection(section).then(() =>
+          openPanel('opinions', elementAnchor(manuscript.value)),
+        )
+      else openPanel('opinions', elementAnchor(manuscript.value))
+    }
   },
+  { immediate: true },
 )
 onBeforeUnmount(() => {
   generation++

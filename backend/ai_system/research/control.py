@@ -67,8 +67,11 @@ async def observe(state, runtime):
     await ctx.events.emit("research_state", public_snapshot(snapshot))
     if blocked:
         from .planner import decision_block_message, preserved_progress
+        delivery_reason = next((snapshot.get('delivery_stages', {}).get(stage, {}).get('note')
+                                for stage in ('export', 'render', 'validate', 'write')
+                                if snapshot.get('delivery_stages', {}).get(stage, {}).get('status') == 'blocked'), None)
         await ctx.set_stage("solve", "blocked", decision_block_message(store,snapshot) if decision_blocked else
-                            "论文写作、检查或导出尚未完成，请查看对应阶段的具体原因。"+preserved_progress(snapshot))
+                            (delivery_reason or "论文写作、检查或导出未完成，可恢复后继续自动处理。")+preserved_progress(snapshot))
     analysis = analysis_view(snapshot, state.get('analysis'))
     from .planner import current_decision
     selected=current_decision(store)
