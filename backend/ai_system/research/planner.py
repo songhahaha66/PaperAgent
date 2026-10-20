@@ -1,7 +1,8 @@
 """Choose one research action; IDs, execution context and ownership belong to the store."""
 import json
 from typing import Literal
-from pydantic import Field
+from pydantic import ConfigDict, Field, model_validator
+from pydantic_core import PydanticCustomError
 from .models import Contract, ExperimentPlan, Requirement, ResearchRevision
 from .domain import findings, experiment_report
 from .store import digest
@@ -28,7 +29,30 @@ class EvidenceSection(Contract):
     basis: list[SectionBasis] = Field(default_factory=list)
 
 
+EXPERIMENT_FIELDS = ('method', 'conditions', 'evaluation')
+
+
+def _action_schema(schema):
+    """Expose the same conditional requirements used before dispatch to the model."""
+    def nonempty(name):
+        return {'required': [name], 'properties': {name: {'type': 'string', 'pattern': r'\S'}}}
+
+    retry = nonempty('experiment_id')
+    schema['allOf'] = [{
+        'if': {'properties': {'action': {'const': 'experiment'}}, 'required': ['action']},
+        'then': {'allOf': [
+            {'anyOf': [retry, nonempty('question_id'), nonempty('question')]},
+            {'anyOf': [retry,
+                {'required': ['experiment'], 'properties': {'experiment': {'type': 'object'}}},
+                {'required': list(EXPERIMENT_FIELDS), 'properties': {
+                    name: {'type': 'string', 'pattern': r'\S'} for name in EXPERIMENT_FIELDS}}]},
+        ]},
+    }]
+
+
 class NextAction(Contract):
+    model_config = ConfigDict(json_schema_extra=_action_schema)
+
     action: Literal['experiment', 'inspect', 'literature', 'tool', 'ask', 'write', 'pause']
     reason: str = Field(min_length=1)
     question_id: str | None = None
@@ -48,11 +72,28 @@ class NextAction(Contract):
     inputs: dict = Field(default_factory=dict)
     outline: list[EvidenceSection] = Field(default_factory=list)
 
+    @model_validator(mode='after')
+    def experiment_fields(self):
+        if self.action != 'experiment' or self.experiment_id:
+            return self
+        missing = []
+        if not (self.question_id or self.question.strip()):
+            missing.append('question（新增问题）或 question_id（已有问题）')
+        if self.experiment is None:
+            missing.extend(name for name in EXPERIMENT_FIELDS if not getattr(self, name).strip())
+        if missing:
+            raise PydanticCustomError('experiment_fields_missing',
+                '新实验缺少必填信息：{fields}', {'fields': '、'.join(missing)})
+        return self
+
 
 PROMPT = """根据原题、研究问题、实验及真实产物决定下一步，只返回一个平铺的NextAction对象。
 持续提出方法、获取证据、修正判断。方法明确就直接experiment；不确定或证据不足时逐步安排候选实验。
 问题是研究目标，实验是回答问题的一种具体方法。同一问题的多个方法都使用同一question_id，不把方法当成新问题。
 新增问题提供question/title，系统分配编号；新增实验提供method、conditions、evaluation，不提供内部branch或任务修改补丁。
+首次实验必须填写非空question；已有问题填写真实question_id。普通新实验的method、conditions、evaluation均不可省略或留空。
+普通新实验格式示例：{"action":"experiment","reason":"检验方法是否适用","question":"该方法能否回答原题目标？","method":"按指定方法计算并登记结果","conditions":"使用原题数据，固定训练与验证范围","evaluation":"核对验证误差并说明适用局限"}。
+重试已有实验只引用experiment_id，不重写method或experiment；完整experiment协议可替代method、conditions、evaluation，但仍须关联研究问题。
 普通代码、推导、仿真使用experiment；CSV双模型比较仅在适用时提供experiment协议，不能决定其他研究的主流程。
 已有产物通过artifact_refs引用；补充实验关联issue_ids。执行失败不是方法被证伪，可重试故障实验或新增方法，不能重跑已完成实验冒充新证据。
 模型估计、审查意见与实测产物必须区分。只有同条件结果才可比较；不强行选优，无赢家时保留多个候选或补实验。
@@ -123,9 +164,6 @@ def validate_action(action, snapshot, context):
                 raise ValueError('只能执行排队实验或重试执行故障；新方法请新增实验')
             if action.method or action.experiment:
                 raise ValueError('已有实验的方法已冻结；换方法请在同一问题下新增实验')
-        elif not (action.question_id or action.question.strip()) or not (
-                action.experiment or action.method.strip() and action.conditions.strip() and action.evaluation.strip()):
-            raise ValueError('新实验需要研究问题、具体方法、数据条件和评价标准')
     elif action.action=='tool':
         from ai_system.modules.registry import capabilities
         capabilities().validate_research_tool(action.capability, action.inputs)

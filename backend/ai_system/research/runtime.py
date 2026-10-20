@@ -199,6 +199,16 @@ async def async_response_hook(response):response_hook(response)
 
 
 def decision_error_summary(error):
+    from pydantic import ValidationError
+    cause = error
+    seen = set()
+    while isinstance(cause, BaseException) and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, ValidationError):
+            for item in cause.errors(include_url=False):
+                if item['type'] == 'experiment_fields_missing':
+                    return item['msg']
+        cause = cause.__cause__
     reason=str(error)
     if any(text in reason for text in ('原题要求','要求绑定','要求必须','要求引用','新增要求')):
         return '实验条件未能正确关联原题要求'
