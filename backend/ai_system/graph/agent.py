@@ -12,7 +12,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langsmith import trace as remote_trace
@@ -25,7 +25,6 @@ from ..research.control import refresh_registry
 from ..research.planner import propose_revision, Planner
 from .build import compile_graph
 from .context import GraphContext
-from ai_system.research.models import is_continuation
 from .tracing import LLMCallTrace,labelled
 
 logger = logging.getLogger(__name__)
@@ -138,7 +137,11 @@ class PaperGraphAgent:
 
     # ------------------------------------------------------------------
 
-    async def run(self, user_input: str, *, new_run: bool = False) -> str:
+    async def run(self, user_input: str, *, new_run: bool = False, action: Literal['run', 'answer', 'resume'] = 'run') -> str:
+        if action == 'resume':
+            if new_run:
+                raise ValueError('恢复操作不能新建研究')
+            return await self.resume_failed()
         ctx = self._context()
         checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
@@ -146,7 +149,7 @@ class PaperGraphAgent:
         try:
             async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
                 graph = compile_graph(saver)
-                graph_input, thread_id = ({"task": user_input}, uuid.uuid4().hex) if new_run else await self._prepare(graph, user_input)
+                graph_input, thread_id = await self._prepare(graph, user_input, action=action, new_run=new_run)
                 if isinstance(graph_input, dict):
                     ctx.registry.reset()
                 ctx.research = ResearchStore(self.workspace_dir, thread_id, experience_scope=ctx.experience_scope)
@@ -165,7 +168,8 @@ class PaperGraphAgent:
     async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
                               change: str, scope: list[str] | None = None, source_issue:dict|None=None) -> str:
         """Apply an idempotent revision, then selectively resume this research."""
-        if is_continuation(change):return await self.resume_failed()
+        if not change.strip():
+            raise ValueError('修改内容不能为空')
         if research_id != self._load_thread():
             raise ValueError("研究标识已改变，请刷新后重试")
         self._require_current_thread()
@@ -173,6 +177,9 @@ class PaperGraphAgent:
         snapshot = store.snapshot()
         if not snapshot:
             raise ValueError("研究尚未生成可修订任务")
+        pending = snapshot.get('action') or {}
+        if pending.get('capability') == 'ask' and pending.get('status') == 'waiting':
+            raise ValueError('当前等待必要信息，请先回答待补充问题')
         # Stable command payload even when retrying after the revision committed.
         issue_options={'source_issue':source_issue} if source_issue else {}
         patch = store.load_revision_command(command_id, base_revision, change, scope,**issue_options)
@@ -244,6 +251,10 @@ class PaperGraphAgent:
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
         saved=await graph.aget_state(config)
+        business = ctx.research.snapshot()
+        pending = (business or {}).get('action') or {}
+        if pending.get('capability') == 'ask' and pending.get('status') == 'waiting':
+            raise ValueError('当前等待必要信息，请先回答待补充问题')
         if ctx.research.snapshot() is None and saved.values.get('task'):
             # Normalize old approval/design checkpoints into this same loop;
             # preserve their analysis and designs, not the obsolete executor.
@@ -308,10 +319,12 @@ class PaperGraphAgent:
         await self._emit("main_agent_complete", output)
         return output
 
-    async def _prepare(self, graph, user_input: str):
-        """决定是恢复已有 thread 还是开新 thread"""
+    async def _prepare(self, graph, user_input: str, *, action: str = 'run', new_run: bool = False):
+        """Consume explicit operations; existing threads never infer a restart."""
+        if action not in {'run', 'answer'} or action == 'answer' and new_run:
+            raise ValueError('不支持的研究操作')
         thread_id = self._load_thread()
-        if thread_id:
+        if action == 'answer':
             self._require_current_thread()
             snapshot = await graph.aget_state({"configurable": {"thread_id": thread_id}})
             if snapshot.interrupts and snapshot.next==('act',):
@@ -321,13 +334,16 @@ class PaperGraphAgent:
                 message=question['message'] if isinstance(question,dict) else str(question)
                 with store._transaction() as db:
                     state=store._read(db)
+                    pending = (state or {}).get('action') or {}
+                    if pending.get('capability') != 'ask' or pending.get('status') != 'waiting':
+                        raise ValueError('待补充问题已改变，请重试')
                     state.setdefault('clarifications',[]).append({'ref':'clarification:'+str(len(state.get('clarifications',[]))+1),'question':message,'response':user_input})
                     if state['action']:state['action']['status']='done'
                     store._save(db,state,'clarification_received',{'question':message,'response':user_input})
                 return None, thread_id
-            if snapshot.interrupts or is_continuation(user_input) and (snapshot.next or snapshot.values.get("research_blocked")):
-                logger.info("从断点继续 thread %s，下一步 %s", thread_id, snapshot.next)
-                return None, thread_id
+            raise ValueError('当前没有等待补充信息的研究')
+        if thread_id and not new_run:
+            raise ValueError('已有研究，请明确恢复、回答待补充信息或重新研究')
         return {"task": user_input}, uuid.uuid4().hex
 
     @staticmethod

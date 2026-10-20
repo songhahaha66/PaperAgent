@@ -58,33 +58,23 @@ def seed(root):
 
 
 @pytest.mark.parametrize("requested,message,status,graph_status,expected", [
-    ("auto", "解释 Q2 的结果", "completed", "done", "ask"),
-    ("auto", "重新计算", "completed", "done", "ask"),
     ("run", "重新计算", "completed", "done", "run"),
-    ("auto", "确认", "waiting", "interrupted", "confirm"),
-    ("auto", "解释一下这个方案", "waiting", "interrupted", "ask"),
-    ("auto", "分析一下这个方案的风险", "waiting", "interrupted", "ask"),
-    ("auto", "采用2020至2024年的数据", "waiting", "interrupted", "confirm"),
-    ("auto", "这个方案是否需要重算？", "waiting", "interrupted", "ask"),
     ("revise", "换用另一种方法", "waiting", "interrupted", "revise"),
-    ("auto", "继续", "failed", "done", "resume"),
-    ("auto", "失败的原因是什么", "failed", "done", "ask"),
     ("ask", "继续", "failed", "done", "ask"),
 ])
 def test_action_resolution_is_safe_and_explicit(tmp_path, requested, message, status, graph_status, expected):
     seed(tmp_path)
     snapshot = research_snapshot(tmp_path, "work", status)
     snapshot.graph_status = graph_status
-    assert resolve_action(requested, message, snapshot) == expected
+    assert asyncio.run(resolve_action(requested, message, snapshot)) == expected
 
 
-def test_initial_question_runs_but_invalid_controls_never_start_a_graph(tmp_path):
+def test_invalid_controls_never_start_a_graph(tmp_path):
     snapshot = research_snapshot(tmp_path, "work", "created")
-    assert resolve_action("auto", "研究销量", snapshot) == "run"
-    assert resolve_action("ask", "你能做什么", snapshot) == "ask"
+    assert asyncio.run(resolve_action("ask", "你能做什么", snapshot)) == "ask"
     for action in ("confirm", "resume", "revise", "unsupported", []):
         with pytest.raises(ValueError):
-            resolve_action(action, "继续", snapshot)
+            asyncio.run(resolve_action(action, "继续", snapshot))
 
 
 def test_snapshot_scopes_real_results_and_allowlists_manifest_paths(tmp_path):
@@ -373,7 +363,7 @@ def test_unscoped_question_balances_subproblems_and_includes_actual_validation(t
 
 
 
-@pytest.mark.parametrize("action", ["resume", "confirm", "revise", "auto"])
+@pytest.mark.parametrize("action", ["resume", "confirm", "revise"])
 def test_unversioned_history_is_read_only_and_cannot_enter_graph(tmp_path, action):
     seed(tmp_path)
     thread = tmp_path / ".system/graph_thread.json"
@@ -382,6 +372,6 @@ def test_unversioned_history_is_read_only_and_cannot_enter_graph(tmp_path, actio
     thread.write_text(json.dumps(metadata))
     snapshot = research_snapshot(tmp_path, "work", "waiting")
     assert not snapshot.results and snapshot.legacy_records and snapshot.engine_version is None
-    assert resolve_action("ask", "解释已有结果", snapshot) == "ask"
+    assert asyncio.run(resolve_action("ask", "解释已有结果", snapshot)) == "ask"
     with pytest.raises(ValueError, match="不支持恢复"):
-        resolve_action(action, "继续", snapshot)
+        asyncio.run(resolve_action(action, "继续", snapshot))

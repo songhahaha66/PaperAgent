@@ -408,7 +408,18 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 snapshot = await asyncio.to_thread(
                     research_snapshot, get_workspace_path(work_id), work_id, original_status,
                 )
-                action = resolve_action(message_data.get("action", "auto"), problem, snapshot)
+                requested_action = message_data.get('action', 'auto')
+                recent_dialogue = []
+                if requested_action == 'auto':
+                    from services.chat_services.chat_history_manager import ChatHistoryManager
+                    recent_dialogue = await asyncio.to_thread(ChatHistoryManager().get_messages, work_id, 6)
+                action = await resolve_action(requested_action, problem, snapshot, recent_dialogue)
+                if action != 'ask':
+                    if task_manager.get_running_task(work_id):
+                        raise ValueError('当前有任务正在执行，请等待完成')
+                    current = await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, work.status)
+                    if (current.research_id, current.commit_seq, current.graph_status) != (snapshot.research_id, snapshot.commit_seq, snapshot.graph_status):
+                        raise ValueError('研究状态已改变，请重试')
                 subproblem_id = message_data.get("subproblem_id")
                 if subproblem_id is not None and not isinstance(subproblem_id, str):
                     raise ValueError("子问题编号无效")
@@ -612,10 +623,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             await main_agent.resume_failed()
                         else:
                             graph_input = problem
-                            if action == "run" and snapshot.has_research:
-                                await main_agent.run(graph_input, new_run=True)
-                            else:
-                                await main_agent.run(graph_input)
+                            await main_agent.run(graph_input, action='answer' if action in {'confirm', 'revise'} else 'run',
+                                                 new_run=action == 'run' and snapshot.has_research)
                         
                         # AI处理完成后，保存最终的AI消息
                         # 使用新的数据库连接，避免长时间运行后连接断开的问题

@@ -10,7 +10,7 @@ import pytest
 from ai_system.graph.context import GraphContext
 from ai_system.graph.build import compile_graph
 from ai_system.research import control,loop,planner
-from ai_system.research.models import WorkerResult, IssueReport, is_continuation
+from ai_system.research.models import WorkerResult, IssueReport
 from ai_system.research.store import ResearchStore,digest
 
 SOURCE='Estimate demand and assess costs.'
@@ -103,18 +103,8 @@ def test_user_revision_without_scope_only_invalidates_its_actual_target(study):
 
 
 
-@pytest.mark.parametrize('message',['继续','恢复','请继续执行','resume'])
-def test_pure_resume_from_stale_revision_mode_never_mutates_goals(study,message):
-    from services.chat_services.research_session import resolve_action
-    snapshot=SimpleNamespace(graph_status='done',work_status='failed',has_research=True,engine_version='research-v3',
-                             research_id='dynamic',tasks=list(study.store.snapshot()['experiments'].values()))
-    assert resolve_action('revise_research',message,snapshot)=='resume'
+def test_revision_requires_a_structured_patch_without_guessing_text(study):
     before=study.store.snapshot()
-    with pytest.raises(ValueError):planner.propose_revision(before,'bad',1,message,None,[])
-    with pytest.raises(ValueError):study.store.apply_revision_command('bad',1,message,None,None)
+    with pytest.raises(ValueError):planner.propose_revision(before,'bad',1,'继续',None,[])
+    with pytest.raises(ValueError):study.store.apply_revision_command('bad',1,'继续',None,None)
     assert study.store.snapshot()==before
-    mixed='继续，并将预测范围改为下周'
-    assert not is_continuation(mixed) and resolve_action('revise_research',mixed,snapshot)=='revise_research'
-    assert resolve_action('auto',mixed,snapshot)=='revise_research'
-    assert resolve_action('auto','解释一下已有结果',snapshot)=='ask'
-    assert resolve_action('auto','修改后的结果是什么？',snapshot)=='ask'

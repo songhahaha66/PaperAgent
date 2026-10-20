@@ -17,7 +17,6 @@ from langgraph.types import Command
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
-from ai_system.research.models import is_continuation as is_approval
 from ai_system.modules.writing.validation import assemble, place_figures
 from ai_system.graph.registry import value_in_output
 from ai_system.graph.state import (
@@ -429,7 +428,7 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
 
     # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
     first_thread = json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"]
-    asyncio.run(agent.run(TASK + "（第二篇）"))
+    asyncio.run(agent.run(TASK + "（第二篇）", new_run=True))
     assert json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"] != first_thread
     registry = ResultRegistry.load(WorkspaceFS(str(ws)))
     assert sorted(registry.results) == ["F1", "F2", "R1", "R2"]
@@ -563,11 +562,6 @@ def test_assemble_keeps_figures_out_of_summary_sections():
     assert "曲线见 {{F:F1}}。\n\n{{F:F1}}" in raw
 
 
-
-
-def test_is_approval():
-    assert is_approval("确认") and is_approval("OK!") and not is_approval("")
-    assert not is_approval("问题二换成双重差分")
 
 
 def test_render_units_math_and_duplicates(tmp_path):

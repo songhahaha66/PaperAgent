@@ -719,9 +719,16 @@ class ResearchStore:
             return ResearchRevision.model_validate(json.loads(row[1])['command'])
 
     def apply_revision_command(self, command_id, base_revision, change, scope, patch, *, source_issue=None):
-        from .models import is_continuation
-        if not change.strip() or is_continuation(change):
-            raise ValueError('继续/恢复不是研究修订，不能改变版本或作废成果')
+        # Revision semantics are selected at the caller. This boundary verifies
+        # the structured contract, never guesses intent from the change text.
+        patch = ResearchRevision.model_validate(patch)
+        if not change.strip() or (patch.command_id, patch.base_revision, patch.change) != (command_id, base_revision, change):
+            raise ValueError('修订契约与命令不一致')
+        selected = set(patch.experiment_ids)
+        if (len(selected) != len(patch.experiment_ids) or
+                scope is not None and (len(set(scope)) != len(scope) or selected != set(scope)) or
+                {key for r in patch.requirements for key in r.task_ids} != selected):
+            raise ValueError('修订要求与修改范围不一致')
         signature = digest({"base_revision": base_revision, "change": change, "scope": scope,**({'source_issue':source_issue} if source_issue else {})})
         key = 'revision:' + command_id
         with self._transaction() as db:
@@ -732,8 +739,9 @@ class ResearchStore:
                 return json.loads(row[1])
             state=self._read(db)
             if state['revision']!=base_revision:raise ResearchConflict('研究版本已改变，请刷新后重试')
-            selected=set(patch.experiment_ids)
             if not selected<=state['experiments'].keys():raise ValueError('修改引用了未知实验')
+            validate_spec(change, {'subproblems': [{'id': key} for key in selected],
+                                  'requirements': [r.model_dump() for r in patch.requirements], 'assumptions': []})
             # Retain every completed experiment and artifact. New methods are
             # selected by observe under the amended question, not retrofitted
             # into the historical experiment that produced an existing result.

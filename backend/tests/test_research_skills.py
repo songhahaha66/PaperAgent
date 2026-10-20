@@ -63,7 +63,7 @@ def test_selection_invalidates_existing_evidence_without_relaxing_contract(tmp_p
     from services.chat_services.research_session import research_snapshot, resolve_action
     (tmp_path / '.system/graph_thread.json').write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3','status':'done'}))
     snapshot = research_snapshot(tmp_path, 'demo', 'completed')
-    assert snapshot.work_status == 'paused' and resolve_action('resume', '继续', snapshot) == 'resume'
+    assert snapshot.work_status == 'paused' and asyncio.run(resolve_action('resume', '继续', snapshot)) == 'resume'
     assert after['spec'] == before['spec'] and after['assumptions'] == before['assumptions']
     assert len(after['executions']) == len(before['executions'])
     assert store.set_skill_preferences(SELECTED, 1)['affected'] == []

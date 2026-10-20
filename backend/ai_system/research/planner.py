@@ -206,8 +206,7 @@ class Planner:
     async def amendment(self, snapshot, change, scope):
         from ..graph.llm_utils import call_structured, as_messages, cap_output
         from .validation import validate_spec,source_excerpt
-        from .models import is_continuation
-        if is_continuation(change):raise ValueError('继续/恢复不是实质修改')
+        if not change.strip():raise ValueError('修改内容不能为空')
         selected = scope if scope is not None else [key for key, t in snapshot["experiments"].items() if t["kind"] != "verify" and not t['retired']]
         payload = {"change": change, "scope": selected,'experiments':[{k:t[k] for k in ('task_id','objective')} for t in snapshot['experiments'].values() if t['task_id'] in selected],
                    "used_requirement_ids": [r["id"] for r in snapshot["spec"]["requirements"]]}
@@ -237,8 +236,6 @@ class AmendmentSpec(Contract):
 
 
 def propose_revision(snapshot, command_id, base_revision, change, scope, requirements):
-    from .models import is_continuation
-    if is_continuation(change):raise ValueError('继续/恢复不是实质修订，不得生成要求或作废成果')
     selected = sorted({key for r in requirements for key in r.task_ids}) if scope is None else scope
     selected = [key for key in selected if snapshot["experiments"][key]["kind"] != "verify"]
     if not change.strip() or not selected or len(set(selected)) != len(selected):

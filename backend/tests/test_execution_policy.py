@@ -170,8 +170,9 @@ def test_obsolete_confirmation_setting_does_not_reinstall_an_approval_executor(t
 def test_resume_cannot_bypass_pending_confirmation():
     from services.chat_services.research_session import ResearchSnapshot,resolve_action
     snapshot=ResearchSnapshot(work_id='pending',work_status='waiting',research_id='study',engine_version='research-v3',graph_status='interrupted')
-    assert resolve_action('resume','继续',snapshot)=='confirm'
-    assert resolve_action('confirm','确认方案',snapshot)=='confirm'
+    with pytest.raises(ValueError, match='等待必要信息'):
+        asyncio.run(resolve_action('resume','继续',snapshot))
+    assert asyncio.run(resolve_action('confirm','确认方案',snapshot))=='confirm'
 
 
 def test_pre_policy_research_traces_retain_legacy_limit(tmp_path):

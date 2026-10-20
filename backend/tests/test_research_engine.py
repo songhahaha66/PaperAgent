@@ -84,7 +84,7 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     assert failed_refs.isdisjoint({r['id'] for r in store.registry_payload()['results']})
     assert len([a for a in initial['executions'].values() if a['task_id']=='Q1'])==1
     # The controller may already have repaired Q2. Resume only if work remains.
-    output = asyncio.run(agent.resume_failed() if mode == 'direct' else agent.run('继续')) if '研究已暂停' in first_output else first_output
+    output = asyncio.run(agent.resume_failed() if mode == 'direct' else agent.run('继续', action='resume')) if '研究已暂停' in first_output else first_output
     assert 'paper.md' in output
     current=store.snapshot();active=current['experiments']['Q2']['execution_id']
     assert current['experiments']['Q1']['execution_id']==q1 and current['experiments']['Q2']['acceptance']=='accepted'
@@ -111,7 +111,7 @@ def test_unversioned_research_requires_new_run_without_changing_existing_files(t
     thread.write_text(json.dumps(metadata))
     before = {p.relative_to(thread.parent): p.read_bytes() for p in thread.parent.rglob("*") if p.is_file()}
     if operation == "confirm":
-        assert "不支持恢复" in asyncio.run(agent.run("确认"))
+        assert "不支持恢复" in asyncio.run(agent.run("确认", action="answer"))
     elif operation == "resume":
         with pytest.raises(ValueError, match="不支持恢复"):
             asyncio.run(agent.resume_failed())

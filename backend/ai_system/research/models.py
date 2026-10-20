@@ -171,20 +171,6 @@ class ReviewRecord(Contract):
     evidence: list[dict[str, Any]] = Field(default_factory=list, description="审查实际引用的本次尝试证据，保留返工前已被替换的值")
 
 
-def is_continuation(message: str) -> bool:
-    """Exact control replies only; mixed instructions retain their substance."""
-    import re
-    return bool(re.fullmatch(r'\s*(?:请)?(?:继续|恢复|重试|接着|继续研究|恢复研究|继续执行|继续运行|恢复执行|确认|同意|可以|好的?|开始|没问题|行|ok(?:ay)?|yes|y|go|lgtm|resume|continue|retry)[\s。.!！]*',message,re.I))
-
-
-def is_revision_request(message: str) -> bool:
-    """Explicit change imperatives; a continuation with substance is not resume."""
-    import re
-    if is_continuation(message) or re.search(r'为什么|为何|怎么|怎样|如何|解释|是什么|哪些|是否|能否|吗|[?？]',message):return False
-    return bool(re.match(r'^\s*(?:请)?(?:(?:修改|调整|改用|换用|补充研究|修正)|(?:将|把).{1,200}(?:改为|改成|调整为|换成)|'
-                        r'(?:继续|恢复|重试)[，,\s]*(?:并|同时|但).*(?:改为|改成|修改|调整|换用))',message,re.S))
-
-
 class CandidateMethod(Contract):
     name: str = Field(min_length=1, max_length=120, description='用户可读的方法名称，不使用任务编号或内部变量名')
     instruction: str = Field(min_length=1, max_length=3000, description='实际要执行的方法、参数或假设；不能由执行者静默换成其他候选')
@@ -215,7 +201,7 @@ class ResearchRevision(Contract):
     base_revision: int = Field(ge=1)
     change: str = Field(min_length=1)
     experiment_ids: list[str] = Field(min_length=1)
-    requirements: list[Requirement]
+    requirements: list[Requirement] = Field(min_length=1)
 
 
 class WorkOrder(Contract):
