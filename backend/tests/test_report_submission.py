@@ -69,9 +69,10 @@ def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_c
     middleware=StepBudgetMiddleware(40,4,'submit',report_ready=lambda: not submission_inventory_issues(ctx,task,runs))
     seen=[]
     async def handler(request):seen.append(request);return None
-    def invoke(history):asyncio.run(middleware.awrap_model_call(ModelRequest(model=None,messages=history,tools=['run_python']),handler))
+    all_tools=['run_python','record_results','record_figure']
+    def invoke(history):asyncio.run(middleware.awrap_model_call(ModelRequest(model=None,messages=history,tools=all_tools),handler))
     invoke(messages)
-    assert seen[-1].tools==['run_python']  # Missing actual answer still allows computation.
+    assert seen[-1].tools==['record_results','record_figure']  # Register existing output instead of repeating it.
     assert "登记证据仍未齐" in seen[-1].messages[-1].content
     assert "只补算缺项" in seen[-1].messages[-1].content
     seed(ctx,runs)
@@ -79,10 +80,10 @@ def test_repeating_execution_can_request_report_only_after_frozen_inventory_is_c
     assert seen[-1].tools==[] and '必需登记证据已齐' in seen[-1].messages[-1].content
     changed=[*messages[:-1],messages[-1].model_copy(update={'content':'[run_id: run_2]\nchanged'})]
     invoke(changed)
-    assert seen[-1].tools==['run_python']  # Identical code with changing results is not a stall.
+    assert seen[-1].tools==all_tools  # Identical code with changing results is not a stall.
     failed=[*messages[:-1],messages[-1].model_copy(update={'content':'[run_id: run_2]\nTraceback (most recent call last): failure'})]
     invoke(failed)
-    assert seen[-1].tools==['run_python']
+    assert seen[-1].tools==all_tools
 
 
 def report(ref, *, requirement="RQ1"):
@@ -324,6 +325,10 @@ class MixedReportModel(FakeModel):
 
 def test_compute_feedback_routes_stalled_solver_into_registration_before_report(tmp_path):
     class InventoryModel(FakeModel):
+        offered_tools: list[list[str]] = []
+        def bind_tools(self, tools, **kwargs):
+            self.offered_tools.append([t.name for t in tools])
+            return self
         def _solver_step(self, task, messages):
             tools = [m for m in messages if isinstance(m, ToolMessage)]
             recorded = [m for m in tools if m.name == "record_results"]
@@ -346,6 +351,7 @@ def test_compute_feedback_routes_stalled_solver_into_registration_before_report(
         finally:
             await ctx.kernels.close()
     status, error, submitted, _ = asyncio.run(go())
+    assert ['SolveReport' in tools for tools in model.offered_tools] == [False,False,True]
     assert status == "completed" and error is None and len(runs) == 1
     assert submitted["requirement_evidence"][0]["evidence_refs"] == [next(iter(ctx.registry.results))]
 

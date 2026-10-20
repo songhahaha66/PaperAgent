@@ -15,12 +15,17 @@ class Judgment(Contract):
     next_step: str = ''
 
 
+class SectionBasis(Contract):
+    ref: str = Field(min_length=1, description='已有产物或文献的实际引用编号')
+    quote: str = ''
+
+
 class EvidenceSection(Contract):
     key: str
     title: str
     purpose: str
     task_ids: list[str] = Field(default_factory=list)
-    basis: list[dict] = Field(default_factory=list)
+    basis: list[SectionBasis] = Field(default_factory=list)
 
 
 class NextAction(Contract):

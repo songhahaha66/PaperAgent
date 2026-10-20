@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.core_handlers.llm_providers import AIGWChatOpenAI, OpenAIProvider
 
 
-def response(request):
+def response(request, cache_style='openai'):
     payload = json.loads(request.content)
     assert payload['max_tokens'] == 512
     assert 'max_completion_tokens' not in payload
@@ -24,12 +24,14 @@ def response(request):
         ({}, 0, 0, None),
         ({}, 100, 3, 'tool_calls'),
     ]:
+        usage={'prompt_tokens': prompt, 'completion_tokens': completion, 'total_tokens': prompt + completion,
+               'completion_tokens_details': {'reasoning_tokens': 1}}
+        if cache_style=='openai':usage['prompt_tokens_details']={'cached_tokens':20}
+        else:usage['prompt_cache_hit_tokens']=20
         chunks.append('data: ' + json.dumps({
             'id': 'test', 'object': 'chat.completion.chunk', 'created': 0, 'model': 'step-5-preview',
             'choices': [{'index': 0, 'delta': delta, 'finish_reason': finish}],
-            'usage': {'prompt_tokens': prompt, 'completion_tokens': completion, 'total_tokens': prompt + completion,
-                      'prompt_tokens_details': {'cached_tokens': 20},
-                      'completion_tokens_details': {'reasoning_tokens': 1}},
+            'usage': usage,
         }))
     return httpx.Response(200, headers={'content-type': 'text/event-stream'},
                           text='\n\n'.join(chunks) + '\n\ndata: [DONE]\n\n')
@@ -51,9 +53,10 @@ def test_cumulative_usage_sync_stream_keeps_tool_arguments_and_final_totals():
         check(llm.invoke('check again'))
 
 
-def test_cumulative_usage_async_stream_counters_are_isolated_per_request():
+@pytest.mark.parametrize('cache_style',['openai','deepseek'])
+def test_cumulative_usage_async_stream_counters_are_isolated_per_request(cache_style):
     async def run():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request:response(request,cache_style))) as client:
             llm = AIGWChatOpenAI(model='step-5-preview', api_key='fixture',
                                 base_url='https://aigw.saurlax.com/v1', max_tokens=512, streaming=True, http_async_client=client)
             for message in await asyncio.gather(llm.ainvoke('first'), llm.ainvoke('second')):

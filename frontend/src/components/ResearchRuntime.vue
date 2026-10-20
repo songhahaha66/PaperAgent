@@ -12,8 +12,11 @@
         {{ compact ? '展开进度' : '执行记录' }}
       </button>
     </header>
-    <p v-if="currentQuestion" class="current-question">{{ currentQuestion }}</p>
-    <p v-if="latestDecision" class="decision">{{ latestDecision.reason }}</p>
+    <p v-if="running && currentQuestion" class="current-question">{{ currentQuestion }}</p>
+    <details v-if="!compact && latestDecision" class="decision">
+      <summary>本次安排</summary>
+      <p>{{ latestDecision.reason }}</p>
+    </details>
     <div
       v-for="action in active.length > 1 ? active : []"
       :key="action.id"
@@ -28,6 +31,10 @@
       {{ snapshot?.execution_reason?.message || '进度已保存，可继续研究。' }}
     </p>
     <p v-else-if="running && !active.length" class="waiting">正在同步执行状态…</p>
+    <details v-if="!compact && paused && snapshot?.execution_reason?.detail" class="decision">
+      <summary>技术详情</summary>
+      <p>{{ snapshot.execution_reason.detail }}</p>
+    </details>
     <details v-if="!compact && history.length" class="history">
       <summary>最近执行 · {{ history.length }} 条</summary>
       <ol>
@@ -35,8 +42,6 @@
           <span
             >{{ row.label }}<small v-if="row.task_id"> · {{ taskTitle(row.task_id) }}</small></span
           ><span>{{ statusLabel(row.status) }} · {{ duration(row) }}</span
-          ><small v-if="row.input_tokens || row.output_tokens"
-            >输入 {{ row.input_tokens || 0 }} / 输出 {{ row.output_tokens || 0 }} tokens</small
           ><button
             v-if="row.run_id && runFile(row.run_id)"
             @click="emit('file', runFile(row.run_id)!)"
@@ -45,6 +50,15 @@
           </button>
         </li>
       </ol>
+      <details v-if="models.length" class="model-calls">
+        <summary>模型请求详情 · {{ models.length }} 次</summary>
+        <ol>
+          <li v-for="request in models" :key="request.id">
+            <span>{{ request.label }}</span>
+            <span>{{ statusLabel(request.status) }} · {{ duration(request) }}</span>
+          </li>
+        </ol>
+      </details>
     </details>
     <p v-if="!running && !paused && !waiting && !history.length" class="waiting">
       {{ snapshot?.has_research ? '暂无执行记录。' : '等待研究开始。' }}
@@ -79,17 +93,18 @@ const models = computed(() => props.snapshot?.runtime?.models || [])
 const active = computed(() => {
   if (!running.value) return []
   const operations = actions.value.filter((a) => a.status === 'running')
+  const capabilities = operations.filter((a) => a.capability !== 'run_python')
   // Capability operations own the visible execution state. Their model calls
   // remain in the detailed history rather than appearing as parallel actions.
   return operations.length
-    ? operations
+    ? capabilities.length
+      ? capabilities
+      : operations
     : models.value.filter((m) => !m.finished_at && ['sent', 'http_response'].includes(m.status))
 })
 const history = computed(() =>
-  [
-    ...actions.value.map((a) => ({ ...a, label: `研究操作 · ${a.label}` })),
-    ...models.value.map((m) => ({ ...m, label: `模型请求 · ${m.label}` })),
-  ]
+  actions.value
+    .filter((a) => !a.capability?.startsWith('experience.'))
     .sort((a, b) => b.started_at - a.started_at)
     .slice(0, 30),
 )
@@ -104,7 +119,9 @@ const headline = computed(() =>
   waiting.value
     ? '等待你的信息'
     : paused.value
-      ? '研究已暂停'
+      ? state.value === 'failed'
+        ? '本次操作未完成'
+        : '研究已暂停'
       : running.value
         ? active.value.length > 1
           ? '正在推进研究'

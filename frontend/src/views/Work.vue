@@ -72,12 +72,6 @@
           >
             <t-icon name="folder-open" />{{ isZh ? '文件' : 'Files' }}
           </button>
-          <button
-            class="progress-trigger"
-            @click="openPanel('materials', isMobile ? 'main' : 'secondary')"
-          >
-            {{ isZh ? '资料与结果' : 'Materials and results' }}
-          </button>
           <button class="progress-trigger" @click="handleMainPaperClick">
             {{ isZh ? '论文' : 'Paper' }}
           </button>
@@ -182,6 +176,33 @@
                     /></t-button>
                   </div>
                 </form>
+                <div
+                  v-if="researchSnapshot?.has_research"
+                  class="model-usage"
+                  aria-label="会话累计模型用量"
+                >
+                  <span
+                    :title="`会话累计输入 ${modelUsage?.input_tokens?.toLocaleString() ?? '—'} tokens`"
+                    >输入 {{ formatTokens(modelUsage?.input_tokens) }}</span
+                  >
+                  <span
+                    :title="`会话累计输出 ${modelUsage?.output_tokens?.toLocaleString() ?? '—'} tokens`"
+                    >输出 {{ formatTokens(modelUsage?.output_tokens) }}</span
+                  >
+                  <span
+                    title="会话平均 TPS：全部已完成请求的输出 token / 累计请求耗时，包含等待与推理时间"
+                    >TPS {{ modelUsage?.tps?.toFixed(1) ?? '—' }}</span
+                  >
+                  <span
+                    title="缓存输入 token / 输入 token；仅统计网关返回缓存计数的请求，旧记录未保存或网关未提供时无法计算"
+                    >缓存
+                    {{
+                      modelUsage?.cache_hit_rate == null
+                        ? '暂无统计'
+                        : (modelUsage.cache_hit_rate * 100).toFixed(1) + '%'
+                    }}</span
+                  >
+                </div>
               </div>
             </div>
           </section>
@@ -213,17 +234,8 @@
             :snapshot="researchSnapshot"
             @issue="openIssueEditor"
             @paper="openEvidenceUse"
+            @experiment="(id) => openObject({ type: 'result', resultType: 'experiment', id })"
             @open-file="handleWorkspaceFileSelect"
-          />
-          <ResearchMaterials
-            v-else-if="panel.kind === 'materials'"
-            :work-id="workId"
-            :snapshot="researchSnapshot"
-            :disabled="isStreaming"
-            :evidence-id="literatureEvidenceId"
-            @updated="loadResearchSnapshot"
-            @cite="citeLiterature"
-            @object="openObject"
           />
           <section
             v-else-if="panel.kind === 'files'"
@@ -387,7 +399,6 @@ import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
 import ResearchStatus from '@/components/ResearchStatus.vue'
-import ResearchMaterials from '@/components/ResearchMaterials.vue'
 import ResearchResultViewer from '@/components/ResearchResultViewer.vue'
 import { researchSetupAPI } from '@/api/researchSetup'
 import { useWorkSession } from '@/composables/useWorkSession'
@@ -459,10 +470,14 @@ const {
 } = artifacts
 // Metadata arrives after cached panes mount; restore scroll once their content is rendered.
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
-const literatureEvidenceId = computed(
-  () => panelSession.value.panels.find((p) => p.kind === 'materials')?.location || '',
-)
 const issueRequest = ref<{ id: string; at: number } | null>(null)
+const modelUsage = computed(() => researchSnapshot.value?.runtime?.usage)
+const formatTokens = (value?: number | null) => {
+  if (value == null) return '—'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
+  return String(value)
+}
 const evidenceRequest = ref<{ section: string; section_version: string; at: number } | null>(null)
 function openEvidenceUse(use: { section: string; section_version: string }) {
   evidenceRequest.value = { ...use, at: Date.now() }
@@ -490,7 +505,7 @@ function citeLiterature(id: string) {
 function openLiteratureEvidence(event: Event) {
   const detail = (event as CustomEvent).detail
   if (detail?.workId !== workId.value || !/^C[1-9]\d*$/.test(detail?.evidenceId || '')) return
-  openObject({ type: 'literature', evidenceId: detail.evidenceId })
+  citeLiterature(detail.evidenceId)
 }
 async function refreshPaper() {
   await loadResearchSnapshot()
@@ -950,6 +965,17 @@ onUnmounted(() => {
   border-radius: var(--pa-radius-card);
   background: var(--pa-surface);
   box-shadow: var(--pa-shadow-card);
+}
+.model-usage {
+  display: flex;
+  justify-content: center;
+  text-align: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 8px 6px 0;
+  color: var(--pa-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .work-composer:focus-within {
   border-color: var(--pa-line-strong);

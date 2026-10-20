@@ -113,6 +113,7 @@ class RuntimeModelMixin:
                         reported=reply_usage(message)
                         if reported:
                             for k in ('input_tokens','output_tokens'):usage[k]=max(usage.get(k,0),int(reported.get(k) or 0))
+                            if 'input_token_details' in reported:usage['input_token_details']=reported['input_token_details']
                         emitted=emitted or bool(getattr(message,'content',None) or getattr(message,'tool_call_chunks',None) or getattr(message,'tool_calls',None) or (getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content'))
                         yield chunk
                 runtime.usage(seq,usage);runtime.succeeded(key);return
@@ -158,6 +159,7 @@ class RuntimeModelMixin:
                     message=getattr(chunk,'message',chunk);reported=reply_usage(message)
                     if reported:
                         for k in ('input_tokens','output_tokens'):usage[k]=max(usage.get(k,0),int(reported.get(k) or 0))
+                        if 'input_token_details' in reported:usage['input_token_details']=reported['input_token_details']
                     emitted=emitted or bool(getattr(message,'content',None) or getattr(message,'tool_call_chunks',None) or getattr(message,'tool_calls',None) or (getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content'))
                     yield chunk
                 runtime.usage(seq,usage);runtime.succeeded(key);return

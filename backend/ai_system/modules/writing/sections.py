@@ -208,7 +208,10 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     planned=next((s for s in state.get('outline',[]) if s['key']==key),{})
     if planned.get('purpose'):
         request+='\n\n# 本节研究表达目的与已核对依据\n'+json.dumps(planned,ensure_ascii=False)
-        citations=' '.join('{{C:'+b['ref']+'}}' for b in planned.get('basis',[]) if re.fullmatch(r'C[1-9]\d*',b['ref']))
+        # Persisted outlines used to accept free-form descriptive basis entries.
+        # Only explicit citation refs select literature; the actual result table
+        # below remains the source of computational evidence for every section.
+        citations=' '.join('{{C:'+b['ref']+'}}' for b in planned.get('basis',[]) if re.fullmatch(r'C[1-9]\d*',b.get('ref','')))
         if citations:request+='\n本节已核对的文献引用：'+citations
     from ai_system.research.method_facts import method_context
     request+=method_context(getattr(ctx,'research',None))
@@ -334,14 +337,14 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             f"最后一行写「{keyword}」并列出 4~6 个关键词。\n\n"
             f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
         )
-    if key.startswith("custom:"):
-        guard = "只列出题目和数据来源，不要编造文献。" if any(w in title for w in ("参考文献", "文献", "引用")) else ""
-        return (
-            f"撰写「{title}」一节，按本节研究表达目的组织已取得的结果、来源和局限，必须引用登记结果。{guard}\n\n"
-            f"题目：\n{clip(state['task'], 3000)}\n\n"
-            + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
-        )
-    raise KeyError(key)
+    # Planner/template sections are identified by their purpose and title;
+    # their storage key need not belong to the built-in outline vocabulary.
+    guard = "只列出题目和数据来源，不要编造文献。" if any(w in title for w in ("参考文献", "文献", "引用")) else ""
+    return (
+        f"撰写「{title}」一节，按本节研究表达目的组织已取得的结果、来源和局限，必须引用登记结果。{guard}\n\n"
+        f"题目：\n{clip(state['task'], 3000)}\n\n"
+        + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
+    )
 
 
 def reference_section(state: PaperState, ctx: GraphContext) -> str:

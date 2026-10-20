@@ -39,7 +39,7 @@
           :content="evidenceText(selected.judgment)"
           :work-id="snapshot?.work_id"
         />
-        <p v-else>实验结果尚不足以形成判断。</p>
+        <p v-else>尚未记录问题结论，可查看下方实验结果。</p>
         <small
           v-if="
             selected.judgment &&
@@ -69,7 +69,6 @@
       <section v-if="selected.next_step || decision" class="next-step">
         <h3>后续安排</h3>
         <p>{{ selected.next_step || decision?.reason }}</p>
-        <p v-if="paused">研究已暂停。点击“继续”后，系统从保存的执行位置恢复。</p>
       </section>
       <section>
         <h3>实验记录</h3>
@@ -83,11 +82,12 @@
             <strong>{{ methodName(task.task_id) }}</strong
             ><span class="state">{{ taskLabel(taskState(task, status), true) }}</span>
           </header>
-          <p v-if="experimentFor(task.task_id)?.experiment" class="conditions">
+          <details v-if="experimentFor(task.task_id)?.experiment" class="conditions">
+            <summary>数据与评价标准</summary>
             {{ experimentFor(task.task_id)?.experiment?.conditions }}<br />评价：{{
               experimentFor(task.task_id)?.experiment?.evaluation
             }}
-          </p>
+          </details>
           <div v-if="experimentFor(task.task_id)?.results.length" class="measurements">
             <button
               v-for="result in experimentFor(task.task_id)!.results.slice(0, 4)"
@@ -105,7 +105,11 @@
             </button>
           </div>
           <p v-else class="muted">
-            {{ task.progress.next_step || task.reason || '尚未取得实测结果。' }}
+            {{
+              task.execution_status === 'failed'
+                ? '本次实验未完成，代码与运行输出已保留。'
+                : task.progress.next_step || task.reason || '尚未取得实测结果。'
+            }}
           </p>
           <p class="review-status" v-if="experimentFor(task.task_id)">
             证据检查：{{ outcomeLabel(experimentFor(task.task_id)!.checking, true) }}

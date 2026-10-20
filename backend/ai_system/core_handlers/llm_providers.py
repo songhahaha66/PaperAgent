@@ -65,7 +65,26 @@ def _patch_reasoning_content():
 _patch_reasoning_content()
 
 
-class MeteredChatOpenAI(RuntimeModelMixin, ChatOpenAI):pass
+def _preserve_cache_usage(message, raw_usage):
+    # OpenAI-compatible services can return DeepSeek's top-level cache counter.
+    # langchain-openai only converts prompt_tokens_details.cached_tokens.
+    cached = (raw_usage or {}).get('prompt_cache_hit_tokens')
+    if cached is not None and message.usage_metadata is not None:
+        message.usage_metadata.setdefault('input_token_details', {}).setdefault('cache_read', cached)
+
+
+class MeteredChatOpenAI(RuntimeModelMixin, ChatOpenAI):
+    def _convert_chunk_to_generation_chunk(self, chunk, *args, **kwargs):
+        result = super()._convert_chunk_to_generation_chunk(chunk, *args, **kwargs)
+        if result is not None:
+            _preserve_cache_usage(result.message, chunk.get('usage'))
+        return result
+
+    def _create_chat_result(self, *args, **kwargs):
+        result = super()._create_chat_result(*args, **kwargs)
+        for generation in result.generations:
+            _preserve_cache_usage(generation.message, (result.llm_output or {}).get('token_usage'))
+        return result
 
 class MeteredChatAnthropic(RuntimeModelMixin, ChatAnthropic):pass
 

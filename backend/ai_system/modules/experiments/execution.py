@@ -510,7 +510,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
         response_format=ToolStrategy(schema),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
                         report_ready=lambda: not inventory()),
-                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(), ReportOrderingMiddleware(schema.__name__)],
+                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(),
+                    ReportOrderingMiddleware(schema.__name__, report_ready=lambda: not inventory())],
     )
     limit = ctx.max_solver_steps * 2 + 1
     fallback = ReportFallback(ctx.coder_llm, schema, SYSTEM, recorder, inventory)

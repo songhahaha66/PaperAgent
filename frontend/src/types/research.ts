@@ -130,6 +130,12 @@ export interface ResearchSnapshot {
   questions?: ResearchQuestion[]
   evidence_uses?: EvidenceUse[]
   runtime?: {
+    usage?: {
+      input_tokens: number | null
+      output_tokens: number | null
+      tps: number | null
+      cache_hit_rate: number | null
+    } | null
     actions: ResearchActivity[]
     models?: ResearchActivity[]
     decisions: {
@@ -150,7 +156,7 @@ export interface ResearchSnapshot {
     action: string
     category: string
   }[]
-  execution_reason?: { kind: string; message: string } | null
+  execution_reason?: { kind: string; message: string; detail?: string } | null
   schema_version: 4
   engine_version?: string | null
   research_revision?: number

@@ -68,17 +68,14 @@ export function useWorkLayout(workId: Ref<string>) {
       paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
       figures: { label: ui.value.figures, icon: 'chart-line' },
       files: { label: ui.value.files, icon: 'folder-open' },
-      materials: { label: isZh.value ? '资料与结果' : 'Materials and results', icon: 'books' },
       progress: { label: isZh.value ? '研究进度' : 'Research progress', icon: 'task' },
     }[panel.kind]
   }
   const panelOptions = computed(() =>
-    (['progress', 'materials', 'paper', 'figures', 'files'] as const).map(
-      (kind) => ({
-        content: panelPresentation({ kind }).label,
-        value: kind,
-      }),
-    ),
+    (['progress', 'paper', 'figures', 'files'] as const).map((kind) => ({
+      content: panelPresentation({ kind }).label,
+      value: kind,
+    })),
   )
   function openProgress() {
     const state = panelSession.value

@@ -111,6 +111,9 @@ class ResearchRuntime:
     def usage(self,sequence,usage=None,*,state="completed"):
         usage=usage or {};known=bool(usage)
         values={key:max(0,int(usage.get(source) or 0)) for key,source in [('input_tokens','input_tokens'),('output_tokens','output_tokens')]}
+        details = usage.get('input_token_details') or {}
+        if details.get('cache_read') is not None:
+            values['cache_read_tokens'] = max(0, int(details['cache_read']))
         with self.store._transaction() as db:
             row=db.execute('SELECT payload FROM model_requests WHERE research_id=? AND sequence=?',(BUDGET_ID,sequence)).fetchone()
             if not row:return
@@ -204,6 +207,15 @@ def decision_error_summary(error):
     return '操作信息未通过校验'
 
 
+def action_failure_message(action):
+    capability = action['capability']
+    if capability.startswith('writing.'):
+        stage = {'reconcile':'结论核对','write':'草稿撰写','validate':'草稿检查',
+                 'repair':'草稿修订','render':'论文渲染','export':'论文导出'}[capability.split('.')[1]]
+        return f'{stage}未完成。实验结果、代码和图表已保存，点击继续将从此步骤重试。'
+    return '当前操作执行失败，已有产物和执行记录已保存。可查看执行详情后继续。'
+
+
 def execution_reason(root,status):
     """Read-only projection for recent work and snapshots; never starts/migrates a run."""
     if status=='waiting':return {'kind':'waiting_confirmation','message':'等待补充必要研究信息'}
@@ -223,7 +235,8 @@ def execution_reason(root,status):
                     action=json.loads(latest[0]).get('action') or {}
                     if action.get('status')=='failed':
                         return {'kind':action.get('error_type','action_failed'),
-                                'message':action.get('message') or action.get('error') or action['reason']}
+                                'message':action.get('message') or (action_failure_message(action) if action['capability'].startswith('writing.') else action.get('error') or action['reason']),
+                                'detail':action.get('error')}
         reason=json.loads(row[0]) if row else None
         if reason and reason.get('kind')=='invalid_response':
             reason={**reason,'message':f'下一步操作准备失败：{decision_error_summary(preparation) if preparation else "模型返回的信息未通过校验"}。可继续重试。'}

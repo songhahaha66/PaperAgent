@@ -1,6 +1,6 @@
 <template>
   <div class="paper-pipeline">
-    <div v-if="currentText" class="pipeline-current" role="status">
+    <div v-if="!externalStatus && currentText" class="pipeline-current" role="status">
       <t-loading v-if="running" size="14px" /><span>{{ currentText }}</span>
     </div>
     <details
@@ -10,9 +10,7 @@
     >
       <summary class="record-summary">
         <t-icon name="task" size="14px" />
-        <span>{{
-          running ? '本次操作进行中' : waitingConfirm ? '本次操作等待确认' : '本次操作记录'
-        }}</span>
+        <span>{{ waitingConfirm ? '本次操作等待确认' : '执行记录' }}</span>
         <small v-if="subproblems.length">{{ subproblems.length }} 项任务</small>
         <span class="record-caret" aria-hidden="true">⌄</span>
       </summary>
@@ -73,7 +71,10 @@
     <button v-if="error" class="pipeline-action" @click="$emit('open-progress')">
       查看运行状态
     </button>
-    <t-alert v-if="error" theme="error" :message="error" class="pipeline-error" />
+    <details v-if="error" class="pipeline-error">
+      <summary>查看当时的错误</summary>
+      <MarkdownRenderer :content="error" />
+    </details>
 
     <div v-if="result" class="pipeline-section pipeline-result">
       <template
@@ -104,6 +105,7 @@ const props = defineProps<{
   superseded?: boolean
   canConfirm?: boolean
   tasks?: ResearchSnapshot['experiments']
+  externalStatus?: boolean
 }>()
 
 defineEmits<{ 'confirm-plan': []; 'open-progress': [] }>()

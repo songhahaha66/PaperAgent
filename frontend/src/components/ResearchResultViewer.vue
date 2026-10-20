@@ -17,6 +17,7 @@
       :runs="snapshot?.runs || []"
       @open-file="(path) => emit('open-file', path)"
       @issue="(id) => emit('issue', id)"
+      @experiment="(id) => emit('experiment', id)"
     />
   </section>
   <section v-else class="result-viewer">
@@ -81,6 +82,7 @@ const emit = defineEmits<{
   'open-file': [path: string]
   issue: [id: string]
   paper: [use: EvidenceUse]
+  experiment: [id: string]
 }>()
 const { isZh } = useStudioCopy()
 const experiment = computed(() =>

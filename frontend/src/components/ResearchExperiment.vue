@@ -5,40 +5,20 @@
       <h2>{{ experiment.title }}</h2>
       <small v-if="experiment.started_at">实验开始于 {{ startedAt }}</small>
     </header>
-    <dl class="states">
-      <div>
-        <dt>{{ isZh ? '计算' : 'Computation' }}</dt>
-        <dd>
-          {{
-            experiment.computation === 'failed'
-              ? isZh
-                ? '计算失败'
-                : 'Computation failed'
-              : label(experiment.computation)
-          }}
-        </dd>
-      </div>
-      <div>
-        <dt>{{ isZh ? '成果' : 'Availability' }}</dt>
-        <dd>{{ label(experiment.availability) }}</dd>
-      </div>
-      <div>
-        <dt>{{ isZh ? '检查' : 'Checks' }}</dt>
-        <dd>{{ label(experiment.checking) }}</dd>
-      </div>
-    </dl>
-    <p
-      v-if="experiment.availability === 'historical' || experiment.checking === 'failed'"
-      role="alert"
-    >
-      {{
-        isZh
-          ? '这是历史结果，仍需核查。'
-          : 'Retained evidence is readable. Affected results require the existing repair process before dependent computation or publication.'
-      }}
-    </p>
-    <h3>{{ isZh ? '实际执行' : 'Actual execution' }}</h3>
+    <p class="experiment-status">{{ statusText }}</p>
+    <aside v-if="newerExperiment" class="follow-up">
+      <span>{{
+        newerExperiment.execution_status === 'running'
+          ? '后续实验正在执行'
+          : newerExperiment.results.length
+            ? '已有后续实验结果'
+            : '已有后续实验记录'
+      }}</span>
+      <button @click="emit('experiment', newerExperiment.id)">查看后续实验 →</button>
+    </aside>
+    <p v-if="experiment.availability === 'historical'" role="alert">此处保留的是历史结果。</p>
     <MarkdownRenderer
+      v-if="experiment.approach || experiment.summary"
       :content="
         experiment.approach ||
         experiment.summary ||
@@ -63,8 +43,8 @@
         :work-id="workId"
       />
     </details>
-    <section v-if="experiment.experiment">
-      <h3>{{ isZh ? '本次试验' : 'This experiment' }}</h3>
+    <details v-if="experiment.experiment">
+      <summary>{{ isZh ? '方法、数据与评价标准' : 'Method, data and evaluation' }}</summary>
       <template v-if="experiment.experiment.candidates.length > 1">
         <p v-for="candidate in experiment.experiment.candidates" :key="candidate.name">
           <strong>{{ candidate.name }}</strong
@@ -73,11 +53,8 @@
       </template>
       <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ experiment.experiment.conditions }}</p>
       <p>{{ isZh ? '评价依据：' : 'Evaluation: ' }}{{ experiment.experiment.evaluation }}</p>
-    </section>
-    <h3>{{ isZh ? '图表与指标' : 'Figures and measurements' }}</h3>
-    <p v-if="!experiment.results.length">
-      {{ isZh ? '尚未登记可读成果。' : 'No results recorded yet.' }}
-    </p>
+    </details>
+    <h3 v-if="experiment.results.length">{{ isZh ? '实验结果' : 'Results' }}</h3>
     <section
       v-for="result in experiment.results"
       :key="result.id"
@@ -131,47 +108,30 @@
         >
       </details>
     </section>
-    <section v-if="experiment.artifacts.length">
-      <h3>{{ isZh ? '实验文件' : 'Experiment files' }}</h3>
-      <button
-        v-for="artifact in experiment.artifacts.filter((a) => a.path)"
-        :key="artifact.id"
-        @click="emit('open-file', artifact.path!)"
-      >
-        {{
-          {
-            code: '执行代码',
-            stdout: '运行输出',
-            stderr: '错误输出',
-            data: '生成数据',
-            report: '实验报告',
-          }[artifact.kind] || '查看文件'
-        }}
-      </button>
-    </section>
-    <h3>{{ isZh ? '结论' : 'Conclusions' }}</h3>
-    <p v-if="!experiment.claims.length">
-      {{ isZh ? '尚未登记有证据关联的结论。' : 'No evidence-linked conclusions recorded.' }}
-    </p>
+    <details v-if="fileGroups.length" class="experiment-files">
+      <summary>
+        {{ isZh ? '代码与运行文件' : 'Code and execution files' }} · {{ fileGroups.length }} 组
+      </summary>
+      <div v-for="(group, index) in fileGroups" :key="group.id" class="file-group">
+        <span
+          >{{ group.run ? `第 ${index + 1} 次运行` : '实验记录'
+          }}<small v-if="group.status"> · {{ group.status }}</small></span
+        >
+        <button
+          v-for="artifact in group.files"
+          :key="artifact.id"
+          @click="emit('open-file', artifact.path!)"
+        >
+          {{ fileLabel(artifact.kind) }}
+        </button>
+      </div>
+    </details>
+    <h3 v-if="experiment.claims.length">{{ isZh ? '结论' : 'Conclusions' }}</h3>
     <div v-for="claim in experiment.claims" :key="claim.id">
       <p>{{ claim.statement }}</p>
-      <small>{{ claim.strength }} · {{ claim.evidence.join(', ') }}</small>
+      <small>{{ claim.strength }}</small>
     </div>
-    <h3>{{ isZh ? '来源' : 'Sources' }}</h3>
-    <p v-if="!experiment.sources.length">
-      {{
-        isZh
-          ? '未记录独立资料文件。'
-          : 'No separate data source was recorded. Computation records are available with each result.'
-      }}
-    </p>
-    <p v-if="experiment.sources.length" class="note">
-      {{
-        isZh
-          ? '本次实验使用的输入文件。'
-          : 'These inputs were frozen for this attempt; per-result file attribution was not separately recorded.'
-      }}
-    </p>
+    <h3 v-if="experiment.sources.length">{{ isZh ? '输入资料' : 'Sources' }}</h3>
     <div v-for="source in experiment.sources" :key="source.path">
       <button v-if="source.available" @click="emit('open-file', source.path)">
         {{ source.path }}
@@ -182,15 +142,12 @@
         <code>{{ source.hash }}</code>
       </details>
     </div>
-    <h3>{{ isZh ? '后续安排' : 'Next step and reason' }}</h3>
-    <p>
-      {{
-        experiment.next_step ||
-        (isZh ? '暂无后续安排。' : 'No next-step decision or reason was recorded.')
-      }}
-    </p>
+    <section v-if="question?.next_step && !newerExperiment">
+      <h3>{{ isZh ? '下一步' : 'Next step' }}</h3>
+      <p>{{ question.next_step }}</p>
+    </section>
     <section v-if="experiment.issues.length">
-      <h3>{{ isZh ? '待处理事项' : 'Findings' }}</h3>
+      <h3>{{ isZh ? '本次实验的问题' : 'Findings' }}</h3>
       <p v-for="issue in experiment.issues" :key="issue.id">
         {{
           issue.category === 'service'
@@ -204,7 +161,7 @@
               : ''
         }}{{ issue.message
         }}<button @click="emit('issue', issue.id)">
-          {{ isZh ? '查看意见与原文' : 'View finding and text' }}
+          {{ isZh ? '查看详情' : 'Details' }}
         </button>
       </p>
     </section>
@@ -248,6 +205,7 @@ const emit = defineEmits<{
   'open-file': [path: string]
   issue: [id: string]
   paper: [use: EvidenceUse]
+  experiment: [id: string]
 }>()
 const startedAt = computed(() => {
   const raw = props.experiment.started_at
@@ -257,6 +215,51 @@ const startedAt = computed(() => {
 const question = computed(() =>
   props.snapshot?.questions?.find((q) => q.id === props.experiment.question_id),
 )
+const newerExperiment = computed(() =>
+  [...(props.snapshot?.experiments || [])]
+    .reverse()
+    .find(
+      (e) =>
+        e.question_id === props.experiment.question_id &&
+        e.id !== props.experiment.id &&
+        Number(e.started_at || 0) > Number(props.experiment.started_at || 0),
+    ),
+)
+const statusText = computed(() => {
+  const e = props.experiment
+  if (e.execution_status === 'running') return '正在执行，结果会陆续更新。'
+  if (e.execution_status === 'failed')
+    return e.results.length
+      ? '本次实验未完成，已有结果已保留。'
+      : '本次实验未完成，代码与运行输出已保留。'
+  if (e.acceptance === 'accepted')
+    return `已完成 · ${e.results.length} 项结果 · ${label(e.checking)}`
+  return `${label(e.computation)} · ${label(e.checking)}`
+})
+const fileLabel = (kind: string) =>
+  ({ code: '代码', stdout: '输出', stderr: '错误输出', data: '生成数据', report: '实验报告' })[
+    kind
+  ] || '文件'
+const fileGroups = computed(() => {
+  const groups = new Map<
+    string,
+    { id: string; run: boolean; status: string; files: Experiment['artifacts'] }
+  >()
+  for (const artifact of props.experiment.artifacts.filter((a) => a.path)) {
+    const id = artifact.run_id || 'experiment'
+    if (!groups.has(id)) {
+      const status = props.runs.find((r) => r.id === artifact.run_id)?.status
+      groups.set(id, {
+        id,
+        run: !!artifact.run_id,
+        status: status === 'success' ? '成功' : status === 'failed' ? '失败' : '',
+        files: [],
+      })
+    }
+    groups.get(id)!.files.push(artifact)
+  }
+  return [...groups.values()]
+})
 const usesFor = (ref: string) => props.snapshot?.evidence_uses?.filter((u) => u.ref === ref) || []
 watch(
   () => [props.focusRef, props.experiment] as const,
@@ -279,6 +282,44 @@ const displayValue = (value: string, kind: string) => {
 const label = (value: string) => outcomeLabel(value, isZh.value)
 </script>
 <style scoped>
+.experiment-status {
+  color: var(--pa-muted);
+  margin: 12px 0 20px;
+}
+.follow-up {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--pa-surface-active);
+}
+.follow-up button {
+  margin-left: auto;
+}
+.file-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--pa-line);
+}
+.file-group > span {
+  flex: 1;
+  min-width: 100px;
+}
+.experiment-files {
+  margin-top: 24px;
+}
+header > small:first-child {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .focused {
   border-left: 3px solid var(--pa-accent);
   padding-left: 16px !important;
@@ -313,25 +354,11 @@ li {
   line-height: 1.8;
   font-size: 14px;
 }
-.states {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.states div {
-  padding: 12px;
-  background: var(--pa-surface-muted);
-  border-radius: var(--pa-radius-card);
-}
 dt,
 small,
 .note {
   font-size: 12px;
   color: var(--pa-muted);
-}
-dd {
-  margin: 6px 0 0;
-  font-size: 13px;
 }
 .measurement {
   border-bottom: 1px solid var(--pa-line);

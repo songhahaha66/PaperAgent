@@ -104,12 +104,15 @@ class StepBudgetMiddleware(AgentMiddleware):
                 note = HumanMessage(content="[系统提醒] 必需登记证据已齐，相同代码和输出已连续重复三次。请现在提交SolveReport，按已有登记引用填写要求证据映射；不得声称未做的分析。")
                 return await handler(request.override(messages=[*request.messages, note], tools=[]))
             note = HumanMessage(content="[系统提醒] 相同代码和输出已连续重复三次，提交所需的登记证据仍未齐。请按最近工具返回的缺项清单，用已有成功run_id调用record_results或record_figure；确实缺少计算结果时只补算缺项，不要重复整个计算，也不要提前提交报告。")
-            return await handler(request.override(messages=[*request.messages, note]))
+            registration = [tool for tool in request.tools if getattr(tool, 'name', tool) != 'run_python']
+            return await handler(request.override(messages=[*request.messages, note], tools=registration))
         if steps >= self.budget - 1:
             # 最后一步只留报告工具（ToolStrategy 下 tool_choice=any，模型只能交报告），不会撞 recursion_limit。
             # 官方 API 的 deepseek-flash 一步只要几秒、步子很碎，v2l 的 Q1 三分钟用完 40 步没交报告，对话和报告全丢
             note = HumanMessage(content=f"[系统提醒] 步数已用完，不能再执行代码。{self.message}")
-            return await handler(request.override(messages=[*request.messages, note], tools=[]))
+            tools = ([tool for tool in request.tools if getattr(tool, 'name', tool) != 'run_python']
+                     if self.report_ready and not self.report_ready() else [])
+            return await handler(request.override(messages=[*request.messages, note], tools=tools))
         if steps >= self.budget - self.reserve:
             left = max(self.budget - steps, 0)
             note = HumanMessage(content=f"[系统提醒] 还剩约 {left} 步。{self.message}")
@@ -216,11 +219,16 @@ class ReportOrderingMiddleware(AgentMiddleware):
     loop return actual execution/registration results before the next submission.
     """
 
-    def __init__(self, report_tool: str):
+    def __init__(self, report_tool: str, report_ready: Callable[[], bool] | None = None):
         super().__init__()
         self.report_tool = report_tool
+        self.report_ready = report_ready
 
     async def awrap_model_call(self, request, handler):
+        # Do not offer a final report while its prerequisite evidence is absent.
+        # Validation remains in place for scope, provenance and report content.
+        if self.report_ready and not self.report_ready():
+            request = request.override(response_format=None)
         response = await handler(request)
         messages = getattr(response, "result", None) or [response]
         reply = next((m for m in messages if isinstance(m, AIMessage)), None)

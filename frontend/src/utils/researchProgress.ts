@@ -56,8 +56,6 @@ export function researchHeadline(
   zh: boolean,
 ) {
   if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
-  if (['paused', 'failed', 'cancelled'].includes(workStatus) && snapshot?.execution_reason)
-    return snapshot.execution_reason.message
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
   if (!snapshot?.experiments?.length) {
@@ -70,9 +68,14 @@ export function researchHeadline(
     return zh ? '等待建立研究任务' : 'Waiting for research tasks'
   }
   const running = snapshot.experiments.filter((t) => taskState(t, workStatus) === 'running')
-  if (running.length) return `${zh ? '正在执行' : 'Running'} ${running.map(taskName).join('、')}`
-  if (['paused', 'failed', 'cancelled'].includes(workStatus))
+  if (running.length) return zh ? '正在执行实验' : 'Running experiments'
+  if (['paused', 'failed', 'cancelled'].includes(workStatus)) {
+    for (const [key, label] of Object.entries(deliveryLabels)) {
+      if (snapshot.delivery_stages?.[key]?.status === 'blocked')
+        return `${label[zh ? 0 : 1]}${zh ? '未完成，进度已保留' : ' incomplete, progress saved'}`
+    }
     return zh ? '研究已暂停，进度已保留' : 'Research paused, progress saved'
+  }
   for (const [key, label] of Object.entries(deliveryLabels)) {
     if (snapshot.delivery_stages?.[key]?.status === 'in_progress') return label[zh ? 0 : 1]
     if (snapshot.delivery_stages?.[key]?.status === 'blocked')

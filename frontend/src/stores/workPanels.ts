@@ -2,15 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
-export type PanelKind =
-  | 'chat'
-  | 'paper'
-  | 'figures'
-  | 'files'
-  | 'file'
-  | 'progress'
-  | 'materials'
-  | 'result'
+export type PanelKind = 'chat' | 'paper' | 'figures' | 'files' | 'file' | 'progress' | 'result'
 export type PanelGroup = 'main' | 'secondary'
 export type SplitEdge = 'left' | 'right' | 'top' | 'bottom'
 export interface WorkPanel {
@@ -20,7 +12,6 @@ export interface WorkPanel {
   path?: string
   resultType?: 'comparison' | 'registered' | 'experiment'
   resultId?: string
-  location?: string
 }
 export interface WorkPanelSession {
   panels: WorkPanel[]
@@ -38,7 +29,6 @@ export interface WorkPanelSession {
 export type WorkObject =
   | { type: 'file'; path: string }
   | { type: 'paper' }
-  | { type: 'literature'; evidenceId?: string }
   | { type: 'result'; resultType: 'comparison' | 'registered' | 'experiment'; id: string }
 
 // Tab-scoped, per-user UI state survives refresh; no credentials are stored here.
@@ -108,17 +98,17 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
     const state = sessions.value[workId]!
     const retired: Record<string, PanelKind> = {
       overview: 'progress',
-      comparisons: 'materials',
-      literature: 'materials',
       experiences: 'progress',
       skills: 'progress',
     }
+    const removed = new Set(['materials', 'comparisons', 'literature'])
     if (
-      state.panels.some((p) => retired[p.kind as string]) ||
+      state.panels.some((p) => removed.has(p.kind) || retired[p.kind as string]) ||
       new Set(state.panels.map((p) => p.id)).size !== state.panels.length
     ) {
       const seen = new Set<string>()
       state.panels = state.panels
+        .filter((p) => !removed.has(p.kind))
         .map((p) => {
           const kind = retired[p.kind as string]
           if (!kind) return p
@@ -170,14 +160,7 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
   }
   function openObject(workId: string, object: WorkObject, group?: PanelGroup) {
     if (object.type !== 'result') {
-      open(
-        workId,
-        object.type === 'literature' ? 'materials' : object.type,
-        object.type === 'file' ? object.path : undefined,
-        group,
-      )
-      if (object.type === 'literature' && object.evidenceId)
-        session(workId).panels.find((p) => p.kind === 'materials')!.location = object.evidenceId
+      open(workId, object.type, object.type === 'file' ? object.path : undefined, group)
       return
     }
     const state = session(workId),

@@ -94,6 +94,18 @@ def test_result_outline_citation_also_brings_original_passage_and_source(cited_s
     assert rows[0]['excerpt']==passage['text'][:800] and '{{C:C9}}' in request
 
 
+def test_saved_freeform_outline_can_resume_writing_with_real_results(tmp_path):
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
+    result=seed(ctx,[],name='MAE')
+    # Shape persisted by the planner in fdb9f007, before basis had a schema.
+    for key in ('modeling','validation','limitations'):
+        state={'task':'比较销量预测方法','analysis':{'subproblems':[],'assumptions':[]},
+               'outline':[{'key':key,'title':'预测结果','purpose':'说明计算结果与局限',
+                           'basis':[{'statement':'验证误差','artifact_ref':result.id}]}]}
+        prompt=section_request(key,'预测结果',state,ctx)
+        assert '说明计算结果与局限' in prompt and '{{R:'+result.id+'}}' in prompt
+
+
 def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(tmp_path):
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
     own = seed(ctx, [], name='answer')

@@ -178,6 +178,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     used_runs = {r.run_id for r in [*results, *issue_evidence]}
     for outcome in readable_outcomes:
         used_runs.update(r["run_id"] for r in outcome["results"])
+        used_runs.update(a['run_id'] for a in outcome['artifacts'] if a['run_id'])
         for previous in outcome["history"]:
             used_runs.update(r["run_id"] for r in previous["results"])
     if business:
@@ -227,11 +228,12 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         status = 'paused'
     control = public_snapshot(business, work_status=status) if business else {}
     from ai_system.research.runtime import execution_reason
-    from ai_system.research.views import model_activity
+    from ai_system.research.views import model_activity, model_usage
     return ResearchSnapshot(
         inputs=[p for p in store.file_inputs() if _file(root,p)] if business else [],
         questions=control.get('questions',[]), evidence_uses=control.get('evidence_uses',[]),
-        runtime={**control.get('runtime',{}), 'models':model_activity(store,status) if business else []},
+        runtime={**control.get('runtime',{}), 'models':model_activity(store,status) if business else [],
+                 'usage':model_usage(store) if business else None},
         execution_reason=execution_reason(root,status),
         engine_version=thread.get("engine_version"),
         research_revision=control.get("revision", 0), commit_seq=control.get("commit_seq", 0),

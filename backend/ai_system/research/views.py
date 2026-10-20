@@ -54,6 +54,22 @@ def execution(snapshot, work_status=None):
     return {'actions':actions,'decisions':snapshot.get('decision_history',[])[-12:]}
 
 
+def model_usage(store):
+    """Workspace conversation totals, including resumed and earlier research runs."""
+    import json
+    with store._connect() as db:
+        rows=[json.loads(r[0]) for r in db.execute('SELECT payload FROM model_requests ORDER BY sequence DESC')]
+    reported=[r for r in rows if r.get('usage_returned')]
+    completed=[r for r in reported if r['state']=='completed' and r.get('finished_at',0)>r['sent_at']]
+    seconds=sum(r['finished_at']-r['sent_at'] for r in completed)
+    cached=[r for r in reported if 'cache_read_tokens' in r]
+    cache_input=sum(r['input_tokens'] for r in cached)
+    return {'input_tokens':sum(r['input_tokens'] for r in reported) if reported else None,
+            'output_tokens':sum(r['output_tokens'] for r in reported) if reported else None,
+            'tps':sum(r['output_tokens'] for r in completed)/seconds if seconds else None,
+            'cache_hit_rate':sum(r['cache_read_tokens'] for r in cached)/cache_input if cache_input else None}
+
+
 def model_activity(store, work_status):
     # Read only. No budget migration or connection metadata enters the response.
     import json
@@ -64,7 +80,7 @@ def model_activity(store, work_status):
     for raw in rows:
         item=json.loads(raw[0])
         if item.get('research_id')!=store.research_id:continue
-        label=item.get('label','');task=re.match(r'Q\d+[a-z]?',label)
+        label=item.get('label','');task=re.match(r'(?:E\d+|Q\d+[a-z]?)',label)
         phase=label.split(':')[-1]
         phase={'review':'核查实验结果','report':'修订报告','solve':'推导与计算',
             'design':'确定执行方法','research':'判断下一步','observe':'判断下一步'}.get(phase,'处理研究内容')

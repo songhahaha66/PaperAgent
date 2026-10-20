@@ -244,10 +244,12 @@ async def act(request, runtime):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        from .runtime import action_failure_message
+        message = action_failure_message(action)
         with store._transaction() as db:
-            state=store._read(db);state['action'].update(status='failed',error=str(exc)[:3000],error_type=type(exc).__name__)
+            state=store._read(db);state['action'].update(status='failed',error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
             store._save(db,state,'action_failed',state['action'])
-        raise
+        raise RuntimeError(message) from exc
 
 
 def resume(store, **_):

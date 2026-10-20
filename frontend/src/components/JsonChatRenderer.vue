@@ -27,6 +27,7 @@
                 :blocks="getJsonBlocks(message)"
                 :tasks="index === messages.length - 1 ? tasks : undefined"
                 :streaming="message.isStreaming"
+                :external-status="!!snapshot?.has_research"
                 :superseded="index < messages.length - 1"
                 :can-confirm="
                   index === messages.length - 1 &&
@@ -253,7 +254,12 @@ const getEventBlocks = (message: ChatMessage) => {
       ({ block }) =>
         !pipeline ||
         (!isPaperEvent(block) &&
-          !['main_agent_start', 'main_agent_complete', 'main_agent_error'].includes(block.type)),
+          ![
+            'main_agent_start',
+            'main_agent_complete',
+            'main_agent_error',
+            'research_activity',
+          ].includes(block.type)),
     )
 }
 
