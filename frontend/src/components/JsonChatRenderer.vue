@@ -161,7 +161,7 @@ interface Props {
 
 const props = defineProps<Props>()
 const technicalReceipt = (message: ChatMessage) =>
-  message.role === 'assistant' &&
+  message.role !== 'user' &&
   /EvidenceDecision|ResearchIntent|结构化输出.*失败/.test(getTextContent(message))
 defineEmits<{
   'open-file': [path: string]
