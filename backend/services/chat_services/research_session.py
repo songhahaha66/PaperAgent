@@ -322,8 +322,8 @@ async def resolve_action(requested: str, message: str, snapshot: ResearchSnapsho
         raise ValueError('不支持的消息操作')
     if requested != 'auto':
         return validate_action(requested, snapshot)
-    if len(message) > 4000:
-        raise ValueError('请用不超过 4000 字符说明本次操作，材料请通过文件提供')
+    if len(message) > 20000:
+        raise ValueError('请输入有效消息（最多 20000 字符）')
     if judge is None:
         if not jev_available():
             raise ValueError('Jev 意图识别未配置，请配置 TYPESAFE_API_KEY 后重试')
