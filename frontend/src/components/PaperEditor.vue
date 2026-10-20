@@ -5,30 +5,11 @@
         <button :aria-pressed="view === 'read'" @click="setView('read')">阅读</button
         ><button :aria-pressed="view === 'source'" @click="setView('source')">源码</button>
       </nav>
-      <button
-        :aria-pressed="side === 'comments'"
-        @click="side = side === 'comments' ? null : 'comments'"
-      >
-        评论 <span v-if="project?.threads.length">{{ project.threads.length }}</span>
-      </button>
-      <button
-        :aria-pressed="side === 'sources'"
-        @click="side = side === 'sources' ? null : 'sources'"
-      >
-        来源
-      </button>
-      <button
-        :aria-pressed="side === 'opinions'"
-        @click="side = side === 'opinions' ? null : 'opinions'"
-      >
-        研究意见
-      </button>
       <button v-if="isLatex" :disabled="compiling" @click="compile">
         {{ compiling ? '正在编译…' : '编译 PDF' }}
       </button>
-      <button :disabled="loading" @click="load">刷新</button>
     </header>
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <p v-if="error && !side && !sourceCard" class="error" role="alert">{{ error }}</p>
     <p v-if="project?.migration_notice" class="notice">{{ project.migration_notice }}</p>
     <p
       v-if="isLatex && project"
@@ -43,31 +24,40 @@
       <h2>论文草稿尚未生成</h2>
       <p>写作产生源码后，可在这里阅读、编辑和评论；无需等待整项研究审查完成。</p>
     </div>
-    <div v-else class="workspace" :class="{ 'with-side': !!side }">
-      <div class="manuscript">
+    <div v-else class="workspace">
+      <div ref="manuscript" class="manuscript">
         <template v-if="view === 'source'">
           <header class="file-toolbar">
-            <select v-model="file" :disabled="dirty" aria-label="项目文件">
+            <span v-if="project.files.length === 1" class="source-label">论文正文</span>
+            <select v-else v-model="file" :disabled="dirty" aria-label="项目文件">
               <option v-for="row in project.files" :key="row.path" :value="row.path">
-                {{ row.path }}
+                {{ row.path === project.main ? '论文正文' : row.path }}
               </option></select
             ><span v-if="dirty">有未保存的编辑</span
             ><button v-if="dirty" @click="discardDraft">放弃本地编辑</button
             ><button :disabled="!dirty || busy" @click="saveDraft">保存修改集</button
-            ><button :disabled="!selection" @click="side = 'comments'">评论选区</button
+            ><button
+              :disabled="!selection"
+              @click="openPanel('comments', elementAnchor($event.currentTarget as Element))"
+            >
+              评论选区</button
             ><button :disabled="!selectedFile" @click="$emit('open-file', file)">打开文件</button>
           </header>
-          <textarea
-            v-if="selectedFile?.text !== null"
-            ref="sourceEditor"
-            v-model="draft"
-            class="source-editor"
-            spellcheck="false"
-            aria-label="论文源码"
-            @select="captureSource"
-            @mouseup="captureSource"
-            @keyup="captureSource"
-          ></textarea>
+          <div v-if="selectedFile?.text !== null" ref="sourceSurface" class="source-surface">
+            <pre ref="sourceMirror" class="source-mirror" aria-hidden="true" :style="mirrorStyle">{{
+              draft
+            }}</pre>
+            <textarea
+              ref="sourceEditor"
+              v-model="draft"
+              class="source-editor"
+              spellcheck="false"
+              aria-label="论文源码"
+              @mouseup="captureSource"
+              @keyup="captureSource"
+              @scroll="syncSourceScroll"
+            ></textarea>
+          </div>
           <p v-else class="empty">这是图片或其他二进制资源，可通过“打开文件”查看。</p>
           <p class="hint">
             选区绑定文件、版本与准确范围。手工编辑先保存为修改集，再在同一版本上评论。
@@ -80,6 +70,7 @@
             :version="project.pdf_version || project.version"
             @selection="captureRead"
             @citation="openCitation"
+            @rendered="refreshAnnotationRoot"
           />
           <div v-else class="empty">
             <h2>源码已保留，PDF 尚未生成</h2>
@@ -87,202 +78,285 @@
             <button @click="setView('source')">查看和评论源码</button>
           </div>
         </template>
-        <div v-else class="read-text" @mouseup="captureRendered" @click="readClick">
+        <div
+          v-else
+          class="read-text"
+          @mouseup="captureRendered"
+          @keyup="captureRendered"
+          @click="readClick"
+        >
           <MarkdownRenderer
             :content="selectedFile?.text || ''"
             :work-id="workId"
             inline-sources
-            @source="(id) => openCitation('#literature-' + id)"
+            @source="(id, target) => openCitation('#literature-' + id, target)"
           />
-          <button v-if="readQuote" @click="captureRead(readQuote)">评论选中文字</button>
         </div>
       </div>
-      <aside v-if="side" class="sidebar">
-        <header>
-          <strong>{{
-            side === 'comments' ? '评论与修改' : side === 'sources' ? '原文与来源' : '研究意见'
-          }}</strong
-          ><button aria-label="关闭侧栏" @click="side = null">×</button>
-        </header>
-        <template v-if="side === 'comments'">
-          <div class="comment-context">
-            <template v-if="selection"
-              ><strong>{{ selectionLabel(selection) }}</strong>
-              <blockquote>{{ selection.quote }}</blockquote>
-              <button @click="selection = null">清除选区</button></template
-            >
-            <template v-else-if="readQuote"
-              ><strong>阅读选区 · 待确认源码位置</strong>
-              <blockquote>{{ readQuote }}</blockquote>
-              <p>
-                解释或检索可直接发送。改稿前请选择下方源码候选；无法匹配时，请在源码中重新选择。
-              </p></template
-            >
-            <p v-else>
-              选择论文中的文字，或直接提问。Agent 会按评论意图解释、检索、计算或提出改稿补丁。
-            </p>
-            <div v-if="locating">正在查找源码位置…</div>
-            <button
-              v-for="(candidate, index) in candidates"
-              :key="`${candidate.file}:${candidate.start}`"
-              class="candidate"
-              @click="confirmCandidate(candidate)"
-            >
-              <strong>{{ selectionLabel(candidate) }} · 候选 {{ index + 1 }}</strong>
-              <pre>{{ candidate.context }}</pre>
-              <span>确认此位置</span>
-            </button>
-            <p v-if="readQuote && !locating && !candidates.length && !selection" class="hint">
-              未找到逐字对应的源码范围。公式、宏或换行可能改变阅读文字；不能猜测修改位置。
-            </p>
-          </div>
-          <select v-model="threadId" aria-label="评论线程">
-            <option value="">新评论</option>
-            <option v-for="thread in project.threads" :key="thread.id" :value="thread.id">
-              {{ thread.messages[0]?.text.slice(0, 50) }}
-            </option>
-          </select>
-          <div class="thread" v-if="activeThread">
-            <article
-              v-for="(message, index) in activeThread.messages"
-              :key="index"
-              :class="message.role"
-            >
-              <strong>{{ message.role === 'user' ? '你' : 'Agent' }}</strong
-              ><MarkdownRenderer
-                :content="message.text"
-                :work-id="workId"
-                inline-sources
-                @source="(id) => openCitation('#literature-' + id)"
-              />
-            </article>
-          </div>
-          <article v-for="execution in threadExecutions" :key="execution.id" class="execution">
-            <p v-if="execution.state === 'running' || execution.state === 'pending'">
-              {{ execution.phase === 'write' ? '正在组织回复或修改…' : '正在处理评论…' }}
-            </p>
-            <p
-              v-if="execution.state === 'failed' || execution.state === 'interrupted'"
-              class="error"
-            >
-              {{ execution.error || '上次处理被中断，已保存原稿与完成步骤。'
-              }}<button :disabled="busy" @click="resume(execution.id)">继续未完成的步骤</button>
-            </p>
-            <template v-if="execution.tool_result"
-              ><p>检索 / 计算结果已保存</p>
-              <pre v-if="execution.tool_result.stdout">{{ execution.tool_result.stdout }}</pre>
+      <PaperTextAnnotations
+        :root="annotationRoot"
+        :clip="view === 'source' ? sourceSurface : manuscript"
+        :annotations="dirty ? [] : textAnnotations"
+        :selection-range="side === 'comments' ? activeRange : null"
+        :selected-quote="side === 'comments' ? readQuote || selection?.quote : ''"
+        @open="openAnnotation"
+      />
+      <PaperPopover
+        :open="!!side"
+        :title="side === 'comments' ? '评论与修改' : side === 'sources' ? '原文与来源' : '研究意见'"
+        :anchor="popoverAnchor"
+        :host="manuscript"
+        :compact="quickComment"
+        :width="quickComment ? 320 : 360"
+        :tone="side === 'sources' ? 'source' : side === 'opinions' ? 'opinion' : activeMarkKind"
+        @close="side = null"
+      >
+        <div class="annotation-content">
+          <p v-if="error" class="error" role="alert">{{ error }}</p>
+          <div v-if="quickComment" class="inline-comment">
+            <blockquote class="inline-selection-quote" aria-label="当前选中的正文">
+              {{ readQuote || selection?.quote }}
+            </blockquote>
+            <textarea
+              v-model="message"
+              class="inline-comment-input"
+              rows="2"
+              data-autofocus
+              placeholder="评论这段文字，或提出修改…"
+              aria-label="评论所选文字"
+              @keydown="submitOnEnter"
+            />
+            <footer>
+              <span>{{
+                busy
+                  ? '正在提交…'
+                  : `已选 ${Array.from(readQuote || selection?.quote || '').length} 字`
+              }}</span>
               <button
-                v-if="execution.tool_result.code_path"
-                @click="$emit('open-file', execution.tool_result.code_path)"
+                type="button"
+                class="dismiss-comment"
+                aria-label="关闭评论"
+                @click="side = null"
               >
-                查看实际代码</button
-              ><button
-                v-if="execution.tool_result.stdout_path"
-                @click="$emit('open-file', execution.tool_result.stdout_path)"
+                ×
+              </button>
+              <button
+                type="button"
+                class="send-comment"
+                aria-label="发送评论"
+                :disabled="busy || !message.trim()"
+                @click="send"
               >
-                查看实际输出
-              </button></template
-            >
-            <details>
-              <summary>技术详情</summary>
-              <p>请求：{{ execution.id }}</p>
-              <p>阶段：{{ execution.phase }}</p>
-            </details>
-          </article>
-          <textarea
-            v-model="message"
-            class="comment-input"
-            rows="4"
-            placeholder="解释这里的依据、查询文献、补充计算，或明确提出修改…"
-            aria-label="评论内容"
-          ></textarea>
-          <button class="primary" :disabled="busy || !message.trim()" @click="send">
-            {{ busy ? '正在提交…' : '发送评论' }}
-          </button>
-          <p class="hint">提出补丁后由你接受或拒绝。来源关联和辅助计算不会自动关闭研究意见。</p>
-          <div v-if="project.generated_candidates?.length" class="changes">
-            <h3>自动写作候选 · 尚未合入源码</h3>
-            <p class="hint">
-              原文件缺少可靠章节映射，需选择源码范围后明确合并；导言区、宏和其他文件保持原样。
-            </p>
-            <template v-for="batch in project.generated_candidates" :key="batch.id"
-              ><article v-for="(text, key) in batch.sections" :key="key" class="change">
-                <details>
-                  <summary>{{ sectionLabel(String(key)) }} · 查看候选</summary>
-                  <pre>{{ text }}</pre>
-                </details>
-                <button :disabled="!selection || busy" @click="mergeGenerated(text)">
-                  以候选替换当前选区（先看差异）
-                </button>
-              </article></template
-            >
-          </div>
-          <div class="changes">
-            <h3>修改集</h3>
-            <article v-for="change in visibleChanges" :key="change.id" class="change">
-              <p>
-                {{
-                  change.status === 'pending'
-                    ? '待确认'
-                    : change.status === 'applied'
-                      ? '已接受'
-                      : change.status === 'reverted'
-                        ? '已回退'
-                        : '已拒绝'
-                }}
-                · {{ [...new Set(change.patches.map((p) => p.file))].join('、') }}
+                ↑
+              </button>
+            </footer>
+            <details v-if="readQuote && !selection" class="selection-location">
+              <summary>{{ locating ? '正在定位原文…' : '修改位置' }}</summary>
+              <p>评论已绑定阅读选区。改稿前请核对对应源码。</p>
+              <button
+                v-for="(candidate, index) in candidates"
+                :key="`${candidate.file}:${candidate.start}`"
+                class="candidate"
+                @click="confirmCandidate(candidate)"
+              >
+                {{ selectionLabel(candidate) }} · 位置 {{ index + 1 }} · 确认
+              </button>
+              <p v-if="!locating && !candidates.length">
+                未找到准确源码位置，改稿时请在源码中选择。
               </p>
-              <pre class="diff">{{ change.diff }}</pre>
-              <template v-if="change.status === 'pending'"
-                ><button :disabled="busy" @click="decide(change.id, 'apply')">接受整组修改</button
-                ><button :disabled="busy" @click="decide(change.id, 'reject')">
-                  拒绝
-                </button></template
-              ><button
-                v-if="change.status === 'applied'"
-                :disabled="busy"
-                @click="decide(change.id, 'revert')"
+            </details>
+          </div>
+          <template v-else-if="side === 'comments'">
+            <details class="comment-context" :open="!contextual">
+              <summary>{{ selection || readQuote ? '所选原文' : '评论范围' }}</summary>
+              <template v-if="selection"
+                ><strong>{{ selectionLabel(selection) }}</strong>
+                <blockquote>{{ selection.quote }}</blockquote>
+                <button @click="selection = null">清除选区</button></template
               >
-                回退这组修改
+              <template v-else-if="readQuote"
+                ><strong>阅读选区 · 待确认源码位置</strong>
+                <blockquote>{{ readQuote }}</blockquote>
+                <p>
+                  解释或检索可直接发送。改稿前请选择下方源码候选；无法匹配时，请在源码中重新选择。
+                </p></template
+              >
+              <p v-else>
+                选择论文中的文字，或直接提问。Agent 会按评论意图解释、检索、计算或提出改稿补丁。
+              </p>
+              <div v-if="locating">正在查找源码位置…</div>
+              <button
+                v-for="(candidate, index) in candidates"
+                :key="`${candidate.file}:${candidate.start}`"
+                class="candidate"
+                @click="confirmCandidate(candidate)"
+              >
+                <strong>{{ selectionLabel(candidate) }} · 候选 {{ index + 1 }}</strong>
+                <pre>{{ candidate.context }}</pre>
+                <span>确认此位置</span>
+              </button>
+              <p v-if="readQuote && !locating && !candidates.length && !selection" class="hint">
+                未找到逐字对应的源码范围。公式、宏或换行可能改变阅读文字；不能猜测修改位置。
+              </p>
+            </details>
+            <select
+              v-if="!contextual || relatedThreads.length > 1"
+              v-model="threadId"
+              aria-label="评论线程"
+              @change="chooseThread"
+            >
+              <option value="">新评论</option>
+              <option v-for="thread in project.threads" :key="thread.id" :value="thread.id">
+                {{ thread.messages[0]?.text.slice(0, 50) }}
+              </option>
+            </select>
+            <div class="thread" v-if="activeThread">
+              <article
+                v-for="(message, index) in activeThread.messages"
+                :key="index"
+                :class="message.role"
+              >
+                <strong>{{ message.role === 'user' ? '你' : 'Agent' }}</strong
+                ><MarkdownRenderer
+                  :content="message.text"
+                  :work-id="workId"
+                  inline-sources
+                  @source="(id, target) => openCitation('#literature-' + id, target)"
+                />
+              </article>
+            </div>
+            <article v-for="execution in threadExecutions" :key="execution.id" class="execution">
+              <p v-if="execution.state === 'running' || execution.state === 'pending'">
+                {{ execution.phase === 'write' ? '正在组织回复或修改…' : '正在处理评论…' }}
+              </p>
+              <p
+                v-if="execution.state === 'failed' || execution.state === 'interrupted'"
+                class="error"
+              >
+                {{ execution.error || '上次处理被中断，已保存原稿与完成步骤。'
+                }}<button :disabled="busy" @click="resume(execution.id)">继续未完成的步骤</button>
+              </p>
+              <template v-if="execution.tool_result"
+                ><p>检索 / 计算结果已保存</p>
+                <pre v-if="execution.tool_result.stdout">{{ execution.tool_result.stdout }}</pre>
+                <button
+                  v-if="execution.tool_result.code_path"
+                  @click="$emit('open-file', execution.tool_result.code_path)"
+                >
+                  查看实际代码</button
+                ><button
+                  v-if="execution.tool_result.stdout_path"
+                  @click="$emit('open-file', execution.tool_result.stdout_path)"
+                >
+                  查看实际输出
+                </button></template
+              >
+              <details>
+                <summary>技术详情</summary>
+                <p>请求：{{ execution.id }}</p>
+                <p>阶段：{{ execution.phase }}</p>
+              </details>
+            </article>
+            <textarea
+              v-model="message"
+              class="comment-input"
+              rows="4"
+              placeholder="解释这里的依据、查询文献、补充计算，或明确提出修改…"
+              aria-label="评论内容"
+              @keydown="submitOnEnter"
+            ></textarea>
+            <button class="primary" :disabled="busy || !message.trim()" @click="send">
+              {{ busy ? '正在提交…' : '发送评论' }}
+            </button>
+            <p class="hint">提出补丁后由你接受或拒绝。来源关联和辅助计算不会自动关闭研究意见。</p>
+            <div v-if="project.generated_candidates?.length" class="changes">
+              <h3>自动写作候选 · 尚未合入源码</h3>
+              <p class="hint">
+                原文件缺少可靠章节映射，需选择源码范围后明确合并；导言区、宏和其他文件保持原样。
+              </p>
+              <template v-for="batch in project.generated_candidates" :key="batch.id"
+                ><article v-for="(text, key) in batch.sections" :key="key" class="change">
+                  <details>
+                    <summary>{{ sectionLabel(String(key)) }} · 查看候选</summary>
+                    <pre>{{ text }}</pre>
+                  </details>
+                  <button :disabled="!selection || busy" @click="mergeGenerated(text)">
+                    以候选替换当前选区（先看差异）
+                  </button>
+                </article></template
+              >
+            </div>
+            <details class="changes" :open="activeMarkKind === 'change'">
+              <summary>
+                修改集 <span v-if="visibleChanges.length">· {{ visibleChanges.length }}</span>
+              </summary>
+              <article v-for="change in visibleChanges" :key="change.id" class="change">
+                <p>
+                  {{
+                    change.status === 'pending'
+                      ? '待确认'
+                      : change.status === 'applied'
+                        ? '已接受'
+                        : change.status === 'reverted'
+                          ? '已回退'
+                          : '已拒绝'
+                  }}
+                  · {{ [...new Set(change.patches.map((p) => p.file))].join('、') }}
+                </p>
+                <pre class="diff">{{ change.diff }}</pre>
+                <template v-if="change.status === 'pending'"
+                  ><button :disabled="busy" @click="decide(change.id, 'apply')">接受整组修改</button
+                  ><button :disabled="busy" @click="decide(change.id, 'reject')">
+                    拒绝
+                  </button></template
+                ><button
+                  v-if="change.status === 'applied'"
+                  :disabled="busy"
+                  @click="decide(change.id, 'revert')"
+                >
+                  回退这组修改
+                </button>
+              </article>
+              <p v-if="!visibleChanges.length" class="hint">还没有修改集。</p>
+            </details>
+          </template>
+          <template v-else-if="side === 'sources'">
+            <p class="hint">
+              摘录来自实际获取的资料；只有摘要时明确标记。来源关联不代表结论已经证实。
+            </p>
+            <article v-for="source in project.sources" :key="source.key" class="source-row">
+              <button @click="openSource(source, $event.currentTarget as Element)">
+                <strong>{{ source.title }}</strong
+                ><span>{{ source.boundary }} · {{ source.locator }}</span>
               </button>
             </article>
-            <p v-if="!visibleChanges.length" class="hint">还没有修改集。</p>
-          </div>
-        </template>
-        <template v-else-if="side === 'sources'">
-          <p class="hint">
-            摘录来自实际获取的资料；只有摘要时明确标记。来源关联不代表结论已经证实。
-          </p>
-          <article v-for="source in project.sources" :key="source.key" class="source-row">
-            <button @click="sourceCard = source">
-              <strong>{{ source.title }}</strong
-              ><span>{{ source.boundary }} · {{ source.locator }}</span>
-            </button>
-          </article>
-          <p v-if="!project.sources.length">尚未获取可定位的来源。可在评论中请求检索。</p>
-        </template>
-        <template v-else>
-          <article v-for="issue in project.feedback" :key="issue.id" class="opinion">
-            <p>{{ issue.message }}</p>
-            <button @click="commentIssue(issue.message)">在评论中讨论</button>
-          </article>
-          <p v-if="!project.feedback?.length">当前没有待处理的正文意见。</p>
-          <p class="hint">
-            以下检查针对登记研究记录；源码修改后的主张仍需核对，编译成功只说明排版成功。
-          </p>
-          <PaperChecks :work-id="workId" :refresh-key="refreshKey" @changed="updated" />
-        </template>
-      </aside>
+            <p v-if="!project.sources.length">尚未获取可定位的来源。可在评论中请求检索。</p>
+          </template>
+          <template v-else>
+            <article v-for="issue in project.feedback" :key="issue.id" class="opinion">
+              <p>{{ issue.message }}</p>
+              <button @click="commentIssue(issue.message)">在评论中讨论</button>
+            </article>
+            <p v-if="!project.feedback?.length">当前没有待处理的正文意见。</p>
+            <p class="hint">
+              以下检查针对登记研究记录；源码修改后的主张仍需核对，编译成功只说明排版成功。
+            </p>
+            <PaperChecks :work-id="workId" :refresh-key="refreshKey" @changed="updated" />
+          </template>
+        </div>
+      </PaperPopover>
     </div>
     <PaperSourcePopover
       :source="sourceCard"
+      :anchor="popoverAnchor"
+      :host="manuscript"
       @close="sourceCard = null"
       @open-file="(path) => $emit('open-file', path)"
     />
   </section>
 </template>
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import {
   paperProjectAPI,
   type PaperProject,
@@ -291,10 +365,18 @@ import {
 } from '@/api/paper'
 import type { ResearchSnapshot } from '@/types/research'
 import { selectionLabel, sourceSelection, sourceKey } from '@/utils/paperSelection'
+import {
+  elementAnchor,
+  uniqueTextSpan,
+  type PaperAnchor,
+  type TextAnnotation,
+} from '@/utils/paperAnnotations'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import PaperPdfReader from './PaperPdfReader.vue'
 import PaperSourcePopover from './PaperSourcePopover.vue'
 import PaperChecks from './PaperChecks.vue'
+import PaperPopover from './PaperPopover.vue'
+import PaperTextAnnotations from './PaperTextAnnotations.vue'
 const props = defineProps<{
   workId: string
   ownerId?: number | string
@@ -316,7 +398,17 @@ const emit = defineEmits<{
 }>()
 const project = ref<PaperProject | null>(null)
 const view = ref<'read' | 'source'>('read'),
-  side = ref<'comments' | 'sources' | 'opinions' | null>('comments')
+  side = ref<'comments' | 'sources' | 'opinions' | null>(null)
+type Panel = 'comments' | 'sources' | 'opinions'
+const popoverAnchor = ref<PaperAnchor | null>(null),
+  activeMarkKind = ref<'comment' | 'change'>('comment')
+const manuscript = ref<HTMLElement | null>(null),
+  sourceMirror = ref<HTMLElement | null>(null),
+  sourceSurface = ref<HTMLElement | null>(null),
+  annotationRoot = ref<HTMLElement | null>(null)
+const mirrorStyle = ref<Record<string, string>>({})
+const activeRange = shallowRef<Range | null>(null)
+const contextual = ref(false)
 const file = ref(''),
   draft = ref(''),
   draftBase = ref(''),
@@ -342,6 +434,21 @@ const selectedFile = computed(() => project.value?.files.find((row) => row.path 
 const dirty = computed(() => draft.value !== draftBase.value)
 const isLatex = computed(() => project.value?.main.endsWith('.tex') ?? props.latex)
 const activeThread = computed(() => project.value?.threads.find((row) => row.id === threadId.value))
+const relatedThreads = computed(
+  () =>
+    project.value?.threads.filter(
+      (row) =>
+        row.selection?.file === selection.value?.file &&
+        row.selection?.quote === selection.value?.quote,
+    ) || [],
+)
+const quickComment = computed(
+  () =>
+    contextual.value &&
+    side.value === 'comments' &&
+    !threadId.value &&
+    activeMarkKind.value === 'comment',
+)
 const threadExecutions = computed(
   () => project.value?.executions.filter((row) => row.thread_id === threadId.value) || [],
 )
@@ -351,8 +458,114 @@ const visibleChanges = computed(() =>
     .slice()
     .reverse(),
 )
+const textAnnotations = computed<TextAnnotation[]>(() => {
+  const doc = project.value
+  if (!doc) return []
+  const valid = (bound?: SourceSelection) => {
+    if (!bound || (view.value === 'source' && bound.file !== file.value)) return false
+    const text = doc.files.find((row) => row.path === bound.file)?.text
+    if (typeof text !== 'string') return false
+    const exact = Array.from(text).slice(bound.start, bound.end).join('') === bound.quote
+    return bound.version === doc.version ? exact : !!uniqueTextSpan(text, bound.quote)
+  }
+  return [
+    ...doc.threads
+      .filter((thread) => valid(thread.selection))
+      .map((thread) => ({
+        id: 'thread:' + thread.id,
+        kind: 'comment' as const,
+        quote: thread.selection!.quote,
+        label: '展开评论：' + (thread.messages[0]?.text || thread.selection!.quote).slice(0, 70),
+        threadId: thread.id,
+        selection: thread.selection!,
+      })),
+    ...doc.changes
+      .filter((change) => change.status === 'pending')
+      .flatMap((change) =>
+        change.patches
+          .filter((bound) => valid(bound))
+          .map((bound, index) => ({
+            id: `change:${change.id}:${index}`,
+            kind: 'change' as const,
+            quote: bound.quote,
+            label: '查看待确认修改：' + bound.quote.slice(0, 70),
+            threadId: change.thread_id,
+            selection: bound,
+          })),
+      ),
+  ]
+})
+function openPanel(panel: Panel, anchor: PaperAnchor | null = popoverAnchor.value) {
+  sourceCard.value = null
+  popoverAnchor.value = anchor
+  side.value = panel
+}
+function selectedRangeAnchor(): PaperAnchor | null {
+  if (typeof window === 'undefined') return null
+  const selected = window.getSelection?.()
+  if (
+    !selected?.rangeCount ||
+    !manuscript.value?.contains(selected.anchorNode) ||
+    !manuscript.value.contains(selected.focusNode)
+  )
+    return null
+  const range = selected.getRangeAt(0).cloneRange()
+  activeRange.value = range.collapsed ? null : range
+  return () => (range.startContainer.isConnected ? range.getBoundingClientRect() : null)
+}
+function sourceRangeAnchor(): PaperAnchor | null {
+  const node = sourceEditor.value,
+    text = sourceMirror.value?.firstChild
+  if (!node || !text) return elementAnchor(node)
+  const range = document.createRange()
+  range.setStart(text, Math.min(node.selectionStart, text.textContent?.length || 0))
+  range.setEnd(text, Math.min(node.selectionEnd, text.textContent?.length || 0))
+  return () => (text.isConnected ? range.getBoundingClientRect() : null)
+}
+function syncSourceScroll() {
+  const node = sourceEditor.value
+  if (!node) return
+  mirrorStyle.value = {
+    width: node.clientWidth + 'px',
+    transform: `translate(${-node.scrollLeft}px, ${-node.scrollTop}px)`,
+  }
+}
+async function refreshAnnotationRoot() {
+  await nextTick()
+  annotationRoot.value =
+    view.value === 'source'
+      ? sourceMirror.value
+      : manuscript.value?.querySelector<HTMLElement>(
+          isLatex.value ? '.textLayer' : '.read-text .markdown-content',
+        ) || null
+  syncSourceScroll()
+}
+watch(
+  () => [view.value, file.value, project.value?.version, sourceMirror.value, dirty.value],
+  refreshAnnotationRoot,
+)
+function openAnnotation(annotation: TextAnnotation, anchor: PaperAnchor) {
+  activeRange.value = null
+  contextual.value = true
+  locateGeneration++
+  selection.value = annotation.selection
+  readQuote.value = ''
+  candidates.value = []
+  threadId.value = annotation.threadId || ''
+  activeMarkKind.value = annotation.kind
+  openPanel('comments', anchor)
+}
+function chooseThread() {
+  locateGeneration++
+  selection.value = activeThread.value?.selection || null
+  readQuote.value = ''
+  candidates.value = []
+}
 const locationKey = () => `paperagent:paper:${props.ownerId || 'session'}:${props.workId}`
 function setView(next: typeof view.value) {
+  activeRange.value = null
+  side.value = null
+  sourceCard.value = null
   view.value = next
   try {
     sessionStorage.setItem(locationKey(), next)
@@ -403,8 +616,21 @@ watch(draft, () => {
 watch(file, () => {
   loadDraft()
   selection.value = null
+  side.value = null
+  sourceCard.value = null
 })
-function captureSource() {
+watch(
+  () => project.value?.version,
+  (version, previous) => {
+    if (previous && version !== previous) {
+      side.value = null
+      sourceCard.value = null
+      popoverAnchor.value = null
+    }
+  },
+)
+function captureSource(event?: MouseEvent | KeyboardEvent) {
+  if (event && 'key' in event && event.key === 'Escape') return
   if (!sourceEditor.value || dirty.value || !project.value) {
     selection.value = null
     return
@@ -418,18 +644,31 @@ function captureSource() {
     node.selectionEnd,
   )
   if (selection.value) {
+    activeRange.value = null
+    contextual.value = true
+    locateGeneration++
     readQuote.value = ''
     candidates.value = []
+    threadId.value = ''
+    activeMarkKind.value = 'comment'
+    openPanel('comments', sourceRangeAnchor())
   }
 }
-function captureRendered() {
-  readQuote.value = window.getSelection()?.toString().trim() || ''
+function captureRendered(event?: MouseEvent | KeyboardEvent) {
+  if (event && 'key' in event && event.key === 'Escape') return
+  const anchor = selectedRangeAnchor()
+  const quote = anchor ? window.getSelection()?.toString().trim() || '' : ''
+  if (quote) void captureRead(quote, anchor)
 }
-async function captureRead(quote: string) {
+async function captureRead(quote: string, anchor: PaperAnchor | null = selectedRangeAnchor()) {
+  if (!quote.trim()) return
+  contextual.value = true
   readQuote.value = quote
   selection.value = null
   candidates.value = []
-  side.value = 'comments'
+  threadId.value = ''
+  activeMarkKind.value = 'comment'
+  openPanel('comments', anchor)
   locating.value = true
   const seq = ++locateGeneration,
     work = props.workId
@@ -454,8 +693,12 @@ async function confirmCandidate(candidate: SourceSelection) {
     Array.from(text).slice(0, candidate.start).join('').length,
     Array.from(text).slice(0, candidate.end).join('').length,
   )
+  syncSourceScroll()
+  openPanel('comments', sourceRangeAnchor())
 }
-function openCitation(url: string) {
+function openCitation(url: string, target?: Element) {
+  if (target) popoverAnchor.value = elementAnchor(target)
+  side.value = null
   const sources = project.value?.sources || [],
     key = sourceKey(url, sources)
   sourceCard.value = sources.find((row) => row.key === key) || null
@@ -464,12 +707,22 @@ function openCitation(url: string) {
     error.value = '该引用没有唯一可定位摘录。请从来源列表核对；未补写原文。'
   }
 }
+function openSource(source: PaperSource, target: Element) {
+  // A source-list button disappears when its list closes. Keep its visible
+  // position instead of retaining a detached DOM element as the anchor.
+  const rect = target.getBoundingClientRect()
+  const point = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+  popoverAnchor.value = () => point
+  side.value = null
+  sourceCard.value = source
+}
 function readClick(event: MouseEvent) {
+  if (event.defaultPrevented) return
   const link = (event.target as Element).closest?.('a')
   if (link?.getAttribute('href')?.startsWith('#literature-')) {
     event.preventDefault()
     event.stopPropagation()
-    openCitation(link.getAttribute('href')!)
+    openCitation(link.getAttribute('href')!, link)
   }
 }
 function sectionLabel(key: string) {
@@ -487,7 +740,7 @@ function sectionLabel(key: string) {
 }
 function commentIssue(text: string) {
   message.value = text
-  side.value = 'comments'
+  openPanel('comments')
 }
 async function send() {
   if (!project.value || !message.value.trim()) return
@@ -517,6 +770,11 @@ async function send() {
   } finally {
     busy.value = false
   }
+}
+function submitOnEnter(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  event.preventDefault()
+  if (!busy.value && message.value.trim()) void send()
 }
 async function saveDraft() {
   if (!project.value || draft.value === draftBase.value) return
@@ -552,7 +810,7 @@ async function saveDraft() {
       thread_id: threadId.value || null,
       patches: [{ ...bound, replacement: draft.value.slice(start, replacementEnd) }],
     })
-    side.value = 'comments'
+    openPanel('comments', sourceRangeAnchor())
     error.value = '修改集已保存；请查看差异并接受。'
     // Keep the draft until the user accepts; reading refresh cannot discard it.
     await load()
@@ -660,6 +918,9 @@ watch(
     draftBase.value = ''
     selection.value = null
     threadId.value = ''
+    side.value = null
+    sourceCard.value = null
+    popoverAnchor.value = null
     error.value = ''
     pendingRequest = null
     try {
@@ -676,7 +937,7 @@ watch(
   () => props.citationRequest,
   (request) => {
     if (request) {
-      side.value = 'sources'
+      openPanel('sources', elementAnchor(manuscript.value))
       sourceCard.value = project.value?.sources.find((row) => row.key === request.id) || null
     }
   },
@@ -684,7 +945,7 @@ watch(
 watch(
   () => props.issueRequest,
   (request) => {
-    if (request) side.value = 'opinions'
+    if (request) openPanel('opinions', elementAnchor(manuscript.value))
   },
 )
 onBeforeUnmount(() => {
@@ -742,16 +1003,14 @@ button:disabled {
   cursor: default;
 }
 .workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
   flex: 1;
   min-height: 0;
 }
-.workspace.with-side {
-  grid-template-columns: minmax(0, 1fr) 340px;
-}
 .manuscript {
+  position: relative;
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -774,19 +1033,34 @@ button:disabled {
   color: var(--pa-ink);
   tab-size: 2;
 }
-.sidebar {
-  border-left: 1px solid var(--pa-line);
-  overflow: auto;
-  padding: 14px;
-  min-width: 0;
-}
-.sidebar > header {
+.source-surface {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 15px;
+  overflow: hidden;
 }
-.sidebar > select {
+.source-mirror {
+  position: absolute;
+  inset: 0 auto auto 0;
+  margin: 0;
+  padding: 20px;
+  border: 0;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  font:
+    13px/1.8 ui-monospace,
+    SFMono-Regular,
+    monospace;
+  tab-size: 2;
+  pointer-events: none;
+  opacity: 0;
+  max-height: none;
+  overflow: visible;
+}
+.annotation-content > select {
   width: 100%;
   margin: 10px 0;
 }
@@ -840,6 +1114,71 @@ details {
   border-radius: var(--pa-radius-card);
   resize: vertical;
   font: 13px/1.7 inherit;
+}
+.inline-comment {
+  padding: 12px 14px;
+}
+.inline-selection-quote {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  max-height: 84px;
+  overflow: auto;
+  border-left: 2px solid var(--pa-info);
+  border-radius: var(--pa-radius-inline);
+  background: var(--pa-info-soft);
+  color: var(--pa-ink);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.inline-comment-input {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  max-height: 140px;
+  resize: vertical;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--pa-ink);
+  font: inherit;
+  line-height: 1.6;
+}
+.inline-comment footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+.inline-comment footer span {
+  margin-right: auto;
+  font-size: 11px;
+  color: var(--pa-muted);
+}
+.inline-comment .send-comment {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--pa-radius-circle);
+  padding: 0;
+  background: var(--pa-ink);
+  color: var(--pa-surface);
+  font-size: 20px;
+  line-height: 1;
+}
+.inline-comment .dismiss-comment {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--pa-muted);
+  font-size: 18px;
+}
+.selection-location {
+  font-size: 11px;
+  margin-top: 8px;
+}
+.selection-location summary {
+  cursor: pointer;
 }
 .primary {
   background: var(--pa-accent);
@@ -897,6 +1236,7 @@ pre {
 }
 .read-text {
   overflow: auto;
+  flex: 1;
   padding: 30px;
   line-height: 1.9;
 }
@@ -911,19 +1251,21 @@ pre {
   font-size: 18px;
   font-weight: 500;
 }
-@container paper (max-width:750px) {
-  .workspace.with-side {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .sidebar {
-    position: absolute;
-    right: 0;
-    top: 90px;
-    bottom: 0;
-    width: min(340px, 90%);
-    background: var(--pa-surface);
-    box-shadow: var(--pa-shadow-overlay);
-    z-index: 10;
+:deep(.read-text a[href*='#literature-']),
+:deep(.read-text a[href*='paperagent.local/citations/']) {
+  color: var(--pa-info);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+:deep(.read-text a[href*='#literature-']:hover),
+:deep(.read-text a[href*='paperagent.local/citations/']:hover) {
+  background: var(--pa-info-soft);
+}
+@container paper (max-width:550px) {
+  .read-text {
+    padding: 20px;
   }
 }
 </style>

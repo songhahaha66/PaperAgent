@@ -21,7 +21,7 @@ interface Props {
 
 const props = defineProps<Props>()
 const authStore = useAuthStore()
-const emit = defineEmits<{ source: [id: string] }>()
+const emit = defineEmits<{ source: [id: string, anchor: Element] }>()
 function openLiterature(event: MouseEvent) {
   const link = (event.target as Element).closest?.(
     'a[href^="#literature-"], a[href^="https://paperagent.local/citations/"]',
@@ -31,7 +31,7 @@ function openLiterature(event: MouseEvent) {
     ?.match(/(?:#literature-|paperagent\.local\/citations\/)([A-Za-z0-9_-]+)/)?.[1]
   if (evidenceId && /^(?:C[1-9]\d*|E[A-Za-z0-9_-]+)$/.test(evidenceId)) {
     event.preventDefault()
-    if (props.inlineSources) emit('source', evidenceId)
+    if (props.inlineSources) emit('source', evidenceId, link!)
     else
       window.dispatchEvent(
         new CustomEvent('paper-literature-open', { detail: { workId: props.workId, evidenceId } }),

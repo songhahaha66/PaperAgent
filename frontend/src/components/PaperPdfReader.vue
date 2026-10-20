@@ -5,8 +5,7 @@
       ><span>第 {{ page }} / {{ count || '…' }} 页</span
       ><button :disabled="page >= count || loading" @click="page++">下一页</button
       ><button @click="zoom = Math.max(0.5, zoom - 0.15)">−</button
-      ><button @click="zoom = Math.min(2, zoom + 0.15)">＋</button
-      ><button :disabled="!selection" @click="$emit('selection', selection)">评论选中文字</button>
+      ><button @click="zoom = Math.min(2, zoom + 0.15)">＋</button>
     </header>
     <p v-if="error" role="alert">{{ error }}</p>
     <p v-if="loading">正在加载 PDF…</p>
@@ -28,7 +27,11 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { useAuthStore } from '@/stores/auth'
 GlobalWorkerOptions.workerSrc = workerUrl
 const props = defineProps<{ workId: string; version?: string }>()
-const emit = defineEmits<{ selection: [quote: string]; citation: [url: string] }>()
+const emit = defineEmits<{
+  selection: [quote: string]
+  citation: [url: string, anchor: Element]
+  rendered: []
+}>()
 const auth = useAuthStore()
 const page = ref(1),
   count = ref(0),
@@ -45,7 +48,8 @@ let pdf: PDFDocumentProxy | undefined,
 let textLayer: TextLayer | undefined,
   renderTask: ReturnType<Awaited<ReturnType<PDFDocumentProxy['getPage']>>['render']> | undefined
 const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-function capture() {
+function capture(event?: MouseEvent | KeyboardEvent) {
+  if (event && 'key' in event && event.key === 'Escape') return
   const selected = window.getSelection()
   selection.value =
     selected &&
@@ -53,6 +57,7 @@ function capture() {
     pageElement.value.contains(selected.focusNode)
       ? selected.toString().trim()
       : ''
+  if (selection.value) emit('selection', selection.value)
 }
 async function render() {
   const seq = ++renderGeneration
@@ -117,9 +122,10 @@ async function render() {
         width: Math.abs(rect[2]! - rect[0]!) + 'px',
         height: Math.abs(rect[3]! - rect[1]!) + 'px',
       })
-      link.onclick = () => emit('citation', url)
+      link.onclick = () => emit('citation', url, link)
       root.append(link)
     }
+    emit('rendered')
   } catch (cause) {
     if (
       seq === renderGeneration &&
@@ -254,6 +260,7 @@ button:disabled {
   position: absolute;
   padding: 0;
   border: 0;
+  border-bottom: 2px solid var(--pa-info);
   background: transparent;
   cursor: pointer;
   z-index: 3;

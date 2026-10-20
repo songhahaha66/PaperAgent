@@ -1,18 +1,14 @@
 <template>
-  <div v-if="source" class="source-backdrop" @click.self="$emit('close')">
-    <section
-      class="source-card"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="source.title"
-      @keydown.esc="$emit('close')"
-      tabindex="-1"
-      ref="dialog"
-    >
-      <header>
-        <h2>{{ source.title }}</h2>
-        <button aria-label="关闭来源" @click="$emit('close')">×</button>
-      </header>
+  <PaperPopover
+    :open="!!source"
+    :title="source?.title || '引用来源'"
+    :anchor="anchor"
+    :host="host"
+    tone="source"
+    :width="420"
+    @close="$emit('close')"
+  >
+    <section v-if="source" class="source-card">
       <p class="boundary">
         {{ source.abstract_only ? '仅摘要' : source.boundary }} ·
         {{ source.page ? `第 ${source.page} 页 · ` : '' }}{{ source.locator }}
@@ -32,44 +28,21 @@
         <p>来源版本：{{ source.version }}</p>
       </details>
     </section>
-  </div>
+  </PaperPopover>
 </template>
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
 import type { PaperSource } from '@/api/paper'
-const props = defineProps<{ source: PaperSource | null }>()
+import type { PaperAnchor } from '@/utils/paperAnnotations'
+import PaperPopover from './PaperPopover.vue'
+defineProps<{
+  source: PaperSource | null
+  anchor?: PaperAnchor | null
+  host?: HTMLElement | null
+}>()
 defineEmits<{ close: []; 'open-file': [path: string] }>()
-const dialog = ref<HTMLElement | null>(null)
-watch(
-  () => props.source,
-  async (value) => {
-    if (value) {
-      await nextTick()
-      dialog.value?.focus()
-    }
-  },
-)
 </script>
 <style scoped>
-.source-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 40;
-  background: var(--pa-mask);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-}
 .source-card {
-  background: var(--pa-surface);
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-overlay);
-  box-shadow: var(--pa-shadow-overlay);
-  padding: 24px;
-  max-width: 620px;
-  max-height: 80%;
-  overflow: auto;
   overflow-wrap: anywhere;
 }
 header {

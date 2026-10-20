@@ -65,8 +65,10 @@ async function pdfFixture() {
   const refresh=editor.load();reads[1].resolve({...doc,version:'new'});await refresh
   assert.equal(editor.draft.value,'unsaved manual edit','Refreshing must retain unsaved user edits')
   await editor.captureRead('target')
+  assert.equal(editor.quickComment.value,true,'Selecting a passage opens the compact composer in the paper')
   assert.equal(editor.selection.value,null,'Reading text is not an automatic edit target')
   assert.equal(editor.candidates.value.length,1)
+  assert.equal(editor.threadId.value,'','A new selection must not reply to a previously opened thread')
   props.workId='B';await flush();props.workId='C';await flush()
   reads[3].resolve({...doc,version:'C'});await flush();reads[2].resolve({...doc,version:'B'});await flush()
   assert.equal(editor.project.value.version,'C','Cross-project stale responses are discarded')
