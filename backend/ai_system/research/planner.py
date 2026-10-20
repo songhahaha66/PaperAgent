@@ -35,6 +35,7 @@ def decision_context(store, snapshot):
     """One evidence frontier, independent of commits, writing and UI refreshes."""
     from .literature import LiteratureStore
     from .store import digest
+    from ai_system.modules.experiments.store import ExperimentStore
     results=store.registry_payload(snapshot)['results']
     literature=LiteratureStore(store.root)
     sources=literature.retrieve(snapshot['spec']['requirement'],limit=12)
@@ -43,6 +44,10 @@ def decision_context(store, snapshot):
     evidence += [{'id':s['id'],'name':s['source'].get('title') or '文献摘录','text':s['text'],
                   'locator':s['locator'],'boundary':s['boundary'],'source_url':s['source_url'],
                   'content_hash':s['content_hash']} for s in sources]
+    evidence += [{'id':summary['id'],'task_id':summary['task_id'],'kind':'comparison',
+                  'name':' / '.join(row['name'] for row in summary['branches'])+' 共同协议实测比较',
+                  'text':json.dumps(summary,ensure_ascii=False,sort_keys=True)}
+                 for summary in ExperimentStore(store).accepted_summaries(snapshot)]
     research_tasks=[t for t in snapshot['tasks'].values() if t['kind']!='verify']
     # Execution labels and report-level claims of completion are scheduler facts,
     # not evidence that every purpose in the original question was answered.
@@ -277,7 +282,7 @@ async def advance_research(ctx):
         names={r['id']:r['statement'] for r in snapshot['spec']['requirements']}
         names.update({t['task_id']:t['subproblem'].get('title','相关研究') for t in snapshot['tasks'].values()})
         names.update({e['id']:e['name'] for e in context['evidence']})
-        human=lambda text:re.sub(r'\b(?:RQ\d+|Q\d+[a-z]?|[RFC]\d+)\b',lambda m:names.get(m[0],'相关证据'),text)
+        human=lambda text:re.sub(r'\b(?:RQ\d+|Q\d+[a-z]?|[RFC]\d+|P[a-f0-9]{24})\b',lambda m:names.get(m[0],'相关证据'),text)
         action={'deliver':'继续核查和写作','research':'补充针对性研究','literature':'查找相关文献原文'}[proposal.action]
         await ctx.events.stage(f"发现：{human(proposal.gap or proposal.reason)}。接下来：{action}。依据：{human(proposal.reason)}")
     proposal=EvidenceDecision.model_validate(record['proposal'])
@@ -310,6 +315,11 @@ class Planner:
             'coverage每条原要求恰好一项：requirement复制完整statement，supported给出实际产物回答了哪些部分及具体答案，'
             'basis引用支撑本项答案的真实evidence，remaining列出没有相应产物回答的部分；不能用一个输出臆推另一项未产生的答案。'
             '输入文件清单仅说明数据可用，不说明已分析；任务objective是研究目的，不是研究结果。报告的局限保留为边界，不作为完成证明。'
+            'kind=comparison的evidence.text是项目共同协议下的实测比较摘要，沿用P比较编号引用；原记录和正式R结果由provenance追溯。'
+            '比较的候选名称/方法是冻结的方案声明，implementation_audit说明实际核查边界；只有项目重算指标是实测，不用模型自评分推断优劣。'
+            'winner只说明在所列数据、划分、指标和容差下优胜，不自动证明统计显著或跨条件更优；'
+            'only_valid只表示一支满足冻结规则及基线门槛，不能声称优于失败、未完成或未通过规则的另一支；'
+            'tied表示容差内无实测优胜者，chosen_index仅按冻结顺序选代表。结合失败状态、共同基线和置换对照边界决定原题是否仍有缺口。'
             'goal和constraint的全部研究目的都有实际依据才可deliver；某一项研究要求仍有未回答部分，就选择解决它的最小补充行动。'
             'deliverable的格式和文书工作由既有写作/导出阶段实施，在coverage中说明，不把待排版当成新的科学研究缺口。'
             '只在影响原题答案的关键缺口仍未解决时补研究；证据已足够回答原题时选deliver，不作无目的扩展。'

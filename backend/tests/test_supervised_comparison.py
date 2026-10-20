@@ -18,9 +18,9 @@ from ai_system.modules.experiments import supervised as engine
 from ai_system.modules.experiments.exploration import explore
 from ai_system.modules.experiments.store import ExperimentStore,CandidateCode,SupervisedSpec
 from ai_system.research.store import ResearchStore,digest
-from ai_system.research.models import ResearchConflict,PlanPatch,TaskChange,PlanProposal
+from ai_system.research.models import ResearchConflict,PlanPatch,TaskChange,PlanProposal,WorkerResult
 from ai_system.research.control import worker_context
-from ai_system.research.planner import Planner
+from ai_system.research.planner import Planner,decision_context,validate_decision,EvidenceDecision,advance_research
 
 TASK='根据 data/diabetes.csv 的结构化数据比较两种回归方案，预测 target；独立留出验证，不用模型自评决定优胜。'
 RIDGE='''from sklearn.pipeline import make_pipeline
@@ -76,6 +76,140 @@ def run(setup):
         try:return await explore(setup.ctx,setup.branch)
         finally:await setup.ctx.kernels.close()
     return asyncio.run(work())
+
+
+def accept_formal_comparison(setup):
+    """Real project measurements and handoff, then the normal store commit."""
+    from ai_system.modules.experiments.handoff import handoff,proof_issues
+    async def work():
+        try:
+            exploration=await explore(setup.ctx,setup.branch)
+            assert exploration.winner is not None
+            await handoff(setup.ctx,setup.branch,exploration,[])
+            proof=setup.ctx.comparison_proof
+            report={'status':'completed','summary':'实际冻结指标已复核。',
+                    'requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':list(proof['protected'])}]}
+            assert not proof_issues(setup.ctx,report)
+            receipt=setup.store.commit(WorkerResult(order=setup.order,execution_status='succeeded',acceptance='accepted',
+                results=list(proof['protected'].values()),report=report,design=setup.branch['design']))
+            assert receipt['published'] and setup.store.snapshot()['tasks']['Q1']['acceptance']=='accepted'
+            return setup.cfg.read('Q1',setup.order.revision)
+        finally:
+            await setup.ctx.kernels.close()
+    return asyncio.run(work())
+
+
+def test_accepted_comparison_reaches_planner_with_measured_candidates_and_boundaries(setup):
+    record=accept_formal_comparison(setup)
+    before=setup.store.snapshot();budget=setup.cfg.budget('Q1')
+    _,context=decision_context(setup.store,before)
+    entry=next(e for e in context['evidence'] if e.get('kind')=='comparison')
+    summary=json.loads(entry['text'])
+    assert entry['id']==record['id'] and entry['id'].startswith('P')
+    assert summary['status']=='winner' and summary['chosen_index']==1
+    assert [r['name'] for r in summary['branches']]==['shallow','ridge']
+    assert [r['metric'] for r in summary['branches']]==[r['metric'] for r in record['branches']]
+    assert summary['branches'][1]['metric']<summary['branches'][0]['metric']
+    assert all(r['run_ids'] and r['code_hash'] and r['prediction_hash'] for r in summary['branches'])
+    assert '"prior":' not in entry['text'] and 'FAKE_SCORE' not in entry['text'] and '"scores":' not in entry['text']
+    protocol=summary['protocol']
+    assert protocol['dataset']==setup.spec['dataset'] and protocol['features']==setup.spec['features']
+    assert protocol['metric']=='RMSE' and protocol['higher_is_better'] is False
+    assert protocol['split']=='random' and protocol['train_count']+protocol['validation_count']==442
+    assert protocol['negative_control']=='permute_all_targets_before_split'
+    assert protocol['tie_tolerance']==setup.spec['tie_tolerance']
+    provenance=summary['provenance']
+    assert provenance['table']=='experiment_comparisons' and provenance['record_id']==record['id']
+    assert provenance['protocol_hash']==record['protocol_hash'] and summary['attempt_id']==setup.order.attempt_id
+    assert set(provenance['formal_evidence_refs'])<=set(before['evidence'])
+    assert {e['id'] for e in context['evidence'] if e['id'].startswith('R')}==set(before['evidence'])
+    assert setup.store.snapshot()==before and setup.cfg.budget('Q1')==budget, 'Reading must not register synthetic results or consume comparison budget'
+
+
+def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(setup,monkeypatch):
+    record=accept_formal_comparison(setup);snapshot=setup.store.snapshot()
+    damaged=[]
+    for status in ('no_valid','budget_exhausted','input_changed','running'):
+        altered=copy.deepcopy(record);altered['status']=status;damaged.append((status,altered))
+    for label,field,value in [('candidates','candidate_hashes',['changed','changed']),('task','task_hash','changed'),
+                              ('protocol','protocol_hash','changed'),('policy','policy_version',-1),
+                              ('implementation','implementation_contract_version',-1),('no handoff','formal_handoffs',[])]:
+        altered=copy.deepcopy(record);altered[field]=value;damaged.append((label,altered))
+    altered=copy.deepcopy(record);altered['formal_handoffs'][0]['code_hash']='different-code';damaged.append(('formal code',altered))
+    for label,altered in damaged:
+        with monkeypatch.context() as patch:
+            patch.setattr(ExperimentStore,'read',lambda *args,record=altered:record)
+            _,context=decision_context(setup.store,snapshot)
+            assert not any(e.get('kind')=='comparison' for e in context['evidence']),label
+    for label in ('stale task','different revision','different attempt','unpublished attempt','failed attempt',
+                  'inactive proof','historical proof','different formal run','different formal metric'):
+        altered=copy.deepcopy(snapshot);task=altered['tasks']['Q1']
+        if label=='stale task':task['validity']='stale'
+        elif label=='different revision':task['revision']+=1
+        elif label=='different attempt':task['active_attempt']='not-the-accepted-attempt'
+        elif label=='unpublished attempt':altered['attempts'][task['active_attempt']]['commit']['published']=False
+        elif label=='failed attempt':altered['attempts'][task['active_attempt']]['execution_status']='failed'
+        else:
+            ref=record['formal_handoffs'][0]['evidence_refs'][0]
+            if label=='inactive proof':altered['evidence'][ref]['active']=False
+            elif label=='historical proof':altered['evidence'][ref]['producer_attempt']='historical-attempt'
+            elif label=='different formal run':altered['evidence'][ref]['payload']['run_id']='another-run'
+            else:altered['evidence'][ref]['payload']['value']='-999'
+        _,context=decision_context(setup.store,altered)
+        assert not any(e.get('kind')=='comparison' for e in context['evidence']),label
+    data=setup.root/setup.spec['dataset'];original=data.read_bytes()
+    try:
+        data.write_bytes(original+b'\n')
+        assert setup.cfg.accepted_summaries(snapshot)==[], 'Changed source files invalidate the comparison without replaying it'
+    finally:data.write_bytes(original)
+    assert setup.cfg.read('Q1',setup.order.revision)==record
+
+
+@pytest.mark.parametrize('status',['winner','only_valid','tied'])
+def test_comparison_selection_status_is_preserved_and_citable_without_new_runs(setup,status):
+    if status=='only_valid':setup.codes['shallow']=BAD_A
+    if status=='tied':
+        setup.codes['shallow']=DUMMY_A
+        setup.branch['design']['candidates'][1].update(name='mean alternative',idea='training mean')
+        setup.codes['mean alternative']=DUMMY_B
+    record=accept_formal_comparison(setup);assert record['status']==status
+    snapshot=setup.store.snapshot();budget=setup.cfg.budget('Q1');calls=list(setup.calls)
+    key,context=decision_context(setup.store,snapshot)
+    entry=next(e for e in context['evidence'] if e.get('kind')=='comparison')
+    summary=json.loads(entry['text'])
+    assert summary['status']==status and summary['chosen_index']==record['chosen_index'] and summary['reason']==record['reason']
+    if status=='only_valid':
+        assert summary['branches'][0]['status']=='execution_error' and summary['branches'][0]['metric'] is None
+        assert sum(r['eligible'] for r in summary['branches'])==1 and '不能' in summary['reason']
+    if status=='tied':
+        assert summary['chosen_index']==0 and '无实测优胜者' in summary['reason']
+    basis={'ref':entry['id'],'quote':summary['reason']}
+    answer=EvidenceDecision(action='deliver',reason='保留共同协议实测结果与边界，继续原有写作核查。',requirement_ids=['RQ1'],basis=[basis],
+        coverage=[{'requirement_id':'RQ1','requirement':snapshot['spec']['requirements'][0]['statement'],
+                   'supported':summary['reason'],'basis':[basis],'remaining':''}])
+    validate_decision(answer,snapshot,context)
+    invalid=answer.model_copy(deep=True);invalid.basis[0].ref='P'+'0'*24
+    with pytest.raises(ValueError,match='实际结果'):
+        validate_decision(invalid,snapshot,context)
+    class Model:
+        count=0
+        def with_structured_output(self,schema,**kwargs):
+            assert schema is EvidenceDecision
+            return self
+        async def ainvoke(self,messages):
+            self.count+=1
+            assert all(term in messages[0].content for term in ('winner','only_valid','tied','不能声称优于失败','P比较编号'))
+            supplied=json.loads(messages[-1].content)
+            assert next(e for e in supplied['evidence'] if e.get('kind')=='comparison')==entry
+            return answer
+    model=Model();setup.parent.planner_llm=model
+    from ai_system.research.loop import resume
+    for _ in range(3):
+        assert asyncio.run(advance_research(setup.parent)) is False
+        setup.store.recover();resume(setup.store)
+    assert model.count==1 and decision_context(setup.store,setup.store.snapshot())[0]==key
+    assert setup.cfg.budget('Q1')==budget and setup.calls==calls
+    assert setup.store.snapshot()['attempts']==snapshot['attempts']
 
 
 def test_low_critic_better_measured_pipeline_wins_and_printed_score_is_ignored(setup):

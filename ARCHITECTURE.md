@@ -32,6 +32,8 @@
 
 具体方法由 `modules/methods.py` 和 `modules/skills/*.md` 提供，方案记录实际选用的 skill 版本。双方案比较使用实验模块同一入口，保留共同划分、负对照、项目重算指标、方法实现核查、冻结候选与晋升校验，已删除图节点中的旧专用实现。比较实验配置只通过研究设置写入；实验结果页面只读。
 
+当前已验收尝试的正式交接证据可将对应比较摘要带入同一次 Planner 决策：沿用实验模块的真实 P 编号，列出共同协议、候选声明与实现核查边界、项目实测指标、失败状态和选择理由，并追溯正式 R 结果与运行。摘要是现有记录的只读投影，不另登记结果或重跑实验；版本、输入、协议或正式证据失效时不作为已完成比较。`winner` 仅限冻结条件下的优胜，`only_valid` 不证明优于失败或不合格的另一支，`tied` 的代表方案不构成实测优胜者。
+
 ## 数据迁移与启动
 
 `uv run main.py` 和 Docker 的 `uvicorn main:app` 都在应用初始化时执行同一套 Alembic 迁移，再执行 `services.migrate_data.migrate_all()`，完成后才提供请求服务。独立运维可运行 `uv run alembic upgrade head` 和 `uv run python -m services.migrate_data`。

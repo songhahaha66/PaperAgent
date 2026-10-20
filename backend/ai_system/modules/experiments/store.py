@@ -85,6 +85,95 @@ class ExperimentStore:
             r=db.execute('SELECT payload FROM experiment_comparisons WHERE research_id=? AND task_id=? AND revision=?',(self.store.research_id,task_id,revision)).fetchone()
         return json.loads(r[0]) if r else None
 
+    def accepted_summaries(self,snapshot):
+        """Project-measured comparisons bound to the active accepted handoff.
+
+        This is a read projection of existing records, not another acceptance
+        verdict. Scores assigned by a model and candidate stdout are excluded.
+        """
+        import math
+        from types import SimpleNamespace
+        from ai_system.research.models import WorkOrder
+        summaries=[]
+        for key,task in snapshot['tasks'].items():
+            if task['retired'] or task['kind']=='verify' or task['acceptance']!='accepted' or task['validity']!='current':
+                continue
+            attempt=snapshot['attempts'].get(task['active_attempt']) or {}
+            if attempt.get('execution_status')!='succeeded' or attempt.get('acceptance')!='accepted' or not attempt.get('commit',{}).get('published'):
+                continue
+            record=self.read(key,task['revision'])
+            if not record or record.get('status') not in {'winner','only_valid','tied'} or record.get('protocol_error') or record.get('provider_unavailable'):
+                continue
+            try:
+                from .supervised import current,choose
+                from .contracts import VERSION,candidate_contract
+                order=WorkOrder.model_validate(attempt['result']['order'])
+                if order.attempt_id!=task['active_attempt'] or order.task_id!=key or order.revision!=task['revision']:
+                    continue
+                ctx=SimpleNamespace(research=self.store,experience_store=None,experience_order=order)
+                design=task.get('design') or {};candidates=design.get('candidates',[])[:2]
+                if record.get('research_id')!=self.store.research_id or record.get('task_id')!=key or not current(ctx,record,{'subproblem':task['subproblem'],'design':design}):
+                    continue
+                protocol=record['protocol'];rows=record['branches'];chosen=record['chosen_index']
+                if record.get('implementation_contract_version')!=VERSION or digest(protocol)!=record['protocol_hash']:
+                    continue
+                if len(rows)!=2 or len(candidates)!=2 or {r['index'] for r in rows}!={0,1}:
+                    continue
+                by_index={r['index']:r for r in rows};winner=by_index[chosen]
+                if any(r.get('candidate_hash')!=record['candidate_hashes'][r['index']] or
+                       r.get('estimator_contract')!=candidate_contract(candidates[r['index']]) for r in rows):
+                    continue
+                if any(r['status']=='valid' and (not r.get('run_ids') or not r.get('prediction_hash') or not r.get('code_hash') or
+                       not math.isfinite(r['metric']) or not math.isfinite(r['baseline']) or
+                       r.get('estimator_contract') and not r.get('implementation_audit',{}).get('checked')) for r in rows):
+                    continue
+                outcome,index,_=choose(record)
+                if (outcome,index)!=(record['status'],chosen):
+                    continue
+                handoff=None
+                expected={'comparison_'+protocol['metric'].lower():winner['metric'],
+                          'comparison_baseline_'+protocol['metric'].lower():winner['baseline'],
+                          'comparison_train_count':len(protocol['train_ids']),
+                          'comparison_validation_count':len(protocol['validation_ids']),
+                          'comparison_total_count':len(protocol['train_ids'])+len(protocol['validation_ids'])}
+                for proof in record.get('formal_handoffs',[]):
+                    refs=proof.get('evidence_refs') or []
+                    if not refs or proof.get('protocol_hash')!=record['protocol_hash'] or proof.get('code_hash')!=winner['code_hash'] or not proof.get('artifact_hash'):
+                        continue
+                    evidence=[snapshot['evidence'].get(ref,{}) for ref in refs]
+                    if not all(e.get('active') and e.get('producer_attempt')==order.attempt_id and
+                               e.get('payload',{}).get('run_id')==proof.get('run_id') for e in evidence):
+                        continue
+                    values={e['payload']['name']:float(e['payload']['value']) for e in evidence}
+                    if all(name in values and math.isclose(values[name],value,rel_tol=1e-9,abs_tol=1e-10) for name,value in expected.items()):
+                        handoff=proof;break
+                if handoff is None:
+                    continue
+                boundary={k:protocol.get(k) for k in ('dataset','data_hash','target','features','task_type','metric','higher_is_better',
+                    'split','split_column','id_column','seed','validation_fraction','positive_label','baseline','baseline_value',
+                    'minimum_improvement','tie_tolerance','tie_rule','negative_control','negative_control_tolerance',
+                    'negative_baseline_value','feature_dtypes')}
+                boundary.update(train_count=len(protocol['train_ids']),validation_count=len(protocol['validation_ids']),
+                                split_hash=digest([protocol['train_ids'],protocol['validation_ids']]))
+                branches=[]
+                for r in sorted(rows,key=lambda r:r['index']):
+                    branches.append({**{k:r.get(k) for k in ('index','status','metric','baseline','improvement','negative_metric',
+                        'negative_baseline','run_ids','candidate_hash','code_hash','prediction_hash','estimator_contract',
+                        'implementation_audit','selection_reason','error')},
+                        'name':candidates[r['index']]['name'],'method_keys':candidates[r['index']].get('method_keys',[]),
+                        'eligible':r['status']=='valid' and r.get('improvement',float('-inf'))>=protocol['minimum_improvement']})
+                summaries.append({'id':record['id'],'task_id':key,'attempt_id':order.attempt_id,'revision':task['revision'],
+                    'status':record['status'],'chosen_index':chosen,'reason':record['reason'],'protocol':boundary,'branches':branches,
+                    'provenance':{'table':'experiment_comparisons','record_id':record['id'],'owner_attempt':record.get('owner_attempt'),
+                        'protocol_hash':record['protocol_hash'],'contract_hash':record['contract_hash'],'policy_version':record['policy_version'],
+                        'formal_run_id':handoff['run_id'],'formal_artifact_hash':handoff['artifact_hash'],
+                        'formal_evidence_refs':handoff['evidence_refs']}})
+            except (KeyError,ValueError,TypeError,IndexError):
+                # Incomplete/old records remain inspectable in ExperimentStore;
+                # they cannot become current completed evidence by inference.
+                continue
+        return summaries
+
     def create(self,task_id,revision,record):
         with self.store._transaction() as db:
             old=db.execute('SELECT payload FROM experiment_comparisons WHERE research_id=? AND task_id=? AND revision=?',(self.store.research_id,task_id,revision)).fetchone()
