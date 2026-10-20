@@ -232,6 +232,31 @@ def test_missing_checks_from_analysis_trace_repair_preserves_numeric_constraints
     assert [c['left']['name'] for c in constraints['R5']['checks']]==['forecast_length','forecast_min']
 
 
+def test_changed_schema_can_retry_without_erasing_old_guards_or_request_usage(tmp_path):
+    from pydantic import create_model
+    from ai_system.research.runtime import ResearchRuntime,budget_scope,RepeatedOperationBlocked
+    old=create_model('Reply',legacy=(str,...))
+    fixed=create_model('Reply',answer=(str,...))
+    runtime=ResearchRuntime(tmp_path)
+    class Model:
+        calls=0
+        def with_structured_output(self,*args,**kwargs):return self
+        async def ainvoke(self,messages):
+            self.calls+=1;runtime.reserve('fake-model')
+            return {'answer':'ok'}
+    model=Model()
+    with budget_scope(tmp_path,'study'):
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                asyncio.run(llm_utils.call_structured(model,old,[],retries=0))
+        with pytest.raises(RepeatedOperationBlocked):
+            asyncio.run(llm_utils.call_structured(model,old,[],retries=0))
+        assert asyncio.run(llm_utils.call_structured(model,fixed,[],retries=0)).answer=='ok'
+        with pytest.raises(RepeatedOperationBlocked):
+            asyncio.run(llm_utils.call_structured(model,old,[],retries=0))
+    assert model.calls==runtime.status()['used']==4
+
+
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
     from ai_system.research.control import task_dispatch as dispatch
     from test_research_p2 import store_for,problem,TASK as original

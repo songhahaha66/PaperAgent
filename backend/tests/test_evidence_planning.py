@@ -89,6 +89,39 @@ def test_sufficient_evidence_and_repeat_observe_resume_do_not_spend_or_add_work(
     assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
 
 
+def test_deliver_tool_schema_requires_coverage_outline_and_no_execution_tasks():
+    from langchain_core.utils.function_calling import convert_to_openai_tool
+    schema=convert_to_openai_tool(planner.EvidenceDecision)['function']['parameters']
+    deliver=next(v for v in schema['anyOf'] if v['properties']['action']['enum']==['deliver'])
+    assert set(deliver['required'])=={'coverage','outline'}
+    assert deliver['properties']['coverage']['minItems']==deliver['properties']['outline']['minItems']==1
+    assert deliver['properties']['task_ids']['maxItems']==0
+
+
+def test_incomplete_deliver_repairs_once_without_rerunning_accepted_tasks(env,monkeypatch):
+    from langchain_core.messages import AIMessage
+    from ai_system.graph import llm_utils
+    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
+    before=env.store.snapshot();_,context=planner.decision_context(env.store,before)
+    valid=proposal(context)
+    class Incomplete(Model):
+        def __init__(self):self.calls=0
+        async def ainvoke(self,messages):
+            self.calls+=1
+            if self.calls==1:
+                return planner.EvidenceDecision(action='deliver',reason='已有结果可以交付',
+                    requirement_ids=valid['requirement_ids'],task_ids=['Q1','Q2'])
+            assert self.calls==2 and '逐项核对' in messages[-1].content
+            assert json.loads(messages[-2].content)['task_ids']==['Q1','Q2']
+            return AIMessage(content=json.dumps(valid))
+    model=Incomplete();ctx=env.context(model)
+    state=observe(env,ctx)
+    assert not state['research_blocked'] and model.calls==2
+    assert env.store.snapshot()['attempts']==before['attempts']
+    assert env.store.snapshot()['tasks']==before['tasks']
+    assert loop.select(state,SimpleNamespace(context=ctx)).arg['capability']=='writing.reconcile'
+
+
 def test_decision_context_uses_products_and_purposes_without_completion_shortcuts(env):
     snapshot=env.store.snapshot()
     for task in snapshot['tasks'].values():

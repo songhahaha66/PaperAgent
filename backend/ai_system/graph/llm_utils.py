@@ -96,7 +96,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
     from ..core_handlers.model_runtime import operation_key
     from ..research.store import digest
     active=ACTIVE_BUDGET.get()
-    guard=operation_key(active,llm,(schema.__name__,messages),{}) if active else None
+    guard=operation_key(active,llm,(schema.__name__,schema.model_json_schema(),messages),{}) if active else None
     for attempt in range(retries + 1):
         parsed = None
         if active:active.check_guard(guard)

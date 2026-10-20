@@ -156,3 +156,17 @@ def test_comment_trace_omits_store_and_model_objects(recorder, monkeypatch, tmp_
     assert all(r['extra']['metadata']['research_id'] == 'research-A' for r in runs)
     assert any(r['run_type'] == 'llm' and r['parent_run_id'] == root['id'] for r in runs)
     assert 'store-secret-never-traced' not in str(runs)
+
+
+def test_controller_validation_failure_is_a_failed_trace(recorder,monkeypatch):
+    from ai_system.research.planner import Planner
+    from ai_system.graph import llm_utils
+    async def reject(*args,**kwargs):
+        raise ValueError('收敛时必须逐项核对全部原要求')
+    monkeypatch.setattr(llm_utils,'call_structured',reject)
+    with research_tracing('project-A','research-A','research'):
+        with pytest.raises(ValueError,match='逐项核对'):
+            asyncio.run(Planner(object()).decide({}, {'evidence':[]}))
+    run=recorder.create_run.call_args.kwargs
+    assert run['name']=='research.decide' and run['inputs']=={'context':{'evidence':[]}}
+    assert '逐项核对' in recorder.update_run.call_args.kwargs['error']
