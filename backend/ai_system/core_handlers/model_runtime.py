@@ -84,7 +84,7 @@ class RuntimeModelMixin:
                     result=await super()._agenerate(*args,**kwargs)
                 runtime.usage(seq,reply_usage(result));runtime.succeeded(key)
                 return result
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, GeneratorExit):
                 runtime.usage(seq,state="interrupted");raise
             except Exception as exc:
                 runtime.usage(seq,state="failed")
@@ -117,7 +117,7 @@ class RuntimeModelMixin:
                         emitted=emitted or bool(getattr(message,'content',None) or getattr(message,'tool_call_chunks',None) or getattr(message,'tool_calls',None) or (getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content'))
                         yield chunk
                 runtime.usage(seq,usage);runtime.succeeded(key);return
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, GeneratorExit):
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
                 runtime.usage(seq,usage,state="failed");kind,message,retry,terminal=failure(exc)
@@ -163,6 +163,8 @@ class RuntimeModelMixin:
                     emitted=emitted or bool(getattr(message,'content',None) or getattr(message,'tool_call_chunks',None) or getattr(message,'tool_calls',None) or (getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content'))
                     yield chunk
                 runtime.usage(seq,usage);runtime.succeeded(key);return
+            except GeneratorExit:
+                runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
                 runtime.usage(seq,usage,state="failed");kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)

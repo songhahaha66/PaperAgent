@@ -198,7 +198,8 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
 
 async def review_solution(ctx: GraphContext, branch: BranchInput, report: Dict, runs: List[Dict]) -> ResultReview:
     prompt = review_prompt(branch, report, ctx, runs)
-    with labelled(f"{branch['subproblem']['id']}:review"):
+    from ai_system.research.runtime import execution_scope
+    with labelled(f"{branch['subproblem']['id']}:review"), execution_scope(step='检查实验报告'):
         return await call_structured(ctx.planner_llm, ResultReview, as_messages(SYSTEM, prompt))
 
 

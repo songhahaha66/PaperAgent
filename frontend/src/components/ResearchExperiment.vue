@@ -1,7 +1,7 @@
 <template>
   <article class="experiment">
     <header>
-      <small v-if="question">研究问题 · {{ question.title }}</small>
+      <small v-if="question">研究问题：{{ question.title }}</small>
       <h2>{{ experiment.title }}</h2>
       <small v-if="experiment.started_at">实验开始于 {{ startedAt }}</small>
     </header>
@@ -22,34 +22,6 @@
       :content="evidenceMarkdown(experiment.summary || experiment.approach || '', snapshot || null)"
       :work-id="workId"
     />
-    <details v-if="experiment.method">
-      <summary>{{ isZh ? '最初的方法设想' : 'Initial method proposal' }}</summary>
-      <MarkdownRenderer
-        :content="
-          [
-            experiment.method.name,
-            experiment.method.idea,
-            experiment.method.formulation,
-            ...(experiment.method.steps || []),
-            experiment.method.validation,
-          ]
-            .filter(Boolean)
-            .join('\n\n')
-        "
-        :work-id="workId"
-      />
-    </details>
-    <details v-if="experiment.experiment">
-      <summary>{{ isZh ? '方法、数据与评价标准' : 'Method, data and evaluation' }}</summary>
-      <template v-if="experiment.experiment.candidates.length > 1">
-        <p v-for="candidate in experiment.experiment.candidates" :key="candidate.name">
-          <strong>{{ candidate.name }}</strong
-          >：{{ candidate.instruction }}
-        </p>
-      </template>
-      <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ experiment.experiment.conditions }}</p>
-      <p>{{ isZh ? '评价依据：' : 'Evaluation: ' }}{{ experiment.experiment.evaluation }}</p>
-    </details>
     <h3 v-if="experiment.results.length">{{ isZh ? '实验结果' : 'Results' }}</h3>
     <section
       v-for="result in experiment.results"
@@ -92,9 +64,7 @@
       </div>
       <details>
         <summary>{{ isZh ? '原始记录与计算来源' : 'Raw record and computation' }}</summary>
-        <p>{{ isZh ? '结果引用：' : 'Result reference: ' }}{{ result.id }}</p>
         <pre>{{ result.value }}<span v-if="result.unit"> {{ result.unit }}</span></pre>
-        <p>{{ result.run_id || (isZh ? '未登记运行编号' : 'No run recorded') }}</p>
         <template v-for="run in runs.filter((r) => r.id === result.run_id)" :key="run.id"
           ><button v-if="run.input_path" @click="emit('open-file', run.input_path)">
             {{ isZh ? '执行代码' : 'Code' }}</button
@@ -104,14 +74,42 @@
         >
       </details>
     </section>
+    <details v-if="experiment.method">
+      <summary>{{ isZh ? '最初的方法设想' : 'Initial method proposal' }}</summary>
+      <MarkdownRenderer
+        :content="
+          [
+            experiment.method.name,
+            experiment.method.idea,
+            experiment.method.formulation,
+            ...(experiment.method.steps || []),
+            experiment.method.validation,
+          ]
+            .filter(Boolean)
+            .join('\n\n')
+        "
+        :work-id="workId"
+      />
+    </details>
+    <details v-if="experiment.experiment">
+      <summary>{{ isZh ? '方法、数据与评价标准' : 'Method, data and evaluation' }}</summary>
+      <template v-if="experiment.experiment.candidates.length > 1">
+        <p v-for="candidate in experiment.experiment.candidates" :key="candidate.name">
+          <strong>{{ candidate.name }}</strong
+          >：{{ candidate.instruction }}
+        </p>
+      </template>
+      <p>{{ isZh ? '实验条件：' : 'Conditions: ' }}{{ experiment.experiment.conditions }}</p>
+      <p>{{ isZh ? '评价依据：' : 'Evaluation: ' }}{{ experiment.experiment.evaluation }}</p>
+    </details>
     <details v-if="fileGroups.length" class="experiment-files">
       <summary>
-        {{ isZh ? '代码与运行文件' : 'Code and execution files' }} · {{ fileGroups.length }} 组
+        {{ isZh ? '代码与运行文件' : 'Code and execution files' }}，{{ fileGroups.length }} 组
       </summary>
       <div v-for="(group, index) in fileGroups" :key="group.id" class="file-group">
         <span
           >{{ group.run ? `第 ${index + 1} 次运行` : '实验记录'
-          }}<small v-if="group.status"> · {{ group.status }}</small></span
+          }}<small v-if="group.status">，{{ group.status }}</small></span
         >
         <button
           v-for="artifact in group.files"
@@ -124,7 +122,10 @@
     </details>
     <h3 v-if="experiment.claims.length">{{ isZh ? '结论' : 'Conclusions' }}</h3>
     <div v-for="claim in experiment.claims" :key="claim.id">
-      <p>{{ claim.statement }}</p>
+      <MarkdownRenderer
+        :content="evidenceMarkdown(claim.statement, snapshot || null)"
+        :work-id="workId"
+      />
       <small>{{ claim.strength }}</small>
     </div>
     <h3 v-if="experiment.sources.length">{{ isZh ? '输入资料' : 'Sources' }}</h3>
@@ -132,11 +133,7 @@
       <button v-if="source.available" @click="emit('open-file', source.path)">
         {{ source.path }}
       </button>
-      <p v-else>{{ source.path }} · {{ isZh ? '文件不可用' : 'Unavailable' }}</p>
-      <details>
-        <summary>{{ isZh ? '文件版本' : 'Frozen source hash' }}</summary>
-        <code>{{ source.hash }}</code>
-      </details>
+      <p v-else>{{ source.path }}，{{ isZh ? '文件不可用' : 'Unavailable' }}</p>
     </div>
     <section v-if="question?.next_step && !newerExperiment">
       <h3>{{ isZh ? '下一步' : 'Next step' }}</h3>
@@ -166,9 +163,9 @@
         {{ isZh ? '保留的历史成果' : 'Retained history' }} ({{ experiment.history.length }})
       </summary>
       <section v-for="previous in experiment.history" :key="previous.attempt_id">
-        <p>v{{ previous.revision }} · {{ previous.attempt_id }}</p>
+        <p>较早的执行记录</p>
         <p v-for="item in previous.results" :key="item.id">
-          {{ item.id }} · {{ item.name }} · {{ item.value }} {{ item.unit
+          {{ item.name || '未命名结果' }}：{{ item.value }} {{ item.unit
           }}<button v-if="item.figure_path" @click="emit('open-file', item.figure_path)">
             {{ isZh ? '图表' : 'Figure' }}
           </button>
@@ -223,14 +220,13 @@ const newerExperiment = computed(() =>
 )
 const statusText = computed(() => {
   const e = props.experiment
-  if (e.execution_status === 'running') return '正在执行，结果会陆续更新。'
+  if (e.execution_status === 'running') return '正在执行，尚未提交本次实验结果。'
   if (e.execution_status === 'failed')
     return e.results.length
       ? '本次实验未完成，已有结果已保留。'
       : '本次实验未完成，代码与运行输出已保留。'
-  if (e.acceptance === 'accepted')
-    return `已完成 · ${e.results.length} 项结果 · ${label(e.checking)}`
-  return `${label(e.computation)} · ${label(e.checking)}`
+  if (e.acceptance === 'accepted') return `已完成，${e.results.length} 项结果，${label(e.checking)}`
+  return `${label(e.computation)}，${label(e.checking)}`
 })
 const fileLabel = (kind: string) =>
   ({ code: '代码', stdout: '输出', stderr: '错误输出', data: '生成数据', report: '实验报告' })[

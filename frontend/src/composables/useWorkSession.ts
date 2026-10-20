@@ -6,6 +6,7 @@ import { workspaceAPI, type Work } from '@/api/workspace'
 import { chatAPI } from '@/api/chat'
 import type { ResearchAction, ResearchSnapshot } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
+import { currentActivity } from '@/utils/researchProgress'
 
 export function useWorkSession(workId: Ref<string>) {
   const authStore = useAuthStore()
@@ -34,12 +35,53 @@ export function useWorkSession(workId: Ref<string>) {
   function applyResearchSnapshot(snapshot: ResearchSnapshot) {
     if (disposed || snapshot.work_id !== workId.value) return
     const previous = researchSnapshot.value
-    if (
-      previous?.research_id === snapshot.research_id &&
-      (snapshot.commit_seq || 0) < (previous?.commit_seq || 0)
-    )
-      return
-    researchSnapshot.value = snapshot
+    if (previous?.research_id === snapshot.research_id) {
+      // Research commits and model-request accounting have independent clocks.
+      if ((snapshot.commit_seq || 0) < (previous?.commit_seq || 0)) {
+        if (
+          snapshot.runtime &&
+          previous.runtime &&
+          (snapshot.runtime.models_updated_at || 0) > (previous.runtime.models_updated_at || 0)
+        ) {
+          const runtime = {
+            ...previous.runtime,
+            models: snapshot.runtime.models,
+            usage: snapshot.runtime.usage,
+            models_updated_at: snapshot.runtime.models_updated_at,
+          }
+          researchSnapshot.value = {
+            ...previous,
+            runtime: { ...runtime, current: currentActivity(runtime) },
+          }
+        }
+        return
+      }
+      if (
+        snapshot.runtime &&
+        previous.runtime &&
+        (snapshot.runtime.models_updated_at || 0) < (previous.runtime.models_updated_at || 0)
+      )
+        snapshot = {
+          ...snapshot,
+          runtime: {
+            ...snapshot.runtime,
+            models: previous.runtime.models,
+            usage: previous.runtime.usage,
+            models_updated_at: previous.runtime.models_updated_at,
+          },
+        }
+      if (
+        (snapshot.snapshot_at || 0) < (previous?.snapshot_at || 0) &&
+        snapshot.commit_seq === previous?.commit_seq
+      )
+        return
+    }
+    researchSnapshot.value = snapshot.runtime
+      ? {
+          ...snapshot,
+          runtime: { ...snapshot.runtime, current: currentActivity(snapshot.runtime) },
+        }
+      : snapshot
     applyWorkStatus(snapshot.work_status)
   }
   async function loadResearchSnapshot() {

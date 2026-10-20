@@ -10,6 +10,9 @@ export interface ResearchQuestion {
   artifact_refs: string[]
   limitations: string[]
   judgments: {
+    recorded_at?: number
+    observation_id?: string
+    action_id?: string
     question_id: string
     statement: string
     artifact_refs: string[]
@@ -27,15 +30,36 @@ export interface EvidenceUse {
 }
 export interface ResearchActivity {
   id: string
+  action_id?: string | null
+  observation_id?: string | null
+  question_id?: string | null
+  experiment_id?: string | null
+  parent_call_id?: string | null
+  purpose?: string | null
+  kind?: string
+  updated_at?: number
   task_id?: string | null
   label: string
   capability?: string
   status: string
-  started_at: number
+  started_at?: number | null
   finished_at?: number
   run_id?: string
   input_tokens?: number
   output_tokens?: number
+}
+export interface ResearchHistory {
+  id: string
+  kind: string
+  label: string
+  action_id?: string | null
+  observation_id?: string | null
+  question_id?: string | null
+  experiment_id?: string | null
+  recorded_at?: number | null
+  reason: string
+  artifact_refs: string[]
+  judgments: ResearchQuestion['judgments']
 }
 export interface ReadableResult {
   id: string
@@ -126,10 +150,15 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  snapshot_at?: number | null
   inputs?: string[]
   questions?: ResearchQuestion[]
   evidence_uses?: EvidenceUse[]
   runtime?: {
+    current?: ResearchActivity | null
+    updated_at?: number | null
+    models_updated_at?: number
+    history?: ResearchHistory[]
     usage?: {
       input_tokens: number | null
       output_tokens: number | null

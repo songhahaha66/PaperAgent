@@ -1,6 +1,8 @@
 """One dispatcher for experiments, artifact repairs and publication in the existing graph."""
 import asyncio
 import json
+import time
+from uuid import uuid4
 from langgraph.graph import END
 from langgraph.types import Send, interrupt
 from ai_system.modules.registry import invoke
@@ -11,11 +13,15 @@ from .planner import Planner, decision_context, planning_failure_message, ready_
 PUBLICATION = ('reconcile', 'write', 'validate', 'render', 'export')
 
 
-def _action(store, capability, inputs, reason, *, target=None, key=None):
+def _action(store, capability, inputs, reason, *, target=None, key=None, observation_id=None, question_id=None):
     with store._transaction() as db:
         state=store._read(db)
         item={'id':key or 'action:'+digest([state['commit_seq'],capability,inputs]),
-              'capability':capability,'inputs':inputs,'reason':reason,'target':target,'status':'planned'}
+              'capability':capability,'inputs':inputs,'reason':reason,'target':target,'status':'planned',
+              'action_id':key or None,'observation_id':observation_id,'experiment_id':target,
+              'question_id':(state['experiments'].get(target) or {}).get('question_id',question_id),
+              'prepared_at':time.time()}
+        item['action_id']=item['id']
         state['action']=item
         store._save(db,state,'action_prepared',item)
     return item
@@ -68,25 +74,32 @@ def create_experiment(store, proposal):
     return key
 
 
-def _save_assessments(store, proposal):
+def _save_assessments(store, proposal, *, observation_id=None, experiment_id=None, action_id=None):
     with store._transaction() as db:
         state=store._read(db)
+        recorded_at=time.time()
+        observation_id=observation_id or 'observation:'+uuid4().hex
+        question_id=(state['experiments'].get(experiment_id) or {}).get('question_id',proposal.question_id)
         for judgment in proposal.judgments:
             question=state['questions'][judgment.question_id]
-            item=judgment.model_dump()
+            item={**judgment.model_dump(),'recorded_at':recorded_at,
+                  'observation_id':observation_id,'action_id':action_id}
             question.update({key:value for key,value in item.items() if key!='question_id'})
             question['judgment']=item['statement']
             question['judgments'].append(item)
-        state.setdefault('decision_history',[]).append({'action':proposal.action,'reason':proposal.reason,
-            'question_id':proposal.question_id,'artifact_refs':proposal.artifact_refs,'issue_ids':proposal.issue_ids})
+        record={**proposal.model_dump(),'id':'decision:'+observation_id,'recorded_at':recorded_at,
+                'observation_id':observation_id,'action_id':action_id,
+                'question_id':question_id,'experiment_id':experiment_id}
+        state.setdefault('decision_history',[]).append(record)
         state['decision_history']=state['decision_history'][-40:]
-        store._save(db,state,'research_observed',proposal.model_dump())
+        store._save(db,state,'research_observed',record)
 
 
 def _publication_action(ctx, snapshot):
     publication=snapshot['publication']
     if not publication or publication['stage']=='completed':return None
-    return _action(ctx.research,'writing.'+publication['stage'],{},publication.get('reason','整理研究成果'))
+    return _action(ctx.research,'writing.'+publication['stage'],{},publication.get('reason','整理研究成果'),
+                   observation_id=publication.get('observation_id'))
 
 
 async def prepare_action(ctx):
@@ -123,14 +136,15 @@ async def prepare_action(ctx):
     if not store.reserve_planning_call(limit=ctx.max_planning_calls):
         _action(store,'pause',{},'达到配置的研究规划上限')
         return False
+    observation_id='observation:'+uuid4().hex
+    target=None
     try:
         from .views import activity
         from ai_system.graph.tracing import labelled
-        with activity(ctx,'research.observe'), labelled('observe'):
+        with activity(ctx,'research.observe',observation_id=observation_id,action_id=key), labelled('observe'):
             proposal=await Planner(ctx.planner_llm).decide(snapshot,context)
         if store.snapshot()['revision']!=snapshot['revision']:
             return False
-        _save_assessments(store,proposal)
         if proposal.action=='experiment':
             if proposal.experiment_id:
                 target=proposal.experiment_id
@@ -138,12 +152,13 @@ async def prepare_action(ctx):
                     state=store._read(db);state['experiments'][target]['execution_status']='pending'
                     store._save(db,state,'experiment_retry_requested',{'experiment_id':target})
             else:target=create_experiment(store,proposal)
-            _action(store,'experiments.execute',{},proposal.reason,target=target,key=key)
+            _action(store,'experiments.execute',{},proposal.reason,target=target,key=key,observation_id=observation_id)
         elif proposal.action=='write':
             with store._transaction() as db:
                 state=store._read(db)
                 state['publication']={'stage':'reconcile','outline':[s.model_dump() for s in proposal.outline],
-                    'title':proposal.title,'reason':proposal.reason,'repair_inputs':[],'repairs':0}
+                    'title':proposal.title,'reason':proposal.reason,'repair_inputs':[],'repairs':0,
+                    'observation_id':observation_id}
                 store._save(db,state,'publication_requested',state['publication'])
             _publication_action(ctx,store.snapshot())
         else:
@@ -151,7 +166,10 @@ async def prepare_action(ctx):
                   'ask':'ask','pause':'pause'}[proposal.action]
             inputs=({'query':proposal.query,'limit':3,'fetch_open_access':True} if proposal.action=='literature'
                     else {'message':proposal.message} if proposal.action=='ask' else proposal.inputs if proposal.action=='tool' else {})
-            _action(store,name,inputs,proposal.reason,key=key)
+            _action(store,name,inputs,proposal.reason,key=key,observation_id=observation_id,question_id=proposal.question_id)
+        _save_assessments(store,proposal,observation_id=observation_id,experiment_id=target,
+                          action_id=store.snapshot()['action']['id'])
+        await ctx.events.emit('research_activity',{'observation_id':observation_id})
         await ctx.events.stage(proposal.reason)
         return proposal.action=='pause'
     except asyncio.CancelledError:
@@ -161,6 +179,7 @@ async def prepare_action(ctx):
         with store._transaction() as db:
             state=store._read(db)
             state['action']={'id':key,'capability':'research.observe','status':'failed','reason':message,
+                             'action_id':key,'observation_id':observation_id,'finished_at':time.time(),
                              'message':message,'error':str(exc)[:3000],'error_type':type(exc).__name__}
             store._save(db,state,'action_failed',state['action'])
         await ctx.events.stage(message)
@@ -177,6 +196,19 @@ def select(state, runtime):
 
 
 async def act(request, runtime):
+    from .runtime import execution_scope
+    ctx=runtime.context
+    action=ctx.research.snapshot()['action']
+    if action['id']!=request['action_id'] or action['status']=='done':return {}
+    with execution_scope(action_id=action['id'],observation_id=action.get('observation_id'),
+                         experiment_id=action.get('experiment_id') or action.get('target'),
+                         question_id=action.get('question_id'),events=ctx.events,
+                         research_id=ctx.research.research_id,purpose=action.get('reason')):
+        try:return await _act(request,runtime)
+        finally:await ctx.events.emit('research_activity',{'action_id':action['id']})
+
+
+async def _act(request, runtime):
     ctx=runtime.context;store=ctx.research
     action=store.snapshot()['action']
     if action['id']!=request['action_id'] or action['status']=='done':return {}
@@ -193,7 +225,7 @@ async def act(request, runtime):
             store._save(db,state,'clarification_received',{'response':str(response)[:20000]})
         return {}
     with store._transaction() as db:
-        state=store._read(db);state['action']['status']='running'
+        state=store._read(db);state['action'].update(status='running',started_at=time.time())
         store._save(db,state,'action_started',{'id':action['id']})
     try:
         inputs=action['inputs']
@@ -239,15 +271,19 @@ async def act(request, runtime):
         with store._transaction() as db:
             state=store._read(db)
             state['action']['status']='failed' if patch.get('research_blocked') else 'done'
+            state['action']['finished_at']=time.time()
             store._save(db,state,'action_finished',{'id':action['id'],'status':state['action']['status']})
         return patch if name=='experiments.execute' or name.startswith('writing.') else {'log':['completed '+name]}
     except asyncio.CancelledError:
+        with store._transaction() as db:
+            state=store._read(db);state['action'].update(status='interrupted',finished_at=time.time())
+            store._save(db,state,'action_interrupted',state['action'])
         raise
     except Exception as exc:
         from .runtime import action_failure_message
         message = action_failure_message(action)
         with store._transaction() as db:
-            state=store._read(db);state['action'].update(status='failed',error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
+            state=store._read(db);state['action'].update(status='failed',finished_at=time.time(),error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
             store._save(db,state,'action_failed',state['action'])
         raise RuntimeError(message) from exc
 
@@ -255,7 +291,7 @@ async def act(request, runtime):
 def resume(store, **_):
     with store._transaction() as db:
         state=store._read(db);action=state['action']
-        if action and action['status'] in {'failed','running'}:
+        if action and action['status'] in {'failed','running','interrupted'}:
             # Experiment recovery is reconciled from its execution receipt. Other
             # capabilities keep their durable products and retry the failed step.
             if action['capability']=='experiments.execute':action['status']='running'

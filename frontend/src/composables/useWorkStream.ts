@@ -57,8 +57,14 @@ export function useWorkStream(options: {
   const isStreaming = ref(false)
   const runningAction = ref<ResearchAction>('auto')
   const questionScope = ref<string | null>(null)
+  let scopedVersion: { research_id: string; base_revision: number } | undefined
   function askSubproblem(id: string) {
     questionScope.value = id
+    const snapshot = researchSnapshot.value
+    scopedVersion =
+      snapshot?.research_id && snapshot.research_revision
+        ? { research_id: snapshot.research_id, base_revision: snapshot.research_revision }
+        : undefined
     activateChat()
     nextTick(() =>
       document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
@@ -280,7 +286,7 @@ export function useWorkStream(options: {
         const block = data.block
 
         if (block?.type === 'research_state' || block?.type === 'research_activity') {
-          loadResearchSnapshot()
+          scheduleResearchRefresh()
         } else if (block?.type === 'research_snapshot') {
           if (block.content?.schema_version === 4 && block.content.work_id === workId.value) {
             invalidateSnapshot()
@@ -489,10 +495,29 @@ export function useWorkStream(options: {
             ...(sourceIssue ? { source_issue: sourceIssue } : {}),
           }
         : undefined
-    handler?.sendMessage(message, undefined, action, subproblemId, revision)
+    handler?.sendMessage(
+      message,
+      undefined,
+      action,
+      subproblemId,
+      revision,
+      subproblemId && action === 'auto' ? scopedVersion : undefined,
+    )
+    scopedVersion = undefined
   }
 
   const fileRefreshTimers = new Set<ReturnType<typeof setTimeout>>()
+  let researchRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  function scheduleResearchRefresh() {
+    if (researchRefreshTimer) return
+    researchRefreshTimer = setTimeout(() => {
+      researchRefreshTimer = undefined
+      if (!isDisposed()) void loadResearchSnapshot()
+    }, 120)
+  }
+  onUnmounted(() => {
+    if (researchRefreshTimer) clearTimeout(researchRefreshTimer)
+  })
   function scheduleFileRefresh() {
     const timer = setTimeout(() => {
       fileRefreshTimers.delete(timer)

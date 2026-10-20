@@ -1,4 +1,5 @@
 import { ref, computed, onUnmounted, watch, nextTick, type Ref } from 'vue'
+import type { ResearchSnapshot } from '@/types/research'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import {
   useWorkPanelsStore,
@@ -10,7 +11,7 @@ import {
 import { isImageFile, paperLabel } from '@/utils/workFiles'
 import { useStudioCopy } from '@/lang/studio'
 
-export function useWorkLayout(workId: Ref<string>) {
+export function useWorkLayout(workId: Ref<string>, snapshot?: Ref<ResearchSnapshot | null>) {
   const { ui, isZh } = useStudioCopy()
   const panelStore = useWorkPanelsStore()
   const panelSession = computed(() => panelStore.session(workId.value))
@@ -25,9 +26,15 @@ export function useWorkLayout(workId: Ref<string>) {
   // 侧边栏折叠状态 - 手机端默认收起
   const isSidebarCollapsed = ref(isMobile.value)
   // Establish the initial workspace once; subsequent user tab arrangements survive.
+  const fresh = !panelStore.sessions[workId.value]
   const initial = panelSession.value
-  if (!isMobile.value && initial.panels.length === 1) {
-    panelStore.open(workId.value, 'paper', undefined, 'secondary')
+  if (fresh) {
+    initial.panels.push({
+      id: 'progress',
+      kind: 'progress',
+      group: isMobile.value ? 'main' : 'secondary',
+    })
+    if (!isMobile.value) initial.secondaryActiveId = 'progress'
     initial.focusedGroup = 'main'
     initial.splitRatio = 0.45
   }
@@ -50,9 +57,23 @@ export function useWorkLayout(workId: Ref<string>) {
   const displayPanels = computed(() =>
     panelSession.value.panels.map((panel) => ({ ...panel, ...panelPresentation(panel) })),
   )
-  function panelPresentation(panel: Pick<WorkPanel, 'kind' | 'path'>) {
+  function panelPresentation(panel: Pick<WorkPanel, 'kind' | 'path' | 'resultId' | 'resultType'>) {
     if (panel.kind === 'result')
-      return { label: isZh.value ? '研究结果' : 'Result', icon: 'chart-line' }
+      return {
+        label:
+          snapshot?.value?.results.find((r) => r.id === panel.resultId)?.name ||
+          snapshot?.value?.experiments?.find(
+            (e) => e.id === panel.resultId || e.results.some((r) => r.id === panel.resultId),
+          )?.title ||
+          (panel.resultType === 'comparison'
+            ? isZh.value
+              ? '方法比较'
+              : 'Comparison'
+            : isZh.value
+              ? '实验记录'
+              : 'Experiment'),
+        icon: 'chart-line',
+      }
     if (panel.kind === 'file')
       return {
         label: paperLabel(panel.path!, isZh.value) || panel.path!.split('/').pop()!,
@@ -68,7 +89,7 @@ export function useWorkLayout(workId: Ref<string>) {
       paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
       figures: { label: ui.value.figures, icon: 'chart-line' },
       files: { label: ui.value.files, icon: 'folder-open' },
-      progress: { label: isZh.value ? '研究进度' : 'Research progress', icon: 'task' },
+      progress: { label: isZh.value ? '研究' : 'Research', icon: 'task' },
     }[panel.kind]
   }
   const panelOptions = computed(() =>

@@ -1,22 +1,18 @@
 <template>
   <section class="research-status">
     <header>
-      <h2>研究进度</h2>
-      <button v-if="actionLabel" :disabled="actionBusy" @click="emit('action')">
+      <h2>研究</h2>
+      <button v-if="actionLabel && !running" :disabled="actionBusy" @click="emit('action')">
         {{ actionLabel }}
       </button>
     </header>
-    <p v-if="workStatus === 'waiting'">研究需要补充信息，请在对话中回复。</p>
-    <ResearchRuntime
-      :snapshot="snapshot"
-      :work-status="workStatus"
-      @file="(path) => emit('object', { type: 'file', path })"
-    />
     <ResearchProgress
       :snapshot="snapshot"
       :work-status="workStatus"
       @object="(o) => emit('object', o)"
       @issue="(id) => emit('issue', id)"
+      @ask="(id) => emit('ask', id)"
+      @pause="emit('pause')"
     />
     <details class="resources">
       <summary>研究资源</summary>
@@ -26,17 +22,9 @@
         @revise="(message, task) => emit('revise', message, task)"
       />
     </details>
-    <section v-if="faults.length" aria-label="运行故障">
-      <h3>执行中断记录</h3>
-      <article v-for="fault in faults" :key="fault.id">
-        <p role="alert">{{ fault.message }}</p>
-      </article>
-    </section>
   </section>
 </template>
 <script setup lang="ts">
-import { computed } from 'vue'
-import ResearchRuntime from './ResearchRuntime.vue'
 import ResearchProgress from './ResearchProgress.vue'
 import ResearchReferences from './ResearchReferences.vue'
 import type { ResearchSnapshot } from '@/types/research'
@@ -56,13 +44,9 @@ const emit = defineEmits<{
   issue: [id: string]
   resolved: []
   revise: [message: string, task: string]
+  ask: [id: string]
+  pause: []
 }>()
-const faults = computed(
-  () =>
-    props.snapshot?.faults?.filter(
-      (f) => !['resolved', 'dismissed', 'superseded'].includes(f.status),
-    ) || [],
-)
 </script>
 <style scoped>
 .research-status {

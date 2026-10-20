@@ -248,8 +248,16 @@ export class WebSocketChatHandler {
     action: ResearchAction = 'auto',
     subproblemId?: string,
     revision?: ResearchRevisionCommand,
+    scopeContext?: { research_id: string; base_revision: number },
   ) {
-    const message = { problem: content, model, action, subproblem_id: subproblemId, revision }
+    const message = {
+      problem: content,
+      model,
+      action,
+      subproblem_id: subproblemId,
+      revision,
+      scope_context: scopeContext,
+    }
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       // 如果连接未建立，将消息加入队列

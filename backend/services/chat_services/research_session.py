@@ -8,6 +8,7 @@ from ai_system.research.domain import findings as research_findings
 import json
 import asyncio
 import logging
+import time
 import os
 import re
 from pathlib import Path
@@ -71,6 +72,7 @@ class ResearchClaim(BaseModel):
 
 
 class ResearchSnapshot(BaseModel):
+    snapshot_at: float | None = None
     pending_question: str | None = None
     inputs: list[str] = Field(default_factory=list)
     questions: list[dict] = Field(default_factory=list)
@@ -241,13 +243,21 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         status = 'paused'
     control = public_snapshot(business, work_status=status,source_root=root) if business else {}
     from ai_system.research.runtime import execution_reason
-    from ai_system.research.views import model_activity, model_usage
+    from ai_system.research.views import model_activity, model_usage, research_history
+    models=model_activity(store,status) if business else []
+    runtime={'actions':[],'decisions':[],**control.get('runtime',{})}
+    running=[item for item in [*runtime.get('actions',[]),*models]
+             if item['status'] in {'running','sent','http_response'} and not item.get('finished_at')]
+    runtime['current']=max(running,key=lambda item:item.get('started_at') or 0,default=None)
     return ResearchSnapshot(
+        snapshot_at=time.time(),
         pending_question=(business['action']['inputs'].get('message') if business and business.get('action')
                           and business['action']['capability']=='ask' and business['action']['status']=='waiting' else None),
         inputs=[p for p in store.file_inputs() if _file(root,p)] if business else [],
         questions=control.get('questions',[]), evidence_uses=control.get('evidence_uses',[]),
-        runtime={**control.get('runtime',{}), 'models':model_activity(store,status) if business else [],
+        runtime={**runtime, 'models':models,
+                 'models_updated_at':max((model['updated_at'] for model in models),default=0),
+                 'history':research_history(store,business) if business else [],
                  'usage':model_usage(store) if business else None},
         execution_reason=execution_reason(root,status),
         engine_version=thread.get("engine_version"),
@@ -311,7 +321,7 @@ INTENT_CHOICE = Choice(
 
 
 async def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot,
-                         history: list[dict] | None = None, *, judge=None) -> str:
+                         history: list[dict] | None = None, *, judge=None, scope: str | None = None) -> str:
     """One Jev Choice for auto; explicit controls use deterministic validation.
 
     Only bounded conversation text and state labels are shared. No files, paper,
@@ -335,6 +345,8 @@ async def resolve_action(requested: str, message: str, snapshot: ResearchSnapsho
         'research': {key: getattr(snapshot, key) for key in
                      ('has_research', 'work_status', 'graph_status', 'outcome', 'research_revision')},
         'pending_question': (snapshot.pending_question or '')[:2000],
+        'selected_scope': next(({key:str(item.get(key,''))[:600] for key in ('title','question')}
+                                for item in snapshot.questions if item['id']==scope), None),
     }
     try:
         answers = await asyncio.wait_for(judge.ask(context, {'intent': INTENT_CHOICE}), timeout=30)
@@ -395,6 +407,18 @@ def scoped_snapshot(snapshot: ResearchSnapshot, subproblem_id: str | None) -> Re
         "results": selected_results, "claims": selected_claims,
         "runs": [r for r in snapshot.runs if r.id in run_ids],
     })
+
+
+def revision_experiment_scope(snapshot: ResearchSnapshot, reference: str | None):
+    """Convert a selected question only after auto has selected a revision."""
+    if reference is None:return None
+    question=next((item for item in snapshot.questions if item['id']==reference),None)
+    ids=set(question['experiment_ids']) if question else {reference}
+    selected=[item['task_id'] for item in snapshot.experiments
+              if item['task_id'] in ids and item['kind']!='verify']
+    if not selected or not ids <= {item['task_id'] for item in snapshot.experiments}:
+        raise ValueError('当前问题没有可修订的实验，请刷新后重试')
+    return selected
 
 
 async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, workspace: str | Path,

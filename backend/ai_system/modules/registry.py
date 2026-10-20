@@ -101,7 +101,6 @@ class ModuleRegistry:
             branch=request.inputs.get('branch') or {}
             task_id=request.inputs.get('task_id') or branch.get('subproblem',{}).get('id')
             with activity(ctx,request.name,task_id):
-                if ctx.events:await ctx.events.emit('research_activity',{'capability':request.name})
                 with capability_span(request.name, capability.module, request.inputs) as span:
                     result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
                     if inspect.isawaitable(result):

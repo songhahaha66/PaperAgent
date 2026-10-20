@@ -54,7 +54,7 @@
       <p v-for="claim in claims" :key="claim.id">{{ claim.statement }}</p>
       <details v-if="run">
         <summary>{{ isZh ? '运行记录' : 'Run record' }}</summary>
-        <p>{{ run.id }} · {{ run.status }}</p>
+        <p>{{ executionLabel(run.status) }}</p>
       </details>
     </template>
     <p v-else role="status">
@@ -68,6 +68,7 @@
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
+import { executionLabel } from '@/utils/researchProgress'
 import type { ResearchSnapshot, EvidenceUse } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
 import ExperimentResult from './ExperimentResult.vue'

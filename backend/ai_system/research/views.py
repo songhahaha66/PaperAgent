@@ -76,13 +76,48 @@ def evidence_uses(snapshot, source_root=None):
 
 
 def execution(snapshot, work_status=None):
-    paused=work_status in {'paused','cancelled','failed','waiting'} or (work_status is None and snapshot['outcome']=='blocked')
+    active=work_status in {'in_progress','running','processing'} or (work_status is None and snapshot['outcome']=='running')
     actions=[]
-    for item in snapshot.get('activity',[])[-60:]:
+    for item in snapshot.get('activity',[])[-120:]:
         row={**item,'label':LABELS.get(item['capability'],'研究操作')}
-        if row['status']=='running' and paused:row['status']='interrupted'
+        if row['status']=='running' and not active:row['status']='interrupted'
         actions.append(row)
-    return {'actions':actions,'decisions':snapshot.get('decision_history',[])[-12:]}
+    current=next((row for row in reversed(actions) if row['status']=='running'),None)
+    return {'actions':actions,'decisions':snapshot.get('decision_history',[])[-40:],
+            'current':current, 'updated_at':snapshot.get('updated_at')}
+
+
+def research_history(store, snapshot):
+    """Important journal facts only. Missing historical clocks/links stay unknown."""
+    import json
+    labels={'research_observed':'研究安排','attempt_committed':'实验执行结束',
+            'inputs_changed':'输入已改变','research_revised':'研究要求已修改',
+            'recovery_requested':'恢复研究','action_failed':'操作未完成',
+            'clarification_requested':'等待补充信息','action_interrupted':'研究已暂停',
+            'action_prepared':'暂停研究','activity_finished':'研究已暂停'}
+    with store._connect() as db:
+        rows=db.execute('SELECT seq,kind,payload FROM journal WHERE research_id=? AND kind IN ('+
+                        ','.join('?' for _ in labels)+") AND (kind!='activity_finished' OR json_extract(payload,'$.status')='interrupted') AND (kind!='action_prepared' OR json_extract(payload,'$.capability')='pause') ORDER BY seq DESC LIMIT 100",
+                        (store.research_id,*labels)).fetchall()
+    result=[]
+    for row in rows:
+        data=json.loads(row['payload']);kind=row['kind']
+        if kind=='action_prepared' and data.get('capability')!='pause':continue
+        if kind=='activity_finished' and data.get('status')!='interrupted':continue
+        eid=data.get('experiment_id') or data.get('task_id')
+        if not eid and data.get('attempt_id'):
+            eid=(snapshot['executions'].get(data['attempt_id']) or {}).get('task_id')
+        question_id=data.get('question_id')
+        refs=data.get('artifact_refs',[])
+        if kind=='attempt_committed':
+            refs=[ref for ref,artifact in snapshot['artifacts'].items()
+                  if artifact['producer_attempt']==data.get('attempt_id') and artifact['type']=='result' and artifact['active']]
+        result.append({'id':'journal:'+str(row['seq']),'kind':kind,'label':labels[kind],
+            'action_id':data.get('action_id'),'observation_id':data.get('observation_id'),
+            'question_id':question_id,'experiment_id':eid,'recorded_at':data.get('recorded_at'),
+            'reason':data.get('reason') or data.get('message') or data.get('purpose') or '',
+            'artifact_refs':refs,'judgments':data.get('judgments',[])})
+    return result
 
 
 def model_usage(store):
@@ -102,54 +137,66 @@ def model_usage(store):
 
 
 def model_activity(store, work_status):
-    # Read only. No budget migration or connection metadata enters the response.
+    # Explicit ownership is frozen at request start; never parse historical labels.
     import json
     with store._connect() as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='model_requests'").fetchone():return []
-        rows=db.execute('SELECT payload FROM model_requests ORDER BY sequence DESC LIMIT 60').fetchall()
+        rows=db.execute('SELECT payload FROM model_requests ORDER BY sequence DESC LIMIT 120').fetchall()
     result=[]
     for raw in rows:
         item=json.loads(raw[0])
         if item.get('research_id')!=store.research_id:continue
-        label=item.get('label','');task=re.match(r'(?:E\d+|Q\d+[a-z]?)',label)
-        phase=label.split(':')[-1]
-        phase={'review':'核查实验结果','report':'修订报告','solve':'推导与计算',
-            'design':'确定执行方法','research':'判断下一步','observe':'判断下一步'}.get(phase,'处理研究内容')
-        status='recorded' if item.get('usage_recorded') and not item.get('finished_at') else item.get('state','unknown')
+        status=item.get('state','unknown')
         if not item.get('finished_at') and work_status not in {'in_progress','running','processing'}:status='interrupted'
-        result.append({'id':str(item['sequence']),'task_id':task[0] if task else None,
-            'label':phase,'started_at':item['sent_at'],'finished_at':item.get('finished_at'),
-            'status':status,'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens')})
+        result.append({'id':'model:'+str(item['sequence']),
+            **{key:item.get(key) for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id')},
+            'task_id':item.get('experiment_id'), 'kind':'model',
+            'purpose':item.get('purpose'),
+            'label':item.get('step') or ('接收模型响应' if status=='http_response' else '等待模型响应'),
+            'started_at':item['sent_at'],'finished_at':item.get('finished_at'),
+            'updated_at':max(item.get('finished_at') or 0,item.get('headers_at') or 0,item['sent_at']),
+            'interrupted_at':item.get('interrupted_at'), 'status':status,
+            'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens')})
     return result
 
 
 from contextlib import contextmanager
 
 @contextmanager
-def activity(ctx, capability, task_id=None):
-    """An observation of the existing executor, never another scheduler."""
+def activity(ctx, capability, task_id=None, **links):
+    """Persist one actual call; inherit explicit execution ownership, not UI state."""
     import time
     from uuid import uuid4
+    from .runtime import execution_scope,execution_links,notify_runtime
     store=getattr(ctx,'experience_store',None) or getattr(ctx,'research',None)
-    if store is not None and store.snapshot() is None:store=None
+    snapshot=store.snapshot() if store is not None else None
+    if snapshot is None:store=None
+    if task_id is not None:
+        experiment=(snapshot or {}).get('experiments',{}).get(task_id) or {}
+        links.update(experiment_id=task_id,question_id=experiment.get('question_id'))
     item={'id':uuid4().hex,'capability':capability,'task_id':task_id,
-        'started_at':time.time(),'status':'running'}
-    if store:
-        with store._transaction() as db:
-            state=store._read(db)
-            state['activity']=[*state.get('activity',[]),item][-120:]
-            store._save(db,state,'activity_started',item)
-    try:
-        yield item
-    except BaseException as exc:
-        item['status']='interrupted' if type(exc).__name__=='CancelledError' else 'failed'
-        item['error_type']=type(exc).__name__
-        raise
-    finally:
-        item['finished_at']=time.time()
-        if item['status']=='running':item['status']='completed'
+          'parent_call_id':execution_links().get('parent_call_id'),
+          **execution_links(),**links,'started_at':time.time(),'status':'running'}
+    with execution_scope(**links,events=getattr(ctx,'events',None),
+                         research_id=store.research_id if store else None,parent_call_id=item['id']):
         if store:
             with store._transaction() as db:
                 state=store._read(db)
-                state['activity']=[item if a['id']==item['id'] else a for a in state.get('activity',[])]
-                store._save(db,state,'activity_finished',item)
+                state['activity']=[*state.get('activity',[]),item][-240:]
+                store._save(db,state,'activity_started',item)
+            notify_runtime()
+        try:
+            yield item
+        except BaseException as exc:
+            item['status']='interrupted' if type(exc).__name__=='CancelledError' else 'failed'
+            item['error_type']=type(exc).__name__
+            raise
+        finally:
+            item['finished_at']=time.time()
+            if item['status']=='running':item['status']='completed'
+            if store:
+                with store._transaction() as db:
+                    state=store._read(db)
+                    state['activity']=[item if a['id']==item['id'] else a for a in state.get('activity',[])]
+                    store._save(db,state,'activity_finished',item)
+                notify_runtime()

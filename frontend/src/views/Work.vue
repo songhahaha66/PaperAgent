@@ -167,7 +167,12 @@
                       class="question-scope"
                       @click="questionScope = null"
                     >
-                      {{ questionScope }}<t-icon name="close" />
+                      {{
+                        researchSnapshot?.questions?.find((q) => q.id === questionScope)?.title ||
+                        researchSnapshot?.experiments?.find((e) => e.task_id === questionScope)
+                          ?.title ||
+                        '当前引用范围'
+                      }}<t-icon name="close" />
                     </button>
                     <input
                       ref="chatFileInput"
@@ -242,6 +247,8 @@
               @issue="openIssueEditor"
               @resolved="refreshPaper"
               @revise="preparePlanRevision"
+              @ask="askSubproblem"
+              @pause="pauseTask"
             />
           </section>
           <ResearchResultViewer
@@ -446,7 +453,7 @@ const {
   applyResearchSnapshot,
   loadResearchSnapshot,
 } = session
-const layout = useWorkLayout(workId)
+const layout = useWorkLayout(workId, researchSnapshot)
 const {
   panelStore,
   panelSession,

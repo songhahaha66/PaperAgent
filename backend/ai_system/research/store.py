@@ -108,6 +108,9 @@ class ResearchStore:
             return self._read(db)
 
     def _save(self, db, state, kind, payload):
+        from .runtime import execution_links
+        state['updated_at']=time.time()
+        payload={**execution_links(),**payload,'recorded_at':state['updated_at']}
         state["commit_seq"] += 1
         db.execute("INSERT OR REPLACE INTO research VALUES (?, ?)",
                    (self.research_id, json.dumps(state, ensure_ascii=False)))
@@ -781,12 +784,15 @@ class ResearchStore:
                         task["retired"] = False
                         issue["status"] = "suspected"
             for operation in state.get('activity',[]):
-                if operation['status']=='running':operation['status']='interrupted'
+                if operation['status']=='running':
+                    operation['status']='interrupted'
+                    operation['interruption_detected_at']=time.time()
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='model_requests'").fetchone():
                 for row in db.execute('SELECT research_id,sequence,payload FROM model_requests').fetchall():
                     request=json.loads(row['payload'])
                     if request.get('research_id')==self.research_id and request.get('state') in {'sent','http_response'}:
                         request['state']='recorded' if request.get('usage_recorded') else 'interrupted'
+                        request['interruption_detected_at']=time.time()
                         db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',
                             (json.dumps(request),row['research_id'],row['sequence']))
             pending = set()

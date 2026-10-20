@@ -44,7 +44,7 @@ def result_view(item, safe_file):
     name = str(item.get('name') or '').strip()
     description = str(item.get('description') or '').strip()
     return {
-        'id': str(item['id']), 'name': name or str(item['id']),
+        'id': str(item['id']), 'name': name or '未命名结果',
         'description': description, 'unit': str(item.get('unit') or ''),
         'kind': item.get('kind', 'number'), 'value': str(item.get('value', '')),
         'run_id': str(item.get('run_id') or ''),

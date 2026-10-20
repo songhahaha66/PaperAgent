@@ -144,7 +144,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # 只用于刷新右侧面板的事件，不写进聊天记录
-TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot', 'research_state'}
+TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot', 'research_state', 'research_activity'}
 
 
 @router.get("/work/{work_id}/history")
@@ -409,20 +409,20 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     research_snapshot, get_workspace_path(work_id), work_id, original_status,
                 )
                 requested_action = message_data.get('action', 'auto')
+                subproblem_id = message_data.get('subproblem_id')
+                if subproblem_id is not None and not isinstance(subproblem_id, str):
+                    raise ValueError('问题范围无效')
                 recent_dialogue = []
                 if requested_action == 'auto':
                     from services.chat_services.chat_history_manager import ChatHistoryManager
                     recent_dialogue = await asyncio.to_thread(ChatHistoryManager().get_messages, work_id, 6)
-                action = await resolve_action(requested_action, problem, snapshot, recent_dialogue)
+                action = await resolve_action(requested_action, problem, snapshot, recent_dialogue, scope=subproblem_id)
                 if action != 'ask':
                     if task_manager.get_running_task(work_id):
                         raise ValueError('当前有任务正在执行，请等待完成')
                     current = await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, work.status)
                     if (current.research_id, current.commit_seq, current.graph_status) != (snapshot.research_id, snapshot.commit_seq, snapshot.graph_status):
                         raise ValueError('研究状态已改变，请重试')
-                subproblem_id = message_data.get("subproblem_id")
-                if subproblem_id is not None and not isinstance(subproblem_id, str):
-                    raise ValueError("子问题编号无效")
                 revision_command = None
                 if action == "revise_research":
                     from pydantic import ValidationError
@@ -430,8 +430,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         revision=message_data.get('revision')
                         if revision is None and message_data.get('action','auto')=='auto':
                             from uuid import uuid4
+                            from services.chat_services.research_session import revision_experiment_scope
+                            expected=message_data.get('scope_context')
+                            if expected is not None and (not isinstance(expected,dict) or
+                                    expected.get('research_id')!=snapshot.research_id or
+                                    expected.get('base_revision')!=snapshot.research_revision):
+                                raise ValueError('研究版本已改变，请刷新后重试')
                             revision={'command_id':uuid4().hex,'research_id':snapshot.research_id,
-                                      'base_revision':snapshot.research_revision,'scope':[subproblem_id] if subproblem_id else None}
+                                      'base_revision':snapshot.research_revision,'scope':revision_experiment_scope(snapshot,subproblem_id)}
                         revision_command = ResearchRevisionCommand.model_validate(revision)
                     except ValidationError:
                         raise ValueError("增量修改需要有效的命令标识、研究标识和基础版本")

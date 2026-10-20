@@ -17,13 +17,13 @@
     </article>
     <article v-for="entry in usage" :key="entry.attempt_id">
       <h4>
-        {{ taskTitle(entry.task_id) }} · {{ entry.published ? '已提交实验' : '尚未发布的实验' }}
+        {{ taskTitle(entry.task_id) }}，{{ entry.published ? '已提交实验' : '尚未发布的实验' }}
       </h4>
       <div v-for="ref in entry.refs" :key="ref.id + ref.stage" class="experience-ref">
-        <strong>{{ source(entry, ref)?.title || '历史经验版本' }} · v{{ ref.version }}</strong>
+        <strong>{{ source(entry, ref)?.title || '历史经验版本' }}</strong>
         <p>{{ ref.reason }}</p>
         <p class="references-note">
-          用于{{ stageLabel(ref.stage) }}{{ entry.available ? '' : ' · 当前来源或复用状态已改变' }}
+          用于{{ stageLabel(ref.stage) }}{{ entry.available ? '' : '，当前来源或复用状态已改变' }}
         </p>
         <RouterLink
           v-if="source(entry, ref)?.source_work_id"

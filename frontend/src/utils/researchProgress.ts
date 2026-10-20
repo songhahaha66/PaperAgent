@@ -1,4 +1,37 @@
-import type { ResearchSnapshot } from '@/types/research'
+import type { ResearchSnapshot, ResearchActivity } from '@/types/research'
+
+export const researchRunning = (status?: string) =>
+  ['in_progress', 'running', 'processing'].includes(status || '')
+export const callRunning = (row: ResearchActivity) =>
+  !row.finished_at && ['running', 'sent', 'http_response'].includes(row.status)
+export const currentActivity = (runtime: NonNullable<ResearchSnapshot['runtime']>) =>
+  [...(runtime.actions || []), ...(runtime.models || [])]
+    .filter(callRunning)
+    .sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0] || null
+export const executionLabel = (status: string) =>
+  ({
+    planned: '待执行',
+    pending: '待执行',
+    running: '执行中',
+    sent: '等待模型响应',
+    http_response: '接收模型响应',
+    completed: '完成',
+    done: '完成',
+    failed: '未完成',
+    interrupted: '已中断',
+    cancelled: '已取消',
+    success: '成功',
+    error: '失败',
+    waiting: '等待补充信息',
+    recorded: '记录已保存',
+  })[status] || '状态未记录'
+export function executionDuration(row: ResearchActivity, now: number, running: boolean) {
+  if (!row.started_at) return '时间未记录'
+  const end = row.finished_at || (running && callRunning(row) ? now : null)
+  if (end == null) return '结束时间未记录'
+  const seconds = Math.max(0, Math.floor(end - row.started_at))
+  return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
+}
 
 export type ResearchTask = NonNullable<ResearchSnapshot['experiments']>[number]
 
@@ -40,7 +73,7 @@ export function taskLabel(state: string, zh: boolean) {
     pending: ['待执行', 'Pending'],
     writing: ['等待论文撰写', 'Pending writing'],
   }
-  return labels[state]![zh ? 0 : 1]
+  return labels[state]?.[zh ? 0 : 1] || (zh ? '状态未记录' : 'Status unavailable')
 }
 
 export const deliveryLabels = {

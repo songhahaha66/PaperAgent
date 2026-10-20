@@ -1,6 +1,8 @@
 """Durable request usage, explicit/legacy limits and operation failure guards."""
 import json
 import time
+import asyncio
+import logging
 from contextlib import closing,contextmanager
 from contextvars import ContextVar
 from .store import ResearchStore
@@ -14,6 +16,39 @@ class RepeatedOperationBlocked(RuntimeError):pass
 class ModelServiceError(RuntimeError):pass
 
 ACTIVE_MODEL_REQUEST=ContextVar('paperagent_model_request',default=None)
+CURRENT_EXECUTION=ContextVar('paperagent_execution',default={})
+LINK_FIELDS=('action_id','observation_id','question_id','experiment_id','parent_call_id','step','purpose')
+
+
+def execution_links():
+    current=CURRENT_EXECUTION.get()
+    return {key:current[key] for key in LINK_FIELDS if key in current}
+
+
+@contextmanager
+def execution_scope(**values):
+    current={**CURRENT_EXECUTION.get(),**values}
+    if values.get('events') is not None:
+        try:current['event_loop']=asyncio.get_running_loop()
+        except RuntimeError:pass
+    token=CURRENT_EXECUTION.set(current)
+    try:yield
+    finally:CURRENT_EXECUTION.reset(token)
+
+
+def notify_runtime():
+    """Notify only after durable writes. Tokens never trigger snapshot pushes."""
+    current=CURRENT_EXECUTION.get()
+    events=current.get('events');loop=current.get('event_loop')
+    if events is None or loop is None or loop.is_closed():return
+    payload={'research_id':current.get('research_id'),'recorded_at':time.time()}
+    def send():
+        async def emit():
+            try:await events.emit('research_activity',payload)
+            except Exception:logging.getLogger(__name__).warning('执行状态通知失败',exc_info=True)
+        loop.create_task(emit())
+    try:loop.call_soon_threadsafe(send)
+    except RuntimeError:pass  # A stopped notification loop must not fail a saved operation.
 
 
 class ResearchRuntime:
@@ -96,9 +131,11 @@ class ResearchRuntime:
                 self._stop(db,reason)
                 raise ResearchBudgetExhausted(reason['message'])
             state['used']+=1;state['state']='budget_exhausted' if limit is not None and state['used']>=limit else 'active'
-            seq=state['used'];row={'sequence':seq,'sent_at':time.time(),'host':host,'label':CURRENT_LABEL.get(),'research_id':self.active_research_id,'state':'sent'}
+            seq=state['used'];row={'sequence':seq,'sent_at':time.time(),'host':host,'label':CURRENT_LABEL.get(),'research_id':self.active_research_id,'state':'sent',
+                                  **execution_links()}
             db.execute('INSERT OR REPLACE INTO request_budgets VALUES (?,?)',(BUDGET_ID,json.dumps(state)))
             db.execute('INSERT INTO model_requests VALUES (?,?,?)',(BUDGET_ID,seq,json.dumps(row)))
+        notify_runtime()
         return seq
 
     def response(self,sequence,status):
@@ -107,6 +144,7 @@ class ResearchRuntime:
             if r:
                 row=json.loads(r[0]);row.update(http_status=status,headers_at=time.time(),state='http_response')
                 db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(row),BUDGET_ID,sequence))
+        notify_runtime()
 
     def usage(self,sequence,usage=None,*,state="completed"):
         usage=usage or {};known=bool(usage)
@@ -125,6 +163,7 @@ class ResearchRuntime:
             state['usage_reported_calls']=state.get('usage_reported_calls',0)+int(known)
             db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(item),BUDGET_ID,sequence))
             db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?',(json.dumps(state),BUDGET_ID))
+        notify_runtime()
 
     def _stop(self,db,reason):
         db.execute('INSERT OR REPLACE INTO runtime_stop VALUES (1,?)',(json.dumps({**reason,'recorded_at':time.time()}),))

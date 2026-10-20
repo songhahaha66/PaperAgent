@@ -17,4 +17,4 @@ export const outcomeLabels: Record<string, [string, string]> = {
   unreviewed: ['尚未完成审查', 'Not reviewed'],
 }
 export const outcomeLabel = (value: string, zh: boolean) =>
-  outcomeLabels[value]?.[zh ? 0 : 1] || value
+  outcomeLabels[value]?.[zh ? 0 : 1] || (zh ? '状态未记录' : 'Status unavailable')

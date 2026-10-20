@@ -73,7 +73,8 @@ async def repair_report(ctx, inputs):
         runs.append({'run_id':run_id,'ok':info.get('status')=='success','code':ctx.fs.read_text(info['input'])})
     # A text editor has no execution tools and cannot change methods, registered
     # values, claims or the immutable worker receipt.
-    with labelled(task['task_id']+':report'):
+    from .runtime import execution_scope
+    with labelled(task['task_id']+':report'), execution_scope(step='修订实验报告'):
         if any(i['category']!='service' for i in issues):
             edit = await call_structured(ctx.writer_llm, ReportEdit, as_messages(
                 '根据报告意见修订summary、sensitivity、limitations。只修解释、方法说明、影响范围和局限；'

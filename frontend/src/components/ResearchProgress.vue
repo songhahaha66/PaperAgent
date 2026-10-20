@@ -1,128 +1,122 @@
 <template>
-  <section class="research-progress" aria-label="研究问题与证据">
+  <section class="research-progress" aria-label="研究工作台">
     <header class="overview">
-      <div>
-        <h3>研究问题</h3>
-        <p>{{ questions.length }} 个问题 · {{ snapshot?.results.length || 0 }} 项实测结果</p>
-      </div>
+      <h3>研究问题</h3>
+      <p>{{ questions.length }} 个问题，{{ snapshot?.results.length || 0 }} 项可用结果</p>
     </header>
     <p v-if="!questions.length" class="empty">尚未建立研究问题。</p>
-    <nav v-else-if="questions.length > 1" class="questions" aria-label="选择研究问题">
+    <nav v-else class="questions" aria-label="选择研究问题">
       <button
         v-for="(question, index) in questions"
         :key="question.id"
         :class="{ selected: selected?.id === question.id }"
         @click="selectedId = question.id"
       >
-        <span class="question-index">{{ index + 1 }}</span
-        ><span
+        <span class="question-index">{{ index + 1 }}</span>
+        <span
           >{{ question.title }}<small>{{ questionState(question) }}</small></span
         >
       </button>
     </nav>
+    <ResearchRuntime
+      :snapshot="snapshot"
+      :work-status="workStatus"
+      :question-id="selected?.id"
+      @pause="emit('pause')"
+      @file="(path) => emit('object', { type: 'file', path })"
+      @result="(id) => emit('object', { type: 'result', resultType: 'registered', id })"
+    />
     <article v-if="selected" class="question-detail">
-      <section v-if="selected.judgment" class="judgment">
-        <h3>当前结论</h3>
+      <header>
+        <h3>{{ selected.title }}</h3>
+        <button class="text-action" @click="emit('ask', selected.id)">追问当前问题</button>
+      </header>
+      <section class="judgment">
+        <h3>当前判断</h3>
         <MarkdownRenderer
           v-if="selected.judgment"
           :content="evidenceText(selected.judgment)"
           :work-id="snapshot?.work_id"
         />
-        <small
-          v-if="
-            selected.judgment &&
-            selectedExperiments.some((t) => experimentFor(t.task_id)?.checking !== 'passed')
-          "
-          >结论仍在核查。</small
-        >
+        <p v-else class="muted">尚未形成判断。已有实验结果不代表该问题已回答。</p>
       </section>
-      <div v-if="selected.artifact_refs.length" class="basis">
+      <div class="basis">
         <button
-          v-for="ref in selected.artifact_refs"
-          :key="ref"
-          @click="emit('object', { type: 'result', resultType: 'registered', id: ref })"
+          v-for="result in basis"
+          :key="result.id"
+          class="text-action"
+          @click="emit('object', { type: 'result', resultType: 'registered', id: result.id })"
         >
-          {{ snapshot?.results.find((r) => r.id === ref)?.name || '查看依据' }}
+          {{ result.name || '查看依据' }}
         </button>
       </div>
       <p v-for="limitation in selected.limitations" :key="limitation" class="muted">
         {{ limitation }}
       </p>
+      <section v-if="selected.issues.length || selected.next_step" class="next-step">
+        <h3>未解决部分与下一步</h3>
+        <p v-if="selected.next_step">{{ selected.next_step }}</p>
+        <div v-for="issue in selected.issues" :key="issue.id" class="finding">
+          <p>{{ issue.message }}</p>
+          <p>{{ issue.next_step }}</p>
+          <button @click="emit('issue', issue.id)">查看相关记录</button>
+        </div>
+      </section>
       <details v-if="selected.judgments.length > 1">
         <summary>之前的判断</summary>
-        <p v-for="(judgment, index) in selected.judgments.slice(0, -1)" :key="index">
-          {{ judgment.statement }}
-        </p>
+        <article v-for="(judgment, index) in selected.judgments.slice(0, -1)" :key="index">
+          <small>{{
+            judgment.recorded_at
+              ? new Date(judgment.recorded_at * 1000).toLocaleString()
+              : '时间未记录'
+          }}</small>
+          <p>{{ judgment.statement }}</p>
+          <p v-for="limit in judgment.limitations" :key="limit">{{ limit }}</p>
+        </article>
       </details>
-      <section v-if="selected.next_step && status !== 'completed'" class="next-step">
-        <h3>后续安排</h3>
-        <p>{{ selected.next_step }}</p>
-      </section>
       <section>
-        <h3>实验记录</h3>
-        <article
-          v-for="task in selectedExperiments"
-          :key="task.task_id"
-          class="experiment"
-          :data-task="task.task_id"
-        >
+        <h3>相关实验</h3>
+        <article v-for="task in selectedExperiments" :key="task.task_id" class="experiment">
           <header>
-            <strong>{{ methodName(task.task_id) }}</strong
+            <strong>{{ task.title || '实验名称未记录' }}</strong
             ><span class="state">{{ taskLabel(taskState(task, status), true) }}</span>
           </header>
+          <p v-if="task.availability === 'historical'" class="muted">当前显示保留的历史结果。</p>
           <MarkdownRenderer
             v-if="task.summary"
             class="experiment-summary"
             :content="evidenceText(task.summary)"
             :work-id="snapshot?.work_id"
           />
-          <p v-else class="muted">
-            {{
-              task.execution_status === 'failed'
-                ? '本次实验未完成，代码与运行输出已保留。'
-                : task.progress.next_step || task.reason || '尚未取得实测结果。'
-            }}
-          </p>
-          <div v-for="issue in issuesFor(task.task_id)" :key="issue.id" class="finding">
-            <strong>待核查</strong>
-            <p>{{ issue.next_step }}</p>
-            <details>
-              <summary>问题详情</summary>
-              <p>{{ issue.message }}</p>
-              <button @click="emit('issue', issue.id)">查看相关记录</button>
-            </details>
-          </div>
+          <p v-else class="muted">{{ task.reason || '尚无已提交的实验报告。' }}</p>
           <button
-            v-if="
-              experimentFor(task.task_id)?.results.length || experimentFor(task.task_id)?.summary
-            "
+            v-if="task.results.length || task.summary || task.artifacts.some((item) => item.path)"
             class="text-action"
             @click="emit('object', { type: 'result', resultType: 'experiment', id: task.task_id })"
           >
-            查看图表、数据与代码 →
+            查看实验结果与记录
           </button>
-          <details v-if="task.progress.executions">
-            <summary>执行记录</summary>
-            <p>
-              {{ task.progress.executions }} 次执行尝试<span v-if="task.kind === 'verify'">
-                · 独立核查</span
-              >。
-            </p>
-            <p v-if="task.dependencies.length">
-              依赖：{{ task.dependencies.map(taskTitle).join('、') }}
-            </p>
+          <details v-if="task.experiment">
+            <summary>方法与条件</summary>
+            <p>{{ task.experiment.conditions }}</p>
+            <p>{{ task.experiment.evaluation }}</p>
           </details>
         </article>
       </section>
     </article>
-    <section v-if="snapshot?.delivery" class="delivery">
+    <section class="delivery">
       <header>
         <h3>论文</h3>
-        <button @click="emit('object', { type: 'paper' })">打开论文 →</button>
+        <button v-if="snapshot?.artifacts.length" @click="emit('object', { type: 'paper' })">
+          打开论文
+        </button>
       </header>
-      <p v-if="!Object.keys(snapshot.delivery_stages || {}).length">尚未开始撰写论文。</p>
-      <p v-for="(stage, key) in snapshot.delivery_stages" :key="key">
-        {{ stageName(String(key)) }} · {{ stageStatus(stage.status) }}
+      <p v-if="snapshot?.artifacts.length">论文产物已保存，可按需打开。</p>
+      <p v-else>论文产物尚不可用。</p>
+      <p v-for="(stage, key) in snapshot?.delivery_stages" :key="key">
+        {{ stageName(String(key)) }}：{{
+          executionLabel(stage.status === 'in_progress' ? 'running' : stage.status)
+        }}
       </p>
     </section>
   </section>
@@ -130,67 +124,53 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
+import ResearchRuntime from './ResearchRuntime.vue'
 import type { ResearchSnapshot, ResearchQuestion } from '@/types/research'
 import type { WorkObject } from '@/stores/workPanels'
-import { researchQuestions, taskState, taskLabel, deliveryLabels } from '@/utils/researchProgress'
+import {
+  taskState,
+  taskLabel,
+  deliveryLabels,
+  executionLabel,
+  researchRunning,
+} from '@/utils/researchProgress'
 import { evidenceMarkdown } from '@/utils/researchEvidence'
 const props = defineProps<{ snapshot: ResearchSnapshot | null; workStatus?: string }>()
-const emit = defineEmits<{ object: [object: WorkObject]; issue: [id: string] }>()
+const emit = defineEmits<{
+  object: [object: WorkObject]
+  issue: [id: string]
+  ask: [id: string]
+  pause: []
+}>()
 const selectedId = ref('')
-const questions = computed(() => researchQuestions(props.snapshot))
+const questions = computed(() => props.snapshot?.questions || [])
 const selected = computed(
-  () =>
-    questions.value.find((q) => q.id === selectedId.value) ||
-    questions.value.find((q) =>
-      props.snapshot?.experiments?.some(
-        (t) => q.experiment_ids.includes(t.task_id) && t.execution_status === 'running',
-      ),
-    ) ||
-    questions.value[0],
+  () => questions.value.find((q) => q.id === selectedId.value) || questions.value[0],
 )
 const selectedExperiments = computed(
-  () =>
-    props.snapshot?.experiments?.filter(
-      (t) =>
-        selected.value?.experiment_ids.includes(t.task_id) ||
-        (t.kind === 'verify' && t.question_id === selected.value?.id),
-    ) || [],
+  () => props.snapshot?.experiments?.filter((e) => e.question_id === selected.value?.id) || [],
 )
 const status = computed(() => props.workStatus || props.snapshot?.work_status || '')
-const paused = computed(() => ['paused', 'failed', 'cancelled'].includes(status.value))
-const experimentFor = (id: string) => props.snapshot?.experiments?.find((o) => o.task_id === id)
-const methodName = (id: string) =>
-  experimentFor(id)
-    ?.experiment?.candidates.map((c) => c.name)
-    .join(' / ') ||
-  experimentFor(id)?.approach ||
-  experimentFor(id)?.method?.name ||
-  taskTitle(id)
-const taskTitle = (id: string) =>
-  props.snapshot?.experiments?.find((t) => t.task_id === id)?.title || '前置研究'
-const issuesFor = (id: string) =>
-  selected.value?.issues.filter((i) =>
-    props.snapshot?.feedback?.some((f) => f.id === i.id && f.task_id === id),
-  ) || []
+const basis = computed(
+  () => props.snapshot?.results.filter((r) => selected.value?.artifact_refs.includes(r.id)) || [],
+)
 const questionState = (question: ResearchQuestion) => {
-  const tasks =
-    props.snapshot?.experiments?.filter((t) => question.experiment_ids.includes(t.task_id)) || []
-  if (tasks.some((t) => t.execution_status === 'running') && !paused.value) return '正在获取证据'
+  if (
+    researchRunning(status.value) &&
+    props.snapshot?.runtime?.actions?.some(
+      (row) => row.question_id === question.id && row.status === 'running',
+    )
+  )
+    return '正在执行'
   if (question.judgment) return '已有判断'
-  return tasks.length && tasks.some((t) => t.acceptance === 'accepted' && t.validity === 'current')
-    ? '已有结果'
-    : '研究中'
+  return props.snapshot?.results.some((result) =>
+    question.experiment_ids.includes(result.subproblem_id),
+  )
+    ? '已有结果，尚无判断'
+    : '尚无判断'
 }
 const stageName = (key: string) =>
-  deliveryLabels[key as keyof typeof deliveryLabels]?.[0] || '论文整理'
-const stageStatus = (status: string) =>
-  ({
-    pending: '待执行',
-    in_progress: '进行中',
-    completed: '完成',
-    blocked: '未完成，位置已保存',
-    interrupted: '已中断',
-  })[status] || status
+  deliveryLabels[key as keyof typeof deliveryLabels]?.[0] || '论文处理'
 const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
 </script>
 <style scoped>

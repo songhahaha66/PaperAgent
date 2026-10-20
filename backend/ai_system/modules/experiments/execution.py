@@ -235,7 +235,6 @@ def build_tools(
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
         with activity(ctx,'run_python',subproblem_id) as operation:
-            await ctx.events.emit('research_activity',{'task_id':subproblem_id})
             result = await kernel.execute(code)
             operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed')
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
