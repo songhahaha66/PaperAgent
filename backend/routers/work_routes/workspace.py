@@ -796,11 +796,8 @@ async def paper_project_state(work_id: str, db: Session = Depends(get_db), curre
         if not has_source or project['main'].endswith('.tex') and (not project['pdf_available'] or project['compile']['state']!='current'):
             from services.chat_services.paper_editor import document
             draft=await document(store)
-        snapshot=store.snapshot()
         return {**project,'research_id':store.research_id,'sources':paper_sources.cards(store),
                 'draft_sections':draft['sections'] if draft else [],
-                'draft_notice':('草稿 · 尚未完成审查，系统会自动修复常规意见；需要补充信息或做取舍时会明确询问。'
-                                if not store.delivery_ready(snapshot) or snapshot['outcome']!='completed' else ''),
                 'has_source':has_source}
     except (ValueError,ResearchConflict,OSError) as exc:
         raise HTTPException(409,str(exc))

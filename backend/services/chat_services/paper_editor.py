@@ -15,9 +15,9 @@ from pathlib import Path
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from ai_system.graph.build import compile_graph
 from ai_system.graph.context import GraphContext
-from ai_system.graph.registry import REF_PATTERN, publication_text
+from ai_system.graph.registry import REF_PATTERN, MATH_PATTERN, publication_text
 from ai_system.modules.writing.sections import section_plan
-from ai_system.modules.writing.validation import assemble, assemble_latex
+from ai_system.modules.writing.validation import assemble, assemble_latex, place_figures
 from ai_system.research.store import ResearchStore, digest
 from ai_system.research.citations import audit_citations, citation_issues, render_citations
 from ai_system.research.literature import CITATION
@@ -163,10 +163,17 @@ async def document(store):
     readable = {}
     native = (store.root/'paper.tex').is_file() or str(snapshot.get('paper_version', '')).endswith('.tex')
     for key, section in snapshot['sections'].items():
-        text = publication_text(ctx.registry.render(section['text'], latex=native))
-        if native:
+        text = section['text']
+        # An empty paper.tex may accompany legacy Markdown. Converting that
+        # draft as TeX escapes headings, tables and images into literal text.
+        markdown = re.search(r'(?m)^ {0,3}#{1,6}\s|^\s*\|.+\|\s*$', text)
+        fragment_native = native and not markdown and bool(re.search(r'\\(?:[A-Za-z]+|[%&#_])', MATH_PATTERN.sub('', text)))
+        if key.startswith('solve:'):
+            text = place_figures(text)
+        text = publication_text(ctx.registry.render(text, latex=fragment_native))
+        if fragment_native:
             text = CITATION.sub(lambda m:'PAPERAGENTCITE'+m.group(1),text)
-        if native and shutil.which('pandoc'):
+        if fragment_native and shutil.which('pandoc'):
             text = await _native_preview(text)
         readable[key] = render_citations(store.root,re.sub(r'PAPERAGENTCITE(C[1-9]\d*)',lambda m:'{{C:'+m.group(1)+'}}',text))
     with store._connect() as db:

@@ -2,7 +2,7 @@
   <section class="paper-editor">
     <header class="toolbar">
       <nav aria-label="论文视图">
-        <button :aria-pressed="view === 'read'" @click="setView('read')">阅读</button
+        <button :aria-pressed="view === 'read'" @click="setView('read')">草稿</button
         ><button
           :aria-pressed="view === 'source'"
           :disabled="!project?.has_source"
@@ -16,8 +16,6 @@
       </button>
     </header>
     <p v-if="error && !side && !sourceCard" class="error" role="alert">{{ error }}</p>
-    <p v-if="project?.migration_notice" class="notice">{{ project.migration_notice }}</p>
-    <p v-if="project?.draft_notice" class="notice" role="status">{{ project.draft_notice }}</p>
     <p
       v-if="isLatex && project?.has_source"
       class="notice"
@@ -74,24 +72,26 @@
           </p>
         </template>
         <div v-else-if="project.draft_sections?.length" class="read-text">
-          <p class="hint">以下为已保存的章节草稿，供审查完成前阅读；修复后的内容会在这里更新。</p>
           <section
             v-for="section in project.draft_sections"
             :key="section.key"
             :data-section="section.key"
           >
             <h2>{{ section.title }}</h2>
+            <details
+              v-for="issue in project.feedback?.filter((item) => item.section === section.key)"
+              :key="issue.id"
+              :data-issue="issue.id"
+              :open="issue.id === issueRequest?.id"
+              class="section-finding"
+            >
+              <summary>本节审查意见</summary>
+              <p>{{ issue.message }}</p>
+            </details>
             <p v-if="section.validity !== 'current'" class="notice">
               此节依据正在更新，当前文字仅供参考。
             </p>
             <MarkdownRenderer :content="section.readable" :work-id="workId" />
-            <p
-              v-for="issue in project.feedback?.filter((item) => item.section === section.key)"
-              :key="issue.id"
-              class="notice"
-            >
-              审查意见：{{ issue.message }}
-            </p>
           </section>
         </div>
         <template v-else-if="isLatex">
@@ -781,13 +781,18 @@ const visibleFeedback = computed(() => {
   const selected = rows.find((issue) => issue.id === props.issueRequest?.id)
   return selected ? [selected] : rows
 })
-async function showIssueSection(key: string) {
+async function showIssueSection(key: string, issueId?: string) {
   setView('read')
   await nextTick()
   const section = Array.from(
     manuscript.value?.querySelectorAll<HTMLElement>('[data-section]') || [],
   ).find((node) => node.dataset.section === key)
-  section?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const finding = Array.from(
+    section?.querySelectorAll<HTMLDetailsElement>('[data-issue]') || [],
+  ).find((node) => node.dataset.issue === issueId)
+  if (finding) finding.open = true
+  const target = finding || section
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 function commentIssue(text: string) {
   message.value = text
@@ -999,7 +1004,9 @@ watch(
   ([request, ready]) => {
     if (request && ready) {
       const section = project.value?.feedback?.find((issue) => issue.id === request.id)?.section
-      if (section)
+      if (section && project.value?.draft_sections?.some((row) => row.key === section))
+        void showIssueSection(section, request.id)
+      else if (section)
         void showIssueSection(section).then(() =>
           openPanel('opinions', elementAnchor(manuscript.value)),
         )
@@ -1299,6 +1306,16 @@ pre {
   flex: 1;
   padding: 30px;
   line-height: 1.9;
+}
+.section-finding {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--pa-line);
+  color: var(--pa-muted);
+  font-size: 12px;
+}
+.section-finding summary {
+  cursor: pointer;
 }
 .empty {
   padding: 36px;
