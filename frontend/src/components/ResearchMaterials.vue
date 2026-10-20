@@ -3,7 +3,6 @@
     <header>
       <div>
         <h2>资料与结果</h2>
-        <p>从输入材料到实测证据，按研究问题查看来源和去向。</p>
       </div>
       <button class="quiet" @click="load">刷新</button>
     </header>
@@ -20,7 +19,7 @@
         <option value="">全部研究问题</option>
         <option v-for="q in questions" :key="q.id" :value="q.id">{{ q.title }}</option>
       </select>
-      <p v-if="!outcomes.length" class="empty">还没有实测结果。执行中的方法可在研究进度里查看。</p>
+      <p v-if="!outcomes.length" class="empty">暂无实验结果。</p>
       <article v-for="outcome in outcomes" :key="outcome.id" class="evidence-card">
         <header>
           <small>{{ questionFor(outcome.task_id)?.title || outcome.title }}</small
@@ -111,9 +110,7 @@
     </template>
     <section v-show="view === 'sources'" class="sources">
       <h3>研究输入</h3>
-      <p v-if="!inputs.length" class="empty">
-        当前未提供可打开的独立材料文件；题内数据与原始要求可在研究问题中查看。
-      </p>
+      <p v-if="!inputs.length" class="empty">未上传独立资料文件。</p>
       <button
         v-for="path in inputs"
         :key="path"
@@ -172,9 +169,7 @@ const inputUse = (path: string) => {
   const used = (props.snapshot?.outcomes || []).filter((o) =>
     o.sources.some((s) => s.path === path),
   )
-  return used.length
-    ? `用于 ${used.length} 项实验 · 每次执行保留输入版本`
-    : '已提供，尚未用于已保存的实验'
+  return used.length ? `用于 ${used.length} 项实验` : '尚未用于实验'
 }
 const openResult = (id: string) => emit('object', { type: 'result', resultType: 'registered', id })
 const experiments = ref<ComparisonRecord[]>([]),

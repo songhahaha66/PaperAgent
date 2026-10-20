@@ -5,7 +5,7 @@ identifiers, copied objectives or provenance quotes.
 """
 from typing import Annotated, Literal
 from pydantic import Field
-from .models import Contract, ExperimentPlan, Requirement, AssumptionChange
+from .models import Contract, ExperimentPlan, Requirement, AssumptionChange, DomainCheck
 
 
 class Assessment(Contract):
@@ -22,6 +22,13 @@ class Intent(Contract):
     assessments: list[Assessment] = Field(default_factory=list,max_length=6)
 
 
+class RequirementBinding(Contract):
+    requirement_id: str | None = Field(default=None, description='绑定已有要求时引用其编号；新增摘录留空')
+    source_quote: str = Field(default='', description='仅新增要求时逐字摘录原题，已有要求无需复制')
+    kind: Literal['goal','constraint','deliverable'] = 'goal'
+    checks: list[DomainCheck] = Field(default_factory=list, description='本实验新增检查，新任务引用用next；系统分配全局检查编号')
+
+
 class ExperimentIntent(Intent):
     action: Literal['experiment']
     problem: str = Field(min_length=1, description='本次要回答的单个研究问题；多个方法研究同一问题时复用相同问题文本')
@@ -31,7 +38,7 @@ class ExperimentIntent(Intent):
     dependencies: list[str] = Field(default_factory=list, description='本次实际使用的已验收任务')
     investigates: list[str] = Field(default_factory=list, description='本次补充实验针对的待核实意见引用；不是实测证据')
     experiment: ExperimentPlan | None = None
-    requirements: list[Requirement] = Field(default_factory=list, description='仅按需补充原题约束和执行检查；新任务用next作为局部引用')
+    requirements: list[RequirementBinding] = Field(default_factory=list, description='按需关联已有要求或新增原题摘录；原文、任务绑定和编号均由系统维护')
 
 
 class RunIntent(Intent):
@@ -104,6 +111,44 @@ class ResearchIntent(Contract):
                     LiteratureIntent | AskIntent | PauseIntent | ToolIntent, Field(discriminator='action')]
 
 
+def bind_intent_requirements(bindings, snapshot):
+    """Only append bindings/checks. The model cannot rewrite canonical text."""
+    import re
+    from .store import digest
+    source='\n'.join([snapshot['spec']['requirement'],*snapshot['spec']['amendments']])
+    existing={r['id']:r for r in snapshot['spec']['requirements']}
+    used=set(existing)
+    number=max((int(k[2:]) for k in used if re.fullmatch(r'RQ\d+',k)),default=-1)+1
+    task_token=max((int(m[1]) for k in snapshot['tasks'] if (m:=re.fullmatch(r'Q([0-9]+)[a-z]?',k))),default=0)+1
+    bound={}
+    for binding in bindings:
+        previous=existing.get(binding.requirement_id)
+        if binding.requirement_id and not previous:raise ValueError('要求引用不存在，请选择spec.requirements中的要求；新增摘录无需编号')
+        if previous:
+            # Identity fields come exclusively from committed requirements.
+            requirement=bound.get(previous['id']) or Requirement.model_validate({k:v for k,v in previous.items() if k!='revision'})
+        else:
+            quote=binding.source_quote.strip()
+            if not quote or quote not in source:raise ValueError('新增要求需要能在原题中定位的逐字摘录')
+            previous=next((r for r in existing.values() if r['source_quote']==quote and r['kind']==binding.kind),None)
+            if previous:
+                requirement=bound.get(previous['id']) or Requirement.model_validate({k:v for k,v in previous.items() if k!='revision'})
+            else:
+                duplicate=next((r for r in bound.values() if r.source_quote==quote and r.kind==binding.kind),None)
+                if duplicate:requirement=duplicate
+                else:
+                    while f'RQ{number}' in used:number+=1
+                    key=f'RQ{number}';used.add(key);number+=1
+                    requirement=Requirement(id=key,statement=quote,source_quote=quote,kind=binding.kind)
+        if 'next' not in requirement.task_ids:requirement.task_ids.append('next')
+        for raw in binding.checks:
+            check=raw.model_copy(deep=True)
+            check.id='chk_'+digest([requirement.id,task_token,check.model_dump(exclude={'id'})])[:20]
+            if not any(c.id==check.id for c in requirement.checks):requirement.checks.append(check)
+        bound[requirement.id]=requirement
+    return list(bound.values())
+
+
 def compile_intent(intent, snapshot, context):
     from .planner import ResearchCommand, prepare_decision
     choice = intent.next
@@ -112,7 +157,8 @@ def compile_intent(intent, snapshot, context):
     targets = choice.tasks if isinstance(choice, RunIntent) else [choice.task] if isinstance(choice, (AdjustIntent, StopIntent)) else [choice.question_task] if isinstance(choice, ExperimentIntent) and choice.question_task else []
     related = list(dict.fromkeys(r for key in targets if key in snapshot['tasks'] for r in snapshot['tasks'][key]['requirement_ids']))
     selected = list(choice.requirement_ids or related or (['RQ0'] if 'RQ0' in requirements else requirements))
-    if isinstance(choice, ExperimentIntent):selected=list(dict.fromkeys([*selected,*(r.id for r in choice.requirements)]))
+    bindings=bind_intent_requirements(choice.requirements,snapshot) if isinstance(choice,ExperimentIntent) else []
+    if bindings:selected=list(dict.fromkeys([*selected,*(r.id for r in bindings)]))
     if 'RQ0' in requirements and 'RQ0' not in selected:
         selected.insert(0, 'RQ0')
     known = {e['id']: e for e in context['evidence']}
@@ -147,7 +193,7 @@ def compile_intent(intent, snapshot, context):
         command.update(action='execute', changes=[dict(action='add', task_id='next', title=choice.title,
             objective=choice.problem, research_question=question, question_key=question_key, investigates=choice.investigates, method_instruction=choice.method,
             experiment=plan, dependencies=choice.dependencies, requirement_ids=selected)],
-            requirements=choice.requirements)
+            requirements=bindings)
     elif isinstance(choice, RunIntent):
         command.update(action='execute', task_ids=choice.tasks)
     elif isinstance(choice, (AdjustIntent, StopIntent)):
@@ -188,7 +234,7 @@ PROMPT = '''围绕原题、当前材料和实际证据选择下一行动，只�
 研究以单个问题为单位，按需提出方法、执行、获得证据、修正判断。方法明确直接experiment；不确定时逐步试候选，不固定生成两案，不预建完整计划。继续同一个问题时用question_task绑定已有任务；针对未确认的科研疑点做补充实验时用investigates关联意见，已有成果保留，只有复核后才能关闭意见；problem说明这次具体要补什么。
 experiment创建并执行一项研究；run只选择ready_tasks。已验收计算不能重复执行，报告文字意见由系统自动处理。stop可停止没有继续价值的未验收尝试，保留失败和成果，不表示原问题已解决；adjust仅修改未验收任务的方法，原问题、依赖和版本由后端绑定。确认反证沿用issue_ids/assumptions协议，不放宽原题。
 普通代码、参数、仿真使用现有执行器。experiment可冻结候选、conditions及evaluation；普通实验一个候选。只有CSV监督学习比较才填写csv（schema见csv_comparison_protocol）和两个候选。模型预估不算实测，条件不同不能硬排名；无赢家可继续补证或保留多个方法。method_keys只引用available_method_keys中的资源，算法写入method。
-原题完整保留。按需在requirements摘录原题硬约束、绑定必要检查；新任务局部引用用next。没有题内阈值不能虚构。requirement_ids省略时关联已有原要求。
+原题完整保留。requirements只填写已有requirement_id，或新增source_quote和kind，再按需补checks；不要填写原要求statement或分配编号，不复制和缩写已有原文。新任务局部引用用next。没有题内阈值不能虚构。requirement_ids省略时关联已有原要求。
 evidence_refs只能选evidence的真实结果或文献引用；不要复制原文，不引用审查意见作为科学证据。失败不等于方法无效，文件存在或任务验收不等于原题已回答。
 deliver时answers逐项回答spec.requirements全部要求，给实质答案、真实evidence_refs和remaining；科学目的未回答不能交付。报告/语言/格式由写作交付，说明安排即可。sections按实际内容给标题、用途、任务引用和证据引用，后端分配章节标识。遵守用户模板，不机械凑章节。
 inspect查看材料；literature补必要文献原文（off时不可用）；capability仅选择明确开放能力并遵守注册契约。ask仅缺少无法自行获取的必要信息或确需用户取舍；pause仅真实外部障碍，不能因为意见未关、待写作或审查不确定而暂停。

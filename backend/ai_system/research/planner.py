@@ -140,8 +140,10 @@ def preserved_progress(snapshot):
 
 
 def planning_failure_message(error, snapshot):
-    reason=str(error).strip() or type(error).__name__
-    return f'系统未能生成可执行的下一步操作，已保留执行位置和技术诊断。{preserved_progress(snapshot)}恢复后会重新准备操作，无需手工修改审查意见。'
+    from .runtime import decision_error_summary
+    detail=decision_error_summary(error)
+    saved='已有结果已保留。' if snapshot['attempts'] else '尚未开始实验。'
+    return f'下一步操作准备失败：{detail}。{saved}可继续重试。'
 
 
 def decision_block_message(store, snapshot):
@@ -193,7 +195,7 @@ def decision_context(store, snapshot):
     attempts=[{**{k:a.get(k) for k in ('attempt_id','task_id','revision','execution_status','acceptance')},
                'error':str((a.get('result',{}).get('report') or {}).get('error',''))[:1500],
                'published':a.get('commit',{}).get('published',False)} for a in snapshot['attempts'].values()]
-    context={'controller_version':5,'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
+    context={'controller_version':6,'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
              'evidence':evidence,'inputs':files,'literature_mode':literature.policy(),
              'materials':materials.get('profile','') if materials.get('inputs')==files else '材料已变更或尚未查看，可选择inspect；不把文件存在当成分析结果。',
              'judgments':snapshot.get('judgments',[])[-20:],'ready_tasks':ready_tasks(snapshot),'attempts':attempts,'recent_actions':actions,

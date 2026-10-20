@@ -19,7 +19,7 @@
       @issue="(id) => emit('issue', id)"
     />
     <details class="resources">
-      <summary>使用的研究资源</summary>
+      <summary>研究资源</summary>
       <ResearchReferences
         :work-id="workId"
         :snapshot="snapshot"

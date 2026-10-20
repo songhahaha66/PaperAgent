@@ -2,13 +2,11 @@
   <section class="research-progress" aria-label="研究问题与证据">
     <header class="overview">
       <div>
-        <h3>围绕问题推进研究</h3>
+        <h3>研究问题</h3>
         <p>{{ questions.length }} 个问题 · {{ snapshot?.results.length || 0 }} 项实测结果</p>
       </div>
     </header>
-    <p v-if="!questions.length" class="empty">
-      系统会从研究目标中提出当前需要解决的问题，方法和实验随证据逐步展开。
-    </p>
+    <p v-if="!questions.length" class="empty">尚未建立研究问题。</p>
     <nav v-else class="questions" aria-label="选择研究问题">
       <button
         v-for="(question, index) in questions"
@@ -24,7 +22,6 @@
     </nav>
     <article v-if="selected" class="question-detail">
       <header>
-        <small>当前研究问题</small>
         <h2>{{ selected.title }}</h2>
         <details v-if="selected.question !== selected.title">
           <summary>研究目标</summary>
@@ -55,22 +52,28 @@
         </details>
       </section>
       <section class="judgment">
-        <h3>目前知道什么</h3>
+        <h3>当前结论</h3>
         <MarkdownRenderer
           v-if="selected.judgment"
           :content="evidenceText(selected.judgment)"
           :work-id="snapshot?.work_id"
         />
-        <p v-else>尚未形成有结果支持的判断。方法设想与执行中的观察保留在下方。</p>
-        <small v-if="selected.judgment">这是当前实验报告的结果说明，审查与采用情况分别记录。</small>
+        <p v-else>暂无结论。</p>
+        <small
+          v-if="
+            selected.judgment &&
+            selectedTasks.some((t) => outcomeFor(t.task_id)?.checking !== 'passed')
+          "
+          >结论仍在核查。</small
+        >
       </section>
       <section v-if="selected.next_step || decision" class="next-step">
-        <h3>接下来为什么这样做</h3>
+        <h3>后续安排</h3>
         <p>{{ selected.next_step || decision?.reason }}</p>
         <p v-if="paused">研究已暂停。点击“继续”后，系统从保存的执行位置恢复。</p>
       </section>
       <section>
-        <h3>试了什么，得到了什么</h3>
+        <h3>实验记录</h3>
         <article
           v-for="task in selectedTasks"
           :key="task.task_id"
@@ -109,10 +112,10 @@
             证据检查：{{ outcomeLabel(outcomeFor(task.task_id)!.checking, true) }}
           </p>
           <div v-for="issue in issuesFor(task.task_id)" :key="issue.id" class="finding">
-            <strong>系统接下来处理</strong>
+            <strong>待核查</strong>
             <p>{{ issue.next_step }}</p>
             <details>
-              <summary>查看核查内容</summary>
+              <summary>问题详情</summary>
               <p>{{ issue.message }}</p>
               <button @click="emit('issue', issue.id)">查看相关记录</button>
             </details>
@@ -122,14 +125,14 @@
             class="text-action"
             @click="emit('object', { type: 'result', resultType: 'task', id: task.task_id })"
           >
-            实验详情与来源 →
+            查看实验 →
           </button>
           <details v-if="task.progress.attempts">
-            <summary>执行与历史</summary>
+            <summary>执行记录</summary>
             <p>
               {{ task.progress.attempts }} 次执行尝试<span v-if="task.kind === 'verify'">
                 · 独立核查</span
-              >；失败记录与已完成成果均保留。
+              >。
             </p>
             <p v-if="task.dependencies.length">
               依赖：{{ task.dependencies.map(taskTitle).join('、') }}
@@ -143,9 +146,7 @@
         <h3>草稿与交付</h3>
         <button @click="emit('object', { type: 'paper' })">打开草稿 →</button>
       </header>
-      <p v-if="!Object.keys(snapshot.delivery_stages || {}).length">
-        已有章节可随时查看，文稿意见由系统继续修订与复核。
-      </p>
+      <p v-if="!Object.keys(snapshot.delivery_stages || {}).length">草稿尚未生成。</p>
       <p v-for="(stage, key) in snapshot.delivery_stages" :key="key">
         {{ stageName(String(key)) }} · {{ stageStatus(stage.status) }}
       </p>

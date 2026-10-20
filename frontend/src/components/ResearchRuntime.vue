@@ -7,23 +7,25 @@
   >
     <header>
       <span class="signal" :class="{ live: running }"></span><strong>{{ headline }}</strong
+      ><time v-if="active.length === 1">{{ duration(active[0]!) }}</time
       ><button v-if="compact" @click="emit('progress')">
         {{ compact ? '展开进度' : '执行记录' }}
       </button>
     </header>
     <p v-if="currentQuestion" class="current-question">{{ currentQuestion }}</p>
     <p v-if="latestDecision" class="decision">{{ latestDecision.reason }}</p>
-    <div v-for="action in active" :key="action.id" class="active-operation">
+    <div
+      v-for="action in active.length > 1 ? active : []"
+      :key="action.id"
+      class="active-operation"
+    >
       <span>{{ action.label }}</span
       ><time>{{ duration(action) }}</time>
       <small v-if="action.task_id">{{ taskTitle(action.task_id) }}</small>
     </div>
     <p v-if="waiting" class="waiting">需要你补充必要信息，请在对话中回复。</p>
     <p v-else-if="paused" class="waiting">
-      {{
-        snapshot?.execution_reason?.message ||
-        '执行位置与已有成果已保存。继续后从未完成的操作恢复。'
-      }}
+      {{ snapshot?.execution_reason?.message || '进度已保存，可继续研究。' }}
     </p>
     <p v-else-if="running && !active.length" class="waiting">正在同步执行状态…</p>
     <details v-if="!compact && history.length" class="history">
@@ -45,11 +47,7 @@
       </ol>
     </details>
     <p v-if="!running && !paused && !waiting && !history.length" class="waiting">
-      {{
-        snapshot?.has_research
-          ? '此项研究尚无可展示的实时运行记录。'
-          : '提交研究目标后，实际执行过程会显示在这里。'
-      }}
+      {{ snapshot?.has_research ? '暂无执行记录。' : '等待研究开始。' }}
     </p>
   </section>
 </template>
@@ -78,18 +76,22 @@ const paused = computed(() => ['paused', 'failed', 'cancelled'].includes(state.v
 const waiting = computed(() => state.value === 'waiting')
 const actions = computed(() => props.snapshot?.runtime?.actions || [])
 const models = computed(() => props.snapshot?.runtime?.models || [])
-const active = computed(() =>
-  running.value
-    ? [
-        ...actions.value.filter((a) => a.status === 'running'),
-        ...models.value.filter(
-          (m) => !m.finished_at && ['sent', 'http_response'].includes(m.status),
-        ),
-      ]
-    : [],
-)
+const active = computed(() => {
+  if (!running.value) return []
+  const operations = actions.value.filter((a) => a.status === 'running')
+  // Capability operations own the visible execution state. Their model calls
+  // remain in the detailed history rather than appearing as parallel actions.
+  return operations.length
+    ? operations
+    : models.value.filter((m) => !m.finished_at && ['sent', 'http_response'].includes(m.status))
+})
 const history = computed(() =>
-  [...actions.value, ...models.value].sort((a, b) => b.started_at - a.started_at).slice(0, 30),
+  [
+    ...actions.value.map((a) => ({ ...a, label: `研究操作 · ${a.label}` })),
+    ...models.value.map((m) => ({ ...m, label: `模型请求 · ${m.label}` })),
+  ]
+    .sort((a, b) => b.started_at - a.started_at)
+    .slice(0, 30),
 )
 const latestDecision = computed(() => props.snapshot?.runtime?.decisions.at(-1))
 const currentQuestion = computed(() => {
@@ -102,7 +104,9 @@ const headline = computed(() =>
     : paused.value
       ? '研究已暂停'
       : running.value
-        ? active.value[0]?.label || '研究正在进行'
+        ? active.value.length > 1
+          ? '正在推进研究'
+          : active.value[0]?.label || '研究正在进行'
         : state.value === 'completed'
           ? '本次研究已完成'
           : '当前研究',
@@ -141,8 +145,16 @@ const runFile = (id: string) => props.snapshot?.runs.find((r) => r.id === id)?.s
   gap: 9px;
   align-items: center;
 }
+.research-runtime header time {
+  margin-left: auto;
+  color: var(--pa-muted);
+  font-variant-numeric: tabular-nums;
+}
 .research-runtime header button {
   margin-left: auto;
+}
+.research-runtime header time + button {
+  margin-left: 8px;
 }
 .signal {
   width: 7px;

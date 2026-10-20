@@ -30,7 +30,7 @@
     <p v-if="outcome.availability === 'historical' || outcome.checking === 'failed'" role="alert">
       {{
         isZh
-          ? '可查阅保留证据；受影响结果不能用于依赖计算或论文发布，须按现有问题流程处理。'
+          ? '这是历史结果，仍需核查。'
           : 'Retained evidence is readable. Affected results require the existing repair process before dependent computation or publication.'
       }}
     </p>
@@ -140,14 +140,14 @@
     <p v-if="!outcome.sources.length">
       {{
         isZh
-          ? '未登记独立数据来源链接；计算记录可在各项成果中按需查看。'
+          ? '未记录独立资料文件。'
           : 'No separate data source was recorded. Computation records are available with each result.'
       }}
     </p>
     <p v-if="outcome.sources.length" class="note">
       {{
         isZh
-          ? '以下为本次尝试冻结的输入文件；单项成果与文件的精确对应未单独登记。'
+          ? '本次实验使用的输入文件。'
           : 'These inputs were frozen for this attempt; per-result file attribution was not separately recorded.'
       }}
     </p>
@@ -157,15 +157,15 @@
       </button>
       <p v-else>{{ source.path }} · {{ isZh ? '文件不可用' : 'Unavailable' }}</p>
       <details>
-        <summary>{{ isZh ? '冻结来源哈希' : 'Frozen source hash' }}</summary>
+        <summary>{{ isZh ? '文件版本' : 'Frozen source hash' }}</summary>
         <code>{{ source.hash }}</code>
       </details>
     </div>
-    <h3>{{ isZh ? '下一步与理由' : 'Next step and reason' }}</h3>
+    <h3>{{ isZh ? '后续安排' : 'Next step and reason' }}</h3>
     <p>
       {{
         outcome.next_step ||
-        (isZh ? '当前记录没有下一步决策或理由。' : 'No next-step decision or reason was recorded.')
+        (isZh ? '暂无后续安排。' : 'No next-step decision or reason was recorded.')
       }}
     </p>
     <section v-if="outcome.issues.length">

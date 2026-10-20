@@ -195,6 +195,15 @@ async def async_request_hook(request):request_hook(request)
 async def async_response_hook(response):response_hook(response)
 
 
+def decision_error_summary(error):
+    reason=str(error)
+    if any(text in reason for text in ('原题要求','要求绑定','要求必须','要求引用','新增要求')):
+        return '实验条件未能正确关联原题要求'
+    if '证据' in reason or '引用' in reason:return '证据引用未通过核对'
+    if '截断' in reason or '结构化输出' in reason:return '模型返回的操作信息不完整或未通过校验'
+    return '操作信息未通过校验'
+
+
 def execution_reason(root,status):
     """Read-only projection for recent work and snapshots; never starts/migrates a run."""
     if status=='waiting':return {'kind':'waiting_confirmation','message':'等待补充必要研究信息'}
@@ -203,10 +212,18 @@ def execution_reason(root,status):
     path=root/'.system/research.sqlite'
     if not path.exists():return None
     try:
+        preparation=None
         with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
             row=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
+            thread=root/'.system/graph_thread.json'
+            if thread.is_file():
+                research_id=json.loads(thread.read_text()).get('thread_id')
+                latest=db.execute("SELECT response FROM commands WHERE research_id=? AND id LIKE 'research-next:%' ORDER BY rowid DESC LIMIT 1",(research_id,)).fetchone()
+                if latest:
+                    record=json.loads(latest[0])
+                    if record.get('status')=='planning_failed':preparation=record.get('error','')
         reason=json.loads(row[0]) if row else None
         if reason and reason.get('kind')=='invalid_response':
-            reason={**reason,'message':'系统未能完成下一步操作；原稿和计算结果已保留。点击“继续”后重试，无需逐条手工处理审查意见。'}
+            reason={**reason,'message':f'下一步操作准备失败：{decision_error_summary(preparation) if preparation else "模型返回的信息未通过校验"}。可继续重试。'}
         return reason if reason and reason.get('kind') not in {'running','completed'} else None
     except (sqlite3.Error,ValueError):return None

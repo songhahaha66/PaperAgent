@@ -11,7 +11,7 @@
             <div class="chat-markdown">
               <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
               <template v-if="technicalReceipt(message)"
-                ><p>这次操作未完成，已保存当时的研究成果与执行位置。</p>
+                ><p>本次操作未完成。</p>
                 <details class="technical-receipt">
                   <summary>查看当时的技术记录</summary>
                   <MarkdownRenderer :content="getTextContent(message)" /></details
@@ -162,7 +162,9 @@ interface Props {
 const props = defineProps<Props>()
 const technicalReceipt = (message: ChatMessage) =>
   message.role !== 'user' &&
-  /EvidenceDecision|ResearchIntent|结构化输出.*失败/.test(getTextContent(message))
+  /EvidenceDecision|ResearchIntent|结构化输出.*失败|系统未能生成可执行的下一步操作|下一步操作准备失败/.test(
+    getTextContent(message),
+  )
 defineEmits<{
   'open-file': [path: string]
   'open-progress': []

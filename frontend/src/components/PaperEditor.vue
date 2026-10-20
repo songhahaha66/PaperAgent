@@ -67,9 +67,7 @@
             ></textarea>
           </div>
           <p v-else class="empty">这是图片或其他二进制资源，可通过“打开文件”查看。</p>
-          <p class="hint">
-            选区绑定文件、版本与准确范围。手工编辑先保存为修改集，再在同一版本上评论。
-          </p>
+          <p class="hint">选中文字即可评论。</p>
         </template>
         <div v-else-if="project.draft_sections?.length" class="read-text">
           <section
@@ -381,7 +379,6 @@
             <p v-if="!project.sources.length">尚未获取可定位的来源。可在评论中请求检索。</p>
           </template>
           <template v-else>
-            <p class="hint">常规意见由研究流程自动修复和复核，无需逐条人工确认。</p>
             <article v-for="issue in visibleFeedback" :key="issue.id" class="opinion">
               <p>{{ issue.message }}</p>
               <button
