@@ -39,9 +39,13 @@ def writing_action(store):
     if not snapshot['sections'] or any(not t['retired'] and (t['acceptance']!='accepted' or t['validity']!='current') for t in snapshot['tasks'].values()):return None
     active=[i for i in findings(snapshot) if i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}]
     doubts=section_doubts({'sections':snapshot['sections']},SimpleNamespace(research=store))
-    editorial=[i for i in active if i['category']=='writing' and i['section'] in snapshot['sections']]
-    if not editorial and not doubts:return None
-    if any(i not in editorial and i['id'] not in doubts for i in active):return None
+    editorial=[i for i in active if i['category']=='writing' and i['section'] and i['section']!='paper'
+               and (i['section'] in snapshot['sections'] or i['source'] in {'sections','review-task:sections'})]
+    review_faults=[i for i in active if i['category']=='service' and i.get('review_scope',{}).get('kind')!='candidate'
+                   and (i.get('review_scope',{}).get('stage')=='sections' or i['source']=='sections')]
+    if not editorial and not doubts and not review_faults:return None
+    if any(i not in editorial and i not in review_faults and i['id'] not in doubts for i in active):return None
+    if review_faults:return 'validate'
     if snapshot.get('workflow',{}).get('validation_version')!=writing_version(snapshot):return 'validate'
     # A reviewed scientific doubt goes back to research, never to a text repair.
     return 'repair' if editorial and not doubts else None

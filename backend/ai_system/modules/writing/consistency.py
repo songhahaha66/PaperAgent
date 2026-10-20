@@ -183,6 +183,7 @@ def section_audit_prompt(state,ctx,*,force=False):
         prompt+=('\n对每个旧疑点在issue_reviews填写issue_id、verdict和reason。仅文稿解释错误选writing，'
                  '上游结果本身确有疑点选research；这两种情况必须在issues给出source_issue_id相同的明确问题，'
                  'writing的research_issue留空，research提供真实证据和可执行检查。'
+                 'writing可以只是需要消除的误导解释，不要求属于严重矛盾；contradicts=false不否定明确的writing处理结论。'
                  '旧意见不成立或原文已有依据地纠正时选dismissed并说明理由。不能省略旧意见或通过改稿掩盖已确认的计算错误。')
     return prompt,keys
 
@@ -214,7 +215,7 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
                     if key in linked:raise ValueError('已撤销的旧疑点不能同时保留为问题')
                     continue
                 finding=linked.get(key)
-                if not finding or finding.section!=doubts[key]['section'] or not finding.contradicts or NOT_A_CONFLICT.search(finding.problem):raise ValueError('归类后须明确保留对应章节的问题')
+                if not finding or finding.section!=doubts[key]['section']:raise ValueError('归类后须明确保留对应章节的问题')
                 if (review.verdict=='research')!=bool(finding.research_issue):raise ValueError('意见归类与具体问题不一致')
         async def perform():
             return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
@@ -229,7 +230,7 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
         issue.research_issue or IssueReport(task_id=doubts[issue.source_issue_id]['task_id'] if issue.source_issue_id in doubts else issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
                     category="writing", section=issue.section, message=f"与结论表不一致：{issue.problem}")
         for issue in audit.issues
-        if issue.section in keys and ((issue.research_issue and issue.research_issue.category=='coverage') or
+        if issue.section in keys and (issue.source_issue_id in doubts or (issue.research_issue and issue.research_issue.category=='coverage') or
                                      issue.contradicts and not NOT_A_CONFLICT.search(issue.problem))
     ]
     if doubts and not candidate:
