@@ -579,10 +579,10 @@ class ResearchStore:
                 issue["status"] = "resolved"
                 issue["resolution_attempt"] = resolution_attempt
 
-    def report_issues(self, reports, source):
+    def report_issues(self, reports, source, *, close_writing=True):
         with self._transaction() as db:
             state = self._read(db)
-            if source == "sections":
+            if source == "sections" and close_writing:
                 for issue in research_findings(state):
                     if issue["source"] == "sections" and issue["category"] in {"writing",'coverage'} and issue.get("section") != "paper":
                         issue["status"] = "resolved"

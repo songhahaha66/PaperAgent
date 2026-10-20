@@ -44,8 +44,9 @@ async def observe(state, runtime):
             store._save(db,saved,'materials_profiled',saved['materials'])
     store.schedule_investigations()
     from .planner import advance_research
-    from .loop import flow
-    decision_blocked=False if flow(store).get('blocked') else await advance_research(ctx)
+    from .loop import flow,writing_action
+    editorial=writing_action(store)
+    decision_blocked=False if flow(store).get('blocked') or editorial else await advance_research(ctx)
     snapshot = store.snapshot()
     tasks = snapshot["tasks"]
     refresh_registry(ctx)

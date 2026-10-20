@@ -12,7 +12,7 @@ from .models import Contract, Requirement, PlanPatch, TaskChange, PlanProposal
 
 class DecisionBasis(Contract):
     ref: str
-    quote: str = Field(min_length=1, max_length=2000)
+    quote: str = Field(default='', max_length=2000, description='可省略，由后端绑定该引用的实际原文；提供时必须逐字摘录')
 
 
 class RequirementCoverage(Contract):
@@ -111,6 +111,9 @@ def prepare_decision(proposal, snapshot, context):
     if proposal.action=='research' and not proposal.gap.strip():
         proposal.gap=proposal.reason[:2000]
     assign_task_ids(proposal,snapshot)
+    evidence={row['id']:row for row in context['evidence']}
+    for basis in [*proposal.basis,*(b for c in proposal.coverage for b in c.basis),*(b for s in proposal.outline for b in s.basis)]:
+        if not basis.quote and basis.ref in evidence:basis.quote=evidence[basis.ref]['text'][:2000]
     for change in proposal.changes:
         if change.experiment and not change.method_instruction:
             change.method_instruction='；'.join(c.instruction for c in change.experiment.candidates)[:3000]
@@ -157,7 +160,7 @@ def decision_context(store, snapshot):
     literature=LiteratureStore(store.root)
     sources=literature.retrieve(snapshot['spec']['requirement'],limit=12)
     evidence=[{'id':r['id'],'task_id':r['subproblem'],'name':r['name'],
-               'text':str(r.get('value') or r['name']),'unit':r.get('unit',''),'run_id':r['run_id']} for r in results]
+               'text':str(r['value'] if r.get('value') is not None else r['name']),'unit':r.get('unit',''),'run_id':r['run_id']} for r in results]
     evidence += [{'id':s['id'],'name':s['source'].get('title') or '文献摘录','text':s['text'],
                   'locator':s['locator'],'boundary':s['boundary'],'source_url':s['source_url'],
                   'content_hash':s['content_hash']} for s in sources]
@@ -180,7 +183,7 @@ def decision_context(store, snapshot):
     attempts=[{**{k:a.get(k) for k in ('attempt_id','task_id','revision','execution_status','acceptance')},
                'error':str((a.get('result',{}).get('report') or {}).get('error',''))[:1500],
                'published':a.get('commit',{}).get('published',False)} for a in snapshot['attempts'].values()]
-    context={'controller_version':3,'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
+    context={'controller_version':4,'spec':snapshot['spec'],'tasks':tasks,'assumptions':assumptions,
              'evidence':evidence,'inputs':files,'literature_mode':literature.policy(),
              'materials':materials.get('profile','') if materials.get('inputs')==files else '材料已变更或尚未查看，可选择inspect；不把文件存在当成分析结果。',
              'ready_tasks':ready_tasks(snapshot),'attempts':attempts,'recent_actions':actions,
@@ -237,7 +240,7 @@ def validate_decision(proposal, snapshot, context):
         for basis in items:
             row=known.get(basis.ref)
             if not row or not basis.quote.strip() or basis.quote not in row['text']:
-                raise ValueError('决策引用必须来自当前实际结果或文献原文，不能补造')
+                raise ValueError('决策依据须引用evidence中的实际结果或文献；审查意见不是实测证据，科研疑点应通过issue_ids关联，不能据此重跑已验收任务')
             if row.get('task_id') and not any(key in snapshot['tasks'] and snapshot['tasks'][key]['kind']!='verify' and
                     ResearchStore._reaches(snapshot,row['task_id'],key) for key in targets):
                 raise ValueError('决策结果与所选原要求无关')
@@ -616,6 +619,7 @@ class Planner:
             '有已确认反证时同一次research决策用既有issue_ids/assumptions修复；不能放宽原要求或凭空加阈值。'
             'action=ask仅询问真实缺失且影响下一行动的必要信息，不审批每个方法；pause明确资源或其他实际阻碍。'
             '常规审查意见由系统自动修复或补充核查，不要求用户逐条处理、审批改稿或决定技术方法。'
+            'issues是待核实的观察，不是实测证据，不能在basis使用issue编号。basis只提供evidence中的ref即可，quote可省略，由后端绑定真实原文。'
             '存在研究疑点时优先选择可执行的核查或补证据行动；只有缺少无法自行获取的必要数据、目标有歧义或确需用户取舍时才ask。'
             '不能仅因存在未关闭意见、写作尚未完成或审查不确定就pause；pause须说明阻止下一行动的实际外部障碍。'
             'action=deliver必须逐项有实际依据，据成果填写title并在outline组织结果、来源与局限，每节给key/title/purpose/task_ids/basis。'

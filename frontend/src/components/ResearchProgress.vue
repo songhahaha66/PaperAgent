@@ -92,14 +92,6 @@
               <p v-if="task.kind === 'verify'">
                 {{ isZh ? '独立核验任务' : 'Independent verification' }}
               </p>
-              <p v-if="issuesFor(task).length">
-                {{ isZh ? '问题记录 ' : 'Issue records '
-                }}{{
-                  issuesFor(task)
-                    .map((i) => i.id)
-                    .join('、')
-                }}
-              </p>
             </div>
           </details>
         </div>
@@ -142,8 +134,8 @@
         {{ writingBlockers.length }}
         {{
           isZh
-            ? '项论文问题需要处理，请在论文中处理。'
-            : 'paper issues to address; open the paper to address them.'
+            ? '项文稿意见，由系统自动改稿和复核。'
+            : 'writing findings will be revised and checked automatically.'
         }}
       </p>
     </section>
@@ -187,14 +179,18 @@ const taskStatus = (task: ResearchTask) => {
   const count = issuesFor(task).length
   return count
     ? isZh.value
-      ? `有 ${count} 项问题需要处理`
-      : `${count} issues to address`
+      ? `${count} 项意见待系统核查`
+      : `${count} findings to verify`
     : taskState(task, status.value) === 'accepted' && outcomeFor(task)?.checking !== 'passed'
       ? outcomeLabel(outcomeFor(task)?.checking || 'unreviewed', isZh.value)
       : taskLabel(taskState(task, status.value), isZh.value)
 }
 const taskNextStep = (task: ResearchTask) => {
   const state = taskState(task, status.value)
+  if (task.progress.next_step) {
+    const paused = ['paused', 'failed', 'cancelled'].includes(status.value)
+    return (paused ? '点击右上角“继续”，恢复自动处理。' : '') + task.progress.next_step
+  }
   if (
     taskState(task, status.value) === 'accepted' &&
     outcomeFor(task)?.checking !== 'passed' &&

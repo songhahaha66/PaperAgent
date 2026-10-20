@@ -391,7 +391,7 @@ async def write_many(ctx: GraphContext, state: PaperState, items: List[Tuple[str
         if ctx.research:
             from ai_system.research.store import digest
             context=digest({'style':writing_style(ctx),'request':section_request(key,title,state,ctx)})
-            ctx.research.save_sections({key:text},['章节写作尚未完成，未发布论文'],{key:context})
+            ctx.research.save_sections({key:text},['章节写作尚未完成，未发布论文'],{key:context}, verified=False)
         return text
     texts = await asyncio.gather(*(one(key,title) for key,title in items),return_exceptions=True)
     errors=[text for text in texts if isinstance(text,BaseException)]

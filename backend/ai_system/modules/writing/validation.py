@@ -19,7 +19,7 @@ from ai_system.graph.registry import REF_PATTERN, find_refs
 from ai_system.research.models import IssueReport
 from ai_system.graph.state import PaperState
 from ai_system.graph.tracing import labelled
-from ai_system.modules.writing.consistency import audit_sections
+from ai_system.modules.writing.consistency import audit_sections, section_doubts
 from ai_system.modules.writing.sections import writing_style, section_plan, section_request, solve_key
 
 def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]:
@@ -61,10 +61,11 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await invoke(ctx, 'literature.verify', texts=list((state.get('sections') or {}).values()))
     reports = [IssueReport(task_id=i["section"].split(":", 1)[1] if i["section"].startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
         category="writing", section=i["section"], message=i["message"]) for i in check_sections(state, ctx)]
-    if ctx.check_claims:
-        flagged = {issue.section for issue in reports}
-        reports += [i for i in await audit_sections(state, ctx) if i.section not in flagged]
-    issues = ctx.research.report_issues(reports, "sections")
+    if ctx.check_claims or section_doubts(state, ctx):
+        reports += await audit_sections(state, ctx)
+    review_failed=any(r.category=='service' for r in reports) or any(i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
+        and i.get('review_scope',{}).get('stage')=='sections' for i in research_findings(ctx.research.snapshot()))
+    issues = ctx.research.report_issues(reports, "sections", close_writing=not review_failed)
     active_service=[i for i in research_findings(ctx.research.snapshot()) if i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
                     and (i.get('review_scope',{}).get('stage') in {'sections','citations'} or i['source']=='sections')]
     issues=list({i['id']:i for i in [*issues,*active_service]}.values())
@@ -76,6 +77,9 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     if blocked:
         reason='；'.join(dict.fromkeys(i['message'] for i in issues if i['category']=='service'))
         await ctx.set_stage("validate", "blocked", "审查服务未完成："+reason+"。草稿已保留；恢复后继续检查，无需人工修改研究意见。")
+    else:
+        await ctx.set_stage('validate', 'in_progress' if issues else 'completed',
+                            '发现文稿意见，接下来自动改稿并复核。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前草稿检查通过。')
     from ai_system.research.control import public_snapshot
     await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot()))
     ctx.write_json(".system/validation.json", {"round": state.get("repair_round", 0), "issues": issues})
@@ -128,6 +132,8 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     texts = await asyncio.gather(*(fix(k, by_section[k]) for k in keys))
     return {
         "sections": dict(zip(keys, texts)),
+        "section_contexts": {**state.get('section_contexts', {}), **{
+            key:digest({'style':writing_style(ctx),'request':section_request(key,titles[key],state,ctx)}) for key in keys}},
         "repair_input": signature,
         "repair_round": state.get("repair_round", 0) + 1,
         "log": [f"repair: {', '.join(keys)}"],

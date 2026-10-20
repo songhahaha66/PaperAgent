@@ -141,6 +141,19 @@ async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     return {"consistency": conflicts, "research_restart": False, "log": [f"reconcile: {len(conflicts)} conflicts"]}
 
 
+def section_doubts(state, ctx):
+    """Unverified chapter findings may be misclassified; proven faults may not."""
+    store=getattr(ctx, 'research', None)
+    if not store:return {}
+    snapshot=store.snapshot()
+    investigated={t.get('verifies_issue') for t in snapshot['tasks'].values()}
+    return {i['id']:i for i in research_findings(snapshot)
+            if i['source'] in {'sections','review-task:sections'} and i['section'] in (state.get('sections') or {})
+            and i['category'] not in {'writing','service','execution','coverage'}
+            and i['status'] in {'suspected','inconclusive'} and not i['repair_targets'] and i['id'] not in investigated
+            and snapshot['tasks'][i['task_id']]['acceptance']=='accepted' and snapshot['tasks'][i['task_id']]['validity']=='current'}
+
+
 def section_audit_prompt(state,ctx,*,force=False):
     sections = state.get("sections") or {}
     keys = [k for k in sections if k!='references' and sections.get(k)]
@@ -164,6 +177,13 @@ def section_audit_prompt(state,ctx,*,force=False):
         f"# 研究契约\n{json.dumps({'requirements': state['analysis']['requirements'], 'assumptions': state['analysis']['assumptions']}, ensure_ascii=False)}"
     )
     prompt+=methods
+    doubts=section_doubts(state,ctx)
+    if doubts:
+        prompt+='\n# 必须逐项重新核对的旧章节疑点\n'+json.dumps(list(doubts.values()),ensure_ascii=False)
+        prompt+=('\n对每个旧疑点在issue_reviews填写issue_id、verdict和reason。仅文稿解释错误选writing，'
+                 '上游结果本身确有疑点选research；这两种情况必须在issues给出source_issue_id相同的明确问题，'
+                 'writing的research_issue留空，research提供真实证据和可执行检查。'
+                 '旧意见不成立或原文已有依据地纠正时选dismissed并说明理由。不能省略旧意见或通过改稿掩盖已确认的计算错误。')
     return prompt,keys
 
 
@@ -178,12 +198,24 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
     prepared=section_audit_prompt(state,ctx,force=candidate)
     if prepared is None:return []
     prompt,keys=prepared
+    doubts=section_doubts(state,ctx)
     try:
         from ai_system.research.review_cache import run_review
         def validate(result):
             if 'issues' not in result.model_fields_set:raise ValueError('章节审查没有明确返回issues字段')
             if any(i.section not in keys for i in result.issues):raise ValueError('章节审查引用了未提供的章节')
             validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
+            reviews={r.issue_id:r for r in result.issue_reviews}
+            if len(reviews)!=len(result.issue_reviews) or set(reviews)!=set(doubts):raise ValueError('必须逐项核对给定的旧章节疑点')
+            linked={i.source_issue_id:i for i in result.issues if i.source_issue_id}
+            if not set(linked)<=set(doubts):raise ValueError('不能替换未提供的源意见')
+            for key,review in reviews.items():
+                if review.verdict=='dismissed':
+                    if key in linked:raise ValueError('已撤销的旧疑点不能同时保留为问题')
+                    continue
+                finding=linked.get(key)
+                if not finding or finding.section!=doubts[key]['section'] or not finding.contradicts or NOT_A_CONFLICT.search(finding.problem):raise ValueError('归类后须明确保留对应章节的问题')
+                if (review.verdict=='research')!=bool(finding.research_issue):raise ValueError('意见归类与具体问题不一致')
         async def perform():
             return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
         audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
@@ -193,10 +225,32 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
             failures=[i for i in research_findings(ctx.research.snapshot()) if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}]
             if failures:return []  # A persisted failure remains a publication blocker.
         return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_code(exc)}")]
-    return [
-        issue.research_issue or IssueReport(task_id=issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
+    reports = [
+        issue.research_issue or IssueReport(task_id=doubts[issue.source_issue_id]['task_id'] if issue.source_issue_id in doubts else issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
                     category="writing", section=issue.section, message=f"与结论表不一致：{issue.problem}")
         for issue in audit.issues
         if issue.section in keys and ((issue.research_issue and issue.research_issue.category=='coverage') or
                                      issue.contradicts and not NOT_A_CONFLICT.search(issue.problem))
     ]
+    if doubts and not candidate:
+        from ai_system.research.review_cache import ReviewCache,review_context
+        from ai_system.research.store import digest
+        material=review_context(ctx,state,'sections',AUDIT_SYSTEM,prompt,ClaimAudit,sections=state.get('sections') or {})
+        hit=ReviewCache(ctx.research).get('sections',material,ClaimAudit)
+        if not hit:raise ValueError('缺少当前原文和证据上的完成审查，不能变更旧意见')
+        with ctx.research._transaction() as db:
+            snapshot=ctx.research._read(db)
+            for review in audit.issue_reviews:
+                old=next(i for i in snapshot['feedback'] if i['id']==review.issue_id)
+                if old!=doubts[old['id']]:raise ValueError('重新核对期间源意见已改变')
+                old['review_resolution']={'review_id':hit[1]['id'],'review_context_hash':hit[1]['context_hash'],
+                    'verdict':review.verdict,'reason':review.reason,'section_hash':digest(state['sections'][old['section']])}
+                if review.verdict!='dismissed':
+                    finding=next(i for i in audit.issues if i.source_issue_id==old['id'])
+                    report=finding.research_issue or IssueReport(task_id=old['task_id'],category='writing',section=finding.section,message='与结论表不一致：'+finding.problem)
+                    replacement=ctx.research._record_issue(snapshot,report,'confirmed' if report.category=='writing' else 'suspected',source='sections')
+                    if replacement['id']==old['id']:continue
+                    old['review_resolution']['replacement_issue_id']=replacement['id']
+                old['status']='dismissed'
+            ctx.research._save(db,snapshot,'section_findings_reassessed',{'review_id':hit[1]['id'],'issues':[r.model_dump() for r in audit.issue_reviews]})
+    return reports

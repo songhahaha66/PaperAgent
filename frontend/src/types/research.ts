@@ -36,6 +36,8 @@ export interface ResearchOutcome {
   issues: { id: string; message: string; category: string; status: string; action: string }[]
   sources: { path: string; hash: string; available: boolean }[]
   next_step: string | null
+  approach?: string
+  summary?: string
   history: {
     attempt_id: string
     revision: number
@@ -131,6 +133,7 @@ export interface ResearchSnapshot {
       attempts: number
       attempt_limit: number
       rework: boolean
+      next_step?: string
     }
     validation?: {
       outcome: string

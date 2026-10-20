@@ -133,6 +133,7 @@ class ConsistencyReview(BaseModel):
 
 
 class ClaimIssue(BaseModel):
+    source_issue_id: str = Field(default='', description='重新核对已有意见时填写源意见编号；新意见留空')
     contradicts: bool = Field(default=True, description="这句话是否确实与结论表矛盾；一致、或只是没有提到的，填 false")
     section: str = Field(description="有问题的章节 key")
     problem: str = Field(description="本节哪句话与哪条结论（编号）不一致，应怎样改")
@@ -140,8 +141,15 @@ class ClaimIssue(BaseModel):
     research_issue: IssueReport | None = Field(default=None, description="若根因是数据、模型或假设错误，提交研究问题而非只改措辞")
 
 
+class SectionIssueReview(BaseModel):
+    issue_id: str
+    verdict: Literal['writing', 'research', 'dismissed']
+    reason: str = Field(min_length=1, description='结合当前原文及登记证据，说明归类或撤销的理由')
+
+
 class ClaimAudit(BaseModel):
     issues: List[ClaimIssue] = Field(default_factory=list, description="没有不一致则为空")
+    issue_reviews: List[SectionIssueReview] = Field(default_factory=list, description='逐项重新核对提供的旧章节疑点；不能凭未提及旧意见就关闭它')
 
 
 class ResultReview(Contract):

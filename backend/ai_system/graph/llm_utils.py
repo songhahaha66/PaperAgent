@@ -126,7 +126,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             return parsed
         except Exception as exc:  # 网关偶发错误或模型输出不合 schema
             if isinstance(exc,(ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError)) or not isinstance(exc,ValueError):raise
-            if active:active.failed(guard,digest([type(exc).__name__,str(exc)]),'invalid_response',f'模型响应未通过 {schema.__name__} 校验；已保留状态，请检查输入后恢复。')
+            if active:active.failed(guard,digest([type(exc).__name__,str(exc)]),'invalid_response','系统未能完成下一步操作；原稿和计算结果已保留。可点击“继续”重试，无需修改研究要求。')
             last_error = exc
             if parsed is not None:
                 # Repair this candidate, rather than guessing a different plan

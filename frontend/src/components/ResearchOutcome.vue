@@ -1,9 +1,6 @@
 <template>
   <article class="outcome">
     <header>
-      <p>
-        <span v-if="outcome.revision">方案版本 {{ outcome.revision }}</span>
-      </p>
       <h2>{{ outcome.title }}</h2>
     </header>
     <dl class="states">
@@ -35,19 +32,32 @@
           : 'Retained evidence is readable. Affected results require the existing repair process before dependent computation or publication.'
       }}
     </p>
-    <h3>{{ isZh ? '方案说明' : 'Method' }}</h3>
-    <template v-if="outcome.method"
-      ><h4>{{ outcome.method.name }}</h4>
-      <p>{{ outcome.method.idea }}</p>
-      <pre v-if="outcome.method.formulation">{{ outcome.method.formulation }}</pre>
-      <ol v-if="outcome.method.steps?.length">
-        <li v-for="step in outcome.method.steps" :key="step">{{ step }}</li>
-      </ol>
-      <p v-if="outcome.method.validation">{{ outcome.method.validation }}</p></template
-    >
-    <p v-else>
-      {{ isZh ? '未登记方案说明；不从变量名称推断方法。' : 'No method description was recorded.' }}
-    </p>
+    <h3>{{ isZh ? '实际执行' : 'Actual execution' }}</h3>
+    <MarkdownRenderer
+      :content="
+        outcome.approach ||
+        outcome.summary ||
+        (isZh ? '尚无执行说明。' : 'No execution description recorded.')
+      "
+      :work-id="workId"
+    />
+    <details v-if="outcome.method">
+      <summary>{{ isZh ? '最初的方法设想' : 'Initial method proposal' }}</summary>
+      <MarkdownRenderer
+        :content="
+          [
+            outcome.method.name,
+            outcome.method.idea,
+            outcome.method.formulation,
+            ...(outcome.method.steps || []),
+            outcome.method.validation,
+          ]
+            .filter(Boolean)
+            .join('\n\n')
+        "
+        :work-id="workId"
+      />
+    </details>
     <section v-if="outcome.experiment">
       <h3>{{ isZh ? '本次试验' : 'This experiment' }}</h3>
       <template v-if="outcome.experiment.candidates.length > 1">
@@ -184,6 +194,7 @@ import { useStudioCopy } from '@/lang/studio'
 import { outcomeLabel } from '@/utils/outcomeLabels'
 import ResultSeries from './ResultSeries.vue'
 import WorkDocument from './WorkDocument.vue'
+import MarkdownRenderer from './MarkdownRenderer.vue'
 defineProps<{ workId: string; outcome: ResearchOutcome; runs: ResearchSnapshot['runs'] }>()
 const emit = defineEmits<{ 'open-file': [path: string]; issue: [id: string] }>()
 const { isZh } = useStudioCopy()

@@ -21,12 +21,40 @@ def flow(store):
     return saved if saved.get('epoch') == signature else {'epoch': signature, 'done': [], 'repairs': 0}
 
 
+def writing_version(snapshot):
+    from .store import digest
+    return digest({'revision':snapshot['revision'],
+        'sections':{k:[s['content_hash'],s['validity']] for k,s in snapshot['sections'].items()},
+        'findings':[(i['id'],i['category'],i['action']) for i in snapshot['feedback'] if i['status'] not in {'resolved','dismissed','superseded'}],
+        'tasks':{k:[t['revision'],t['active_attempt'],t['acceptance'],t['validity']] for k,t in snapshot['tasks'].items()},
+        'evidence':{k:e['payload'] for k,e in snapshot['evidence'].items() if e['active']}})
+
+
+def writing_action(store):
+    """Repair existing chapter feedback before asking for a new research plan."""
+    from types import SimpleNamespace
+    from .domain import findings
+    from ai_system.modules.writing.consistency import section_doubts
+    snapshot=store.snapshot()
+    if not snapshot['sections'] or any(not t['retired'] and (t['acceptance']!='accepted' or t['validity']!='current') for t in snapshot['tasks'].values()):return None
+    active=[i for i in findings(snapshot) if i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}]
+    doubts=section_doubts({'sections':snapshot['sections']},SimpleNamespace(research=store))
+    editorial=[i for i in active if i['category']=='writing' and i['section'] in snapshot['sections']]
+    if not editorial and not doubts:return None
+    if any(i not in editorial and i['id'] not in doubts for i in active):return None
+    if snapshot.get('workflow',{}).get('validation_version')!=writing_version(snapshot):return 'validate'
+    # A reviewed scientific doubt goes back to research, never to a text repair.
+    return 'repair' if editorial and not doubts else None
+
+
 def select(state, runtime):
     """All transitions, including writing/repair/delivery, are decided here."""
     from .control import task_dispatch
     ctx = runtime.context
     if state.get('research_blocked'):
         return END
+    editorial=writing_action(ctx.research)
+    if editorial:return Send('act',{'capability':'writing.'+editorial,'inputs':{'state':state}})
     from .planner import literature_action,current_decision
     selected=current_decision(ctx.research)
     if not selected:return 'observe'
@@ -137,6 +165,7 @@ async def act(action, runtime):
                 if step not in progress['done']:
                     progress['done'].append(step)
             progress['blocked'] = bool(patch.get('research_blocked'))
+            if step=='validate':progress['validation_version']=writing_version(snapshot)
             if not progress['blocked'] and (step == 'export' or step == 'render' and ctx.output_mode == 'markdown'):
                 if ctx.research.delivery_ready(snapshot):
                     snapshot['outcome'] = 'needs_attention' if patch.get('artifact_conflict') else 'completed'

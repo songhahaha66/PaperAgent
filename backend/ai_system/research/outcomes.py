@@ -7,6 +7,7 @@ An available calculation is not an accepted scientific conclusion.
 from ai_system.research.domain import findings as research_findings
 from ..graph.registry import numeric_series, REF_PATTERN
 from .validation import report_fingerprint
+from .progress import issue_next_step
 
 CLOSED = {'resolved', 'dismissed', 'superseded'}
 
@@ -92,14 +93,15 @@ def outcomes(business, registry, safe_file, current_files=None):
             'objective': task['objective'], 'revision': attempt.get('revision'),
             'attempt_id': attempt.get('attempt_id'), 'computation': attempt.get('execution_status', task['execution_status']),
             'availability': ('current' if current else 'historical') if items else 'unavailable',
-            'checking': check_state(task, attempt, issues) if inputs_match else 'outdated',
+            'checking': check_state(task, attempt, [i for i in issues if i['category']!='writing' or task['kind']=='writing']) if inputs_match else 'outdated',
+            'approach': report.get('approach') or '', 'summary': report.get('summary') or '',
             'method': {k: method[k] for k in ('name', 'idea', 'formulation', 'steps', 'validation') if method.get(k)} or None,
             'experiment':attempt.get('experiment') or task.get('experiment'),
             'results': [result_view(item, safe_file) for item in items[:500]],
             'claims': [claim_view(c['payload'], [e['payload'] for e in business['evidence'].values()]) for c in business['claims'].values()
                        if c['producer_attempt'] == attempt.get('attempt_id')],
             'issues': issues, 'sources': sources,
-            'next_step': task.get('reason') or report.get('next_step') or None,
+            'next_step': ' '.join(dict.fromkeys(issue_next_step(i,business) for i in issues)) or task.get('reason') or report.get('next_step') or None,
             'history': [{'attempt_id': a['attempt_id'], 'revision': a['revision'],
                          'execution_status': a['execution_status'], 'acceptance': a.get('acceptance'),
                          'results': [result_view(item, safe_file) for item in records[:500]]}

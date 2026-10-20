@@ -206,5 +206,7 @@ def execution_reason(root,status):
         with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
             row=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
         reason=json.loads(row[0]) if row else None
+        if reason and reason.get('kind')=='invalid_response':
+            reason={**reason,'message':'系统未能完成下一步操作；原稿和计算结果已保留。点击“继续”后重试，无需逐条手工处理审查意见。'}
         return reason if reason and reason.get('kind') not in {'running','completed'} else None
     except (sqlite3.Error,ValueError):return None
