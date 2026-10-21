@@ -152,8 +152,8 @@ def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_
         run=await ctx.kernels.get(eid).execute("print(6*7)")
         assert run.ok
         result=ctx.registry.record_value(subproblem=eid,name='计算结果',value='42',run_id=run.run_id)
-        return {'solutions':{eid:{'status':'completed','summary':'结果 {{R:'+result.id+'}}','approach':'整数计算'}},
-                'designs':{eid:experiment_design(branch['experiment'])}}
+        return {'report':{'status':'completed','summary':'结果 {{R:'+result.id+'}}','approach':'整数计算'},
+                'design':experiment_design(branch['experiment'])}
     monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
     async def run():

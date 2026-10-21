@@ -189,7 +189,7 @@ class PaperState(TypedDict, total=False):
 
 
 class BranchInput(TypedDict, total=False):
-    """Send 给单个子问题分支的输入"""
+    """Frozen context for one experiment, independent of the graph writing view."""
 
     source: str
     task_revision: int
@@ -197,7 +197,6 @@ class BranchInput(TypedDict, total=False):
     research_contract: Dict[str, Any]
     review_findings: List[Dict[str, Any]]
     subproblem: Dict[str, Any]
-    analysis: Dict[str, Any]
     data_profile: str
     design: Dict[str, Any]
     dependencies: Dict[str, Dict[str, Any]]

@@ -151,8 +151,6 @@ async def _act(request, runtime):
             from .control import graph_view
             inputs={'state':graph_view(store.snapshot())}
         patch=await invoke(ctx,name,**inputs)
-        from .models import WorkerResult
-        if isinstance(patch,WorkerResult):patch={'commit':store.commit(patch)}
         if name=='experiments.inspect':
             with store._transaction() as db:
                 state=store._read(db);state['materials']=patch

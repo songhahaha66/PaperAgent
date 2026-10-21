@@ -180,7 +180,7 @@ def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,m
             item=local.registry.record_value(eid,name,value,result.run_id)
             report={'summary':'Observed {{R:'+item.id+'}}','approach':'count and scale','status':'completed','key_findings':[],
                 'requirement_evidence':[{'requirement_id':'RQ0','evidence_refs':[item.id]}]}
-            return {'solutions':{eid:report},'designs':{eid:experiment_design(branch['experiment'])}}
+            return {'report':report,'design':experiment_design(branch['experiment'])}
         monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
         try:
             await execute(experiment_dispatch(ctx,eid),SimpleNamespace(context=ctx))

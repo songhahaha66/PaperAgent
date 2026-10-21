@@ -69,11 +69,40 @@ def test_ordinary_solver_does_not_generate_candidates_or_hide_design_failures(st
     from ai_system.modules import registry
     monkeypatch.setattr(registry,'invoke',forbidden);monkeypatch.setattr(execution,'_solve_loop',solve)
     branch={'source':SOURCE,'subproblem':study.state['analysis']['subproblems'][0],
-            'analysis':study.state['analysis'],'data_profile':'Known materials.'}
+            'data_profile':'Known materials.'}
     with pytest.raises(RuntimeError,match='stop before'):
         asyncio.run(execution.solve(branch,SimpleNamespace(context=study.ctx)))
     assert captured[0][0]['design']['direct_execution']
     assert SOURCE in captured[0][1][0].content
+
+
+@pytest.mark.parametrize('pending_premise',[False,True])
+def test_single_experiment_solver_returns_its_record_without_a_graph_patch(study,monkeypatch,pending_premise):
+    from ai_system.modules.experiments import execution
+    from test_assumption_submission import draft
+    from test_report_submission import branch as solver_input
+    task=solver_input();design=task['design']
+    if pending_premise:design['chosen']['assumptions']=[draft()]
+    calls=[]
+    async def solve_once(ctx,task,runs,messages):
+        calls.append(task['subproblem']['id'])
+        return 'completed',None,{'summary':'Recorded experiment interpretation','key_findings':[]},[]
+    monkeypatch.setattr(execution,'_solve_loop',solve_once)
+    result=asyncio.run(execution.solve(task,SimpleNamespace(context=study.ctx)))
+    assert set(result)=={'report','design'} and result['design'] is design
+    assert result['report']['status']==('prepared' if pending_premise else 'completed')
+    assert calls==([] if pending_premise else ['Q1'])
+
+
+def test_dispatch_contains_only_the_selected_experiment_and_its_frozen_contract(study):
+    before=study.store.snapshot();task=before['experiments']['Q1']
+    dispatched=control.experiment_dispatch(study.ctx,'Q1')
+    assert 'analysis' not in dispatched and 'solutions' not in dispatched and 'designs' not in dispatched
+    assert dispatched['subproblem']==task['subproblem']
+    assert dispatched['task_revision']==task['revision']
+    assert dispatched['research_contract']['requirements']==[
+        r for r in before['spec']['requirements'] if r['id'] in task['requirement_ids']]
+    assert dispatched['dependencies']=={} and study.store.snapshot()==before
 
 
 

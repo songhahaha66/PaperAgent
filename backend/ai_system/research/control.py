@@ -65,8 +65,15 @@ async def observe(state, runtime):
 
 
 def graph_view(snapshot):
+    from .views import questions
     publication=snapshot['publication'] or {}
-    return {'task':snapshot['spec']['requirement'], 'analysis':{**analysis_view(snapshot),'title':publication.get('title') or snapshot['spec']['requirement'].splitlines()[0][:80]},
+    source=snapshot['spec']['requirement']
+    return {'task':source, 'analysis':{
+        'title':publication.get('title') or source.splitlines()[0][:80],
+        'restatement':source, 'overall_analysis':'',
+        'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify' and not t['retired']],
+        'questions':questions(snapshot), 'requirements':snapshot['spec']['requirements'],
+        'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired']},
         'solutions':{key:experiment_report(snapshot, t) for key,t in snapshot['experiments'].items()
                      if t['acceptance']=='accepted' and t['validity']=='current' and not t['retired']},
         'designs':{key:experiment_design(snapshot, t) for key,t in snapshot['experiments'].items() if experiment_design(snapshot, t)},
@@ -79,18 +86,6 @@ def graph_view(snapshot):
                   and i['status'] not in {'resolved','dismissed','superseded'}]}
 
 
-def analysis_view(snapshot, previous=None):
-    """Existing workers/writing consume a projection, never a startup plan."""
-    from .views import questions
-    source = snapshot['spec']['requirement']
-    return {'title':source.splitlines()[0][:80], 'restatement':source, 'overall_analysis':'',
-            **(previous or {}),
-            'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify' and not t['retired']],
-            'questions':questions(snapshot),
-            'requirements':snapshot['spec']['requirements'],
-            'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired']}
-
-
 def experiment_dispatch(ctx, key):
     """Workers receive system-built context, never a model-supplied branch."""
     snapshot=ctx.research.snapshot()
@@ -99,7 +94,7 @@ def experiment_dispatch(ctx, key):
     from ai_system.modules.experiments.store import ExperimentStore
     comparison=ExperimentStore(ctx.research).read(key,task['revision']) if (task.get('experiment') or {}).get('csv') else None
     return {'resume_comparison':bool(comparison and comparison.get('recovery_requested')),'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
-        'analysis':analysis_view(snapshot), 'task_revision':task['revision'], 'experiment':task.get('experiment'),
+        'task_revision':task['revision'], 'experiment':task.get('experiment'),
         'data_profile':snapshot['materials']['profile'], 'feedback':task.get('method_instruction',''),
         'clarifications':snapshot.get('clarifications',[]),
         'continuation':task.get('continuation'),
@@ -261,10 +256,10 @@ async def execute(branch, runtime):
         branch={**branch,'research_contract':{**branch['research_contract'],
                 'requirements':frozen['requirements'],'checks':frozen['protocol']}}
         local = worker_context(ctx, order)
-        update = await solve(branch, SimpleNamespace(context=local))
-        if task.get('experiment') and ((update.get('designs') or {}).get(key) or branch.get('design') or {}).get('experiment')!=task['experiment']:
+        solved = await solve(branch, SimpleNamespace(context=local))
+        report,design = solved['report'],solved['design']
+        if task.get('experiment') and design.get('experiment')!=task['experiment']:
             raise ResearchConflict('执行报告中的候选方法或评价条件与冻结任务不符')
-        report = update["solutions"][key]
         checks = [] if report["status"] in {"prepared","comparison_blocked"} or branch["subproblem"].get("kind") == "verify" else report_issues(
             local, report, key, branch["subproblem"].get("depends_on") or [],
             figure_required=needs_figure(branch["subproblem"]))
@@ -293,12 +288,12 @@ async def execute(branch, runtime):
         result = WorkerResult(order=order,
             execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
             acceptance="inconclusive" if report['status']=='comparison_blocked' else "rejected" if checks else "accepted", report=report,
-            design=(update.get("designs") or {}).get(key) or branch.get("design"),
+            design=design,
             results=results, claims=[asdict(c) for c in local.registry.claims.values() if c.subproblem == key], issues=[IssueReport(task_id=key, category="evidence", message=message, evidence_refs=[r["id"] for r in results]) for message in checks]
                 + [IssueReport.model_validate(i) for i in report.get("research_issues", [])],
             reviews=report.get("reviews", []),
             assumptions=[{**a, "source": source} for source, drafts in (
-                ("design", ((update.get("designs") or {}).get(key) or branch.get("design") or {}).get("chosen", {}).get("assumptions", [])),
+                ("design", design['chosen'].get("assumptions", [])),
                 ("solve", report.get("assumptions", []))) for a in drafts])
         receipt = ctx.research.commit(result)
         refresh_registry(ctx)
@@ -321,7 +316,7 @@ async def execute(branch, runtime):
             await ctx.events.emit("paper_solved", f"{key} 已通过验收，登记 {len(results)} 项结果")
         else:
             await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '仍需验收或修复，请查看研究问题'}")
-        return {"log": update.get("log", []) + [f"commit {key}: {receipt}"]}
+        return {"log": [f"commit {key}: {receipt}"]}
     except asyncio.CancelledError:
         raise  # Recovery records cancellation and acquires a new lease.
     except Exception as exc:

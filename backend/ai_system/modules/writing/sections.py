@@ -121,13 +121,13 @@ def _report_text(report: Dict) -> str:
 
 def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> str:
     sid = subproblem["id"]
-    design = (state.get("designs") or {}).get(sid)
-    report = (state.get("solutions") or {}).get(sid) or {}
     store=getattr(ctx,'research',None)
     if store:
         from ai_system.research.views import experiment_context
         record=experiment_context(store.snapshot(),{sid})[0]
         return json.dumps({k:v for k,v in record.items() if k!='results'},ensure_ascii=False)
+    design = (state.get("designs") or {}).get(sid)
+    report = (state.get("solutions") or {}).get(sid) or {}
     return (
         f"## {sid} {subproblem['title']}\n问题：{subproblem['question']}\n"
         + (_design_text(design, current_premises(state, sid)) + "\n" if design else "")

@@ -447,10 +447,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         from .planning import experiment_design
         branch={**branch,'design':experiment_design(branch['experiment'])}
         branch['design']['clarification_refs']=[r['ref'] for r in branch.get('clarifications',[])]
-    designed_here = branch.get("design") is None
-    if designed_here:
-        # 按需设计：轮到这个子问题时才设计，候选方案能参考已经求解完的前序结论
-
+    if branch.get("design") is None:
         if branch["subproblem"].get("kind") == "verify":
             chosen = {"name": "独立复算固定验收", "method_keys": [], "idea": "从冻结输入独立复算争议检查，不引入新的建模前提。",
                 "formulation": "", "steps": ["读取冻结输入", "独立复算并登记指定指标"], "assumptions": [], "validation": "提交固定检查所需证据"}
@@ -472,11 +469,9 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
             from .handoff import publish_comparison
             record=await invoke(ctx,'experiments.compare',branch=branch)
             report=await publish_comparison(ctx,branch,record,run_log)
-            return {'solutions':{subproblem_id:report},'designs':{subproblem_id:design},
-                    'log':['comparison measurements returned to observe']}
+            return {'report':report,'design':design}
         if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
-            return {"solutions": {subproblem_id: {"status": "prepared", "reviews": []}},
-                    "designs": {subproblem_id: design}, "log": [f"prepare {subproblem_id}: register selected premises"]}
+            return {'report':{'status':'prepared','reviews':[]},'design':design}
         await ctx.events.stage(f"{subproblem_id}：开始编码求解「{design['chosen']['name']}」")
         status, error, report, reviews = await _solve_loop(
             ctx, branch, run_log, [HumanMessage(content=build_task(branch, ctx))]
@@ -497,15 +492,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         # 写作看的报告和结论表用同一份陈述：手写的数换成引用
         ctx.registry.set_claims(subproblem_id, report.get("key_findings") or [])
 
-    count = len(ctx.registry.for_subproblem(subproblem_id))
-    update = {
-        "solutions": {subproblem_id: {**report, "status": status, "error": error, "reviews": reviews}},
-        "log": [f"solve {subproblem_id}: {status}, {count} results, {len(reviews)} reviews"],
-    }
-    if branch.get('experiment') or designed_here:
-        # 写作阶段按实际求解的方案描述模型
-        update["designs"] = {subproblem_id: design}
-    return update
+    return {'report':{**report,'status':status,'error':error,'reviews':reviews},'design':design}
 
 
 async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict], messages: List):
