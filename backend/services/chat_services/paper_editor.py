@@ -12,8 +12,6 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from ai_system.graph.build import compile_graph
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import REF_PATTERN, publication_text
 from ai_system.modules.writing.sections import section_plan
@@ -22,7 +20,7 @@ from ai_system.research.store import ResearchStore, digest
 from ai_system.research.citations import audit_citations, citation_issues, render_citations
 from ai_system.research.literature import CITATION
 from ai_system.research.models import ResearchConflict
-from ai_system.research.control import refresh_registry
+from ai_system.research.control import refresh_registry,paper_state
 from ai_system.export import export_docx
 from ai_system.export.latex import fragment_issues
 
@@ -98,14 +96,6 @@ def current_store(root):
     return store
 
 
-async def paper_state(store):
-    async with AsyncSqliteSaver.from_conn_string(str(store.root / '.system/graph.sqlite')) as saver:
-        saved = await compile_graph(saver).aget_state({'configurable': {'thread_id': store.research_id}})
-    if not saved.values.get('analysis'):
-        raise ValueError('尚无可编辑的论文记录')
-    return {**saved.values, 'sections': {k: v['text'] for k, v in store.snapshot()['sections'].items()}}
-
-
 def source_info(store, snapshot):
     from .paper_project import is_latex
     if is_latex(store):raise ResearchConflict('LaTeX 请使用源码评论与文件修改集')
@@ -132,7 +122,7 @@ async def document(store):
     snapshot = store.snapshot()
     if not snapshot or not any(s.get('text', '').strip() for s in snapshot['sections'].values()):
         return empty_document(store.research_id, (snapshot or {}).get('commit_seq', 0))
-    state = await paper_state(store)
+    state = paper_state(store)
     plan = section_plan(state)
     titles = {k: title for k, title, _ in plan}
     levels = {k: level for k, _, level in plan}
@@ -266,7 +256,7 @@ async def decide(store, proposal_id, apply, output_mode):
         from .issue_edits import require_binding,ready
         require_binding(store,proposal['source_issue'])
         if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
-    state = await paper_state(store)
+    state = paper_state(store)
     changes=proposal.get('after_sections') or {proposal['section']:proposal['after']}
     if proposal.get('generation_contract')=='scoped-anchored-edits-v2':
         from .paper_corrections import require_scope

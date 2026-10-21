@@ -16,26 +16,101 @@ from test_native_latex import accepted_store
 from test_research_p2 import problem, TASK
 from ai_system.modules.writing.validation import assemble
 from ai_system.modules.writing.sections import section_plan
+from ai_system.research.control import graph_view,paper_state
 
 
 @pytest.fixture
-def paper(tmp_path, monkeypatch):
+def paper(tmp_path):
     store = accepted_store(tmp_path)
-    state = {'analysis': problem().model_dump(), 'task': TASK, 'sections': {}}
+    state = graph_view(store.snapshot())
     sections = {key: '原来的表述说明研究范围与局限。' * 8 for key, _, _ in section_plan(state) if key != 'solve_heading'}
     state['sections'] = sections
     store.save_sections(sections, [])
     store.publish_paper(assemble(state))
     (tmp_path / '.system/graph_thread.json').write_text(json.dumps({'thread_id': store.research_id, 'engine_version': 'research-v3'}))
-    async def load(_):
-        return {**state, 'sections': {k: v['text'] for k, v in store.snapshot()['sections'].items()}}
-    monkeypatch.setattr(editor, 'paper_state', load)
     return store, state
 
 
 def candidate(store):
     before = store.snapshot()['sections']['solve:Q1']['text']
     return asyncio.run(editor.propose(store, 'solve:Q1', '简洁表述', before.replace('原来的表述', '修订后的表述')))
+
+
+@pytest.mark.skipif(not shutil.which('pandoc'),reason='pandoc unavailable')
+def test_saved_word_document_opens_and_edits_without_a_graph_checkpoint(paper):
+    store,_=paper
+    checkpoint=store.root/'.system/graph.sqlite'
+    assert not checkpoint.exists()
+    before=store.snapshot()
+    assert asyncio.run(editor.document(store))['sections']
+    proposal=candidate(store)
+    assert asyncio.run(editor.decide(store,proposal['id'],True,'word'))['status']=='applied'
+    assert (store.root/'paper.docx').read_bytes().startswith(b'PK')
+    assert '修订后的表述' in (store.root/'paper.md').read_text()
+    assert store.snapshot()['executions']==before['executions'] and not checkpoint.exists()
+
+
+def test_saved_store_requirements_outline_and_judgments_override_an_old_checkpoint(paper):
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from ai_system.graph.build import compile_graph
+    from services.chat_services import review_tasks
+    store,_=paper
+    async def save_old_checkpoint():
+        async with AsyncSqliteSaver.from_conn_string(str(store.root/'.system/graph.sqlite')) as saver:
+            await compile_graph(saver).aupdate_state({'configurable':{'thread_id':store.research_id}},
+                {'task':'OUTDATED_REQUEST','analysis':{'title':'OUTDATED_TITLE'},
+                 'outline':[{'key':'old','title':'OUTDATED_OUTLINE'}]},as_node='solve_join')
+    asyncio.run(save_old_checkpoint())
+    outline=[{'key':'evaluation','title':'当前结论'},{'key':'solve_heading','title':'当前研究'}]
+    with store._transaction() as db:
+        saved=store._read(db)
+        saved['spec']['requirement']+='\n当前补充要求。'
+        saved['spec']['requirements'][0]['statement']='当前要求记录'
+        saved['publication']={'title':'当前论文标题','outline':outline}
+        saved['consistency']=[{'resolution':'当前已保存说明'}]
+        next(iter(saved['questions'].values()))['judgment']='当前问题判断'
+        store._save(db,saved,'fixture_current_material',{})
+    snapshot=store.snapshot();state=paper_state(store)
+    assert state==editor.paper_state(store)==review_tasks.paper_state(store)
+    assert state['task']==snapshot['spec']['requirement'] and state['analysis']['title']=='当前论文标题'
+    assert state['outline']==outline and state['consistency']==snapshot['consistency']
+    assert state['analysis']['requirements']==snapshot['spec']['requirements']
+    assert state['analysis']['questions']==graph_view(snapshot)['analysis']['questions']
+    assert 'OUTDATED_' not in json.dumps(state)
+    doc=asyncio.run(editor.document(store))
+    assert doc['title']=='当前论文标题' and doc['outline'][0]['title']=='当前结论'
+
+
+def test_historical_sections_remain_visible_without_becoming_publishable(paper):
+    store,_=paper
+    with store._transaction() as db:
+        saved=store._read(db);saved['sections']['abstract']['validity']='stale'
+        store._save(db,saved,'fixture_stale_section',{})
+    snapshot=store.snapshot()
+    assert 'abstract' not in graph_view(snapshot)['sections']
+    assert paper_state(store)['sections']['abstract']==snapshot['sections']['abstract']['text']
+    doc=asyncio.run(editor.document(store))
+    assert next(s for s in doc['sections'] if s['key']=='abstract')['validity']=='stale'
+    assert not doc['artifacts']
+    with pytest.raises(ResearchConflict):asyncio.run(editor.propose(store,'abstract','修改旧稿',content='新的文字'))
+
+
+def test_shared_native_view_uses_real_files_and_versions_instead_of_saved_sections(paper):
+    from ai_system.export.latex import native_document
+    from services.chat_services import paper_project as project,review_tasks
+    store,_=paper
+    with store._transaction() as db:
+        saved=store._read(db);saved['spec']['output_mode']='latex'
+        store._save(db,saved,'fixture_native_output',{})
+    source=native_document('真实源码','摘要',r'\section{当前正文}实际文件内容。')
+    (store.root/'paper.tex').write_text(source)
+    project.initialize(store)
+    before=store.snapshot();state=paper_state(store)
+    assert state==review_tasks.paper_state(store)
+    assert state['sections']=={'paper.tex':source}
+    assert state['source_version']==project.snapshot(store.root)['version']
+    assert all(not k.startswith('solve:') for k in state['sections'])
+    assert store.snapshot()==before
 
 
 def test_document_order_matches_assembled_outline(paper):

@@ -11,7 +11,7 @@ from ai_system.graph.registry import REF_PATTERN,MATH_PATTERN,publication_text
 from ai_system.graph.state import ClaimAudit
 from ai_system.research.store import digest
 from ai_system.research.models import ResearchConflict
-from ai_system.research.control import refresh_registry
+from ai_system.research.control import refresh_registry,paper_state
 from ai_system.research.method_facts import verified_methods,canonical_method_block
 from ai_system.research.review_cache import ReviewCache,review_context,run_review
 from ai_system.research.citations import audit_citations,citation_issues
@@ -251,7 +251,7 @@ def require_scope(store,proposal,snapshot,source):
 
 
 async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment_scope=None,recovery_of=None,wording=False,source_issue=None):
-    from .paper_editor import paper_state,source_info
+    from .paper_editor import source_info
     snapshot=store.refresh_inputs();filename,source=source_info(store,snapshot)
     if not llm:raise ValueError('依据修正需要实际写作与审查模型')
     if source_issue:
@@ -267,7 +267,7 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
     if not 1<=len(keys)<=6 or any(k not in snapshot['sections'] or snapshot['sections'][k]['validity']!='current' or k=='references' for k in keys):raise ValueError('请选择一至六个当前正文章节')
     facts=verified_methods(store)
     if not facts and not wording:raise ValueError('当前研究没有可用于依据修正的项目核验方法记录，请使用研究修改')
-    state=await paper_state(store);ctx=proposal_context(store,state,llm)
+    state=paper_state(store);ctx=proposal_context(store,state,llm)
     before={k:snapshot['sections'][k]['text'] for k in keys}
     blocks={k:canonical_method_block(facts,k.split(':',1)[1]) for k in keys if k.startswith('solve:') and not wording}
     answer=None;scope=None;attempt=None
@@ -322,7 +322,7 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
 
 async def review_pending_fragment(store,proposal_id,llm):
     """Resume a saved candidate's interrupted service review; never retry findings."""
-    from .paper_editor import get_proposal,source_info,paper_state
+    from .paper_editor import get_proposal,source_info
     p=get_proposal(store,proposal_id);snapshot=store.refresh_inputs();_,source=source_info(store,snapshot)
     if p['status']!='pending' or p.get('generation_contract') not in {'scoped-anchored-edits-v2','manual-evidence-v1'} or p.get('review_id'):
         raise ResearchConflict('只能恢复尚无有效审查结果的已保存候选；实际审查意见不能绕过')
@@ -336,7 +336,7 @@ async def review_pending_fragment(store,proposal_id,llm):
     with store._connect() as db:
         failed=db.execute("SELECT payload FROM review_records WHERE research_id=? AND context_hash=? AND state IN ('failed','running') ORDER BY rowid DESC LIMIT 1",(store.research_id,p['review_context_hash'])).fetchone()
     if not failed and p.get('review_state')!='pending':raise ResearchConflict('没有可恢复的对应服务审查失败记录')
-    state=await paper_state(store);state['sections'].update(p['after_sections']);ctx=proposal_context(store,state,llm)
+    state=paper_state(store);state['sections'].update(p['after_sections']);ctx=proposal_context(store,state,llm)
     problems=check_sections(state,ctx)
     if problems:raise ResearchConflict('候选仍有确定性或引用问题，不能以重审放行')
     issues,hit,context=await review_candidate(store,state,llm,scope,p.get('source_issue'))

@@ -80,10 +80,20 @@ def graph_view(snapshot):
         'sections':{} if snapshot['spec'].get('output_mode')=='latex' else {key:s['text'] for key,s in snapshot['sections'].items() if s['validity']=='current'},
         'section_contexts':{} if snapshot['spec'].get('output_mode')=='latex' else {key:s.get('context_hash') for key,s in snapshot['sections'].items() if s['validity']=='current'},
         'data_profile':snapshot['materials']['profile'],
-        'outline':publication.get('outline',[]), 'consistency':[],
+        'outline':publication.get('outline',[]), 'consistency':snapshot.get('consistency',[]),
         'repair_round':publication.get('repairs',0),
         'issues':[i for i in snapshot['feedback'] if i.get('section') and i['action']=='rewrite'
                   and i['status'] not in {'resolved','dismissed','superseded'}]}
+
+
+def paper_state(store):
+    """Saved draft/history text; publication validity remains in the Store."""
+    snapshot=store.snapshot()
+    state=graph_view(snapshot)
+    state['sections']={key:s['text'] for key,s in snapshot['sections'].items()}
+    state['section_contexts']={key:s.get('context_hash') for key,s in snapshot['sections'].items()}
+    from services.chat_services.paper_project import is_latex,source_state
+    return source_state(store,state) if is_latex(store) else state
 
 
 def experiment_dispatch(ctx, key):

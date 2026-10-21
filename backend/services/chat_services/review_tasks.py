@@ -4,6 +4,7 @@ from ai_system.research.domain import findings as research_findings
 import asyncio,json,time
 from contextlib import closing
 from ai_system.research.store import ResearchStore,digest
+from ai_system.research.control import paper_state
 from ai_system.research.models import IssueReport,ResearchConflict
 from ai_system.research.review_cache import ReviewCache,ReviewInProgress,ReviewSuperseded,review_context,science_version
 from ai_system.research.review_migration import context_from_store
@@ -14,17 +15,6 @@ from ai_system.graph.tracing import LLMCallTrace,labelled
 
 LABELS={'reconcile':'结论口径','sections':'章节一致性','citations':'文献支持'}
 ACTIVE=set()
-
-
-def paper_state(store):
-    snapshot=store.snapshot()
-    state={'task':snapshot['spec']['requirement'],'analysis':{'title':'研究','requirements':snapshot['spec']['requirements'],
-        'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired'],
-        'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if not t['retired']]},
-        'sections':{k:v['text'] for k,v in snapshot['sections'].items()},'consistency':[]}
-    state['consistency']=snapshot.get('consistency',[])
-    from .paper_project import is_latex, source_state
-    return source_state(store,state) if is_latex(store) else state
 
 
 def material(store,stage):
