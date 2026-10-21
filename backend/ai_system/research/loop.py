@@ -7,10 +7,10 @@ from langgraph.graph import END
 from langgraph.types import Send, interrupt
 from ai_system.modules.registry import invoke
 from .store import digest
-from .domain import attach_question, report_artifact
-from .planner import Planner, decision_context, planning_failure_message, ready_tasks
+from .domain import attach_question
+from .planner import Planner, decision_context, planning_failure_message
 
-PUBLICATION = ('reconcile', 'write', 'validate', 'render', 'export')
+PUBLICATION = ('write', 'validate', 'render', 'export')
 
 
 def _action(store, capability, inputs, reason, *, target=None, key=None, observation_id=None, question_id=None):
@@ -32,14 +32,15 @@ def create_experiment(store, proposal):
     from .models import ExperimentPlan
     with store._transaction() as db:
         state=store._read(db)
-        key='E'+str(max((int(key[1:]) for key in state['experiments'] if key.startswith('E')),default=0)+1)
+        key='E'+str(max((int(key[1:]) for key in state['experiments'] if key.startswith('E') and key[1:].isdigit()),default=0)+1)
         question_id=proposal.question_id
         if question_id is None:
-            question_id=next((q['id'] for q in state['questions'].values() if q['question']==proposal.question),None)
+            question_id=next((q['id'] for q in state['questions'].values() if not q.get('retired') and q['question']==proposal.question),None)
         plan=proposal.experiment or ExperimentPlan(conditions=proposal.conditions,evaluation=proposal.evaluation,
             candidates=[{'name':proposal.title or proposal.method[:100], 'instruction':proposal.method}])
         dependencies=list(dict.fromkeys(state['artifacts'][ref]['experiment_id'] for ref in proposal.artifact_refs))
-        requirement_ids=list(dict.fromkeys(rid for eid in dependencies for rid in state['experiments'][eid]['requirement_ids']))
+        owners=set(dependencies) | {eid for eid,e in state['experiments'].items() if e['question_id']==question_id}
+        requirement_ids=[r['id'] for r in state['spec']['requirements'] if owners.intersection(r['task_ids'])]
         if not requirement_ids:requirement_ids=[r['id'] for r in state['spec']['requirements']]
         instruction='；'.join(c.instruction for c in plan.candidates)
         experiment={'task_id':key,'question_id':question_id,'revision':1,
@@ -84,8 +85,12 @@ def _save_assessments(store, proposal, *, observation_id=None, experiment_id=Non
             question=state['questions'][judgment.question_id]
             item={**judgment.model_dump(),'recorded_at':recorded_at,
                   'observation_id':observation_id,'action_id':action_id}
-            question.update({key:value for key,value in item.items() if key!='question_id'})
+            question.update({key:item[key] for key in ('artifact_refs','limitations','next_step')})
+            question.pop('statement',None)
             question['judgment']=item['statement']
+            question['answer_status']='current'
+            question['basis_versions']={ref:state['artifacts'][ref]['content_hash'] for ref in item['artifact_refs']}
+            question['interpretation_versions']={eid:state['experiments'][eid]['report_ref'] for eid in {state['artifacts'][ref]['experiment_id'] for ref in item['artifact_refs']}}
             question['judgments'].append(item)
         record={**proposal.model_dump(),'id':'decision:'+observation_id,'recorded_at':recorded_at,
                 'observation_id':observation_id,'action_id':action_id,
@@ -123,14 +128,6 @@ async def prepare_action(ctx):
         else:
             return True  # An interrupted external operation needs explicit recovery.
     snapshot=store.snapshot()
-    # Ready experiments already have recorded method and evaluation conditions.
-    ready=ready_tasks(snapshot)
-    if ready:
-        _action(store,'experiments.execute',{},'执行已安排的实验',target=ready[0]);return False
-    from .feedback import pending_report_review
-    review=pending_report_review(store)
-    if review:
-        _action(store,'research.review_report',review,'修订并复核实验报告',target=review['task_id']);return False
     if _publication_action(ctx,snapshot):return False
     key,context=decision_context(store,snapshot)
     if not store.reserve_planning_call(limit=ctx.max_planning_calls):
@@ -145,28 +142,39 @@ async def prepare_action(ctx):
             proposal=await Planner(ctx.planner_llm).decide(snapshot,context)
         if store.snapshot()['revision']!=snapshot['revision']:
             return False
-        if proposal.action=='experiment':
+        if proposal.question_updates:
+            from .questions import apply_questions
+            with store._transaction() as db:
+                state=store._read(db)
+                apply_questions(state,proposal.question_updates)
+                state['revision']+=1
+                store._save(db,state,'questions_revised',{'updates':[q.model_dump() for q in proposal.question_updates]})
+        if proposal.action in {'experiment','continue'}:
             if proposal.experiment_id:
                 target=proposal.experiment_id
                 with store._transaction() as db:
-                    state=store._read(db);state['experiments'][target]['execution_status']='pending'
+                    state=store._read(db);experiment=state['experiments'][target]
+                    if proposal.action=='continue':
+                        experiment['continuation']={'parent_attempt':experiment['execution_id'],'information_need':proposal.information_need}
+                    experiment['execution_status']='pending'
                     store._save(db,state,'experiment_retry_requested',{'experiment_id':target})
             else:target=create_experiment(store,proposal)
             _action(store,'experiments.execute',{},proposal.reason,target=target,key=key,observation_id=observation_id)
         elif proposal.action=='write':
             with store._transaction() as db:
                 state=store._read(db)
-                state['publication']={'stage':'reconcile','outline':[s.model_dump() for s in proposal.outline],
+                state['publication']={'stage':'write','outline':[s.model_dump() for s in proposal.outline],
                     'title':proposal.title,'reason':proposal.reason,'repair_inputs':[],'repairs':0,
                     'observation_id':observation_id}
                 store._save(db,state,'publication_requested',state['publication'])
             _publication_action(ctx,store.snapshot())
         else:
             name={'inspect':'experiments.inspect','literature':'literature.collect','tool':proposal.capability,
-                  'ask':'ask','pause':'pause'}[proposal.action]
+                  'ask':'ask','pause':'pause','observe':'research.update'}[proposal.action]
             inputs=({'query':proposal.query,'limit':3,'fetch_open_access':True} if proposal.action=='literature'
                     else {'message':proposal.message} if proposal.action=='ask' else proposal.inputs if proposal.action=='tool' else {})
-            _action(store,name,inputs,proposal.reason,key=key,observation_id=observation_id,question_id=proposal.question_id)
+            target=(inputs.get('task_id') if proposal.action=='tool' else None) or proposal.experiment_id
+            _action(store,name,inputs,proposal.reason,target=target,key=key,observation_id=observation_id,question_id=proposal.question_id)
         _save_assessments(store,proposal,observation_id=observation_id,experiment_id=target,
                           action_id=store.snapshot()['action']['id'])
         await ctx.events.emit('research_activity',{'observation_id':observation_id})
@@ -213,6 +221,11 @@ async def _act(request, runtime):
     action=store.snapshot()['action']
     if action['id']!=request['action_id'] or action['status']=='done':return {}
     name=action['capability']
+    if name=='research.update':
+        with store._transaction() as db:
+            saved=store._read(db);saved['action']['status']='done'
+            store._save(db,saved,'questions_updated',{'action_id':action['id']})
+        return {}
     if name=='ask':
         with store._transaction() as db:
             state=store._read(db);state['action']['status']='waiting'
@@ -274,6 +287,7 @@ async def _act(request, runtime):
             if patch.get('research_blocked'):
                 from .runtime import action_failure_message
                 state['action']['message']=patch.get('message') or action_failure_message(action)
+            state['action']['result']=patch
             state['action']['finished_at']=time.time()
             store._save(db,state,'action_finished',{'id':action['id'],'status':state['action']['status'],
                                                    'message':state['action'].get('message')})
@@ -300,9 +314,6 @@ def resume(store, **_):
             # Experiment recovery is reconciled from its execution receipt. Other
             # capabilities keep their durable products and retry the failed step.
             if action['capability']=='experiments.execute':action['status']='running'
-            elif action['capability'] in {'research.observe','research.review_report'}:state['action']=None
+            elif action['capability'] in {'research.observe','research.revise_interpretation','research.check_interpretation'}:state['action']=None
             else:action['status']='planned'
-        for experiment in state['experiments'].values():
-            artifact=report_artifact(state,experiment)
-            if artifact and artifact.get('review'):artifact['review']['attempt_count']=0
         store._save(db,state,'recovery_requested',{'action':state['action']})

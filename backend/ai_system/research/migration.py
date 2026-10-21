@@ -8,6 +8,8 @@ from contextlib import closing
 
 from .domain import FAULT_CATEGORIES, SCHEMA_VERSION
 
+MIGRATION_VERSION = 6
+
 
 def migrate_runtime(db, root):
     statements = (
@@ -54,16 +56,85 @@ def migrate_runtime(db, root):
         db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?', (json.dumps(budget), record[0]))
 
 
+def retire_legacy_workflow(state):
+    """Normalize retired workflow names once at import, never in the dispatcher."""
+    from copy import deepcopy
+    writing={eid for eid,task in state['experiments'].items() if task['kind']=='writing'}
+    for eid in writing:
+        task=state['experiments'][eid]
+        if not task.get('retired'):
+            state.setdefault('legacy_records',[]).append({'source':'retired-writing-experiment','raw':deepcopy(task)})
+            task.update(retired=True,reason='写作改为研究级交付；保留原实验记录')
+    def dependencies(eid):
+        return [item for dep in state['experiments'][eid]['dependencies']
+                for item in (dependencies(dep) if dep in writing else [dep])]
+    for task in state['experiments'].values():
+        if not task['retired']:task['dependencies']=list(dict.fromkeys(dependencies(task['task_id'])))
+    for qid,question in state['questions'].items():
+        owned={eid for eid,task in state['experiments'].items() if task['question_id']==qid}
+        related=owned | set(question.get('related_experiment_ids',[]))
+        if owned and owned <= writing and not any(not state['experiments'][eid]['retired'] for eid in related):
+            question.update(retired=True,reason='文书属于研究级交付，保留原问题历史')
+    action=state.get('action') or {}
+    if action.get('capability') in {'research.review_report','writing.reconcile'} or action.get('target') in writing:
+        state.setdefault('legacy_records',[]).append({'source':'retired-review-action','raw':action})
+        state['action']=None
+    if (state.get('publication') or {}).get('stage')=='reconcile':state['publication']=None
+
+
+def migrate_interpretations(state):
+    """Keep original records; current claims derive from the actual report, never a reviewer."""
+    from .domain import experiment_report
+    from ai_system.graph.registry import find_refs
+    number=max((int(k[1:]) for k in state['claims'] if k.startswith('C') and k[1:].isdigit()),default=0)
+    for key, task in state['experiments'].items():
+        report=experiment_report(state,task)
+        current=[]
+        for finding in report.get('key_findings',[]):
+            candidate=next((c for c in state['claims'].values() if c['producer_attempt']==task['execution_id']
+                            and c['payload']['statement']==finding['statement']),None)
+            if candidate is None:
+                number+=1;ref='C'+str(number)
+                candidate={'payload':{'id':ref,'subproblem':key,**finding,
+                           'evidence':list(dict.fromkeys(find_refs(finding['statement'])))},
+                           'experiment_id':key,'producer_attempt':task['execution_id'],'assumption_refs':{}}
+                state['claims'][ref]=candidate
+            current.append(candidate['payload']['id'])
+        for ref,claim in state['claims'].items():
+            if claim['experiment_id']!=key:continue
+            claim.update(active=ref in current,status='current' if ref in current else 'historical',
+                         report_ref=task['report_ref'] if ref in current else claim.get('report_ref'))
+            if ref not in current:claim.setdefault('reason','与当前实验解释不对应，原观点与来源保留')
+    for q in state['questions'].values():
+        q.pop('statement',None)
+        q.setdefault('version',1)
+        q.setdefault('history',[])
+        q.setdefault('related_experiment_ids',[])
+        q.setdefault('answer_status','needs_update' if q.get('judgment') else 'unanswered')
+    for issue in [*state['feedback'],*state['faults']]:
+        if not issue.get('repair_targets') and (issue['source'] in {'local_review','reconcile','sections'}
+                or issue['source'].startswith(('review:','review-task:'))):
+            issue['blocking']=False
+    retire_legacy_workflow(state)
+    if state.get('publication'):
+        stage=state['publication']['stage']
+        if stage in {'reconcile','validate','repair'}:state['publication']=None
+    # Old unified wording is kept as history, never another current state.
+    if state.get('consistency'):
+        state.setdefault('legacy_records',[]).append({'source':'consistency','raw':state['consistency']})
+    state.pop('consistency',None)
+
+
 def migrate_workspace(store):
     # Stores are also opened from inside existing business transactions. Once
     # migrated, checking the version must not acquire a second writer lease.
     with closing(store._connect()) as probe:
         if probe.execute("SELECT 1 FROM sqlite_master WHERE name='domain_migrations'").fetchone():
-            if probe.execute('SELECT 1 FROM domain_migrations WHERE version=?', (SCHEMA_VERSION,)).fetchone():
+            if probe.execute('SELECT 1 FROM domain_migrations WHERE version=?', (MIGRATION_VERSION,)).fetchone():
                 return
     with store._transaction() as db:
         db.execute("CREATE TABLE IF NOT EXISTS domain_migrations(version INTEGER PRIMARY KEY)")
-        if db.execute("SELECT 1 FROM domain_migrations WHERE version=?", (SCHEMA_VERSION,)).fetchone():
+        if db.execute("SELECT 1 FROM domain_migrations WHERE version=?", (MIGRATION_VERSION,)).fetchone():
             return
         db.execute("CREATE TABLE IF NOT EXISTS legacy_records(source TEXT PRIMARY KEY, raw BLOB NOT NULL)")
         for name in ('.system/results.json','.system/validation.json','.system/consistency.json','plan.md','plan.json','metadata.json'):
@@ -72,7 +143,12 @@ def migrate_workspace(store):
                 db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',(name,source.read_bytes()))
         for row in db.execute("SELECT id,payload FROM research").fetchall():
             state = json.loads(row[1])
-            if state.get("schema_version") == SCHEMA_VERSION:
+            if state.get('schema_version') in {4, SCHEMA_VERSION}:
+                db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',
+                           (f'research/{row[0]}/v{state["schema_version"]}',row[1].encode('utf-8')))
+                migrate_interpretations(state)
+                state['schema_version']=SCHEMA_VERSION
+                db.execute('UPDATE research SET payload=? WHERE id=?',(json.dumps(state,ensure_ascii=False),row[0]))
                 continue
             if state.get("schema_version") not in {2, 3}:
                 db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)', (f'research/{row[0]}', row[1].encode('utf-8')))
@@ -150,6 +226,7 @@ def migrate_workspace(store):
                     db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',
                         (f'commands/{row[0]}/{command[0]}',json.dumps(list(command),ensure_ascii=False).encode()))
                     db.execute('DELETE FROM commands WHERE research_id=? AND id=?',(row[0],command[0]))
+            migrate_interpretations(state)
             state["schema_version"] = SCHEMA_VERSION
             db.execute("UPDATE research SET payload=? WHERE id=?", (json.dumps(state, ensure_ascii=False), row[0]))
         names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -161,4 +238,4 @@ def migrate_workspace(store):
                     raise ValueError(f"发现两套 {old}/{new}，停止迁移以避免覆盖")
                 db.execute(f'ALTER TABLE "{old}" RENAME TO "{new}"')
         migrate_runtime(db, store.root)
-        db.execute("INSERT INTO domain_migrations VALUES (?)", (SCHEMA_VERSION,))
+        db.execute("INSERT INTO domain_migrations VALUES (?)", (MIGRATION_VERSION,))

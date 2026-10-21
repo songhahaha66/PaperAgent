@@ -8,6 +8,17 @@ from .domain import findings, experiment_report, experiment_scope, current_resul
 from .store import digest
 
 
+class QuestionUpdate(Contract):
+    question_id: str | None = None
+    base_version: int = Field(default=1, ge=1)
+    question: str = Field(min_length=1, description='用户要回答的问题，不是清洗、检索等手段')
+    title: str = ''
+    reason: str = ''
+    source_question_ids: list[str] = Field(default_factory=list, description='拆分或合并的来源问题；历史和成果保留')
+    experiment_ids: list[str] = Field(default_factory=list, description='关联可复用的已有实验，不修改其来源或计算')
+    retire_source_ids: list[str] = Field(default_factory=list)
+
+
 class Judgment(Contract):
     question_id: str
     statement: str = Field(min_length=1)
@@ -53,12 +64,14 @@ def _action_schema(schema):
 class NextAction(Contract):
     model_config = ConfigDict(json_schema_extra=_action_schema)
 
-    action: Literal['experiment', 'inspect', 'literature', 'tool', 'ask', 'write', 'pause']
+    action: Literal['experiment', 'continue', 'observe', 'inspect', 'literature', 'tool', 'ask', 'write', 'pause']
     reason: str = Field(min_length=1)
+    information_need: str = Field(default='', description='继续实验、查看或核查须说明缺少什么信息及会影响什么判断')
+    question_updates: list[QuestionUpdate] = Field(default_factory=list)
     question_id: str | None = None
     question: str = Field(default='', description='仅新增研究问题时提供；已有问题使用question_id')
     title: str = Field(default='',max_length=120)
-    experiment_id: str | None = Field(default=None, description='仅执行已排队实验或重试执行故障时引用；更换方法必须新增实验')
+    experiment_id: str | None = Field(default=None, description='继续/重试原实验，或标明读取和检索行动的所属实验；更换方法须新增实验')
     method: str = Field(default='', max_length=3000, description='本次实际执行的方法、参数及关键假设，执行者不得静默换方法')
     conditions: str = Field(default='', max_length=2000, description='实际数据范围、输入版本与适用条件')
     evaluation: str = Field(default='', max_length=2000, description='怎样检验方法，比较时须使用共同条件；无赢家允许保留多个候选')
@@ -87,22 +100,20 @@ class NextAction(Contract):
         return self
 
 
-PROMPT = """根据原题、研究问题、实验及真实产物决定下一步，只返回一个平铺的NextAction对象。
-持续提出方法、获取证据、修正判断。方法明确就直接experiment；不确定或证据不足时逐步安排候选实验。
-问题是研究目标，实验是回答问题的一种具体方法。同一问题的多个方法都使用同一question_id，不把方法当成新问题。
-新增问题提供question/title，系统分配编号；新增实验提供method、conditions、evaluation，不提供内部branch或任务修改补丁。
-首次实验必须填写非空question；已有问题填写真实question_id。普通新实验的method、conditions、evaluation均不可省略或留空。
-普通新实验格式示例：{"action":"experiment","reason":"检验方法是否适用","question":"该方法能否回答原题目标？","method":"按指定方法计算并登记结果","conditions":"使用原题数据，固定训练与验证范围","evaluation":"核对验证误差并说明适用局限"}。
-重试已有实验只引用experiment_id，不重写method或experiment；完整experiment协议可替代method、conditions、evaluation，但仍须关联研究问题。
-普通代码、推导、仿真使用experiment；CSV双模型比较仅在适用时提供experiment协议，不能决定其他研究的主流程。
-已有产物通过artifact_refs引用；补充实验关联issue_ids。执行失败不是方法被证伪，可重试故障实验或新增方法，不能重跑已完成实验冒充新证据。
-模型估计、审查意见与实测产物必须区分。只有同条件结果才可比较；不强行选优，无赢家时保留多个候选或补实验。
-judgments记录基于实际产物的判断与局限，可引用本问题实验及已有递归依赖的当前有效结果，不能引用无依赖的其他问题结果。没有判断时可留空。正文常规意见自动修；只有缺必要信息或真实用户取舍才ask。
-已有材料未查看且需要读取时inspect。文献不足时literature。工具入口只使用给定能力及其参数，不传复杂内部状态。
-当实际成果足以回答原题时write，可提供简洁大纲；写作直接更新当前论文，科学验收和发布由现有写作检查负责。
-不要复制完整原要求、分配编号、构造执行上下文或要求用户修模型格式。完整原题始终保留，方法必须落实其要求。
+PROMPT = """研究层根据完整原要求、问题当前答案、实验发现及必要历史，决定一次NextAction。
+主线：研究→用户要回答的问题→获取/验证证据的实验→连续的读取、检索、计算、绘图、核查和解释修订行动。
+问题不是方法或清洗任务。首轮识别原要求的实质目标，用question_updates逐步建立问题，可细化、改写、拆合；已有实验通过experiment_ids复用，保留来源和历史。不要只建立一个前处理问题而遗漏用户目标。
+已有问题使用question_id；新增实验填写question或question_id，以及method/conditions/evaluation（或完整experiment）。
+每次继续获取信息都写明information_need：缺什么证据、为何影响问题答案。换方法或比较条件才新增experiment。
+已完成实验需新增计算但方法和条件不变时continue并引用experiment_id；故障可experiment重试原experiment_id。读取已有文件用research.read_artifact，不重算已有输出。已有实验后的inspect/literature行动须用experiment_id关联所属实验。
+文字或过度解释错误调用research.revise_interpretation，传interpretation_version、完整summary/key_findings及所需意见处置；不新增实验、不重算正确统计。
+可按需research.check_interpretation返回具体疑点。核查意见是建议而非事实，须核对原资料、对象、粒度、单位、分母、范围后采纳、带证据驳回或保留局限。程序失败不证明方法无效。
+judgments更新当前答案、依据、未知及下一步原因；结果或解释改变后重新判断适用范围、方法选择和问题答案。question_updates可与observe同时提交，系统完成编号后再决定实验。
+多个问题可引用同一实验结果，artifact_refs必须真实有效；不要复制来源或按同值猜引用。新问题可通过关联已有experiment_ids复用证据。
+主要目标已有可靠答案即可write，明确重要未知；不要求软意见全部归零。跨问题写作是研究级交付，不创建写作实验。
+写作自主组织原要求、当前答案、相关结果和必要历史/负结果；未支持或撤回观点可讨论但不能当当前事实。缺实质证据时回研究层，排版、措辞、编译留写作处理。
+只返回平铺NextAction；真实缺用户必要信息才ask，无可行路径才pause。工具只使用提供的能力和真实参数。
 """
-
 
 def ready_tasks(snapshot):
     experiments = snapshot['experiments']
@@ -115,19 +126,46 @@ def ready_tasks(snapshot):
         and all(snapshot['assumptions'][aid]['status']!='refuted' for aid in item['assumption_ids'])]
 
 
+def report_context(report, *, full=False):
+    if full:return report
+    return {k:report[k] for k in ('summary','key_findings','limitations','status','error') if k in report}
+
+
+def research_history_context(snapshot, *, full=False):
+    from .domain import experiment_report
+    return [{'experiment_id':key, 'execution_status':e['execution_status'], 'acceptance':e['acceptance'],
+             'validity':e['validity'], 'report':report_context(experiment_report(snapshot,e),full=full), 'report_ref':e['report_ref'],
+             'prior_interpretations':[{'report':report_context(a['report'],full=full), 'report_ref':a['payload']['id'], 'status':'failed' if a['report'].get('status')=='failed' else 'superseded'}
+                  for a in snapshot['artifacts'].values() if a['type']=='report' and a['experiment_id']==key
+                  and a['payload']['id']!=e['report_ref']]}
+            for key,e in snapshot['experiments'].items()
+            if e['acceptance']!='accepted' or e['validity']!='current' or any(
+                 a['type']=='report' and a['experiment_id']==key and a['payload']['id']!=e['report_ref']
+                 for a in snapshot['artifacts'].values())]
+
+
 def decision_context(store, snapshot):
     from .literature import LiteratureStore
     from ai_system.modules.registry import capabilities
     from ai_system.modules.methods import allowed_method_keys
+    from .feedback import interpretation_version
     registry = store.registry_payload(snapshot)
     sources = LiteratureStore(store.root).retrieve(snapshot['spec']['requirement'], limit=12)
     files = store.file_inputs()
-    context = {'source': snapshot['spec'], 'questions': list(snapshot['questions'].values()),
+    from ai_system.graph.registry import find_refs
+    used={ref for e in snapshot['experiments'].values() for ref in find_refs(json.dumps(report_context(experiment_report(snapshot,e)),ensure_ascii=False))}
+    used.update(ref for q in snapshot['questions'].values() for ref in q.get('artifact_refs',[]))
+    from .views import questions, question_context
+    context = {'source': snapshot['spec'], 'questions': question_context(questions(snapshot)),
         'experiments': [{**{k:e.get(k) for k in ('task_id','question_id','revision','objective','method_instruction','experiment','dependencies','execution_status','acceptance','validity','retired','investigates')},
-                         'report':experiment_report(snapshot,e)} for e in snapshot['experiments'].values()],
-        'artifacts': registry['results'], 'claims': registry['claims'], 'literature': sources,
+                         'report':report_context(experiment_report(snapshot,e)), 'record_path':(snapshot['artifacts'].get(e['report_ref']) or {}).get('payload',{}).get('path'), 'interpretation_version':interpretation_version(snapshot,e)} for e in snapshot['experiments'].values()],
+        'artifacts': [r for r in registry['results'] if r['id'] in used],
+        'artifact_index':[{k:r[k] for k in ('id','subproblem','name','kind')} for r in registry['results']],
+        'literature': sources,
         'issues': [i for i in findings(snapshot) if i['status'] not in {'resolved','dismissed','superseded'}],
+        'history': research_history_context(snapshot),
         'inputs': files, 'materials': snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
+        'last_action': snapshot.get('action'),
         'recent_actions': snapshot.get('decision_history', [])[-12:], 'clarifications':snapshot.get('clarifications',[]),
         'capabilities': capabilities().research_tools(), 'skill_policy': store.skill_preferences()['policy']}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
@@ -144,20 +182,32 @@ def validate_action(action, snapshot, context):
     """Check actual references and execution meaning once, without quote-copy protocols."""
     if action.question_id is not None and action.question_id not in snapshot['questions']:
         raise ValueError('question_id应引用已有研究问题；新增问题请提供question')
-    known = {item['id'] for item in context['artifacts']}
+    if action.experiment_id is not None and action.experiment_id not in snapshot['experiments']:
+        raise ValueError('experiment_id必须引用已有实验')
+    if action.action in {'inspect','literature'} and snapshot['experiments'] and not action.experiment_id:
+        raise ValueError('读取或检索行动须通过experiment_id关联实验；新方法先建立实验')
+    known = {item['id'] for item in [*context['artifacts'],*context.get('artifact_index',[])]}
     if not set(action.artifact_refs) <= known:
         raise ValueError('artifact_refs中有不存在或已失效的产物，请引用当前artifacts')
     issues = {i['id'] for i in context['issues']}
     if not set(action.issue_ids) <= issues:
         raise ValueError('issue_ids中有不存在或已关闭的意见')
+    from .questions import projected_questions
+    projected = projected_questions(snapshot, action.question_updates)
     for judgment in action.judgments:
-        if judgment.question_id not in snapshot['questions'] or not set(judgment.artifact_refs)<=known:
-            raise ValueError('问题判断必须关联已有问题和实际产物')
-        own = {key for key, experiment in snapshot['experiments'].items()
-               if experiment['question_id'] == judgment.question_id and not experiment['retired']}
-        scope = experiment_scope(snapshot['experiments'], own)
-        if not set(judgment.artifact_refs) <= current_result_refs(snapshot, scope):
-            raise ValueError('问题判断只能引用本问题实验及已有依赖的当前有效产物')
+        if judgment.question_id not in projected or not set(judgment.artifact_refs) <= known:
+            raise ValueError('问题答案必须关联已有问题与实际产物；新问题建立后再判断')
+        question = projected[judgment.question_id]
+        own = {key for key, e in snapshot['experiments'].items()
+               if e['question_id'] == judgment.question_id and not e['retired']} | set(question.get('related_experiment_ids', []))
+        if not set(judgment.artifact_refs) <= current_result_refs(snapshot, experiment_scope(snapshot['experiments'], own)):
+            raise ValueError('答案只能引用关联实验与其依赖的当前有效结果')
+    if action.action=='continue':
+        task=snapshot['experiments'].get(action.experiment_id)
+        if not task or task['execution_status'] != 'succeeded' or task['validity'] != 'current':
+            raise ValueError('continue只补充同方法同条件的已完成实验；故障使用experiment重试')
+        if action.method or action.experiment or action.conditions:
+            raise ValueError('更改方法或条件须新增实验，不能作为继续行动')
     if action.action=='experiment':
         if action.experiment_id:
             experiment=snapshot['experiments'].get(action.experiment_id)
@@ -173,8 +223,16 @@ def validate_action(action, snapshot, context):
     elif action.action=='literature':
         if context['literature_mode']=='off' or not action.query.strip():
             raise ValueError('文献检索需要有效查询且项目允许外部检索')
-    elif action.action=='write' and not context['artifacts']:
-        raise ValueError('尚无真实研究产物，先执行实验再撰写研究结果')
+    elif action.action=='write':
+        if not known:raise ValueError('尚无真实研究产物，先执行实验再撰写研究结果')
+        from .store import ResearchStore
+        for judgment in action.judgments:
+            q=projected[judgment.question_id]
+            q.update(judgment=judgment.statement,artifact_refs=judgment.artifact_refs,
+                     answer_status='current',basis_versions={ref:snapshot['artifacts'][ref]['content_hash'] for ref in judgment.artifact_refs},
+                     interpretation_versions={snapshot['artifacts'][ref]['experiment_id']:snapshot['experiments'][snapshot['artifacts'][ref]['experiment_id']]['report_ref'] for ref in judgment.artifact_refs})
+        if not ResearchStore.delivery_ready({**snapshot,'questions':projected}):
+            raise ValueError('write前须在judgments更新基于实际依据的当前答案，明确重要未知；已改变的解释须先重新评估，软意见不要求归零')
 
 
 def preserved_progress(snapshot):
@@ -204,33 +262,38 @@ class Planner:
     async def decide(self, snapshot, context):
         from ..graph.llm_utils import call_structured, as_messages, cap_output
         model_name=str(getattr(self.llm,'model_name',None) or getattr(self.llm,'model',''))
+        from langchain_core.messages import SystemMessage, HumanMessage
+        # Keep stable instructions, tool schemas and common materials before the
+        # changing research view. No extra summary model or cache service.
+        common={'capabilities':context['capabilities'],'available_method_keys':context['available_method_keys'],
+                'skill_policy':context['skill_policy'],'original_request':context['source']['requirement'],
+                'inputs':context['inputs'],'materials':context['materials']}
+        dynamic={k:v for k,v in context.items() if k not in {'capabilities','available_method_keys','skill_policy','inputs','materials'}}
         return await call_structured(cap_output(self.llm, 4800), NextAction,
-            as_messages(PROMPT, json.dumps(context, ensure_ascii=False)),
+            [SystemMessage(content=PROMPT),HumanMessage(content=json.dumps(common,ensure_ascii=False)),
+             HumanMessage(content=json.dumps(dynamic,ensure_ascii=False))],
             validate=lambda action: validate_action(action, snapshot, context),
             retries=1, json_first='qwen' in model_name.lower())
 
     async def amendment(self, snapshot, change, scope):
         from ..graph.llm_utils import call_structured, as_messages, cap_output
-        from .validation import validate_spec,source_excerpt
+        from .validation import validate_spec
         if not change.strip():raise ValueError('修改内容不能为空')
         selected = scope if scope is not None else [key for key, t in snapshot["experiments"].items() if t["kind"] != "verify" and not t['retired']]
         payload = {"change": change, "scope": selected,'experiments':[{k:t[k] for k in ('task_id','objective')} for t in snapshot['experiments'].values() if t['task_id'] in selected],
                    "used_requirement_ids": [r["id"] for r in snapshot["spec"]["requirements"]]}
+        source='\n'.join([snapshot['spec']['requirement'],*snapshot['spec']['amendments'],change])
         def validate(contract):
-            for requirement in contract.requirements:
-                requirement.source_quote=source_excerpt(change,requirement.source_quote) or requirement.source_quote
             affected={key for r in contract.requirements for key in r.task_ids}
             if not affected or not affected<=set(selected):raise ValueError('修订只能关联实际受影响的已知任务')
-            validate_spec(change,{'subproblems':[{'id':key} for key in affected],
+            validate_spec(source,{'subproblems':[{'id':key} for key in affected],
                 'requirements':[r.model_dump() for r in contract.requirements],'assumptions':[]})
-            if any(r.id in payload['used_requirement_ids'] for r in contract.requirements):
-                raise ValueError('补充要求编号与原要求重复')
         response = await call_structured(cap_output(self.llm,4800), AmendmentSpec,as_messages(
-            "把用户补充要求转成结构化要求，使用新的RQ编号，source_quote逐字摘录change，task_ids只取scope中的任务。"
+            "把用户补充要求转成结构化要求，已有要求复用RQ编号形成新版本，新要求才用新编号，source_quote保留原题或补充要求的实际摘录，task_ids只取scope中的任务。"
             "只关联change实际影响的问题，不把缺省scope当作修改所有问题；继续/恢复不是新要求。"
             "合并相同任务的要求，简短输出。方法选择或实现纠错作为goal，不虚构0/1自报检查。"
             "硬约束必须有可执行检查，数值阈值必须出现在本项逐字摘录内；检查编号全局唯一。"
-            "原题约束保持不变；不要悄悄删除或放宽。", json.dumps(payload, ensure_ascii=False)),validate=validate)
+            "保留原始要求及旧执行契约快照；新条件只属于新问题范围，不能声称旧实验已经验证。", json.dumps(payload, ensure_ascii=False)),validate=validate)
         contract = response if isinstance(response, AmendmentSpec) else AmendmentSpec.model_validate(response)
         if not contract.requirements or scope is not None and {key for r in contract.requirements for key in r.task_ids} != set(scope):
             raise ValueError("补充要求未覆盖修改范围")

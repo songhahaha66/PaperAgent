@@ -183,7 +183,7 @@ def _save_findings(store,stage,reports,expected):
     with store._transaction() as db:
         if intent_context(store,stage)!=expected:raise ReviewSuperseded('审查期间材料已变化')
         state=store._read(db);ids=[]
-        for report in reports:ids.append(store._record_issue(state,report,'confirmed' if report.category=='writing' else 'suspected',source='review-task:'+stage)['id'])
+        for report in reports:ids.append(store._record_issue(state,report,'suspected',source='review-task:'+stage)['id'])
         store._save(db,state,'review_task_findings',{'stage':stage,'issues':ids})
     return ids
 

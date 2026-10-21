@@ -39,16 +39,13 @@ from ai_system.graph.context import GraphContext, list_data_files
 from ai_system.graph.llm_utils import call_structured, clip
 from ai_system.modules.methods import describe, skill_policy_prompt, allowed_method_keys, SKILL_SOURCES, SKILL_VERSION
 from ai_system.graph.registry import GroundingError
-from ai_system.graph.state import BranchInput, Finding, ResultItem, ResultReview, SolveReport
+from ai_system.graph.state import BranchInput, Finding, ResultItem, SolveReport
 from ai_system.graph.tracing import labelled, set_label
 from ai_system.research.assumptions import unbound_assumptions
-from ai_system.research.models import IssueReport, ReviewRecord
-from ai_system.research.validation import report_fingerprint
+from ai_system.research.models import IssueReport
 from ai_system.modules.experiments.review import (
-    feedback_message,
     needs_figure,
     report_issues,
-    review_solution,
     report_submission_issues,
     submission_inventory_issues,
 )
@@ -91,11 +88,11 @@ SolveReport.assumptions不是论文假设汇总，没有新增时必须留空[]�
 确有新增时填入assumptions，使用稳定key、statement和可证伪checks；已有契约前提不能静默改写。
 新前提会先登记版本再按冻结契约重算；它不是原题事实，也不因代码跑通而被验证。
 每条主要结论都要写出依据的登记结果，并如实标注证据强度：检验不显著的就标「不显著」，不要把不显著的结果写成有效应。
-这些结论会和其他子问题的结论放在一起做一致性审查。"""
+发现有意义结果或实质阻碍后提交报告，交回研究层判断。
+读取已有文件、修正解释不重算正确结果。派生数据须保留来源文件版本、原始行标识及一对多关系；说明统计对象、范围、单位、分母、过滤和去重口径。stdout出现某个数字只证明执行输出过该值，不证明其语义或解释正确。"""
 
 
 OBSERVATION_CHARS = 6000
-WRITING_APPROACH = "基于前序结论撰写"
 
 FINAL_NUDGE = "步数已经用完，不能再执行代码。请根据上面已经得到的输出和登记的结果，现在提交报告；报告里的数字只能写登记返回的引用。"
 REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
@@ -223,6 +220,29 @@ def build_tools(
         return text + ("\n[提交检查] 尚缺：\n" + "\n".join(f"- {gap}" for gap in gaps)
                        if gaps else "\n[提交检查] 必需登记指标已齐。请单独提交 SolveReport，requirement_evidence 使用已返回的原始编号。")
 
+    async def read_file(path: str, start: int = 0, limit: int = 12000) -> str:
+        """读取工作区已有文本文件，不重跑计算；使用start/limit分段读取。"""
+        if start < 0 or not 1 <= limit <= 24000:return '读取范围无效'
+        from ai_system.research.views import activity
+        with activity(ctx,'read_file',subproblem_id) as operation:
+            operation['inputs']={'path':path,'start':start,'limit':limit}
+            text=ctx.fs.read_text(path)
+            operation['output']={'total_chars':len(text),'excerpt':text[start:start+limit]}
+            return text[start:start+limit]
+
+    async def search_literature(query: str, information_need: str = "") -> str:
+        """为当前实验的明确信息需求检索文献；遵守项目外部检索设置，保存来源。"""
+        from ai_system.research.citations import literature_root
+        from ai_system.research.literature import LiteratureStore, LiteratureService
+        from ai_system.research.views import activity
+        root=literature_root(ctx)
+        if LiteratureStore(root).policy()=='off':return '项目已关闭外部检索。'
+        with activity(ctx,'literature.collect',subproblem_id) as operation:
+            operation['inputs']={'query':query,'information_need':information_need}
+            value=await LiteratureService(root).search(query,limit=3,fetch_open_access=True)
+            operation['output']=value
+            return json.dumps(value,ensure_ascii=False)
+
     async def run_python(code: str) -> str:
         """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
         code = strip_template_tokens(code)
@@ -235,8 +255,10 @@ def build_tools(
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
         with activity(ctx,'run_python',subproblem_id) as operation:
+            operation['inputs']={'code':code}
             result = await kernel.execute(code)
-            operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed')
+            operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
+                output={'ok':result.ok,'run_id':result.run_id})
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
         await ctx.events.emit(
             "paper_code",
@@ -260,7 +282,8 @@ def build_tools(
                 lines.append('- '+item.name+'：这是项目保护的冻结指标，请直接使用已有引用，不重新登记替换。');continue
             try:
                 result = ctx.registry.record_value(
-                    subproblem_id, item.name, item.value, item.run_id, item.unit, item.description
+                    subproblem_id, item.name, item.value, item.run_id, item.unit, item.description,
+                    item.meaning.model_dump() if item.meaning else None,
                 )
             except GroundingError as exc:
                 lines.append(f"- {item.name}：登记失败，{exc} 请核对原始执行输出并使用其实际 run_id；不会按相同数值自动改写来源。")
@@ -278,7 +301,9 @@ def build_tools(
         await ctx.events.file_changed(result.path)
         return submission_feedback(f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）")
 
-    tools = [StructuredTool.from_function(coroutine=run_python, name="run_python")]
+    tools = [StructuredTool.from_function(coroutine=run_python, name="run_python"),
+             StructuredTool.from_function(coroutine=read_file, name="read_file"),
+             StructuredTool.from_function(coroutine=search_literature, name="search_literature")]
     if record:
         tools += [
             StructuredTool.from_function(coroutine=record_results, name="record_results"),
@@ -317,7 +342,10 @@ def build_task(
         prompt_context(ctx,branch,chosen.get('method_keys') or [],'solve') if chosen.get('method_keys') else '',
         _dependency_text(branch.get("dependencies") or {}, ctx),
         "# 研究契约（不得放宽验收；按指定名称登记检查指标，并填写 requirement_evidence）\n" + json.dumps(branch["research_contract"], ensure_ascii=False) if branch.get("research_contract") else "",
-        "# 必须逐项复核的先前审查意见\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",
+        "# 已有核查疑点（按信息需求核实；错误意见可驳回）\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",
+        ('# 同一实验继续行动（方法和条件不变）\n'+json.dumps(branch['continuation'],ensure_ascii=False)
+         +'\n此前记录：'+json.dumps(branch.get('previous_report'),ensure_ascii=False)
+         +'\n复用已有结果和中间文件，只处理明确的信息需求，不重放已完成计算。') if branch.get('continuation') else '',
         extra,
         ending,
     ]))
@@ -345,9 +373,6 @@ def submission_schema(ctx: GraphContext, branch: BranchInput, runs: List[Dict]):
         # A new premise is staged centrally, never accepted as a solved task.
         if unbound_assumptions(sid, report.assumptions, branch.get("research_contract", {})):
             return report
-        report.summary = ctx.registry.ground_statement(sid, report.summary)
-        for finding in report.key_findings:
-            finding.statement = ctx.registry.ground_statement(sid, finding.statement)
         issues = report_submission_issues(ctx, branch, report.model_dump(), runs)
         from ai_system.modules.experiments.handoff import proof_issues
         issues.extend(proof_issues(ctx,report.model_dump()))
@@ -398,28 +423,16 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     subproblem_id = branch["subproblem"]["id"]
     set_label(subproblem_id)
     await ctx.set_stage("solve", "in_progress")
-    if branch["subproblem"].get("kind") == "writing":
-        # 写作类子问题不开内核、不跑编码循环，写作阶段直接依据前序结论撰写
-        await ctx.events.stage(f"{subproblem_id} 为写作类交付物，写作阶段依据前序结论撰写")
-        report = SolveReport(
-            summary="本问为文书类交付物，依据前序各问的结论撰写。",
-            approach=WRITING_APPROACH,
-            key_findings=[],
-        ).model_dump()
-        update = {
-            "solutions": {subproblem_id: {**report, "status": "completed", "error": None, "reviews": []}},
-            "log": [f"solve {subproblem_id}: writing"],
-        }
-        if branch.get("design") is None:
-            from ai_system.modules.experiments.planning import WRITING_DESIGN
-
-            update["designs"] = {subproblem_id: {
-                "methods": [], "candidates": [WRITING_DESIGN], "scores": [{"total": None}],
-                "chosen": WRITING_DESIGN, "chosen_index": 0, "critic": None, "critic_error": None,
-            }}
-        return update
-
     run_log: List[Dict] = []
+    if branch.get('continuation'):
+        for result in ctx.registry.for_subproblem(subproblem_id):
+            info=ctx.fs.get_run_info(result.run_id) or {}
+            if not info and ctx.source_workspace:
+                from services.file_services.workspace_fs import WorkspaceFS
+                source_fs=WorkspaceFS(ctx.source_workspace)
+                info=source_fs.get_run_info(result.run_id) or {}
+            if info and info.get('status')=='success' and not any(r['run_id']==result.run_id for r in run_log):
+                run_log.append({'run_id':result.run_id,'ok':True,'code':'','inherited':True})
     if branch.get('experiment'):
         from .planning import experiment_design
         branch={**branch,'design':experiment_design(branch['experiment'])}
@@ -444,19 +457,11 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         branch = {**branch, "design": record}
     design = branch["design"]
     try:
-        if (branch.get('experiment') or {}).get('csv'):
+        if (branch.get('experiment') or {}).get('csv') and not branch.get('continuation'):
             from ai_system.modules.registry import invoke
             from .handoff import publish_comparison
             record=await invoke(ctx,'experiments.compare',branch=branch)
             report=await publish_comparison(ctx,branch,record,run_log)
-            if report['status']=='completed' and ctx.max_review_rounds>0:
-                try:
-                    review=await review_solution(ctx,branch,report,run_log)
-                except Exception as exc:
-                    review=ResultReview(issues=[IssueReport(task_id=subproblem_id,category='service',message=f'局部审查未完成：{exc}')])
-                cited={ref for issue in review.issues for ref in issue.evidence_refs}
-                report['reviews']=[ReviewRecord(report_hash=report_fingerprint(report),issues=review.issues,
-                    evidence=[asdict(r) for r in ctx.registry.for_subproblem(subproblem_id) if r.id in cited]).model_dump()]
             return {'solutions':{subproblem_id:report},'designs':{subproblem_id:design},
                     'log':['comparison measurements returned to observe']}
         if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
@@ -480,8 +485,6 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         ).model_dump()
     else:
         # 写作看的报告和结论表用同一份陈述：手写的数换成引用
-        for finding in report.get("key_findings") or []:
-            finding["statement"] = ctx.registry.ground_statement(subproblem_id, str(finding.get("statement", "")))
         ctx.registry.set_claims(subproblem_id, report.get("key_findings") or [])
 
     count = len(ctx.registry.for_subproblem(subproblem_id))
@@ -496,15 +499,26 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
 
 
 async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict], messages: List):
-    """正式求解：CodeAct 循环 + 结果审查返工，返回 (status, error, report, reviews)"""
+    """实验执行：连续 CodeAct 行动，完成尝试后将发现交回研究层，返回 (status, error, report, reviews)"""
     subproblem_id = branch["subproblem"]["id"]
     recorder = HistoryRecorder()
     schema = submission_schema(ctx, branch, run_log)
     def inventory():
         return submission_inventory_issues(ctx, branch, run_log)
+    async def check_interpretation(report: SolveReport, information_need: str = "") -> str:
+        """针对明确疑点核查代码与解释；意见仅供当前实验者核实，不触发计算或自动改稿。"""
+        from .review import review_solution
+        from ai_system.research.views import activity
+        with activity(ctx,'check_interpretation',subproblem_id) as operation:
+            operation['inputs']={'information_need':information_need,'report':report.model_dump()}
+            result=await review_solution(ctx,branch,report.model_dump(),run_log)
+            operation['output']={'findings':[i.model_dump() for i in result.issues]}
+            return json.dumps(operation['output'],ensure_ascii=False)+'\n请据原资料和实际输出采纳、驳回或保留局限，勿因措辞问题重算。'
+    tools=build_tools(ctx, subproblem_id, run_log, submission_gaps=inventory)
+    tools.append(StructuredTool.from_function(coroutine=check_interpretation,name='check_interpretation'))
     agent = create_agent(
         model=ctx.coder_llm,
-        tools=build_tools(ctx, subproblem_id, run_log, submission_gaps=inventory),
+        tools=tools,
         system_prompt=SYSTEM,
         response_format=ToolStrategy(schema),
         middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
@@ -522,37 +536,8 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     try:
         result = await run_agent(agent, messages, limit, fallback=fallback)
         structured = result.get("structured_response")
-        for round_index in range(ctx.max_review_rounds + 1):
-            if structured is None:
-                break
+        if structured is not None:
             report = structured.model_dump()
-            for finding in report.get("key_findings", []):
-                finding["statement"] = ctx.registry.ground_statement(subproblem_id, str(finding["statement"]))
-            if unbound_assumptions(subproblem_id, report["assumptions"], branch.get("research_contract", {})):
-                break  # Register new premises before accepting/reviewing their conclusions.
-            if not ctx.max_review_rounds:
-                break
-            subproblem = branch["subproblem"]
-            fixes = [] if subproblem.get("kind") == "verify" else report_issues(
-                ctx, report, subproblem_id, subproblem.get("depends_on") or [],
-                figure_required=needs_figure(subproblem))
-            prior = branch.get("review_findings", []) + [issue for r in reviews for issue in r["issues"]]
-            try:
-                review = await review_solution(ctx, {**branch, "review_findings": prior}, report, run_log)
-            except Exception as exc:
-                review = ResultReview(issues=[IssueReport(task_id=subproblem_id, category="service", message=f"局部审查未完成：{exc}")])
-            review.issues = [IssueReport(task_id=subproblem_id, category="evidence", message=message) for message in fixes] + review.issues
-            cited = {ref for i in review.issues for ref in i.evidence_refs}
-            reviews.append(ReviewRecord(report_hash=report_fingerprint(report), issues=review.issues,
-                evidence=[asdict(r) for r in ctx.registry.for_subproblem(subproblem_id) if r.id in cited]).model_dump())
-            if not review.issues or round_index == ctx.max_review_rounds or any(i.category == "service" for i in review.issues):
-                break
-            await ctx.events.emit("paper_review", f"{subproblem_id} 审查发现 {len(review.issues)} 个问题，返工后重新核验")
-            result = await run_agent(agent, result["messages"] + [HumanMessage(content=feedback_message(review))], limit, fallback=fallback)
-            structured = result.get("structured_response")
-            if structured is None:
-                status, error = "incomplete", "审查返工未提交完整报告"
-                break
         if not report or not ctx.registry.for_subproblem(subproblem_id):
             status, error = "incomplete", "没有提交完整报告或登记结果"
     except GraphRecursionError:

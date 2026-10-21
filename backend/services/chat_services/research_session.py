@@ -79,7 +79,7 @@ class ResearchSnapshot(BaseModel):
     evidence_uses: list[dict] = Field(default_factory=list)
     runtime: dict = Field(default_factory=dict)
     execution_reason: dict | None = None
-    schema_version: int = 4
+    schema_version: int = 5
     engine_version: str | None = None
     research_revision: int = 0
     commit_seq: int = 0

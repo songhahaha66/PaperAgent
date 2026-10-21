@@ -18,29 +18,33 @@
         >
       </button>
     </nav>
-    <ResearchRuntime
-      :snapshot="snapshot"
-      :work-status="workStatus"
-      :question-id="selected?.id"
-      @pause="emit('pause')"
-      @file="(path) => emit('object', { type: 'file', path })"
-      @result="(id) => emit('object', { type: 'result', resultType: 'registered', id })"
-    />
     <article v-if="selected" class="question-detail">
       <header>
         <h3>{{ selected.title }}</h3>
         <button class="text-action" @click="emit('ask', selected.id)">追问当前问题</button>
       </header>
       <section class="judgment">
-        <h3>当前判断</h3>
+        <h3>当前答案</h3>
+        <p v-if="selected.answer_status === 'needs_update'" class="muted">
+          依据或解释已改变，当前答案待研究层重新评估。
+        </p>
         <MarkdownRenderer
-          v-if="selected.judgment"
+          v-if="selected.judgment && selected.answer_status !== 'needs_update'"
           :content="evidenceText(selected.judgment)"
           :work-id="snapshot?.work_id"
         />
-        <p v-else class="muted">尚未形成判断。已有实验结果不代表该问题已回答。</p>
+        <p v-else-if="selected.answer_status !== 'needs_update'" class="muted">
+          尚未形成判断。已有实验结果不代表该问题已回答。
+        </p>
+        <details v-if="selected.judgment && selected.answer_status === 'needs_update'">
+          <summary>先前答案（等待重新评估）</summary>
+          <MarkdownRenderer
+            :content="evidenceText(selected.judgment)"
+            :work-id="snapshot?.work_id"
+          />
+        </details>
       </section>
-      <div class="basis">
+      <div v-if="selected.answer_status !== 'needs_update'" class="basis">
         <button
           v-for="result in basis"
           :key="result.id"
@@ -104,6 +108,14 @@
         </article>
       </section>
     </article>
+    <ResearchRuntime
+      :snapshot="snapshot"
+      :work-status="workStatus"
+      :question-id="selected?.id"
+      @pause="emit('pause')"
+      @file="(path) => emit('object', { type: 'file', path })"
+      @result="(id) => emit('object', { type: 'result', resultType: 'registered', id })"
+    />
     <section class="delivery">
       <header>
         <h3>论文</h3>
@@ -143,7 +155,7 @@ const emit = defineEmits<{
   pause: []
 }>()
 const selectedId = ref('')
-const questions = computed(() => props.snapshot?.questions || [])
+const questions = computed(() => props.snapshot?.questions?.filter((q) => !q.retired) || [])
 const selected = computed(
   () => questions.value.find((q) => q.id === selectedId.value) || questions.value[0],
 )
@@ -155,7 +167,8 @@ const previousJudgments = computed(() => {
     : history
 })
 const selectedExperiments = computed(
-  () => props.snapshot?.experiments?.filter((e) => e.question_id === selected.value?.id) || [],
+  () =>
+    props.snapshot?.experiments?.filter((e) => selected.value?.experiment_ids.includes(e.id)) || [],
 )
 const status = computed(() => props.workStatus || props.snapshot?.work_status || '')
 const basis = computed(
@@ -169,7 +182,8 @@ const questionState = (question: ResearchQuestion) => {
     )
   )
     return '正在执行'
-  if (question.judgment) return '已有判断'
+  if (question.answer_status === 'needs_update') return '答案待更新'
+  if (question.judgment) return '已有答案'
   return props.snapshot?.results.some((result) =>
     question.experiment_ids.includes(result.subproblem_id),
   )

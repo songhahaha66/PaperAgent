@@ -1,7 +1,7 @@
 """Question → experiment → artifact. Only ResearchStore owns research state."""
 from itertools import chain
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FAULT_CATEGORIES = frozenset({"execution", "service"})
 
 
@@ -24,14 +24,46 @@ def experiment_scope(experiments, experiment_ids):
     return scope
 
 
+def execution_lineage(state, execution_id):
+    """Current execution first, then its saved ancestors, without replaying code."""
+    ids=[]
+    while execution_id and execution_id not in ids:
+        ids.append(execution_id)
+        execution_id=state['executions'].get(execution_id,{}).get('parent_attempt')
+    return ids
+
+
+def current_results(state, experiment_ids=None, *, task_id=None, results=()):
+    """One effective execution per named result; explicit refs retain provenance.
+
+    Candidates override by ID, so inherited outputs are not counted twice.
+    A newer execution's same-name result replaces the ancestor's current value.
+    Multiple IDs within that same execution remain ambiguous for name selectors;
+    evaluate reports an inconclusive check instead of guessing a value.
+    """
+    ranks={}
+    for eid, experiment in state['experiments'].items():
+        if experiment_ids is not None and eid not in experiment_ids:continue
+        if experiment['retired'] or experiment['validity']!='current':continue
+        if eid!=task_id and (experiment['kind']=='verify' or experiment['acceptance']!='accepted'):continue
+        ranks.update({aid:index for index,aid in enumerate(execution_lineage(state,experiment['execution_id']))})
+    entries={ref:entry for ref,entry in state['artifacts'].items()
+             if entry['type']=='result' and entry['active'] and entry['producer_attempt'] in ranks}
+    for item in results:
+        previous=state['artifacts'].get(item['id'])
+        if previous and (not previous['active'] or previous['producer_attempt'] not in ranks):continue
+        entries[item['id']]=previous or {'payload':item,'producer_attempt':state['experiments'][task_id]['execution_id']}
+    selected={}
+    for entry in entries.values():
+        item=entry['payload'];key=(item['subproblem'],item['name']);rank=ranks.get(entry['producer_attempt'],0)
+        if key not in selected or rank < selected[key][0]:selected[key]=(rank,[])
+        if rank==selected[key][0]:selected[key][1].append(item)
+    return [item for _,items in selected.values() for item in items]
+
+
 def current_result_refs(state, experiment_ids):
-    """Usable evidence is distinct from whether a research question is answered."""
-    executions = {key: experiment['execution_id'] for key, experiment in state['experiments'].items()
-                  if key in experiment_ids and not experiment['retired'] and experiment['kind'] != 'verify'
-                  and experiment['acceptance'] == 'accepted' and experiment['validity'] == 'current'}
-    return {ref for ref, artifact in state['artifacts'].items()
-            if artifact['experiment_id'] in executions and artifact['type'] == 'result' and artifact['active']
-            and artifact['producer_attempt'] == executions[artifact['experiment_id']]}
+    """Available evidence is distinct from whether a question is answered."""
+    return {item['id'] for item in current_results(state,experiment_ids)}
 
 
 def attach_question(state, experiment, *, question_id=None, statement=None, title=None):
@@ -41,7 +73,7 @@ def attach_question(state, experiment, *, question_id=None, statement=None, titl
         question_id = 'question:' + experiment['task_id']
         questions[question_id] = {'id': question_id, 'title': title or statement or experiment['objective'],
             'question': statement or experiment['objective'], 'judgment': '', 'artifact_refs': [],
-            'limitations': [], 'next_step': '', 'judgments': []}
+            'limitations': [], 'next_step': '', 'judgments': [], 'version':1, 'answer_status':'unanswered'}
     experiment['question_id'] = question_id
     return questions[question_id]
 
@@ -99,4 +131,6 @@ def save_report_artifact(state, root, experiment, report):
         'previous_ref':previous.get('previous_ref') if experiment['report_ref']==ref else experiment['report_ref'],
         'payload':{'id':ref,'kind':'text','subproblem':experiment['task_id'],'name':'实验报告',
                    'value':report.get('summary',''),'path':path,'run_id':'','unit':'','description':''}}
+    if previous and previous.get('payload',{}).get('id')!=ref:
+        previous['active']=False
     experiment['report_ref']=ref

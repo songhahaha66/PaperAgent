@@ -38,12 +38,13 @@ def test_dependency_progress_and_recovery_preserve_unrelated_acceptance(tmp_path
 
 
 
-def test_open_review_does_not_count_as_accepted_and_budget_is_explicit(tmp_path):
+def test_open_semantic_review_is_advisory_and_budget_is_explicit(tmp_path):
     store = make_store(tmp_path)
     finish(store, "Q1")
     [issue] = store.report_issues([IssueReport(task_id="Q1", category="model", message="scope uncertain")], "sections")
-    assert tasks(store)["Q1"]["progress"]["state"] == "review"
-    assert tasks(store)["Q1"]["progress"]["issue_ids"] == [issue["id"]]
+    assert tasks(store)["Q1"]["progress"]["state"] == "accepted"
+    assert tasks(store)["Q1"]["progress"]["issue_ids"] == []
+    assert not issue["blocking"] and issue["status"] == "suspected"
     for _ in range(3):
         order = store.claim("Q3")
         finish(store, "Q3", acceptance="rejected", order=order)

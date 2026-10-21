@@ -8,6 +8,7 @@ LLM、内核、登记表这类运行时对象放在 GraphContext 里（不进 ch
 import operator
 from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
 
+from ai_system.research.models import ResultMeaning
 from pydantic import BaseModel, Field, model_validator
 from ..research.models import Contract, AssumptionDraft, IssueReport
 
@@ -30,9 +31,9 @@ def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
 
 class Subproblem(BaseModel):
     id: str = Field(description="子问题编号，如 Q1、Q2")
-    kind: Literal["compute", "writing", "verify"] = Field(
+    kind: Literal["compute", "verify"] = Field(
         default="compute",
-        description="compute=需要用数据建模计算；writing=只需基于前序结论写成文书（如给教练的备忘录、建议信、政策建议），不需要新的计算",
+        description="compute=获取研究证据的实验；verify=独立核查。论文与文书属于研究级交付，不建立写作实验",
     )
     title: str = Field(min_length=1, description="子问题的简短标题")
     question: str = Field(min_length=1, description="子问题要回答的具体内容，忠实于原题")
@@ -75,6 +76,7 @@ STRENGTHS = ("显著", "倾向", "不显著")
 
 
 class ResultItem(BaseModel):
+    meaning: ResultMeaning | None = Field(default=None, description="登记指标的对象、范围、统计口径与行关系；未知时留空，不能由名称或同值猜测")
     name: str = Field(description="结果名称")
     value: str = Field(description="单个数值、一小段文字，或同一变量的完整一维数值序列（JSON数组字符串）；必须来自run_id的输出。不同指标各登记一条，不能拼接整行输出。序列的长度、最小值等数值检查需另登记标量")
     run_id: str = Field(description="打印该值的那次执行的 run_id")

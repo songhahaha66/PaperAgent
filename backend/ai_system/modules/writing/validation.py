@@ -66,25 +66,16 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         if not state['sections'] or not any(t.strip() for t in state['sections'].values()):
             raise ValueError('当前 LaTeX 项目没有正文，请先写入源码')
     await ctx.set_stage("validate", "in_progress")
-    from ai_system.modules.registry import invoke
-    await invoke(ctx, 'literature.verify', texts=list((state.get('sections') or {}).values()))
     reports = [IssueReport(task_id=i["section"].split(":", 1)[1] if i["section"].startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
         category="writing", section=i["section"], message=i["message"]) for i in check_sections(state, ctx)]
-    if ctx.check_claims or section_doubts(state, ctx):
-        reports += await audit_sections(state, ctx)
-    review_failed=any(r.category=='service' for r in reports) or any(i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
-        and i.get('review_scope',{}).get('stage')=='sections' for i in research_findings(ctx.research.snapshot()))
     if state.get('source_version'):
         from services.chat_services.paper_project import snapshot as source_snapshot
         from ai_system.research.review_cache import ReviewSuperseded
         if source_snapshot(ctx.research.root)['version'] != state['source_version']:
             raise ReviewSuperseded('内容检查期间源码已改变，请检查当前版本')
-    issues = ctx.research.report_issues(reports, "sections", close_writing=not review_failed)
-    active_service=[i for i in research_findings(ctx.research.snapshot()) if i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}
-                    and (i.get('review_scope',{}).get('stage') in {'sections','citations'} or i['source']=='sections')]
-    issues=list({i['id']:i for i in [*issues,*active_service]}.values())
-    research_restart = any(i['category']=='coverage' or i['category']!='service' and i["blocking"] and i["action"] != "rewrite" for i in issues)
-    blocked = bool(active_service) or any(i["category"]=="service" for i in issues)
+    issues = ctx.research.report_issues(reports, "sections", close_writing=True)
+    research_restart = False
+    blocked = False
     if ctx.output_mode != 'latex':
         ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"), verified=False)
     from services.chat_services.issue_edits import bind_findings
@@ -96,7 +87,7 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         await ctx.set_stage("validate", "blocked", message)
     else:
         await ctx.set_stage('validate', 'in_progress' if issues else 'completed',
-                            '发现文稿意见，接下来自动改稿并复核。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前正文检查通过。')
+                            '发现引用或结构错误，修正当前稿件。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前正文检查通过。')
     from ai_system.research.control import public_snapshot
     await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
     ctx.write_json(".system/validation.json", {"source_version":state.get("source_version"), "round": state.get("repair_round", 0), "issues": issues})
@@ -225,10 +216,6 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     if ctx.research:
         snapshot = ctx.research.refresh_inputs()
         if not ctx.research.delivery_ready(snapshot):
-            if any(i['category']=='service' and i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}
-                   for i in research_findings(snapshot)):
-                await ctx.set_stage('render', 'blocked', '审查服务尚未完成，保留已完成的交付步骤，恢复后重试。')
-                return {'research_blocked': True, 'log': ['render: pending service review; delivery position retained']}
             return {"research_restart": True, "log": ["render: research evidence changed, returning to research control"]}
         if ctx.output_mode != 'latex':
             ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))

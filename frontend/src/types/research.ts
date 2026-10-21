@@ -2,6 +2,10 @@ export interface ResearchQuestion {
   id: string
   title: string
   question: string
+  version?: number
+  retired?: boolean
+  answer_status?: string
+  history?: { question: string; reason?: string }[]
   experiment_ids: string[]
   sources: string[]
   judgment: string
@@ -36,6 +40,10 @@ export interface ResearchActivity {
   experiment_id?: string | null
   parent_call_id?: string | null
   purpose?: string | null
+  inputs?: Record<string, unknown>
+  output?: Record<string, unknown>
+  message?: string
+  error_type?: string
   kind?: string
   updated_at?: number
   task_id?: string | null
@@ -71,8 +79,37 @@ export interface ReadableResult {
   run_id: string
   figure_path: string | null
   series: number[] | null
+  meaning?: {
+    object: string
+    scope: string
+    statistic: string
+    conditions?: string
+    lineage: { path: string; source_path: string; row_keys: string[]; transformation?: string }[]
+  } | null
 }
 export interface ResearchExperiment {
+  interpretation_version?: string
+  primary_result_refs?: string[]
+  current_actions?: ResearchActivity[]
+  record?: {
+    summary?: string
+    approach?: string
+    key_findings?: { statement: string; strength: string }[]
+    sensitivity?: string
+    limitations?: string[]
+  }
+  interpretation_history?: {
+    report_ref: string
+    status: string
+    report: ResearchExperiment['record']
+  }[]
+  historical_claims?: {
+    id: string
+    statement: string
+    strength: string
+    status: string
+    reason: string
+  }[]
   question_id: string
   kind: string
   dependencies: string[]

@@ -15,18 +15,6 @@ def report_fingerprint(report):
     return fingerprint({k: v for k, v in report.items() if k not in {"status", "error", "reviews"}})
 
 
-def needs_owner_review(issue):
-    """Freeze qualitative findings into a fresh audit of their owning task.
-
-    Global findings bound to executable checks keep their independent countercheck.
-    A confirmed recomputation likewise cannot be cleared by a local review.
-    """
-    return (not (issue['source']=='sections' and issue['category']=='coverage') and
-            issue["status"] not in {"resolved", "dismissed", "superseded"} and issue["action"] != "recompute"
-            and (issue["source"] == "local_review" or
-                 issue["action"] == "verify" and issue["status"] == "inconclusive" and not issue["check_ids"]))
-
-
 SOURCE_TOKEN = re.compile(r"[A-Za-z]+|\d+(?:\.\d+)?|[^\s]", re.UNICODE)
 
 
@@ -100,34 +88,23 @@ def validate_spec(source, analysis):
     return requirements, assumptions
 
 
-def bind_requirements(state, requirements, amendment=None):
-    """Append source requirements/checks without rewriting executed contracts.
-
-    Both decision repair and transactional application use this same boundary.
-    """
+def bind_requirements(state, requirements):
+    """Version current requirement bindings; executed contracts stay in executions."""
     bound = {r['id']:dict(r) for r in state['spec']['requirements']}
-    source = amendment or state['spec']['requirement'] + "\n" + "\n".join(state['spec']['amendments'])
-    attempted = {a['task_id'] for a in state['executions'].values() if a['revision']==state['experiments'][a['task_id']]['revision']}
     for requirement in requirements:
         incoming = requirement.model_dump()
         previous = bound.get(requirement.id)
-        if requirement.source_quote not in source:
-            raise ValueError('要求必须逐字追溯原题或明确用户修订')
-        scope = set(previous['task_ids']) if previous else set()
-        if not amendment and (set(requirement.task_ids)-scope) & attempted:
-            raise ValueError('不能在执行后追加原题要求绑定；须另建研究')
-        if previous:
-            if amendment or any(incoming[k]!=previous[k] for k in ('statement','source_quote','kind')):
-                raise ValueError('不能覆盖或放宽原题要求')
-            if not scope<=set(requirement.task_ids) or any(c not in incoming['checks'] for c in previous['checks']):
-                raise ValueError('不能移除原要求的任务绑定或冻结检查')
-            if any(c['left']['task_id'] in attempted for c in incoming['checks'] if c not in previous['checks']):
-                raise ValueError('执行后不能改写检查；须另建研究并保留原实验')
-        bound[requirement.id] = {**incoming, 'revision':previous['revision'] if previous else 1}
+        changed = previous is not None and any(previous[k] != v for k,v in incoming.items())
+        bound[requirement.id] = {**incoming, 'revision':previous['revision'] + int(changed) if previous else 1}
     return list(bound.values())
 
 
-def protocol(state, task_id):
+def protocol(state, task_id, *, execution_id=None):
+    if execution_id:
+        execution = state['executions'][execution_id]
+        frozen = execution.get('experience_basis', {}).get('protocol')
+        if frozen is not None:
+            return frozen
     task = state["experiments"][task_id]
     if task.get("verifies_issue"):
         return task["verification_protocol"]
@@ -165,12 +142,10 @@ def requirement_evidence_gaps(requirement_ids, proofs, available_refs):
 
 
 def evaluate(state, task_id, results):
-    rules = protocol(state, task_id)
-    task = state["experiments"][task_id]
-    current_attempts = {t["execution_id"] for t in state["experiments"].values()
-                        if t["acceptance"] == "accepted" and t["validity"] == "current"}
-    available = [entry["payload"] for entry in state["artifacts"].values() if entry["producer_attempt"] in current_attempts and entry["active"]]
-    available += results
+    from .domain import current_results
+    task = state['experiments'][task_id]
+    rules = protocol(state, task_id, execution_id=task['execution_id'])
+    available = current_results(state, task_id=task_id, results=results)
     checks = []
     for rule in rules:
         check = DomainCheck.model_validate(rule["check"])

@@ -1,12 +1,5 @@
 """Build worker methods from the controller's versioned task intent; no planner."""
 
-WRITING_DESIGN = {
-    'name':'基于前序结论撰写', 'method_keys':[],
-    'idea':'依据前序登记结果撰写，不进行新的计算。',
-    'formulation':'', 'steps':[], 'assumptions':[], 'validation':'与前序结论保持一致',
-}
-
-
 def experiment_design(plan):
     from ai_system.modules.methods import SKILL_VERSION,SKILL_SOURCES
     candidates=[{'name':c['name'], 'method_keys':c.get('method_keys',[]),

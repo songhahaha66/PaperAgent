@@ -7,10 +7,11 @@ from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
-    'research.review_report':'修订与复核报告','literature.collect':'获取文献证据',
-    'writing.reconcile':'核对证据与结论','writing.write':'撰写论文',
+    'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有证据','literature.collect':'获取文献证据',
+    'writing.write':'撰写论文',
     'writing.validate':'检查论文','writing.repair':'修订论文',
-    'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码'}
+    'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码',
+    'read_file':'读取已有文件','check_interpretation':'核查实验解释'}
 
 
 def questions(snapshot):
@@ -22,11 +23,15 @@ def questions(snapshot):
     rows=[]
     for question in snapshot['questions'].values():
         experiments=[e for e in snapshot['experiments'].values() if e['question_id']==question['id'] and not e['retired']]
-        ids={e['task_id'] for e in experiments}
+        ids={e['task_id'] for e in experiments} | set(question.get('related_experiment_ids', []))
+        experiments=[snapshot['experiments'][eid] for eid in ids if eid in snapshot['experiments']]
         scope=experiment_scope(snapshot['experiments'], ids)
         available=current_result_refs(snapshot, scope)
         issues=[i for i in findings(snapshot) if i['task_id'] in ids and i['status'] not in CLOSED]
+        stale = (any(snapshot['artifacts'].get(ref,{}).get('content_hash') != version for ref,version in question.get('basis_versions',{}).items())
+                 or any(snapshot['experiments'].get(eid,{}).get('report_ref') != version for eid,version in question.get('interpretation_versions',{}).items()))
         rows.append({**question,
+            'answer_status':'needs_update' if stale else question.get('answer_status','current' if question.get('judgment') else 'unanswered'),
             'experiment_ids':[e['task_id'] for e in experiments],
             'dependency_experiment_ids':sorted(scope - ids),
             'available_artifact_refs':sorted(available),
@@ -36,11 +41,12 @@ def questions(snapshot):
     return rows
 
 
-def question_context(rows):
+def question_context(rows, *, include_history=False):
     """Share current judgments and their evidence scope without report/history copies."""
     fields = ('id', 'title', 'question', 'judgment', 'artifact_refs', 'limitations', 'next_step',
               'experiment_ids', 'dependency_experiment_ids', 'available_artifact_refs',
-              'unavailable_artifact_refs', 'sources', 'issues')
+              'unavailable_artifact_refs', 'sources', 'issues', 'answer_status', 'retired', 'version')
+    if include_history:fields += ('history','judgments')
     return [{key: row[key] for key in fields if key in row} for row in rows]
 
 

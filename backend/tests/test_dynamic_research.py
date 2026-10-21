@@ -86,16 +86,27 @@ def test_ordinary_solver_does_not_generate_candidates_or_hide_design_failures(st
 
 
 
-def test_user_revision_without_scope_only_invalidates_its_actual_target(study):
+def test_user_revision_without_scope_preserves_results_and_updates_only_its_question(study):
     from ai_system.research.models import Requirement
     publish(study,'Q1',8);publish(study,'Q2',12)
+    current=study.store.snapshot()
+    results=study.store.registry_payload()['results']
+    loop._save_assessments(study.store,planner.NextAction(action='observe',reason='记录已有问题答案',judgments=[
+        planner.Judgment(question_id=current['experiments'][key]['question_id'],
+            statement='当前数据下的结果 {{R:'+next(r['id'] for r in results if r['subproblem']==key)+'}}',
+            artifact_refs=[r['id'] for r in results if r['subproblem']==key],limitations=['仅限已执行条件'])
+        for key in ('Q1','Q2')]))
     before=study.store.snapshot();change='预测范围改为下周'
     requirement=Requirement(id='RQ3',statement=change,source_quote=change,kind='goal',task_ids=['Q1'])
     patch=planner.propose_revision(before,'range-change',1,change,None,[requirement])
     study.store.apply_revision_command('range-change',1,change,None,patch)
     after=study.store.snapshot()
-    assert after['experiments']['Q2']==before['experiments']['Q2']
-    assert after['experiments']['Q1']['validity']=='stale' and after['spec']['requirement']==SOURCE
+    assert after['experiments']==before['experiments']
+    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
+    q1=before['experiments']['Q1']['question_id'];q2=before['experiments']['Q2']['question_id']
+    assert after['questions'][q1]['answer_status']=='needs_update'
+    assert after['questions'][q2]==before['questions'][q2]
+    assert after['spec']['requirement']==SOURCE
     assert after['spec']['requirements'][:2]==before['spec']['requirements']
 
 

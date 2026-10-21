@@ -126,7 +126,7 @@ def root_store(ctx):
     return ctx.experience_store or ctx.research or ResearchStore(ctx.source_workspace or ctx.workspace,'workspace-comparisons')
 
 
-def current(ctx,record,branch):
+def current(ctx,record,branch,*,allow_inherited=False):
     store=root_store(ctx);state=store.snapshot();order=ctx.experience_order
     candidates=branch['design'].get('candidates',[])[:2]
     if [digest(c) for c in candidates]!=record['candidate_hashes']:return False
@@ -135,9 +135,15 @@ def current(ctx,record,branch):
     if store.file_inputs()!=record['file_inputs']:return False
     if state and order:
         task=state['experiments'][order.task_id]
-        if task['revision']!=record['revision'] or digest(research_protocol(state,order.task_id))!=record['contract_hash']:return False
-        if task['execution_id']!=order.attempt_id or state['executions'][order.attempt_id]['lease']!=order.lease:return False
-        if store._inputs(state,task,store.file_inputs())!=order.input_refs:return False
+        if task['revision']!=record['revision'] or digest(research_protocol(state,order.task_id,execution_id=order.attempt_id))!=record['contract_hash']:return False
+        from ai_system.research.domain import execution_lineage
+        permitted=execution_lineage(state,task['execution_id']) if allow_inherited else {task['execution_id']}
+        if order.attempt_id not in permitted or state['executions'][order.attempt_id]['lease']!=order.lease:return False
+        actual=store._inputs(state,task,store.file_inputs());frozen=order.input_refs
+        if allow_inherited:
+            actual={k:v for k,v in actual.items() if k!='continuation'}
+            frozen={k:v for k,v in frozen.items() if k!='continuation'}
+        if actual!=frozen:return False
     if record.get('policy_version') is not None and ExperimentStore(store).policy()['version']!=record['policy_version']:return False
     return True
 

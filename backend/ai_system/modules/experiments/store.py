@@ -100,6 +100,11 @@ class ExperimentStore:
             if task['retired'] or task['kind']=='verify' or task['acceptance']!='accepted' or task['validity']!='current':
                 continue
             attempt=snapshot['executions'].get(task['execution_id']) or {}
+            # Continuations preserve the original measured comparison receipt;
+            # never refit candidates to recreate its summary.
+            while attempt.get('parent_attempt'):
+                attempt=snapshot['executions'].get(attempt['parent_attempt']) or {}
+            view_task={**task,'execution_id':attempt.get('attempt_id')}
             if attempt.get('execution_status')!='succeeded' or attempt.get('acceptance')!='accepted' or not attempt.get('commit',{}).get('published'):
                 continue
             record=self.read(key,task['revision'])
@@ -109,14 +114,14 @@ class ExperimentStore:
                 from .supervised import current,choose
                 from .contracts import VERSION,candidate_contract
                 order=WorkOrder.model_validate(attempt['result']['order'])
-                if order.attempt_id!=task['execution_id'] or order.task_id!=key or order.revision!=task['revision']:
+                if order.attempt_id!=attempt['attempt_id'] or order.task_id!=key or order.revision!=task['revision']:
                     continue
                 ctx=SimpleNamespace(research=self.store,experience_store=None,experience_order=order)
-                design=experiment_design(snapshot,task) or {};candidates=design.get('candidates',[])[:2]
-                if record.get('research_id')!=self.store.research_id or record.get('task_id')!=key or not current(ctx,record,{'subproblem':task['subproblem'],'design':design}):
+                design=experiment_design(snapshot,view_task) or {};candidates=design.get('candidates',[])[:2]
+                if record.get('research_id')!=self.store.research_id or record.get('task_id')!=key or not current(ctx,record,{'subproblem':task['subproblem'],'design':design},allow_inherited=True):
                     continue
                 if record.get('measurements'):
-                    summary=self.measured_summary(snapshot,task,attempt,record)
+                    summary=self.measured_summary(snapshot,view_task,attempt,record)
                     if summary:summaries.append(summary)
                     continue
                 protocol=record['protocol'];rows=record['branches'];chosen=record['chosen_index']

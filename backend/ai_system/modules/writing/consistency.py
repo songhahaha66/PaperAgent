@@ -1,16 +1,8 @@
-"""
-结论一致性（结论图）
+"""Optional semantic checks over current claims and manuscripts.
 
-结果登记表保证了"每个数字都是算出来的"，但保证不了"各处的结论说法一致"。
-2024_C 的判分指出了两类问题：Q2 检验得出"不能拒绝纯随机"，Q1/Q3/Q5 却把动量当成可预测的状态；
-摘要说 Q3 过拟合，正文说没有。
-
-这里把每个子问题报告里的主要结论登记为结论节点（陈述 + 证据强度 + 指向登记结果的证据边），在两处检查：
-
-1. reconcile（写作前）：审查模型通读全部结论，找出跨子问题的矛盾、以及强度与自身证据不符的结论，
-   给出统一口径；写作时每一节都带着这份口径，从源头避免各写各的。
-2. audit_sections（校验时）：检查摘要、问题分析、灵敏度分析、模型评价这些汇总性章节是否与结论表一致，
-   实际矛盾作为校验问题交给修复环节；技术失败保留为未完成，不改判研究结论。
+Review records retain actual scope and provenance. Findings and verdicts are
+advisory; the research owner decides what to adopt, dismiss or retain as limits.
+There is no mandatory reconcile/terminal-review production chain.
 """
 
 from ai_system.research.domain import findings as research_findings
@@ -32,7 +24,7 @@ RECONCILE_SYSTEM = (
     "数值已经替换成真实结果，证据强度由求解者标注。请找出：\n"
     "1. 不同子问题之间相互矛盾或口径不一的结论（例如一处检验认为某效应不显著，另一处却把它当作有效预测因素）；\n"
     "2. 证据强度与自身数值不符的结论（例如 p 值很大却标为显著，AUC 接近 0.5 却称预测有效）。\n"
-    "对每个问题给出写作时统一采用的口径：怎样表述才能与全部证据一致。"
+    "对每个疑点说明实际依据与建议核查内容，不自动决定全文口径或改写事实。"
     "若发现上游模型、数据、假设错误，必须填写research_issue，引用实际登记证据与研究契约中的检查编号；不能靠统一措辞掩盖。"
     "只报告真实的矛盾，表述角度不同但不冲突的不要列入。"
 )
@@ -79,7 +71,7 @@ def consistency_text(ctx: GraphContext, conflicts: List[Dict]) -> str:
     if not ctx.registry.claims:
         return ""
     parts = [
-        "# 全文结论表（核对实际证据，不能夸大证据强度）\n"
+        "# 当前实验主要结论（核对完整实验记录和实际证据，不能夸大证据强度）\n"
         "陈述里\"数值⟨Rn⟩\"表示这个数值对应引用 {{R:Rn}}；正文写引用，不要照抄数值，也不要把编号和数值错配。",
         ctx.registry.claims_table(),
     ]
@@ -104,45 +96,6 @@ def reconcile_prompt(state,ctx):
     contract = ctx.research.snapshot()
     return f"# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
 
-
-async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
-    ctx = runtime.context
-    claims = ctx.registry.claims
-    if not ctx.check_claims or len(claims) < 2:
-        return {"consistency": [], "research_restart": False, "log": ["reconcile: skipped"]}
-    await ctx.events.stage(f"审查 {len(claims)} 条结论的一致性")
-    prompt = reconcile_prompt(state,ctx)
-    try:
-        from ai_system.research.review_cache import run_review
-        def validate(result):
-            if 'conflicts' not in result.model_fields_set:raise ValueError('结论审查没有明确返回conflicts字段')
-            if any(not c.claims or not set(c.claims)<=set(claims) for c in result.conflicts):raise ValueError('结论审查引用了未知结论')
-            validate_findings([c.research_issue for c in result.conflicts if c.research_issue],state,ctx)
-        async def perform():return await call_structured(ctx.planner_llm, ConsistencyReview, as_messages(RECONCILE_SYSTEM, prompt),validate=validate)
-        review = await run_review(ctx,state,'reconcile',ConsistencyReview,RECONCILE_SYSTEM,prompt,perform,validate=validate)
-        conflicts = valid_conflicts([c.model_dump() for c in review.conflicts], set(claims))
-    except Exception as exc:
-        from ai_system.research.review_cache import error_code, error_detail
-        detail=error_detail(exc)
-        ctx.write_json(".system/consistency.json", {"error": error_code(exc), "detail":detail, "conflicts": []})
-        return {"consistency": [], "research_restart": False, "research_blocked": True,
-                "message":"结论核对未完成："+detail+"。已有实验成果已保留。", "log": [f"reconcile: incomplete ({error_code(exc)})"]}
-    research_reports = [IssueReport.model_validate(c["research_issue"]) for c in conflicts if c.get("research_issue")]
-    if research_reports:
-        active = ctx.research.report_issues(research_reports, "reconcile")
-        if active:
-            return {"consistency": [], "research_restart": True, "log": ["reconcile: research verification requested"]}
-        # Closed research findings must not become writing instructions that
-        # resurrect a dismissed suspicion as an established conclusion.
-        conflicts = [c for c in conflicts if not c.get("research_issue")]
-    ctx.write_json(".system/consistency.json", {"conflicts": conflicts})
-    if ctx.research:
-        ctx.research.save_consistency(conflicts)
-    await ctx.events.emit(
-        "paper_consistency",
-        f"结论一致性：发现 {len(conflicts)} 处矛盾，已定统一口径" if conflicts else "结论一致性：未发现矛盾",
-    )
-    return {"consistency": conflicts, "research_restart": False, "log": [f"reconcile: {len(conflicts)} conflicts"]}
 
 
 def section_doubts(state, ctx):
@@ -254,26 +207,9 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False,
         if issue.section in keys and ((issue.research_issue and issue.research_issue.category=='coverage') or
                                      issue.contradicts and not NOT_A_CONFLICT.search(issue.problem))
     ]
-    if doubts and not candidate:
-        from ai_system.research.review_cache import ReviewCache,review_context
-        from ai_system.research.store import digest
-        material=review_context(ctx,state,'sections',AUDIT_SYSTEM,prompt,ClaimAudit,sections=state.get('sections') or {})
-        hit=ReviewCache(ctx.research).get('sections',material,ClaimAudit)
-        if not hit:raise ValueError('缺少当前原文和证据上的完成审查，不能变更旧意见')
-        with ctx.research._transaction() as db:
-            snapshot=ctx.research._read(db)
-            for review in audit.issue_reviews:
-                old=next(i for i in snapshot['feedback'] if i['id']==review.issue_id)
-                if old!=doubts[old['id']]:raise ValueError('重新核对期间源意见已改变')
-                old['review_resolution']={'review_id':hit[1]['id'],'review_context_hash':hit[1]['context_hash'],
-                    'verdict':review.verdict,'reason':review.reason,'section_hash':digest(state['sections'][old['section']])}
-                if review.verdict!='dismissed':
-                    finding=review.finding
-                    report=finding.research_issue or IssueReport(task_id=old['task_id'],category='writing',section=finding.section,message='与结论表不一致：'+finding.problem)
-                    reports.append(report)
-                    replacement=ctx.research._record_issue(snapshot,report,'confirmed' if report.category=='writing' else 'suspected',source='sections')
-                    if replacement['id']==old['id']:continue
-                    old['review_resolution']['replacement_issue_id']=replacement['id']
-                old['status']='dismissed'
-            ctx.research._save(db,snapshot,'section_findings_reassessed',{'review_id':hit[1]['id'],'issues':[r.model_dump() for r in audit.issue_reviews]})
+    # Verdicts about earlier doubts remain suggestions in the versioned review
+    # record. The research owner explicitly accepts/dismisses them with reasons.
+    reports.extend(review.finding.research_issue or IssueReport(task_id=doubts[review.issue_id]['task_id'],
+        category='writing',section=review.finding.section,message=review.finding.problem)
+        for review in audit.issue_reviews if review.finding)
     return reports

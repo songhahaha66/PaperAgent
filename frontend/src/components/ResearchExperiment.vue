@@ -6,74 +6,97 @@
       <small v-if="experiment.started_at">实验开始于 {{ startedAt }}</small>
     </header>
     <p class="experiment-status">{{ statusText }}</p>
-    <aside v-if="newerExperiment" class="follow-up">
-      <span>{{
-        newerExperiment.execution_status === 'running'
-          ? '后续实验正在执行'
-          : newerExperiment.results.length
-            ? '已有后续实验结果'
-            : '已有后续实验记录'
-      }}</span>
-      <button @click="emit('experiment', newerExperiment.id)">查看后续实验 →</button>
-    </aside>
     <p v-if="experiment.availability === 'historical'" role="alert">此处保留的是历史结果。</p>
     <MarkdownRenderer
       v-if="experiment.approach || experiment.summary"
       :content="evidenceMarkdown(experiment.summary || experiment.approach || '', snapshot || null)"
       :work-id="workId"
     />
-    <h3 v-if="experiment.results.length">{{ isZh ? '实验结果' : 'Results' }}</h3>
-    <section
-      v-for="result in experiment.results"
-      :key="result.id"
-      class="measurement"
-      :data-result="result.id"
-      :class="{ focused: focusRef === result.id }"
-    >
-      <h4>
-        {{ resultName(result.name) }}
-      </h4>
-      <p v-if="result.description">{{ result.description }}</p>
-      <ResultSeries
-        v-if="result.series?.length"
-        :values="result.series"
-        :label="result.name + (result.unit ? ' (' + result.unit + ')' : '')"
-        :axis-label="
-          isZh ? '登记顺序（未登记横轴含义）' : 'Recorded order (axis meaning unavailable)'
-        "
-      />
-      <WorkDocument
-        v-else-if="result.figure_path"
-        :work-id="workId"
-        :path="result.figure_path"
-        :show-toolbar="false"
-        :active="true"
-      />
-      <p v-else-if="result.kind === 'figure'">
-        {{ isZh ? '登记图表文件当前不可用。' : 'The registered figure is unavailable.' }}
-      </p>
-      <p v-else class="value">
-        {{ displayValue(result.value, result.kind)
-        }}<span v-if="result.unit"> {{ result.unit }}</span>
-      </p>
-      <div v-if="usesFor(result.id).length" class="paper-uses">
-        <span>用于正文</span
-        ><button v-for="use in usesFor(result.id)" :key="use.section" @click="emit('paper', use)">
-          {{ use.title }} ↗
-        </button>
-      </div>
-      <details>
-        <summary>{{ isZh ? '原始记录与计算来源' : 'Raw record and computation' }}</summary>
-        <pre>{{ result.value }}<span v-if="result.unit"> {{ result.unit }}</span></pre>
-        <template v-for="run in runs.filter((r) => r.id === result.run_id)" :key="run.id"
-          ><button v-if="run.input_path" @click="emit('open-file', run.input_path)">
-            {{ isZh ? '执行代码' : 'Code' }}</button
-          ><button v-if="run.stdout_path" @click="emit('open-file', run.stdout_path)">
-            {{ isZh ? '执行输出' : 'Output' }}
-          </button></template
-        >
-      </details>
+    <section>
+      <h3>实验目的</h3>
+      <p>{{ experiment.objective }}</p>
+      <p v-if="experiment.experiment">条件：{{ experiment.experiment.conditions }}</p>
+      <p v-if="experiment.experiment">评价依据：{{ experiment.experiment.evaluation }}</p>
     </section>
+    <h3 v-if="experiment.claims.length">主要发现与解释</h3>
+    <div v-for="claim in experiment.claims" :key="claim.id">
+      <MarkdownRenderer
+        :content="evidenceMarkdown(claim.statement, snapshot || null)"
+        :work-id="workId"
+      />
+      <small>{{ claim.strength }}</small>
+    </div>
+    <p v-for="limitation in experiment.record?.limitations || []" :key="limitation">
+      局限：{{ limitation }}
+    </p>
+    <h3 v-if="primaryResults.length">关键依据</h3>
+    <ResearchMeasurement
+      v-for="result in primaryResults"
+      :key="result.id"
+      :result="result"
+      :work-id="workId"
+      :runs="runs"
+      :snapshot="snapshot"
+      :focus-ref="focusRef"
+      @open-file="(path) => emit('open-file', path)"
+      @paper="(use) => emit('paper', use)"
+    />
+    <details v-if="otherResults.length" :open="otherResults.some((r) => r.id === focusRef)">
+      <summary>全部登记与辅助结果（{{ otherResults.length }} 项）</summary>
+      <ResearchMeasurement
+        v-for="result in otherResults"
+        :key="result.id"
+        :result="result"
+        :work-id="workId"
+        :runs="runs"
+        :snapshot="snapshot"
+        :focus-ref="focusRef"
+        @open-file="(path) => emit('open-file', path)"
+        @paper="(use) => emit('paper', use)"
+      />
+    </details>
+    <section v-if="actions.length">
+      <h3>当前行动与执行记录</h3>
+      <article v-for="action in actions" :key="action.id" class="action-record">
+        <p>
+          <strong>{{ action.label }}</strong
+          ><span class="note"> {{ executionLabel(action.status) }}</span>
+        </p>
+        <p v-if="action.purpose">{{ action.purpose }}</p>
+        <p v-if="action.message">{{ action.message }}</p>
+        <details>
+          <summary>调试详情</summary>
+          <p v-if="action.error_type">{{ action.error_type }}</p>
+          <pre v-if="action.inputs">{{ JSON.stringify(action.inputs, null, 2) }}</pre>
+          <pre v-if="action.output">{{ JSON.stringify(action.output, null, 2) }}</pre>
+          <template v-for="run in runs.filter((r) => r.id === action.run_id)" :key="run.id">
+            <button v-if="run.input_path" @click="emit('open-file', run.input_path)">
+              代码与工具输入
+            </button>
+            <button v-if="run.stdout_path" @click="emit('open-file', run.stdout_path)">
+              实际输出与错误
+            </button>
+          </template>
+        </details>
+      </article>
+    </section>
+    <details
+      v-if="experiment.interpretation_history?.length || experiment.historical_claims?.length"
+    >
+      <summary>解释与观点的历史（已被当前解释替代）</summary>
+      <article v-for="prior in experiment.interpretation_history || []" :key="prior.report_ref">
+        <MarkdownRenderer
+          :content="evidenceMarkdown(prior.report?.summary || '', snapshot || null)"
+          :work-id="workId"
+        />
+        <p v-for="finding in prior.report?.key_findings || []" :key="finding.statement">
+          {{ finding.statement }}
+        </p>
+      </article>
+      <p v-for="claim in experiment.historical_claims || []" :key="claim.id">
+        {{ claim.status }}：{{ claim.statement }}（{{ claim.reason }}）
+      </p>
+    </details>
     <details v-if="experiment.method">
       <summary>{{ isZh ? '最初的方法设想' : 'Initial method proposal' }}</summary>
       <MarkdownRenderer
@@ -120,14 +143,6 @@
         </button>
       </div>
     </details>
-    <h3 v-if="experiment.claims.length">{{ isZh ? '结论' : 'Conclusions' }}</h3>
-    <div v-for="claim in experiment.claims" :key="claim.id">
-      <MarkdownRenderer
-        :content="evidenceMarkdown(claim.statement, snapshot || null)"
-        :work-id="workId"
-      />
-      <small>{{ claim.strength }}</small>
-    </div>
     <h3 v-if="experiment.sources.length">{{ isZh ? '输入资料' : 'Sources' }}</h3>
     <div v-for="source in experiment.sources" :key="source.path">
       <button v-if="source.available" @click="emit('open-file', source.path)">
@@ -135,7 +150,7 @@
       </button>
       <p v-else>{{ source.path }}，{{ isZh ? '文件不可用' : 'Unavailable' }}</p>
     </div>
-    <section v-if="question?.next_step && !newerExperiment">
+    <section v-if="question?.next_step">
       <h3>{{ isZh ? '下一步' : 'Next step' }}</h3>
       <p>{{ question.next_step }}</p>
     </section>
@@ -182,10 +197,10 @@ import type {
   EvidenceUse,
 } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
+import { executionLabel } from '@/utils/researchProgress'
 import { outcomeLabel } from '@/utils/outcomeLabels'
-import ResultSeries from './ResultSeries.vue'
-import { evidenceMarkdown, resultName } from '@/utils/researchEvidence'
-import WorkDocument from './WorkDocument.vue'
+import ResearchMeasurement from './ResearchMeasurement.vue'
+import { evidenceMarkdown } from '@/utils/researchEvidence'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 const props = defineProps<{
   workId: string
@@ -208,16 +223,17 @@ const startedAt = computed(() => {
 const question = computed(() =>
   props.snapshot?.questions?.find((q) => q.id === props.experiment.question_id),
 )
-const newerExperiment = computed(() =>
-  [...(props.snapshot?.experiments || [])]
-    .reverse()
-    .find(
-      (e) =>
-        e.question_id === props.experiment.question_id &&
-        e.id !== props.experiment.id &&
-        Number(e.started_at || 0) > Number(props.experiment.started_at || 0),
-    ),
+const primaryResults = computed(() =>
+  props.experiment.results.filter(
+    (r) => props.experiment.primary_result_refs?.includes(r.id) && r.meaning,
+  ),
 )
+const otherResults = computed(() =>
+  props.experiment.results.filter(
+    (r) => !primaryResults.value.some((primary) => primary.id === r.id),
+  ),
+)
+const actions = computed(() => props.experiment.current_actions || [])
 const statusText = computed(() => {
   const e = props.experiment
   if (e.execution_status === 'running') return '正在执行，尚未提交本次实验结果。'
@@ -252,7 +268,6 @@ const fileGroups = computed(() => {
   }
   return [...groups.values()]
 })
-const usesFor = (ref: string) => props.snapshot?.evidence_uses?.filter((u) => u.ref === ref) || []
 watch(
   () => [props.focusRef, props.experiment] as const,
   async () => {
@@ -265,12 +280,6 @@ watch(
   { immediate: true },
 )
 const { isZh } = useStudioCopy()
-const displayValue = (value: string, kind: string) => {
-  const number = Number(value)
-  return kind === 'number' && value.trim() && Number.isFinite(number)
-    ? number.toLocaleString(isZh.value ? 'zh-CN' : 'en-US', { maximumSignificantDigits: 6 })
-    : value
-}
 const label = (value: string) => outcomeLabel(value, isZh.value)
 </script>
 <style scoped>

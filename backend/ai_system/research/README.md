@@ -1,5 +1,5 @@
-# Research control
+# Research engine
 
-See [the domain architecture and migration contract](../../../ARCHITECTURE.md).
+`store.py` owns schema 5 state. `planner.py` chooses research decisions; `loop.py` dispatches through LangGraph and preserves `solve_join`. Experiments execute continuous CodeAct actions and return complete findings. Interpretation edits never run calculation. Read views project the same questions, reports, results, claims and history.
 
-`store.py` owns transactional research state; `loop.py` selects capabilities; `control.py` publishes grounded worker submissions. LangGraph persists execution positions, and `ai_system/modules` owns the research methods and outputs.
+See [ARCHITECTURE.md](../../../ARCHITECTURE.md) for ownership, versioning, migration and advisory checks.

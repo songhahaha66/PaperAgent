@@ -1,13 +1,8 @@
-"""
-求解结果审查（critic）：在写作之前检查结果本身靠不靠谱
+"""Deterministic submission checks and optional semantic review.
 
-求解循环只保证"数字确实是代码算出来的"，保证不了"算法用对了"。
-2024_C 的 trace 里出现过：只用了一场比赛的数据、类别不平衡下用 F1 显得很高、训练/验证差距大。
-这里让审查模型对照代码和登记结果逐项检查，有必须修正的问题就把意见交回同一个求解循环
-（内核还在，变量不用重算），最多 max_review_rounds 轮。
-
-模型主动提交标签置换对照时核对其执行来源和数值；是否需要这类实验取决于问题与冻结契约，
-不能仅因报告出现 MAE、RMSE 等指标就给时序预测增加置换实验的硬性门槛。
+Existence, execution provenance and frozen contracts are program checks.
+Semantic review returns doubts to the experiment/research owner; it never
+schedules another calculation or controls acceptance automatically.
 """
 
 from ai_system.research.domain import findings as research_findings
@@ -24,7 +19,7 @@ from ai_system.research.models import DomainCheck
 
 SYSTEM = (
     "你是数学建模竞赛的评审老师，负责在写论文之前审查一个子问题的求解结果。"
-    "只依据给出的代码、输出和登记结果判断，不要臆测。只把真正影响结论可信度的问题列为必须修正，"
+    "只依据给出的代码、输出和登记结果判断，不要臆测。只返回具体疑点与实际依据，由当前实验或研究者核实处置，"
     "措辞风格、可有可无的扩展不要列入。"
     "以原题和冻结研究契约为验收边界，不增加题外实验或效果门槛。预测方法的局限、"
     "不同误差指标排序不同、按预先说明的规则选法、逐日预测碰巧同值，本身都不是交付缺失。"
@@ -182,7 +177,7 @@ def review_prompt(branch: BranchInput, report: Dict, ctx: GraphContext, runs: Li
         f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n"
         f"交付物：{'；'.join(subproblem.get('deliverables') or [])}\n\n"
         f"# 数据概览\n{clip(branch['data_profile'], 4000)}\n\n"
-        f"# 选定方案\n{branch['design']['chosen']['name']}：{branch['design']['chosen']['idea']}\n\n"
+        f"# 选定方案\n{((branch.get('design') or {}).get('chosen') or {}).get('name',report.get('approach',''))}：{((branch.get('design') or {}).get('chosen') or {}).get('idea','未保留独立方法说明')}\n\n"
         f"# 求解报告\n{report}\n\n"
         f"# 登记结果\n{ctx.registry.to_prompt_table(subproblem['id'])}\n\n"
         f"# 本次执行代码与输出（按时间顺序，含最初建模计算）\n{code or '（无）'}\n\n{CHECKLIST}\n\n"
@@ -201,12 +196,3 @@ async def review_solution(ctx: GraphContext, branch: BranchInput, report: Dict, 
     from ai_system.research.runtime import execution_scope
     with labelled(f"{branch['subproblem']['id']}:review"), execution_scope(step='检查实验报告'):
         return await call_structured(ctx.planner_llm, ResultReview, as_messages(SYSTEM, prompt))
-
-
-def feedback_message(review: ResultReview) -> str:
-    items = "\n".join(f"{i + 1}. [{item.category}] {item.task_id}：{item.message}" for i, item in enumerate(review.issues))
-    return (
-        "评审老师审查了你的结果，以下问题必须修正：\n"
-        f"{items}\n\n"
-        "内核中的变量仍然存在。请补充或重做相应计算，登记新的结果，然后重新提交完整的求解报告。"
-    )

@@ -9,6 +9,21 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class RowLineage(Contract):
+    path: str = Field(min_length=1, description='保存原始行关系的数据文件，派生表须含稳定原始行键')
+    source_path: str = Field(min_length=1)
+    row_keys: list[str] = Field(min_length=1, description='原始行ID/工作表和行号等实际保留的键列；多值展开保留一对多关系')
+    transformation: str = ''
+
+
+class ResultMeaning(Contract):
+    object: str = Field(min_length=1, description='实际统计或测量对象，不能将展开记录当原始对象')
+    scope: str = Field(min_length=1, description='数据范围、过滤、去重、分母与粒度')
+    statistic: str = Field(min_length=1, description='指标定义、聚合或计算口径')
+    conditions: str = ''
+    lineage: list[RowLineage] = Field(default_factory=list)
+
+
 class ResultSelector(Contract):
     task_id: str
     name: str = Field(min_length=1, description="必须登记的单个结果名称，求解和验证使用相同名称。数值比较只接受标量；序列长度/非负性应分别命名长度/最小值等标量指标，不能引用整组数组")
@@ -91,7 +106,7 @@ class Requirement(Contract):
     source_quote: str = Field(min_length=1, description="原题逐字摘录，必须能在用户需求中找到")
     kind: Literal["goal", "constraint", "deliverable"] = Field(description="goal=研究目标；constraint=必须保留的数学/领域约束，相关实验执行前绑定具体检查；deliverable=报告、语言、格式、引用等交付要求。不要为文书要求伪造满足指标")
     task_ids: list[str] = Field(default_factory=list)
-    checks: list[DomainCheck] = Field(default_factory=list, description="原题要求可先保留而不绑定实验；相关实验领取前冻结操作化检查。文书要求由章节校验处理")
+    checks: list[DomainCheck] = Field(default_factory=list, description="要求可先保留而不绑定实验；实际声明的检查随执行冻结，未操作化的约束保留为待核实，不补造自报指标。文书要求由写作处理")
 
 
 class Assumption(Contract):

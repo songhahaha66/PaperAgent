@@ -1,4 +1,4 @@
-from .domain import experiment_report, experiment_design, report_artifact
+from .domain import experiment_report, experiment_design, report_artifact, execution_lineage, current_results
 """Read-only, task-oriented views of retained computation evidence.
 
 This deliberately does not widen the publication registry or change the planner.
@@ -6,7 +6,7 @@ An available calculation is not an accepted scientific conclusion.
 """
 
 from ai_system.research.domain import findings as research_findings
-from ..graph.registry import numeric_series, REF_PATTERN
+from ..graph.registry import numeric_series, REF_PATTERN, find_refs
 from .validation import report_fingerprint
 from .progress import issue_next_step
 
@@ -36,7 +36,7 @@ def check_state(snapshot, task, attempt, issues):
             and not reviews[-1].get('issues') and task.get('acceptance') == 'accepted'
             and task.get('validity') == 'current'):
         return 'passed'
-    # Deterministic checks alone, or review_required=False, do not certify review.
+    # Deterministic checks alone do not certify a semantic review.
     return 'unreviewed'
 
 
@@ -44,6 +44,7 @@ def result_view(item, safe_file):
     name = str(item.get('name') or '').strip()
     description = str(item.get('description') or '').strip()
     return {
+        'meaning': item.get('meaning'), 'grounding':'output_occurrence',
         'id': str(item['id']), 'name': name or '未命名结果',
         'description': description, 'unit': str(item.get('unit') or ''),
         'kind': item.get('kind', 'number'), 'value': str(item.get('value', '')),
@@ -78,7 +79,10 @@ def experiments_view(business, safe_file, current_files=None):
         for attempt in reversed(attempts):
             aid = attempt['attempt_id']
             items = [e['payload'] for e in business['artifacts'].values()
-                     if e['producer_attempt'] == aid and e['active'] and e['type']=='result']
+                     if e['producer_attempt'] in execution_lineage(business,aid) and e['type']=='result'
+                     and (e['active'] or aid!=task.get('execution_id'))]
+            if aid==task.get('execution_id'):
+                items=current_results(business,{key},task_id=key)
             if items:
                 retained.append((attempt, items))
         active = next((p for p in retained if p[0]['attempt_id'] == task.get('execution_id')), None)
@@ -94,18 +98,32 @@ def experiments_view(business, safe_file, current_files=None):
         sources = [{'path': path, 'hash': fingerprint,
                     'available': bool(safe_file(path))}
                    for path, fingerprint in attempt.get('input_refs', {}).items() if path.startswith(('data/', 'attachment/'))]
+        current_claims=[c for c in business['claims'].values() if c['producer_attempt'] in execution_lineage(business,attempt.get('attempt_id')) and c.get('active',True)]
+        cited=set(find_refs(' '.join([report.get('summary',''),report.get('sensitivity',''),*report.get('limitations',[]),
+                    *(f.get('statement','') for f in report.get('key_findings',[]))])))
+        from .feedback import interpretation_version
+        from .views import LABELS
         views.append({
+            'interpretation_version':interpretation_version(business,task),
+            'primary_result_refs':[item['id'] for item in items if item['id'] in cited and item.get('meaning')],
+            'record':report,
+            'current_actions':[{**a,'label':LABELS.get(a['capability'],'研究行动')}
+                               for a in business.get('activity',[]) if a.get('experiment_id')==key][-40:],
+            'interpretation_history':[{'report_ref':ref,'report':a['report'],'status':'superseded'}
+                 for ref,a in business['artifacts'].items() if a['type']=='report' and a['experiment_id']==key and ref!=task['report_ref']],
+            'historical_claims':[{**claim_view(c['payload'],[a['payload'] for a in business['artifacts'].values()]),
+                                 'status':c.get('status','historical'),'reason':c.get('reason','')}
+                  for c in business['claims'].values() if c['experiment_id']==key and not c.get('active',True)],
             'id': key, 'task_id': key, 'question_id':task['question_id'], 'title': task.get('subproblem', {}).get('title') or task['objective'],
             'objective': task['objective'], 'revision': attempt.get('revision'),
             'attempt_id': attempt.get('attempt_id'), 'started_at':attempt.get('started_at'), 'computation': attempt.get('execution_status', task['execution_status']),
             'availability': ('current' if current else 'historical') if items else 'unavailable',
-            'checking': check_state(business, task, attempt, [i for i in issues if i['category']!='writing' or task['kind']=='writing']) if inputs_match else 'outdated',
+            'checking': check_state(business, task, attempt, [i for i in issues if i['category']!='writing']) if inputs_match else 'outdated',
             'approach': report.get('approach') or '', 'summary': report.get('summary') or '',
             'method': {k: method[k] for k in ('name', 'idea', 'formulation', 'steps', 'validation') if method.get(k)} or None,
             'experiment':attempt.get('experiment') or task.get('experiment'),
             'results': [result_view(item, safe_file) for item in items[:500]],
-            'claims': [claim_view(c['payload'], [e['payload'] for e in business['artifacts'].values()]) for c in business['claims'].values()
-                       if c['producer_attempt'] == attempt.get('attempt_id')],
+            'claims': [claim_view(c['payload'], [e['payload'] for e in business['artifacts'].values()]) for c in current_claims],
             'issues': issues, 'sources': sources,
             'next_step': ' '.join(dict.fromkeys(issue_next_step(i,business) for i in issues)) or task.get('reason') or report.get('next_step') or None,
             'artifacts': [{'id':ref,'kind':e['type'],'path':safe_file(e['payload'].get('path')),'run_id':e['payload']['run_id']}

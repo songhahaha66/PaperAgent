@@ -5,7 +5,7 @@ are intentionally coarse in this first schema: old revisions and attempts remain
 in the journal, while reads see a single committed, consistent snapshot.
 """
 
-from ai_system.research.domain import findings as research_findings, SCHEMA_VERSION, attach_question, save_report_artifact
+from ai_system.research.domain import findings as research_findings, SCHEMA_VERSION, attach_question, save_report_artifact, execution_lineage, current_results
 import hashlib
 import json
 import re
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import ENGINE_VERSION, DEFAULT_PLANNING_CALL_LIMIT
 from .models import Assumption, DomainCheck, ResearchRevision, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord, ContentFeedback, RuntimeFault
-from .validation import bind_requirements, validate_spec, protocol, evaluate, fingerprint, report_fingerprint, requirement_evidence_gaps, needs_owner_review
+from .validation import bind_requirements, validate_spec, protocol, evaluate, fingerprint
 from .assumptions import assumption_id, premise_definition, assumption_scope
 
 DB_PATH = ".system/research.sqlite"
@@ -152,6 +152,8 @@ class ResearchStore:
                      "planning_calls": 0, "max_total_attempts": len(tasks) * max_attempts + 6}
             for experiment in tasks.values():
                 attach_question(state, experiment, title=experiment["subproblem"].get("title"))
+            from .migration import retire_legacy_workflow
+            retire_legacy_workflow(state)
             self._validate_contracts(state)
             self._bind_assumption_inputs(state)
             self._save(db, state, "initialized", {"spec": state["spec"], "experiments": tasks})
@@ -161,6 +163,11 @@ class ResearchStore:
         with self._transaction() as db:
             db.execute("INSERT INTO counters VALUES (?, ?, 1) ON CONFLICT(research_id, prefix) DO UPDATE SET value=value+1", (self.research_id, prefix))
             value = db.execute("SELECT value FROM counters WHERE research_id=? AND prefix=?", (self.research_id, prefix)).fetchone()[0]
+            state=self._read(db) or {}
+            known=set(state.get('artifacts',{})) | set(state.get('claims',{}))
+            while f'{prefix}{value}' in known:
+                value+=1
+            db.execute('UPDATE counters SET value=? WHERE research_id=? AND prefix=?',(value,self.research_id,prefix))
             return f"{prefix}{value}"
 
     def _artifact_hash(self, item):
@@ -191,7 +198,7 @@ class ResearchStore:
             state = self._read(db)
             affected = []
             if state:
-                roots = {key for key, task in state['experiments'].items() if not task['retired'] and task['kind'] != 'writing'}
+                roots = {key for key, task in state['experiments'].items() if not task['retired']}
                 affected = self._invalidate(state, roots, '科研技能配置已改变，使用当前选择重新设计和求解')
                 for key in affected:
                     state['experiments'][key]['revision'] += 1
@@ -226,6 +233,7 @@ class ResearchStore:
                      for dep in task["dependencies"]})
         refs.update({f"assumption:{aid}": str(state["assumptions"][aid]["revision"])
                      for aid in task["assumption_ids"]})
+        if task.get('continuation'):refs['continuation']=task['continuation']['parent_attempt']
         return refs
 
     def refresh_inputs(self):
@@ -236,7 +244,7 @@ class ResearchStore:
             for key, task in state["experiments"].items():
                 attempt = state["executions"].get(task["execution_id"])
                 if task["acceptance"] == "accepted" and attempt:
-                    previous = {k: v for k, v in attempt["input_refs"].items() if not k.startswith(("task:", "assumption:"))}
+                    previous = {k: v for k, v in attempt["input_refs"].items() if not k.startswith(("task:", "assumption:", "continuation"))}
                     if previous != files:
                         changed.add(key)
             if changed:
@@ -247,7 +255,7 @@ class ResearchStore:
                 self._save(db, state, "inputs_changed", {"affected": affected})
             return state
 
-    def claim(self, task_id: str, *, review_required=False) -> WorkOrder:
+    def claim(self, task_id: str) -> WorkOrder:
         files = self.file_inputs()
         with self._transaction() as db:
             state = self._read(db)
@@ -264,20 +272,18 @@ class ResearchStore:
             attempts = [a for a in state["executions"].values() if a["task_id"] == task_id and a["revision"] == task["revision"]]
             if len(attempts) >= state["max_attempts"] or len(state["executions"]) >= state["max_total_attempts"]:
                 raise ResearchConflict(f"任务 {task_id} 已达到尝试预算")
-            for requirement in state["spec"]["requirements"]:
-                if requirement['kind']=='constraint' and task_id in requirement['task_ids'] and not any(
-                        c['left']['task_id']==task_id for c in requirement['checks']):
-                    raise ResearchConflict('相关原题约束尚未绑定本实验的操作化检查')
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
-                              protocol_hash=digest(protocol(state, task_id)), review_required=review_required,
-                              review_issue_ids=[i["id"] for i in research_findings(state) if needs_owner_review(i) and i["task_id"] == task_id])
+                              protocol_hash=digest(protocol(state, task_id)))
             from .experience import conditions
             basis = {'question':task['objective'],'protocol':protocol(state,task_id),
+                     'requirements':[r for r in state['spec']['requirements'] if r['id'] in task['requirement_ids']],
                      'conditions':conditions(self.root,state['spec']['requirement']+' '+task['objective'])}
             state["executions"][order.attempt_id] = {**order.model_dump(), "execution_status": "running", "started_at": time.time(),
                                                  'experience_basis':basis}
+            if task.get('continuation'):
+                state['executions'][order.attempt_id].update(task['continuation'])
             if task.get('experiment'):
                 state['executions'][order.attempt_id]['experiment']=task['experiment']
             task.update(execution_status="running", execution_id=order.attempt_id)
@@ -333,12 +339,35 @@ class ResearchStore:
             current = (task["revision"] == order.revision and task["execution_id"] == order.attempt_id
                        and task["validity"] == "current" and attempt["execution_status"] == "running"
                        and self._inputs(state, task, files) == order.input_refs
-                       and digest(protocol(state, order.task_id)) == order.protocol_hash and experience_current)
+                       and digest(protocol(state, order.task_id, execution_id=order.attempt_id)) == order.protocol_hash and experience_current)
             receipt = {"attempt_id": order.attempt_id, "published": current, "commit_seq": state["commit_seq"] + 1}
             if not experience_current:
                 receipt['reason']='引用经验已禁用、删除、变更或来源/权限失效，需重新领取任务'
             attempt.update(execution_status=result.execution_status, acceptance=result.acceptance,
                            result_digest=signature, commit=receipt, result=result.model_dump())
+            if current and attempt.get('parent_attempt') and result.execution_status != 'succeeded':
+                # A failed additional action does not retract previously valid
+                # evidence or interpretation. Retain this failed attempt separately.
+                parent=attempt['parent_attempt']
+                for item in result.results:
+                    if item['id'] in state['artifacts']:continue
+                    if item['subproblem']!=order.task_id:raise ValueError('补充结果不属于当前实验')
+                    state['artifacts'][item['id']]={'payload':item,'content_hash':digest(item),
+                        'artifact_hash':self._artifact_hash(item),'producer_attempt':order.attempt_id,
+                        'experiment_id':order.task_id,'type':'result','active':False}
+                historical={**task,'execution_id':order.attempt_id,'report_ref':None}
+                save_report_artifact(state,self.root,historical,result.report)
+                state['artifacts'][historical['report_ref']]['active']=False
+                task.update(execution_id=parent,execution_status='succeeded',acceptance='accepted')
+                task.pop('continuation',None)
+                for report in result.issues:
+                    self._record_issue(state,IssueReport(task_id=order.task_id,category='execution',
+                        message=report.message,evidence_refs=report.evidence_refs),'confirmed',producer_attempt=order.attempt_id)
+                receipt.update(reason='补充行动失败；原实验结果与解释仍保留为当前依据',continued=False)
+                from .domain import register_execution_artifacts
+                register_execution_artifacts(state,self.root,attempt)
+                self._save(db,state,'attempt_committed',receipt)
+                return receipt
             if current:
                 if result.acceptance == "accepted" and result.execution_status != "succeeded":
                     raise ValueError("执行失败的结果不能通过验收")
@@ -349,11 +378,14 @@ class ResearchStore:
                     if item["id"] in all_evidence and all_evidence[item["id"]] != item:
                         raise ValueError("同一证据编号不能对应不同内容")
                     all_evidence[item["id"]] = item
+                inherited = execution_lineage(state, attempt.get('parent_attempt'))
                 for item in all_evidence.values():
-                    if item["id"] in state["artifacts"] or item["subproblem"] != order.task_id:
-                        raise ValueError("结果编号重复或不属于当前任务")
+                    previous=state['artifacts'].get(item['id'])
+                    if item['subproblem'] != order.task_id or (previous and
+                        (not previous['active'] or previous['producer_attempt'] not in inherited or previous['payload'] != item)):
+                        raise ValueError('结果编号重复或不属于当前任务/延续来源')
                 ids = {r["id"] for r in result.results}
-                frozen = {v for k, v in order.input_refs.items() if k.startswith("task:")}
+                frozen = set().union(*(execution_lineage(state,v) for k,v in order.input_refs.items() if k.startswith("task:")))
                 input_evidence = {rid for rid, entry in state["artifacts"].items() if entry["producer_attempt"] in frozen and entry["active"]}
                 for claim in result.claims:
                     if claim["id"] in state["claims"] or claim["subproblem"] != order.task_id:
@@ -361,14 +393,21 @@ class ResearchStore:
                     if not set(claim.get("evidence", [])) <= (ids | input_evidence):
                         raise ValueError("结论引用了不可用证据")
                 for item in all_evidence.values():
+                    if item["id"] in state["artifacts"]:continue  # Reuse original provenance unchanged.
                     state["artifacts"][item["id"]] = {"payload": item, "content_hash": digest(item),
                         "artifact_hash": self._artifact_hash(item), "producer_attempt": order.attempt_id,
                         "experiment_id": order.task_id, "type": "result", "active": item["id"] in ids}
+                for ref,artifact in state['artifacts'].items():
+                    if artifact['type']=='result' and artifact['producer_attempt'] in inherited and ref not in ids:
+                        artifact['active']=False
                 introduced = self._register_assumptions(state, result) if result.execution_status == "succeeded" else []
+                for old in state['claims'].values():
+                    if old['experiment_id']==order.task_id and old.get('active',True):
+                        old.update(active=False,status='superseded',reason='实验继续行动后更新解释')
                 for item in result.claims:
                     state["claims"][item["id"]] = {"payload": item, "producer_attempt": order.attempt_id, "experiment_id":order.task_id,
-                        "assumption_refs": {k.removeprefix("assumption:"): int(v) for k, v in order.input_refs.items() if k.startswith("assumption:")}}
-                review_clear = self._commit_reviews(state, result, set(all_evidence) | input_evidence, staging=False)
+                        "active": True, "status": "current", "assumption_refs": {k.removeprefix("assumption:"): int(v) for k, v in order.input_refs.items() if k.startswith("assumption:")}}
+                review_clear = self._commit_reviews(state, result, set(all_evidence) | input_evidence)
                 if introduced:
                     attempt['introduced_assumptions'] = introduced
                 validation = evaluate(state, order.task_id, result.results) if result.execution_status == "succeeded" else ValidationRecord(
@@ -461,7 +500,7 @@ class ResearchStore:
             return []
         root = result.order.task_id
         if state["experiments"][root]["kind"] != "compute":
-            raise ValueError("验证和写作任务不能引入新的建模前提")
+            raise ValueError("验证任务不能引入新的建模前提")
         scope = assumption_scope(state["experiments"], root)
         introduced, seen = [], {}
         for proposal in result.assumptions:
@@ -492,36 +531,17 @@ class ResearchStore:
             task['assumption_ids'] += [aid for aid in introduced if aid not in task['assumption_ids']]
         return introduced
 
-    def _commit_reviews(self, state, result, available, *, staging):
-        order = result.order
-        recorded = []
-        allowed = available | {ref for i in research_findings(state) if i["id"] in order.review_issue_ids for ref in i["evidence_refs"]}
+    def _commit_reviews(self, state, result, available):
+        # Historical worker reviews are advisory input. Only deterministic
+        # contracts (evaluate) or an explicit owner decision can invalidate work.
         for review in result.reviews:
             for report in review.issues:
-                if not set(report.evidence_refs) <= allowed:
-                    raise ValueError("局部审查引用了冻结上下文之外的证据")
-                issue = self._record_issue(state, report, "confirmed" if report.category == "service" else "suspected",
-                    producer_attempt=order.attempt_id, source="local_review",
-                    target_revision=order.revision if report.task_id == order.task_id else None)
-                issue["blocking"] = True
-                recorded.append(issue)
-        if staging or result.execution_status != "succeeded":
-            return
-        fresh = bool(result.reviews and result.reviews[-1].report_hash == report_fingerprint(result.report))
-        if order.review_required and not fresh:
-            self._record_issue(state, IssueReport(task_id=order.task_id, category="service", message="缺少当前报告的完整局部审查"),
-                "confirmed", producer_attempt=order.attempt_id, source="local_review")
-        if fresh:
-            # Successful auditing closes service faults; scientific findings close
-            # only when the current report has been rechecked with no open issues.
-            clear = not result.reviews[-1].issues
-            for issue in [*recorded, *[i for i in research_findings(state) if i["id"] in order.review_issue_ids]]:
-                if not needs_owner_review(issue) or issue["task_id"] != order.task_id:
-                    continue
-                if clear or issue["category"] == "service" and not any(r.category == "service" for r in result.reviews[-1].issues):
-                    issue["status"] = "resolved"
-                    issue["resolution_attempt"] = order.attempt_id
-        return (fresh and not result.reviews[-1].issues) or (not order.review_required and not result.reviews)
+                if not set(report.evidence_refs) <= available:
+                    raise ValueError('核查引用了冻结上下文之外的证据')
+                issue = self._record_issue(state, report, 'suspected',
+                    producer_attempt=result.order.attempt_id, source='local_review')
+                issue['blocking'] = False
+        return result.execution_status == 'succeeded'
 
     @staticmethod
     def _record_issue(state, report, status, producer_attempt=None, source="worker", target_revision=None):
@@ -535,18 +555,20 @@ class ResearchStore:
             raise ValueError("问题指向未知假设")
         revision = target_revision if target_revision is not None else task["revision"]
         identity = digest({**report.model_dump(), "revision": revision, "source": source})[:24]
+        advisory = source in {'local_review','semantic_check','reconcile','sections'} or source.startswith(('review:','review-task:'))
         previous = next((i for i in research_findings(state) if i["id"] == identity), None)
         if previous:
             if (report.category in {"writing", "service"} or report.category=='coverage' and source=='sections' or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
                 previous["status"] = status
-                previous['blocking']=report.category!='writing' or report.section!='paper'
+                previous['blocking']=not advisory and (report.category!='writing' or report.section!='paper')
+            if advisory:previous['blocking']=False
             return previous
         record_type = RuntimeFault if report.category in {'execution', 'service'} else ContentFeedback
         issue = record_type(**report.model_dump(), id=identity, task_revision=revision,
             producer_attempt=producer_attempt, status=status, source=source,
             assumption_revision=state["assumptions"][report.assumption_id]["revision"] if report.assumption_id else None,
             action="retry" if report.category in {"execution", "service"} else "rewrite" if report.category == "writing" else "verify",
-            blocking=report.category != "writing" or report.section != "paper").model_dump()
+            blocking=not advisory and (report.category != "writing" or report.section != "paper")).model_dump()
         state["faults" if report.category in {"execution", "service"} else "feedback"].append(issue)
         return issue
 
@@ -591,23 +613,24 @@ class ResearchStore:
 
     @staticmethod
     def delivery_ready(state):
-        """Require supported questions and a clear current manuscript, not every candidate winning."""
-        accepted={key:t for key,t in state['experiments'].items() if not t['retired']
-                  and t['acceptance']=='accepted' and t['validity']=='current'
-                  and any(e['active'] and e['experiment_id']==key and e['type']=='result'
-                          for e in state['artifacts'].values())}
-        questions={t['question_id'] for t in state['experiments'].values() if not t['retired'] and t['kind']!='verify'}
-        if not questions or not questions<={t['question_id'] for t in accepted.values()}:return False
-        if any(r['kind']!='deliverable' and not set(r['task_ids'])&accepted.keys() for r in state['spec']['requirements']):return False
-        return not any(i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'}
-            and (i.get('section') or i['task_id'] in accepted) for i in research_findings(state))
+        """Readiness follows recorded answers and explicit unknowns, not reviewer unanimity."""
+        from .views import questions
+        rows = [q for q in questions(state) if not q.get('retired')]
+        # The controller explicitly chooses delivery using the original request;
+        # soft suspicions/failed alternative methods do not veto that choice.
+        if any(q.get('answer_status')=='needs_update' or q.get('unavailable_artifact_refs') for q in rows):return False
+        if not rows or not any(q.get('judgment') and q.get('artifact_refs') and not q.get('unavailable_artifact_refs')
+                               and q.get('answer_status') != 'needs_update' for q in rows):
+            return False
+        return not any(i.get('repair_targets') and i['blocking'] and i['status'] not in
+            {'resolved','dismissed','superseded'} for i in research_findings(state))
 
     @staticmethod
     def _active_registry(state):
-        accepted = {t["execution_id"] for t in state["experiments"].values()
-                    if t["kind"] != "verify" and t["acceptance"] == "accepted" and t["validity"] == "current"}
-        results = [e["payload"] for e in state["artifacts"].values() if e["producer_attempt"] in accepted and e["active"] and e["type"]=="result"]
-        claims = [c["payload"] for c in state["claims"].values() if c["producer_attempt"] in accepted]
+        accepted = set().union(*(execution_lineage(state,t['execution_id']) for t in state['experiments'].values()
+                    if t['kind'] != 'verify' and not t['retired'] and t['acceptance'] == 'accepted' and t['validity'] == 'current'))
+        results = current_results(state)
+        claims = [c["payload"] for c in state["claims"].values() if c["producer_attempt"] in accepted and c.get("active", True)]
         return {"results": results, "claims": claims, "results_by_id": {r["id"]: r for r in results}}
 
     def registry_payload(self, snapshot=None):
@@ -693,13 +716,6 @@ class ResearchStore:
                 state["outcome"] = outcome
                 self._save(db, state, "outcome_changed", {"outcome": outcome})
 
-    def save_consistency(self, conflicts):
-        with self._transaction() as db:
-            state = self._read(db)
-            if state.get('consistency') != conflicts:
-                state['consistency'] = conflicts
-                self._save(db, state, 'consistency_committed', {'conflicts': conflicts})
-
     def set_delivery_stage(self, stage, status, note):
         if stage not in {"write", "validate", "render", "export"}:
             return
@@ -743,24 +759,24 @@ class ResearchStore:
             state=self._read(db)
             if state['revision']!=base_revision:raise ResearchConflict('研究版本已改变，请刷新后重试')
             if not selected<=state['experiments'].keys():raise ValueError('修改引用了未知实验')
-            validate_spec(change, {'subproblems': [{'id': key} for key in selected],
+            source='\n'.join([state['spec']['requirement'],*state['spec']['amendments'],change])
+            validate_spec(source, {'subproblems': [{'id': key} for key in selected],
                                   'requirements': [r.model_dump() for r in patch.requirements], 'assumptions': []})
-            # Retain every completed experiment and artifact. New methods are
-            # selected by observe under the amended question, not retrofitted
-            # into the historical experiment that produced an existing result.
-            state['spec']['requirements']=bind_requirements(state,patch.requirements,change)
+            # Revise question scope, not the inputs or conditions of old experiments.
+            state['spec']['requirements']=bind_requirements(state,patch.requirements)
             state['spec']['amendments'].append(change)
-            affected=self._invalidate(state,selected,change)
-            for qid in {state['experiments'][key]['question_id'] for key in affected}:
+            from .questions import apply_questions
+            from .planner import QuestionUpdate
+            affected=sorted(selected)
+            for qid in dict.fromkeys(state['experiments'][eid]['question_id'] for eid in affected):
                 question=state['questions'][qid]
-                question['question']+='\n补充要求：'+change
-                question.update(judgment='',artifact_refs=[],next_step='按补充要求安排实验')
-            for requirement in state['spec']['requirements']:
-                for eid in set(requirement['task_ids'])&set(affected):
-                    experiment=state['experiments'][eid]
-                    if requirement['id'] not in experiment['requirement_ids']:experiment['requirement_ids'].append(requirement['id'])
+                apply_questions(state,[QuestionUpdate(question_id=qid,base_version=question.get('version',1),
+                    question=question['question']+'\n补充要求：'+change,reason=change,
+                    experiment_ids=[eid for eid in affected if state['experiments'][eid]['question_id']==qid])])
+                question['next_step']='评估已有证据的适用范围；新方法或条件按需安排实验'
             state['revision']+=1
             state['action']=None;state['publication']=None
+            state['outcome']='running'
             receipt={'revision':state['revision'],'affected':affected,'command':patch.model_dump()}
             db.execute('INSERT INTO commands VALUES (?,?,?,?)',
                        (self.research_id,key,signature,json.dumps(receipt,ensure_ascii=False)))
@@ -801,6 +817,10 @@ class ResearchStore:
                     execution['execution_status'] = 'cancelled'
                     experiment = state['experiments'][execution['task_id']]
                     if experiment['execution_id'] == execution['attempt_id']:
+                        if execution.get('parent_attempt'):
+                            experiment.update(execution_id=execution['parent_attempt'],execution_status='succeeded',acceptance='accepted')
+                            experiment.pop('continuation',None)
+                            continue
                         experiment.update(execution_status='cancelled', acceptance='inconclusive')
                         pending.add(execution['task_id'])
             for stage in state.get("delivery_stages", {}).values():

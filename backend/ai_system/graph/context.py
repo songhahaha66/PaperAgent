@@ -106,7 +106,7 @@ class GraphContext:
     max_review_rounds: int = 1
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
-    check_claims: bool = True  # 结论一致性审查（reconcile + 汇总章节核对）
+    check_claims: bool = True  # Historical preference; semantic checks are explicitly invoked.
     max_planning_calls: int | None = DEFAULT_PLANNING_CALL_LIMIT
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)

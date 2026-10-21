@@ -5,7 +5,7 @@ from ..registry import CapabilityProduct, StateInputs
 
 
 def register(registry):
-    for name, owner in (("reconcile", "consistency"), ("write", "sections"),
+    for name, owner in (("write", "sections"),
                         ("validate", "validation"), ("repair", "validation"),
                         ("render", "validation"), ("export", "export")):
         async def run(ctx, inputs, name=name, owner=owner):

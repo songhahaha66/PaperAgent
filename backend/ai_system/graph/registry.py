@@ -66,6 +66,7 @@ class Result:
     unit: str = ""
     description: str = ""
     path: str = ""  # 图片的 outputs/ 路径
+    meaning: dict | None = None  # declared semantics, not certified by stdout matching
 
     def display(self, with_unit: bool = True) -> str:
         unit = self.unit.strip()
@@ -215,7 +216,15 @@ class ResultRegistry:
         run_id: str,
         unit: str = "",
         description: str = "",
+        meaning: dict | None = None,
     ) -> Result:
+        if meaning is not None:
+            from ai_system.research.models import ResultMeaning
+            meaning = ResultMeaning.model_validate(meaning).model_dump()
+            for link in meaning['lineage']:
+                for path in (link['path'], link['source_path']):
+                    if not self.fs.exists(path):
+                        raise GroundingError('行关系来源文件不存在：'+path)
         value = str(value).strip()
         series = numeric_series(value)
         if value.startswith("[") and series is None:
@@ -234,12 +243,12 @@ class ResultRegistry:
             (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip()),
             None,
         )
-        if same and (same.value, same.run_id, same.unit, same.description) != (value, run_id, unit.strip(), description.strip()):
+        if same and (same.value, same.run_id, same.unit, same.description, same.meaning) != (value, run_id, unit.strip(), description.strip(), meaning):
             self.staged_history.append(self.results.pop(same.id))
             same = None
         result = Result(
             id=same.id if same else self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
-            value=value, run_id=run_id, unit=unit.strip(), description=description.strip(),
+            value=value, run_id=run_id, unit=unit.strip(), description=description.strip(), meaning=meaning,
         )
         self.results[result.id] = result
         self.save()
@@ -278,60 +287,8 @@ class ResultRegistry:
         return added
 
     def ground_statement(self, subproblem: str, statement: str) -> str:
-        """结论里直接写出的数，如果与本子问题某个登记结果的值逐字相同，换成引用
-
-        v3 的 2023_C Q1 把 R1~R9 都登记了，七条结论却全写成"R²=0.883""p=1.04e-164"这样的字面数，
-        结论图里没有证据边，写作时也只能照抄字面数，校验再报"未引用"。值相同的结果不止一个时不换，避免张冠李戴。
-        """
-        by_value: Dict[str, List[Result]] = {}
-        for r in self.for_subproblem(subproblem):
-            if r.kind == "number":
-                by_value.setdefault(r.value.strip(), []).append(r)
-
-        # 常见写法"r=0.95（{{R:R14}}）"：数和括号里的引用是同一个结果，合并成一个引用，渲染后不会变成"0.95（0.95）"
-        def merge(match: re.Match) -> str:
-            result = self.results.get(match.group(3))
-            same = result is not None and result.subproblem == subproblem and result.value.strip() == match.group(1)
-            return f"{{{{R:{result.id}}}}}" if same else match.group(0)
-
-        statement = re.sub(
-            rf"({LITERAL_NUMBER.pattern})\s*[（(]\s*{REF_PATTERN.pattern}\s*[）)]", merge, statement
-        )
-        cited = set(find_refs(statement))
-
-        def replace(match: re.Match) -> str:
-            found = by_value.get(match.group())
-            if not found:
-                # Formatting changes (0.30 vs 0.3, 50% vs 50.0 %) do not
-                # create new evidence. Percent units must match explicitly.
-                literal = match.group()
-                target = _parse_number(literal)
-                found = [r for rows in by_value.values() for r in rows
-                         if literal.endswith("%") == (r.value.endswith("%") or r.unit == "%")
-                         and _parse_number(r.value) == target]
-            # 已经引用过的结果不再替换：多半是"数（引用）"里数与值的写法不同，换了会重复
-            if not found or len(found) != 1 or found[0].id in cited:
-                return match.group(0)
-            return f"{{{{R:{found[0].id}}}}}"
-
-        def ground(text: str) -> str:
-            out = LITERAL_NUMBER.sub(replace, text)
-            # 渲染时引用会自动带单位，原文紧跟的同一单位去掉，避免"3.5 元 元"
-            for r in self.for_subproblem(subproblem):
-                unit = r.unit.strip()
-                if unit and unit != "%":
-                    out = re.sub(rf"(\{{\{{R:{r.id}\}}\}})\s*{re.escape(unit)}", r"\1", out)
-            return out
-
-        # 已有的引用和公式不动
-        protected = re.compile(f"{REF_PATTERN.pattern}|{MATH_PATTERN.pattern}", re.DOTALL)
-        parts, last = [], 0
-        for m in protected.finditer(statement):
-            parts.append(ground(statement[last:m.start()]))
-            parts.append(m.group(0))
-            last = m.end()
-        parts.append(ground(statement[last:]))
-        return "".join(parts)
+        """Preserve explicit references. Equal numbers never establish identity."""
+        return statement
 
     def claims_table(self) -> str:
         """结论表：陈述里的引用替换为"真实数值⟨编号⟩"，供一致性审查和写作使用
@@ -365,13 +322,13 @@ class ResultRegistry:
             "引用渲染时会自动带上单位，正文在引用后不要再写单位。",
             "数值序列引用代表整个序列，不支持在引用后追加 [0] 等索引或算术运算。没有逐项登记时，整组数据作为一个序列展示。",
             "",
-            "| 引用 | 子问题 | 名称 | 值（含单位） | 说明 |",
-            "|---|---|---|---|---|",
+            "| 引用 | 子问题 | 名称 | 值（含单位） | 说明 | 对象/范围/口径（登记者声明，须核实） |",
+            "|---|---|---|---|---|---|",
         ]
         for r in rows:
             ref = f"{{{{{r.id[0]}:{r.id}}}}}"
             shown = r.path if r.kind == "figure" else r.display()
-            lines.append(f"| {ref} | {r.subproblem} | {r.name} | {shown} | {r.description} |")
+            lines.append(f"| {ref} | {r.subproblem} | {r.name} | {shown} | {r.description} | {json.dumps(r.meaning, ensure_ascii=False) if r.meaning else '语义未登记'} |")
         return "\n".join(lines)
 
     def render(self, text: str, *, latex: bool = False, links: bool = False) -> str:
