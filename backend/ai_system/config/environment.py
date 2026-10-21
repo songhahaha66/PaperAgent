@@ -24,7 +24,7 @@ class DatabaseConfigManager:
         优先级：用户特定配置 -> 系统全局配置
 
         Args:
-            system_type: 系统类型（brain, code, writing）
+            system_type: 系统类型（brain, code, writing, jev）
             user_id: 用户ID（可选）
             provider: AI提供商（可选，用于筛选特定提供商的配置）
 
@@ -32,6 +32,8 @@ class DatabaseConfigManager:
             ModelConfig对象
         """
         from models.models import ModelConfig
+        if system_type == 'jev':
+            return self.get_jev_config(user_id)
 
         def query_configs(user_id_filter):
             """内部查询函数"""
@@ -77,6 +79,30 @@ class DatabaseConfigManager:
         
         logger.info(f"成功加载 {system_type} 配置，提供商: {config.provider}, 模型: {config.model_id}")
         return config
+
+    def get_jev_config(self, user_id: int):
+        """Resolve one user's Jev connection; never mutate SDK environment globals."""
+        from models.models import ModelConfig
+        from types import SimpleNamespace
+        from typesafe_sdk.constants import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT
+        if user_id is None:
+            raise ValueError('必须指定用户ID才能获取 Jev 配置')
+        saved = self.db_session.query(ModelConfig).filter(
+            ModelConfig.type == 'jev', ModelConfig.created_by == user_id).first()
+        if saved is not None:
+            if not saved.is_active or not (saved.api_key or '').strip():
+                raise ValueError('Jev 未配置或未启用，请在模型设置中保存 Jev 连接。明确操作按钮不依赖 Jev。')
+            return SimpleNamespace(type='jev', source='user', is_active=True,
+                api_key=saved.api_key.strip(), model_id=(saved.model_id or '').strip() or DEFAULT_MODEL,
+                base_url=(saved.base_url or '').strip() or DEFAULT_BASE_URL,
+                timeout_seconds=saved.timeout_seconds if saved.timeout_seconds is not None else DEFAULT_TIMEOUT)
+        key = (os.getenv('TYPESAFE_API_KEY') or '').strip()
+        if not key:
+            raise ValueError('Jev 未配置，请在模型设置中填写 Jev 密钥。明确操作按钮不依赖 Jev。')
+        return SimpleNamespace(type='jev', source='deployment', is_active=True, api_key=key,
+            model_id=(os.getenv('TYPESAFE_DEFAULT_MODEL') or '').strip() or DEFAULT_MODEL,
+            base_url=(os.getenv('TYPESAFE_BASE_URL') or '').strip() or DEFAULT_BASE_URL,
+            timeout_seconds=DEFAULT_TIMEOUT)
 
     def get_api_key(self, system_type: str, user_id: int, provider: Optional[str] = None) -> str:
         """获取指定系统类型的API密钥"""

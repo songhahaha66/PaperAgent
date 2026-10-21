@@ -56,6 +56,78 @@
             >
           </div>
         </t-card>
+        <t-card
+          :title="isZh ? 'Jev 意图识别' : 'Jev intent routing'"
+          class="connection-card jev-card"
+        >
+          <template #actions
+            ><t-tag :theme="jevReady ? 'success' : 'default'" variant="light" size="small">
+              {{
+                jevSource === 'deployment'
+                  ? isZh
+                    ? '部署默认'
+                    : 'Deployment default'
+                  : jevReady
+                    ? ui.configured
+                    : ui.unconfigured
+              }}
+            </t-tag></template
+          >
+          <p class="jev-note">
+            {{
+              isZh
+                ? '自动聊天使用 Jev 识别操作。未配置时自动聊天会提示配置，明确操作按钮不依赖 Jev。此连接独立于研究、计算和写作模型。'
+                : 'Automatic chat uses Jev to select an operation. Missing configuration blocks automatic routing; explicit action buttons do not require Jev. Research, computation and writing use their own models.'
+            }}
+          </p>
+          <p v-if="jevSource === 'deployment'" class="jev-note">
+            {{
+              isZh
+                ? '当前使用部署默认连接。保存个人密钥后优先使用个人配置。'
+                : 'Using the deployment default. A saved personal connection takes precedence.'
+            }}
+          </p>
+          <ConnectionFields :form="forms.jev" :disabled="loading || !!savingRole" :ui="ui" jev />
+          <p class="jev-note">
+            {{
+              isZh
+                ? '密钥不回显，编辑时留空保留原密钥。连接检查会发送一次 Jev 请求，可能产生费用。'
+                : 'Saved keys are never returned. Leave the key blank to keep it. Checking the connection sends a Jev request and may incur a charge.'
+            }}
+          </p>
+          <t-alert
+            v-if="jevFeedback"
+            :theme="jevFeedbackError ? 'error' : 'success'"
+            :message="jevFeedback"
+            class="connection-feedback"
+          />
+          <div class="connection-actions">
+            <t-button
+              theme="primary"
+              :loading="savingRole === 'jev'"
+              :disabled="loading || !valid(forms.jev) || !!savingRole"
+              @click="saveRole('jev')"
+              >{{ ui.save }}</t-button
+            >
+            <t-button
+              theme="default"
+              variant="outline"
+              :loading="testingJev"
+              :disabled="
+                loading || !!savingRole || (!valid(forms.jev) && jevSource !== 'deployment')
+              "
+              @click="testJevConnection"
+              >{{ ui.test }}</t-button
+            >
+            <t-button
+              v-if="forms.jev.id"
+              theme="danger"
+              variant="text"
+              @click="confirmDelete('jev')"
+              >{{ ui.delete }}</t-button
+            >
+          </div>
+        </t-card>
         <section class="advanced-config">
           <button
             class="advanced-toggle"
@@ -113,7 +185,7 @@ import Sidebar from '@/components/Sidebar.vue'
 import { modelConfigAPI, type ModelConfig } from '@/api/modelConfig'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
-type Role = 'brain' | 'code' | 'writing'
+type Role = 'brain' | 'code' | 'writing' | 'jev'
 interface Form {
   id?: number
   apiKey: string
@@ -132,7 +204,13 @@ const forms = reactive<Record<Role, Form>>({
   brain: { apiKey: '', baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-flash' },
   code: { apiKey: '', baseUrl: '', modelId: '' },
   writing: { apiKey: '', baseUrl: '', modelId: '' },
+  jev: { apiKey: '', baseUrl: 'https://api.typesafe.ai', modelId: 'jev-latest' },
 })
+const jevSource = ref<'user' | 'deployment' | 'missing'>('missing')
+const jevReady = ref(false),
+  testingJev = ref(false)
+const jevFeedback = ref(''),
+  jevFeedbackError = ref(false)
 const loading = ref(true),
   saving = ref(false),
   testing = ref(false),
@@ -153,6 +231,7 @@ const ConnectionFields = defineComponent({
   props: {
     form: { type: Object, required: true },
     disabled: Boolean,
+    jev: Boolean,
     ui: { type: Object, required: true },
   },
   setup(props) {
@@ -171,17 +250,22 @@ const ConnectionFields = defineComponent({
               : props.ui.enterKey,
             'password',
           ],
-          ['baseUrl', 'endpoint', 'https://api.deepseek.com/v1', 'text'],
-          ['modelId', 'modelId', 'deepseek-flash', 'text'],
-          ['timeoutSeconds', 'requestTimeout', '600', 'number'],
+          [
+            'baseUrl',
+            'endpoint',
+            props.jev ? 'https://api.typesafe.ai' : 'https://api.deepseek.com/v1',
+            'text',
+          ],
+          ['modelId', 'modelId', props.jev ? 'jev-latest' : 'deepseek-flash', 'text'],
+          ['timeoutSeconds', 'requestTimeout', props.jev ? '10' : '600', 'number'],
         ].map(([key, label, placeholder, type]) =>
           h('label', { class: 'connection-field' }, [
             h(
               'span',
               label === 'requestTimeout'
                 ? isZh.value
-                  ? '模型请求超时（秒，留空为 600）'
-                  : 'Request timeout (seconds, blank for 600)'
+                  ? `模型请求超时（秒，留空为 ${props.jev ? '10' : '600'}）`
+                  : `Request timeout (seconds, blank for ${props.jev ? '10' : '600'})`
                 : props.ui[label as string],
             ),
             h(Input, {
@@ -226,7 +310,7 @@ function adopt(config: ModelConfig) {
     id: config.id,
     apiKey: '',
     baseUrl: config.base_url || '',
-    modelId: config.model_id,
+    modelId: config.model_id || (config.type === 'jev' ? 'jev-latest' : ''),
     timeoutSeconds: config.timeout_seconds ?? null,
   }
 }
@@ -236,6 +320,7 @@ async function persist(role: Role) {
     model_id: form.modelId.trim(),
     base_url: form.baseUrl.trim(),
     timeout_seconds: form.timeoutSeconds ?? null,
+    ...(role === 'jev' ? { is_active: true } : {}),
     ...(form.apiKey.trim() ? { api_key: form.apiKey.trim() } : {}),
   }
   const result = form.id
@@ -251,7 +336,7 @@ async function saveDefault() {
     await persist('brain')
     if (applyAll.value) {
       const configs = await modelConfigAPI.applyDefault()
-      configs.forEach(adopt)
+      configs.filter((config) => config.type !== 'jev').forEach(adopt)
     }
     feedbackError.value = false
     feedback.value = ui.value.saveSuccess
@@ -267,6 +352,7 @@ async function saveRole(role: Role) {
   savingRole.value = role
   try {
     await persist(role)
+    if (role === 'jev') await loadJevReadiness()
     MessagePlugin.success(ui.value.saveSuccess)
   } catch {
     MessagePlugin.error(ui.value.saveFailed)
@@ -289,9 +375,45 @@ async function testConnection() {
     feedback.value = ui.value.tested
   } catch (error) {
     feedbackError.value = true
-    feedback.value = `${ui.value.connectionFailed}${error instanceof Error ? ` · ${error.message}` : ''}`
+    feedback.value = `${ui.value.connectionFailed}${error instanceof Error ? `：${error.message}` : ''}`
   } finally {
     testing.value = false
+  }
+}
+async function loadJevReadiness() {
+  const readiness = await modelConfigAPI.readiness()
+  jevReady.value = !!readiness.roles.jev
+  jevSource.value = readiness.jev.source
+  if (!forms.jev.id && readiness.jev.source === 'deployment') {
+    forms.jev.modelId = readiness.jev.model_id || 'jev-latest'
+    forms.jev.baseUrl = readiness.jev.base_url || 'https://api.typesafe.ai'
+    forms.jev.timeoutSeconds = readiness.jev.timeout_seconds ?? null
+  }
+}
+async function testJevConnection() {
+  if (testingJev.value) return
+  testingJev.value = true
+  jevFeedback.value = ''
+  try {
+    await modelConfigAPI.testConnection({
+      type: 'jev',
+      model_id: forms.jev.modelId.trim(),
+      base_url: forms.jev.baseUrl.trim(),
+      timeout_seconds: forms.jev.timeoutSeconds ?? null,
+      ...(forms.jev.apiKey.trim() ? { api_key: forms.jev.apiKey.trim() } : {}),
+    })
+    jevFeedbackError.value = false
+    jevFeedback.value = isZh.value ? 'Jev 连接检查通过' : 'Jev connection check passed'
+  } catch (error) {
+    jevFeedbackError.value = true
+    jevFeedback.value =
+      error instanceof Error
+        ? error.message
+        : isZh.value
+          ? 'Jev 连接检查失败'
+          : 'Jev connection check failed'
+  } finally {
+    testingJev.value = false
   }
 }
 function confirmDelete(role: Role) {
@@ -304,6 +426,10 @@ function confirmDelete(role: Role) {
       try {
         await modelConfigAPI.deleteModelConfig(forms[role].id!)
         forms[role] = { apiKey: '', baseUrl: '', modelId: '' }
+        if (role === 'jev') {
+          forms.jev = { apiKey: '', baseUrl: 'https://api.typesafe.ai', modelId: 'jev-latest' }
+          await loadJevReadiness()
+        }
         dialog.destroy()
       } catch {
         MessagePlugin.error(ui.value.saveFailed)
@@ -311,6 +437,12 @@ function confirmDelete(role: Role) {
     },
   })
 }
+watch(
+  () => [forms.jev.apiKey, forms.jev.baseUrl, forms.jev.modelId, forms.jev.timeoutSeconds],
+  () => {
+    jevFeedback.value = ''
+  },
+)
 watch(
   () => [forms.brain.apiKey, forms.brain.baseUrl, forms.brain.modelId],
   () => {
@@ -320,10 +452,14 @@ watch(
 onMounted(async () => {
   try {
     const configs = await modelConfigAPI.getAllModelConfigs()
-    configs.filter((c) => ['brain', 'code', 'writing'].includes(c.type)).forEach(adopt)
+    configs.filter((c) => ['brain', 'code', 'writing', 'jev'].includes(c.type)).forEach(adopt)
     const b = configs.find((c) => c.type === 'brain')
     applyAll.value =
-      !b || configs.every((c) => c.model_id === b.model_id && c.base_url === b.base_url)
+      !b ||
+      configs
+        .filter((c) => ['brain', 'code', 'writing'].includes(c.type))
+        .every((c) => c.model_id === b.model_id && c.base_url === b.base_url)
+    await loadJevReadiness()
   } catch {
     MessagePlugin.error(ui.value.saveFailed)
   } finally {
@@ -365,6 +501,15 @@ onMounted(async () => {
   border-color: var(--pa-line);
   border-radius: var(--pa-radius-card);
   box-shadow: none;
+}
+.jev-card {
+  margin-top: 20px;
+}
+.jev-note {
+  color: var(--pa-muted);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0 0 22px;
 }
 .connection-card :deep(.t-card__header) {
   padding: 22px 26px;

@@ -1,7 +1,7 @@
 """
 基于 TypeSafe Jev（System One API）的判断器
 
-需要环境变量 TYPESAFE_API_KEY；模型默认读 TYPESAFE_DEFAULT_MODEL，
+连接参数可显式传入；未提供时使用 SDK 的 TYPESAFE_* 部署默认。
 评测时应显式 pin 版本（如 jev-1.14.0），保证前后结果可比。
 """
 
@@ -39,7 +39,9 @@ def _to_sdk(question: Question):
 class JevJudge:
     name = "jev"
 
-    def __init__(self, model: Optional[str] = None, client: Any = None):
+    def __init__(self, model: Optional[str] = None, client: Any = None, *,
+                 api_key: Optional[str] = None, base_url: Optional[str] = None,
+                 timeout: Optional[float] = None):
         """
         Args:
             model: Jev 模型 ID，None 时用 SDK 默认值
@@ -47,13 +49,23 @@ class JevJudge:
         """
         self.model = model
         self._client = client
+        self._owned_client = client is None
+        self._api_key = api_key
+        self._base_url = base_url
+        self._timeout = timeout
 
     def _get_client(self):
         if self._client is None:
             from typesafe_sdk import AsyncTypeSafeClient
 
-            self._client = AsyncTypeSafeClient(model=self.model)
+            self._client = AsyncTypeSafeClient(model=self.model, api_key=self._api_key,
+                                              base_url=self._base_url, timeout=self._timeout)
         return self._client
+
+    async def aclose(self):
+        if self._owned_client and self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def ask(self, state: Any, questions: Mapping[str, Question]) -> Answers:
         client = self._get_client()

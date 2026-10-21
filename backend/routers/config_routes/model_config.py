@@ -52,10 +52,11 @@ async def get_all_model_configs(
     return [_remove_api_key_from_config(config) for config in configs]
 
 class ConnectionTest(BaseModel):
-    type: Literal["brain", "code", "writing"] = "brain"
+    type: Literal["brain", "code", "writing", "jev"] = "brain"
     model_id: str = Field(min_length=1, max_length=200)
     base_url: str = ""
     api_key: Optional[str] = None
+    timeout_seconds: Optional[float] = Field(default=None, gt=0, le=3600)
 
 
 @router.get("/readiness")
@@ -64,13 +65,19 @@ async def model_readiness(current_user: int = Depends(auth.get_current_user), db
     from ai_system.config.environment import DatabaseConfigManager
     manager = DatabaseConfigManager(db)
     roles = {}
-    for role in ("brain", "code", "writing"):
+    jev = {'source': 'missing'}
+    for role in ("brain", "code", "writing", "jev"):
         try:
             config = manager.get_model_config(role, current_user)
             roles[role] = bool(config.api_key and config.model_id)
+            if role == 'jev':
+                jev = {'source': config.source, 'model_id': config.model_id,
+                       'base_url': config.base_url, 'timeout_seconds': config.timeout_seconds}
         except ValueError:
             roles[role] = False
-    return {"roles": roles, "ready": all(roles.values())}
+    return {"roles": roles, "ready": all(roles.values()),
+            'research_ready': all(roles[role] for role in ('brain','code','writing')),
+            'jev': jev}
 
 
 @router.post("/apply-default", response_model=list[schemas.ModelConfigResponse])
@@ -108,6 +115,31 @@ async def test_model_connection(
 ):
     """One short real request; use only the current user's stored credential as fallback."""
     saved = crud.get_model_config_by_type(db, config.type, current_user)
+    if config.type == 'jev':
+        # This path must never probe an OpenAI-compatible endpoint.
+        from ai_system.config.environment import DatabaseConfigManager
+        from ai_system.judge import JevJudge, Choice
+        from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
+        from typesafe_sdk.constants import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT
+        key = (config.api_key or '').strip() or ((saved.api_key or '').strip() if saved else '')
+        if not key:
+            try:key = DatabaseConfigManager(db).get_model_config('jev', current_user).api_key
+            except ValueError:
+                raise HTTPException(status_code=400, detail='请填写 Jev API 密钥或保存个人 Jev 连接') from None
+        try:
+            async with AsyncTypeSafeClient(api_key=key, model=config.model_id.strip() or DEFAULT_MODEL,
+                    base_url=config.base_url.strip() or DEFAULT_BASE_URL,
+                    timeout=config.timeout_seconds or DEFAULT_TIMEOUT, retry=RetryPolicy(max_retries=0)) as client:
+                answer = await asyncio.wait_for(JevJudge(client=client).ask(
+                    {'connection_check': True}, {'connection': Choice(instructions='Select ready.',
+                        criteria={'ready': 'Ready', 'other': 'Other'})}), timeout=config.timeout_seconds or DEFAULT_TIMEOUT)
+                if answer.choices['connection'].choice not in {'ready','other'}:
+                    raise ValueError('invalid Jev response')
+        except (asyncio.TimeoutError, TimeoutError):
+            raise HTTPException(status_code=504, detail='Jev 连接超时，请检查连接后重试') from None
+        except Exception:
+            raise HTTPException(status_code=400, detail='Jev 连接检查失败，请核对密钥、模型和服务地址') from None
+        return {'ok': True}
     key = (config.api_key or "").strip() or (saved.api_key if saved else "")
     if not key:
         raise HTTPException(status_code=400, detail="请填写 API 密钥")

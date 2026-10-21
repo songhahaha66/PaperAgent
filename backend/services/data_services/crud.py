@@ -92,6 +92,8 @@ def update_system_config(db: Session, is_allow_register: bool):
 def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id: int):
     """创建模型配置"""
     try:
+        if config.type == 'jev' and not config.api_key.strip():
+            raise HTTPException(status_code=400, detail='请填写 Jev API 密钥')
         # 检查是否已存在相同类型的配置（同一用户下）
         existing_config = db.query(models.ModelConfig).filter(
             models.ModelConfig.type == config.type,
@@ -123,8 +125,8 @@ def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model config creation failed: {str(e)}"
-        )
+            detail="模型配置保存失败，请重试"
+        ) from None
 
 def get_model_config(db: Session, config_id: int):
     """根据ID获取模型配置（不包含api_key）"""
@@ -163,6 +165,8 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
         update_data = config_update.model_dump(exclude_unset=True) if hasattr(config_update, 'model_dump') else config_update.dict(exclude_unset=True)
+        if 'api_key' in update_data and not (update_data['api_key'] or '').strip():
+            update_data.pop('api_key')
 
         for field, value in update_data.items():
             setattr(db_config, field, value)
@@ -174,8 +178,8 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model config update failed: {str(e)}"
-        )
+            detail="模型配置保存失败，请重试"
+        ) from None
 
 def delete_model_config(db: Session, config_id: int, user_id: int = None):
     """删除模型配置"""

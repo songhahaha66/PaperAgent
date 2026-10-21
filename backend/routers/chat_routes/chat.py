@@ -413,10 +413,28 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 if subproblem_id is not None and not isinstance(subproblem_id, str):
                     raise ValueError('问题范围无效')
                 recent_dialogue = []
+                intent_judge = None
                 if requested_action == 'auto':
                     from services.chat_services.chat_history_manager import ChatHistoryManager
+                    from ai_system.judge import JevJudge
+                    from ai_system.config.environment import DatabaseConfigManager
+                    def load_intent_config():
+                        config_db = next(get_db())
+                        try:
+                            return DatabaseConfigManager(config_db).get_model_config('jev', user_id)
+                        finally:
+                            config_db.close()
+                    intent_config = await asyncio.to_thread(load_intent_config)
+                    intent_judge = JevJudge(model=intent_config.model_id, api_key=intent_config.api_key,
+                                            base_url=intent_config.base_url, timeout=intent_config.timeout_seconds)
                     recent_dialogue = await asyncio.to_thread(ChatHistoryManager().get_messages, work_id, 6)
-                action = await resolve_action(requested_action, problem, snapshot, recent_dialogue, scope=subproblem_id)
+                try:
+                    action = await resolve_action(requested_action, problem, snapshot, recent_dialogue,
+                                                  scope=subproblem_id, judge=intent_judge,
+                                                  timeout_seconds=intent_config.timeout_seconds if intent_judge is not None else 30)
+                finally:
+                    if intent_judge is not None:
+                        await intent_judge.aclose()
                 if action != 'ask':
                     if task_manager.get_running_task(work_id):
                         raise ValueError('当前有任务正在执行，请等待完成')

@@ -18,7 +18,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai_system.judge import Choice, JevJudge, jev_available
+from ai_system.judge import Choice
 from ai_system.research import ENGINE_VERSION
 
 ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "revise_research"]
@@ -321,7 +321,8 @@ INTENT_CHOICE = Choice(
 
 
 async def resolve_action(requested: str, message: str, snapshot: ResearchSnapshot,
-                         history: list[dict] | None = None, *, judge=None, scope: str | None = None) -> str:
+                         history: list[dict] | None = None, *, judge=None, scope: str | None = None,
+                         timeout_seconds: float = 30) -> str:
     """One Jev Choice for auto; explicit controls use deterministic validation.
 
     Only bounded conversation text and state labels are shared. No files, paper,
@@ -335,9 +336,7 @@ async def resolve_action(requested: str, message: str, snapshot: ResearchSnapsho
     if len(message) > 20000:
         raise ValueError('请输入有效消息（最多 20000 字符）')
     if judge is None:
-        if not jev_available():
-            raise ValueError('Jev 意图识别未配置，请配置 TYPESAFE_API_KEY 后重试')
-        judge = JevJudge(model=os.getenv('TYPESAFE_DEFAULT_MODEL') or None)
+        raise ValueError('Jev 未配置，请在模型设置中保存 Jev 连接。明确操作按钮不依赖 Jev。')
     context = {
         'message': message,
         'recent_dialogue': [{'role': item['role'], 'content': str(item.get('content', ''))[:600]}
@@ -349,7 +348,7 @@ async def resolve_action(requested: str, message: str, snapshot: ResearchSnapsho
                                 for item in snapshot.questions if item['id']==scope), None),
     }
     try:
-        answers = await asyncio.wait_for(judge.ask(context, {'intent': INTENT_CHOICE}), timeout=30)
+        answers = await asyncio.wait_for(judge.ask(context, {'intent': INTENT_CHOICE}), timeout=timeout_seconds)
         intent = answers.choices['intent'].choice
         if intent not in INTENT_CHOICE.criteria:
             raise ValueError('invalid Jev choice')
