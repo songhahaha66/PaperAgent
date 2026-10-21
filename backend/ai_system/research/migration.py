@@ -8,7 +8,7 @@ from contextlib import closing
 
 from .domain import FAULT_CATEGORIES, SCHEMA_VERSION
 
-MIGRATION_VERSION = 6
+MIGRATION_VERSION = 7
 
 
 def migrate_runtime(db, root):
@@ -45,6 +45,16 @@ def migrate_runtime(db, root):
                     'timeout_source': 'legacy' if historical else 'model_connection',
                     'preference_source': 'legacy' if historical else 'default'}
         db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)', (json.dumps(settings),))
+    retired=[]
+    for row in db.execute('SELECT id,payload FROM failure_guards').fetchall():
+        guard=json.loads(row['payload'])
+        if guard.get('kind')!='invalid_response':continue
+        db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',('invalid-response-guard/'+row['id'],row['payload'].encode()))
+        db.execute('DELETE FROM failure_guards WHERE id=?',(row['id'],));retired.append(row['id'])
+    stop=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
+    if stop and json.loads(stop[0]).get('operation') in retired:
+        db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',('invalid-response-stop',stop[0].encode()))
+        db.execute('DELETE FROM runtime_stop WHERE id=1')
     for record in db.execute('SELECT research_id,payload FROM request_budgets').fetchall():
         budget = json.loads(record[1])
         if budget.get('metering_version') != 2:
@@ -146,7 +156,8 @@ def migrate_workspace(store):
             if state.get('schema_version') in {4, SCHEMA_VERSION}:
                 db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',
                            (f'research/{row[0]}/v{state["schema_version"]}',row[1].encode('utf-8')))
-                migrate_interpretations(state)
+                if state['schema_version']==4:migrate_interpretations(state)
+                else:retire_legacy_workflow(state)
                 state['schema_version']=SCHEMA_VERSION
                 db.execute('UPDATE research SET payload=? WHERE id=?',(json.dumps(state,ensure_ascii=False),row[0]))
                 continue

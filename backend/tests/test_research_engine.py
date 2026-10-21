@@ -28,7 +28,6 @@ class VersionAwareModel(FakeModel):
 @pytest.fixture(autouse=True)
 def no_retries_or_state_leaks(monkeypatch):
     from ai_system.graph import llm_utils
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     FAIL_ONCE.clear()
     _Structured.reviewed_q1 = True
     _Structured.audits = 2

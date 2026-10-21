@@ -25,7 +25,7 @@ from services.file_services.workspace_fs import WorkspaceFS
 def study(tmp_path):
     store=ResearchStore(tmp_path,'architecture');store.initialize('Compare aggregate records and selected subjects.')
     eid=create_experiment(store,NextAction(action='experiment',reason='Measure source rows',information_need='Need record count',
-        question='What does the supplied material establish?',method='count source rows',conditions='entire source',evaluation='retain original row identity'))
+        question_updates=[{'question':'What does the supplied material establish?'}],method='count source rows',conditions='entire source',evaluation='retain original row identity'))
     order=store.claim(eid)
     fs=WorkspaceFS(str(tmp_path));run=fs.create_run();fs.save_run_input(run,'print(12)');fs.save_run_stdout(run,'12\n');fs.finish_run(run,'success')
     registry=ResultRegistry(fs,allocate_id=store.allocate_ref)
@@ -40,7 +40,7 @@ def study(tmp_path):
                              results=[asdict(value),asdict(aux)],claims=[asdict(claim)]))
     qid=store.snapshot()['experiments'][eid]['question_id']
     with store._transaction() as db:
-        state=store._read(db);state['questions'][qid].update(judgment='Current answer',artifact_refs=[value.id],answer_status='current')
+        state=store._read(db);state['questions'][qid].update(judgment='Current answer',artifact_refs=[value.id],answer_status='current',coverage='answered',stop_reason='All supplied source rows are accounted for')
         store._save(db,state,'test_answer',{})
     return SimpleNamespace(store=store,eid=eid,qid=qid,value=value,aux=aux,registry=registry,run=run,order=order)
 
@@ -148,7 +148,7 @@ def test_schema_four_cutover_preserves_original_and_removes_stale_current_claim(
     raw=json.dumps(state)
     with study.store._transaction() as db:
         db.execute('UPDATE research SET payload=? WHERE id=?',(raw,'architecture'))
-        db.execute('DELETE FROM domain_migrations WHERE version=6')
+        db.execute('DELETE FROM domain_migrations WHERE version=7')
     migrated=ResearchStore(study.store.root,'architecture')
     assert migrated.snapshot()['schema_version']==5 and not migrated.registry_payload()['claims']
     assert migrated.snapshot()['executions']==state['executions']
@@ -165,7 +165,7 @@ def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,m
         ctx=GraphContext.create(str(tmp_path),planner_llm=None,max_review_rounds=0,check_claims=False)
         ctx.research=ResearchStore(tmp_path,'kernel-continuation')
         ctx.research.initialize('Count the supplied observations and derive a scaled count.')
-        eid=create_experiment(ctx.research,NextAction(action='experiment',reason='Count',question='What can be concluded?',
+        eid=create_experiment(ctx.research,NextAction(action='experiment',reason='Count',question_updates=[{'question':'What can be concluded?'}],
             method='count and scale',conditions='fixed observations',evaluation='exact arithmetic'))
         async def solve(branch,runtime):
             local=runtime.context
@@ -294,3 +294,71 @@ def test_new_revision_reopens_finished_study_and_idempotent_retry_does_not(study
     finished=study.store.snapshot()
     assert study.store.apply_revision_command('reopen',before['revision'],change,[study.eid],patch)==receipt
     assert study.store.snapshot()==finished
+
+
+def test_empty_observe_rejected_but_current_answer_change_is_allowed(study):
+    state=study.store.snapshot();_,context=decision_context(study.store,state)
+    with pytest.raises(ValueError,match='没有实际'):
+        validate_action(NextAction(action='observe',reason='Think again'),state,context)
+    changed=NextAction(action='observe',reason='Narrow the explanation',judgments=[
+        Judgment(question_id=study.qid,statement='Limited to the observed source rows',artifact_refs=[study.value.id])])
+    validate_action(changed,state,context)
+    unchanged=NextAction(action='observe',reason='No new information',judgments=[Judgment(
+        question_id=study.qid,statement='Current answer',artifact_refs=[study.value.id],
+        coverage='answered',stop_reason='All supplied source rows are accounted for')])
+    with pytest.raises(ValueError,match='没有实际'):validate_action(unchanged,state,context)
+    state['questions'][study.qid]['answer_status']='needs_update'
+    validate_action(unchanged,state,context)  # Reassessment may retain the same answer.
+
+
+def test_delivery_closes_each_problem_without_requiring_positive_answers(study):
+    state=study.store.snapshot()
+    assert study.store.delivery_ready(state)
+    apply_questions(state,[QuestionUpdate(question='Does this generalize beyond the supplied source?')])
+    assert not study.store.delivery_ready(state)
+    other=next(q for key,q in state['questions'].items() if key!=study.qid)
+    other.update(coverage='unanswered',stop_reason='No observations beyond this source were provided')
+    assert study.store.delivery_ready(state)
+    other.update(coverage='partial',judgment='Only the supplied range is described')
+    assert study.store.delivery_ready(state)
+    other.update(coverage='answered')
+    assert not study.store.delivery_ready(state)  # A positive answer still needs real evidence.
+
+
+def test_question_scope_filters_other_runtime_judgments(study):
+    from services.chat_services.research_session import research_snapshot,scoped_snapshot
+    with study.store._transaction() as db:
+        state=study.store._read(db)
+        ids=apply_questions(state,[QuestionUpdate(question='Other question marker')])
+        study.store._save(db,state,'test_other_question',{})
+    other=ids[0]
+    from ai_system.research import ENGINE_VERSION
+    (study.store.root/'.system/graph_thread.json').write_text(json.dumps({'engine_version':ENGINE_VERSION,'thread_id':study.store.research_id}))
+    snapshot=research_snapshot(study.store.root,'work','paused')
+    snapshot.runtime={'actions':[
+        {'id':'a','question_id':study.qid,'status':'done','inputs':{'secret':'debug'}},
+        {'id':'b','question_id':other,'status':'done','purpose':'OTHER_ONLY'}],
+        'history':[{'id':'decision','question_id':None,'reason':'OTHER_ONLY','judgments':[
+            {'question_id':study.qid,'statement':'Selected answer'},
+            {'question_id':other,'statement':'OTHER_ONLY'}]}],
+        'models':[{'id':'m','question_id':other,'status':'done','purpose':'OTHER_ONLY'}]}
+    scoped=scoped_snapshot(snapshot,study.qid)
+    serialized=scoped.model_dump_json()
+    assert 'OTHER_ONLY' not in serialized and 'Other question marker' not in serialized
+    assert scoped.runtime['history'][0]['judgments']==[{'question_id':study.qid,'statement':'Selected answer'}]
+    assert len(scoped.runtime['actions'])==1 and 'inputs' not in scoped.runtime['actions'][0]
+    assert scoped.delivery is None and not scoped.artifacts
+
+
+def test_decision_context_limits_full_records_to_focused_question(study):
+    other=create_experiment(study.store,NextAction(action='experiment',reason='Another target',
+        question_updates=[{'question':'Other goal'}],method='OTHER_METHOD',conditions='other source',evaluation='other exact check'))
+    with study.store._transaction() as db:
+        state=study.store._read(db)
+        state['action']={'id':'focus','question_id':study.qid,'status':'done','capability':'research.observe'}
+        study.store._save(db,state,'test_focus',{})
+    _,context=decision_context(study.store,study.store.snapshot())
+    assert {e['task_id'] for e in context['experiments']}=={study.eid}
+    assert len(context['questions'])==2  # Goal coverage remains visible to the research layer.
+    assert 'OTHER_METHOD' not in json.dumps(context,ensure_ascii=False)
+    assert 'history' not in context and 'recent_actions' not in context

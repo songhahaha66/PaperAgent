@@ -11,6 +11,7 @@ import math
 import re
 import time
 import inspect
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +25,7 @@ from ...research.validation import protocol as research_protocol
 from ai_system.graph.llm_utils import as_messages,structured_model,cap_output
 from .contracts import candidate_contract,check_estimator,VERSION as CONTRACT_VERSION
 
+RECOVERABLE={'generation_error','code_error','execution_error','timeout','contract_error','interrupted','not_started'}
 TERMINAL={'winner','tied','only_valid','no_valid','budget_exhausted','input_changed','not_applicable'}
 
 
@@ -192,9 +194,9 @@ print('PROJECT_PREDICTIONS_SAVED')
 
 
 async def ask(ctx,schema,system,prompt,timeout,tokens=2000):
-    model=structured_model(cap_output(ctx.coder_llm if schema is CandidateCode else ctx.planner_llm,tokens),schema)
-    result=await asyncio.wait_for(model.ainvoke(as_messages(system,prompt)),timeout)
-    return result if isinstance(result,schema) else schema.model_validate(result)
+    from ai_system.graph.llm_utils import call_structured
+    return await asyncio.wait_for(call_structured(cap_output(ctx.coder_llm if schema is CandidateCode else ctx.planner_llm,tokens),
+        schema,as_messages(system,prompt)),timeout)
 
 
 async def compare(ctx,branch):
@@ -207,7 +209,28 @@ async def compare(ctx,branch):
     if record:
         if not current(ctx,record,branch):
             record.update(status='input_changed',chosen_index=None,reason='输入、契约、候选或配置已改变，旧比较不晋升');db.save(record);return record
-        if record['status'] in TERMINAL:return record
+        if record.pop('recovery_requested',False):
+            # Explicit recovery corrects failed candidates under the same frozen
+            # method. Valid predictions and original runs are copied, never replayed.
+            previous=store.root/'.system/attempts'/record['owner_attempt']/'workspace' if record.get('owner_attempt') else ctx.workspace
+            if previous!=ctx.workspace:
+                folder=previous/'outputs/intermediate/comparisons'/record['id']
+                if folder.exists():shutil.copytree(folder,ctx.workspace/'outputs/intermediate/comparisons'/record['id'],dirs_exist_ok=True)
+                manifest=json.loads((previous/'manifest.json').read_text())
+                for row in record['branches']:
+                    for rid in row.get('run_ids',[]):
+                        shutil.copytree(previous/'runs'/rid,ctx.workspace/'runs'/rid,dirs_exist_ok=True)
+                        ctx.fs._manifest['runs'][rid]=manifest['runs'][rid]
+                ctx.fs._save_manifest()
+            for row in record['branches']:
+                if row['status'] not in RECOVERABLE:continue
+                row.setdefault('history',[]).append({k:v for k,v in row.items() if k!='history'})
+                row['status']='pending'
+                for field in ('error','error_detail','error_type','phase','code_hash','ast_hash','driver_hash','driver_code'):row.pop(field,None)
+            record.update(status='frozen' if record.get('protocol') else 'preparing',protocol_error=False,
+                owner_attempt=order.attempt_id if order else None)
+            db.save(record)
+        elif record['status'] in TERMINAL:return record
         for row in record['branches']:
             if row['status'] in {'generating','running'}:
                 row.update(status='interrupted',error='上次操作中断，已预留预算不会退还，也不会重复执行')
@@ -253,29 +276,41 @@ async def compare(ctx,branch):
         else:
             frozen,payload,truth,negative_truth,train,negative_train=prepare(ctx.workspace,record['protocol'])
             if digest(frozen)!=record['protocol_hash']:raise ValueError('数据或实际划分已改变')
-    except Exception:
-        for row in record['branches']:row.update(status='not_started',error='共同协议或数据条件未通过冻结检查，未执行候选')
+    except Exception as exc:
+        from ai_system.research.runtime import ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked
+        from ai_system.core_handlers.model_runtime import failure
+        record.update(phase='protocol',error_type=type(exc).__name__,error_detail=diagnostic(exc),
+            candidate=str(getattr(getattr(exc,'candidate',None),'content','')))
+        if failure(exc)[3] or isinstance(exc,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked)):
+            record['provider_unavailable']=True
+        for row in record['branches']:row.update(status='not_started',phase='protocol',error=diagnostic(exc),error_type=type(exc).__name__)
         record.update(status='no_valid',chosen_index=None,reason='比较协议无法冻结或数据不适用；未执行候选、未选择胜者',protocol_error=True);db.save(record);return record
     directory=ctx.workspace/'outputs/intermediate/comparisons'/record['id'];directory.mkdir(parents=True,exist_ok=True)
     for row,candidate in zip(record['branches'],candidates):
         if row['status']!='pending':continue
         await ctx.events.stage('正在准备候选实验：'+candidate['name'])
-        key=f"{record['id']}:code:{row['index']}"
-        if not db.reserve(tid,'model_calls',25,key,candidate=True):row.update(status='budget_exhausted',error='候选生成预算不足');db.save(record);continue
-        row['status']='generating';db.save(record);started=time.monotonic()
+        key=f"{record['id']}:code:{row['index']}:{len(row.get('history',[]))}"
+        if not db.reserve(tid,'model_calls',25,key,candidate=not row.get('history')):row.update(status='budget_exhausted',error='候选生成预算不足');db.save(record);continue
+        row.update(status='generating',phase='generation');db.save(record);started=time.monotonic()
         answer=None
         try:
             prompt={'candidate':{'name':str(candidate.get('name',''))[:80],'method_keys':candidate.get('method_keys') or [],
                     'idea':str(candidate.get('idea',''))[:1500],'formulation':str(candidate.get('formulation',''))[:1500],
                     'steps':[str(step)[:400] for step in candidate.get('steps',[])[:8]],'variant':row['index']},
-                'task_type':frozen['task_type'],'metric':frozen['metric'],'features':frozen['feature_dtypes'],'n_train':len(train),'seed':frozen['seed']}
+                'task_type':frozen['task_type'],'metric':frozen['metric'],'features':frozen['feature_dtypes'],'n_train':len(train),'seed':frozen['seed'],
+                'previous_attempt':row.get('history',[])[-1] if row.get('history') else None}
             prompt['candidate']['estimator_contract']=row.get('estimator_contract')
             answer=await ask(ctx,CandidateCode,'只实现 JSON 中当前 candidate 的 sklearn 模块 make_estimator(seed)，严格遵守其方法、预处理和参数；不得自行改为另一候选或增加多项式/特征工程。对象使用 fit(X_train,y_train) 和 predict(X_validation)，二分类可用 predict_proba/decision_function。项目提供划分并计算指标；不要读取文件、访问验证标签、计算/报告分数或修改项目文件。只返回简短的工厂实现，不写长说明。',json.dumps(prompt,ensure_ascii=False),25)
             row.update(code=answer.code,code_hash=hashlib.sha256(answer.code.encode()).hexdigest(),ast_hash=valid_code(answer.code),status='code_frozen')
         except Exception as exc:
-            row.update(status='code_error' if answer is not None else 'generation_error',error='候选代码不符合 make_estimator 契约' if answer is not None else '生成请求失败或超时，已耗预算且不自动重试')
-            if type(exc).__name__ in {'AuthenticationError','PermissionDeniedError','RateLimitError'}:
-                row.update(status='provider_error',error='网关拒绝授权或额度请求，停止后续比较调用，不自动重试')
+            row.update(status='code_error' if answer is not None else 'generation_error',
+                phase='code_validation' if answer is not None else 'generation',error=diagnostic(exc),
+                error_detail=diagnostic(exc),error_type=type(exc).__name__,code=answer.code if answer else row.get('code',''),
+                candidate=str(getattr(getattr(exc,'candidate',None),'content','')))
+            from ai_system.research.runtime import ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked
+            from ai_system.core_handlers.model_runtime import failure
+            if failure(exc)[3] or isinstance(exc,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked)):
+                row.update(status='provider_error')
                 record['provider_unavailable']=True
                 for remaining in record['branches']:
                     if remaining['status']=='pending':remaining.update(status='not_started',error='网关请求已被拒绝，未继续消耗请求')
@@ -292,20 +327,20 @@ async def compare(ctx,branch):
     for row in record['branches']:
         if row['status']!='code_frozen':continue
         if not current(ctx,record,branch):record.update(status='input_changed',reason='执行前输入已改变',chosen_index=None);db.save(record);return record
-        if not db.reserve(tid,'executions',25,f"{record['id']}:run:{row['index']}"):
+        if not db.reserve(tid,'executions',25,f"{record['id']}:run:{row['index']}:{len(row.get('history',[]))}"):
             row.update(status='budget_exhausted',error='执行或超时额度不足');db.save(record);continue
         code=directory/f"candidate-{row['index']}.py";inputs=directory/f"inputs-{row['index']}.json";output=directory/f"predictions-{row['index']}.json"
         code.write_text(row['code']);inputs.write_text(json.dumps(payload,allow_nan=False));output.unlink(missing_ok=True)
         driver=DRIVER.format(payload=inputs.relative_to(ctx.workspace).as_posix(),code=code.relative_to(ctx.workspace).as_posix(),output=output.relative_to(ctx.workspace).as_posix(),guard=inspect.getsource(check_estimator),contract=row.get('estimator_contract'))
         row['driver_code']=driver;row['driver_hash']=hashlib.sha256(driver.encode()).hexdigest()
-        key=f"{tid}~comparison{row['index']}";row['status']='running';db.save(record)
+        key=f"{tid}~comparison{row['index']}";row.update(status='running',phase='execution');db.save(record)
         kernel=ctx.kernels.get(key);kernel.timeout=25;started=time.monotonic()
         try:
             run=await kernel.execute(driver)
             row['run_ids'].append(run.run_id);row['stdout_hash']=hashlib.sha256(run.stdout.encode()).hexdigest()
             if not run.ok:
                 row['error_detail']=diagnostic(run.error)
-                raise RuntimeError('timeout' if run.timed_out else 'candidate execution error')
+                raise (TimeoutError(run.error) if run.timed_out else RuntimeError(run.error))
             if not output.is_file() or output.stat().st_size>2_000_000:raise ValueError('预测产物缺失或超预算')
             if hashlib.sha256(code.read_bytes()).hexdigest()!=row['code_hash']:raise ValueError('候选代码在执行期间被改动')
             predictions=json.loads(output.read_text());row['implementation_audit']=predictions['estimator_audit']
@@ -320,7 +355,8 @@ async def compare(ctx,branch):
                 prediction_hash=hashlib.sha256(output.read_bytes()).hexdigest(),kernel_key=key)
             if row['status']=='control_inconclusive':row['error']='置换对照异常，需复核泄漏或偶然性；不能直接判定方法无效'
         except Exception as exc:
-            row.update(status='timeout' if 'timeout' in str(exc) else 'execution_error',error='候选运行超时' if 'timeout' in str(exc) else '候选执行或预测契约失败')
+            row.update(status='timeout' if isinstance(exc,TimeoutError) else 'execution_error',
+                error=diagnostic(exc),error_type=type(exc).__name__,phase='execution')
             row.setdefault('error_detail',diagnostic(exc))
         row['elapsed_seconds']=time.monotonic()-started;row['timeout_reserved']=25;db.save(record)
     status,index,reason=choose(record)

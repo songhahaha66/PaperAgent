@@ -17,7 +17,10 @@ const mainText = n => n.kind === 'details' ? '' : [n.text || '', ...(n.children 
     primary_result_refs: ['R1'], record: { limitations: ['推广未知'] },
     results: [{ id: 'R1', name: '解释实际使用的结果', meaning: { object: '记录', scope: '全部输入', statistic: '原始记录数', lineage: [] } }, { id: 'R2', name: 'opaque_aux_var' }],
     claims: [{ id: 'C2', statement: '当前支持的解释', strength: '倾向' }],
-    current_actions: [{ id: 'a1', label: '读取已有文件', status: 'completed', inputs: { path: 'saved.csv' } }],
+    current_actions: [
+      { id: 'old', label: '先前失败行动', status: 'failed', message: '先前具体错误' },
+      { id: 'a1', label: '读取已有文件', status: 'completed', inputs: { path: 'saved.csv' } },
+    ],
     interpretation_history: [{ report_ref: 'old', status: 'superseded', report: { summary: '已撤回旧观点' } }],
     historical_claims: [], sources: [], artifacts: [], history: [], issues: [],
   })
@@ -27,7 +30,9 @@ const mainText = n => n.kind === 'details' ? '' : [n.text || '', ...(n.children 
   assert.match(mainText(host.root), /回答原目标|明确数据范围/)
   assert.match(mainText(host.root), /当前支持的解释/)
   assert.match(mainText(host.root), /解释实际使用的结果/)
-  assert.doesNotMatch(mainText(host.root), /opaque_aux_var|已撤回旧观点/)
+  assert.doesNotMatch(mainText(host.root), /opaque_aux_var|已撤回旧观点|先前具体错误|saved.csv|completed/)
+  assert.match(mainText(host.root), /读取已有文件/)
+  assert.match(text(host.root), /先前具体错误|调试详情/)
   assert.match(text(host.root), /opaque_aux_var|已撤回旧观点|saved.csv/)
   assert.equal(host.find(n => n.kind === 'details' && text(n).includes('opaque_aux_var')) !== undefined, true)
   app.unmount()

@@ -21,7 +21,7 @@ from pydantic import create_model, model_validator
 from langchain.agents import create_agent
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, messages_to_dict
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
 from langgraph.errors import GraphRecursionError
 from langgraph.runtime import Runtime
 
@@ -301,13 +301,20 @@ def build_tools(
         await ctx.events.file_changed(result.path)
         return submission_feedback(f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）")
 
-    tools = [StructuredTool.from_function(coroutine=run_python, name="run_python"),
-             StructuredTool.from_function(coroutine=read_file, name="read_file"),
-             StructuredTool.from_function(coroutine=search_literature, name="search_literature")]
+    from functools import wraps
+    def make_tool(fn):
+        @wraps(fn)
+        async def run(*args,**kwargs):
+            try:return await fn(*args,**kwargs)
+            except (ValueError,KeyError,FileNotFoundError) as exc:
+                from ai_system.research.review_cache import error_detail
+                raise ToolException(error_detail(exc)) from exc
+        return StructuredTool.from_function(coroutine=run,name=fn.__name__,handle_tool_error=True,handle_validation_error=str)
+    tools = [make_tool(run_python),make_tool(read_file),make_tool(search_literature)]
     if record:
         tools += [
-            StructuredTool.from_function(coroutine=record_results, name="record_results"),
-            StructuredTool.from_function(coroutine=record_figure, name="record_figure"),
+            make_tool(record_results),
+            make_tool(record_figure),
         ]
     return tools
 
@@ -457,7 +464,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
         branch = {**branch, "design": record}
     design = branch["design"]
     try:
-        if (branch.get('experiment') or {}).get('csv') and not branch.get('continuation'):
+        if (branch.get('experiment') or {}).get('csv') and (not branch.get('continuation') or branch.get('resume_comparison')):
             from ai_system.modules.registry import invoke
             from .handoff import publish_comparison
             record=await invoke(ctx,'experiments.compare',branch=branch)
@@ -515,7 +522,7 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
             operation['output']={'findings':[i.model_dump() for i in result.issues]}
             return json.dumps(operation['output'],ensure_ascii=False)+'\n请据原资料和实际输出采纳、驳回或保留局限，勿因措辞问题重算。'
     tools=build_tools(ctx, subproblem_id, run_log, submission_gaps=inventory)
-    tools.append(StructuredTool.from_function(coroutine=check_interpretation,name='check_interpretation'))
+    tools.append(StructuredTool.from_function(coroutine=check_interpretation,name='check_interpretation',handle_tool_error=True,handle_validation_error=str))
     agent = create_agent(
         model=ctx.coder_llm,
         tools=tools,

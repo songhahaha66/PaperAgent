@@ -63,7 +63,7 @@ def seed(root):
     from ai_system.research.planner import NextAction,Judgment
     current=store.snapshot()
     _save_assessments(store,NextAction(action='write',reason='已形成有限的当前答案',judgments=[
-        Judgment(question_id=current['experiments'][key]['question_id'],
+        Judgment(coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
                  statement='本次记录显示 {{R:'+projection['results'][i]['id']+'}}，仅限所提供样本',
                  artifact_refs=[projection['results'][i]['id']],limitations=['没有外推证据'])
         for i,key in enumerate(('Q1','Q2'))]))

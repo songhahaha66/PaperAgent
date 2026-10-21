@@ -3,8 +3,7 @@ import json
 from pydantic import BaseModel, Field
 from ai_system.graph.llm_utils import as_messages, call_structured
 from ai_system.graph.registry import find_refs, publication_text
-from ai_system.modules.writing.sections import STYLE, subproblem_brief
-from ai_system.modules.writing.consistency import consistency_text
+from ai_system.modules.writing.sections import STYLE
 from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_project as project
 
@@ -35,11 +34,11 @@ async def _update(state, runtime, *, repairing=False):
         project.atomic_text(store.root/project.META, json.dumps(data, ensure_ascii=False))
         state = project.source_state(store, state)
     targets = project.source_targets(state)
-    evidence = '\n\n'.join(subproblem_brief(state, ctx, sp) for sp in state['analysis']['subproblems'])
-    from ai_system.research.views import questions, question_context
-    research_questions = question_context(questions(store.snapshot()),include_history=True)
-    from ai_system.research.planner import research_history_context
-    history=research_history_context(store.snapshot(),full=True)
+    from ai_system.research.views import questions,question_context,experiment_context
+    snapshot=store.snapshot()
+    research_questions=question_context(questions(snapshot))
+    records=experiment_context(snapshot)
+    evidence=json.dumps(records,ensure_ascii=False)
     prompt = ('直接更新当前 LaTeX 项目。返回 edits，每项 target、replacement；'
               'target 只选下方提供的片段标记，replacement 是该片段修改后的完整内容，无需复制 old 或计算位置。'
               '优先修改片段；需调整整体结构时可选择文件标记。同次修改的范围不能重复或重叠。'
@@ -55,9 +54,7 @@ async def _update(state, runtime, *, repairing=False):
               '# 原要求\n'+state.get('task', '')+'\n# 用户模板\n'+(ctx.template_requirements or '')+
               '\n# 研究大纲（可按表达需要调整）\n'+json.dumps(state.get('outline', []), ensure_ascii=False)+
               '\n# 研究问题、已有判断与未解决部分\n'+json.dumps(research_questions, ensure_ascii=False)+
-              '\n# 必要研究历史与负结果（单独标注状态，不能混入当前事实）\n'+json.dumps(history,ensure_ascii=False)+
-              '\n# 完整实验研究记录\n'+json.dumps(state.get('solutions',{}),ensure_ascii=False)+
-              '\n# 实际研究成果\n'+evidence+'\n'+ctx.registry.to_prompt_table()+'\n'+consistency_text(ctx, state.get('consistency') or [])+
+              '\n# 实验记录与结果（每份报告只列一次；历史提供定位）\n'+evidence+
               '\n# 当前项目源码片段（唯一当前正文）\n'+json.dumps(project.source_prompt(state), ensure_ascii=False))
     from ai_system.research.literature import literature_context
     prompt += literature_context(store.root, state.get('task','')+'\n'+evidence)

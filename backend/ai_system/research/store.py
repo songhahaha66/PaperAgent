@@ -616,12 +616,12 @@ class ResearchStore:
         """Readiness follows recorded answers and explicit unknowns, not reviewer unanimity."""
         from .views import questions
         rows = [q for q in questions(state) if not q.get('retired')]
-        # The controller explicitly chooses delivery using the original request;
-        # soft suspicions/failed alternative methods do not veto that choice.
-        if any(q.get('answer_status')=='needs_update' or q.get('unavailable_artifact_refs') for q in rows):return False
-        if not rows or not any(q.get('judgment') and q.get('artifact_refs') and not q.get('unavailable_artifact_refs')
-                               and q.get('answer_status') != 'needs_update' for q in rows):
-            return False
+        if not rows:return False
+        for q in rows:
+            if q.get('answer_status')=='needs_update' or q.get('unavailable_artifact_refs'):return False
+            if q.get('coverage') not in {'answered','partial','unanswered'} or not q.get('stop_reason'):return False
+            if q['coverage']=='answered' and (not q.get('judgment') or not q.get('artifact_refs')):return False
+            if q['coverage']=='partial' and not q.get('judgment'):return False
         return not any(i.get('repair_targets') and i['blocking'] and i['status'] not in
             {'resolved','dismissed','superseded'} for i in research_findings(state))
 

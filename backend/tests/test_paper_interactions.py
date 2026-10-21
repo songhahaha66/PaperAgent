@@ -179,7 +179,6 @@ def test_comment_writing_has_one_format_repair_without_repeating_tools(paper,mon
     from ai_system.graph import llm_utils
     store,_=paper;bound=selection(store,'原来的表述')
     record,_=comments.create(store,'one-repair','计算后修改',bound)
-    monkeypatch.setattr(llm_utils,'RETRY_DELAY',0)
     calls={'plan':0,'write':0,'repair':0,'tool':0}
     candidate='{"replacement":"依据实际结果修订的表述"}'  # Missing required answer; never guess it.
     class Model:

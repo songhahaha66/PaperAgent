@@ -92,7 +92,7 @@ def test_user_revision_without_scope_preserves_results_and_updates_only_its_ques
     current=study.store.snapshot()
     results=study.store.registry_payload()['results']
     loop._save_assessments(study.store,planner.NextAction(action='observe',reason='记录已有问题答案',judgments=[
-        planner.Judgment(question_id=current['experiments'][key]['question_id'],
+        planner.Judgment(coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
             statement='当前数据下的结果 {{R:'+next(r['id'] for r in results if r['subproblem']==key)+'}}',
             artifact_refs=[r['id'] for r in results if r['subproblem']==key],limitations=['仅限已执行条件'])
         for key in ('Q1','Q2')]))

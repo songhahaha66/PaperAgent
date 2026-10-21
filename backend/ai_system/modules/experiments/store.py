@@ -99,15 +99,14 @@ class ExperimentStore:
         for key,task in snapshot['experiments'].items():
             if task['retired'] or task['kind']=='verify' or task['acceptance']!='accepted' or task['validity']!='current':
                 continue
-            attempt=snapshot['executions'].get(task['execution_id']) or {}
-            # Continuations preserve the original measured comparison receipt;
-            # never refit candidates to recreate its summary.
-            while attempt.get('parent_attempt'):
-                attempt=snapshot['executions'].get(attempt['parent_attempt']) or {}
-            view_task={**task,'execution_id':attempt.get('attempt_id')}
-            if attempt.get('execution_status')!='succeeded' or attempt.get('acceptance')!='accepted' or not attempt.get('commit',{}).get('published'):
-                continue
+            from ai_system.research.domain import execution_lineage
             record=self.read(key,task['revision'])
+            if not record:continue
+            producers={p.get('attempt_id') for p in record.get('measurements',[])} or {record.get('owner_attempt')}
+            source=next((aid for aid in execution_lineage(snapshot,task['execution_id']) if aid in producers),task['execution_id'])
+            attempt=snapshot['executions'].get(source) or {}
+            view_task={**task,'execution_id':source}
+            if attempt.get('execution_status')!='succeeded' or attempt.get('acceptance')!='accepted' or not attempt.get('commit',{}).get('published'):continue
             if not record or record.get('status') not in {'winner','only_valid','tied','no_valid','budget_exhausted'} or record.get('protocol_error'):
                 continue
             try:
@@ -242,9 +241,13 @@ class ExperimentStore:
                     raise ResearchConflict('候选方法声明已冻结')
                 if 'estimator_contract' in before and before['estimator_contract']!=after.get('estimator_contract'):
                     raise ResearchConflict('候选方法契约已经冻结')
-                if before.get('code_hash') and any(before.get(k)!=after.get(k) for k in ('code','code_hash','ast_hash')):
+                from .supervised import RECOVERABLE
+                history=after.get('history',[])
+                correction=(before['status'] in RECOVERABLE and after['status']=='pending'
+                    and history==[*before.get('history',[]),{k:v for k,v in before.items() if k!='history'}])
+                if before.get('code_hash') and not correction and any(before.get(k)!=after.get(k) for k in ('code','code_hash','ast_hash')):
                     raise ResearchConflict('候选代码已经冻结')
-                if before.get('driver_hash') and any(before.get(k)!=after.get(k) for k in ('driver_code','driver_hash')):
+                if before.get('driver_hash') and not correction and any(before.get(k)!=after.get(k) for k in ('driver_code','driver_hash')):
                     raise ResearchConflict('项目执行代码已经冻结')
             db.execute('UPDATE experiment_comparisons SET payload=? WHERE id=?',(json.dumps(record,ensure_ascii=False,allow_nan=False),record['id']))
 

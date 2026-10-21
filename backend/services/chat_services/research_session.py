@@ -397,8 +397,33 @@ def scoped_snapshot(snapshot: ResearchSnapshot, subproblem_id: str | None) -> Re
     if question is None and not selected_results and not selected_claims:
         raise ValueError("该子问题尚无可供追问的登记结果")
     run_ids = {r.run_id for r in selected_results}
+    selected_questions=[item for item in snapshot.questions if item['id']==subproblem_id or
+                        (question is None and own.intersection(item['experiment_ids']))]
+    question_ids={q['id'] for q in selected_questions}
+    def relevant(row):
+        return row.get('experiment_id') in scope or row.get('task_id') in scope or row.get('question_id') in question_ids
+    runtime={}
+    for key in ('actions','models'):
+        runtime[key]=[{k:v for k,v in row.items() if k not in {'inputs','output','result'}}
+                      for row in snapshot.runtime.get(key,[]) if relevant(row)]
+    for key in ('history','decisions'):
+        runtime[key]=[]
+        for row in snapshot.runtime.get(key,[]):
+            judgments=[j for j in row.get('judgments',[]) if j.get('question_id') in question_ids]
+            if not relevant(row) and not judgments:continue
+            runtime[key].append({k:v for k,v in row.items() if k in {
+                'id','kind','label','recorded_at','action_id','observation_id','question_id','experiment_id'}} |
+                {'judgments':judgments,'artifact_refs':[ref for ref in row.get('artifact_refs',[]) if ref in result_ids],
+                 'reason':row.get('reason','') if relevant(row) else ''})
+    runtime['current']=next((row for row in reversed(runtime['actions']) if row['status']=='running'),None)
     return snapshot.model_copy(update={
-        'questions': [item for item in snapshot.questions if item['id'] == subproblem_id or own.intersection(item['experiment_ids'])],
+        'runtime':runtime,'artifacts':[],
+        'requirements':[r for r in snapshot.requirements if scope.intersection(r.get('task_ids',[]))],
+        'assumptions':[a for a in snapshot.assumptions if scope.intersection(a.get('task_ids',[]))],
+        'consistency':[c for c in snapshot.consistency if set(c.get('claims',[])) <= {c.id for c in selected_claims}],
+        'delivery':None,
+
+        'questions':selected_questions,
         'experiments': [item for item in snapshot.experiments if item['task_id'] in scope],
         'feedback': [item for item in snapshot.feedback if item.get('task_id') in scope],
         'faults': [item for item in snapshot.faults if item.get('task_id') in scope],

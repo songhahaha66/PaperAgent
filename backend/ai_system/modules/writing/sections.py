@@ -15,7 +15,6 @@ from langgraph.runtime import Runtime
 
 from ai_system.graph.context import GraphContext
 from ai_system.graph.outline import template_outline
-from ai_system.modules.writing.consistency import consistency_text
 from ai_system.graph.llm_utils import as_messages, call_text, clip, cap_output
 from ai_system.graph.state import PaperState
 from ai_system.graph.tracing import labelled
@@ -127,7 +126,7 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
     return (
         f"## {sid} {subproblem['title']}\n问题：{subproblem['question']}\n"
         + (_design_text(design, current_premises(state, sid)) + "\n" if design else "")
-        + f"求解报告：\n{_report_text(report)}\n登记结果：\n{ctx.registry.to_prompt_table(sid)}"
+        + f"求解报告：\n{_report_text(report)}"
     )
 
 
@@ -205,24 +204,6 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     request += "\n\n# 本节可用引用（仅可复制这里的编号）\n" + references.to_prompt_table()
     if not any(r.kind == "figure" for r in references.results.values()):
         request += "\n本节没有可用图表，只能用文字、公式或基于已登记结果的表格说明，不得引用图。"
-    shared_ctx = ctx
-    conflicts = state.get("consistency") or []
-    if ctx.research and key.startswith("solve:"):
-        from dataclasses import replace
-        sid = key.split(":", 1)[1]
-        subproblem = next(sp for sp in state["analysis"]["subproblems"] if sp["id"] == sid)
-        source_ids = allowed
-        own_claims = {c.id for c in ctx.registry.claims.values() if c.subproblem in source_ids}
-        conflicts = [c for c in conflicts if own_claims & set(c["claims"])]
-        related = own_claims | {cid for c in conflicts for cid in c["claims"]}
-        claims = {cid: c for cid, c in ctx.registry.claims.items() if cid in related}
-        result_ids = {rid for c in claims.values() for rid in c.evidence}
-        registry = ResultRegistry(ctx.fs,
-            results={rid: r for rid, r in ctx.registry.results.items() if rid in result_ids}, claims=claims)
-        shared_ctx = replace(ctx, registry=registry)
-    shared = consistency_text(shared_ctx, conflicts)
-    if shared:
-        request = f"{request}\n\n{shared}"
     if ctx.template_requirements:
         request += (
             "\n\n# 用户模板的要求（章节标题和顺序已按模板安排，本节只写正文；措辞、格式、篇幅以模板为准）\n"

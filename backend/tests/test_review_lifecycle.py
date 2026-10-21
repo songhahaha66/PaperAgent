@@ -31,7 +31,6 @@ def draft():
 
 def run_agent(tmp_path, monkeypatch, model, **options):
     from ai_system.graph import llm_utils
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     agent = PaperGraphAgent(model, workspace_dir=str(tmp_path), judge=FixedJudge(), explore_top_k=1, n_candidates=2,
                             max_review_rounds=1, **options)
     asyncio.run(resume_saved_contract(agent))

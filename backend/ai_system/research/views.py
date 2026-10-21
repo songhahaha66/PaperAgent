@@ -24,7 +24,7 @@ def questions(snapshot):
     for question in snapshot['questions'].values():
         experiments=[e for e in snapshot['experiments'].values() if e['question_id']==question['id'] and not e['retired']]
         ids={e['task_id'] for e in experiments} | set(question.get('related_experiment_ids', []))
-        experiments=[snapshot['experiments'][eid] for eid in ids if eid in snapshot['experiments']]
+        experiments=[e for eid,e in snapshot['experiments'].items() if eid in ids]
         scope=experiment_scope(snapshot['experiments'], ids)
         available=current_result_refs(snapshot, scope)
         issues=[i for i in findings(snapshot) if i['task_id'] in ids and i['status'] not in CLOSED]
@@ -45,9 +45,31 @@ def question_context(rows, *, include_history=False):
     """Share current judgments and their evidence scope without report/history copies."""
     fields = ('id', 'title', 'question', 'judgment', 'artifact_refs', 'limitations', 'next_step',
               'experiment_ids', 'dependency_experiment_ids', 'available_artifact_refs',
-              'unavailable_artifact_refs', 'sources', 'issues', 'answer_status', 'retired', 'version')
+              'unavailable_artifact_refs', 'sources', 'issues', 'answer_status', 'coverage', 'stop_reason', 'retired', 'version')
     if include_history:fields += ('history','judgments')
     return [{key: row[key] for key in fields if key in row} for row in rows]
+
+
+def experiment_context(snapshot, experiment_ids=None):
+    from .domain import experiment_report, current_results
+    from .feedback import interpretation_version
+    selected=set(experiment_ids) if experiment_ids is not None else {
+        eid for eid,e in snapshot['experiments'].items() if not e['retired']}
+    rows=[]
+    results=current_results(snapshot,selected)
+    for eid,e in snapshot['experiments'].items():
+        if eid not in selected:continue
+        artifact=snapshot['artifacts'].get(e['report_ref']) or {}
+        rows.append({'task_id':eid,'question_id':e['question_id'],'objective':e['objective'],
+            'execution_status':e['execution_status'],'acceptance':e['acceptance'],'validity':e['validity'],
+            'method':e.get('method_instruction',''),'conditions':(e.get('experiment') or {}).get('conditions',''),
+            'evaluation':(e.get('experiment') or {}).get('evaluation',''),
+            'record':experiment_report(snapshot,e),'record_path':artifact.get('payload',{}).get('path'),
+            'interpretation_version':interpretation_version(snapshot,e),
+            'results':[r for r in results if r['subproblem']==eid],
+            'history':[{'ref':ref,'path':a['payload'].get('path'),'status':a['report'].get('status','superseded')}
+                for ref,a in snapshot['artifacts'].items() if a['type']=='report' and a['experiment_id']==eid and ref!=e['report_ref']]})
+    return rows
 
 
 def evidence_uses(snapshot, source_root=None):
@@ -195,7 +217,9 @@ def activity(ctx, capability, task_id=None, **links):
             yield item
         except BaseException as exc:
             item['status']='interrupted' if type(exc).__name__=='CancelledError' else 'failed'
+            from .review_cache import error_detail
             item['error_type']=type(exc).__name__
+            item['message']=error_detail(exc)
             raise
         finally:
             item['finished_at']=time.time()

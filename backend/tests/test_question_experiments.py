@@ -5,24 +5,23 @@ import shutil
 from types import SimpleNamespace
 
 from ai_system.research.store import ResearchStore
-from ai_system.research.models import WorkerResult, ReviewRecord, IssueReport, ResearchRevision
-from ai_system.research.planner import NextAction, validate_action
+from ai_system.research.models import WorkerResult, IssueReport, ResearchRevision
+from ai_system.research.planner import NextAction, Judgment, validate_action
 from ai_system.research.loop import create_experiment, prepare_action, act, resume
 from ai_system.research.control import graph_view
 from ai_system.research.domain import experiment_report
-from ai_system.research.validation import report_fingerprint
 from services.chat_services.research_session import research_snapshot
 from services.file_services.workspace_fs import WorkspaceFS
 
 
 def experiment(store, *, question_id=None, name='窗口均值'):
     return create_experiment(store, NextAction(action='experiment',reason='检验预测误差',
-        question_id=question_id,question='' if question_id else '怎样预测下一周需求？',title=name,
+        question_id=question_id,question_updates=[] if question_id else [{'question':'怎样预测下一周需求？'}],title=name,
         method=name,conditions='前15天训练，后5天固定验证',evaluation='比较MAE，差异不足时保留两种方法'))
 
 
 def finish(store, eid, *, failed=False):
-    order=store.claim(eid,review_required=not failed)
+    order=store.claim(eid)
     workspace=store.root/'.system/attempts'/order.attempt_id/'workspace'
     fs=WorkspaceFS(str(workspace));run=fs.create_run()
     fs.save_run_input(run,'print(42)')
@@ -34,7 +33,6 @@ def finish(store, eid, *, failed=False):
     result=WorkerResult(order=order,execution_status='failed' if failed else 'succeeded',
         acceptance='inconclusive' if failed else 'accepted',report=report,
         results=[] if failed else [{'id':ref,'subproblem':eid,'kind':'number','name':'误差','value':'42','run_id':run}],
-        reviews=[] if failed else [ReviewRecord(report_hash=report_fingerprint(report),issues=[])],
         issues=[IssueReport(task_id=eid,category='execution',message='执行环境故障')] if failed else [])
     return result,store.commit(result)
 
@@ -47,12 +45,19 @@ def test_multiple_methods_keep_ownership_and_failed_method_does_not_block_questi
     result,receipt=finish(store,first);finish(store,second);finish(store,bad,failed=True)
     assert store.commit(result)==receipt
     state=store.snapshot()
+    assert result.reviews==[] and state['experiments'][first]['acceptance']=='accepted'
     assert len(state['questions'])==1 and len(state['experiments'])==3
     assert not {'tasks','attempts','evidence','workflow'}&state.keys()
     assert all('report' not in e and 'design' not in e for e in state['experiments'].values())
     assert {a['experiment_id'] for a in state['artifacts'].values()}=={first,second,bad}
     assert {'result','code','stdout','report'}<={a['type'] for a in state['artifacts'].values()}
-    assert store.delivery_ready(state)
+    assert not store.delivery_ready(state)  # Results alone are not a recorded answer.
+    from ai_system.research.loop import _save_assessments
+    refs=[r['id'] for r in store.registry_payload()['results']]
+    _save_assessments(store,NextAction(action='observe',reason='记录当前有限结论',judgments=[
+        Judgment(question_id=qid,statement='两项方法已得到固定验证输出',artifact_refs=refs,
+                 coverage='answered',stop_reason='已比较给定方法，仿真执行故障另行保留')]))
+    state=store.snapshot();assert store.delivery_ready(state)
     assert len(store.registry_payload()['results'])==2
     store.recover();resume(store)
     assert store.snapshot()['executions']==state['executions']
@@ -77,9 +82,9 @@ def test_schema_three_migration_retains_results_and_is_idempotent(tmp_path):
     raw=json.dumps(old,ensure_ascii=False)
     with store._transaction() as db:
         db.execute('UPDATE research SET payload=? WHERE id=?',(raw,'research'))
-        db.execute('DELETE FROM domain_migrations WHERE version=4')
+        db.execute('DELETE FROM domain_migrations WHERE version=7')
     upgraded=ResearchStore(tmp_path,'research');before=upgraded.snapshot()
-    assert before['schema_version']==4
+    assert before['schema_version']==5
     assert set(before['artifacts'])>=set(old['evidence'])
     assert experiment_report(before,before['experiments'][eid])==report
     assert ResearchStore(tmp_path,'research').snapshot()==before
@@ -95,7 +100,7 @@ def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path
                         events=SimpleNamespace(stage=stage,emit=stage))
     async def decide(self,state,context):
         calls.append(context)
-        action=NextAction(action='experiment',reason='方法明确，直接计算',question='怎样预测下一周需求？',
+        action=NextAction(action='experiment',reason='方法明确，直接计算',question_updates=[{'question':'怎样预测下一周需求？'}],
             title='窗口均值',method='最后三天均值',conditions='最后五天固定验证',evaluation='MAE')
         validate_action(action,state,context)
         return action
@@ -117,9 +122,10 @@ def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path
     receipt=store.apply_revision_command('change',original['revision'],'改为预测两周',[eid],revision)
     assert store.apply_revision_command('change',original['revision'],'改为预测两周',[eid],revision)==receipt
     current=store.snapshot()
-    assert current['experiments'][eid]['validity']=='stale'
+    assert current['experiments'][eid]['validity']=='current'
+    assert current['questions'][current['experiments'][eid]['question_id']]['answer_status'] in {'needs_update','unanswered'}
     assert experiment_report(current,current['experiments'][eid])==experiment_report(original,original['experiments'][eid])
-    assert current['artifacts']==original['artifacts'] and not store.registry_payload()['results']
+    assert current['artifacts']==original['artifacts'] and store.registry_payload()['results']
 
 
 def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_path,monkeypatch):
@@ -133,9 +139,12 @@ def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_
             return AIMessage(content='本节依据实测结果 {{R:R1}} 说明当前条件下的结论，推广仍需验证。')
     async def decide(self,state,context):
         if not state['experiments']:
-            return NextAction(action='experiment',reason='先检验固定方法',question='给定计算的结果是多少？',
+            return NextAction(action='experiment',reason='先检验固定方法',question_updates=[{'question':'给定计算的结果是多少？'}],
                 title='固定计算',method='计算 6*7 并登记',conditions='Python整数运算',evaluation='核对精确值')
-        return NextAction(action='write',reason='已有真实计算结果，开始整理草稿',title='计算研究')
+        eid=next(iter(state['experiments']));qid=state['experiments'][eid]['question_id']
+        refs=[r['payload']['id'] for r in state['artifacts'].values() if r['type']=='result']
+        return NextAction(action='write',reason='已有真实计算结果，开始整理草稿',title='计算研究',judgments=[
+            Judgment(question_id=qid,statement='整数计算结果为42',artifact_refs=refs,coverage='answered',stop_reason='已完成指定整数运算')])
     async def solve(branch,runtime):
         ctx=runtime.context;eid=branch['subproblem']['id']
         run=await ctx.kernels.get(eid).execute("print(6*7)")

@@ -5,6 +5,8 @@ export interface ResearchQuestion {
   version?: number
   retired?: boolean
   answer_status?: string
+  coverage?: 'answered' | 'partial' | 'unanswered' | null
+  stop_reason?: string
   history?: { question: string; reason?: string }[]
   experiment_ids: string[]
   sources: string[]
@@ -44,6 +46,7 @@ export interface ResearchActivity {
   output?: Record<string, unknown>
   message?: string
   error_type?: string
+  phase?: string
   kind?: string
   updated_at?: number
   task_id?: string | null

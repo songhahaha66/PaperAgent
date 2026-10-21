@@ -53,7 +53,6 @@ class LiteralNumberWriter(FakeModel):
 
 
 def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputing(tmp_path, monkeypatch):
-    monkeypatch.setattr(llm_utils, "RETRY_DELAY", 0)
     monkeypatch.setattr(_Structured, "reviewed_q1", True)
     monkeypatch.setattr(_Structured, "audits", 10)
     model = BrokenWriter(loose_number_once=False)

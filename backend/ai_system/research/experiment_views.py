@@ -92,7 +92,7 @@ def experiments_view(business, safe_file, current_files=None):
         inputs_match = current_files is None or frozen_files == {p: h for p, h in current_files.items() if p.startswith(('data/', 'attachment/'))}
         current = bool(active and attempt['revision'] == task['revision'] and task['validity'] == 'current' and inputs_match)
         issues = [i for i in research_findings(business) if i['task_id'] == key and i['status'] not in CLOSED]
-        report = (experiment_report(business,task) if current else None) or (attempt.get('result') or {}).get('report') or {}
+        report = (experiment_report(business,task) if attempt.get('attempt_id')==task.get('execution_id') else None) or (attempt.get('result') or {}).get('report') or {}
         design = (attempt.get('result') or {}).get('design') or experiment_design(business,task) or {}
         method = design.get('chosen') or {}
         sources = [{'path': path, 'hash': fingerprint,

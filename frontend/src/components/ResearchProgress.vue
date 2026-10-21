@@ -25,6 +25,8 @@
       </header>
       <section class="judgment">
         <h3>当前答案</h3>
+        <p>{{ coverageLabel(selected.coverage) }}</p>
+        <p v-if="selected.stop_reason">停止理由：{{ selected.stop_reason }}</p>
         <p v-if="selected.answer_status === 'needs_update'" class="muted">
           依据或解释已改变，当前答案待研究层重新评估。
         </p>
@@ -174,6 +176,8 @@ const status = computed(() => props.workStatus || props.snapshot?.work_status ||
 const basis = computed(
   () => props.snapshot?.results.filter((r) => selected.value?.artifact_refs.includes(r.id)) || [],
 )
+const coverageLabel = (value?: string | null) =>
+  ({ answered: '已回答', partial: '部分回答', unanswered: '未回答' })[value || ''] || '尚未确定交付范围'
 const questionState = (question: ResearchQuestion) => {
   if (
     researchRunning(status.value) &&
@@ -183,6 +187,7 @@ const questionState = (question: ResearchQuestion) => {
   )
     return '正在执行'
   if (question.answer_status === 'needs_update') return '答案待更新'
+  if (question.coverage) return coverageLabel(question.coverage)
   if (question.judgment) return '已有答案'
   return props.snapshot?.results.some((result) =>
     question.experiment_ids.includes(result.subproblem_id),

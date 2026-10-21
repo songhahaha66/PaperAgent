@@ -126,7 +126,7 @@ def test_manual_edit_preserves_both_paper_versions(tmp_path):
     from ai_system.research.planner import NextAction,Judgment
     current=store.snapshot();results=store.registry_payload()['results']
     _save_assessments(store,NextAction(action='write',reason='依据实际结果形成当前答案',judgments=[
-        Judgment(question_id=current['experiments'][key]['question_id'],
+        Judgment(coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
             statement='本次条件下的结果 {{R:'+next(r['id'] for r in results if r['subproblem']==key)+'}}',
             artifact_refs=[r['id'] for r in results if r['subproblem']==key],limitations=['仅适用于当前实验条件'])
         for key in ('Q1','Q2','Q3')]))

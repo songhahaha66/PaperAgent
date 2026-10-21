@@ -1,8 +1,7 @@
 """Choose one research action; IDs, execution context and ownership belong to the store."""
 import json
 from typing import Literal
-from pydantic import ConfigDict, Field, model_validator
-from pydantic_core import PydanticCustomError
+from pydantic import Field, model_validator
 from .models import Contract, ExperimentPlan, Requirement, ResearchRevision
 from .domain import findings, experiment_report, experiment_scope, current_result_refs
 from .store import digest
@@ -21,10 +20,12 @@ class QuestionUpdate(Contract):
 
 class Judgment(Contract):
     question_id: str
-    statement: str = Field(min_length=1)
+    statement: str = ''
     artifact_refs: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     next_step: str = ''
+    coverage: Literal['answered','partial','unanswered'] | None = None
+    stop_reason: str = ''
 
 
 class SectionBasis(Contract):
@@ -43,33 +44,13 @@ class EvidenceSection(Contract):
 EXPERIMENT_FIELDS = ('method', 'conditions', 'evaluation')
 
 
-def _action_schema(schema):
-    """Expose the same conditional requirements used before dispatch to the model."""
-    def nonempty(name):
-        return {'required': [name], 'properties': {name: {'type': 'string', 'pattern': r'\S'}}}
-
-    retry = nonempty('experiment_id')
-    schema['allOf'] = [{
-        'if': {'properties': {'action': {'const': 'experiment'}}, 'required': ['action']},
-        'then': {'allOf': [
-            {'anyOf': [retry, nonempty('question_id'), nonempty('question')]},
-            {'anyOf': [retry,
-                {'required': ['experiment'], 'properties': {'experiment': {'type': 'object'}}},
-                {'required': list(EXPERIMENT_FIELDS), 'properties': {
-                    name: {'type': 'string', 'pattern': r'\S'} for name in EXPERIMENT_FIELDS}}]},
-        ]},
-    }]
-
-
 class NextAction(Contract):
-    model_config = ConfigDict(json_schema_extra=_action_schema)
-
     action: Literal['experiment', 'continue', 'observe', 'inspect', 'literature', 'tool', 'ask', 'write', 'pause']
     reason: str = Field(min_length=1)
     information_need: str = Field(default='', description='继续实验、查看或核查须说明缺少什么信息及会影响什么判断')
     question_updates: list[QuestionUpdate] = Field(default_factory=list)
     question_id: str | None = None
-    question: str = Field(default='', description='仅新增研究问题时提供；已有问题使用question_id')
+    question_index: int | None = Field(default=None, ge=0, description='本次question_updates中行动所属问题的零基索引；仅有一个更新时可省略。已有问题使用question_id，系统分配实际编号')
     title: str = Field(default='',max_length=120)
     experiment_id: str | None = Field(default=None, description='继续/重试原实验，或标明读取和检索行动的所属实验；更换方法须新增实验')
     method: str = Field(default='', max_length=3000, description='本次实际执行的方法、参数及关键假设，执行者不得静默换方法')
@@ -89,28 +70,37 @@ class NextAction(Contract):
     def experiment_fields(self):
         if self.action != 'experiment' or self.experiment_id:
             return self
-        missing = []
-        if not (self.question_id or self.question.strip()):
-            missing.append('question（新增问题）或 question_id（已有问题）')
         if self.experiment is None:
-            missing.extend(name for name in EXPERIMENT_FIELDS if not getattr(self, name).strip())
-        if missing:
-            raise PydanticCustomError('experiment_fields_missing',
-                '新实验缺少必填信息：{fields}', {'fields': '、'.join(missing)})
+            missing = [name for name in EXPERIMENT_FIELDS if not getattr(self,name).strip()]
+            if missing:raise ValueError('新实验缺少方法、条件或评价：'+', '.join(missing))
+        resolve_question(self, [q.question_id or f'new:{i}' for i,q in enumerate(self.question_updates)])
         return self
+
+
+def resolve_question(action, updated_ids):
+    if action.question_id is not None and action.question_index is not None:
+        raise ValueError('question_id与question_index选择一种明确的关联')
+    if action.question_id is not None:return action.question_id
+    if action.question_index is not None:
+        if action.question_index>=len(updated_ids):raise ValueError('question_index超出本次问题更新范围')
+        return updated_ids[action.question_index]
+    if len(updated_ids)==1:return updated_ids[0]
+    if action.action=='experiment' and not action.experiment_id:
+        raise ValueError('新实验须关联已有question_id或本次question_updates；多个问题用question_index明确选择')
+    return None
 
 
 PROMPT = """研究层根据完整原要求、问题当前答案、实验发现及必要历史，决定一次NextAction。
 主线：研究→用户要回答的问题→获取/验证证据的实验→连续的读取、检索、计算、绘图、核查和解释修订行动。
 问题不是方法或清洗任务。首轮识别原要求的实质目标，用question_updates逐步建立问题，可细化、改写、拆合；已有实验通过experiment_ids复用，保留来源和历史。不要只建立一个前处理问题而遗漏用户目标。
-已有问题使用question_id；新增实验填写question或question_id，以及method/conditions/evaluation（或完整experiment）。
+问题只通过question_updates建立或修改。新增实验可在同一决策中关联本次唯一更新；多个更新时用question_index明确选择，已有问题使用question_id。实验填写method/conditions/evaluation（或完整experiment），不再重复顶层question。
 每次继续获取信息都写明information_need：缺什么证据、为何影响问题答案。换方法或比较条件才新增experiment。
 已完成实验需新增计算但方法和条件不变时continue并引用experiment_id；故障可experiment重试原experiment_id。读取已有文件用research.read_artifact，不重算已有输出。已有实验后的inspect/literature行动须用experiment_id关联所属实验。
 文字或过度解释错误调用research.revise_interpretation，传interpretation_version、完整summary/key_findings及所需意见处置；不新增实验、不重算正确统计。
 可按需research.check_interpretation返回具体疑点。核查意见是建议而非事实，须核对原资料、对象、粒度、单位、分母、范围后采纳、带证据驳回或保留局限。程序失败不证明方法无效。
-judgments更新当前答案、依据、未知及下一步原因；结果或解释改变后重新判断适用范围、方法选择和问题答案。question_updates可与observe同时提交，系统完成编号后再决定实验。
+judgments更新当前答案、依据、未知及下一步原因；结果或解释改变后重新判断适用范围、方法选择和问题答案。question_updates可与experiment一次提交，系统分配问题编号并原子关联。observe只用于实际更新问题或判断，不得空转。
 多个问题可引用同一实验结果，artifact_refs必须真实有效；不要复制来源或按同值猜引用。新问题可通过关联已有experiment_ids复用证据。
-主要目标已有可靠答案即可write，明确重要未知；不要求软意见全部归零。跨问题写作是研究级交付，不创建写作实验。
+write时逐一在judgments明确每个用户问题的coverage（answered/partial/unanswered）与stop_reason。允许部分或未答后交付，说明停止原因，不强求正结果，也不能把一个答案当全题完成。跨问题写作是研究级交付，不创建写作实验。
 写作自主组织原要求、当前答案、相关结果和必要历史/负结果；未支持或撤回观点可讨论但不能当当前事实。缺实质证据时回研究层，排版、措辞、编译留写作处理。
 只返回平铺NextAction；真实缺用户必要信息才ask，无可行路径才pause。工具只使用提供的能力和真实参数。
 """
@@ -148,29 +138,34 @@ def decision_context(store, snapshot):
     from .literature import LiteratureStore
     from ai_system.modules.registry import capabilities
     from ai_system.modules.methods import allowed_method_keys
-    from .feedback import interpretation_version
-    registry = store.registry_payload(snapshot)
-    sources = LiteratureStore(store.root).retrieve(snapshot['spec']['requirement'], limit=12)
-    files = store.file_inputs()
+    from .views import questions,question_context,experiment_context
+    files=store.file_inputs()
+    rows=[q for q in questions(snapshot) if not q.get('retired')]
+    last=snapshot.get('action') or {}
+    focused=last.get('question_id')
+    selected=next((q for q in rows if q['id']==focused),None)
+    if selected is None:selected=next((q for q in rows if q.get('answer_status')=='needs_update' or not q.get('coverage')),None)
+    own=set(selected['experiment_ids']) if selected else {eid for q in rows for eid in q['experiment_ids']}
+    scope=experiment_scope(snapshot['experiments'],own)
+    records=experiment_context(snapshot,scope)
+    registry=store.registry_payload(snapshot)
+    sources=LiteratureStore(store.root).retrieve(selected['question'] if selected else snapshot['spec']['requirement'],limit=12)
     from ai_system.graph.registry import find_refs
-    used={ref for e in snapshot['experiments'].values() for ref in find_refs(json.dumps(report_context(experiment_report(snapshot,e)),ensure_ascii=False))}
-    used.update(ref for q in snapshot['questions'].values() for ref in q.get('artifact_refs',[]))
-    from .views import questions, question_context
-    context = {'source': snapshot['spec'], 'questions': question_context(questions(snapshot)),
-        'experiments': [{**{k:e.get(k) for k in ('task_id','question_id','revision','objective','method_instruction','experiment','dependencies','execution_status','acceptance','validity','retired','investigates')},
-                         'report':report_context(experiment_report(snapshot,e)), 'record_path':(snapshot['artifacts'].get(e['report_ref']) or {}).get('payload',{}).get('path'), 'interpretation_version':interpretation_version(snapshot,e)} for e in snapshot['experiments'].values()],
-        'artifacts': [r for r in registry['results'] if r['id'] in used],
+    used={ref for row in records for ref in find_refs(json.dumps(report_context(row['record']),ensure_ascii=False))}
+    used.update(ref for q in rows for ref in q.get('artifact_refs',[]))
+    # Current question summaries stay global for goal coverage. Full records and
+    # actual values are restricted to the selected question/dependency scope.
+    context={'source':snapshot['spec'],'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
+        'experiments':[{**row,'record':report_context(row['record']),'results':[r for r in row['results'] if r['id'] in used]} for row in records],
+        'artifacts':[r for r in registry['results'] if r['subproblem'] in scope and r['id'] in used],
         'artifact_index':[{k:r[k] for k in ('id','subproblem','name','kind')} for r in registry['results']],
-        'literature': sources,
-        'issues': [i for i in findings(snapshot) if i['status'] not in {'resolved','dismissed','superseded'}],
-        'history': research_history_context(snapshot),
-        'inputs': files, 'materials': snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
-        'last_action': snapshot.get('action'),
-        'recent_actions': snapshot.get('decision_history', [])[-12:], 'clarifications':snapshot.get('clarifications',[]),
-        'capabilities': capabilities().research_tools(), 'skill_policy': store.skill_preferences()['policy']}
+        'literature':sources,'issues':[i for i in findings(snapshot) if i['task_id'] in scope and i['status'] not in {'resolved','dismissed','superseded'}],
+        'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
+        'last_action':last,'clarifications':snapshot.get('clarifications',[]),
+        'capabilities':capabilities().research_tools(),'skill_policy':store.skill_preferences()['policy']}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
     from ai_system.modules.experiments.store import ExperimentStore
-    context['comparisons']=ExperimentStore(store).accepted_summaries(snapshot)
+    context['comparisons']=[row for row in ExperimentStore(store).accepted_summaries(snapshot) if row.get('task_id') in scope]
     context['literature_mode'] = LiteratureStore(store.root).policy()
     if any(name.lower().endswith('.csv') for name in files):
         from ai_system.modules.experiments.store import SupervisedSpec
@@ -181,7 +176,7 @@ def decision_context(store, snapshot):
 def validate_action(action, snapshot, context):
     """Check actual references and execution meaning once, without quote-copy protocols."""
     if action.question_id is not None and action.question_id not in snapshot['questions']:
-        raise ValueError('question_id应引用已有研究问题；新增问题请提供question')
+        raise ValueError('question_id应引用已有研究问题；新增问题请提供question_updates')
     if action.experiment_id is not None and action.experiment_id not in snapshot['experiments']:
         raise ValueError('experiment_id必须引用已有实验')
     if action.action in {'inspect','literature'} and snapshot['experiments'] and not action.experiment_id:
@@ -192,8 +187,15 @@ def validate_action(action, snapshot, context):
     issues = {i['id'] for i in context['issues']}
     if not set(action.issue_ids) <= issues:
         raise ValueError('issue_ids中有不存在或已关闭的意见')
-    from .questions import projected_questions
-    projected = projected_questions(snapshot, action.question_updates)
+    from .questions import apply_questions
+    from copy import deepcopy
+    preview=deepcopy(snapshot)
+    updated=apply_questions(preview,action.question_updates)
+    target=resolve_question(action,updated)
+    projected=preview['questions']
+    from .views import questions
+    outdated={q['id'] for q in questions(snapshot) if q.get('answer_status')=='needs_update'}
+    if target is not None and target not in projected:raise ValueError('行动关联了未知问题')
     for judgment in action.judgments:
         if judgment.question_id not in projected or not set(judgment.artifact_refs) <= known:
             raise ValueError('问题答案必须关联已有问题与实际产物；新问题建立后再判断')
@@ -202,6 +204,11 @@ def validate_action(action, snapshot, context):
                if e['question_id'] == judgment.question_id and not e['retired']} | set(question.get('related_experiment_ids', []))
         if not set(judgment.artifact_refs) <= current_result_refs(snapshot, experiment_scope(snapshot['experiments'], own)):
             raise ValueError('答案只能引用关联实验与其依赖的当前有效结果')
+    if action.action=='observe' and preview['questions']==snapshot['questions'] and not any(
+        j.question_id in outdated or any(projected[j.question_id].get(k)!=v for k,v in {'judgment':j.statement,'artifact_refs':j.artifact_refs,
+            'limitations':j.limitations,'next_step':j.next_step,'coverage':j.coverage,'stop_reason':j.stop_reason}.items())
+        for j in action.judgments):
+        raise ValueError('observe没有实际问题或答案变化；请选择有信息需求的行动，或明确交付/暂停')
     if action.action=='continue':
         task=snapshot['experiments'].get(action.experiment_id)
         if not task or task['execution_status'] != 'succeeded' or task['validity'] != 'current':
@@ -224,15 +231,14 @@ def validate_action(action, snapshot, context):
         if context['literature_mode']=='off' or not action.query.strip():
             raise ValueError('文献检索需要有效查询且项目允许外部检索')
     elif action.action=='write':
-        if not known:raise ValueError('尚无真实研究产物，先执行实验再撰写研究结果')
         from .store import ResearchStore
         for judgment in action.judgments:
             q=projected[judgment.question_id]
             q.update(judgment=judgment.statement,artifact_refs=judgment.artifact_refs,
-                     answer_status='current',basis_versions={ref:snapshot['artifacts'][ref]['content_hash'] for ref in judgment.artifact_refs},
+                     answer_status='current',coverage=judgment.coverage,stop_reason=judgment.stop_reason,basis_versions={ref:snapshot['artifacts'][ref]['content_hash'] for ref in judgment.artifact_refs},
                      interpretation_versions={snapshot['artifacts'][ref]['experiment_id']:snapshot['experiments'][snapshot['artifacts'][ref]['experiment_id']]['report_ref'] for ref in judgment.artifact_refs})
         if not ResearchStore.delivery_ready({**snapshot,'questions':projected}):
-            raise ValueError('write前须在judgments更新基于实际依据的当前答案，明确重要未知；已改变的解释须先重新评估，软意见不要求归零')
+            raise ValueError('write前逐一明确每个用户问题的coverage与stop_reason；已答项须有有效依据，允许说明部分/未答及停止原因')
 
 
 def preserved_progress(snapshot):

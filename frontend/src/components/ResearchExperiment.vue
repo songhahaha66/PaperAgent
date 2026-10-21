@@ -57,7 +57,7 @@
     </details>
     <section v-if="actions.length">
       <h3>当前行动与执行记录</h3>
-      <article v-for="action in actions" :key="action.id" class="action-record">
+      <article v-for="action in actions.slice(-1)" :key="action.id" class="action-record">
         <p>
           <strong>{{ action.label }}</strong
           ><span class="note"> {{ executionLabel(action.status) }}</span>
@@ -80,6 +80,14 @@
         </details>
       </article>
     </section>
+    <details v-if="actions.length > 1">
+      <summary>先前行动</summary>
+      <article v-for="action in actions.slice(0, -1)" :key="action.id">
+        <p>{{ action.label }} {{ executionLabel(action.status) }}</p>
+        <p v-if="action.message">{{ action.message }}</p>
+        <details><summary>调试详情</summary><pre>{{ JSON.stringify({ inputs: action.inputs, output: action.output, error_type: action.error_type }, null, 2) }}</pre></details>
+      </article>
+    </details>
     <details
       v-if="experiment.interpretation_history?.length || experiment.historical_claims?.length"
     >
@@ -154,7 +162,8 @@
       <h3>{{ isZh ? '下一步' : 'Next step' }}</h3>
       <p>{{ question.next_step }}</p>
     </section>
-    <section v-if="experiment.issues.length">
+    <details v-if="experiment.issues.length">
+      <summary>核查意见与故障历史</summary>
       <h3>{{ isZh ? '本次实验的问题' : 'Findings' }}</h3>
       <p v-for="issue in experiment.issues" :key="issue.id">
         {{
@@ -172,7 +181,7 @@
           {{ isZh ? '查看详情' : 'Details' }}
         </button>
       </p>
-    </section>
+    </details>
     <details v-if="experiment.history.length">
       <summary>
         {{ isZh ? '保留的历史成果' : 'Retained history' }} ({{ experiment.history.length }})

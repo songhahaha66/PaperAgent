@@ -96,7 +96,9 @@ def experiment_dispatch(ctx, key):
     snapshot=ctx.research.snapshot()
     task=snapshot['experiments'][key]
     from .validation import protocol
-    return {'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
+    from ai_system.modules.experiments.store import ExperimentStore
+    comparison=ExperimentStore(ctx.research).read(key,task['revision']) if (task.get('experiment') or {}).get('csv') else None
+    return {'resume_comparison':bool(comparison and comparison.get('recovery_requested')),'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
         'analysis':analysis_view(snapshot), 'task_revision':task['revision'], 'experiment':task.get('experiment'),
         'data_profile':snapshot['materials']['profile'], 'feedback':task.get('method_instruction',''),
         'clarifications':snapshot.get('clarifications',[]),
@@ -173,10 +175,13 @@ def delivery_status(snapshot):
     rows=[q for q in questions(snapshot) if not q.get('retired')]
     blockers=[{'task_id':q['id'],'message':'答案依据或解释已更新，需研究层重新评估','action':'research'}
               for q in rows if q.get('answer_status')=='needs_update' or q['unavailable_artifact_refs']]
+    blockers += [{'task_id':q['id'],'message':'尚未明确该问题已答、部分回答或未答，以及停止原因','action':'research'}
+                 for q in rows if not q.get('coverage') or not q.get('stop_reason')]
     blockers += [{'task_id':i['task_id'],'message':i['message'],'action':i['action']}
         for i in research_findings(snapshot) if i.get('repair_targets') and i['blocking']
         and i['status'] not in {'resolved','dismissed','superseded'}]
-    return {'ready':ResearchStore.delivery_ready(snapshot),'blockers':blockers}
+    return {'ready':ResearchStore.delivery_ready(snapshot),'blockers':blockers,
+        'questions':[{k:q.get(k) for k in ('id','title','coverage','stop_reason','answer_status')} for q in rows]}
 
 
 def _copy_tree(source, target):
