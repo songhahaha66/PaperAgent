@@ -142,7 +142,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
         def add_json_card_message(self,*args,**kwargs):saved.append(args)
     class Agent:
         def __init__(self,llm,stream,*args,**kwargs):self.stream=stream
-        async def run(self,problem):
+        async def run(self,problem,**kwargs):
             await self.stream.send_json_block('paper_stage','Q4：求解中')
             await asyncio.Event().wait()
     monkeypatch.setattr(chat,'verify_token',lambda token:7)
@@ -164,7 +164,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
         with client.websocket_connect('/api/chat/ws/pause-test') as ws:
             ws.send_json({'token':'test'})
             assert ws.receive_json()['type']=='auth_success'
-            ws.send_json({'problem':'test'})
+            ws.send_json({'problem':'test','action':'run'})
             assert ws.receive_json()['type']=='start'
             assert ws.receive_json()['block']['type']=='paper_stage'
             response=client.post('/api/chat/work/pause-test/pause')

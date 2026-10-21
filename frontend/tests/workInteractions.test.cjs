@@ -70,6 +70,7 @@ async function environment() {
         },
         '@/api/paper':{paperProjectAPI:{comment:async(_work,body)=>{paperComments.push(body);return {id:body.request_id,thread_id:'thread'}},read:async()=>({executions:paperComments.map(body=>({id:body.request_id,state:'completed',answer:'基于当前原文的回复'}))})}},
         '@/api/researchSetup': {researchSetupAPI:{settings:async()=>({})}},
+        '@/api/modelConfig': {modelConfigAPI:{readiness:async()=>({roles:{jev:true}})}},
         '@/api/chat': {
           WebSocketChatHandler: Socket,
           chatAPI: {

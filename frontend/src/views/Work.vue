@@ -151,6 +151,15 @@
                     </div>
                   </div>
                   <p v-if="paperCommentError" role="alert">{{ paperCommentError }}</p>
+                  <p v-if="intentConfigChecking" role="status">
+                    {{ isZh ? '正在读取 Jev 配置' : 'Reading Jev configuration' }}
+                  </p>
+                  <p v-if="intentConfigMessage" role="alert">
+                    {{ intentConfigMessage }}
+                    <router-link to="/api-config">{{
+                      isZh ? '打开模型设置' : 'Open model settings'
+                    }}</router-link>
+                  </p>
                   <t-textarea
                     v-model="inputValue"
                     :placeholder="ui.inputHint"
@@ -193,6 +202,7 @@
                       type="submit"
                       theme="primary"
                       shape="circle"
+                      :loading="intentConfigChecking"
                       :disabled="isStreaming || paperSending || loading || !inputValue.trim()"
                       :aria-label="isZh ? '发送消息' : 'Send message'"
                       ><t-icon name="arrow-up"
@@ -417,6 +427,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import { paperProjectAPI, type PaperComposerContext } from '@/api/paper'
 import { workspaceAPI } from '@/api/workspace'
+import { modelConfigAPI } from '@/api/modelConfig'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkHistoryStore } from '@/stores/workHistory'
 import Sidebar from '@/components/Sidebar.vue'
@@ -579,6 +590,8 @@ const {
   handleStreamMessage,
 } = stream
 const paperContexts = ref<PaperComposerContext[]>([])
+const intentConfigMessage = ref(''),
+  intentConfigChecking = ref(false)
 const paperSubmitting = ref(false),
   paperCommentError = ref(''),
   paperRefresh = ref(0)
@@ -607,7 +620,39 @@ async function attachPaperQuote(context: PaperComposerContext) {
 async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
   // Explicit research actions keep their existing path. Composer references use
   // the versioned comment API and never enter research intent classification.
-  if (args.length || !paperContexts.value.length) return streamSendMessage(...args)
+  if (args.length || !paperContexts.value.length) {
+    if ((args[1] || 'auto') !== 'auto') {
+      intentConfigMessage.value = ''
+      return streamSendMessage(...args)
+    }
+    if (
+      intentConfigChecking.value ||
+      isStreaming.value ||
+      !authStore.token ||
+      session.isDisposed() ||
+      !(args[0] || inputValue.value.trim())
+    )
+      return
+    intentConfigChecking.value = true
+    intentConfigMessage.value = ''
+    let configured = false
+    try {
+      configured = !!(await modelConfigAPI.readiness()).roles.jev
+      if (!session.isDisposed() && !configured)
+        intentConfigMessage.value = isZh.value
+          ? '自动聊天需要配置 Jev。明确操作按钮不依赖 Jev。'
+          : 'Automatic chat requires Jev configuration. Explicit action buttons do not require Jev.'
+    } catch {
+      if (!session.isDisposed())
+        intentConfigMessage.value = isZh.value
+          ? 'Jev 配置暂时无法读取，请重试。明确操作按钮不受此检查影响。'
+          : 'Jev configuration could not be read. Retry, or use an explicit action.'
+    } finally {
+      intentConfigChecking.value = false
+    }
+    if (configured && !session.isDisposed()) return streamSendMessage(...args)
+    return
+  }
   if (paperSending.value || isStreaming.value || loading.value || !inputValue.value.trim()) return
   const contexts = [...paperContexts.value],
     context = contexts[0]!,

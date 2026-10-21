@@ -67,11 +67,14 @@ def test_config_limits_and_inflight_changes_are_rejected(client,monkeypatch):
     assert client.put('/api/workspace/B/research-setup',json={}).status_code==409
 
 
-def test_readiness_uses_runtime_env_fallback_and_exposes_only_booleans(env,monkeypatch):
+def test_readiness_uses_runtime_env_defaults_without_exposing_credentials(env,monkeypatch):
     from routers.config_routes.model_config import router
     monkeypatch.setenv('PAPERAGENT_API_KEY','offline-test-secret')
     monkeypatch.setenv('PAPERAGENT_API_MODEL','offline-model')
     monkeypatch.setenv('PAPERAGENT_API_BASE','https://example.test/v1')
+    monkeypatch.setenv('TYPESAFE_API_KEY','offline-jev-secret')
+    monkeypatch.setenv('TYPESAFE_DEFAULT_MODEL','offline-jev-model')
+    monkeypatch.setenv('TYPESAFE_BASE_URL','https://example.test/typesafe')
     app=FastAPI();app.include_router(router)
     app.dependency_overrides[get_current_user]=lambda:1
     def database():
@@ -80,8 +83,14 @@ def test_readiness_uses_runtime_env_fallback_and_exposes_only_booleans(env,monke
     with TestClient(app) as c:
         result=c.get('/model-configs/readiness')
     assert result.status_code==200
-    assert result.json()=={'ready':True,'roles':{'brain':True,'code':True,'writing':True}}
+    data=result.json()
+    assert data['ready'] and data['research_ready']
+    assert data['roles']=={'brain':True,'code':True,'writing':True,'jev':True}
+    assert data['jev']['source']=='deployment'
+    assert data['jev']['model_id']=='offline-jev-model'
+    assert data['jev']['base_url']=='https://example.test/typesafe'
     assert 'offline-test-secret' not in result.text
+    assert 'offline-jev-secret' not in result.text
 
 
 def test_new_default_is_metered_without_implicit_cap_and_permissions_unchanged(client):
