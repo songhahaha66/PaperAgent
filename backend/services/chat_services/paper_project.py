@@ -375,3 +375,27 @@ def source_state(store, state):
     return {**state, 'sections': {row['path']: row['text'] for row in doc['files']
                                 if row['path'].endswith('.tex') and row['text'] is not None},
             'source_version': doc['version'], 'source_files': doc['files']}
+
+
+def source_targets(state):
+    """Server-owned ranges in one source snapshot; labels are local to that version.
+
+    Paragraph boundaries are editing units, not a TeX parser. File targets allow
+    structural edits and findings spanning paragraphs without guessed offsets.
+    """
+    targets = {}
+    for name, text in state['sections'].items():
+        def selection(start, end):
+            return {'file':name, 'version':state['source_version'],
+                    'start':start, 'end':end, 'quote':text[start:end]}
+        targets[name] = selection(0, len(text))
+        for index, match in enumerate(re.finditer(r'.+?(?:\n[ \t]*\n|\Z)', text, re.DOTALL), 1):
+            targets[f'{name}#{index}'] = selection(match.start(), match.end())
+    return targets
+
+
+def source_prompt(state):
+    targets = source_targets(state)
+    return [{'file':name, 'target':name, 'blocks':[
+        {'target':key, 'text':value['quote']} for key,value in targets.items()
+        if key != name and value['file'] == name]} for name in state['sections']]

@@ -89,9 +89,11 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"), verified=False)
     from services.chat_services.issue_edits import bind_findings
     bind_findings(ctx.research,[i['id'] for i in issues],state.get('sections') or {},source_version=state.get('source_version'))
+    message = None
     if blocked:
         reason='；'.join(dict.fromkeys(i['message'] for i in issues if i['category']=='service'))
-        await ctx.set_stage("validate", "blocked", "审查服务未完成："+reason+"。正文已保留；恢复后继续检查，无需人工修改研究意见。")
+        message="论文检查未完成："+reason+"。正文已保留，继续后从检查步骤重试。"
+        await ctx.set_stage("validate", "blocked", message)
     else:
         await ctx.set_stage('validate', 'in_progress' if issues else 'completed',
                             '发现文稿意见，接下来自动改稿并复核。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前正文检查通过。')
@@ -101,6 +103,7 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     note = f"第 {state.get('repair_round', 0)} 轮：{len(issues)} 个问题"
     await ctx.events.emit("paper_validation", note if issues else "校验通过")
     return {"issues": issues, "research_restart": research_restart, "research_blocked": blocked,
+            "message": message,
             "log": [f"validate: {len(issues)} issues"]}
 
 

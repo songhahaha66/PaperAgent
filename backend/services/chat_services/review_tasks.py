@@ -134,7 +134,7 @@ def status(store):
         applicable=(stage!='reconcile' or len(context_from_store(store,'version').registry.claims)>=2) and (stage=='reconcile' or bool(state['sections']))
         if not applicable:item.update(state='not_required',coverage='当前材料尚不需要此审查',can_resume=False)
         elif same and same[0]['state']=='running':item.update(state='running',record_id=same[0]['id'],can_resume=False)
-        elif same and same[0]['state']=='failed' and not same[0].get('recovered_by'):item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('error_code','interrupted'))
+        elif same and same[0]['state']=='failed' and not same[0].get('recovered_by'):item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('diagnostic',{}).get('reason') or same[0].get('error_code','interrupted'))
         elif root and valid_result(root[0],store):
             findings=bool(root[0]['result'].get('issues') or any(c.get('research_issue') for c in root[0]['result'].get('conflicts',[])) or any(v.get('status')!='supported' for v in root[0]['result'].get('verdicts',[])))
             item.update(state='completed',record_id=root[0]['id'],outcome='findings' if findings else 'passed',can_resume=False)
@@ -146,8 +146,8 @@ def status(store):
                 reason='局部编辑已核查，当前重要结论核查仍待完成' if fragment else None)
         elif stage=='citations' and not any(citation_issues(store.root,t) for t in state['sections'].values()):
             item.update(state='completed',outcome='passed',coverage='当前引用句与原文逐项核查有效（或无引用）',can_resume=False)
-        elif same and same[0]['state'] in {'failed','superseded'}:item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('error_code','interrupted'))
-        elif root and root[0]['state'] in {'failed','running','superseded'}:item.update(state='failed' if root[0]['state']!='running' else 'running',record_id=root[0]['id'],reason=root[0].get('error_code'),can_resume=root[0]['state']!='running')
+        elif same and same[0]['state'] in {'failed','superseded'}:item.update(state='failed',record_id=same[0]['id'],reason=same[0].get('diagnostic',{}).get('reason') or same[0].get('error_code','interrupted'))
+        elif root and root[0]['state'] in {'failed','running','superseded'}:item.update(state='failed' if root[0]['state']!='running' else 'running',record_id=root[0]['id'],reason=root[0].get('diagnostic',{}).get('reason') or root[0].get('error_code'),can_resume=root[0]['state']!='running')
         if stage=='sections':
             from ai_system.modules.writing.consistency import section_coverage
             item['coverage_detail']=section_coverage(state['sections'])
@@ -166,7 +166,7 @@ def status(store):
         coverage_note=(('重要结论核查；提供的章节：' if detail.get('policy')=='key-claims-v1' else '历史核查覆盖所列章节：')+', '.join(detail['sections']) if detail['complete'] else '覆盖不完整，不能判为全文通过') if detail else '历史记录未说明覆盖范围，不能据此判为全文通过' if row['stage']=='sections' and row['source']!='recovery-intent' else '仅局部等义核查，不是全文审查' if row['stage']=='fragment' else None
         history.append({'id':row['id'],'stage':row['stage'],'state':'superseded' if replacement else row['state'],'original_state':row['state'],
             'version':row['context_hash'],'replacement_review_id':replacement,'recovered_by_review_id':row.get('recovered_by'),'superseded_by_context':row.get('superseded_by_context'),
-            'error_code':row.get('error_code'),'source':row['source'],'coverage_detail':detail,'coverage_note':coverage_note})
+            'error_code':row.get('error_code'),'diagnostic':row.get('diagnostic',{}),'source':row['source'],'coverage_detail':detail,'coverage_note':coverage_note})
     pending_candidates=[]
     with closing(store._connect()) as db:
         for r in db.execute("SELECT response FROM commands WHERE research_id=? AND id LIKE 'paper-edit:%' ORDER BY rowid DESC LIMIT 10",(store.research_id,)):
@@ -190,31 +190,32 @@ def _save_findings(store,stage,reports,expected):
 
 async def execute(store,stage,llm):
     """Reuse each stage's schemas/prompts and cache, without resuming solve/write."""
-    from ai_system.modules.writing.consistency import RECONCILE_SYSTEM,AUDIT_SYSTEM,reconcile_prompt,section_audit_prompt,validate_findings,NOT_A_CONFLICT
+    from ai_system.modules.writing.consistency import RECONCILE_SYSTEM,reconcile_prompt,validate_findings
     from ai_system.research.review_cache import run_review
     state=paper_state(store);ctx=context_from_store(store,getattr(llm,'model_name',None) or getattr(llm,'model',None));ctx.planner_llm=llm
     if stage=='citations':
         from ai_system.research.citations import audit_citations,citation_issues
         await audit_citations(store.root,list(state['sections'].values()),llm,active=True)
         reports=[IssueReport(task_id=next(iter(store.snapshot()['experiments'])),category='writing',section=k,message=m) for k,t in state['sections'].items() for m in citation_issues(store.root,t)]
+    elif stage=='sections':
+        from ai_system.modules.writing.consistency import audit_sections
+        reports=await audit_sections(state,ctx,force=True)
     else:
-        schema=ConsistencyReview if stage=='reconcile' else ClaimAudit
-        system=RECONCILE_SYSTEM if stage=='reconcile' else AUDIT_SYSTEM
-        prompt=reconcile_prompt(state,ctx) if stage=='reconcile' else section_audit_prompt(state,ctx,force=True)[0]
+        schema=ConsistencyReview
+        system=RECONCILE_SYSTEM
+        prompt=reconcile_prompt(state,ctx)
         def validate(result):
-            if stage=='reconcile':
-                if any(not c.claims or not set(c.claims)<=set(ctx.registry.claims) for c in result.conflicts):raise ValueError('未知结论')
-                validate_findings([c.research_issue for c in result.conflicts if c.research_issue],state,ctx)
-            else:
-                if any(i.section not in state['sections'] or i.section=='references' for i in result.issues):raise ValueError('未知章节')
-                validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
+            if any(not c.claims or not set(c.claims)<=set(ctx.registry.claims) for c in result.conflicts):raise ValueError('未知结论')
+            validate_findings([c.research_issue for c in result.conflicts if c.research_issue],state,ctx)
         async def perform():return await call_structured(llm,schema,as_messages(system,prompt),validate=validate,retries=0)
         result=await run_review(ctx,state,stage,schema,system,prompt,perform,sections=None if stage=='reconcile' else state['sections'],validate=validate)
-        if stage=='reconcile':reports=[c.research_issue for c in result.conflicts if c.research_issue]
-        else:reports=[i.research_issue or IssueReport(task_id=next(iter(store.snapshot()['experiments'])),category='writing',section=i.section,message=i.problem) for i in result.issues if i.contradicts and not NOT_A_CONFLICT.search(i.problem)]
+        reports=[c.research_issue for c in result.conflicts if c.research_issue]
     current=material(store,stage)
     proof=[r['id'] for r in records(store) if r['source']!='recovery-intent' and r['stage']==stage and valid_result(r,store) and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
-    if not proof:raise RuntimeError('没有当前版本实际完成的审查记录')
+    if not proof:
+        failed=next((r for r in records(store) if r['stage']==stage and r['state']=='failed' and matches(r,current,stage)),None)
+        reason=(failed.get('diagnostic',{}).get('reason') or failed.get('error_code')) if failed else '没有当前版本实际完成的审查记录'
+        raise RuntimeError(LABELS[stage]+'未完成：'+reason)
     return reports,proof[:1]
 
 

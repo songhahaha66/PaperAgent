@@ -281,10 +281,11 @@ def execution_reason(root,status):
                 research_id=json.loads(thread.read_text()).get('thread_id')
                 latest=db.execute('SELECT payload FROM research WHERE id=?',(research_id,)).fetchone()
                 if latest:
-                    action=json.loads(latest[0]).get('action') or {}
+                    snapshot=json.loads(latest[0]);action=snapshot.get('action') or {}
                     if action.get('status')=='failed':
+                        from .planner import decision_block_message
                         return {'kind':action.get('error_type','action_failed'),
-                                'message':action.get('message') or (action_failure_message(action) if action['capability'].startswith('writing.') else action.get('error') or action['reason']),
+                                'message':decision_block_message(None,snapshot),
                                 'detail':action.get('error')}
         reason=json.loads(row[0]) if row else None
         if reason and reason.get('kind')=='invalid_response':

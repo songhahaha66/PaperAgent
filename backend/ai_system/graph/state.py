@@ -133,11 +133,11 @@ class ConsistencyReview(BaseModel):
 
 
 class ClaimIssue(BaseModel):
-    source_issue_id: str = Field(default='', description='重新核对已有意见时填写源意见编号；新意见留空')
     contradicts: bool = Field(default=True, description="这句话是否确实与结论表矛盾；一致、或只是没有提到的，填 false")
     section: str = Field(description="有问题的章节 key")
+    targets: List[str] = Field(default_factory=list, description='选择系统提供的源码片段标记，可选多个；不能定位时留空，作为文件级意见，不编造标记')
     problem: str = Field(description="本节哪句话与哪条结论（编号）不一致，应怎样改")
-    quote: str = Field(default='',max_length=1200,description="可选：逐字复制本节问题原文；不能精确引用则留空，不编造引文")
+    quote: str = Field(default='',max_length=1200,description="可选摘录，仅供阅读；LaTeX 定位使用 targets，无需复制原文")
     research_issue: IssueReport | None = Field(default=None, description="若根因是数据、模型或假设错误，提交研究问题而非只改措辞")
 
 
@@ -145,6 +145,7 @@ class SectionIssueReview(BaseModel):
     issue_id: str
     verdict: Literal['writing', 'research', 'dismissed']
     reason: str = Field(min_length=1, description='结合当前原文及登记证据，说明归类或撤销的理由')
+    finding: ClaimIssue | None = Field(default=None, description='旧意见仍需处理时在此提供具体问题；撤销时为空。不在新意见 issues 中重复登记')
 
 
 class ClaimAudit(BaseModel):

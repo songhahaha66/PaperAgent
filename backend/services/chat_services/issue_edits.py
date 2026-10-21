@@ -25,7 +25,7 @@ def route(issue):return 'writing' if issue['category']=='writing' else 'service'
 
 
 def bind_findings(store,ids,sections, *, source_version=None):
-    """Capture only actual review provenance and verifiable, unique raw quotes."""
+    """Bind native findings to server-owned ranges from the reviewed version."""
     from .review_tasks import records,valid_result
     rows=records(store)
     from .paper_project import is_latex, source_state
@@ -33,6 +33,9 @@ def bind_findings(store,ids,sections, *, source_version=None):
     if source and (sections!=source['sections'] or source_version and source_version!=source['source_version']):
         from ai_system.research.review_cache import ReviewSuperseded
         raise ReviewSuperseded('意见对应的源码已改变，未重新绑定到新正文')
+    if source:
+        from .paper_project import source_targets
+        targets=source_targets(source)
     with store._transaction() as db:
         state=store._read(db);changed=[]
         for issue in research_findings(state):
@@ -42,14 +45,23 @@ def bind_findings(store,ids,sections, *, source_version=None):
             for row in rows:
                 if source and row['context'].get('source_version')!=source['source_version']:continue
                 if row['stage']!='sections' or not valid_result(row,store) or row['context'].get('section_hashes',{}).get(issue['section'])!=digest(text):continue
-                finding=next((f for f in row['result'].get('issues',[]) if f['section']==issue['section'] and f.get('problem') and (issue['message']==f['problem'] or issue['message']=='与结论表不一致：'+f['problem'])),None)
-                if not finding:continue
-                origin['review_id']=row['id'];quote=finding.get('quote') or ''
-                if quote and text.count(quote)==1:origin['quote']=quote
+                findings=[*row['result'].get('issues',[]),
+                          *(r['finding'] for r in row['result'].get('issue_reviews',[]) if r.get('finding'))]
+                matched=[f for f in findings if f['section']==issue['section'] and f.get('problem') and
+                         (issue['message']==f['problem'] or issue['message']=='与结论表不一致：'+f['problem'])]
+                if not matched:continue
+                origin['review_id']=row['id']
+                if source:
+                    selected=list(dict.fromkeys(key for f in matched for key in f.get('targets',[])))
+                    origin['selections']=[targets[key] for key in selected
+                                          if key in targets and targets[key]['file']==issue['section']]
+                    if len(origin['selections'])==1:
+                        origin['selection']=origin['selections'][0]
+                        origin['quote']=origin['selection']['quote']
+                else:
+                    quote=matched[0].get('quote') or ''
+                    if quote and text.count(quote)==1:origin['quote']=quote
                 break
-            if source and origin['quote']:
-                start=text.index(origin['quote'])
-                origin['selection']={'file':issue['section'],'version':source['source_version'],'start':start,'end':start+len(origin['quote']),'quote':origin['quote']}
             if issue.get('paper_origin')!=origin:issue['paper_origin']=origin;changed.append(issue['id'])
         if changed:store._save(db,state,'issue_paper_context_bound',{'issue_ids':changed})
 

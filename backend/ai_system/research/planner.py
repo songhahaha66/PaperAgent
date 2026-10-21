@@ -189,6 +189,11 @@ def planning_failure_message(error, snapshot):
 
 def decision_block_message(store, snapshot):
     action=snapshot.get('action') or {}
+    if action.get('status')=='failed' and action.get('capability','').startswith('writing.'):
+        from .runtime import action_failure_message
+        step=action['capability'].split('.')[1]
+        stage=snapshot.get('delivery_stages',{}).get(step,{})
+        return action.get('message') or stage.get('note') or action_failure_message(action)
     return action.get('message') or action.get('error') or action.get('reason') or '研究操作未完成，已有产物已保存。'
 
 

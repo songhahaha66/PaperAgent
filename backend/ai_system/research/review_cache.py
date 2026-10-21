@@ -109,6 +109,20 @@ def error_code(error):
     return type(error).__name__
 
 
+def error_detail(error):
+    """Keep actionable validation causes without dumping replies or HTTP secrets."""
+    from pydantic import ValidationError
+    current=error;seen=set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current,ValidationError):
+            return '；'.join('.'.join(map(str,item['loc']))+': '+item['msg']
+                           for item in current.errors(include_url=False,include_input=False))[:2000]
+        if isinstance(current,ValueError):return str(current)[:2000]
+        current=current.__cause__ or current.__context__
+    return (str(error)[:2000] if isinstance(error,RuntimeError) and str(error) else error_code(error))
+
+
 class ReviewCache:
     def __init__(self,store):
         self.store=store
@@ -252,7 +266,9 @@ class ReviewCache:
         return True
 
     def failed(self,record,error,*,diagnostic=None,current_context=None):
-        code=error_code(error);record={**record,'failed_at':time.time(),'error_code':code,'diagnostic':diagnostic or {}}
+        code=error_code(error);detail=error_detail(error)
+        record={**record,'failed_at':time.time(),'error_code':code,
+                'diagnostic':{'reason':detail, **(diagnostic or {})}}
         with self.store._transaction() as db:
             row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
             if not row or row[0]!='running' or json.loads(row[1]).get('lease')!=record.get('lease'):return record
@@ -263,9 +279,9 @@ class ReviewCache:
             state=self.store._read(db)
             if state and state.get('experiments') and not record['context'].get('extra',{}).get('non_blocking',False):
                 task=next(iter(state['experiments']));label=STAGE_LABELS[record['stage']]
-                issue=self.store._record_issue(state,IssueReport(task_id=task,category='service',message=f'{label}未完成：{code}',section=f"review:{record['stage']}:{record['context_hash']}"),'confirmed',source='review:'+record['stage'])
+                issue=self.store._record_issue(state,IssueReport(task_id=task,category='service',message=f'{label}未完成：{detail}',section=f"review:{record['stage']}:{record['context_hash']}"),'confirmed',source='review:'+record['stage'])
                 issue['review_scope']={'stage':record['stage'],'context_hash':record['context_hash'],'failed_review_id':record['id']}
-                self.store._save(db,state,'review_failed',{'review_id':record['id'],'issue_id':issue['id'],'stage':record['stage'],'context_hash':record['context_hash'],'error_code':code})
+                self.store._save(db,state,'review_failed',{'review_id':record['id'],'issue_id':issue['id'],'stage':record['stage'],'context_hash':record['context_hash'],'error_code':code,'detail':detail})
         return record
 
     @staticmethod

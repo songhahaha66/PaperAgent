@@ -10,8 +10,7 @@ from services.chat_services import paper_project as project
 
 
 class SourceEdit(BaseModel):
-    file: str
-    old: str
+    target: str = Field(description='系统提供的源码片段或文件标记')
     replacement: str
 
 
@@ -34,12 +33,14 @@ async def _update(state, runtime, *, repairing=False):
         data['main'] = 'paper.tex'
         project.atomic_text(store.root/project.META, json.dumps(data, ensure_ascii=False))
         state = project.source_state(store, state)
-    current = {r['path']:r['text'] for r in state['source_files'] if r['text'] is not None}
+    targets = project.source_targets(state)
     evidence = '\n\n'.join(subproblem_brief(state, ctx, sp) for sp in state['analysis']['subproblems'])
     from ai_system.research.views import questions, question_context
     research_questions = question_context(questions(store.snapshot()))
-    prompt = ('直接更新当前 LaTeX 项目。返回文件局部修改 edits，每项 file、old、replacement；'
-              'old 必须是该文件中唯一出现的逐字原文，不能猜选区。只改实际受影响部分，保留人工编辑、宏和版式。'
+    prompt = ('直接更新当前 LaTeX 项目。返回 edits，每项 target、replacement；'
+              'target 只选下方提供的片段标记，replacement 是该片段修改后的完整内容，无需复制 old 或计算位置。'
+              '优先修改片段；需调整整体结构时可选择文件标记。同次修改的范围不能重复或重叠。'
+              '只改实际受影响部分，保留人工编辑、宏、环境和与相邻片段的换行分隔。'
               '正文直接使用原生 LaTeX。可按研究成果与用户模板组织、增删或调整结构；旧数据库章节不是约束。'
               '数值与图使用给定的 {{R:Rn}} / {{F:Fn}}，文献使用已核实 {{C:Cn}}；系统在写入前解析。'
               '不得编造结果、来源、引用键或实验。没有需要修改时返回空 edits。\n'
@@ -49,7 +50,7 @@ async def _update(state, runtime, *, repairing=False):
               '\n# 研究大纲（可按表达需要调整）\n'+json.dumps(state.get('outline', []), ensure_ascii=False)+
               '\n# 研究问题、已有判断与未解决部分\n'+json.dumps(research_questions, ensure_ascii=False)+
               '\n# 实际研究成果\n'+evidence+'\n'+ctx.registry.to_prompt_table()+'\n'+consistency_text(ctx, state.get('consistency') or [])+
-              '\n# 当前项目文件（唯一当前正文）\n'+json.dumps(current, ensure_ascii=False))
+              '\n# 当前项目源码片段（唯一当前正文）\n'+json.dumps(project.source_prompt(state), ensure_ascii=False))
     from ai_system.research.literature import literature_context
     prompt += literature_context(store.root, state.get('task','')+'\n'+evidence)
     if repairing:
@@ -58,28 +59,33 @@ async def _update(state, runtime, *, repairing=False):
     from ai_system.research.store import digest
     signature = digest({'source':state['source_version'], 'issues':state.get('issues') or []})
     if repairing and (store.snapshot().get('publication') or {}).get('repair_inputs', []).count(signature) >= 3:
-        return {'research_blocked':True, 'log':['同一源码与意见未能修复，源码与修改历史已保留']}
+        return {'research_blocked':True, 'message':'论文修订未完成：同一版本的意见反复修复未成功，源码与修改历史已保留。',
+                'log':['同一源码与意见未能修复，源码与修改历史已保留']}
 
-    def validate(answer):
+    def patches_for(answer):
+        if len({edit.target for edit in answer.edits}) != len(answer.edits):
+            raise ValueError('一次修改不能重复选择同一片段')
+        patches = []
         for edit in answer.edits:
-            if edit.file not in current or not edit.file.endswith('.tex'):
-                raise ValueError('写作只能修改当前项目的 LaTeX 文件')
-            if not edit.old or current[edit.file].count(edit.old) != 1:
-                raise ValueError('写作选区必须唯一匹配当前文件原文')
-            if not edit.replacement.strip() and edit.old == current[edit.file]:
+            if edit.target not in targets:
+                raise ValueError('target 不属于当前源码版本，请从提供的片段或文件标记中选择')
+            selected = targets[edit.target]
+            if not edit.replacement.strip() and edit.target == selected['file']:
                 raise ValueError('不能清空论文文件')
+            patches.append({**selected, 'replacement':edit.replacement})
+        if patches:project.validate_patches(store.root, patches)
+        return patches
+    def validate(answer):
+        patches_for(answer)
     answer = await call_structured(ctx.writer_llm, SourceEdits, as_messages(STYLE+'\n输出 SourceEdits JSON；replacement 使用原生 LaTeX，可修改章节结构、导言区和宏，保持现有项目与用户模板一致。', prompt), validate=validate)
     patches = []
     from ai_system.research.citations import render_citations
-    for edit in answer.edits:
-        text = current[edit.file]
-        start = text.index(edit.old)
-        refs = find_refs(edit.replacement)
-        rendered = publication_text(render_citations(store.root, ctx.registry.render(edit.replacement, latex=True), True))
+    for patch in patches_for(answer):
+        refs = find_refs(patch['replacement'])
+        rendered = publication_text(render_citations(store.root, ctx.registry.render(patch['replacement'], latex=True), True))
         if refs:
             rendered += '\n% paperagent:evidence '+','.join(sorted(set(refs)))+'\n'
-        patches.append({'file':edit.file, 'version':state['source_version'], 'start':start,
-                        'end':start+len(edit.old), 'quote':edit.old, 'replacement':rendered})
+        patches.append({**patch, 'replacement':rendered})
     if project.snapshot(store.root)['version'] != state['source_version']:
         raise ResearchConflict('写作期间项目已更新，未覆盖新源码；请基于当前版本继续')
     change = project.propose_change(store, None, None, patches) if patches else None

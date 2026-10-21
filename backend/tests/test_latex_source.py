@@ -71,10 +71,10 @@ def test_findings_bind_exact_file_quote_and_become_stale(native):
     ids=[i['id'] for i in native.store.report_issues([issue],'sections')]
     state=native.state;context=review_context(native.ctx,state,'sections','s','p',ClaimAudit,sections=state['sections'])
     cache=ReviewCache(native.store);record=cache.start('sections',context)
-    cache.complete(record,ClaimAudit(issues=[ClaimIssue(section='part.tex',quote='结果有局限',problem=issue.message,contradicts=True)]).model_dump())
+    cache.complete(record,ClaimAudit(issues=[ClaimIssue(section='part.tex',targets=['part.tex#1'],problem=issue.message,contradicts=True)]).model_dump())
     issue_edits.bind_findings(native.store,ids,state['sections'])
     current=issue_edits.context(native.store,ids[0])
-    assert current['selection']['file']=='part.tex' and current['quote']=='结果有局限'
+    assert current['selection']['file']=='part.tex' and current['quote']==state['sections']['part.tex']
     project.bind(native.store.root,current['selection'])
     (native.store.root/'refs.bib').write_text('changed bibliography')
     stale=issue_edits.context(native.store,ids[0])
@@ -90,7 +90,7 @@ def test_native_writer_uses_source_changes_and_retains_user_edits(native,monkeyp
     async def reply(llm,schema,messages,validate):
         assert '过期数据库正文' not in messages[-1].content
         assert '当前原文' in messages[-1].content
-        answer=latex.SourceEdits(edits=[latex.SourceEdit(file='part.tex',old='当前原文：结果有局限。',replacement='新正文：结果 {{R:R1}} 有局限。')])
+        answer=latex.SourceEdits(edits=[latex.SourceEdit(target='part.tex#1',replacement='新正文：结果 {{R:R1}} 有局限。')])
         validate(answer)
         if race:(store.root/'part.tex').write_text('用户在生成期间的新编辑')
         return answer
@@ -113,7 +113,7 @@ def test_check_status_uses_source_version_without_requiring_merge(native,monkeyp
         answer=ClaimAudit(issues=[])
         if validate:validate(answer)
         return answer
-    monkeypatch.setattr(review_tasks,'call_structured',reply)
+    monkeypatch.setattr('ai_system.modules.writing.consistency.call_structured',reply)
     asyncio.run(review_tasks.execute(native.store,'sections',SimpleNamespace(model_name='offline-model')))
     def task():return next(t for t in review_tasks.status(native.store)['tasks'] if t['stage']=='sections')
     assert task()['state']=='completed'
@@ -129,3 +129,69 @@ def test_public_check_stage_does_not_reuse_old_pass(native):
     assert public_snapshot(native.store.snapshot(),source_root=native.store.root)['delivery_stages']['validate']['status']=='completed'
     (native.store.root/'part.tex').write_text('updated source')
     assert public_snapshot(native.store.snapshot(),source_root=native.store.root)['delivery_stages']['validate']['status']=='pending'
+
+
+def test_duplicate_passages_bind_by_range_and_unlocated_findings_stay_file_scoped(native,monkeypatch):
+    from ai_system.modules.writing import consistency
+    (native.store.root/'part.tex').write_text('重复原文。\n\n重复原文。\n\n')
+    state=review_tasks.paper_state(native.store)
+    calls=[]
+    async def reply(llm,schema,messages,validate=None,**kwargs):
+        calls.append(1)
+        assert 'source_issue_id' not in schema.model_fields['issues'].annotation.__args__[0].model_fields
+        result=ClaimAudit(issues=[ClaimIssue(section='part.tex',targets=['part.tex#2'],problem='第二段范围错误'),
+                                  ClaimIssue(section='part.tex',problem='文件整体缺少适用范围')])
+        validate(result);return result
+    monkeypatch.setattr(consistency,'call_structured',reply)
+    reports=asyncio.run(consistency.audit_sections(state,native.ctx,force=True))
+    assert reports==asyncio.run(consistency.audit_sections(state,native.ctx,force=True)) and len(calls)==1
+    recorded=native.store.report_issues(reports,'sections')
+    issue_edits.bind_findings(native.store,[i['id'] for i in recorded],state['sections'])
+    anchored=issue_edits.context(native.store,recorded[0]['id'])
+    assert anchored['selection']['start']==len('重复原文。\n\n')
+    assert anchored['quote']=='重复原文。\n\n'
+    assert issue_edits.context(native.store,recorded[1]['id'])['selection'] is None
+    async def noop(*args):pass
+    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',
+                        set_stage=noop,events=SimpleNamespace(file_changed=noop))
+    async def replace(llm,schema,messages,validate):
+        result=latex.SourceEdits(edits=[latex.SourceEdit(target='part.tex#2',replacement='仅修正第二段。\n\n')])
+        validate(result);return result
+    monkeypatch.setattr(latex,'call_structured',replace)
+    asyncio.run(latex.write(state,SimpleNamespace(context=ctx)))
+    assert (native.store.root/'part.tex').read_text()=='重复原文。\n\n仅修正第二段。\n\n'
+
+
+def test_old_finding_is_rechecked_explicitly_without_linking_new_findings(native,monkeypatch):
+    from ai_system.modules.writing import consistency
+    from ai_system.graph.state import SectionIssueReview
+    old=native.store.report_issues([IssueReport(task_id='Q1',category='writing',section='part.tex',message='需要限定结论')],'sections')[0]
+    async def reply(llm,schema,messages,validate=None,**kwargs):
+        result=ClaimAudit(issues=[],issue_reviews=[SectionIssueReview(issue_id=old['id'],verdict='writing',reason='仍未限定范围',
+            finding=ClaimIssue(section='part.tex',targets=['part.tex#1'],problem='应说明结论适用范围',contradicts=False))])
+        validate(result);return result
+    monkeypatch.setattr(consistency,'call_structured',reply)
+    reports=asyncio.run(consistency.audit_sections(native.state,native.ctx))
+    assert len(reports)==1 and '适用范围' in reports[0].message
+    saved=native.store.snapshot()['feedback']
+    assert next(i for i in saved if i['id']==old['id'])['status']=='dismissed'
+    replacement=next(i for i in saved if i['id']!=old['id'] and i['category']=='writing')
+    assert replacement['status']=='confirmed'
+    issue_edits.bind_findings(native.store,[replacement['id']],native.state['sections'])
+    assert issue_edits.context(native.store,replacement['id'])['selection']
+
+
+def test_review_failure_retains_actual_reason_and_blocked_action_does_not_repeat_intent(native,monkeypatch):
+    from ai_system.modules.writing import consistency
+    from ai_system.research.planner import decision_block_message
+    async def fail(*args,**kwargs):
+        try:raise ValueError('targets 引用了不存在的片段 paper.tex#999')
+        except ValueError as exc:raise RuntimeError('结构化输出 ClaimAudit 失败') from exc
+    monkeypatch.setattr(consistency,'call_structured',fail)
+    asyncio.run(consistency.audit_sections(native.state,native.ctx,force=True))
+    failed=next(r for r in review_tasks.records(native.store) if r['state']=='failed')
+    assert failed['diagnostic']['reason']=='targets 引用了不存在的片段 paper.tex#999'
+    assert 'paper.tex#999' in next(i for i in native.store.snapshot()['faults'] if i['category']=='service')['message']
+    snapshot={'action':{'capability':'writing.validate','status':'failed','reason':'准备开始撰写论文'},
+              'delivery_stages':{'validate':{'note':'正文审查未完成：targets 引用错误'}}}
+    assert decision_block_message(None,snapshot)=='正文审查未完成：targets 引用错误'

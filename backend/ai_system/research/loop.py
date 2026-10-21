@@ -271,8 +271,12 @@ async def _act(request, runtime):
         with store._transaction() as db:
             state=store._read(db)
             state['action']['status']='failed' if patch.get('research_blocked') else 'done'
+            if patch.get('research_blocked'):
+                from .runtime import action_failure_message
+                state['action']['message']=patch.get('message') or action_failure_message(action)
             state['action']['finished_at']=time.time()
-            store._save(db,state,'action_finished',{'id':action['id'],'status':state['action']['status']})
+            store._save(db,state,'action_finished',{'id':action['id'],'status':state['action']['status'],
+                                                   'message':state['action'].get('message')})
         return patch if name=='experiments.execute' or name.startswith('writing.') else {'log':['completed '+name]}
     except asyncio.CancelledError:
         with store._transaction() as db:
@@ -281,7 +285,8 @@ async def _act(request, runtime):
         raise
     except Exception as exc:
         from .runtime import action_failure_message
-        message = action_failure_message(action)
+        from .review_cache import error_detail
+        message = action_failure_message(action)+' 原因：'+error_detail(exc)
         with store._transaction() as db:
             state=store._read(db);state['action'].update(status='failed',finished_at=time.time(),error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
             store._save(db,state,'action_failed',state['action'])

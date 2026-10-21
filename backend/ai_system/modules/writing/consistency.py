@@ -38,6 +38,8 @@ RECONCILE_SYSTEM = (
 )
 
 AUDIT_SYSTEM = (
+    "审查建议和统一口径不是实测证据，须用实际结果核对；建议与结果矛盾时不得要求正文服从建议。"
+    "区分序列单调递增与增量递增，不能由前者推断后者；描述角度不同也不自动构成矛盾。"
     "区分实测数值差异与统计显著性：固定拆分上误差更低、相对均值基线改善，并不能单独支持统计显著。"
     "即使结论表的strength标为显著，仍要核查具体检验证据；不得把结果明确当作已做显著性检验。"
     "正文同时声明未做显著性检验却使用显著优于/显著改善时，须要求限定为该拆分上的实测差异。"
@@ -77,12 +79,12 @@ def consistency_text(ctx: GraphContext, conflicts: List[Dict]) -> str:
     if not ctx.registry.claims:
         return ""
     parts = [
-        "# 全文结论表（各章节的结论必须与此一致，证据强度不能被改写）\n"
+        "# 全文结论表（核对实际证据，不能夸大证据强度）\n"
         "陈述里\"数值⟨Rn⟩\"表示这个数值对应引用 {{R:Rn}}；正文写引用，不要照抄数值，也不要把编号和数值错配。",
         ctx.registry.claims_table(),
     ]
     if conflicts:
-        parts.append("# 统一口径（审查发现的矛盾及写法，必须遵守）")
+        parts.append("# 待核对的审查建议（须对照实际证据；错误建议不能当成事实写入正文）")
         parts.extend(f"- {'、'.join(c['claims'])}：{c['issue']} → {c['resolution']}" for c in conflicts)
     return "\n\n".join(parts)
 
@@ -120,9 +122,11 @@ async def reconcile(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         review = await run_review(ctx,state,'reconcile',ConsistencyReview,RECONCILE_SYSTEM,prompt,perform,validate=validate)
         conflicts = valid_conflicts([c.model_dump() for c in review.conflicts], set(claims))
     except Exception as exc:
-        from ai_system.research.review_cache import error_code
-        ctx.write_json(".system/consistency.json", {"error": error_code(exc), "conflicts": []})
-        return {"consistency": [], "research_restart": False, "research_blocked": True, "log": [f"reconcile: incomplete ({error_code(exc)})"]}
+        from ai_system.research.review_cache import error_code, error_detail
+        detail=error_detail(exc)
+        ctx.write_json(".system/consistency.json", {"error": error_code(exc), "detail":detail, "conflicts": []})
+        return {"consistency": [], "research_restart": False, "research_blocked": True,
+                "message":"结论核对未完成："+detail+"。已有实验成果已保留。", "log": [f"reconcile: incomplete ({error_code(exc)})"]}
     research_reports = [IssueReport.model_validate(c["research_issue"]) for c in conflicts if c.get("research_issue")]
     if research_reports:
         active = ctx.research.report_issues(research_reports, "reconcile")
@@ -149,8 +153,9 @@ def section_doubts(state, ctx):
     investigated={t.get('verifies_issue') for t in snapshot['experiments'].values()}
     return {i['id']:i for i in research_findings(snapshot)
             if i['source'] in {'sections','review-task:sections'} and i['section'] in (state.get('sections') or {})
-            and i['category'] not in {'writing','service','execution','coverage'}
-            and i['status'] in {'suspected','inconclusive'} and not i['repair_targets'] and i['id'] not in investigated
+            and i['category'] not in {'service','execution','coverage'}
+            and (i['status'] in {'suspected','inconclusive'} or i['category']=='writing' and i['status']=='confirmed')
+            and not i['repair_targets'] and i['id'] not in investigated
             and snapshot['experiments'][i['task_id']]['acceptance']=='accepted' and snapshot['experiments'][i['task_id']]['validity']=='current'}
 
 
@@ -165,9 +170,11 @@ def section_audit_prompt(state,ctx,*,force=False):
         applicable=any(i['category']=='writing' and i.get('section') in keys and
             i['status'] not in {'resolved','dismissed','superseded'} for i in research_findings(ctx.research.snapshot()))
     if not applicable:return None
-    body = "\n\n".join(
-        f"## 章节 key: {k}\n{sections[k]}" for k in keys
-    )
+    if state.get('source_version'):
+        from services.chat_services.paper_project import source_prompt
+        body = json.dumps(source_prompt(state), ensure_ascii=False)
+    else:
+        body = "\n\n".join(f"## 章节 key: {k}\n{sections[k]}" for k in keys)
     refs = (set(ctx.registry.results) if state.get('source_version') else set(find_refs(body))) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
     evidence = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items() if rid in refs})
     prompt = (
@@ -178,7 +185,8 @@ def section_audit_prompt(state,ctx,*,force=False):
     )
     if state.get('source_version'):
         prompt += ('\n正文来自当前版本实际文件，section 填文件路径。核查完整原要求与实际实验依据。'
-                   '有具体问题时 quote 逐字复制文件中的原文；无法精确定位时留空并在 problem 说明文件范围。'
+                   '有具体问题时 targets 选择提供的一个或多个片段标记，无需复制原文。'
+                   '不能定位到片段时 targets 留空，保留为文件级意见，不因此否定意见。'
                    '不要推测 PDF 坐标与源码位置。\n# 项目依赖文本\n'+json.dumps(
                        {r['path']:r['text'] for r in state.get('source_files', [])
                         if r['text'] is not None and not r['path'].endswith('.tex')}, ensure_ascii=False))
@@ -187,10 +195,12 @@ def section_audit_prompt(state,ctx,*,force=False):
     if doubts:
         prompt+='\n# 必须逐项重新核对的旧章节疑点\n'+json.dumps(list(doubts.values()),ensure_ascii=False)
         prompt+=('\n对每个旧疑点在issue_reviews填写issue_id、verdict和reason。仅文稿解释错误选writing，'
-                 '上游结果本身确有疑点选research；这两种情况必须在issues给出source_issue_id相同的明确问题，'
+                 '上游结果本身确有疑点选research；这两种情况直接在本项 review.finding 给出具体问题，'
                  'writing的research_issue留空，research提供真实证据和可执行检查。'
                  'writing可以只是需要消除的误导解释，不要求属于严重矛盾；contradicts=false不否定明确的writing处理结论。'
-                 '旧意见不成立或原文已有依据地纠正时选dismissed并说明理由。不能省略旧意见或通过改稿掩盖已确认的计算错误。')
+                 '旧意见不成立或原文已有依据地纠正时选dismissed并说明理由，finding 为空。'
+                 'issues 只登记本次新发现，不填写旧意见编号，不重复列出 finding。'
+                 '不能省略旧意见或通过改稿掩盖已确认的计算错误。')
     return prompt,keys
 
 
@@ -200,9 +210,9 @@ def validate_findings(issues,state,ctx):
         if issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.registry.results):raise ValueError('审查问题超出冻结任务/证据范围')
 
 
-async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False) -> List[IssueReport]:
+async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False,force=False) -> List[IssueReport]:
     """Completed results are reusable only for the same complete review context."""
-    prepared=section_audit_prompt(state,ctx,force=candidate)
+    prepared=section_audit_prompt(state,ctx,force=candidate or force)
     if prepared is None:return []
     prompt,keys=prepared
     doubts=section_doubts(state,ctx)
@@ -210,33 +220,38 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
         from ai_system.research.review_cache import run_review
         def validate(result):
             if 'issues' not in result.model_fields_set:raise ValueError('章节审查没有明确返回issues字段')
-            if any(i.section not in keys for i in result.issues):raise ValueError('章节审查引用了未提供的章节')
-            validate_findings([i.research_issue for i in result.issues if i.research_issue],state,ctx)
+            all_findings = [*result.issues, *(r.finding for r in result.issue_reviews if r.finding)]
+            if any(i.section not in keys for i in all_findings):raise ValueError('章节审查引用了未提供的章节')
+            if state.get('source_version'):
+                from services.chat_services.paper_project import source_targets
+                targets=source_targets(state)
+                for finding in all_findings:
+                    if any(key not in targets or targets[key]['file']!=finding.section for key in finding.targets):
+                        raise ValueError('targets 包含未提供或属于其他文件的源码片段；请选择本文件片段，不能定位时留空')
+            validate_findings([i.research_issue for i in all_findings if i.research_issue],state,ctx)
             reviews={r.issue_id:r for r in result.issue_reviews}
             if len(reviews)!=len(result.issue_reviews) or set(reviews)!=set(doubts):raise ValueError('必须逐项核对给定的旧章节疑点')
-            linked={i.source_issue_id:i for i in result.issues if i.source_issue_id}
-            if not set(linked)<=set(doubts):raise ValueError('不能替换未提供的源意见')
             for key,review in reviews.items():
                 if review.verdict=='dismissed':
-                    if key in linked:raise ValueError('已撤销的旧疑点不能同时保留为问题')
+                    if review.finding:raise ValueError('已撤销的旧疑点不能同时保留为问题')
                     continue
-                finding=linked.get(key)
+                finding=review.finding
                 if not finding or finding.section!=doubts[key]['section']:raise ValueError('归类后须明确保留对应章节的问题')
                 if (review.verdict=='research')!=bool(finding.research_issue):raise ValueError('意见归类与具体问题不一致')
         async def perform():
             return await call_structured(ctx.planner_llm,ClaimAudit,as_messages(AUDIT_SYSTEM,prompt),validate=validate,**({'retries':0} if candidate else {}))
         audit = await run_review(ctx,state,'sections',ClaimAudit,AUDIT_SYSTEM,prompt,perform,sections=state.get('sections') or {},extra={'non_blocking':True} if candidate else None,validate=validate)
     except Exception as exc:
-        from ai_system.research.review_cache import error_code
+        from ai_system.research.review_cache import error_detail
         if ctx.research is not None and not candidate:
             failures=[i for i in research_findings(ctx.research.snapshot()) if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}]
             if failures:return []  # A persisted failure remains a publication blocker.
-        return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_code(exc)}")]
+        return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_detail(exc)}")]
     reports = [
-        issue.research_issue or IssueReport(task_id=doubts[issue.source_issue_id]['task_id'] if issue.source_issue_id in doubts else issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
+        issue.research_issue or IssueReport(task_id=issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
                     category="writing", section=issue.section, message=f"与结论表不一致：{issue.problem}")
         for issue in audit.issues
-        if issue.section in keys and (issue.source_issue_id in doubts or (issue.research_issue and issue.research_issue.category=='coverage') or
+        if issue.section in keys and ((issue.research_issue and issue.research_issue.category=='coverage') or
                                      issue.contradicts and not NOT_A_CONFLICT.search(issue.problem))
     ]
     if doubts and not candidate:
@@ -253,8 +268,9 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False)
                 old['review_resolution']={'review_id':hit[1]['id'],'review_context_hash':hit[1]['context_hash'],
                     'verdict':review.verdict,'reason':review.reason,'section_hash':digest(state['sections'][old['section']])}
                 if review.verdict!='dismissed':
-                    finding=next(i for i in audit.issues if i.source_issue_id==old['id'])
+                    finding=review.finding
                     report=finding.research_issue or IssueReport(task_id=old['task_id'],category='writing',section=finding.section,message='与结论表不一致：'+finding.problem)
+                    reports.append(report)
                     replacement=ctx.research._record_issue(snapshot,report,'confirmed' if report.category=='writing' else 'suspected',source='sections')
                     if replacement['id']==old['id']:continue
                     old['review_resolution']['replacement_issue_id']=replacement['id']

@@ -100,13 +100,15 @@ class ModuleRegistry:
             from ai_system.research.views import activity
             branch=request.inputs.get('branch') or {}
             task_id=request.inputs.get('task_id') or branch.get('subproblem',{}).get('id')
-            with activity(ctx,request.name,task_id):
+            with activity(ctx,request.name,task_id) as execution:
                 with capability_span(request.name, capability.module, request.inputs) as span:
                     result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
                     if inspect.isawaitable(result):
                         result = await result
                     if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
                         raise TypeError(f"能力产物不符合接口：{request.name}")
+                    if isinstance(result.value,dict) and result.value.get('research_blocked'):
+                        execution.update(status='failed',message=result.value.get('message'))
                     if span is not None:
                         span.end(outputs={'kind': result.kind, 'value': result.value})
         finally:
