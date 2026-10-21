@@ -269,54 +269,6 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
     assert (tmp_path / 'paper.pdf').read_bytes() == b'%PDF-old'
 
 
-def test_failed_native_export_keeps_project_diagnostics_and_resumes_without_research_replay(tmp_path, monkeypatch):
-    from ai_system.export.latex import LatexResult,BUILD_DIR
-    from ai_system.graph import PaperGraphAgent
-    from ai_system.research.store import ResearchStore
-    from services.chat_services import paper_project as project
-    from test_paper_graph import _make_workspace, TASK as GRAPH_TASK, FixedJudge
-    compiled=[]
-    async def no_pdf(workspace, *args):
-        compiled.append((workspace/'paper.tex').read_text())
-        (workspace/BUILD_DIR).mkdir(parents=True,exist_ok=True)
-        (workspace/BUILD_DIR/'paper.log').write_text('controlled compile failure')
-        return LatexResult('paper.tex', error='模拟编译错误')
-    monkeypatch.setattr('ai_system.export.latex.compile_pdf', no_pdf)
-    root = _make_workspace(tmp_path)
-    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(root), judge=FixedJudge(), output_mode='latex')
-    output = asyncio.run(agent.run(GRAPH_TASK))
-    assert agent.last_result['research_blocked'] and '模拟编译错误' in output
-    assert len(compiled)==1, 'writing must complete before the compiler failure is observed'
-    assert (root / 'paper.tex').exists() and not (root / 'paper.md').exists()
-    assert not (root/'.system/paper_raw.tex').exists() and not (root/'paper.pdf').exists()
-    store=ResearchStore(root,agent._load_thread());before=store.snapshot()
-    source=(root/'paper.tex').read_bytes();version=project.snapshot(root)['version']
-    data=project.describe(store);compilation=data['compile']
-    assert compilation['state']=='failed' and compilation['source_version']==version
-    assert compilation['message']=='模拟编译错误' and compilation['diagnostics']==[]
-    assert (root/compilation['log_path']).read_text()=='controlled compile failure'
-    assert (root/project.VERSIONS/version/'paper.tex').read_bytes()==source
-    changes=data['changes']
-    snapshot = research_snapshot(root, 'work', 'paused')
-    assert snapshot.delivery_stages['export']['status'] == 'blocked'
-    assert snapshot.artifacts == ['paper.tex']
-    async def recovered(workspace,*args):
-        compiled.append((workspace/'paper.tex').read_text())
-        (workspace/'paper.pdf').write_bytes(b'%PDF-controlled-compiler')
-        return LatexResult('paper.tex',pdf_path='paper.pdf')
-    monkeypatch.setattr('ai_system.export.latex.compile_pdf',recovered)
-    assert 'paper.pdf' in asyncio.run(agent.resume_failed())
-    assert len(compiled)==2 and compiled[0]==compiled[1]
-    assert (root/'paper.tex').read_bytes()==source
-    assert project.describe(store)['changes']==changes
-    assert project.describe(store)['compile']['state']=='current'
-    assert project.describe(store)['pdf_version']==version
-    assert store.snapshot()['executions']==before['executions']
-    assert store.snapshot()['artifacts']==before['artifacts']
-    assert store.snapshot()['outcome']=='completed'
-    assert research_snapshot(root,'work','completed').delivery_stages['export']['status']=='completed'
-
-
 def test_native_tables_cannot_invent_indexed_series_references(tmp_path,monkeypatch):
     from ai_system.research.control import refresh_registry
     from ai_system.research.models import WorkerResult

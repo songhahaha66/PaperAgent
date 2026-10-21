@@ -243,3 +243,140 @@ def test_compile_diagnostic_routes_to_existing_repair_and_only_compiler_closes_i
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
     asyncio.run(project.compile_project(native.store))
     assert next(i for i in native.store.snapshot()['feedback'] if i['id']==issue['id'])['status']=='resolved'
+
+
+def test_compile_gate_keeps_first_fatal_context_and_last_success(native,monkeypatch):
+    from ai_system.export import latex as compiler
+    root=native.store.root
+    (root/'paper.pdf').write_bytes(b'last successful PDF')
+    previous=project.snapshot(root)['version']
+    project.atomic_text(root/project.META,json.dumps({'main':'paper.tex','pdf_version':previous}))
+    source=(root/'paper.tex').read_text().replace(r'\end{document}','')
+    (root/'paper.tex').write_text(source)
+    failed=asyncio.run(project.compile_project(native.store))['compile']
+    assert not failed['success'] and '缺少 \\end{document}' in failed['error_summary']
+    assert failed['diagnostics'][0]['line'] is None
+    assert '不能仅补文档结尾' in (root/failed['log_path']).read_text()
+    assert (root/'paper.tex').read_text()==source
+    # A fatal error without a location still carries its cause, not the log tail.
+    log='! Emergency stop.\n<*> paper.tex\n\n*** (job aborted, no legal \\end found)\n'+'memory stats\n'*100
+    assert 'no legal \\end found' in compiler.compile_diagnostics(log)[0]['context']
+    (root/'paper.tex').write_text(source+r'\end{document}')
+    monkeypatch.setattr(compiler.shutil,'which',lambda _: '/controlled/xelatex')
+    async def fail(cmd,cwd,**kwargs):
+        (cwd/compiler.BUILD_DIR/'paper.log').write_text(log)
+        (cwd/compiler.BUILD_DIR/'paper.pdf').write_bytes(b'partial PDF')
+        return 1,log,''
+    monkeypatch.setattr(compiler,'run_command',fail)
+    failed=asyncio.run(project.compile_project(native.store))['compile']
+    assert not failed['success'] and failed['exit_code']==1
+    assert 'no legal \\end found' in failed['error_summary']
+    assert 'memory stats' in (root/failed['log_path']).read_text()
+    assert (root/'paper.pdf').read_bytes()==b'last successful PDF'
+    assert project.meta(root)['pdf_version']==previous
+
+
+def test_compile_gate_checks_final_pass_refs_without_rewriting(native,monkeypatch):
+    from ai_system.export import latex as compiler
+    root=native.store.root
+    source=r'\documentclass{article}\begin{document}See \ref{fig:actual}.\label{fig:actual}\end{document}'
+    (root/'paper.tex').write_text(source)
+    monkeypatch.setattr(compiler.shutil,'which',lambda _: '/controlled/xelatex')
+    calls=[]
+    async def passes(cmd,cwd,**kwargs):
+        calls.append(cmd)
+        log="LaTeX Warning: Reference `fig:actual' on page 1 undefined.\n" if len(calls)==1 else 'Output written on paper.pdf (1 page).'
+        (cwd/compiler.BUILD_DIR/'paper.log').write_text(log)
+        (cwd/compiler.BUILD_DIR/'paper.pdf').write_bytes(b'checked PDF')
+        return 0,log,''
+    monkeypatch.setattr(compiler,'run_command',passes)
+    result=asyncio.run(compiler.compile_pdf(root))
+    assert result.success and len(calls)==3 and (root/'paper.tex').read_text()==source
+    async def undefined(cmd,cwd,**kwargs):
+        (cwd/compiler.BUILD_DIR/'paper.log').write_text("LaTeX Warning: Reference `fig:missing' on page 1 undefined.\n")
+        (cwd/compiler.BUILD_DIR/'paper.pdf').write_bytes(b'unchecked PDF')
+        return 0,'',''
+    monkeypatch.setattr(compiler,'run_command',undefined)
+    result=asyncio.run(compiler.compile_pdf(root))
+    assert not result.success and result.exit_code==0 and '未定义' in result.error
+    assert (root/'paper.pdf').read_bytes()==b'checked PDF'
+    (root/'paper.tex').write_text(source.replace(r'\ref{fig:actual}',r'\ref{R:R25}'))
+    result=asyncio.run(compiler.compile_pdf(root))
+    assert not result.success and '登记结果 ID' in result.error
+    assert r'\ref{R:R25}' in (root/'paper.tex').read_text()
+
+
+def test_compile_repairs_stop_after_two_and_resume_writing_only(native,monkeypatch):
+    from ai_system.export.latex import LatexResult,BUILD_DIR
+    from ai_system.graph.context import GraphContext
+    from ai_system.research import loop
+    from ai_system.research.control import refresh_registry
+    store=native.store;ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
+    refresh_registry(ctx)
+    before=store.snapshot();calls=[]
+    async def broken(folder,*args):
+        build=folder/BUILD_DIR;build.mkdir(parents=True,exist_ok=True)
+        (build/'paper.log').write_text('! Emergency stop.\n<*> paper.tex\n*** no legal \\end found')
+        return LatexResult('paper.tex',error='Emergency stop: no legal \\end found')
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',broken)
+    async def reply(llm,schema,messages,validate,**kwargs):
+        prompt='\n'.join(m.content for m in messages)
+        assert 'Emergency stop' in prompt and '完整日志' in prompt and '当前项目源码片段' in prompt
+        calls.append(1)
+        result=schema(edits=[{'target':'part.tex','replacement':f'已核对全文，第{len(calls)}次修订。\n'}])
+        validate(result);return result
+    monkeypatch.setattr(latex,'call_structured',reply)
+    with store._transaction() as db:
+        state=store._read(db)
+        state['publication']={'stage':'export','repair_inputs':[],'repairs':0}
+        state['outcome']=None
+        store._save(db,state,'test_compile_recovery',{})
+    async def advance():
+        for _ in range(20):
+            if store.snapshot()['outcome']=='completed':return
+            if await loop.prepare_action(ctx):return
+            action=store.snapshot()['action']
+            await loop._act({'action_id':action['id']},SimpleNamespace(context=ctx))
+        pytest.fail('publication did not stop')
+    asyncio.run(advance())
+    stopped=store.snapshot()
+    assert len(calls)==2 and stopped['action']['status']=='failed'
+    assert stopped['publication']['stage']=='repair' and '两次' in stopped['action']['message']
+    assert stopped['outcome']!='completed'
+    assert stopped['executions']==before['executions'] and stopped['artifacts']==before['artifacts']
+    loop.resume(store)
+    assert store.snapshot()['action']['capability']=='writing.repair'
+    asyncio.run(advance())
+    assert len(calls)==4 and store.snapshot()['publication']['stage']=='repair'
+    assert store.snapshot()['executions']==before['executions']
+    async def success(folder,*args):
+        (folder/'paper.pdf').write_bytes(b'%PDF-repaired')
+        return LatexResult('paper.tex',pdf_path='paper.pdf')
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
+    loop.resume(store)
+    asyncio.run(advance())
+    assert store.snapshot()['outcome']=='completed'
+    assert project.meta(store.root)['compile']['success']
+    assert store.snapshot()['executions']==before['executions'] and store.snapshot()['artifacts']==before['artifacts']
+
+
+def test_writer_reports_missing_results_and_records_value_provenance(native,monkeypatch):
+    from ai_system.graph.context import GraphContext
+    from ai_system.research.control import graph_view
+    ctx=GraphContext.create(str(native.store.root),planner_llm=None,output_mode='latex');ctx.research=native.store
+    state=graph_view(native.store.snapshot())
+    async def missing(llm,schema,messages,validate,**kwargs):
+        with pytest.raises(ValueError,match='R999'):
+            validate(schema(edits=[{'target':'part.tex','replacement':'未知结果','result_refs':['R999']}]))
+        return schema(research_gap='R999 未登记，无法确认实际数值和适用范围')
+    monkeypatch.setattr(latex,'call_structured',missing)
+    result=asyncio.run(latex.write(state,SimpleNamespace(context=ctx)))
+    assert result['research_blocked'] and 'R999' in result['message'] and not result.get('research_restart')
+    async def actual(llm,schema,messages,validate,**kwargs):
+        result=schema(edits=[{'target':'part.tex','replacement':r'本次输入下需求为 8，见\ref{sec:methods}。','result_refs':['R1']}])
+        validate(result);return result
+    monkeypatch.setattr(latex,'call_structured',actual)
+    asyncio.run(latex.write(state,SimpleNamespace(context=ctx)))
+    source=(native.store.root/'part.tex').read_text()
+    assert '本次输入下需求为 8' in source and r'\ref{sec:methods}' in source
+    assert '% paperagent:evidence R1' in source

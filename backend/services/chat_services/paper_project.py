@@ -329,21 +329,25 @@ async def compile_project(store):
         except Exception as exc:
             from ai_system.research.review_cache import error_detail
             result=LatexResult(tex_path=main,error='编译服务未完成：'+error_detail(exc)+'。上次成功 PDF 已保留。')
-        log_path=None
-        log=staging/BUILD_DIR/f'{Path(main).stem}.log'
-        if log.is_file():
-            log_path=f'{BUILD_DIR}/{version}/compile.log'
-            destination=store.root/log_path;destination.parent.mkdir(parents=True,exist_ok=True)
-            shutil.copyfile(log,destination)
+            import traceback
+            result.log_path=f'{BUILD_DIR}/compile.log'
+            atomic_text(staging/result.log_path,traceback.format_exc())
+        log=staging/(result.log_path or f'{BUILD_DIR}/{Path(main).stem}.log')
+        log_path=f'{BUILD_DIR}/{version}/{time.time_ns()}/compile.log'
+        atomic_text(store.root/log_path,log.read_text(errors='replace') if log.is_file() else result.error or '编译完成')
+        compilation={'success':result.success,'error_summary':result.error,'diagnostics':result.diagnostics,
+                     'source_version':version,'log_path':log_path,'exit_code':result.exit_code,
+                     'warnings':result.warnings,'pages':result.pages}
         with store._transaction() as db:
             data=meta(store.root)
             if snapshot(store.root)['version']!=version:
-                data['compile']={'state':'stale','message':'编译期间源码已更新，请重新编译。上次成功 PDF 已保留。'}
-            elif result.pdf_path:
+                compilation.update(success=False,error_summary='编译期间源码已更新，请重新编译。上次成功 PDF 已保留。')
+                data['compile']={**compilation,'state':'stale','message':compilation['error_summary']}
+            elif result.success:
                 target=store.root/'paper.pdf';tmp=target.with_suffix('.pdf.paper-tmp')
                 shutil.copyfile(staging/result.pdf_path,tmp);tmp.replace(target)
                 data['pdf_version']=version
-                data['compile']={'state':'current','message':'PDF 已与当前源码同步','warnings':result.warnings}
+                data['compile']={**compilation,'state':'current','message':'PDF 已与当前源码同步'}
                 state=store._read(db)
                 closed=[]
                 for issue in state['feedback']:
@@ -352,8 +356,7 @@ async def compile_project(store):
                         closed.append(issue['id'])
                 if closed:store._save(db,state,'latex_source_errors_resolved',{'issues':closed,'source_version':version})
             else:
-                data['compile']={'state':'failed','message':result.error or 'PDF 编译失败，上次成功预览已保留',
-                                 'diagnostics':result.diagnostics,'source_version':version,'log_path':log_path}
+                data['compile']={**compilation,'state':'failed','message':result.error or 'PDF 编译失败，上次成功预览已保留'}
             atomic_text(store.root/META,json.dumps(data,ensure_ascii=False))
     return meta(store.root)
 

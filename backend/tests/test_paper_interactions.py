@@ -232,8 +232,9 @@ def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
 def test_latex_success_updates_pdf_at_exact_project_version(paper,monkeypatch):
     store,_=paper;(store.root/'paper.tex').write_text('源文件。')
     async def success(folder,*args):
+        from ai_system.export.latex import LatexResult
         (folder/'paper.pdf').write_bytes(b'new pdf')
-        return SimpleNamespace(pdf_path='paper.pdf',warnings=[])
+        return LatexResult('paper.tex',pdf_path='paper.pdf')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
     run(project.compile_project(store))
     doc=project.describe(store)
@@ -247,8 +248,9 @@ def test_compile_does_not_publish_stale_result(paper,monkeypatch):
     store,_=paper;path=store.root/'paper.tex';path.write_text('原稿。')
     pdf=store.root/'paper.pdf';pdf.write_bytes(b'old')
     async def success(folder,*args):
+        from ai_system.export.latex import LatexResult
         path.write_text('编译期间修改。');(folder/'paper.pdf').write_bytes(b'stale')
-        return SimpleNamespace(pdf_path='paper.pdf',warnings=[])
+        return LatexResult('paper.tex',pdf_path='paper.pdf')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
     run(project.compile_project(store))
     assert pdf.read_bytes()==b'old' and project.meta(store.root)['compile']['state']=='stale'

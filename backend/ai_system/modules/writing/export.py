@@ -17,37 +17,36 @@ EXPORT_MODES = ("latex", "word")
 
 
 async def _latex(ctx: GraphContext) -> dict:
-    from services.chat_services.paper_project import compile_project, meta
-    await compile_project(ctx.research)
-    from types import SimpleNamespace
-    data=meta(ctx.workspace)
-    result=SimpleNamespace(tex_path='paper.tex',pdf_path='paper.pdf' if data.get('compile',{}).get('state')=='current' else None,
-                           pages=None,warnings=data.get('compile',{}).get('warnings',[]),error=data.get('compile',{}).get('message'))
-    await ctx.events.file_changed(result.tex_path)
-    if result.pdf_path:
-        pages = f"（{result.pages} 页）" if result.pages else ""
-        await ctx.events.file_changed(result.pdf_path)
+    from services.chat_services.paper_project import compile_project, source_state
+    data=await compile_project(ctx.research)
+    compilation=data['compile']
+    await ctx.events.file_changed('paper.tex')
+    if compilation['success']:
+        pages = f"（{compilation['pages']} 页）" if compilation['pages'] else ""
+        await ctx.events.file_changed('paper.pdf')
         await ctx.set_stage("export", "completed", f"paper.pdf{pages}")
-        note = f"LaTeX 排版完成：{result.tex_path}，编译出 {result.pdf_path}{pages}"
-        if result.warnings:
-            note += "\n\n编译警告：" + "；".join(result.warnings)
+        note = f"LaTeX 排版完成：paper.tex，编译出 paper.pdf{pages}"
+        if compilation['warnings']:
+            note += "\n\n编译警告：" + "；".join(compilation['warnings'])
         await ctx.events.emit("paper_export", note)
-        return {"log": [f"export: {result.pdf_path}"]}
+        return {"exports":['paper.tex','paper.pdf'],"log": ["export: paper.pdf"]}
 
-    await ctx.set_stage("export", "blocked", result.error or "PDF 未生成")
-    await ctx.events.emit("paper_export", f"已生成 {result.tex_path}，PDF 未生成：{result.error}")
-    from services.chat_services.paper_project import source_state
+    error=compilation['message']
+    await ctx.set_stage("export", "blocked", error)
+    await ctx.events.emit("paper_export", f"论文源码已保存，PDF 编译未完成：{error}")
     from ai_system.research.models import IssueReport
     source=source_state(ctx.research,{})
-    compilation=data.get('compile',{})
-    diagnostics=compilation.get('diagnostics',[])
-    if compilation.get('source_version')==source['source_version'] and diagnostics and all(
-            d['file'] in source['sections'] for d in diagnostics):
+    diagnostics=compilation['diagnostics'] or [{'file':None,'line':None,'message':error,'context':''}]
+    if compilation['source_version']==source['source_version']:
         task=next(iter(ctx.research.snapshot()['experiments']))
-        reports=[IssueReport(task_id=task,category='writing',section=d['file'],
-            message=f"LaTeX 编译错误，第{d['line']}行：{d['message']}\n{d['context']}") for d in diagnostics]
+        reports=[IssueReport(task_id=task,category='writing',section=d['file'] if d['file'] in source['sections'] else data.get('main','paper.tex'),
+            message='LaTeX 编译未通过'+(f"，第{d['line']}行" if d['line'] is not None else '')+
+                f"：{d['message']}\n{d['context']}\n完整日志：{compilation['log_path']}") for d in diagnostics]
         with ctx.research._transaction() as db:
             snapshot=ctx.research._read(db)
+            for old in snapshot['feedback']:
+                if old['source']=='latex.compile' and old['status'] not in {'resolved','dismissed','superseded'}:
+                    old['status']='superseded'
             issues=[ctx.research._record_issue(snapshot,report,'confirmed',source='latex.compile') for report in reports]
             # The compiler is the gate for these findings. Keep rendering
             # reachable after repair; only a successful compile closes them.
@@ -56,8 +55,8 @@ async def _latex(ctx: GraphContext) -> dict:
         from services.chat_services.issue_edits import bind_findings
         bind_findings(ctx.research,[i['id'] for i in issues],source['sections'],source_version=source['source_version'])
         await ctx.events.stage('源码编译未通过，正在自动修正后重新检查')
-        return {'issues':issues,'log':[f'export: tex only ({result.error}); repairing source']}
-    return {"research_blocked": True, "message":result.error or 'PDF 编译未完成', "log": [f"export: tex only ({result.error})"]}
+        return {'issues':issues,'exports':['paper.tex'],'log':[f'export: {error}; repairing source']}
+    return {"research_blocked": True, "exports":['paper.tex'],"message":error, "log": [f"export: {error}"]}
 
 
 async def _word(ctx: GraphContext, markdown: str) -> dict:
@@ -67,7 +66,7 @@ async def _word(ctx: GraphContext, markdown: str) -> dict:
     style = "沿用上传模板的样式" if result.reference == "template" else "默认论文样式"
     await ctx.set_stage("export", "completed", result.docx_path)
     await ctx.events.emit("paper_export", f"已导出 {result.docx_path}（{style}）")
-    return {"log": [f"export: {result.docx_path} ({result.reference})"]}
+    return {"exports":[result.docx_path],"log": [f"export: {result.docx_path} ({result.reference})"]}
 
 
 async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
@@ -76,9 +75,7 @@ async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     await ctx.events.stage("LaTeX 排版并编译 PDF" if ctx.output_mode == "latex" else "导出 Word 文档")
     try:
         result = await _latex(ctx) if ctx.output_mode == "latex" else await _word(ctx, (ctx.workspace / "paper.md").read_text(encoding="utf-8"))
-        message = " ".join(result.get("log") or [])
-        paths = (["paper.tex"] if "tex only" in message else ["paper.tex", "paper.pdf"]) if ctx.output_mode == "latex" else ["paper.docx"]
-        ctx.research.register_exports(paths)
+        ctx.research.register_exports(result.pop('exports'))
         return result
     except Exception as exc:
         await ctx.set_stage("export", "blocked", str(exc)[:80])

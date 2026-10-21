@@ -11,11 +11,12 @@ from services.chat_services import paper_project as project
 class SourceEdit(BaseModel):
     target: str = Field(description='系统提供的源码片段或文件标记')
     replacement: str
+    result_refs: list[str] = Field(default_factory=list, description='本次修改实际使用的登记结果 ID，仅用于来源追溯，不是 LaTeX 标签')
 
 
 class SourceEdits(BaseModel):
     edits: list[SourceEdit] = Field(default_factory=list, max_length=24)
-    research_gap: str = Field(default='', description='只有缺少会改变问题答案的实质证据时填写，措辞/排版/编译自行修复')
+    research_gap: str = Field(default='', description='所需结果不存在、取值或适用范围不明确时说明具体缺项，禁止猜值；措辞/排版/编译自行修复')
 
 
 async def _update(state, runtime, *, repairing=False):
@@ -38,19 +39,24 @@ async def _update(state, runtime, *, repairing=False):
     snapshot=store.snapshot()
     research_questions=question_context(questions(snapshot))
     records=experiment_context(snapshot)
+    results={r['id']:r for record in records for r in record['results']}
     evidence=json.dumps(records,ensure_ascii=False)
-    prompt = ('直接更新当前 LaTeX 项目。返回 edits，每项 target、replacement；'
+    prompt = ('直接更新当前 LaTeX 项目。返回 edits，每项 target、replacement、result_refs；'
               'target 只选下方提供的片段标记，replacement 是该片段修改后的完整内容，无需复制 old 或计算位置。'
               '优先修改片段；需调整整体结构时可选择文件标记。同次修改的范围不能重复或重叠。'
               '只改实际受影响部分，保留人工编辑、宏、环境和与相邻片段的换行分隔。'
               '正文直接使用原生 LaTeX。可按研究成果与用户模板组织、增删或调整结构；旧数据库章节不是约束。'
               '使用当前导言区已定义的命令；交叉引用默认用原生 \\ref、\\eqref，不使用未加载宏包的 \\cref 等命令。'
-              '数值与图使用给定的 {{R:Rn}} / {{F:Fn}}，文献使用已核实 {{C:Cn}}；系统在写入前解析。'
+              '结果 ID（例如 R25）只标识实验记录，不是章节、图表编号。读取下方结果的 value、unit、meaning 和实验 conditions/evaluation，'
+              '把实际数值、单位和适用条件写入正文；使用的结果 ID 填入 result_refs，由系统保存来源关联。'
+              '禁止用 \\ref{R25} 或 \\ref{R:R25} 取数，也不要发明对应标签。正常图表、章节的 \\ref/\\eqref 要保留。'
+              '图使用给定的 {{F:Fn}}，文献使用已核实 {{C:Cn}}；系统在写入前解析。'
               '不得编造结果、来源、引用键或实验。没有需要修改时返回空 edits。\n'
               '问题判断为空时如实说明尚无判断；实验结果可用不等于研究问题已回答。'
               '保留问题答案的局限和重要未知，主要请求已有可靠答案即可交付，不要求软意见归零。'
               '可讨论历史负结果和撤回观点，但须明确未支持/已撤回及理由，不能当当前事实。'
-              '只有实质证据缺口才返回research_gap且edits为空，交回研究层；文字排版和编译问题自行处理。\n'
+              '所需结果缺失或含义、适用范围不能明确时，返回research_gap说明具体结果和缺项且edits为空，等待补充，不得猜值。'
+              '文字排版和编译问题自行处理；缺文档结尾可能意味着正文截断，须核对全文补足缺失内容，不得只补结束标记。\n'
               '# 原要求\n'+state.get('task', '')+'\n# 用户模板\n'+(ctx.template_requirements or '')+
               '\n# 研究大纲（可按表达需要调整）\n'+json.dumps(state.get('outline', []), ensure_ascii=False)+
               '\n# 研究问题、已有判断与未解决部分\n'+json.dumps(research_questions, ensure_ascii=False)+
@@ -60,20 +66,31 @@ async def _update(state, runtime, *, repairing=False):
     prompt += literature_context(store.root, state.get('task','')+'\n'+evidence)
     if repairing:
         prompt += '\n# 本版本待修复意见\n'+json.dumps(state.get('issues') or [], ensure_ascii=False)
+        compilation=project.meta(store.root).get('compile',{})
+        if compilation.get('source_version')==state['source_version'] and not compilation.get('success'):
+            prompt += '\n# 当前版本编译反馈\n'+json.dumps(compilation,ensure_ascii=False)
     await ctx.set_stage('validate' if repairing else 'write', 'in_progress', '修改当前 LaTeX 源码')
     from ai_system.research.store import digest
     signature = digest({'source':state['source_version'], 'issues':state.get('issues') or []})
     publication=store.snapshot().get('publication') or {}
     history=publication.get('repair_inputs',[])
-    if repairing and history[publication.get('repair_resume_offset',0):].count(signature) >= 3:
-        return {'research_blocked':True, 'message':'论文修订未完成：同一版本的意见反复修复未成功，源码与修改历史已保留。',
-                'log':['同一源码与意见未能修复，源码与修改历史已保留']}
+    if repairing and len(history[publication.get('repair_resume_offset',0):]) >= 2:
+        reason='；'.join(i['message'] for i in state.get('issues') or [])
+        message='论文修复未完成：已尝试两次自动修复。'+reason+'。源码、修改历史和编译日志已保留；继续将从写作恢复。'
+        await ctx.set_stage('validate','blocked',message)
+        return {'research_blocked':True, 'message':message, 'log':[message]}
 
     def patches_for(answer):
         if len({edit.target for edit in answer.edits}) != len(answer.edits):
             raise ValueError('一次修改不能重复选择同一片段')
         patches = []
         for edit in answer.edits:
+            for ref in set(edit.result_refs + find_refs(edit.replacement)):
+                if ref not in results or (results[ref]['kind']!='figure' and results[ref]['value'] in (None,'')):
+                    raise ValueError(f'结果 {ref} 不存在或没有实际取值，请报告 research_gap，不得猜值')
+            from ai_system.export.latex import result_reference_issues
+            if problems:=result_reference_issues(edit.replacement):
+                raise ValueError('；'.join(problems))
             if edit.target not in targets:
                 raise ValueError('target 不属于当前源码版本，请从提供的片段或文件标记中选择')
             selected = targets[edit.target]
@@ -83,15 +100,16 @@ async def _update(state, runtime, *, repairing=False):
         if patches:project.validate_patches(store.root, patches)
         return patches
     def validate(answer):
-        if answer.research_gap and answer.edits:raise ValueError('证据缺口交回研究层时不得同时改写正文')
+        if answer.research_gap and answer.edits:raise ValueError('报告依据缺项时不得同时改写正文')
         patches_for(answer)
     answer = await call_structured(ctx.writer_llm, SourceEdits, as_messages(STYLE+'\n输出 SourceEdits JSON；replacement 使用原生 LaTeX，可修改章节结构、导言区和宏，保持现有项目与用户模板一致。', prompt), validate=validate)
     if answer.research_gap:
-        return {'research_restart':True,'research_gap':answer.research_gap,'log':['写作发现实质证据缺口：'+answer.research_gap]}
+        message='论文写作缺少可用依据：'+answer.research_gap+'。源码和已有实验结果已保留，补充后从写作继续。'
+        return {'research_blocked':True,'message':message,'log':[message]}
     patches = []
     from ai_system.research.citations import render_citations
-    for patch in patches_for(answer):
-        refs = find_refs(patch['replacement'])
+    for edit,patch in zip(answer.edits,patches_for(answer)):
+        refs = edit.result_refs + find_refs(patch['replacement'])
         rendered = publication_text(render_citations(store.root, ctx.registry.render(patch['replacement'], latex=True), True))
         if refs:
             rendered += '\n% paperagent:evidence '+','.join(sorted(set(refs)))+'\n'
