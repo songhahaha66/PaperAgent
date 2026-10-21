@@ -11,7 +11,6 @@ from .markdown_prep import run_command
 TEMPLATE_PATH = Path(__file__).with_name("template.tex")
 BUILD_DIR = ".system/latex"
 COMPILE_TIMEOUT = 180
-LOG_ERROR = re.compile(r"^! .*$", re.MULTILINE)
 
 
 @dataclass
@@ -21,6 +20,7 @@ class LatexResult:
     pages: Optional[int] = None
     error: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
+    diagnostics: List[dict] = field(default_factory=list)
 
 
 def escape_plain(text: str) -> str:
@@ -68,8 +68,17 @@ def fragment_issues(text: str) -> List[str]:
     return issues
 
 
-def _log_errors(log: str) -> List[str]:
-    return [line.strip() for line in LOG_ERROR.findall(log)][:5]
+def compile_diagnostics(log: str) -> List[dict]:
+    """Read TeX's file/line diagnostics, including the offending command."""
+    lines=log.splitlines();errors=[]
+    for index,line in enumerate(lines):
+        match=re.match(r'^(.*?\.(?:tex|sty|cls)):(\d+):\s*(.+)$',line)
+        if not match and not line.startswith('! '):continue
+        context='\n'.join(lines[index+1:index+4]).strip()
+        errors.append({'file':match[1].removeprefix('./') if match else None,
+                       'line':int(match[2]) if match else None,
+                       'message':match[3] if match else line[2:], 'context':context})
+    return errors[:5]
 
 
 async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResult:
@@ -84,7 +93,7 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
     stem = Path(tex_name).stem
     pdf = build / f"{stem}.pdf"
     pdf.unlink(missing_ok=True)
-    cmd = ["xelatex", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"-output-directory={BUILD_DIR}", tex_name]
+    cmd = ["xelatex", "-no-shell-escape", "-file-line-error", "-interaction=nonstopmode", "-halt-on-error", f"-output-directory={BUILD_DIR}", tex_name]
     out = ""
     for iteration in range(3):  # bibliography, then resolve cross-references
         code, out, _err = await run_command(cmd, workspace, timeout=COMPILE_TIMEOUT)
@@ -102,7 +111,9 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
                     return result
     log_file = build / f"{stem}.log"
     log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else out
-    errors = _log_errors(log)
+    result.diagnostics = compile_diagnostics(log)
+    errors = [(f"{d['file']} 第{d['line']}行：" if d['file'] else '')+d['message']+' '+d['context'].split('\n')[0]
+              for d in result.diagnostics]
     if "There were undefined references" in log or "There were undefined citations" in log:
         errors.append("存在未定义的交叉引用")
     if code != 0 or errors or not pdf.exists():

@@ -195,3 +195,34 @@ def test_review_failure_retains_actual_reason_and_blocked_action_does_not_repeat
     snapshot={'action':{'capability':'writing.validate','status':'failed','reason':'准备开始撰写论文'},
               'delivery_stages':{'validate':{'note':'正文审查未完成：targets 引用错误'}}}
     assert decision_block_message(None,snapshot)=='正文审查未完成：targets 引用错误'
+
+
+def test_compile_diagnostic_routes_to_existing_repair_and_only_compiler_closes_it(native,monkeypatch):
+    from ai_system.export.latex import LatexResult, BUILD_DIR, compile_diagnostics
+    from ai_system.modules.writing.export import _latex
+    log='./part.tex:12: Undefined control sequence.\nl.12 结果如\\cref\n {tab:comparison}所示。\n'
+    diagnostics=compile_diagnostics(log)
+    assert diagnostics[0]['file']=='part.tex' and diagnostics[0]['line']==12
+    async def fail(folder,*args):
+        build=folder/BUILD_DIR;build.mkdir(parents=True)
+        (build/'paper.log').write_text(log)
+        return LatexResult('paper.tex',error='part.tex 第12行：Undefined control sequence. \\cref',diagnostics=diagnostics)
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',fail)
+    async def noop(*args):pass
+    ctx=SimpleNamespace(research=native.store,workspace=native.store.root,set_stage=noop,
+                        events=SimpleNamespace(file_changed=noop,emit=noop,stage=noop))
+    result=asyncio.run(_latex(ctx))
+    assert not result.get('research_blocked') and result['issues']
+    issue=next(i for i in native.store.snapshot()['feedback'] if i['source']=='latex.compile')
+    assert issue['status']=='confirmed' and not issue['blocking']
+    compilation=project.meta(native.store.root)['compile']
+    assert (native.store.root/compilation['log_path']).read_text()==log
+    assert compilation['diagnostics'][0]['line']==12
+    (native.store.root/'part.tex').write_text('修正后的源码')
+    assert next(i for i in native.store.snapshot()['feedback'] if i['id']==issue['id'])['status']=='confirmed'
+    async def success(folder,*args):
+        (folder/'paper.pdf').write_bytes(b'%PDF-verified-fixture')
+        return LatexResult('paper.tex',pdf_path='paper.pdf')
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
+    asyncio.run(project.compile_project(native.store))
+    assert next(i for i in native.store.snapshot()['feedback'] if i['id']==issue['id'])['status']=='resolved'

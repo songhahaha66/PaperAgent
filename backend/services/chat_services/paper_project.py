@@ -317,7 +317,7 @@ async def decide(store, change_id, decision, *, compile_after=True, expected_ver
 
 async def compile_project(store):
     """Compile an immutable source snapshot; failed builds retain the last PDF."""
-    from ai_system.export.latex import compile_pdf
+    from ai_system.export.latex import compile_pdf, BUILD_DIR, LatexResult
     before=snapshot(store.root);version=before['version'];main=before['main']
     with tempfile.TemporaryDirectory(prefix='paper-project-') as folder:
         staging=Path(folder)
@@ -326,10 +326,16 @@ async def compile_project(store):
             shutil.copyfile(store.root/VERSIONS/version/row['path'],target)
         try:
             result=await compile_pdf(staging,main)
-        except Exception:
-            from types import SimpleNamespace
-            result=SimpleNamespace(pdf_path=None,error='编译服务未完成，上次成功 PDF 已保留；请查看技术日志或重试。')
-        with store._transaction():
+        except Exception as exc:
+            from ai_system.research.review_cache import error_detail
+            result=LatexResult(tex_path=main,error='编译服务未完成：'+error_detail(exc)+'。上次成功 PDF 已保留。')
+        log_path=None
+        log=staging/BUILD_DIR/f'{Path(main).stem}.log'
+        if log.is_file():
+            log_path=f'{BUILD_DIR}/{version}/compile.log'
+            destination=store.root/log_path;destination.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(log,destination)
+        with store._transaction() as db:
             data=meta(store.root)
             if snapshot(store.root)['version']!=version:
                 data['compile']={'state':'stale','message':'编译期间源码已更新，请重新编译。上次成功 PDF 已保留。'}
@@ -338,8 +344,16 @@ async def compile_project(store):
                 shutil.copyfile(staging/result.pdf_path,tmp);tmp.replace(target)
                 data['pdf_version']=version
                 data['compile']={'state':'current','message':'PDF 已与当前源码同步','warnings':result.warnings}
+                state=store._read(db)
+                closed=[]
+                for issue in state['feedback']:
+                    if issue['source']=='latex.compile' and issue['status'] not in {'resolved','dismissed','superseded'}:
+                        issue.update(status='resolved',review_resolution={'source_version':version,'source':'xelatex'})
+                        closed.append(issue['id'])
+                if closed:store._save(db,state,'latex_source_errors_resolved',{'issues':closed,'source_version':version})
             else:
-                data['compile']={'state':'failed','message':result.error or 'PDF 编译失败，上次成功预览已保留'}
+                data['compile']={'state':'failed','message':result.error or 'PDF 编译失败，上次成功预览已保留',
+                                 'diagnostics':result.diagnostics,'source_version':version,'log_path':log_path}
             atomic_text(store.root/META,json.dumps(data,ensure_ascii=False))
     return meta(store.root)
 

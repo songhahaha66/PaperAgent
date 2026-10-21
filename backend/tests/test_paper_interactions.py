@@ -220,7 +220,8 @@ def test_comment_writing_has_one_format_repair_without_repeating_tools(paper,mon
 def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
     store,_=paper;path=store.root/'paper.tex';path.write_text('原稿中有 \\custom{宏} 和公式 $x^2$。')
     pdf=store.root/'paper.pdf';pdf.write_bytes(b'last good pdf')
-    async def fail(*args):return SimpleNamespace(pdf_path=None,error='花括号未配对',warnings=[])
+    from ai_system.export.latex import LatexResult
+    async def fail(*args):return LatexResult('paper.tex',error='花括号未配对')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',fail)
     p=change(store,selection(store,'原稿',file='paper.tex'),'新稿')
     run(project.decide(store,p['id'],'apply'))

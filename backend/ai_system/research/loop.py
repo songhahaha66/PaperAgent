@@ -260,7 +260,7 @@ async def _act(request, runtime):
                         publication['repairs']+=1
                         publication['repair_inputs'].append(patch.pop('repair_input'))
                         publication['stage']='validate'
-                    elif step=='validate' and patch.get('issues'):
+                    elif step in {'validate','export'} and patch.get('issues'):
                         publication['stage']='repair'
                     else:
                         next_index=PUBLICATION.index(step)+1
