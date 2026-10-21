@@ -81,57 +81,8 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
 
 
 def test_format_failure_retains_candidate_and_explicit_resume_keeps_cumulative_usage(tmp_path):
-    from ai_system.research.loop import prepare_action, resume
-    from ai_system.research.runtime import ResearchRuntime, budget_scope
-    candidate={'action':'experiment','reason':'检验当前问题',
-        'question_updates':[{'question':'给定观测支持什么结论？'}],
-        'method':'统计给定观测','conditions':'','evaluation':'核对源记录'}
-    store=ResearchStore(tmp_path,'format-recovery');store.initialize('统计给定观测并说明结论。')
-    runtime=ResearchRuntime(tmp_path,store.research_id)
-    class Model:
-        model_name='Qwen-test'
-        calls=0
-        corrected=False
-        async def ainvoke(self,messages):
-            self.calls+=1
-            runtime.reserve('offline-model')
-            reply={**candidate,'conditions':'全部给定观测'} if self.corrected else candidate
-            return AIMessage(content=json.dumps(reply,ensure_ascii=False))
-    model=Model()
-    async def event(*args):pass
-    ctx=SimpleNamespace(research=store,planner_llm=model,max_planning_calls=None,
-        events=SimpleNamespace(stage=event,emit=event))
-    with budget_scope(tmp_path,store.research_id):
-        assert asyncio.run(prepare_action(ctx))
-    failed=store.snapshot();action=failed['action']
-    assert action['status']=='failed' and action['phase']=='decision'
-    assert 'conditions' in action['error'] and action['error_type']=='InvalidStructuredReply'
-    assert json.loads(action['candidate']['response'])==candidate
-    assert not failed['questions'] and not failed['experiments'] and not failed['executions']
-    assert model.calls==runtime.status()['used']==2
-    with runtime.store._connect() as db:
-        assert not db.execute('SELECT 1 FROM failure_guards').fetchone()
-    assert runtime.stop_reason() is None
-    resume(store)
-    assert store.snapshot()['action']['candidate']==action['candidate']
-    assert runtime.status()['used']==2
-    model.corrected=True
-    with budget_scope(tmp_path,store.research_id):
-        assert not asyncio.run(prepare_action(ctx))
-    recovered=store.snapshot()
-    assert recovered['action']['capability']=='experiments.execute' and recovered['action']['status']=='planned'
-    assert len(recovered['questions'])==len(recovered['experiments'])==1 and not recovered['executions']
-    assert recovered['spec']['requirement']==failed['spec']['requirement']
-    assert recovered['spec']['amendments']==failed['spec']['amendments']
-    assert [{k:v for k,v in requirement.items() if k!='task_ids'} for requirement in recovered['spec']['requirements']]==[
-        {k:v for k,v in requirement.items() if k!='task_ids'} for requirement in failed['spec']['requirements']]
-    eid=recovered['action']['target']
-    assert [requirement['task_ids'] for requirement in recovered['spec']['requirements']]==[
-        [*requirement['task_ids'],eid] for requirement in failed['spec']['requirements']]
-    assert model.calls==runtime.status()['used']==3
-    with store._connect() as db:
-        journal=[json.loads(row[0]) for row in db.execute('SELECT payload FROM journal WHERE research_id=?',(store.research_id,))]
-    assert any(row.get('candidate')==action['candidate'] and row.get('phase')=='decision' for row in journal)
+    from test_planner_action_contract import test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_usage
+    test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_usage(tmp_path)
 
 
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):

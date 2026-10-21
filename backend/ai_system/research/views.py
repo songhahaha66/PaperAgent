@@ -6,7 +6,10 @@ from .progress import issue_next_step
 from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
-LABELS = {'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
+LABELS = {'research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
+    'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
+    'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用未完成',
+    'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有证据','literature.collect':'获取文献证据',
     'writing.write':'撰写论文',
     'writing.validate':'检查论文','writing.repair':'修订论文',
@@ -118,7 +121,8 @@ def execution(snapshot, work_status=None):
 def research_history(store, snapshot):
     """Important journal facts only. Missing historical clocks/links stay unknown."""
     import json
-    labels={'research_observed':'研究安排','attempt_committed':'实验执行结束',
+    labels={'question_updated':'问题已更新','experiment_created':'已安排实验','experiment_continued':'继续实验',
+            'delivery_requested':'开始交付','research_observed':'问题判断已更新','attempt_committed':'实验执行结束',
             'inputs_changed':'输入已改变','research_revised':'研究要求已修改',
             'recovery_requested':'恢复研究','action_failed':'操作未完成',
             'clarification_requested':'等待补充信息','action_interrupted':'研究已暂停',

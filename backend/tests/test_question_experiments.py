@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 from ai_system.research.store import ResearchStore
 from ai_system.research.models import WorkerResult, IssueReport, ResearchRevision
-from ai_system.research.planner import NextAction, Judgment, validate_action
-from ai_system.research.loop import create_experiment, prepare_action, act, resume
+from ai_system.research import operations
+from research_tools_helpers import add_experiment,answer
+from ai_system.research.loop import prepare_action, act, resume
 from ai_system.research.control import graph_view
 from ai_system.research.domain import experiment_report
 from services.chat_services.research_session import research_snapshot
@@ -15,9 +16,8 @@ from services.file_services.workspace_fs import WorkspaceFS
 
 
 def experiment(store, *, question_id=None, name='窗口均值'):
-    return create_experiment(store, NextAction(action='experiment',reason='检验预测误差',
-        question_id=question_id,question_updates=[] if question_id else [{'question':'怎样预测下一周需求？'}],title=name,
-        method=name,conditions='前15天训练，后5天固定验证',evaluation='比较MAE，差异不足时保留两种方法'))
+    return add_experiment(store,'怎样预测下一周需求？',question_id=question_id,title=name,
+        method=name,conditions='前15天训练，后5天固定验证',evaluation='比较MAE，差异不足时保留两种方法')
 
 
 def finish(store, eid, *, failed=False):
@@ -52,11 +52,9 @@ def test_multiple_methods_keep_ownership_and_failed_method_does_not_block_questi
     assert {a['experiment_id'] for a in state['artifacts'].values()}=={first,second,bad}
     assert {'result','code','stdout','report'}<={a['type'] for a in state['artifacts'].values()}
     assert not store.delivery_ready(state)  # Results alone are not a recorded answer.
-    from ai_system.research.loop import _save_assessments
     refs=[r['id'] for r in store.registry_payload()['results']]
-    _save_assessments(store,NextAction(action='observe',reason='记录当前有限结论',judgments=[
-        Judgment(question_id=qid,statement='两项方法已得到固定验证输出',artifact_refs=refs,
-                 coverage='answered',stop_reason='已比较给定方法，仿真执行故障另行保留')]))
+    answer(store,question_id=qid,statement='两项方法已得到固定验证输出',artifact_refs=refs,
+        coverage='answered',stop_reason='已比较给定方法，仿真执行故障另行保留')
     state=store.snapshot();assert store.delivery_ready(state)
     assert len(store.registry_payload()['results'])==2
     store.recover();resume(store)
@@ -98,22 +96,22 @@ def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path
     async def stage(*args):pass
     ctx=SimpleNamespace(research=store,planner_llm=None,max_planning_calls=None,
                         events=SimpleNamespace(stage=stage,emit=stage))
-    async def decide(self,state,context):
+    async def decide(self,ctx,context,observation_id):
         calls.append(context)
-        action=NextAction(action='experiment',reason='方法明确，直接计算',question_updates=[{'question':'怎样预测下一周需求？'}],
-            title='窗口均值',method='最后三天均值',conditions='最后五天固定验证',evaluation='MAE')
-        validate_action(action,state,context)
-        return action
-    monkeypatch.setattr('ai_system.research.planner.Planner.decide',decide)
+        qid=operations.update_question(ctx,{'question':'怎样预测下一周需求？','question_id':None,'base_version':1,
+            'title':'','reason':'','source_question_ids':[],'experiment_ids':[],'retire_source_ids':[]})['question_id']
+        operations.schedule_experiment(ctx,operations.ExperimentInput(question_id=qid,title='窗口均值',
+            plan={'conditions':'最后五天固定验证','evaluation':'MAE','candidates':[{'name':'窗口均值','instruction':'最后三天均值'}]}).model_dump())
+    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     assert not asyncio.run(prepare_action(ctx))
     action=store.snapshot()['action'];eid=action['target'];finish(store,eid)
     with store._transaction() as db:
         state=store._read(db);state['action']['status']='running'
         store._save(db,state,'interrupted_after_commit',{})
     store.recover();resume(store)
-    async def pause(self,state,context):
-        return NextAction(action='pause',reason='本轮检查结束')
-    monkeypatch.setattr('ai_system.research.planner.Planner.decide',pause)
+    async def pause(self,ctx,context,observation_id):
+        operations.pause(ctx,{'message':'本轮检查结束'})
+    monkeypatch.setattr('ai_system.research.planner.Planner.run',pause)
     assert asyncio.run(prepare_action(ctx))
     assert len(store.snapshot()['executions'])==1 and len(calls)==1
     original=store.snapshot();revision=ResearchRevision(command_id='change',base_revision=original['revision'],
@@ -137,14 +135,18 @@ def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_
     class Writer:
         async def ainvoke(self,messages):
             return AIMessage(content='本节依据实测结果 {{R:R1}} 说明当前条件下的结论，推广仍需验证。')
-    async def decide(self,state,context):
+    async def decide(self,ctx,context,observation_id):
+        state=ctx.research.snapshot()
         if not state['experiments']:
-            return NextAction(action='experiment',reason='先检验固定方法',question_updates=[{'question':'给定计算的结果是多少？'}],
-                title='固定计算',method='计算 6*7 并登记',conditions='Python整数运算',evaluation='核对精确值')
+            from research_tools_helpers import add_question
+            qid=add_question(ctx.research,'给定计算的结果是多少？')
+            return operations.schedule_experiment(ctx,operations.ExperimentInput(question_id=qid,title='固定计算',
+                plan={'conditions':'Python整数运算','evaluation':'核对精确值','candidates':[{'name':'固定计算','instruction':'计算 6*7 并登记'}]}).model_dump())
         eid=next(iter(state['experiments']));qid=state['experiments'][eid]['question_id']
         refs=[r['payload']['id'] for r in state['artifacts'].values() if r['type']=='result']
-        return NextAction(action='write',reason='已有真实计算结果，开始整理草稿',title='计算研究',judgments=[
-            Judgment(question_id=qid,statement='整数计算结果为42',artifact_refs=refs,coverage='answered',stop_reason='已完成指定整数运算')])
+        answer(ctx.research,question_id=qid,statement='整数计算结果为42',artifact_refs=refs,
+            coverage='answered',stop_reason='已完成指定整数运算')
+        return operations.deliver(ctx,{'title':'计算研究','reason':'已有真实计算结果，开始整理草稿'})
     async def solve(branch,runtime):
         ctx=runtime.context;eid=branch['subproblem']['id']
         run=await ctx.kernels.get(eid).execute("print(6*7)")
@@ -152,7 +154,7 @@ def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_
         result=ctx.registry.record_value(subproblem=eid,name='计算结果',value='42',run_id=run.run_id)
         return {'solutions':{eid:{'status':'completed','summary':'结果 {{R:'+result.id+'}}','approach':'整数计算'}},
                 'designs':{eid:experiment_design(branch['experiment'])}}
-    monkeypatch.setattr('ai_system.research.planner.Planner.decide',decide)
+    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
     async def run():
         ctx=GraphContext.create(str(tmp_path),planner_llm=Writer(),max_review_rounds=0,check_claims=False)

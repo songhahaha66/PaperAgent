@@ -1,6 +1,18 @@
 """Version questions independently of experiments; reuse evidence across scope changes."""
 from copy import deepcopy
-from .models import ResearchConflict
+from .models import Contract, ResearchConflict
+from pydantic import Field
+
+
+class QuestionUpdate(Contract):
+    question_id: str | None = None
+    base_version: int = Field(default=1,ge=1)
+    question: str = Field(min_length=1)
+    title: str = ""
+    reason: str = ""
+    source_question_ids: list[str] = Field(default_factory=list)
+    experiment_ids: list[str] = Field(default_factory=list)
+    retire_source_ids: list[str] = Field(default_factory=list)
 
 
 def projected_questions(snapshot, updates):

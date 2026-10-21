@@ -32,7 +32,7 @@ from ai_system.graph.state import (
 )
 from ai_system.research import ENGINE_VERSION
 from ai_system.research.models import Requirement, Assumption, IssueReport
-from ai_system.research.planner import AmendmentSpec, NextAction
+from ai_system.research.planner import AmendmentSpec
 from ai_system.research.store import ResearchStore
 from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
@@ -96,24 +96,6 @@ def decision_outline(context,coverage):
         ('symbols','符号说明'),('solve_heading','模型建立与求解'),('sensitivity','灵敏度分析'),('evaluation','模型评价')]]
 
 
-def controller_reply(context, plan=None):
-    plan=plan or _analysis()
-    existing={e['objective']:e for e in context['experiments']}
-    for problem in plan.subproblems:
-        if problem.kind=='writing':continue
-        current=existing.get(problem.question)
-        if current and current['acceptance']=='accepted' and current['validity']=='current':continue
-        if current and current['execution_status'] in {'failed','cancelled'}:
-            return {'action':'experiment','reason':'重试执行故障','experiment_id':current['task_id']}
-        dependencies=[next((e for e in context['experiments'] if e['objective']==sp.question),None)
-                      for sp in plan.subproblems if sp.id in problem.depends_on]
-        if any(e is None or e['acceptance']!='accepted' for e in dependencies):continue
-        return {'action':'experiment','reason':'验证明确方法','question':problem.question,'title':problem.title,
-            'method':problem.title,'conditions':'使用当前原题数据','evaluation':'核对实测结果与原题要求',
-            'artifact_refs':[r['id'] for r in context['artifacts'] if any(r['subproblem']==e['task_id'] for e in dependencies)]}
-    return {'action':'write','reason':'实际结果已经回答原题，开始整理草稿','title':plan.title}
-
-
 class _Structured:
     reviewed_q1 = False
     audits = 0
@@ -122,9 +104,6 @@ class _Structured:
         self.schema = schema
 
     async def ainvoke(self, messages):
-        if self.schema is NextAction:
-            context=json.loads(messages[-1].content)
-            return NextAction.model_validate(controller_reply(context))
         if self.schema is AmendmentSpec:
             data = json.loads(messages[-1].content)
             number = max(int(r[2:]) for r in data["used_requirement_ids"]) + 1

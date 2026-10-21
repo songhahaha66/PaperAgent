@@ -122,14 +122,12 @@ def test_manual_edit_preserves_both_paper_versions(tmp_path):
     store = make_store(tmp_path)
     for key in ("Q1", "Q2", "Q3"):
         finish(store, key)
-    from ai_system.research.loop import _save_assessments
-    from ai_system.research.planner import NextAction,Judgment
+    from research_tools_helpers import answer
     current=store.snapshot();results=store.registry_payload()['results']
-    _save_assessments(store,NextAction(action='write',reason='依据实际结果形成当前答案',judgments=[
-        Judgment(coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
+    for key in ('Q1','Q2','Q3'):
+        answer(store,coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
             statement='本次条件下的结果 {{R:'+next(r['id'] for r in results if r['subproblem']==key)+'}}',
             artifact_refs=[r['id'] for r in results if r['subproblem']==key],limitations=['仅适用于当前实验条件'])
-        for key in ('Q1','Q2','Q3')]))
     assert store.publish_paper("generated one") == ("paper.md", False)
     (tmp_path / "paper.md").write_text("human edits")
     path, conflict = store.publish_paper("generated two")

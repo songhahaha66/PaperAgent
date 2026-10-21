@@ -77,6 +77,9 @@ class ModuleRegistry:
         if model_callable and not purpose.strip():raise ValueError('模型可调用能力必须声明用途和产物边界')
         self._capabilities[name] = Capability(name, module, product, handler, inputs,purpose,model_callable)
 
+    def model_capabilities(self):
+        return [c for c in self._capabilities.values() if c.model_callable]
+
     def research_tools(self):
         return [{'name':c.name,'purpose':c.purpose,'inputs':c.inputs.model_json_schema(),'product':c.product}
                 for c in self._capabilities.values() if c.model_callable]
@@ -99,8 +102,8 @@ class ModuleRegistry:
         try:
             from ai_system.research.views import activity
             branch=request.inputs.get('branch') or {}
-            task_id=request.inputs.get('task_id') or branch.get('subproblem',{}).get('id')
-            with activity(ctx,request.name,task_id) as execution:
+            task_id=request.inputs.get('task_id') or request.inputs.get('experiment_id') or branch.get('subproblem',{}).get('id')
+            with activity(ctx,request.name,task_id,**({'question_id':request.inputs['question_id']} if request.inputs.get('question_id') else {})) as execution:
                 execution['inputs'] = request.inputs if not request.name.startswith('writing.') else {'source':'当前研究与版本化正文'}
                 with capability_span(request.name, capability.module, request.inputs) as span:
                     result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
@@ -110,6 +113,8 @@ class ModuleRegistry:
                         raise TypeError(f"能力产物不符合接口：{request.name}")
                     if isinstance(result.value,dict) and not request.name.startswith('writing.'):
                         execution['output'] = result.value
+                        if result.value.get('question_id'):execution['question_id']=result.value['question_id']
+                        if result.value.get('experiment_id'):execution['experiment_id']=result.value['experiment_id']
                     if isinstance(result.value,dict) and result.value.get('research_blocked'):
                         execution.update(status='failed',message=result.value.get('message'))
                     if span is not None:
@@ -140,10 +145,10 @@ def capabilities():
     global _registry
     if _registry is None:
         from . import literature, writing, experience
-        from ai_system.research import feedback
+        from ai_system.research import feedback, operations
         from .experiments import module
         registry = ModuleRegistry()
-        for owner in (literature, module, writing, experience, feedback):
+        for owner in (literature, module, writing, experience, feedback, operations):
             owner.register(registry)
         _registry = registry
     return _registry

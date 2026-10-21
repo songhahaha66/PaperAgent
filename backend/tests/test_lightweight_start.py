@@ -41,14 +41,15 @@ def test_start_persists_source_materials_and_output_without_a_plan(tmp_path):
 def test_first_observe_can_inspect_without_tasks_or_extra_model_calls(tmp_path, monkeypatch):
     ctx = setup(tmp_path)
     calls = []
-    async def decide(self, snapshot, context):
+    async def decide(self,ctx,context,observation_id):
         calls.append(context)
         assert not context['experiments'] and not context['artifacts']
-        return planner.NextAction(action='inspect', reason='先查看材料是否能回答需求。')
-    monkeypatch.setattr(planner.Planner, 'decide', decide)
+        from ai_system.modules.registry import invoke
+        await invoke(ctx,'experiments.inspect')
+    monkeypatch.setattr(planner.Planner, 'run', decide)
     state = asyncio.run(control.observe({'task':SOURCE}, SimpleNamespace(context=ctx)))
     action = loop.select(state, SimpleNamespace(context=ctx))
-    assert ctx.research.snapshot()['action']['capability'] == 'experiments.inspect'
+    assert any(a['capability']=='experiments.inspect' for a in ctx.research.snapshot()['activity'])
     assert len(calls) == 1 and not ctx.research.snapshot()['experiments']
     assert state['analysis']['subproblems'] == [] and state['analysis']['restatement'] == SOURCE
-    assert state['data_profile'] == ''
+    assert state['data_profile'] == ctx.research.snapshot()['materials']['profile']

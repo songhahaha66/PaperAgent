@@ -11,9 +11,12 @@ from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import ResultRegistry
 from ai_system.research.domain import current_result_refs, experiment_report
 from ai_system.research.feedback import ReportEdit, FeedbackDecision, interpretation_version, revise_interpretation
-from ai_system.research.loop import create_experiment, prepare_action
+from ai_system.research.loop import prepare_action
+from research_tools_helpers import add_experiment,answer
+from ai_system.research import operations
 from ai_system.research.models import WorkerResult, IssueReport, ResearchConflict
-from ai_system.research.planner import NextAction, QuestionUpdate, Judgment, decision_context, validate_action
+from ai_system.research.planner import decision_context
+from ai_system.research.questions import QuestionUpdate
 from ai_system.research.questions import apply_questions
 from ai_system.research.store import ResearchStore
 from ai_system.research.views import questions
@@ -24,8 +27,7 @@ from services.file_services.workspace_fs import WorkspaceFS
 @pytest.fixture
 def study(tmp_path):
     store=ResearchStore(tmp_path,'architecture');store.initialize('Compare aggregate records and selected subjects.')
-    eid=create_experiment(store,NextAction(action='experiment',reason='Measure source rows',information_need='Need record count',
-        question_updates=[{'question':'What does the supplied material establish?'}],method='count source rows',conditions='entire source',evaluation='retain original row identity'))
+    eid=add_experiment(store,'What does the supplied material establish?',method='count source rows',conditions='entire source',evaluation='retain original row identity')
     order=store.claim(eid)
     fs=WorkspaceFS(str(tmp_path));run=fs.create_run();fs.save_run_input(run,'print(12)');fs.save_run_stdout(run,'12\n');fs.finish_run(run,'success')
     registry=ResultRegistry(fs,allocate_id=store.allocate_ref)
@@ -114,21 +116,20 @@ def test_semantic_doubts_do_not_automatically_schedule_another_review(study,monk
         state=study.store._read(db)
         study.store._record_issue(state,IssueReport(task_id=study.eid,category='writing',message='Check interpretation'),'suspected',source='local_review')
         study.store._save(db,state,'test_doubt',{})
-    async def decide(self,snapshot,context):return NextAction(action='pause',reason='Owner decides next step')
+    async def decide(self,ctx,context,observation_id):
+        operations.pause(ctx,{'message':'Owner decides next step'})
     async def event(*args):pass
-    monkeypatch.setattr('ai_system.research.planner.Planner.decide',decide)
+    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     ctx=SimpleNamespace(research=study.store,planner_llm=None,max_planning_calls=None,events=SimpleNamespace(stage=event,emit=event))
     assert asyncio.run(prepare_action(ctx))
     assert study.store.snapshot()['action']['capability']=='pause'
 
 
 def test_same_experiment_continuation_inherits_evidence_without_relabeling_source(study,monkeypatch):
-    async def decide(self,snapshot,context):
-        action=NextAction(action='continue',reason='Inspect additional condition within fixed method',
-                          information_need='Need one additional descriptive measurement',experiment_id=study.eid)
-        validate_action(action,snapshot,context);return action
+    async def decide(self,ctx,context,observation_id):
+        operations.continue_experiment(ctx,{'experiment_id':study.eid,'information_need':'Need one additional descriptive measurement'})
     async def event(*args):pass
-    monkeypatch.setattr('ai_system.research.planner.Planner.decide',decide)
+    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     ctx=SimpleNamespace(research=study.store,planner_llm=None,max_planning_calls=None,events=SimpleNamespace(stage=event,emit=event))
     asyncio.run(prepare_action(ctx));order=study.store.claim(study.eid)
     before=study.store.snapshot();artifact=copy.deepcopy(before['artifacts'][study.value.id])
@@ -165,8 +166,7 @@ def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,m
         ctx=GraphContext.create(str(tmp_path),planner_llm=None,max_review_rounds=0,check_claims=False)
         ctx.research=ResearchStore(tmp_path,'kernel-continuation')
         ctx.research.initialize('Count the supplied observations and derive a scaled count.')
-        eid=create_experiment(ctx.research,NextAction(action='experiment',reason='Count',question_updates=[{'question':'What can be concluded?'}],
-            method='count and scale',conditions='fixed observations',evaluation='exact arithmetic'))
+        eid=add_experiment(ctx.research,'What can be concluded?',method='count and scale',conditions='fixed observations',evaluation='exact arithmetic')
         async def solve(branch,runtime):
             local=runtime.context
             if branch.get('continuation'):
@@ -281,11 +281,11 @@ def test_new_revision_reopens_finished_study_and_idempotent_retry_does_not(study
     assert revised['outcome']=='running'
     assert revised['executions']==before['executions'] and revised['artifacts']==before['artifacts']
     observed=[]
-    async def decide(self,snapshot,context):
-        observed.append(snapshot['revision'])
-        return NextAction(action='pause',reason='New revision reached the research decision loop')
+    async def decide(self,ctx,context,observation_id):
+        observed.append(ctx.research.snapshot()['revision'])
+        operations.pause(ctx,{'message':'New revision reached the research decision loop'})
     async def event(*args):pass
-    monkeypatch.setattr('ai_system.research.planner.Planner.decide',decide)
+    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     ctx=SimpleNamespace(research=study.store,planner_llm=None,max_planning_calls=None,
         events=SimpleNamespace(stage=event,emit=event))
     assert asyncio.run(prepare_action(ctx))
@@ -296,19 +296,18 @@ def test_new_revision_reopens_finished_study_and_idempotent_retry_does_not(study
     assert study.store.snapshot()==finished
 
 
-def test_empty_observe_rejected_but_current_answer_change_is_allowed(study):
-    state=study.store.snapshot();_,context=decision_context(study.store,state)
-    with pytest.raises(ValueError,match='没有实际'):
-        validate_action(NextAction(action='observe',reason='Think again'),state,context)
-    changed=NextAction(action='observe',reason='Narrow the explanation',judgments=[
-        Judgment(question_id=study.qid,statement='Limited to the observed source rows',artifact_refs=[study.value.id])])
-    validate_action(changed,state,context)
-    unchanged=NextAction(action='observe',reason='No new information',judgments=[Judgment(
-        question_id=study.qid,statement='Current answer',artifact_refs=[study.value.id],
-        coverage='answered',stop_reason='All supplied source rows are accounted for')])
-    with pytest.raises(ValueError,match='没有实际'):validate_action(unchanged,state,context)
-    state['questions'][study.qid]['answer_status']='needs_update'
-    validate_action(unchanged,state,context)  # Reassessment may retain the same answer.
+def test_unchanged_answer_is_not_new_progress_but_stale_answer_can_be_reassessed(study):
+    values=dict(question_id=study.qid,statement='Limited to the observed source rows',artifact_refs=[study.value.id])
+    first=answer(study.store,**values)
+    before=study.store.snapshot()
+    second=answer(study.store,**values)
+    assert not first['unchanged'] and second['unchanged']
+    assert study.store.snapshot()==before
+    with study.store._transaction() as db:
+        state=study.store._read(db);state['questions'][study.qid]['answer_status']='needs_update'
+        study.store._save(db,state,'test_reassessment',{})
+    assert not answer(study.store,**values)['unchanged']
+    assert study.store.snapshot()['questions'][study.qid]['answer_status']=='current'
 
 
 def test_delivery_closes_each_problem_without_requiring_positive_answers(study):
@@ -351,8 +350,7 @@ def test_question_scope_filters_other_runtime_judgments(study):
 
 
 def test_decision_context_limits_full_records_to_focused_question(study):
-    other=create_experiment(study.store,NextAction(action='experiment',reason='Another target',
-        question_updates=[{'question':'Other goal'}],method='OTHER_METHOD',conditions='other source',evaluation='other exact check'))
+    other=add_experiment(study.store,'Other goal',method='OTHER_METHOD',conditions='other source',evaluation='other exact check')
     with study.store._transaction() as db:
         state=study.store._read(db)
         state['action']={'id':'focus','question_id':study.qid,'status':'done','capability':'research.observe'}

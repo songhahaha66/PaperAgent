@@ -68,11 +68,21 @@ def setup(tmp_path,monkeypatch):
     async def ask(_ctx,schema,system,prompt,timeout,tokens=2000):
         assert schema is CandidateCode
         content=json.loads(prompt)
-        assert set(content)<={'candidate','task_type','metric','features','n_train','seed'}
+        assert set(content)=={'candidate','task_type','metric','features','n_train','seed','previous_attempt'}
         assert 'X_validation' not in content and 'y_validation' not in content
         assert set(content['candidate'])=={'name','method_keys','idea','formulation','steps','variant','estimator_contract'}
         chosen=next(c for c in candidates if c['name']==content['candidate']['name'])
         assert all(content['candidate'][key]==chosen[key] for key in ('idea','formulation','steps'))
+        record=cfg.read('Q1',_ctx.experience_order.revision)
+        row=next(r for r in record['branches'] if r['index']==content['candidate']['variant'])
+        history=row.get('history',[])
+        if history:
+            assert content['previous_attempt']==history[-1]
+            assert history[-1]['status'] in engine.RECOVERABLE
+            assert history[-1]['name']==chosen['name']
+            assert history[-1]['index']==row['index']
+        else:
+            assert content['previous_attempt'] is None
         calls.append(content['candidate']['name']);return CandidateCode(code=codes[content['candidate']['name']])
     monkeypatch.setattr(engine,'ask',ask)
     return SimpleNamespace(root=root,store=store,cfg=cfg,spec=spec,parent=parent,ctx=ctx,order=order,branch=branch,calls=calls,codes=codes)

@@ -33,6 +33,6 @@ async def import_source(ctx, inputs):
 
 def register(registry):
     registry.register("literature", "literature.search", "literature", search, LiteratureInputs)
-    registry.register("literature", "literature.collect", "literature", collect, SourceInputs)
+    registry.register("literature", "literature.collect", "literature", collect, SourceInputs,model_callable=True,purpose="按当前研究信息需求检索文献并保留来源，不将检索摘要当作计算结果。")
     registry.register("literature", "literature.verify", "literature", verify, CitationInputs)
     registry.register("literature", "literature.import", "literature", import_source, ImportInputs)

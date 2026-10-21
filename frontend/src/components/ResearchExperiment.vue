@@ -63,10 +63,11 @@
           ><span class="note"> {{ executionLabel(action.status) }}</span>
         </p>
         <p v-if="action.purpose">{{ action.purpose }}</p>
-        <p v-if="action.message">{{ action.message }}</p>
+        <p v-if="action.message">{{ action.error_type ? '本次行动未完成，具体诊断见调试详情。' : action.message }}</p>
         <details>
           <summary>调试详情</summary>
           <p v-if="action.error_type">{{ action.error_type }}</p>
+          <pre v-if="action.error_type && action.message">{{ action.message }}</pre>
           <pre v-if="action.inputs">{{ JSON.stringify(action.inputs, null, 2) }}</pre>
           <pre v-if="action.output">{{ JSON.stringify(action.output, null, 2) }}</pre>
           <template v-for="run in runs.filter((r) => r.id === action.run_id)" :key="run.id">
@@ -84,8 +85,8 @@
       <summary>先前行动</summary>
       <article v-for="action in actions.slice(0, -1)" :key="action.id">
         <p>{{ action.label }} {{ executionLabel(action.status) }}</p>
-        <p v-if="action.message">{{ action.message }}</p>
-        <details><summary>调试详情</summary><pre>{{ JSON.stringify({ inputs: action.inputs, output: action.output, error_type: action.error_type }, null, 2) }}</pre></details>
+        <p v-if="action.message">{{ action.error_type ? '本次行动未完成，具体诊断见调试详情。' : action.message }}</p>
+        <details><summary>调试详情</summary><pre>{{ JSON.stringify({ inputs: action.inputs, output: action.output, error_type: action.error_type, message: action.message }, null, 2) }}</pre></details>
       </article>
     </details>
     <details

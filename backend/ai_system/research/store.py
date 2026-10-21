@@ -766,7 +766,7 @@ class ResearchStore:
             state['spec']['requirements']=bind_requirements(state,patch.requirements)
             state['spec']['amendments'].append(change)
             from .questions import apply_questions
-            from .planner import QuestionUpdate
+            from .questions import QuestionUpdate
             affected=sorted(selected)
             for qid in dict.fromkeys(state['experiments'][eid]['question_id'] for eid in affected):
                 question=state['questions'][qid]
