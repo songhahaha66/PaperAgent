@@ -123,6 +123,11 @@ def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> 
     sid = subproblem["id"]
     design = (state.get("designs") or {}).get(sid)
     report = (state.get("solutions") or {}).get(sid) or {}
+    store=getattr(ctx,'research',None)
+    if store:
+        from ai_system.research.views import experiment_context
+        record=experiment_context(store.snapshot(),{sid})[0]
+        return json.dumps({k:v for k,v in record.items() if k!='results'},ensure_ascii=False)
     return (
         f"## {sid} {subproblem['title']}\n问题：{subproblem['question']}\n"
         + (_design_text(design, current_premises(state, sid)) + "\n" if design else "")
@@ -202,7 +207,12 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     references = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items()
                                                if allowed is None or r.subproblem in allowed})
     request += _comparison_context(ctx,references,allowed)
-    request += "\n\n# 本节可用引用（仅可复制这里的编号）\n" + references.to_prompt_table()
+    if ctx.research:
+        from ai_system.research.views import result_context
+        snapshot=ctx.research.snapshot()
+        evidence=json.dumps([result_context(snapshot,r.__dict__) for r in references.results.values()],ensure_ascii=False)
+    else:evidence=references.to_prompt_table()
+    request += '\n\n# 本节可用引用（值、声明的对象范围、来源与版本一起读取；缺失语义不得猜测；仅可复制这里的reference）\n'+evidence
     if not any(r.kind == "figure" for r in references.results.values()):
         request += "\n本节没有可用图表，只能用文字、公式或基于已登记结果的表格说明，不得引用图。"
     if ctx.template_requirements:

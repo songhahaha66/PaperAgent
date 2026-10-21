@@ -33,11 +33,19 @@ def execution_lineage(state, execution_id):
     return ids
 
 
+
+def result_semantic_key(meaning,unit=''):
+    """Declared statistical identity; lineage remains provenance, not scope."""
+    if not meaning or not all(meaning.get(k) for k in ('object','scope','statistic')):return None
+    return tuple(meaning.get(k,'') for k in ('object','scope','statistic','conditions'))+(unit,)
+
+
 def current_results(state, experiment_ids=None, *, task_id=None, results=()):
     """One effective execution per named result; explicit refs retain provenance.
 
     Candidates override by ID, so inherited outputs are not counted twice.
-    A newer execution's same-name result replaces the ancestor's current value.
+    A newer execution replaces a same-name, same declared-scope result.
+    Different declared objects/scopes/conditions or units keep their own refs.
     Multiple IDs within that same execution remain ambiguous for name selectors;
     evaluate reports an inconclusive check instead of guessing a value.
     """
@@ -55,7 +63,7 @@ def current_results(state, experiment_ids=None, *, task_id=None, results=()):
         entries[item['id']]=previous or {'payload':item,'producer_attempt':state['experiments'][task_id]['execution_id']}
     selected={}
     for entry in entries.values():
-        item=entry['payload'];key=(item['subproblem'],item['name']);rank=ranks.get(entry['producer_attempt'],0)
+        item=entry['payload'];key=(item['subproblem'],item['name'],result_semantic_key(item.get('meaning'),item.get('unit','')));rank=ranks.get(entry['producer_attempt'],0)
         if key not in selected or rank < selected[key][0]:selected[key]=(rank,[])
         if rank==selected[key][0]:selected[key][1].append(item)
     return [item for _,items in selected.values() for item in items]

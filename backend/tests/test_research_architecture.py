@@ -297,7 +297,8 @@ def test_new_revision_reopens_finished_study_and_idempotent_retry_does_not(study
 
 
 def test_unchanged_answer_is_not_new_progress_but_stale_answer_can_be_reassessed(study):
-    values=dict(question_id=study.qid,statement='Limited to the observed source rows',artifact_refs=[study.value.id])
+    values=dict(question_id=study.qid,statement='Limited to the observed source rows',artifact_refs=[study.value.id],
+                coverage='answered',stop_reason='The source-row question is answered by the recorded result')
     first=answer(study.store,**values)
     before=study.store.snapshot()
     second=answer(study.store,**values)

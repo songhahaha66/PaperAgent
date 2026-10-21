@@ -9,6 +9,7 @@ PROMPT = """你是研究层Agent，沿研究→用户问题→实验→行动组
 使用普通工具工作，不输出总计划JSON。先用research_update_question建立用户要回答的问题，取得真实question_id，再安排实验。问题不是清洗或检索手段；覆盖原始请求的不同实质目标，可逐步细化、拆合并复用已有实验。
 同一实验执行层会连续完成必要行动；新增方法或条件比较才安排新实验，固定方法补充计算或修复执行故障用research_continue_experiment。已有结果直接读取和复用，保留其来源、条件和版本。修过度解释用research_revise_interpretation，不重算正确统计。
 每个工具独立提交。建立问题后尚未安排实验是正常状态。用工具实际返回的ID，禁止猜编号、沿用失败请求的假编号或混用其它工具字段。参数错误会返回具体观察，直接在同一上下文纠正；不能把格式错误当研究阻碍。版本冲突时重新读取当前记录再操作。
+同名或同值不代表同一对象或范围。结果的meaning、实验conditions、输入版本与行关系一并核对；未知口径如实说明。新实验需要沿用或比较已有结果时，用artifact_refs建立实际依赖，勿先独立重算再猜旧结果为何不同。
 按需调用语义核查，意见只供核实、采纳、驳回或保留局限。程序故障不证明方法无效。旧观点、负结果可以讨论，但不可混为当前事实。
 结果与解释更新后，用research_update_answer修订问题答案、实际依据、适用范围、未知与下一步。继续获取信息应有明确需求，不重复无变化的读取或判断。
 原要求的重要问题分别记录已答、部分或未答及停止原因后，research_deliver交付。写作是研究级操作，读取当前答案、实验记录与必要历史，不创建写作实验。不要求所有软意见归零或所有问题有正结果。
@@ -40,29 +41,26 @@ def decision_context(store, snapshot):
     last=snapshot.get('action') or {}
     focused=last.get('question_id')
     selected=next((q for q in rows if q['id']==focused),None)
-    if selected is None:selected=next((q for q in rows if q.get('answer_status')=='needs_update' or not q.get('coverage')),None)
+    if selected is None:selected=next((q for q in rows if q.get('answer_gaps')),None)
     own=set(selected['experiment_ids']) if selected else {eid for q in rows for eid in q['experiment_ids']}
     scope=experiment_scope(snapshot['experiments'],own)
     records=experiment_context(snapshot,scope)
     registry=store.registry_payload(snapshot)
     sources=LiteratureStore(store.root).retrieve(selected['question'] if selected else snapshot['spec']['requirement'],limit=12)
-    from ai_system.graph.registry import find_refs
-    used={ref for row in records for ref in find_refs(json.dumps(report_context(row['record']),ensure_ascii=False))}
-    used.update(ref for q in rows for ref in q.get('artifact_refs',[]))
     # Current question summaries stay global for goal coverage. Full records and
     # actual values are restricted to the selected question/dependency scope.
     context={'source':snapshot['spec'],'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
-        'experiments':[{**row,'record':report_context(row['record']),'results':[r for r in row['results'] if r['id'] in used]} for row in records],
-        'artifacts':[r for r in registry['results'] if r['subproblem'] in scope and r['id'] in used],
-        'artifact_index':[{k:r[k] for k in ('id','subproblem','name','kind')} for r in registry['results']],
+        'experiments':[{**row,'record':report_context(row['record'])} for row in records],
+        'artifact_index':[{**{k:r.get(k) for k in ('id','subproblem','name','kind','unit','meaning')},
+            'conditions':(snapshot['experiments'][r['subproblem']].get('experiment') or {}).get('conditions','')} for r in registry['results']],
         'literature':sources,'issues':[i for i in findings(snapshot) if i['task_id'] in scope and i['status'] not in {'resolved','dismissed','superseded'}],
         'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
-        'last_action':last,'clarifications':snapshot.get('clarifications',[]),
+        'last_action':{k:last.get(k) for k in ('id','capability','status','question_id','target','reason','message','error_type')},'clarifications':snapshot.get('clarifications',[]),
         'skill_policy':store.skill_preferences()['policy']}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
     from ai_system.modules.experiments.store import ExperimentStore
     context['comparisons']=[row for row in ExperimentStore(store).accepted_summaries(snapshot) if row.get('task_id') in scope]
-    context['recent_operations']=[{k:a.get(k) for k in ('capability','inputs','output','status','message','error_type')} for a in snapshot.get('activity',[]) if a.get('capability')!='research.observe' and (a.get('question_id') in {None,selected['id'] if selected else None} or a.get('experiment_id') in scope)][-12:]
+    context['recent_operations']=[{k:a.get(k) for k in ('capability','question_id','experiment_id','status','message','error_type')} for a in snapshot.get('activity',[]) if a.get('capability')!='research.observe' and (a.get('question_id') in {None,selected['id'] if selected else None} or a.get('experiment_id') in scope)][-12:]
     context['literature_mode'] = LiteratureStore(store.root).policy()
     if any(name.lower().endswith('.csv') for name in files):
         from ai_system.modules.experiments.store import SupervisedSpec
@@ -76,7 +74,14 @@ def preserved_progress(snapshot):
 
 def planning_failure_message(error, snapshot):
     from .runtime import ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked
-    detail=str(error) if isinstance(error,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked,NoResearchProgress)) else '研究控制器未完成下一行动，具体诊断已保存，可继续处理。'
+    from langgraph.errors import GraphRecursionError
+    if isinstance(error,GraphRecursionError):
+        detail='研究工具循环达到图步骤上限，尚未完成下一行动；这不是费用额度耗尽。'
+        last=next((a.get('message') for a in reversed(snapshot.get('activity',[]))
+                   if a.get('status')=='failed' and a.get('capability')!='research.observe' and a.get('message')),None)
+        if last:detail+=' 最近具体反馈：'+last
+    else:
+        detail=str(error) if isinstance(error,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked,NoResearchProgress)) else '研究控制器未完成下一行动，具体诊断已保存，可继续处理。'
     return detail+' '+preserved_progress(snapshot)
 
 
@@ -109,9 +114,10 @@ class Planner:
             tools.append(StructuredTool(name=name,description=capability.purpose,args_schema=capability.inputs,coroutine=call))
         lock=asyncio.Lock()
         known_revision=ctx.research.snapshot()["revision"]
+        model_calls=0;last_tool_feedback=''
         @wrap_tool_call
         async def feedback(request,handler):
-            nonlocal known_revision
+            nonlocal known_revision,last_tool_feedback
             call=request.tool_call;name=call['name'];key='research-tool:'+observation_id+':'+call['id']
             async with lock:
                 with execution_scope(action_id=key,observation_id=observation_id,tool_call_id=key,expected_revision=known_revision):
@@ -121,9 +127,10 @@ class Planner:
                         # boundary, including extra fields and failed references.
                         result=await invoke(ctx,mapping[name],**call['args'])
                         if isinstance(result,dict) and 'revision' in result:known_revision=result['revision']
+                        last_tool_feedback='；'.join(result.get('answer_gaps',[])) if isinstance(result,dict) else ''
                         return ToolMessage(content=json.dumps(result,ensure_ascii=False,default=str),tool_call_id=call['id'],name=name)
                     except (ValueError,KeyError,FileNotFoundError) as exc:
-                        detail=error_detail(exc)
+                        detail=error_detail(exc);last_tool_feedback=detail
                         # Registered calls already have a failed activity. Unknown
                         # tools have no registry boundary, so retain that call here.
                         if name not in mapping:
@@ -136,15 +143,19 @@ class Planner:
         pending_diagnostic=''
         @before_model(can_jump_to=['end'])
         async def dispatched(state,runtime):
-            nonlocal known_revision,pending_diagnostic
+            nonlocal known_revision,pending_diagnostic,model_calls
             observations=[]
             if pending_diagnostic:
                 observations.append(HumanMessage(content=pending_diagnostic));pending_diagnostic=''
             snapshot=ctx.research.snapshot();action=snapshot.get('action') or {}
             if action.get('status')=='planned':return {'messages':observations,'jump_to':'end'}
+            if model_calls>=ctx.max_solver_steps:
+                raise NoResearchProgress(f'本轮研究已达到 {model_calls} 次模型决策上限，尚未安排下一行动；已有结果保留。'+(' 最近具体反馈：'+last_tool_feedback if last_tool_feedback else ''))
+            model_calls+=1
             if snapshot['revision']!=known_revision:
                 known_revision=snapshot['revision']
                 _,current=decision_context(ctx.research,snapshot)
+                current={**current,'source':{k:v for k,v in current['source'].items() if k!='requirement'}}
                 observations.append(HumanMessage(content='当前研究记录已更新：'+json.dumps(current,ensure_ascii=False)))
             if observations:return {'messages':observations}
         prompted_for_action=False
@@ -174,10 +185,14 @@ class Planner:
         common={'original_request':context['source']['requirement'],'available_method_keys':context['available_method_keys'],
                 'skill_policy':context['skill_policy'],'inputs':context['inputs'],'materials':context['materials']}
         dynamic={k:v for k,v in context.items() if k not in {'available_method_keys','skill_policy','inputs','materials'}}
+        dynamic['source']={k:v for k,v in context['source'].items() if k!='requirement'}
         messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False)),HumanMessage(content=json.dumps(dynamic,ensure_ascii=False))]
         result=None
         try:
-            result=await agent.ainvoke({'messages':messages},config={'recursion_limit':ctx.max_solver_steps*2+1})
+            # before/after hooks are graph nodes too. Bound actual model calls above;
+            # allocate graph transitions from this agent's real topology.
+            nodes=len(set(agent.get_graph().nodes)-{'__start__','__end__'})
+            result=await agent.ainvoke({'messages':messages},config={'recursion_limit':ctx.max_solver_steps*nodes+2})
             return result
         finally:
             history=result['messages'] if result else recorder.messages

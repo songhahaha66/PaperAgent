@@ -397,9 +397,8 @@ class ResearchStore:
                     state["artifacts"][item["id"]] = {"payload": item, "content_hash": digest(item),
                         "artifact_hash": self._artifact_hash(item), "producer_attempt": order.attempt_id,
                         "experiment_id": order.task_id, "type": "result", "active": item["id"] in ids}
-                for ref,artifact in state['artifacts'].items():
-                    if artifact['type']=='result' and artifact['producer_attempt'] in inherited and ref not in ids:
-                        artifact['active']=False
+                # Continuations retain upstream results. current_results selects
+                # newer versions by declared identity, without discarding other scopes.
                 introduced = self._register_assumptions(state, result) if result.execution_status == "succeeded" else []
                 for old in state['claims'].values():
                     if old['experiment_id']==order.task_id and old.get('active',True):
@@ -614,17 +613,8 @@ class ResearchStore:
 
     @staticmethod
     def delivery_ready(state):
-        """Readiness follows recorded answers and explicit unknowns, not reviewer unanimity."""
-        from .views import questions
-        rows = [q for q in questions(state) if not q.get('retired')]
-        if not rows:return False
-        for q in rows:
-            if q.get('answer_status')=='needs_update' or q.get('unavailable_artifact_refs'):return False
-            if q.get('coverage') not in {'answered','partial','unanswered'} or not q.get('stop_reason'):return False
-            if q['coverage']=='answered' and (not q.get('judgment') or not q.get('artifact_refs')):return False
-            if q['coverage']=='partial' and not q.get('judgment'):return False
-        return not any(i.get('repair_targets') and i['blocking'] and i['status'] not in
-            {'resolved','dismissed','superseded'} for i in research_findings(state))
+        from .questions import delivery_status
+        return delivery_status(state)['ready']
 
     @staticmethod
     def _active_registry(state):

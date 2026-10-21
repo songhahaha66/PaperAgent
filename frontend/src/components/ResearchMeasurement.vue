@@ -48,6 +48,7 @@
     </div>
     <details>
       <summary>{{ isZh ? '原始记录与计算来源' : 'Raw record and computation' }}</summary>
+      <p v-if="!result.meaning">未登记统计对象与范围，不能仅凭名称或数值判断与其他结果同口径。</p>
       <pre>{{ result.value }}<span v-if="result.unit"> {{ result.unit }}</span></pre>
       <template v-for="run in runs.filter((r) => r.id === result.run_id)" :key="run.id"
         ><button v-if="run.input_path" @click="emit('open-file', run.input_path)">

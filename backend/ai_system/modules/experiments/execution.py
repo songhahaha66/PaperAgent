@@ -187,14 +187,17 @@ def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
         return ""
     parts = [
         "# 前序子问题的结论（可直接使用其登记结果、中间数据和代码）\n"
-        "前序子问题在各自的内核里运行，它们的变量和函数在你的内核里不存在。需要沿用前序的数据处理或模型时，"
+        "结果值、对象/范围、实验条件、来源与版本须一并沿用。范围不同可并存，缺少语义不能凭名字或同值判为相同口径；先核查筛选与行关系，再比较。前序子问题在各自的内核里运行，它们的变量和函数在你的内核里不存在。需要沿用前序的数据处理或模型时，"
         "先读它的代码文件、复制需要的部分，或读取它保存的中间数据，不要从头重写。"
     ]
+    from ai_system.research.views import experiment_context
+    store=getattr(ctx,'research',None)
+    records={e['task_id']:e for e in experiment_context(store.snapshot(),set(dependencies))} if store else {}
     for dep_id, report in dependencies.items():
-        parts.append(f"## {dep_id}\n{report.get('summary', '')}")
+        parts.append(json.dumps(records[dep_id],ensure_ascii=False) if dep_id in records else f"## {dep_id}\n{report.get('summary', '')}")
         if ctx.fs.exists(solution_code_path(dep_id)):
             parts.append(f"代码：{solution_code_path(dep_id)}")
-        parts.append(ctx.registry.to_prompt_table(dep_id))
+        if dep_id not in records:parts.append(ctx.registry.to_prompt_table(dep_id))
     files = _intermediate_files(ctx)
     if files:
         parts.append("中间数据文件：\n" + "\n".join(f"- {f}" for f in files))

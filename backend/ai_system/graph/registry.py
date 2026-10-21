@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from services.file_services.workspace_fs import WorkspaceFS
+from ..research.domain import result_semantic_key
 
 REGISTRY_PATH = ".system/results.json"
 MATH_PATTERN = re.compile(
@@ -240,7 +241,7 @@ class ResultRegistry:
             value = json.dumps(series, ensure_ascii=False, separators=(",", ":"))
         # 完全相同的登记复用编号；值或来源改变时保留历史，并分配新引用。
         same = next(
-            (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip()),
+            (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip() and result_semantic_key(r.meaning,r.unit) == result_semantic_key(meaning,unit.strip())),
             None,
         )
         if same and (same.value, same.run_id, same.unit, same.description, same.meaning) != (value, run_id, unit.strip(), description.strip(), meaning):

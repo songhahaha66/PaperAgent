@@ -43,7 +43,8 @@ def test_first_observe_can_inspect_without_tasks_or_extra_model_calls(tmp_path, 
     calls = []
     async def decide(self,ctx,context,observation_id):
         calls.append(context)
-        assert not context['experiments'] and not context['artifacts']
+        assert not context['experiments'] and not context['artifact_index']
+        assert 'artifacts' not in context  # Values are carried once in scoped experiments.
         from ai_system.modules.registry import invoke
         await invoke(ctx,'experiments.inspect')
     monkeypatch.setattr(planner.Planner, 'run', decide)

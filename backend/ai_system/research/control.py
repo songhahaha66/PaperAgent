@@ -169,19 +169,7 @@ def current_validation(snapshot, task):
     return attempt.get("validation")
 
 
-def delivery_status(snapshot):
-    from .store import ResearchStore
-    from .views import questions
-    rows=[q for q in questions(snapshot) if not q.get('retired')]
-    blockers=[{'task_id':q['id'],'message':'答案依据或解释已更新，需研究层重新评估','action':'research'}
-              for q in rows if q.get('answer_status')=='needs_update' or q['unavailable_artifact_refs']]
-    blockers += [{'task_id':q['id'],'message':'尚未明确该问题已答、部分回答或未答，以及停止原因','action':'research'}
-                 for q in rows if not q.get('coverage') or not q.get('stop_reason')]
-    blockers += [{'task_id':i['task_id'],'message':i['message'],'action':i['action']}
-        for i in research_findings(snapshot) if i.get('repair_targets') and i['blocking']
-        and i['status'] not in {'resolved','dismissed','superseded'}]
-    return {'ready':ResearchStore.delivery_ready(snapshot),'blockers':blockers,
-        'questions':[{k:q.get(k) for k in ('id','title','coverage','stop_reason','answer_status')} for q in rows]}
+from .questions import delivery_status
 
 
 def _copy_tree(source, target):

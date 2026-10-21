@@ -3,6 +3,7 @@ import re
 from .store import digest
 from .domain import findings, experiment_scope, current_result_refs
 from .progress import issue_next_step
+from .questions import answer_gaps
 from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
@@ -33,14 +34,17 @@ def questions(snapshot):
         issues=[i for i in findings(snapshot) if i['task_id'] in ids and i['status'] not in CLOSED]
         stale = (any(snapshot['artifacts'].get(ref,{}).get('content_hash') != version for ref,version in question.get('basis_versions',{}).items())
                  or any(snapshot['experiments'].get(eid,{}).get('report_ref') != version for eid,version in question.get('interpretation_versions',{}).items()))
-        rows.append({**question,
+        row={**question,
             'answer_status':'needs_update' if stale else question.get('answer_status','current' if question.get('judgment') else 'unanswered'),
             'experiment_ids':[e['task_id'] for e in experiments],
             'dependency_experiment_ids':sorted(scope - ids),
             'available_artifact_refs':sorted(available),
             'unavailable_artifact_refs':[ref for ref in question['artifact_refs'] if ref not in available],
             'sources':list(dict.fromkeys(r['source_quote'] for r in snapshot['spec']['requirements'] if ids.intersection(r['task_ids']))),
-            'issues':[{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues]})
+            'issues':[{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues]}
+        row['answer_gaps']=answer_gaps(row)
+        if row['answer_gaps'] and (row.get('judgment') or row.get('coverage') in {'answered','partial'}):row['answer_status']='needs_update'
+        rows.append(row)
     return rows
 
 
@@ -48,13 +52,23 @@ def question_context(rows, *, include_history=False):
     """Share current judgments and their evidence scope without report/history copies."""
     fields = ('id', 'title', 'question', 'judgment', 'artifact_refs', 'limitations', 'next_step',
               'experiment_ids', 'dependency_experiment_ids', 'available_artifact_refs',
-              'unavailable_artifact_refs', 'sources', 'issues', 'answer_status', 'coverage', 'stop_reason', 'retired', 'version')
+              'unavailable_artifact_refs', 'sources', 'issues', 'answer_status', 'coverage', 'stop_reason', 'answer_gaps', 'retired', 'version')
     if include_history:fields += ('history','judgments')
     return [{key: row[key] for key in fields if key in row} for row in rows]
 
 
+
+def result_context(snapshot,item):
+    """Read the existing value, declared scope and immutable execution provenance."""
+    artifact=snapshot['artifacts'][item['id']]
+    attempt=snapshot['executions'][artifact['producer_attempt']]
+    return {**item,'reference':'{{'+('F' if item['kind']=='figure' else 'R')+':'+item['id']+'}}',
+            'producer_attempt':artifact['producer_attempt'],'content_hash':artifact['content_hash'],
+            'input_refs':attempt['input_refs']}
+
+
 def experiment_context(snapshot, experiment_ids=None):
-    from .domain import experiment_report, current_results
+    from .domain import experiment_report, experiment_design, current_results
     from .feedback import interpretation_version
     selected=set(experiment_ids) if experiment_ids is not None else {
         eid for eid,e in snapshot['experiments'].items() if not e['retired']}
@@ -65,11 +79,14 @@ def experiment_context(snapshot, experiment_ids=None):
         artifact=snapshot['artifacts'].get(e['report_ref']) or {}
         rows.append({'task_id':eid,'question_id':e['question_id'],'objective':e['objective'],
             'execution_status':e['execution_status'],'acceptance':e['acceptance'],'validity':e['validity'],
-            'method':e.get('method_instruction',''),'conditions':(e.get('experiment') or {}).get('conditions',''),
+            'method':e.get('method_instruction',''),
+            'adopted_method':(experiment_design(snapshot,e) or {}).get('chosen'),
+            'conditions':(e.get('experiment') or {}).get('conditions',''),
             'evaluation':(e.get('experiment') or {}).get('evaluation',''),
             'record':experiment_report(snapshot,e),'record_path':artifact.get('payload',{}).get('path'),
             'interpretation_version':interpretation_version(snapshot,e),
-            'results':[r for r in results if r['subproblem']==eid],
+            'dependencies':list(e['dependencies']),
+            'results':[result_context(snapshot,r) for r in results if r['subproblem']==eid],
             'history':[{'ref':ref,'path':a['payload'].get('path'),'status':a['report'].get('status','superseded')}
                 for ref,a in snapshot['artifacts'].items() if a['type']=='report' and a['experiment_id']==eid and ref!=e['report_ref']]})
     return rows

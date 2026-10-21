@@ -25,11 +25,12 @@
       </header>
       <section class="judgment">
         <h3>当前答案</h3>
-        <p>{{ coverageLabel(selected.coverage) }}</p>
+        <p>{{ selected.answer_gaps?.length ? '当前判断待补全' : coverageLabel(selected.coverage) }}</p>
         <p v-if="selected.stop_reason">停止理由：{{ selected.stop_reason }}</p>
-        <p v-if="selected.answer_status === 'needs_update'" class="muted">
+        <p v-if="selected.answer_status === 'needs_update' && !selected.answer_gaps?.length" class="muted">
           依据或解释已改变，当前答案待研究层重新评估。
         </p>
+        <p v-for="gap in selected.answer_gaps || []" :key="gap" role="status">{{ gap }}</p>
         <MarkdownRenderer
           v-if="selected.judgment && selected.answer_status !== 'needs_update'"
           :content="evidenceText(selected.judgment)"
@@ -39,7 +40,7 @@
           尚未形成判断。已有实验结果不代表该问题已回答。
         </p>
         <details v-if="selected.judgment && selected.answer_status === 'needs_update'">
-          <summary>先前答案（等待重新评估）</summary>
+          <summary>已保存的判断（等待补全或重新评估）</summary>
           <MarkdownRenderer
             :content="evidenceText(selected.judgment)"
             :work-id="snapshot?.work_id"

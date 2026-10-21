@@ -185,8 +185,8 @@ def test_accepted_comparison_reaches_planner_with_measured_candidates_and_bounda
     assert set(provenance['formal_evidence_refs'])<=set(before['artifacts'])
     expected={ref for ref,entry in before['artifacts'].items() if entry['type']=='result' and entry['active']}
     assert {e['id'] for e in context['artifact_index']}==expected
-    assert {e['id'] for e in context['artifacts']}<=expected
-    assert not context['artifacts'], 'uncited values remain discoverable by index instead of copying the entire registry'
+    assert {r['id'] for e in context['experiments'] for r in e['results']}==expected
+    assert 'artifacts' not in context, 'current values are supplied once in their experiment context'
     assert setup.store.snapshot()==before and setup.cfg.budget('Q1')==budget, 'Reading must not register synthetic results or consume comparison budget'
 
 

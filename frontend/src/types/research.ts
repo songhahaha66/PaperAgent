@@ -5,6 +5,7 @@ export interface ResearchQuestion {
   version?: number
   retired?: boolean
   answer_status?: string
+  answer_gaps?: string[]
   coverage?: 'answered' | 'partial' | 'unanswered' | null
   stop_reason?: string
   history?: { question: string; reason?: string }[]

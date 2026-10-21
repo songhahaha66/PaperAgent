@@ -73,7 +73,8 @@ def test_decision_context_uses_products_and_purposes_without_completion_shortcut
     assert not env.store.delivery_ready(snapshot), 'a report cannot declare all user questions answered'
     assert context['source']['requirements']==snapshot['spec']['requirements']
     assert record['objective']==snapshot['experiments']['Q1']['objective']
-    assert {e['name'] for e in context['artifacts']}=={'demand'}
+    assert {r['name'] for e in context['experiments'] for r in e['results']}=={'demand'}
+    assert 'artifacts' not in context
     assert {'demand','allocation','residual','independent'}<={e['name'] for e in context['artifact_index']}
     revised=copy.deepcopy(snapshot);revised['experiments']['Q1']['revision']+=1
     new_key,new_context=planner.decision_context(env.store,revised)

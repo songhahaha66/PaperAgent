@@ -62,3 +62,34 @@ def apply_questions(state, updates):
             old.update(retired=True, superseded_by=key)
 
     return resolved
+
+
+def answer_gaps(question):
+    """One completeness rule for saved judgments, delivery and read views."""
+    gaps=[];coverage=question.get('coverage')
+    if coverage not in {'answered','partial','unanswered'}:
+        gaps.append('尚未说明问题已答、部分回答或未答。')
+    if not str(question.get('stop_reason') or '').strip():
+        gaps.append('缺少停止理由：说明现有答案的范围，或为何仍有未知。')
+    if coverage in {'answered','partial'} and not str(question.get('judgment') or '').strip():
+        gaps.append('缺少当前答案；无答案时可明确标为未答并说明原因。')
+    if coverage=='answered' and not question.get('artifact_refs'):
+        gaps.append('完整回答缺少实际依据引用；请读取已有实验结果，再补全问题答案的依据，无需重算。')
+    if question.get('unavailable_artifact_refs'):
+        gaps.append('答案引用已失效或不在关联实验范围，请读取当前结果并更新答案引用。')
+    elif question.get('answer_status')=='needs_update' and not gaps:
+        gaps.append('问题范围、依据或解释已改变，请重新评估并更新问题答案。')
+    return gaps
+
+
+def delivery_status(state):
+    from .views import questions
+    from .domain import findings
+    rows=[q for q in questions(state) if not q.get('retired')]
+    blockers=[{'task_id':q['id'],'message':message,'action':'research','tool':'research_update_answer'}
+              for q in rows for message in q['answer_gaps']]
+    if not rows:blockers.append({'task_id':None,'message':'尚未建立用户要回答的问题。','action':'research','tool':'research_update_question'})
+    blockers.extend({'task_id':i['task_id'],'message':i['message'],'action':i['action']}
+        for i in findings(state) if i.get('repair_targets') and i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'})
+    return {'ready':not blockers,'blockers':blockers,
+        'questions':[{k:q.get(k) for k in ('id','title','coverage','stop_reason','answer_status','answer_gaps')} for q in rows]}

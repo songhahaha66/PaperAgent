@@ -145,21 +145,27 @@ def update_answer(ctx,inputs):
         interpretations={state['artifacts'][ref]['experiment_id']:state['experiments'][state['artifacts'][ref]['experiment_id']]['report_ref'] for ref in inputs['artifact_refs']}
         values={k:v for k,v in inputs.items() if k!='question_id'}
         values['judgment']=values.pop('statement')
+        from .questions import answer_gaps
+        gaps=answer_gaps({**q,**values,'answer_status':'current','unavailable_artifact_refs':[]})
+        status='needs_update' if gaps else 'current'
         unchanged=(all(q.get(k)==v for k,v in values.items()) and q.get('basis_versions',{})==basis
-            and q.get('interpretation_versions',{})==interpretations and q.get('answer_status')=='current')
+            and q.get('interpretation_versions',{})==interpretations and q.get('answer_status')==status)
         if not unchanged:
-            q.update(values,answer_status='current',basis_versions=basis,interpretation_versions=interpretations)
+            q.update(values,answer_status=status,basis_versions=basis,interpretation_versions=interpretations)
             q['judgments'].append({**inputs,'recorded_at':time.time()})
-        return {'question_id':q['id'],'judgments':[inputs],'artifact_refs':inputs['artifact_refs'],'unchanged':unchanged}
+        return {'question_id':q['id'],'judgments':[inputs],'artifact_refs':inputs['artifact_refs'],'answer_status':status,'answer_gaps':gaps,
+                'repair_tool':'research_update_answer' if gaps else None,'unchanged':unchanged}
     return _change(ctx,'research_observed',inputs,edit)
 
 
 def deliver(ctx,inputs):
     def edit(state):
         _dispatchable(state)
-        if not ctx.research.delivery_ready(state):
-            from .control import delivery_status
-            raise ValueError('尚未明确各问题的回答范围或依据已过期：'+json.dumps(delivery_status(state),ensure_ascii=False))
+        from .questions import delivery_status
+        status=delivery_status(state)
+        if not status['ready']:
+            raise ValueError('尚不能交付：'+'；'.join(b['message'] for b in status['blockers'])+
+                             ' 请先用对应工具修复；仅修改交付 reason 不会补全答案。')
         from .loop import _set_action
         from .runtime import execution_links
         observation_id=execution_links().get('observation_id')
@@ -197,7 +203,7 @@ def register(registry):
     register_tool('update_question',update_question,QuestionUpdate,'建立或版本化修改一个用户问题，返回真实question_id。可关联已有实验、拆合来源并保留历史。')
     register_tool('schedule_experiment',schedule_experiment,ExperimentInput,'为真实question_id安排新方法/条件的实验。plan使用已有ExperimentPlan；普通实验一个候选。返回实验编号后转入执行层。')
     register_tool('continue_experiment',continue_experiment,ContinueInput,'继续或重试已有实验，保持方法和条件；补充有价值行动，复用已有计算。换方法须新实验。')
-    register_tool('update_answer',update_answer,AnswerUpdate,'根据实际结果更新一个问题的当前答案、依据、局限、下一步及覆盖状态；不运行计算。')
+    register_tool('update_answer',update_answer,AnswerUpdate,'保存问题判断、依据、局限及覆盖状态。完整回答须有实际引用；缺项返回answer_gaps，可原地补全，不重算。')
     register_tool('read_question',read_question,QuestionTarget,'读取一个问题及相关实验的当前记录、有效结果、版本与历史定位；不重算。')
     register_tool('deliver',deliver,DeliveryInput,'各问题已明确回答/部分/未答及停止原因后开始研究级论文交付；不创建写作实验。')
     register_tool('ask_user',ask_user,MessageInput,'仅在缺少用户必须提供的信息或决定时提问并等待回应。')

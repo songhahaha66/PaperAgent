@@ -18,6 +18,8 @@ from test_report_submission import seed
 def cited_section(tmp_path):
     from ai_system.research.literature import LiteratureStore
     from ai_system.research.store import ResearchStore
+    from ai_system.research.models import WorkerResult
+    from ai_system.research.control import graph_view
     from test_research_p2 import problem,TASK
     library=LiteratureStore(tmp_path)
     background=library.upsert({'title':'Background notes','url':'https://example.org/background'})
@@ -30,9 +32,14 @@ def cited_section(tmp_path):
     assert passage['id']=='C9' and passage['id'] not in {r['id'] for r in library.retrieve('Estimate demand',6)}
     analysis=problem().model_dump();store=ResearchStore(tmp_path,'writing-literature');store.initialize(TASK,analysis)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
-    state={'task':TASK,'analysis':analysis,'solutions':{},'designs':{'Q1':{'chosen':{
+    design={'chosen':{
         'name':'Adopted procedure','idea':'Use the acquired procedure {{C:C9}}','formulation':'training transform',
-        'validation':'independent observations'}}}}
+        'validation':'independent observations'}}
+    store.commit(WorkerResult(order=store.claim('Q1'),execution_status='succeeded',acceptance='accepted',
+        design=design,report={'status':'completed','summary':'Recorded the adopted procedure and its source.'}))
+    state=graph_view(store.snapshot())
+    assert state['designs']['Q1']==design
+    state['designs']={}  # Writing must read the persisted method, even without this projection.
     return ctx,state,library,passage
 
 
