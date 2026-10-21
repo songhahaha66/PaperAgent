@@ -411,10 +411,10 @@ def test_research_ablation_variants_pass_options(tmp_path, monkeypatch):
     from evals.runner import PIPELINES, _build_agent
 
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    assert {"research", "research-no-review", "research-no-consistency"} <= set(PIPELINES)
+    assert set(PIPELINES)=={'research','research-no-planner'}
     assert 'research-no-explore' not in PIPELINES
-    assert _build_agent("research-no-review", object(), tmp_path).options["max_review_rounds"] == 0
-    assert _build_agent("research-no-consistency", object(), tmp_path).options["check_claims"] is False
+    for retired in ('research-no-review','research-no-consistency'):
+        with pytest.raises(ValueError,match='未知 pipeline'):_build_agent(retired,object(),tmp_path)
     assert "explore_top_k" not in _build_agent("research", object(), tmp_path).options
     assert _build_agent("research-no-planner", object(), tmp_path).options["max_planning_calls"] == 0
     with pytest.raises(ValueError, match="未知 pipeline"):

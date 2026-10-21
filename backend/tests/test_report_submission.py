@@ -361,7 +361,7 @@ def test_compute_feedback_routes_stalled_solver_into_registration_before_report(
                 name, args = "run_python", {"code": "answer = sum([1, 2, 3])\nprint('answer', answer)"}
             return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}"}])
     model = InventoryModel(loose_number_once=False)
-    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=6, max_review_rounds=0)
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=6)
     task, runs = branch(), []
     async def go():
         try:
@@ -377,7 +377,7 @@ def test_compute_feedback_routes_stalled_solver_into_registration_before_report(
 @pytest.mark.parametrize("valid_mixed", [False, True])
 def test_mixed_operations_and_report_finish_operations_before_retrying_submission(tmp_path, valid_mixed):
     model = MixedReportModel(valid_mixed=valid_mixed, loose_number_once=False)
-    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=12, max_review_rounds=0)
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=12)
     task, runs = branch(), []
     async def go():
         try:
@@ -398,7 +398,7 @@ def test_mixed_operations_and_report_finish_operations_before_retrying_submissio
 @pytest.mark.parametrize("mode,expected_reports", [("missing_registration",1), ("missing_metric",1), ("unknown_reference",2)])
 def test_real_tool_feedback_fills_registration_or_reference_gaps_without_rerunning_code(tmp_path, mode, expected_reports):
     model = FillGapsModel(mode=mode, loose_number_once=False)
-    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=12, max_review_rounds=0)
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=12)
     task = branch()
     runs = []
 
@@ -429,7 +429,7 @@ def test_real_tool_feedback_fills_registration_or_reference_gaps_without_rerunni
 
 def test_repeated_invalid_submissions_exhaust_budget_without_a_fake_final_report(tmp_path):
     model = FillGapsModel(mode="stuck", loose_number_once=False)
-    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=5, max_review_rounds=0)
+    ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=5)
     task, runs = branch(), []
 
     async def go():

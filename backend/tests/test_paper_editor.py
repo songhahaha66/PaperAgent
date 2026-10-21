@@ -14,7 +14,7 @@ from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_editor as editor
 from test_native_latex import accepted_store
 from test_research_p2 import problem, TASK
-from ai_system.modules.writing.validation import assemble, assemble_latex
+from ai_system.modules.writing.validation import assemble
 from ai_system.modules.writing.sections import section_plan
 
 
@@ -109,7 +109,8 @@ def test_wording_cannot_change_numeric_evidence_or_math(after):
 
 def test_native_legacy_proposals_cannot_overwrite_file_project(paper):
     store, state = paper
-    store.publish_paper(assemble_latex(state), filename='paper.tex')
+    from test_native_latex import render_native_paper
+    store.publish_paper(render_native_paper(store,state), filename='paper.tex')
     original = (store.root / 'paper.tex').read_text()
     with pytest.raises(ResearchConflict, match='源码选区评论'):
         candidate(store)

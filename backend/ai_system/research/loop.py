@@ -147,9 +147,6 @@ async def _act(request, runtime):
         if name=='experiments.execute':
             from .control import experiment_dispatch
             inputs={'branch':experiment_dispatch(ctx,action['target'])}
-        elif name.startswith('writing.'):
-            from .control import graph_view
-            inputs={'state':graph_view(store.snapshot())}
         patch=await invoke(ctx,name,**inputs)
         if name=='experiments.inspect':
             with store._transaction() as db:

@@ -81,6 +81,8 @@ def experiment_context(snapshot, experiment_ids=None):
             'execution_status':e['execution_status'],'acceptance':e['acceptance'],'validity':e['validity'],
             'method':e.get('method_instruction',''),
             'adopted_method':(experiment_design(snapshot,e) or {}).get('chosen'),
+            'adopted_premises':[{k:a[k] for k in ('id','statement','revision')} for a in snapshot['assumptions'].values()
+                if a['status']=='active' and eid in a['task_ids']],
             'conditions':(e.get('experiment') or {}).get('conditions',''),
             'evaluation':(e.get('experiment') or {}).get('evaluation',''),
             'record':experiment_report(snapshot,e),'record_path':artifact.get('payload',{}).get('path'),

@@ -72,6 +72,8 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     from test_research_p2 import problem, TASK
     _,_,evidence=seed(tmp_path)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
+    from test_native_latex import accepted_store
+    ctx.research=accepted_store(tmp_path)
     state={'analysis':problem().model_dump(),'task':TASK,
            'sections':{'restatement':'未经核查的主张 {{C:'+evidence['id']+'}}'}}
     with pytest.raises(ValueError,match='发布前文献引用未获原文支持'):

@@ -210,8 +210,8 @@ def worker_context(ctx, order):
             shutil.copyfile(previous/'manifest.json',work/'manifest.json')
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
         writer_llm=ctx.writer_llm, judge=ctx.judge, stream_manager=ctx.events.stream_manager,
-        max_solver_steps=ctx.max_solver_steps, max_review_rounds=ctx.max_review_rounds,
-        template_requirements=ctx.template_requirements, check_claims=ctx.check_claims, skill_policy=ctx.skill_policy,
+        max_solver_steps=ctx.max_solver_steps,
+        template_requirements=ctx.template_requirements, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
         source_workspace=ctx.workspace)
     local.compact_paper=ctx.compact_paper

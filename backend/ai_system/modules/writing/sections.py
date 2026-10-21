@@ -48,19 +48,6 @@ STYLE = (
 
 def writing_style(ctx: GraphContext) -> str:
     compact=('\n本研究选用简短论文：求解小节约600–900字，其他每节约100–300字，保留证据、来源与局限，不重复扩展实验。' if ctx.compact_paper else '')
-    if ctx.output_mode == "latex":
-        return STYLE + compact + (
-            "\n输出格式：原生 LaTeX 章节源码，直接用于 XeLaTeX 编译。"
-            "只输出本节正文，不要代码围栏、Markdown 标题、加粗或管道表格；"
-            "不要输出导言区、本节标题、document 环境、自定义宏或文件操作。"
-            "小节使用 \\subsubsection，列表使用 itemize/enumerate，表格使用 tabular/booktabs。"
-            "表格包含长段文字时使用 tabularx，宽度设为 \\linewidth，长文本列使用 X 自动换行，避免超出页边。"
-            "行内公式使用 $...$，独立公式使用 \\[...\\] 或 equation/align 环境。"
-            "文本中的特殊字符要正确转义（例如百分号写为 \\%）。"
-            "登记的数值引用仍使用 {{R:Rn}}；登记图引用 {{F:Fn}} 独占一行插图，"
-            "行内使用同一引用指代；不要自行添加 figure、caption、图片 label、图片路径或 includegraphics。"
-            "这些占位引用由系统原生替换为 LaTeX 数值和 figure 环境，无需格式转换。"
-        )
     return STYLE + compact + "\n只输出本节 Markdown 正文，不要输出本节标题或代码；小节标题用 ### 开头。"
 
 
@@ -99,45 +86,14 @@ def current_premises(state: PaperState, sid: str | None = None) -> List[Dict]:
             and (sid is None or sid in a["task_ids"])]
 
 
-def _design_text(design: Dict, premises: List[Dict]) -> str:
-    chosen = design["chosen"]
-    return (
-        f"方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"
-        f"当前采用的假设：{'；'.join(a['statement'] for a in premises) or '无新增假设'}\n检验：{chosen['validation']}"
-    )
-
-
-def _report_text(report: Dict) -> str:
-    findings = "\n".join(
-        f"- [{f['strength']}] {f['statement']}" if isinstance(f, dict) else f"- {f}"
-        for f in report.get("key_findings") or []
-    )
-    limitations = "；".join(report.get("limitations") or [])
-    return (
-        f"概要：{report.get('summary', '')}\n实际方法：{report.get('approach', '')}\n主要结论：\n{findings}\n"
-        f"灵敏度/检验：{report.get('sensitivity', '')}\n局限：{limitations}"
-    )
-
-
-def subproblem_brief(state: PaperState, ctx: GraphContext, subproblem: Dict) -> str:
-    sid = subproblem["id"]
-    store=getattr(ctx,'research',None)
-    if store:
-        from ai_system.research.views import experiment_context
-        record=experiment_context(store.snapshot(),{sid})[0]
-        return json.dumps({k:v for k,v in record.items() if k!='results'},ensure_ascii=False)
-    design = (state.get("designs") or {}).get(sid)
-    report = (state.get("solutions") or {}).get(sid) or {}
-    return (
-        f"## {sid} {subproblem['title']}\n问题：{subproblem['question']}\n"
-        + (_design_text(design, current_premises(state, sid)) + "\n" if design else "")
-        + f"求解报告：\n{_report_text(report)}"
-    )
+def subproblem_brief(ctx: GraphContext, subproblem: Dict) -> str:
+    from ai_system.research.views import experiment_context
+    record=experiment_context(ctx.research.snapshot(),{subproblem['id']})[0]
+    return json.dumps({k:v for k,v in record.items() if k!='results'},ensure_ascii=False)
 
 
 def _comparison_context(ctx: GraphContext, references, allowed) -> str:
     """Current comparison facts, with measured quantities bound to real R refs."""
-    if ctx.research is None:return ''
     import math
     from ai_system.modules.experiments.store import ExperimentStore
     summaries=[]
@@ -207,11 +163,9 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
     references = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items()
                                                if allowed is None or r.subproblem in allowed})
     request += _comparison_context(ctx,references,allowed)
-    if ctx.research:
-        from ai_system.research.views import result_context
-        snapshot=ctx.research.snapshot()
-        evidence=json.dumps([result_context(snapshot,r.__dict__) for r in references.results.values()],ensure_ascii=False)
-    else:evidence=references.to_prompt_table()
+    from ai_system.research.views import result_context
+    snapshot=ctx.research.snapshot()
+    evidence=json.dumps([result_context(snapshot,r.__dict__) for r in references.results.values()],ensure_ascii=False)
     request += '\n\n# 本节可用引用（值、声明的对象范围、来源与版本一起读取；缺失语义不得猜测；仅可复制这里的reference）\n'+evidence
     if not any(r.kind == "figure" for r in references.results.values()):
         request += "\n本节没有可用图表，只能用文字、公式或基于已登记结果的表格说明，不得引用图。"
@@ -255,7 +209,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
             + ("合并交代问题与数据、采用前提及无新增假设的边界、符号定义、模型公式、共同划分、"
                "方法参数、实测结果与图、已完成检查及恢复边界。只在此节集中引用一句有公开原文支持的背景，"
                "不得把文献当成本研究结果或添加实验。" if ctx.compact_paper else "")
-            + "\n\n"+"\n\n".join(subproblem_brief(state,ctx,item) for item in experiments)
+            + "\n\n"+"\n\n".join(subproblem_brief(ctx,item) for item in experiments)
         )
 
     if key == "restatement":
@@ -268,8 +222,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         return (
             f"撰写「问题分析」，逐个子问题说明分析思路和选用模型的理由。\n\n整体思路：{analysis['overall_analysis']}\n\n"
             + "\n\n".join(
-                f"{sp['id']} {sp['title']}\n" + _design_text(state["designs"][sp["id"]], current_premises(state, sp['id']))
-                for sp in subproblems if sp["id"] in (state.get("designs") or {})
+                subproblem_brief(ctx,sp) for sp in subproblems
             )
         )
     if key == "assumptions":
@@ -283,26 +236,26 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         )
     solved_text = "\n\n".join(clip(sections.get(solve_key(sp["id"]), ""), 4000) for sp in subproblems)
     if key == "symbols":
-        table = "原生 LaTeX tabular 表格（符号、说明、单位）" if ctx.output_mode == "latex" else "Markdown 表格（符号 | 说明 | 单位）"
+        table = "Markdown 表格（符号 | 说明 | 单位）"
         return f"撰写「符号说明」，用{table}，只列下文公式里实际用到的主要符号，不超过 15 行，不列代码变量名。\n\n求解章节：\n{solved_text}"
     if key == "sensitivity":
         return (
             "撰写「灵敏度分析」，汇总各子问题的检验和灵敏度分析结论，必须引用登记结果。\n\n"
-            + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
+            + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
         )
     if key == "evaluation":
         return (
             "撰写「模型的评价与推广」，分优点、缺点、改进与推广三部分，结合各子问题的局限。"
             "推广部分写清模型在实际中怎么用：谁在什么场景下用哪个输出做什么决定，哪些输出因证据不足不能用于决策。\n\n"
-            + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
+            + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
         )
     if key == "abstract":
-        keyword = r"\textbf{关键词：}" if ctx.output_mode == "latex" else "**关键词**："
+        keyword = "**关键词**："
         return (
             "撰写「摘要」：一段总述 + 每个子问题一段（2~4 句：用了什么方法、得到什么结论，只引用 1~3 个最关键的登记结果）"
             "+ 一段总结，全文不超过 1000 字，不写检验统计量的罗列，不用小节标题；"
             f"最后一行写「{keyword}」并列出 4~6 个关键词。\n\n"
-            f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
+            f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
         )
     # Planner/template sections are identified by their purpose and title;
     # their storage key need not belong to the built-in outline vocabulary.
@@ -310,7 +263,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
     return (
         f"撰写「{title}」一节，按本节研究表达目的组织已取得的结果、来源和局限，必须引用登记结果。{guard}\n\n"
         f"题目：\n{clip(state['task'], 3000)}\n\n"
-        + "\n\n".join(subproblem_brief(state, ctx, sp) for sp in subproblems)
+        + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
     )
 
 
@@ -367,10 +320,9 @@ async def write_section(ctx: GraphContext, state: PaperState, key: str, title: s
 async def write_many(ctx: GraphContext, state: PaperState, items: List[Tuple[str, str]]) -> Dict[str, str]:
     async def one(key,title):
         text=await write_section(ctx,state,key,title)
-        if ctx.research:
-            from ai_system.research.store import digest
-            context=digest({'style':writing_style(ctx),'request':section_request(key,title,state,ctx)})
-            ctx.research.save_sections({key:text},['章节写作尚未完成，未发布论文'],{key:context}, verified=False)
+        from ai_system.research.store import digest
+        context=digest({'style':writing_style(ctx),'request':section_request(key,title,state,ctx)})
+        ctx.research.save_sections({key:text},['章节写作尚未完成，未发布论文'],{key:context}, verified=False)
         return text
     texts = await asyncio.gather(*(one(key,title) for key,title in items),return_exceptions=True)
     errors=[text for text in texts if isinstance(text,BaseException)]
@@ -398,31 +350,24 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     state = {**state, "outline": outline}
     plan = section_plan(state)
     solve_items = [(key, title) for key, title, _ in plan if key.startswith("solve:")]
-    sections: Dict[str, str] = dict(state.get("sections") or {}) if ctx.research else {}
-    sections={k:v for k,v in sections.items() if k in {key for key,_,_ in plan}}
+    sections: Dict[str, str] = {}
     contexts = {}
-    if ctx.research:
-        from ai_system.research.store import digest
-        previous = ctx.research.snapshot()["sections"]
-        for key, title in solve_items:
-            contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, state, ctx)})
-            if previous.get(key, {}).get("context_hash") != contexts[key]:
-                sections.pop(key, None)
-            elif previous[key]['validity']=='current':
-                sections[key]=previous[key]['text']
+    from ai_system.research.store import digest
+    previous = ctx.research.snapshot()["sections"]
+    for key, title in solve_items:
+        contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, state, ctx)})
+        if previous.get(key, {}).get("context_hash") == contexts[key] and previous[key]['validity']=='current':
+            sections[key]=previous[key]['text']
     sections.update(await write_many(ctx, state, [(k, t) for k, t in solve_items if k not in sections]))
 
     # 摘要只依据各问的求解报告和登记结果，不读其他章节，和其余章节一起并行写，少一轮串行等待
     await ctx.set_stage("write", "in_progress", "撰写其余章节和摘要")
     with_solved = {**state, "sections": sections}
     rest = [(key, title) for key, title, _ in plan if key != "solve_heading" and not key.startswith("solve:")]
-    if ctx.research:
-        for key, title in rest:
-            contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, with_solved, ctx)})
-            if previous.get(key, {}).get("context_hash") != contexts[key]:
-                sections.pop(key, None)
-            elif previous[key]['validity']=='current':
-                sections[key]=previous[key]['text']
+    for key, title in rest:
+        contexts[key] = digest({"style": writing_style(ctx), "request": section_request(key, title, with_solved, ctx)})
+        if previous.get(key, {}).get("context_hash") == contexts[key] and previous[key]['validity']=='current':
+            sections[key]=previous[key]['text']
     sections.update(await write_many(ctx, with_solved, [(k, t) for k, t in rest if k not in sections]))
     await ctx.set_stage("write", "completed", f"{len(sections)} 个章节")
     log = f"write: {len(sections)} sections" + (f" (template outline: {len(outline)})" if outline else "")

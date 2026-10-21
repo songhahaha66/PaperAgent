@@ -63,7 +63,7 @@ def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputin
             events.append((kind, content))
 
     agent = PaperGraphAgent(model, workspace_dir=str(tmp_path), judge=FixedJudge(),
-        stream_manager=Recorder(), explore_top_k=1, max_review_rounds=0, max_repair_rounds=1)
+        stream_manager=Recorder(), explore_top_k=1, max_repair_rounds=1)
     assert "研究已暂停" in asyncio.run(agent.run(TASK))
     store = ResearchStore(tmp_path, agent._load_thread())
     before = store.snapshot()
@@ -96,7 +96,7 @@ def test_explicit_resume_of_unchanged_bad_writer_is_bounded_and_keeps_history_an
     monkeypatch.setattr(_Structured,'reviewed_q1',True)
     monkeypatch.setattr(_Structured,'audits',10)
     model=BrokenWriter(loose_number_once=False)
-    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),judge=FixedJudge(),max_review_rounds=0)
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),judge=FixedJudge())
     assert '研究已暂停' in asyncio.run(agent.run(TASK))
     store=ResearchStore(tmp_path,agent._load_thread());before=store.snapshot()
     history=list(before['publication']['repair_inputs']);written=len(model.text_calls)
@@ -125,7 +125,7 @@ def test_literal_numbers_are_allowed_without_regex_writing_repairs(tmp_path,monk
     monkeypatch.setattr(_Structured,'audits',10)
     model=LiteralNumberWriter(loose_number_once=False);start=len(model.text_calls)
     agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),judge=FixedJudge(),
-        explore_top_k=1,max_review_rounds=0,max_repair_rounds=1)
+        explore_top_k=1,max_repair_rounds=1)
     output=asyncio.run(agent.run(TASK))
     assert 'paper.md' in output and '引用有效性与文稿结构校验已完成' in output
     assert '数字校验' not in output

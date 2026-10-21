@@ -157,7 +157,7 @@ def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_
     monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
     async def run():
-        ctx=GraphContext.create(str(tmp_path),planner_llm=Writer(),max_review_rounds=0,check_claims=False)
+        ctx=GraphContext.create(str(tmp_path),planner_llm=Writer())
         ctx.research=ResearchStore(tmp_path,'graph')
         try:
             result=await compile_graph().ainvoke({'task':'计算6*7并写出结果。'},{'recursion_limit':40},context=ctx)

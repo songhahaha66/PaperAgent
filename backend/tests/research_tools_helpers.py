@@ -40,6 +40,26 @@ def answer(store,**values):
     return operations.update_answer(SimpleNamespace(research=store),operations.AnswerUpdate(**values).model_dump())
 
 
+def record_writing_inputs(ctx,source,subproblems,*,reports=None,designs=None):
+    """Persist synthetic worker receipts for writing tests, using the real store."""
+    from dataclasses import asdict
+    from ai_system.research.store import ResearchStore
+    from ai_system.research.models import WorkerResult
+    from ai_system.research.control import graph_view,refresh_registry
+    store=ResearchStore(ctx.workspace,'writing-fixture')
+    store.initialize(source,{'subproblems':subproblems,'assumptions':[],
+        'requirements':[{'id':'RQ0','statement':source,'source_quote':source,'kind':'goal',
+                         'task_ids':[sp['id'] for sp in subproblems],'checks':[]}]},output_mode=ctx.output_mode)
+    for sp in subproblems:
+        results=[asdict(r) for r in ctx.registry.for_subproblem(sp['id'])]
+        store.commit(WorkerResult(order=store.claim(sp['id']),execution_status='succeeded',acceptance='accepted',
+            report=(reports or {}).get(sp['id'],{'status':'completed','summary':'Recorded writing inputs'}),
+            design=(designs or {}).get(sp['id']),results=results))
+    ctx.research=store
+    refresh_registry(ctx)
+    return graph_view(store.snapshot())
+
+
 class ResearchToolsModel(BaseChatModel):
     respond: Callable
     _calls: int = PrivateAttr(default=0)

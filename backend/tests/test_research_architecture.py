@@ -163,7 +163,7 @@ def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,m
     from ai_system.research.control import execute, experiment_dispatch
     from ai_system.modules.experiments.planning import experiment_design
     async def run():
-        ctx=GraphContext.create(str(tmp_path),planner_llm=None,max_review_rounds=0,check_claims=False)
+        ctx=GraphContext.create(str(tmp_path),planner_llm=None)
         ctx.research=ResearchStore(tmp_path,'kernel-continuation')
         ctx.research.initialize('Count the supplied observations and derive a scaled count.')
         eid=add_experiment(ctx.research,'What can be concluded?',method='count and scale',conditions='fixed observations',evaluation='exact arithmetic')

@@ -332,6 +332,12 @@ class ResultRegistry:
             lines.append(f"| {ref} | {r.subproblem} | {r.name} | {shown} | {r.description} | {json.dumps(r.meaning, ensure_ascii=False) if r.meaning else '语义未登记'} |")
         return "\n".join(lines)
 
+    def series_index_issue(self, text: str) -> str | None:
+        for ref in re.finditer(r"\{\{\s*R:\s*(R\d+)\s*\}\}\s*\[\s*\d+\s*\]", text):
+            result=self.get(ref.group(1))
+            if result and result.kind=='series':
+                return '数值序列引用不支持 [0] 等索引。引用代表完整序列，请整组展示，或使用已经逐项登记的真实引用；不要把同一个序列填到多个单值单元格。'
+
     def render(self, text: str, *, latex: bool = False, links: bool = False) -> str:
         """把正文中的引用替换成真实内容
 
@@ -340,6 +346,7 @@ class ResultRegistry:
         - {{R:R1}} 渲染为数值和单位；
         - 未知引用保留原样，由校验环节报告。
         """
+        if issue:=self.series_index_issue(text):raise ValueError(issue)
         from ..export.latex import escape_plain
         encode = escape_plain if latex else str
         figure_numbers: Dict[str, int] = {}

@@ -21,10 +21,6 @@ class Inputs(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-class StateInputs(Inputs):
-    state: dict = Field(min_length=1)
-
-
 class BranchInputs(Inputs):
     branch: dict = Field(min_length=1)
 

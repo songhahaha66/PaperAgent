@@ -24,13 +24,12 @@ from ai_system.modules.writing.sections import writing_style, section_plan, sect
 def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]:
     sections = state.get("sections") or {}
     registry = ctx.registry
-    if ctx.output_mode == 'latex' and ctx.research:
+    if ctx.output_mode == 'latex':
         # Syntax, cross-references and layout are checked by the compiler.
         from ai_system.research.citations import citation_issues
         return [{'section':key, 'message':message} for key,text in sections.items()
                 for message in [*citation_issues(ctx.research.root,text), *(['正文仍有未解析的结果引用，请基于登记证据修复源码'] if REF_PATTERN.search(text) else [])]]
     issues: List[Dict[str, str]] = []
-    labels = {label for body in sections.values() for label in re.findall(r"\\label\{([^{}]+)\}", body)}
 
     for key, title, _ in section_plan(state):
         if key == "solve_heading":
@@ -41,26 +40,16 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
         if not text.strip():
             issues.append({"section": key, "message": f"必需章节「{title}」为空"})
             continue
-        if ctx.output_mode == "latex":
-            from ai_system.export.latex import fragment_issues
-            issues.extend({"section": key, "message": message} for message in fragment_issues(text))
-            unknown_labels = sorted(set(re.findall(r"\\(?:ref|eqref|pageref)\{([^{}]+)\}", text)) - labels)
-            if unknown_labels:
-                issues.append({"section": key, "message": "引用了未定义的 LaTeX 标签：" + ", ".join(unknown_labels) + "。图引用只能用本节登记的 {{F:Fn}}，公式引用需有对应 label。"})
         unknown = [ref for ref in find_refs(text) if registry.get(ref) is None]
         if unknown:
             issues.append({"section": key, "message": f"引用了不存在的结果：{', '.join(sorted(set(unknown)))}"})
-        for ref in re.finditer(r"\{\{\s*R:\s*(R\d+)\s*\}\}\s*\[\s*\d+\s*\]", text):
-            result = registry.get(ref.group(1))
-            if result and result.kind == "series":
-                issues.append({"section": key, "message": "数值序列引用不支持 [0] 等索引。引用代表完整序列，请整组展示，或使用已经逐项登记的真实引用；不要把同一个序列填到多个单值单元格。"})
-                break
+        if message:=registry.series_index_issue(text):issues.append({'section':key,'message':message})
     return issues
 
 
 async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
-    if ctx.output_mode == 'latex' and ctx.research:
+    if ctx.output_mode == 'latex':
         from services.chat_services.paper_project import source_state
         state = source_state(ctx.research,state)
         if not state['sections'] or not any(t.strip() for t in state['sections'].values()):
@@ -74,27 +63,19 @@ async def validate(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         if source_snapshot(ctx.research.root)['version'] != state['source_version']:
             raise ReviewSuperseded('内容检查期间源码已改变，请检查当前版本')
     issues = ctx.research.report_issues(reports, "sections", close_writing=True)
-    research_restart = False
-    blocked = False
     if ctx.output_mode != 'latex':
         ctx.research.save_sections(state.get("sections") or {}, issues, state.get("section_contexts"), verified=False)
     from services.chat_services.issue_edits import bind_findings
     bind_findings(ctx.research,[i['id'] for i in issues],state.get('sections') or {},source_version=state.get('source_version'))
-    message = None
-    if blocked:
-        reason='；'.join(dict.fromkeys(i['message'] for i in issues if i['category']=='service'))
-        message="论文检查未完成："+reason+"。正文已保留，继续后从检查步骤重试。"
-        await ctx.set_stage("validate", "blocked", message)
-    else:
-        await ctx.set_stage('validate', 'in_progress' if issues else 'completed',
-                            '发现引用或结构错误，修正当前稿件。' if issues and not research_restart else '发现研究疑点，交回控制器安排核查。' if research_restart else '当前正文检查通过。')
+    await ctx.set_stage('validate', 'in_progress' if issues else 'completed',
+                        '发现引用或结构错误，修正当前稿件。' if issues else '当前正文检查通过。')
     from ai_system.research.control import public_snapshot
     await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
     ctx.write_json(".system/validation.json", {"source_version":state.get("source_version"), "round": state.get("repair_round", 0), "issues": issues})
     note = f"第 {state.get('repair_round', 0)} 轮：{len(issues)} 个问题"
     await ctx.events.emit("paper_validation", note if issues else "校验通过")
-    return {"issues": issues, "research_restart": research_restart, "research_blocked": blocked,
-            "message": message,
+    return {"issues": issues, "research_restart": False, "research_blocked": False,
+            "message": None,
             "log": [f"validate: {len(issues)} issues"]}
 
 
@@ -194,35 +175,16 @@ def assemble(state: PaperState) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def assemble_latex(state: PaperState) -> str:
-    from ai_system.export.latex import escape_plain, native_document
-    sections = state.get("sections") or {}
-    body = []
-    solve_keys = {solve_key(sp["id"]) for sp in state["analysis"]["subproblems"]}
-    for key, title, level in section_plan(state):
-        if key == "abstract":
-            continue
-        title = re.sub(r"^[一二三四五六七八九十]+[、.．]\s*", "", title)
-        command = "section" if level == 2 else "subsection"
-        body.append("\\" + command + "{" + escape_plain(title) + "}\n")
-        if key != "solve_heading":
-            text = sections.get(key, "").strip()
-            body.append(place_figures(text) if key in solve_keys else FIGURE_LINE.sub(r"（见{{F:\1}}）", text))
-    abstract = FIGURE_LINE.sub(r"（见{{F:\1}}）", sections.get("abstract", ""))
-    return native_document(state["analysis"]["title"], abstract, "\n\n".join(body))
-
-
 async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx = runtime.context
-    if ctx.research:
-        snapshot = ctx.research.refresh_inputs()
-        if not ctx.research.delivery_ready(snapshot):
-            return {"research_restart": True, "log": ["render: research evidence changed, returning to research control"]}
-        if ctx.output_mode != 'latex':
-            ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
+    snapshot = ctx.research.refresh_inputs()
+    if not ctx.research.delivery_ready(snapshot):
+        return {"research_restart": True, "log": ["render: research evidence changed, returning to research control"]}
+    if ctx.output_mode != 'latex':
+        ctx.research.save_sections(state.get("sections") or {}, state.get("issues") or [], state.get("section_contexts"))
     native = ctx.output_mode == "latex"
     filename = "paper.tex" if native else "paper.md"
-    if native and ctx.research:
+    if native:
         import json
         from services.chat_services.paper_project import snapshot as source_snapshot, source_state
         state=source_state(ctx.research,state)
@@ -233,14 +195,14 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         # Read the actual project source, preserving its preamble and user edits.
         raw = (ctx.workspace / 'paper.tex').read_text(encoding='utf-8')
     else:
-        raw = assemble_latex(state) if native else assemble(state)
+        raw = assemble(state)
     # Native source already has immutable file-project versions; Markdown still
     # retains its pre-render references for provenance.
-    if not (native and ctx.research):
-        ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
+    if not native:
+        ctx.fs.write_text('.system/paper_raw.md', raw)
     from ai_system.graph.registry import publication_text
     from ai_system.research.citations import render_citations, literature_root,citation_issues
-    if native and ctx.research:
+    if native:
         from services.chat_services.paper_sources import validate_references
         for text in state.get('sections',{}).values():
             validate_references(ctx.workspace,text,text)
@@ -248,17 +210,14 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     else:
         problems=citation_issues(literature_root(ctx),raw)
     if problems:raise ValueError('发布前文献引用未获原文支持：'+'；'.join(problems))
-    rendered = raw if native and ctx.research else publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw, latex=native),native))
+    rendered = raw if native else publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw, latex=native),native))
     if REF_PATTERN.search(rendered):
         raise ValueError("论文仍有未解析的登记引用，禁止发布")
-    if native and ctx.research:
+    if native:
         path, conflict = filename, False
     else:
-        path, conflict = ctx.research.publish_paper(rendered, filename=filename) if ctx.research else (filename, False)
-    if ctx.research:
-        ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")
-    else:
-        ctx.fs.write_text(path, rendered, kind="document", created_by="ai", visibility="user")
+        path, conflict = ctx.research.publish_paper(rendered, filename=filename)
+    ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")
     remaining = len(state.get("issues") or [])
     await ctx.set_stage("validate", "completed", f"剩余 {remaining} 个问题" if remaining else "全部通过")
     await ctx.set_stage("render", "completed", f"登记结果 {len(ctx.registry.results)} 项")

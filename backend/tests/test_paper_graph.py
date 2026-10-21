@@ -1041,6 +1041,9 @@ def test_research_level_advice_uses_current_experimental_results_and_limits(tmp_
                             'limitations':limits}},'sections':{},
         'outline':[{'key':'evaluation','title':'政策建议','purpose':'建议必须依据当前实测结果并说明适用边界。','task_ids':['E1']}]}
     before=dict(ctx.registry.results)
+    from research_tools_helpers import record_writing_inputs
+    persisted=record_writing_inputs(ctx,state['task'],[experiment],reports=state['solutions'])
+    state={**persisted,'outline':state['outline']}
     request=section_request('evaluation','政策建议',state,ctx)
     assert '谁在什么场景下用哪个输出做什么决定' in request
     assert '哪些输出因证据不足不能用于决策' in request

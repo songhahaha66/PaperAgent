@@ -12,6 +12,7 @@ from ai_system.graph.context import GraphContext
 from ai_system.modules.writing.sections import section_request, STYLE
 from test_paper_graph import FakeModel, _analysis
 from test_report_submission import seed
+from research_tools_helpers import record_writing_inputs
 
 
 @pytest.fixture
@@ -104,9 +105,10 @@ def test_result_outline_citation_also_brings_original_passage_and_source(cited_s
 def test_saved_freeform_outline_can_resume_writing_with_real_results(tmp_path):
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     result=seed(ctx,[],name='MAE')
+    base=record_writing_inputs(ctx,'比较销量预测方法',_analysis().model_dump()['subproblems'])
     # Shape persisted by the planner in fdb9f007, before basis had a schema.
     for key in ('modeling','validation','limitations'):
-        state={'task':'比较销量预测方法','analysis':{'subproblems':[],'assumptions':[]},
+        state={**base,
                'outline':[{'key':key,'title':'预测结果','purpose':'说明计算结果与局限',
                            'basis':[{'statement':'验证误差','artifact_ref':result.id}]}]}
         prompt=section_request(key,'预测结果',state,ctx)
@@ -117,7 +119,7 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
     own = seed(ctx, [], name='answer')
     unrelated = seed(ctx, [], sid='Q2', name='unrelated', value='12')
-    state = {'analysis': _analysis().model_dump(), 'solutions': {}, 'designs': {}, 'sections': {}}
+    state = record_writing_inputs(ctx,'研究给定计算结果',_analysis().model_dump()['subproblems'])
     request = section_request('solve:Q1', '求解', state, ctx)
     assert '{{R:' + own.id + '}}' in request
     assert '{{R:' + unrelated.id + '}}' not in request
@@ -128,6 +130,12 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     ctx.fs.finish_run(run, 'success')
     (ctx.fs.run_dir(run) / 'artifacts/plot.png').write_bytes(b'png')
     figure = ctx.registry.record_figure('Q1', run, 'plot.png', '实际图表')
+    from research_tools_helpers import continue_experiment
+    from ai_system.research.models import WorkerResult
+    from dataclasses import asdict
+    continue_experiment(ctx.research,'Q1','登记已有实际图表')
+    ctx.research.commit(WorkerResult(order=ctx.research.claim('Q1'),execution_status='succeeded',acceptance='accepted',
+        report={'status':'completed','summary':'已登记实际图表'},results=[asdict(figure)]))
     request = section_request('solve:Q1', '求解', state, ctx)
     assert '{{F:' + figure.id + '}}' in request and '本节没有可用图表' not in request
 
@@ -139,7 +147,11 @@ def test_assumptions_section_uses_only_active_premises_and_never_pads_given_fact
         {'id': 'A1', 'revision': 2, 'statement': '当前已采纳前提', 'task_ids': ['Q1'], 'status': 'active'},
         {'id': 'A2', 'revision': 1, 'statement': '已被反证前提', 'task_ids': ['Q1'], 'status': 'refuted'},
         {'id': 'A3', 'revision': 1, 'statement': '已停用前提', 'task_ids': ['Q1'], 'status': 'retired'}]
-    state = {'analysis': analysis}
+    state=record_writing_inputs(ctx,'说明当前采用的研究前提',analysis['subproblems'])
+    with ctx.research._transaction() as db:
+        saved=ctx.research._read(db);saved['assumptions']={a['id']:a for a in analysis['assumptions']}
+        ctx.research._save(db,saved,'fixture_premises',{})
+    state['analysis']['assumptions']=analysis['assumptions']
     request = section_request('assumptions', '假设', state, ctx)
     assert 'A1 v2：当前已采纳前提' in request
     assert '已被反证前提' not in request and '已停用前提' not in request
@@ -151,9 +163,32 @@ def test_assumptions_section_uses_only_active_premises_and_never_pads_given_fact
         request = section_request(key, '正文', state, ctx)
         assert '当前已采纳前提' in request
         assert '原方案中过期的前提' not in request
-    analysis['assumptions'] = []
+    state['analysis']['assumptions'] = []
     request = section_request('assumptions', '假设', state, ctx)
     assert '没有假设时如实说明' in request
+
+
+@pytest.mark.parametrize('mode',['word','latex'])
+def test_formal_writing_entry_reads_store_without_accepting_a_second_state(tmp_path,monkeypatch,mode):
+    from ai_system.modules.registry import invoke,capabilities
+    from ai_system.modules.writing import sections,latex
+    from test_native_latex import accepted_store
+    from pydantic import ValidationError
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode=mode);ctx.research=accepted_store(tmp_path)
+    before=ctx.research.snapshot();received=[]
+    async def write(state,runtime):
+        received.append(state)
+        assert runtime.context.research is ctx.research
+        return {'sections':{},'log':['controlled writer']}
+    monkeypatch.setattr(latex if mode=='latex' else sections,'write',write)
+    asyncio.run(invoke(ctx,'writing.write'))
+    assert len(received)==1 and received[0]['task']==before['spec']['requirement']
+    assert received[0]['analysis']['questions'] and received[0]['solutions']
+    assert ctx.research.snapshot()['executions']==before['executions']
+    entry=next(c for c in capabilities().describe() if c['name']=='writing.write')
+    assert entry['inputs']['additionalProperties'] is False and not entry['inputs']['properties']
+    with pytest.raises(ValidationError):asyncio.run(invoke(ctx,'writing.write',state={'task':'stale parallel input'}))
+    assert len(received)==1
 
 
 def test_semantic_audit_preserves_actual_references_and_includes_auxiliary_evidence(tmp_path, monkeypatch):
