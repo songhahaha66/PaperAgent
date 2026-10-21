@@ -14,7 +14,11 @@ from services.chat_services.research_session import research_snapshot
 
 
 class VersionAwareModel(FakeModel):
+    fail_title_once: str = ''
     def _solver_step(self, task, messages):
+        if self.fail_title_once and self.fail_title_once in task and len([m for m in messages if isinstance(m,ToolMessage)]) == 2:
+            self.fail_title_once = ''
+            raise RuntimeError('403 real_name_required')
         reply = super()._solver_step(task, messages)
         if reply.tool_calls and reply.tool_calls[0]["name"] == "SolveReport":
             refs = [ref for message in messages if isinstance(message, ToolMessage)
@@ -35,9 +39,9 @@ def no_retries_or_state_leaks(monkeypatch):
     FAIL_ONCE.clear()
 
 
-def agent_for(tmp_path, **options):
+def agent_for(tmp_path, *, fail_title_once="", **options):
     ws = _make_workspace(tmp_path)
-    return PaperGraphAgent(VersionAwareModel(), workspace_dir=str(ws), judge=FixedJudge(), explore_top_k=1, **options)
+    return PaperGraphAgent(VersionAwareModel(fail_title_once=fail_title_once), workspace_dir=str(ws), judge=FixedJudge(), explore_top_k=1, **options)
 
 
 def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(tmp_path):
@@ -45,16 +49,22 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
     assert "paper.md" in asyncio.run(agent.run(TASK))
     store = ResearchStore(agent.workspace_dir, agent._load_thread())
     original = store.snapshot()
-    original_q1 = original["experiments"]["Q1"]["execution_id"]
-    # Change the downstream task, preserving Q1's evidence and its solve section.
-    command = dict(command_id="revise-q2", research_id=agent._load_thread(), base_revision=original["revision"],
-                   change="补充政策边界条件", scope=["Q2"])
+    targets = {t['subproblem']['title']: key for key,t in original['experiments'].items()}
+    forecast, policy = targets['用电量预测'], targets['政策评估']
+    # Revising the question preserves calculations; new conditions are not
+    # retroactively claimed as verified by the old experiment.
+    command = dict(command_id="revise-policy", research_id=agent._load_thread(), base_revision=original["revision"],
+                   change="补充政策边界条件", scope=[policy])
     assert "paper.md" in asyncio.run(agent.revise_research(**command))
     revised = store.snapshot()
-    assert revised["experiments"]["Q1"]["execution_id"] == original_q1
-    assert revised["experiments"]["Q2"]["revision"] == 2
-    assert revised["experiments"]["Q3"]["execution_id"] != original["experiments"]["Q3"]["execution_id"]
-    assert revised["sections"]["solve:Q1"]["text"] == original["sections"]["solve:Q1"]["text"]
+    for name in ('experiments','executions','artifacts'):
+        assert revised[name] == original[name]
+    forecast_qid,policy_qid = (original['experiments'][key]['question_id'] for key in (forecast,policy))
+    assert revised['questions'][forecast_qid] == original['questions'][forecast_qid]
+    assert revised['questions'][policy_qid]['version'] > original['questions'][policy_qid]['version']
+    assert revised['questions'][policy_qid]['coverage'] == 'partial'
+    assert '未执行条件仍未知' in revised['questions'][policy_qid]['stop_reason']
+    assert revised['sections']['solve:'+forecast]['text'] == original['sections']['solve:'+forecast]['text']
     assert revised["outcome"] in {"completed", "needs_attention"}
     before = len(revised["executions"])
     written = len(agent.llm.text_calls)
@@ -64,39 +74,40 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
     assert len(agent.llm.text_calls) == written
     assert store.snapshot()["commit_seq"] == commit_seq
     snapshot = research_snapshot(agent.workspace_dir, "work", "completed")
-    assert snapshot.engine_version == "research-v3" and snapshot.research_revision == original["revision"] + 1
-    assert len(snapshot.tasks) == 3
+    assert snapshot.engine_version == "research-v3" and snapshot.research_revision == revised["revision"] > original["revision"]
+    assert len(snapshot.experiments) == 2
 
 
 @pytest.mark.parametrize("mode", ["direct", "chat"])
 def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecessor(tmp_path, mode):
-    agent = agent_for(tmp_path)
-    FAIL_ONCE.add("Q2")
+    agent = agent_for(tmp_path, fail_title_once="政策评估")
     first_output = asyncio.run(agent.run(TASK))
     store = ResearchStore(agent.workspace_dir, agent._load_thread())
     initial = store.snapshot()
-    q1 = initial['experiments']['Q1']['execution_id']
-    failed=[a for a in initial['executions'].values() if a['task_id']=='Q2' and a['execution_status']=='failed']
+    targets = {t['subproblem']['title']: key for key,t in initial['experiments'].items()}
+    forecast,policy = targets['用电量预测'],targets['政策评估']
+    q1 = initial['experiments'][forecast]['execution_id']
+    failed=[a for a in initial['executions'].values() if a['task_id']==policy and a['execution_status']=='failed']
     assert len(failed)==1 and failed[0]['execution_status']=='failed' and failed[0]['acceptance']!='accepted'
     failed_ids={a['attempt_id'] for a in failed}
-    failed_refs={ref for ref,e in initial['evidence'].items() if e['producer_attempt'] in failed_ids}
+    failed_refs={ref for ref,e in initial['artifacts'].items() if e['producer_attempt'] in failed_ids}
     assert failed_refs.isdisjoint({r['id'] for r in store.registry_payload()['results']})
-    assert len([a for a in initial['executions'].values() if a['task_id']=='Q1'])==1
+    assert len([a for a in initial['executions'].values() if a['task_id']==forecast])==1
     # The controller may already have repaired Q2. Resume only if work remains.
     output = asyncio.run(agent.resume_failed() if mode == 'direct' else agent.run('继续', action='resume')) if '研究已暂停' in first_output else first_output
     assert 'paper.md' in output
-    current=store.snapshot();active=current['experiments']['Q2']['execution_id']
-    assert current['experiments']['Q1']['execution_id']==q1 and current['experiments']['Q2']['acceptance']=='accepted'
-    assert len([a for a in current['executions'].values() if a['task_id']=='Q1'])==1
+    current=store.snapshot();active=current['experiments'][policy]['execution_id']
+    assert current['experiments'][forecast]['execution_id']==q1 and current['experiments'][policy]['acceptance']=='accepted'
+    assert len([a for a in current['executions'].values() if a['task_id']==forecast])==1
     assert active not in failed_ids and current['executions'][active]['execution_status']=='succeeded'
     assert current['executions'][active]['acceptance']=='accepted'
-    results=store.registry_payload()['results'];q2_results=[r for r in results if r['subproblem']=='Q2']
-    assert q2_results and all(current['evidence'][r['id']]['producer_attempt']==active for r in q2_results)
+    results=store.registry_payload()['results'];q2_results=[r for r in results if r['subproblem']==policy]
+    assert q2_results and all(current['artifacts'][r['id']]['producer_attempt']==active for r in q2_results)
     assert failed_refs.isdisjoint({r['id'] for r in results})
     paper=(Path(agent.workspace_dir)/'paper.md').read_bytes();attempts=current['executions'];written=len(agent.llm.text_calls)
     assert 'paper.md' in asyncio.run(agent.resume_failed())
     after=store.snapshot()
-    assert after['executions']==attempts and after['experiments']['Q1']['execution_id']==q1
+    assert after['executions']==attempts and after['experiments'][forecast]['execution_id']==q1
     assert (Path(agent.workspace_dir)/'paper.md').read_bytes()==paper and len(agent.llm.text_calls)==written
 
 
@@ -105,6 +116,8 @@ def test_unversioned_research_requires_new_run_without_changing_existing_files(t
     agent = agent_for(tmp_path, confirm_models=True)
     asyncio.run(agent.run(TASK))
     thread = agent._thread_file()
+    before_state = ResearchStore(agent.workspace_dir, agent._load_thread()).snapshot()
+    scope_id = next(iter(before_state["experiments"]))
     metadata = json.loads(thread.read_text())
     metadata.pop("engine_version")
     thread.write_text(json.dumps(metadata))
@@ -117,7 +130,7 @@ def test_unversioned_research_requires_new_run_without_changing_existing_files(t
     else:
         with pytest.raises(ValueError, match="不支持恢复"):
             asyncio.run(agent.revise_research(command_id="change", research_id=metadata["thread_id"],
-                base_revision=1, change="modify", scope=["Q1"]))
+                base_revision=before_state["revision"], change="modify", scope=[scope_id]))
     assert before == {p.relative_to(thread.parent): p.read_bytes() for p in thread.parent.rglob("*") if p.is_file()}
     assert "paper.md" in asyncio.run(agent.run(TASK, new_run=True)) or agent.waiting_confirm
     assert agent._load_thread() != metadata["thread_id"]

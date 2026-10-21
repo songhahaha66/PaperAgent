@@ -20,6 +20,8 @@ from ai_system.judge.base import Answers, ChoiceAnswer
 
 
 class ReadOnlyChoice:
+    def __init__(self):self.close_calls=0
+    async def aclose(self):self.close_calls+=1
     async def ask(self, state, questions):
         return Answers(judge='jev:offline', choices={
             'intent': ChoiceAnswer('question', {'question': 1}, None)})
@@ -168,6 +170,8 @@ def web(monkeypatch, tmp_path):
         async def resume_failed(self):
             calls.append(("resume", None))
             await self.stream.send_json_block("main_agent_complete", "已恢复")
+    monkeypatch.setattr('services.chat_services.chat_history_manager.ChatHistoryManager.get_messages',
+        lambda *args: [{'role':'user','content':'原问题'}])
     monkeypatch.setattr(chat, "verify_token", lambda token: 7)
     monkeypatch.setattr(chat, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr("services.data_services.crud.get_work", lambda *args: work)
@@ -207,11 +211,14 @@ def exchange(client, payload):
 
 
 def test_websocket_followup_never_constructs_graph_or_changes_research_status(web, monkeypatch):
-    monkeypatch.setattr('services.chat_services.research_session.jev_available', lambda: True)
-    monkeypatch.setattr('services.chat_services.research_session.JevJudge', lambda **kwargs: ReadOnlyChoice())
+    judge=ReadOnlyChoice()
+    monkeypatch.setattr('ai_system.judge.JevJudge', lambda **kwargs: judge)
+    monkeypatch.setattr('ai_system.config.environment.DatabaseConfigManager.get_model_config',
+        lambda *args: SimpleNamespace(model_id='offline', api_key='unused', base_url='https://example.test/v1', timeout_seconds=30))
     client, work, calls, statuses, saved, root = web
     original = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
     events = exchange(client, {"problem": "解释 Q1 的结果", "subproblem_id": "Q1"})
+    assert judge.close_calls==1
     assert events[0]["action"] == "ask"
     assert events[-1]["work_status"] == "completed"
     assert [name for name, _ in calls] == ["ask"]
@@ -250,14 +257,14 @@ def test_snapshot_api_checks_ownership_before_reading_files(web):
     assert response.status_code == 403 and "R1" not in response.text
 
 
-def test_outcomes_api_preserves_the_same_owner_boundary(web):
+def test_experiment_results_use_the_research_api_and_preserve_owner_boundary(web):
     client, work, *_ = web
-    response = client.get('/api/chat/work/work/outcomes')
+    response = client.get('/api/chat/work/work/research')
     assert response.status_code == 200
-    assert response.json()['outcomes'][0]['checking'] == 'unreviewed'
-    assert response.json()['outcomes'][0]['results'][0]['id'] == 'R1'
+    assert response.json()['experiments'][0]['checking'] == 'unreviewed'
+    assert response.json()['experiments'][0]['results'][0]['id'] == 'R1'
     work.created_by = 9
-    denied = client.get('/api/chat/work/work/outcomes')
+    denied = client.get('/api/chat/work/work/research')
     assert denied.status_code == 403 and 'R1' not in denied.text
 
 
@@ -312,12 +319,15 @@ def test_question_failure_preserves_research_status_and_hides_provider_error(web
 
 
 def test_asking_about_waiting_plan_does_not_confirm_or_redesign(web, monkeypatch):
-    monkeypatch.setattr('services.chat_services.research_session.jev_available', lambda: True)
-    monkeypatch.setattr('services.chat_services.research_session.JevJudge', lambda **kwargs: ReadOnlyChoice())
+    judge=ReadOnlyChoice()
+    monkeypatch.setattr('ai_system.judge.JevJudge', lambda **kwargs: judge)
+    monkeypatch.setattr('ai_system.config.environment.DatabaseConfigManager.get_model_config',
+        lambda *args: SimpleNamespace(model_id='offline', api_key='unused', base_url='https://example.test/v1', timeout_seconds=30))
     client, work, calls, statuses, saved, root = web
     work.status = "waiting"
     (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "interrupted"}))
     events = exchange(client, {"problem": "解释这个方案有什么风险"})
+    assert judge.close_calls==1
     assert [name for name, _ in calls] == ["ask"]
     assert events[-1]["work_status"] == "waiting" and statuses == []
     assert json.loads((root / ".system/graph_thread.json").read_text())["status"] == "interrupted"
@@ -388,7 +398,10 @@ def test_unversioned_history_is_read_only_and_cannot_enter_graph(tmp_path, actio
     metadata.pop("engine_version")
     thread.write_text(json.dumps(metadata))
     snapshot = research_snapshot(tmp_path, "work", "waiting")
-    assert not snapshot.results and snapshot.legacy_records and snapshot.engine_version is None
+    assert not snapshot.results and not snapshot.experiments and snapshot.engine_version is None
+    assert 'legacy_records' not in snapshot.model_dump()
+    assert snapshot.has_research, 'unversioned history remains visible without promoting it to current evidence'
+    assert (tmp_path/'paper.md').read_text() == '# 研究\n已有报告，不得改写'
     assert asyncio.run(resolve_action("ask", "解释已有结果", snapshot)) == "ask"
     with pytest.raises(ValueError, match="不支持恢复"):
         asyncio.run(resolve_action(action, "继续", snapshot))

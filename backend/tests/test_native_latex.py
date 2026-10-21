@@ -19,6 +19,8 @@ from services.file_services.workspace_structure import WorkspaceStructureManager
 from services.chat_services.research_session import research_snapshot
 from test_paper_graph import FakeModel
 from test_research_p2 import store_for, submit, problem, TASK
+from research_tools_helpers import answer
+from ai_system.research.views import questions
 
 
 def accepted_store(root):
@@ -26,7 +28,38 @@ def accepted_store(root):
     submit(store, 'Q1', {'demand': 8})
     submit(store, 'Q3', {'independent': 3})
     submit(store, 'Q2', {'allocation': 8, 'residual': 0})
+    before=store.snapshot()
+    assert not store.delivery_ready(before), 'Execution results alone do not answer the user questions'
+    results=store.registry_payload()['results']
+    for question in questions(before):
+        if question.get('retired'):continue
+        evidence=[r for r in results if r['subproblem'] in question['experiment_ids']]
+        assert evidence, 'An answered fixture question must have actual current results'
+        answer(store,question_id=question['id'],
+            statement='在本次给定条件下，'+'；'.join(r['name']+'为 {{R:'+r['id']+'}}' for r in evidence)+'。',
+            artifact_refs=[r['id'] for r in evidence],coverage='answered',
+            stop_reason='对应实验已完成冻结检查，当前问题已得到给定条件下的结果。',
+            limitations=['仅限本次输入与实验条件，未验证外推适用性。'])
+    after=store.snapshot()
+    assert store.delivery_ready(after)
+    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
     return store
+
+
+def validate_render_current_native(store):
+    """Use actual current-source validation/render; never fabricate its version."""
+    from ai_system.modules.writing import validation
+    from ai_system.research.control import graph_view,refresh_registry
+    ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
+    refresh_registry(ctx)
+    async def perform():
+        state=graph_view(store.snapshot())
+        checked=await validation.validate(state,SimpleNamespace(context=ctx))
+        assert not checked['issues'] and not checked['research_blocked']
+        return await validation.render(state,SimpleNamespace(context=ctx))
+    rendered=asyncio.run(perform())
+    assert rendered['paper_path']=='paper.tex'
+    return ctx
 
 
 def render_native_paper(store, state):
@@ -48,10 +81,12 @@ def test_latex_workspace_starts_with_tex_not_markdown(tmp_path):
     assert not (tmp_path / 'paper.md').exists()
 
 
-def test_native_project_draft_is_separate_from_rendered_research_artifacts(tmp_path):
+def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_exports(tmp_path):
     from services.chat_services import paper_project as project
     from ai_system.research.models import IssueReport
     store=accepted_store(tmp_path)
+    with store._transaction() as db:
+        state=store._read(db);state['spec']['output_mode']='latex';store._save(db,state,'fixture_native_output',{})
     store.save_sections({'abstract':'已保存但尚未正式交付的正文。'},[])
     (tmp_path/'.system/graph_thread.json').write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
     (tmp_path/'paper.tex').write_text('论文草稿。')
@@ -61,13 +96,18 @@ def test_native_project_draft_is_separate_from_rendered_research_artifacts(tmp_p
     assert not research_snapshot(tmp_path,'work','paused').artifacts
     # Native render uses project files, without the legacy publish_paper hash.
     assert not store.snapshot().get('paper_hash')
-    store.set_delivery_stage('render','completed','')
+    validate_render_current_native(store)
+    assert store.snapshot()['delivery_stages']['render']['status']=='completed'
+    assert project.is_latex(store)
+    assert json.loads((tmp_path/'.system/validation.json').read_text())['source_version']==project.snapshot(tmp_path)['version']
     assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
     store.register_exports(['paper.tex','paper.pdf'])
-    assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.pdf','paper.tex']
+    assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
+    assert project.describe(store)['pdf_available'], 'old PDF preview remains, but registration alone does not validate its source version'
     store.report_issues([IssueReport(task_id='Q1',category='model',message='还需核验科学结论')],'local_review')
-    assert not research_snapshot(tmp_path,'work','paused').artifacts
-    assert project.describe(store)['files'], 'Scientific blockers must not hide the editable draft'
+    assert research_snapshot(tmp_path,'work','paused').artifacts==['paper.tex']
+    assert store.delivery_ready(store.snapshot()), 'advisory findings cannot revoke recorded question answers'
+    assert project.describe(store)['files'], 'an advisory finding must not hide the editable draft'
 
 
 def test_native_style_requests_no_markdown_and_repairs_format_errors(tmp_path):
@@ -128,9 +168,11 @@ def test_tex_publication_versions_manual_edits_and_snapshot_artifacts(tmp_path):
     assert path == 'paper.tex' and not conflict
     assert store.snapshot()['paper_version'].endswith('.tex')
     (tmp_path / '.system/graph_thread.json').write_text(json.dumps({'thread_id': 'p2', 'engine_version': 'research-v3', 'status': 'done'}))
+    validate_render_current_native(store)
     assert research_snapshot(tmp_path, 'work', 'completed').artifacts == ['paper.tex']
     manual = source + '\n% 用户修改'
     (tmp_path / 'paper.tex').write_text(manual)
+    assert not research_snapshot(tmp_path,'work','completed').artifacts, 'an edited source must invalidate the prior validation version'
     path, conflict = store.publish_paper(source + '\n% 自动修订', filename='paper.tex')
     assert conflict and path.endswith('.tex')
     assert (tmp_path / 'paper.tex').read_text() == manual
@@ -198,23 +240,52 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
     assert (tmp_path / 'paper.pdf').read_bytes() == b'%PDF-old'
 
 
-def test_failed_native_export_blocks_completion_and_preserves_source(tmp_path, monkeypatch):
-    import ai_system.modules.writing.export as exporter
-    from ai_system.export.latex import LatexResult
+def test_failed_native_export_keeps_project_diagnostics_and_resumes_without_research_replay(tmp_path, monkeypatch):
+    from ai_system.export.latex import LatexResult,BUILD_DIR
     from ai_system.graph import PaperGraphAgent
+    from ai_system.research.store import ResearchStore
+    from services.chat_services import paper_project as project
     from test_paper_graph import _make_workspace, TASK as GRAPH_TASK, FixedJudge
+    compiled=[]
     async def no_pdf(workspace, *args):
+        compiled.append((workspace/'paper.tex').read_text())
+        (workspace/BUILD_DIR).mkdir(parents=True,exist_ok=True)
+        (workspace/BUILD_DIR/'paper.log').write_text('controlled compile failure')
         return LatexResult('paper.tex', error='模拟编译错误')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf', no_pdf)
     root = _make_workspace(tmp_path)
     agent = PaperGraphAgent(FakeModel(), workspace_dir=str(root), judge=FixedJudge(), output_mode='latex')
     output = asyncio.run(agent.run(GRAPH_TASK))
-    assert agent.last_result['research_blocked']
-    assert 'PDF 编译未完成' in output and '模拟编译错误' in output
+    assert agent.last_result['research_blocked'] and '模拟编译错误' in output
+    assert len(compiled)==1, 'writing must complete before the compiler failure is observed'
     assert (root / 'paper.tex').exists() and not (root / 'paper.md').exists()
+    assert not (root/'.system/paper_raw.tex').exists() and not (root/'paper.pdf').exists()
+    store=ResearchStore(root,agent._load_thread());before=store.snapshot()
+    source=(root/'paper.tex').read_bytes();version=project.snapshot(root)['version']
+    data=project.describe(store);compilation=data['compile']
+    assert compilation['state']=='failed' and compilation['source_version']==version
+    assert compilation['message']=='模拟编译错误' and compilation['diagnostics']==[]
+    assert (root/compilation['log_path']).read_text()=='controlled compile failure'
+    assert (root/project.VERSIONS/version/'paper.tex').read_bytes()==source
+    changes=data['changes']
     snapshot = research_snapshot(root, 'work', 'paused')
     assert snapshot.delivery_stages['export']['status'] == 'blocked'
     assert snapshot.artifacts == ['paper.tex']
+    async def recovered(workspace,*args):
+        compiled.append((workspace/'paper.tex').read_text())
+        (workspace/'paper.pdf').write_bytes(b'%PDF-controlled-compiler')
+        return LatexResult('paper.tex',pdf_path='paper.pdf')
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',recovered)
+    assert 'paper.pdf' in asyncio.run(agent.resume_failed())
+    assert len(compiled)==2 and compiled[0]==compiled[1]
+    assert (root/'paper.tex').read_bytes()==source
+    assert project.describe(store)['changes']==changes
+    assert project.describe(store)['compile']['state']=='current'
+    assert project.describe(store)['pdf_version']==version
+    assert store.snapshot()['executions']==before['executions']
+    assert store.snapshot()['artifacts']==before['artifacts']
+    assert store.snapshot()['outcome']=='completed'
+    assert research_snapshot(root,'work','completed').delivery_stages['export']['status']=='completed'
 
 
 def test_native_tables_cannot_invent_indexed_series_references(tmp_path):

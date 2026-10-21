@@ -162,7 +162,7 @@ def test_duplicate_passages_bind_by_range_and_unlocated_findings_stay_file_scope
     assert (native.store.root/'part.tex').read_text()=='重复原文。\n\n仅修正第二段。\n\n'
 
 
-def test_old_finding_is_rechecked_explicitly_without_linking_new_findings(native,monkeypatch):
+def test_review_keeps_old_finding_until_owner_applies_source_edit_and_accepts_advice(native,monkeypatch):
     from ai_system.modules.writing import consistency
     from ai_system.graph.state import SectionIssueReview
     old=native.store.report_issues([IssueReport(task_id='Q1',category='writing',section='part.tex',message='需要限定结论')],'sections')[0]
@@ -173,12 +173,28 @@ def test_old_finding_is_rechecked_explicitly_without_linking_new_findings(native
     monkeypatch.setattr(consistency,'call_structured',reply)
     reports=asyncio.run(consistency.audit_sections(native.state,native.ctx))
     assert len(reports)==1 and '适用范围' in reports[0].message
-    saved=native.store.snapshot()['feedback']
-    assert next(i for i in saved if i['id']==old['id'])['status']=='dismissed'
-    replacement=next(i for i in saved if i['id']!=old['id'] and i['category']=='writing')
-    assert replacement['status']=='confirmed'
+    before=native.store.snapshot()
+    saved=before['feedback']
+    assert next(i for i in saved if i['id']==old['id'])['status']=='confirmed'
+    assert len(saved)==1, 'a semantic check returns advice without creating or closing findings'
+    [replacement]=native.store.report_issues(reports,'sections',close_writing=False)
     issue_edits.bind_findings(native.store,[replacement['id']],native.state['sections'])
-    assert issue_edits.context(native.store,replacement['id'])['selection']
+    selected=issue_edits.context(native.store,replacement['id'])['selection']
+    assert selected
+    # Adoption is an explicit owner operation after the actual source correction.
+    current=native.ctx.registry.get('R1')
+    project.initialize(native.store)
+    change=project.propose_change(native.store,None,None,[{**selected,
+        'replacement':'当前原文：本次结果为'+current.value+'，仅限给定样本与条件。\n% paperagent:evidence R1\n'}])
+    asyncio.run(project.decide(native.store,change['id'],'apply',compile_after=False))
+    from ai_system.research.feedback import revise_interpretation,interpretation_version,FeedbackDecision
+    state=native.store.snapshot();task=state['experiments'][old['task_id']]
+    revise_interpretation(native.store,task['task_id'],interpretation_version(state,task),decisions=[
+        FeedbackDecision(issue_id=i['id'],disposition='adopt',reason='已在当前源码明确给定样本与条件，没有改动计算。',evidence_refs=['R1'])
+        for i in (old,replacement)])
+    after=native.store.snapshot()
+    assert all(next(i for i in after['feedback'] if i['id']==item['id'])['status']=='resolved' for item in (old,replacement))
+    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
 
 
 def test_review_failure_retains_actual_reason_and_blocked_action_does_not_repeat_intent(native,monkeypatch):
@@ -192,7 +208,8 @@ def test_review_failure_retains_actual_reason_and_blocked_action_does_not_repeat
     failed=next(r for r in review_tasks.records(native.store) if r['state']=='failed')
     assert failed['diagnostic']['reason']=='targets 引用了不存在的片段 paper.tex#999'
     assert 'paper.tex#999' in next(i for i in native.store.snapshot()['faults'] if i['category']=='service')['message']
-    snapshot={'action':{'capability':'writing.validate','status':'failed','reason':'准备开始撰写论文'},
+    snapshot={'action':{'capability':'writing.validate','status':'failed','reason':'准备开始撰写论文',
+                        'message':'正文审查未完成：targets 引用错误'},
               'delivery_stages':{'validate':{'note':'正文审查未完成：targets 引用错误'}}}
     assert decision_block_message(None,snapshot)=='正文审查未完成：targets 引用错误'
 

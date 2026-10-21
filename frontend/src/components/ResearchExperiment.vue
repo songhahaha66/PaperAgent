@@ -303,7 +303,7 @@ const label = (value: string) => outcomeLabel(value, isZh.value)
   gap: 8px;
   flex-wrap: wrap;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--pa-radius-control);
   background: var(--pa-surface-active);
 }
 .follow-up button {

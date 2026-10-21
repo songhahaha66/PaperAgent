@@ -467,6 +467,7 @@ class ResearchStore:
             else:
                 attempt["validity"] = "stale"
                 if task["execution_id"] == order.attempt_id:
+                    task['execution_status']=result.execution_status
                     task["revision"] += 1
                     state["revision"] += 1
                     self._invalidate(state, {order.task_id}, "执行期间输入已改变")

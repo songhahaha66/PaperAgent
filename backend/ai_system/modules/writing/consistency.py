@@ -104,12 +104,33 @@ def section_doubts(state, ctx):
     if not store:return {}
     snapshot=store.snapshot()
     investigated={t.get('verifies_issue') for t in snapshot['experiments'].values()}
-    return {i['id']:i for i in research_findings(snapshot)
+    doubts={i['id']:i for i in research_findings(snapshot)
             if i['source'] in {'sections','review-task:sections'} and i['section'] in (state.get('sections') or {})
             and i['category'] not in {'service','execution','coverage'}
             and (i['status'] in {'suspected','inconclusive'} or i['category']=='writing' and i['status']=='confirmed')
             and not i['repair_targets'] and i['id'] not in investigated
             and snapshot['experiments'][i['task_id']]['acceptance']=='accepted' and snapshot['experiments'][i['task_id']]['validity']=='current'}
+    generated={key:i['review_scope']['generated_by_review'] for key,i in doubts.items()
+               if i['source']=='review-task:sections' and i.get('review_scope',{}).get('generated_by_review')}
+    if generated:
+        from contextlib import closing
+        from ai_system.research.review_cache import review_context,science_version
+        from ai_system.research.store import digest
+        current=review_context(ctx,state,'sections','','',ClaimAudit,sections=state.get('sections') or {})
+        with closing(store._connect()) as db:
+            for key,review_id in generated.items():
+                row=db.execute("SELECT state,payload FROM review_records WHERE research_id=? AND id=?",(store.research_id,review_id)).fetchone()
+                if not row or row[0]!='completed':continue
+                producer=json.loads(row[1]);origin=producer['context']
+                # A finding is this completed review's output, not another input
+                # requiring immediate recheck. New source/evidence or independent
+                # doubts still change the normal material/request hashes.
+                if (producer['stage']=='sections' and producer.get('result_hash')==digest(producer.get('result'))
+                        and science_version(origin)==science_version(current)
+                        and all(origin.get(k)==current.get(k) for k in
+                                ('source_version','section_hashes','citation_sources','reconcile_projection_hash'))):
+                    doubts.pop(key)
+    return doubts
 
 
 def section_audit_prompt(state,ctx,*,force=False):

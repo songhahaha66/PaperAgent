@@ -17,7 +17,9 @@ const { hostRenderer } = require('./vueHost.cjs')
     {},
     true,
   )
+  let openedProgress=0
   const state = vue.reactive({
+    onOpenProgress:()=>{openedProgress++},
     blocks: [
       { type: 'paper_analysis', content: '保留分析与假设' },
       { type: 'paper_solved', content: 'Q1 已通过验收，登记 5 项结果' },
@@ -65,7 +67,9 @@ const { hostRenderer } = require('./vueHost.cjs')
   ]
   await flush()
   assert.equal(record().props.open, false, 'ordinary live records stay folded')
-  assert.match(text(host.root), /建立需求预测模型：正在核验.*本次操作进行中/)
+  const current=host.find(node=>node.props?.class==='pipeline-current')
+  assert.match(text(current), /建立需求预测模型：正在核验/)
+  assert.doesNotMatch(text(host.root), /本次操作进行中/,'Current progress comes from the concrete event')
   record().props.onToggle({ target: { open: true } })
   await flush()
   state.blocks = [...state.blocks, { type: 'paper_stage', content: 'Q1：更新计算' }]
@@ -88,11 +92,16 @@ const { hostRenderer } = require('./vueHost.cjs')
   ]
   await flush()
   const error = host.find((node) => node.props?.class === 'pipeline-error')
+  assert.equal(error.kind,'details')
   assert.match(text(error), /核验未通过，需要修改假设/)
+  const openProgress=host.find(node=>node.kind==='button'&&text(node).trim()==='查看运行状态')
+  assert.ok(openProgress)
+  openProgress.props.onClick()
+  assert.equal(openedProgress,1,'The current recovery action opens research progress')
   assert.equal(
     error.parent,
     record().parent,
-    'errors remain visible without expanding technical history',
+    'error diagnostics stay outside the historical process and can be expanded independently',
   )
   state.blocks = [{
     type: 'paper_phase',

@@ -60,26 +60,53 @@ def test_changed_source_invalidates_review_and_keeps_evidence(long):
     update(v,v.state['sections']['evaluation']+'新增适用范围。');run(v)
     assert len(v.model.calls)==2
     after=v.store.snapshot()
-    assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
+    assert all(before[k]==after[k] for k in ('experiments','executions','artifacts','claims','validations'))
 
 
 def test_interruption_is_incomplete_then_explicit_resume_reuses_the_same_draft(long):
     v=long;v.model.failure=True;before=v.store.snapshot();run(v)
     record=review_tasks.records(v.store)[0]
     assert record['state']=='failed' and record['error_code']=='TimeoutError'
-    task=next(t for t in review_tasks.status(v.store)['experiments'] if t['stage']=='sections')
+    task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
     assert task['state']=='failed' and task['can_resume'] and 'segmented' not in task
     v.model.failure=False
     async def scenario():
         review_tasks.start(v.store,'sections',task['version'],'resume-current-review',v.model)
         if review_tasks.ACTIVE:await asyncio.wait_for(asyncio.gather(*list(review_tasks.ACTIVE)),3)
     asyncio.run(scenario())
-    task=next(t for t in review_tasks.status(v.store)['experiments'] if t['stage']=='sections')
+    task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
     assert task['state']=='completed' and task['outcome']=='findings' and len(v.model.calls)==2
     finding=next(i for i in review_tasks.status(v.store)['issues'] if i['category']=='writing')
     assert issue_edits.context(v.store,finding['id'])['quote']==TAIL
+    saved=next(i for i in v.store.snapshot()['feedback'] if i['id']==finding['id'])
+    assert saved['review_scope']['generated_by_review']==task['record_id']
+    assert review_tasks.status(v.store)['tasks']==review_tasks.status(v.store)['tasks'] and len(v.model.calls)==2
     after=v.store.snapshot()
-    assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations','sections'))
+    assert all(before[k]==after[k] for k in ('experiments','executions','artifacts','claims','validations','sections'))
+
+
+@pytest.mark.parametrize('change',['source','evidence','independent_doubt','producer_receipt'])
+def test_completed_findings_stay_current_until_an_independent_input_or_proof_changes(long,change):
+    from ai_system.research.models import IssueReport
+    v=long
+    async def scenario():
+        task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
+        review_tasks.start(v.store,'sections',task['version'],'first-complete-review',v.model)
+        if review_tasks.ACTIVE:await asyncio.wait_for(asyncio.gather(*list(review_tasks.ACTIVE)),3)
+    asyncio.run(scenario())
+    completed=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
+    assert completed['state']=='completed' and completed['outcome']=='findings' and len(v.model.calls)==1
+    before=review_tasks.material(v.store,'sections')
+    if change=='source':update(v,v.state['sections']['evaluation']+'新的适用条件。')
+    elif change=='evidence':(v.store.root/'runs/one/stdout.log').write_text('changed actual execution output')
+    elif change=='independent_doubt':
+        v.store.report_issues([IssueReport(task_id='Q1',category='writing',section='evaluation',message='独立新增的样本范围疑点')],'sections')
+    else:
+        with v.store._transaction() as db:db.execute("UPDATE review_records SET state='failed' WHERE id=?",(completed['record_id'],))
+    task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
+    assert task['state']!='completed' and task['version']!=completed['version']
+    assert review_tasks.material(v.store,'sections')!=before
+    assert len(v.model.calls)==1, 'status reads must neither recheck their own findings nor call the model'
 
 
 def test_concurrent_same_review_has_one_owner(long):

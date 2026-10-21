@@ -178,12 +178,16 @@ def status(store):
         'pending_candidates':pending_candidates,'budget':budget}
 
 
-def _save_findings(store,stage,reports,expected):
+def _save_findings(store,stage,reports,expected,review_id):
     if not reports:return []
     with store._transaction() as db:
         if intent_context(store,stage)!=expected:raise ReviewSuperseded('审查期间材料已变化')
-        state=store._read(db);ids=[]
-        for report in reports:ids.append(store._record_issue(state,report,'suspected',source='review-task:'+stage)['id'])
+        state=store._read(db);ids=[];existing={i['id'] for i in research_findings(state)}
+        for report in reports:
+            issue=store._record_issue(state,report,'suspected',source='review-task:'+stage)
+            if issue['id'] not in existing:
+                issue['review_scope']={'stage':stage,'generated_by_review':review_id}
+            ids.append(issue['id'])
         store._save(db,state,'review_task_findings',{'stage':stage,'issues':ids})
     return ids
 
@@ -239,7 +243,7 @@ async def _run_owned(store,stage,record,llm):
                 if intent_context(store,stage)!=context:raise ReviewSuperseded('结论审查完成时材料已变化')
                 path=store.root/'.system/consistency.json';temporary=path.with_suffix('.review-tmp')
                 temporary.write_text(json.dumps(row['result'],ensure_ascii=False));temporary.replace(path)
-        finding_ids=_save_findings(store,stage,reports,context)
+        finding_ids=_save_findings(store,stage,reports,context,proof[0])
         if reports:
             from .issue_edits import bind_findings
             bind_findings(store,finding_ids,paper_state(store)['sections'],source_version=context.get('version_material',{}).get('source_version'))

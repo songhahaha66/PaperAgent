@@ -60,8 +60,8 @@ def test_required_series_flows_through_tools_submission_and_domain_acceptance(tm
     assert "必需登记指标已齐" in response and "登记失败" not in response
     result = next(iter(ctx.registry.results.values()))
     submission_schema(ctx, task, runs).model_validate(report(result.id))
-    state = {"experiments": {"Q1": {"execution_id": "attempt", "acceptance": "pending", "validity": "current"}},
-             "spec": {"requirements": [{"id": "RQ1", "revision": 1, "checks": [check]}]}, "assumptions": {}, "evidence": {}}
+    state = {"experiments": {"Q1": {"execution_id": "attempt", "acceptance": "pending", "validity": "current", "retired": False, "kind": "compute"}},
+             "spec": {"requirements": [{"id": "RQ1", "revision": 1, "checks": [check]}]}, "assumptions": {}, "executions": {"attempt": {"attempt_id": "attempt", "input_attempts": {}, "experience_basis": {}}}, "artifacts": {}}
     payload = {"id": result.id, "subproblem": "Q1", "name": "answer", "value": result.value}
     assert evaluate(state, "Q1", [payload]).checks[0].outcome == "passed"
     check["operator"] = "finite"

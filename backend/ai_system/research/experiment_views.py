@@ -81,7 +81,7 @@ def experiments_view(business, safe_file, current_files=None):
             items = [e['payload'] for e in business['artifacts'].values()
                      if e['producer_attempt'] in execution_lineage(business,aid) and e['type']=='result'
                      and (e['active'] or aid!=task.get('execution_id'))]
-            if aid==task.get('execution_id'):
+            if aid==task.get('execution_id') and task['validity']=='current':
                 items=current_results(business,{key},task_id=key)
             if items:
                 retained.append((attempt, items))

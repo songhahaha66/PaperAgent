@@ -224,7 +224,7 @@ const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
   gap: 12px;
   padding: 13px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--pa-radius-control);
   background: transparent;
   font-size: 14px;
   color: var(--pa-ink);
@@ -240,7 +240,7 @@ const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
   background: var(--pa-surface-muted);
   width: 24px;
   height: 24px;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-inline);
   flex-shrink: 0;
   font-size: 12px;
 }
@@ -274,7 +274,7 @@ section {
 .judgment {
   background: var(--pa-surface-muted);
   padding: 18px;
-  border-radius: 10px;
+  border-radius: var(--pa-radius-card);
 }
 .judgment small {
   color: var(--pa-muted);
@@ -285,7 +285,7 @@ section {
 }
 .experiment {
   border: 1px solid var(--pa-line);
-  border-radius: 10px;
+  border-radius: var(--pa-radius-card);
   padding: 18px;
   margin-top: 12px;
 }
@@ -319,7 +319,7 @@ section {
   background: var(--pa-surface-muted);
   padding: 12px;
   margin-top: 12px;
-  border-radius: 6px;
+  border-radius: var(--pa-radius-inline);
 }
 .finding > strong {
   font-size: 12px;

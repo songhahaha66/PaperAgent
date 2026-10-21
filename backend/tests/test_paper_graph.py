@@ -46,6 +46,7 @@ TASK = "某城市给出 2015-2024 年用电量数据。问题一：建立模型�
 
 
 from pydantic import BaseModel, Field
+from research_tools_helpers import research_step
 
 
 class ProblemAnalysis(BaseModel):
@@ -56,6 +57,7 @@ class ProblemAnalysis(BaseModel):
     subproblems: list[Subproblem] = Field(min_length=1)
     requirements: list[Requirement] = Field(min_length=1)
     assumptions: list[Assumption]
+    outline: list[dict] = Field(default_factory=list)
 
     def model_dump(self, **kwargs):
         value=super().model_dump(**kwargs)
@@ -72,12 +74,12 @@ def _analysis() -> ProblemAnalysis:
         subproblems=[
             Subproblem(id="Q1", title="用电量预测", question="预测 2025 年用电量", deliverables=["预测值"]),
             Subproblem(id="Q2", title="政策评估", question="评估节能政策", depends_on=["Q1"]),
-            Subproblem(id="Q3", title="致市长的建议信", question="给市长写一封建议信", kind="writing", depends_on=["Q1", "Q2"]),
         ],
         requirements=[Requirement(id="RQ1", statement="预测用电量", source_quote="预测 2025 年用电量", kind="goal", task_ids=["Q1"]),
                       Requirement(id="RQ2", statement="评估政策效果", source_quote="评估节能政策效果", kind="goal", task_ids=["Q2"]),
-                      Requirement(id="RQ3", statement="形成政策建议", source_quote="评估节能政策效果", kind="deliverable", task_ids=["Q3"])],
+                      Requirement(id="RQ3", statement="形成政策建议", source_quote="评估节能政策效果", kind="deliverable", task_ids=["Q1","Q2"])],
         assumptions=[Assumption(id="A1", statement="数据真实可靠", task_ids=["Q1", "Q2"])],
+        outline=[{'key':'recommendations','title':'政策建议','purpose':'依据预测与政策评估结果表达建议和未知，不产生写作实验','task_ids':['Q1','Q2']}],
     )
 
 
@@ -96,6 +98,48 @@ def decision_outline(context,coverage):
         ('symbols','符号说明'),('solve_heading','模型建立与求解'),('sensitivity','灵敏度分析'),('evaluation','模型评价')]]
 
 
+def native_source_reply(messages):
+    """Controlled source edits using the actual writer context and source targets."""
+    from ai_system.modules.writing.latex import SourceEdits,SourceEdit
+    from ai_system.export.latex import escape_plain
+    from ai_system.graph.registry import REF_PATTERN,find_refs
+    prompt=messages[-1].content
+    def payload(marker):
+        return json.JSONDecoder().raw_decode(prompt.split(marker,1)[1].lstrip())[0]
+    questions=payload('# 研究问题、已有判断与未解决部分\n')
+    records=payload('# 实验记录与结果（每份报告只列一次；历史提供定位）\n')
+    sources=payload('# 当前项目源码片段（唯一当前正文）\n')
+    source=next(f for f in sources if f['file']=='paper.tex')
+    current=''.join(block['text'] for block in source['blocks'])
+    assert current.count(r'\begin{document}')==1 and current.count(r'\end{document}')==1
+    results={r['id']:r for record in records for r in record['results']}
+    assert results and questions
+    def prose(text):
+        chunks=[];start=0
+        for match in REF_PATTERN.finditer(text):
+            assert match[2] in results, 'controlled writer must only reference supplied experiment results'
+            chunks.extend([escape_plain(text[start:match.start()]),match[0]])
+            start=match.end()
+        return ''.join(chunks)+escape_plain(text[start:])
+    body=[r'\section{研究问题与当前答案}']
+    for question in questions:
+        assert set(find_refs(question['judgment'])) <= results.keys()
+        body.extend([r'\subsection{'+escape_plain(question['title'])+'}',prose(question['judgment'])])
+        body.extend(escape_plain(item) for item in question['limitations'])
+    body.append(r'\section{实验记录与适用范围}')
+    for record in records:
+        body.extend([escape_plain(record['objective']),prose((record['record'] or {}).get('summary',''))])
+        body.extend(escape_plain(item) for item in (record['record'] or {}).get('limitations',[]))
+        for result in record['results']:
+            if result['kind']=='figure':body.append('{{F:'+result['id']+'}}')
+    body.extend([r'\section{局限}', '结论限于实际执行的输入和条件，未验证的外推仍为未知。'])
+    preamble,tail=current.split(r'\begin{document}',1)
+    original_body,suffix=tail.split(r'\end{document}',1)
+    # Keep the supplied document body/title block; do not assume a title macro.
+    replacement=preamble+r'\begin{document}'+original_body+'\n\n'+'\n\n'.join(body)+'\n'+r'\end{document}'+suffix
+    return SourceEdits(edits=[SourceEdit(target=source['target'],replacement=replacement)])
+
+
 class _Structured:
     reviewed_q1 = False
     audits = 0
@@ -104,6 +148,9 @@ class _Structured:
         self.schema = schema
 
     async def ainvoke(self, messages):
+        from ai_system.modules.writing.latex import SourceEdits
+        if self.schema is SourceEdits:
+            return native_source_reply(messages)
         if self.schema is AmendmentSpec:
             data = json.loads(messages[-1].content)
             number = max(int(r[2:]) for r in data["used_requirement_ids"]) + 1
@@ -163,13 +210,16 @@ class FakeModel(BaseChatModel):
         return "fake"
 
     def bind_tools(self, tools, **kwargs):
-        return self
+        return self.bind(tools=tools,**kwargs)
 
     def with_structured_output(self, schema, **kwargs):
         return _Structured(schema)
 
     def _generate(self, messages: List[BaseMessage], stop=None, run_manager=None, **kwargs) -> ChatResult:
-        return ChatResult(generations=[ChatGeneration(message=self._respond(messages))])
+        tools=kwargs.get('tools') or []
+        names={t.get('function',t).get('name') if isinstance(t,dict) else t.name for t in tools}
+        reply=research_step(messages,_analysis()) if 'research_update_question' in names else self._respond(messages)
+        return ChatResult(generations=[ChatGeneration(message=reply)])
 
     def _respond(self, messages: List[BaseMessage]) -> AIMessage:
         first = next(m for m in messages if isinstance(m, HumanMessage)).content
@@ -211,6 +261,10 @@ class FakeModel(BaseChatModel):
         ]
         name, args = script[min(step, len(script) - 1)]
         if name == "SolveReport":
+            refs=[ref for message in tool_results for ref in re.findall(r"\{\{R:(R[0-9]+)\}\}",str(message.content))]
+            if refs:
+                args['summary']='完成，当前结果为 {{R:'+refs[-1]+'}}'
+                args['key_findings']=[{'statement':'当前条件下的结果 {{R:'+refs[-1]+'}}','strength':'倾向'}]
             source = task.split("# 研究契约", 1)[-1]
             if "# 研究契约" in task:
                 contract, _ = json.JSONDecoder().raw_decode(source[source.index("{"):])
@@ -304,71 +358,56 @@ def test_graph_end_to_end_offline(tmp_path):
 
     result = asyncio.run(go())
 
-    # 首次研究可以直接执行；概览不再是必经入口。
-    assert result["data_profile"] == "", "material inspection is chosen on demand, not forced before research"
-    # 普通研究由执行 Agent 落实方法，不先强制生成或评选候选。
-    design = result["designs"]["Q1"]
-    assert design["direct_execution"] and not design["scores"]
-    # This two-row legacy fixture cannot certify supervised experiments.
-    # Real split/metric selection is covered with diabetes data in test_supervised_comparison.
-    assert 'exploration' not in design and not CANDIDATE_PROMPTS
+    # Research tools allocate real IDs; writing remains a research-level delivery.
+    business=ctx.research.snapshot()
+    by_title={task['subproblem']['title']:key for key,task in business['experiments'].items()}
+    first=by_title['用电量预测'];second=by_title['政策评估']
+    assert len(by_title)==2 and all(task['kind']=='compute' for task in business['experiments'].values())
+    assert business['experiments'][second]['dependencies']==[first]
+    assert result['data_profile']=='', 'Material inspection remains optional'
+    design=result['designs'][first]
+    assert design['controller_selected'] and not design['scores']
     assert design['candidates']==[design['chosen']] and design['chosen_index']==0
+    assert 'exploration' not in design and not CANDIDATE_PROMPTS
+    assert {key:report['status'] for key,report in result['solutions'].items()}=={first:'completed',second:'completed'}
+    # Approved change: semantic checks are opt-in, without automatic rewrite/review chains.
+    assert all(report['reviews']==[] for report in result['solutions'].values())
+    assert result['consistency']==[] and _Structured.audits==0 and not _Structured.reviewed_q1
+    assert result['repair_round']==0 and result['issues']==[]
+    assert not any('全文结论表' in request for request in model.text_calls)
+    assert len(business['executions'])==2, 'No extra experiment or recomputation for writing/review'
+    manifest=json.loads((ws/'manifest.json').read_text())['runs']
+    assert manifest and all(run['status']=='success' for run in manifest.values())
+    from ai_system.modules.experiments.execution import solution_code_path
+    for experiment_id in (first,second):
+        exported=(ws/solution_code_path(experiment_id)).read_text(encoding='utf-8')
+        assert 'forecast = 1234.5678' in exported and 'plt.plot' in exported
 
-    # 审查要求 Q1 返工一轮后通过；Q2 一次通过
-    assert [bool(r["issues"]) for r in result["solutions"]["Q1"]["reviews"]] == [True, False]
-    assert not result["solutions"]["Q2"]["reviews"][-1]["issues"] and result["solutions"]["Q2"]["summary"] == "完成，预测为 {{R:R1}}"
-
-    # 两个子问题都求解完成；编造值登记被拒绝，只登记了真实结果和图
-    assert {k: v["status"] for k, v in result["solutions"].items()} == {"Q1": "completed", "Q2": "completed", "Q3": "completed"}
-    # 写作类子问题不设计方案、不跑编码循环，写作时依据前序结论和登记结果
-    assert result["designs"]["Q3"]["chosen"]["name"] == "基于前序结论撰写"
-    assert result["solutions"]["Q3"]["approach"] == "基于前序结论撰写"
-    q3_request = next(r for r in model.text_calls if "Q3 致市长的建议信（文书类交付物）" in r and "撰写「Q3" in r)
-    assert "{{R:R1}}" in q3_request
-    registry = ResultRegistry.load(WorkspaceFS(str(ws)))
-    kinds = sorted((r.subproblem, r.kind) for r in registry.results.values())
-    assert kinds == [("Q1", "figure"), ("Q1", "number"), ("Q2", "figure"), ("Q2", "number")]
-    assert all(r.value != "99.99" for r in registry.results.values())
-    assert (ws / registry.get("F1").path).exists()
-
-    # 结论图：每个子问题的结论登记为节点，证据指向登记结果
-    claims = sorted((c.subproblem, c.strength, tuple(c.evidence)) for c in registry.claims.values())
-    assert claims == [("Q1", "显著", ("R1",)), ("Q2", "显著", ("R1",))]
-    # 写作前的一致性审查：指向不存在结论的冲突被过滤，统一口径带进每一节的写作请求
-    assert [c["claims"] for c in result["consistency"]] == [["C1"]]
-    assert all("全文结论表" in req and "统一表述为倾向性结论" in req for req in model.text_calls)
-
-    # 模型评价与结论表存在实质矛盾，修复该节；字面数值本身不触发正则验收。
-    assert any("与结论表不一致：把 C1 写成了显著" in req for req in model.text_calls)
-    assert not any("无矛盾" in req or "没有提到 C1" in req for req in model.text_calls)
-    assert result["repair_round"] == 1
-    assert result["issues"] == []
-    assert _Structured.audits == 2, "Changed evaluation text needs a new review; unchanged text must reuse the cached finding"
-    assert "尚无统计显著性检验证据" in result["sections"]["evaluation"]
-
-    paper = (ws / "paper.md").read_text(encoding="utf-8")
-    assert paper.startswith("# 基于时间序列的城市用电量预测与政策评估")
-    assert "1234.57 万千瓦时" in paper and "8.5%" in paper
-    assert f"![图1 Q1 结果图]({registry.get('F1').path})" in paper
-    assert "{{" not in paper and "12.345" in paper
-    planned_titles=[section['title'] for section in result['outline']]
-    actual_titles=re.findall(r'^## (.+)$',paper,re.MULTILINE)
-    assert planned_titles and actual_titles[:len(planned_titles)]==planned_titles
-    assert "### Q2 政策评估" in paper
-    assert "{{R:R1}}" in (ws / ".system" / "paper_raw.md").read_text(encoding="utf-8")
-
-    assert not CANDIDATE_PROMPTS, "ordinary research does not generate candidates first"
-    # 依赖：Q2 的求解任务里带上了 Q1 的结论
+    registry=ResultRegistry.load(WorkspaceFS(str(ws)))
+    assert sorted((r.subproblem,r.kind) for r in registry.results.values())==[
+        (first,'figure'),(first,'number'),(second,'figure'),(second,'number')]
+    assert all(r.value!='99.99' for r in registry.results.values())
+    for key in (first,second):
+        number=next(r for r in registry.results.values() if r.subproblem==key and r.kind=='number')
+        figure=next(r for r in registry.results.values() if r.subproblem==key and r.kind=='figure')
+        assert (ws/figure.path).is_file()
+        own_claims=[c for c in registry.claims.values() if c.subproblem==key]
+        assert len(own_claims)==1 and own_claims[0].evidence==[number.id] and own_claims[0].strength=='倾向'
+        question=business['questions'][business['experiments'][key]['question_id']]
+        assert question['coverage']=='answered' and number.id in question['artifact_refs'] and question['stop_reason']
+    paper=(ws/'paper.md').read_text(encoding='utf-8')
+    assert paper.startswith('# '+_analysis().title)
+    assert '1234.57 万千瓦时' in paper and '8.5%' in paper
+    assert all(r.path in paper for r in registry.results.values() if r.kind=='figure')
+    assert '{{' not in paper and '12.345' in paper, 'Literal numbers do not create an automatic semantic gate'
+    assert '政策评估' in paper
+    assert '{{R:R1}}' in (ws/'.system/paper_raw.md').read_text(encoding='utf-8')
+    assert _analysis().outline[0]['key']=='recommendations'
     from ai_system.research.control import public_snapshot
-    progress = public_snapshot(ctx.research.snapshot())
-    assert all(t["progress"]["state"] == "accepted" for t in progress["experiments"])
-    assert progress["delivery_stages"]["render"]["status"] == "completed"
-    assert not (ws / "plan.json").exists(), "fixed phase plans must not compete with research tasks"
-    manifest = json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
-    assert registry.results
-    assert all(manifest['runs'][result.run_id]['status']=='success' for result in registry.results.values())
-    assert (ws/'paper.md').is_file() and (ws/'code/Q1_solution.py').is_file() and (ws/'code/Q2_solution.py').is_file()
-    assert all((ws/result.path).is_file() for result in registry.results.values() if result.path)
+    progress=public_snapshot(business)
+    assert all(t['progress']['state']=='accepted' for t in progress['experiments'])
+    assert progress['delivery_stages']['render']['status']=='completed'
+    assert not (ws/'plan.json').exists()
 
 
 def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
@@ -388,13 +427,16 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     agent = PaperGraphAgent(FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), judge=FixedJudge())
     output = asyncio.run(agent.run(TASK))
 
-    assert "paper.md" in output and "Q1 用电量预测：完成" in output
+    assert "paper.md" in output
+    saved=ResearchStore(ws,agent._load_thread()).snapshot()
+    ids={task['subproblem']['title']:key for key,task in saved['experiments'].items()}
+    first,second=ids['用电量预测'],ids['政策评估']
     assert (ws / ".system" / "graph.sqlite").exists()
     assert json.loads((ws / ".system" / "graph_thread.json").read_text())["status"] == "done"
     assert events[0] == "main_agent_start" and events[-1] == "main_agent_complete"
     assert "research_state" in events and "file_changed" in events
-    assert any(s.get("Q1") == "running" for s in snapshots), "claim must publish progress before model execution"
-    assert any(s.get("Q1") == "accepted" and s.get("Q2") == "running" for s in snapshots)
+    assert any(s.get(first) == "running" for s in snapshots), "claim must publish progress before model execution"
+    assert any(s.get(first) == "accepted" and s.get(second) == "running" for s in snapshots)
     # 前端阶段卡片依赖的结构化阶段事件
     assert not any(stage == "analyze" for stage, _ in phases) and ("render", "completed") in phases
     # markdown 输出不排版
@@ -402,7 +444,7 @@ def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
     # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
     calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
     tagged = {(c.get("capability"), c["label"]) for c in calls}
-    assert {("experiments.execute", "Q1"), ("experiments.execute", "Q2"), ("writing.write", "abstract")} <= tagged
+    assert {("experiments.execute", first), ("experiments.execute", second), ("writing.write", "abstract")} <= tagged
     assert ("writing.repair", "repair:abstract") not in tagged, "Literal numbers alone must not force an abstract rewrite"
 
     # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
@@ -532,7 +574,8 @@ def test_assemble_keeps_figures_out_of_summary_sections():
     from ai_system.modules.writing.sections import solve_key
 
     state = {
-        "analysis": {"title": "T", "subproblems": [{"id": "Q1", "title": "建模"}]},
+        "analysis": {"title": "T", "subproblems": [{"id": "Q1", "title": "建模"}],
+                     "questions":[{"id":"question:Q1","title":"建模","experiment_ids":["Q1"]}]},
         "sections": {"abstract": "结论见下图\n\n{{F:F1}}", solve_key("Q1"): "曲线见 {{F:F1}}。"},
     }
     raw = assemble(state)
@@ -618,7 +661,7 @@ def test_claims_replace_per_subproblem_and_render(tmp_path):
     ]
 
 
-def test_claims_ground_literal_numbers(tmp_path):
+def test_claims_preserve_explicit_refs_and_never_infer_identity_from_equal_numbers(tmp_path):
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
     run_id = fs.create_run()
@@ -627,26 +670,24 @@ def test_claims_ground_literal_numbers(tmp_path):
     registry = ResultRegistry.load(fs)
     r2 = registry.record_value("Q1", "R2", "0.883", run_id)
     coef = registry.record_value("Q1", "系数", "-0.0079", run_id)
-    p = registry.record_value("Q1", "p值", "1.04e-164", run_id)
-    cost = registry.record_value("Q1", "成本", "3.50", run_id, unit="元")
+    registry.record_value("Q1", "p值", "1.04e-164", run_id)
+    registry.record_value("Q1", "成本", "3.50", run_id, unit="元")
     registry.record_value("Q1", "甲", "0.5", run_id)
     registry.record_value("Q1", "乙", "0.5", run_id)
     registry.record_value("Q1", "样本量", "15082", run_id)
     other = registry.record_value("Q2", "别的", "0.883", run_id)
-
-    statement = registry.ground_statement(
-        "Q1", "R²=0.883，系数 -0.0079（p=1.04e-164），成本 3.50 元，两组都是 0.5，样本 15082，$x=0.883$，0.8830，已有 {{R:%s}}" % other.id
-    )
-    assert statement == (
-        f"R²={{{{R:{r2.id}}}}}，系数 {{{{R:{coef.id}}}}}（p={{{{R:{p.id}}}}}），成本 {{{{R:{cost.id}}}}}，"
-        f"两组都是 0.5，样本 15082，$x=0.883$，{{{{R:{r2.id}}}}}，已有 {{{{R:{other.id}}}}}"
-    )
-    # "数（引用）"合并成一个引用；已引用过的结果不再重复替换
-    assert registry.ground_statement("Q1", f"r=0.883（{{{{R:{r2.id}}}}}），再写 -0.0079 ({{{{R:{coef.id}}}}})，-0.0079") == (
-        f"r={{{{R:{r2.id}}}}}，再写 {{{{R:{coef.id}}}}}，-0.0079"
-    )
-    claims = registry.set_claims("Q1", [{"statement": "R²=0.883", "strength": "显著"}])
-    assert claims[0].evidence == [r2.id]
+    literal='R²=0.883，系数 -0.0079（p=1.04e-164），成本 3.50 元，两组都是 0.5，样本 15082，$x=0.883$，0.8830'
+    statement=literal+'，已有 {{R:'+other.id+'}}'
+    assert registry.ground_statement('Q1',statement)==statement
+    explicit='r=0.883（{{R:'+r2.id+'}}），再写 -0.0079 ({{R:'+coef.id+'}})，-0.0079'
+    assert registry.ground_statement('Q1',explicit)==explicit
+    [unlinked]=registry.set_claims('Q1',[{'statement':literal,'strength':'倾向'}])
+    assert unlinked.statement==literal and unlinked.evidence==[]
+    [linked]=registry.set_claims('Q1',[{'statement':explicit,'strength':'倾向'}])
+    assert linked.statement==explicit and linked.evidence==[r2.id,coef.id]
+    reloaded=ResultRegistry.load(fs)
+    assert reloaded.claims[linked.id]==linked
+    assert '0.883⟨'+r2.id+'⟩' in reloaded.claims_table()
 
 
 def test_call_structured_falls_back_to_plain_json():
@@ -983,12 +1024,30 @@ def test_stream_manager_accepts_structured_block():
     assert received == [{"type": "paper_phase", "content": {"stage": "solve", "status": "in_progress"}}]
 
 
-def test_writing_brief_asks_for_actionable_advice():
-    from ai_system.modules.writing.sections import ACTIONABLE_ADVICE, subproblem_brief
-
-    memo = {"id": "Q4", "kind": "writing", "title": "给教练的备忘录", "question": "给出建议", "deliverables": ["一页备忘录"]}
-    brief = subproblem_brief({"analysis": {"subproblems": [memo]}}, None, memo)
-    assert ACTIONABLE_ADVICE in brief
+def test_research_level_advice_uses_current_experimental_results_and_limits(tmp_path):
+    from ai_system.modules.writing.sections import section_request
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
+    rid=ctx.fs.create_run();ctx.fs.save_run_input(rid,"print('observed saving',8.5)")
+    ctx.fs.save_run_stdout(rid,'observed saving 8.5');ctx.fs.finish_run(rid,'success')
+    result=ctx.registry.record_value('E1','给定样本上的节电比例','8.5',rid,unit='%')
+    actual='本次验证条件下节电比例为 {{R:'+result.id+'}}'
+    limits=['未检验其他地区，不支持无条件推广。']
+    experiment={'id':'E1','kind':'compute','title':'政策效果验证','question':'评估给定条件下节能政策效果','depends_on':[]}
+    state={'task':'依据政策验证结果给出可执行建议，保留适用边界。',
+        'analysis':{'title':'政策建议','subproblems':[experiment],'assumptions':[],
+                    'questions':[{'id':'question:policy','question':experiment['question'],'title':'政策效果',
+                                  'experiment_ids':['E1'],'judgment':actual,'limitations':limits}]},
+        'solutions':{'E1':{'status':'completed','summary':actual,'key_findings':[{'statement':actual,'strength':'倾向'}],
+                            'limitations':limits}},'sections':{},
+        'outline':[{'key':'evaluation','title':'政策建议','purpose':'建议必须依据当前实测结果并说明适用边界。','task_ids':['E1']}]}
+    before=dict(ctx.registry.results)
+    request=section_request('evaluation','政策建议',state,ctx)
+    assert '谁在什么场景下用哪个输出做什么决定' in request
+    assert '哪些输出因证据不足不能用于决策' in request
+    assert state['outline'][0]['purpose'] in request and actual in request and limits[0] in request
+    assert result.name in request and '{{R:'+result.id+'}}' in request
+    assert ctx.registry.results==before and len(state['analysis']['subproblems'])==1
+    assert all(sp['kind']=='compute' for sp in state['analysis']['subproblems']), 'advice is a research delivery, never a writing experiment'
 
 
 def test_dependency_handoff_includes_solution_code(tmp_path):

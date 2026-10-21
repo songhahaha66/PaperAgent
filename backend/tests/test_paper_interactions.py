@@ -207,7 +207,7 @@ def test_comment_writing_has_one_format_repair_without_repeating_tools(paper,mon
         assert result['state']=='completed' and result['change_id'] and result['answer']=='实际结果为4，候选已提出。'
         assert all(key not in result for key in ('error','error_type','owner_pid'))
     else:
-        with pytest.raises(RuntimeError,match='CommentReply'):
+        with pytest.raises(llm_utils.InvalidStructuredReply,match='CommentReply'):
             run(comments.execute(store,record['id'],Model()))
         saved=project.read_records(store,'paper_executions')[0]
         assert saved['state']=='failed' and saved['phase']=='write' and saved['tool_result']['stdout']=='4'

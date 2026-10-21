@@ -166,6 +166,7 @@ async def _act(request, runtime):
             state=store._read(db)
             if name.startswith('writing.'):
                 publication=state['publication'];step=name.split('.')[1]
+                if 'outline' in patch:publication['outline']=patch['outline']
                 if 'consistency' in patch:state['consistency']=patch['consistency']
                 if patch.get('research_restart'):
                     state['publication']=None
@@ -221,6 +222,9 @@ def resume(store, **_):
     with store._transaction() as db:
         state=store._read(db);action=state['action']
         if action and action['status'] in {'failed','running','interrupted'}:
+            if action['capability'].startswith('writing.') and state.get('publication'):
+                publication=state['publication']
+                publication['repair_resume_offset']=len(publication.get('repair_inputs',[]))
             # Experiment recovery is reconciled from its execution receipt. Other
             # capabilities keep their durable products and retry the failed step.
             if action['capability']=='experiments.execute':action['status']='running'

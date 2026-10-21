@@ -982,7 +982,7 @@ onBeforeUnmount(() => {
   border: 0;
   background: var(--pa-surface-muted);
   color: var(--pa-accent);
-  border-radius: 5px;
+  border-radius: var(--pa-radius-control);
   padding: 5px 8px;
   cursor: pointer;
 }

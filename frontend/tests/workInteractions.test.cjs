@@ -10,7 +10,7 @@ async function environment() {
     '@/stores/auth': { useAuthStore: () => auth },
   })
   const store = storeModule.useWorkPanelsStore(pinia.createPinia())
-  async function work(id, deferred = false, loadFailures = [], taskAPI = {}) {
+  async function work(id, deferred = false, loadFailures = [], taskAPI = {}, readiness = async () => ({roles:{jev:true}})) {
     const cleanup = [],
       sockets = [],
       sent = [],
@@ -70,7 +70,7 @@ async function environment() {
         },
         '@/api/paper':{paperProjectAPI:{comment:async(_work,body)=>{paperComments.push(body);return {id:body.request_id,thread_id:'thread'}},read:async()=>({executions:paperComments.map(body=>({id:body.request_id,state:'completed',answer:'基于当前原文的回复'}))})}},
         '@/api/researchSetup': {researchSetupAPI:{settings:async()=>({})}},
-        '@/api/modelConfig': {modelConfigAPI:{readiness:async()=>({roles:{jev:true}})}},
+        '@/api/modelConfig': {modelConfigAPI:{readiness}},
         '@/api/chat': {
           WebSocketChatHandler: Socket,
           chatAPI: {
@@ -548,8 +548,18 @@ if (require.main === module) (async () => {
     'PASS: work progress uses experiment and model records and rejects stale snapshots across recovery',
   )
 
+  let resolveReadiness
+  const ready=new Promise(resolve=>{resolveReadiness=resolve})
+  const beforeReady=await env.work('leaving-before-readiness',true,[],{},()=>ready)
+  const pending=beforeReady.state.sendMessage('Do not send after leaving before readiness')
+  beforeReady.stop();resolveReadiness({roles:{jev:true}});await pending
+  assert.equal(beforeReady.sent.length,0)
+  assert.equal(beforeReady.sockets.length,0,'Unmounting before readiness resolves must not create a socket')
+
   const leaving = await env.work('leaving', true)
   const send = leaving.state.sendMessage('Do not send after leaving')
+  await flush()
+  assert.equal(leaving.connected.length,1,'Readiness completed and connection is pending before leaving')
   leaving.stop()
   leaving.connected[0]()
   await send
@@ -600,16 +610,17 @@ if (require.main === module) (async () => {
 
   const literature = await env.work('literature')
   literature.state.openLiteratureEvidence({ detail: { workId:'other', evidenceId:'C1' } })
-  assert.equal(literature.state.literatureEvidenceId.value,'')
+  assert.equal(literature.state.citationRequest.value,null)
   literature.state.openLiteratureEvidence({ detail: { workId:'literature', evidenceId:'C1' } })
-  assert.equal(literature.state.literatureEvidenceId.value,'C1')
-  assert(literature.state.panelSession.value.panels.some(p=>p.kind==='materials'))
-  literature.state.citeLiterature('C1')
   assert.equal(literature.state.citationRequest.value.id,'C1')
+  assert(literature.state.panelSession.value.panels.some(p=>p.kind==='paper'))
+  assert(!literature.state.panelSession.value.panels.some(p=>p.kind==='materials'))
+  literature.state.citeLiterature('C2')
+  assert.equal(literature.state.citationRequest.value.id,'C2')
   assert(literature.state.panelSession.value.panels.some(p=>p.kind==='paper'))
   assert.equal(literature.sent.length,0,'opening provenance never starts a model or research task')
   literature.stop()
-  console.log('PASS: citation traces open the current work library and prepare a reviewable paper edit')
+  console.log('PASS: citation traces open registered sources in the current paper project and prepare a reviewable paper edit')
 })().catch((error) => {
   console.error(error)
   process.exitCode = 1

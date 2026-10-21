@@ -86,16 +86,12 @@ def test_format_failure_retains_candidate_and_explicit_resume_keeps_cumulative_u
 
 
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
-    from ai_system.research.control import task_dispatch as dispatch
-    from test_research_p2 import store_for,problem,TASK as original
-    store=store_for(tmp_path)
-    runtime=SimpleNamespace(context=SimpleNamespace(research=store))
-    state={'task':'shortened summary without source data','analysis':problem().model_dump()}
-    for sends in [dispatch(state,runtime,['Q1','Q3'])]:
-        assert sends and all(s.arg['source']==original for s in sends)
-    store.claim('Q1')
-    store.recover()
-    assert all(s.arg['source']==original for s in dispatch(state,runtime,['Q1','Q3']))
+    from ai_system.research.control import experiment_dispatch
+    from test_research_p2 import store_for,TASK as original
+    store=store_for(tmp_path);ctx=SimpleNamespace(research=store)
+    assert all(experiment_dispatch(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
+    store.claim('Q1');store.recover()
+    assert all(experiment_dispatch(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
 
 
 def test_inline_source_data_reaches_solver_and_local_review(tmp_path):
@@ -177,7 +173,7 @@ def test_missing_parsed_and_error_retains_only_public_candidate_for_repair(monke
 
 
 @pytest.mark.parametrize('raw_tool',[True,False])
-def test_truncated_structured_outputs_keep_partial_candidate_and_request_shorter_complete_json(monkeypatch,raw_tool):
+def test_truncated_reply_retains_reason_without_replaying_partial_json_and_requests_complete_reply(monkeypatch,raw_tool):
     partial='{"title":"unfinished","requirements":[{"id":"R1"}]'
     class Model:
         calls=0
@@ -191,7 +187,7 @@ def test_truncated_structured_outputs_keep_partial_candidate_and_request_shorter
                 return {'raw':reply,'parsed':None,'parsing_error':ValueError('missing fields')}
             if not raw_tool and self.calls==2:
                 return AIMessage(content=partial,response_metadata={'finish_reason':'length'})
-            assert messages[-2].content==partial
+            assert all(partial not in str(message.content) for message in messages)
             assert '被截断' in messages[-1].content and '缩短' in messages[-1].content
             return AIMessage(content=_analysis().model_dump_json())
     model=Model()

@@ -108,8 +108,9 @@ async def repair(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     # Stop a repeated identical repair input, not a fixed number of improving edits.
     from ai_system.research.store import digest
     signature = digest({'sections': {k: state.get('sections', {}).get(k, '') for k in by_section}, 'issues': by_section})
-    history = ctx.research.snapshot().get('publication', {}).get('repair_inputs', [])
-    if history.count(signature) >= 3:
+    publication = ctx.research.snapshot().get('publication') or {}
+    history = publication.get('repair_inputs', [])
+    if history[publication.get('repair_resume_offset',0):].count(signature) >= 3:
         message='自动改稿反复回到同一正文和意见，未能完成修复。正文与意见已保留；这是自动修复失败，不是等待你决定研究内容。'
         await ctx.set_stage('validate', 'blocked', message)
         return {'research_blocked': True, 'log': [message]}
@@ -233,8 +234,10 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         raw = (ctx.workspace / 'paper.tex').read_text(encoding='utf-8')
     else:
         raw = assemble_latex(state) if native else assemble(state)
-    # 带引用的原稿留在 .system，方便追溯每个数字的来源
-    ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
+    # Native source already has immutable file-project versions; Markdown still
+    # retains its pre-render references for provenance.
+    if not (native and ctx.research):
+        ctx.fs.write_text(".system/paper_raw" + (".tex" if native else ".md"), raw)
     from ai_system.graph.registry import publication_text
     from ai_system.research.citations import render_citations, literature_root,citation_issues
     if native and ctx.research:

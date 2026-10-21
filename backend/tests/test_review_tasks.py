@@ -22,15 +22,24 @@ def setup(env,monkeypatch):
         if validate:validate(answer)
         return answer
     monkeypatch.setattr(tasks,'call_structured',controlled)
+    from ai_system.modules.writing import consistency
+    monkeypatch.setattr(consistency,'call_structured',controlled)
     return env
 
 def model(**kwargs):return SimpleNamespace(**{'model_name':'offline-controlled','calls':0,'gate':None,'error':None,'answer':None,**kwargs})
-def item(store,stage='sections'):return next(t for t in tasks.status(store)['experiments'] if t['stage']==stage)
+def item(store,stage='sections'):return next(t for t in tasks.status(store)['tasks'] if t['stage']==stage)
 async def drain():
     workers=list(tasks.ACTIVE)
     if workers:await asyncio.wait_for(asyncio.gather(*workers),3)
 async def failed(store,stage='sections'):
-    with pytest.raises(TimeoutError):await tasks.execute(store,stage,model(error=TimeoutError()))
+    llm=model(error=TimeoutError('controlled timeout'))
+    with pytest.raises(RuntimeError if stage=='sections' else TimeoutError,match='未完成|controlled timeout'):
+        await tasks.execute(store,stage,llm)
+    assert llm.calls==1
+    failure=next(r for r in tasks.records(store) if r['stage']==stage and r['state']=='failed')
+    assert failure['error_code']=='TimeoutError'
+    assert failure['diagnostic']['reason']=='TimeoutError'
+    assert 'controlled timeout' not in str(failure['diagnostic']), 'provider exception text must stay private'
 def edit(store):
     sections={k:v['text'] for k,v in store.snapshot()['sections'].items()};sections['abstract']+='新的措辞。';store.save_sections(sections,[])
 def issue_map(store):return {i['id']:i for i in research_findings(store.snapshot())}
@@ -54,7 +63,7 @@ def test_new_version_only_replaces_old_service_after_actual_completed_review(set
         assert issues[old['id']]['review_supersession']['old_review_id']==old['review_scope']['failed_review_id']
         assert issues[writing['id']]['status']=='confirmed' and issues[science['id']]['status']=='suspected'
         history=tasks.status(store)['history'];assert any(h['original_state']=='failed' and h['replacement_review_id'] for h in history)
-        assert not store.delivery_ready(store.snapshot())
+        assert store.delivery_ready(store.snapshot()), "Optional review failures/findings do not invalidate recorded answers"
         assert ResearchRuntime(store.root).status()['used']==0
     asyncio.run(scenario())
 
@@ -164,7 +173,7 @@ def test_api_owner_research_and_budget_guards(setup,monkeypatch):
     monkeypatch.setattr(workspace,'_paper_writing_model',forbidden)
     with TestClient(app) as client:
         response=client.get('/api/workspace/work/review-tasks');assert response.status_code==200
-        t=next(t for t in response.json()['experiments'] if t['stage']=='sections')
+        t=next(t for t in response.json()['tasks'] if t['stage']=='sections')
         body={'research_id':store.research_id,'stage':'sections','version':t['version'],'command_id':'retry'}
         assert client.post('/api/workspace/work/review-tasks',json=body).status_code==409
         assert client.post('/api/workspace/work/review-tasks',json={**body,'research_id':'other'}).status_code==409
@@ -191,7 +200,7 @@ def test_failed_publication_of_review_findings_is_not_success(setup,monkeypatch)
         tasks.start(store,'sections',item(store)['version'],'metadata-failure',model());await drain()
         assert any(r['state']=='completed' and r['source']!='recovery-intent' for r in tasks.records(store))
         assert item(store)['state']=='failed' and item(store)['can_resume']
-        assert not store.delivery_ready(store.snapshot())
+        assert store.delivery_ready(store.snapshot()), "Optional review failures/findings do not invalidate recorded answers"
     asyncio.run(scenario())
 
 

@@ -191,7 +191,7 @@ const runFile = (id: string) => props.snapshot?.runs.find((r) => r.id === id)?.s
 <style scoped>
 .research-runtime {
   border: 1px solid var(--pa-line);
-  border-radius: 12px;
+  border-radius: var(--pa-radius-card);
   padding: 18px;
   background: var(--pa-surface);
   color: var(--pa-ink);

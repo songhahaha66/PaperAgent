@@ -149,16 +149,17 @@ def _comparison_context(ctx: GraphContext, references, allowed) -> str:
                     except (ValueError,TypeError):pass
             return None
         protocol=dict(summary['protocol'])
-        protocol['baseline_value']=reference('comparison_baseline_'+metric,protocol['baseline_value'])
+        baseline_name=next((r['baseline_name'] for r in summary['branches'] if r.get('baseline_name')),'comparison_baseline_'+metric)
+        protocol['baseline_value']=reference(baseline_name,protocol['baseline_value'])
         protocol.pop('negative_baseline_value',None)
         for field in ('train_count','validation_count'):
             protocol[field]=reference('comparison_'+field,protocol[field])
         branches=[]
         for row in summary['branches']:
             candidate={k:row[k] for k in ('index','name','method_keys','status','eligible','selection_reason','error',
-                                        'estimator_contract','implementation_audit','candidate_hash','code_hash','prediction_hash','run_ids')}
+                                        'estimator_contract','implementation_audit','candidate_hash','code_hash','prediction_hash','run_ids') if k in row}
             for field in ('metric','baseline'):
-                name=f"comparison_candidate_{row['index']+1}_"+('baseline_' if field=='baseline' else '')+metric
+                name=row.get(field+'_name') or f"comparison_candidate_{row['index']+1}_"+('baseline_' if field=='baseline' else '')+metric
                 ref=reference(name,row[field])
                 if ref is None and row['index']==summary['chosen_index']:
                     ref=reference('comparison_'+('baseline_' if field=='baseline' else '')+metric,row[field])

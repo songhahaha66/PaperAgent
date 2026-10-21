@@ -16,6 +16,15 @@ def legacy(root, *, conflicting=False):
     state = store.initialize('原始研究目标', {'subproblems':[{'id':'Q1','title':'目标','question':'原始研究目标','depends_on':[]}],
         'requirements':[{'id':'RQ1','statement':'原始研究目标','source_quote':'原始研究目标','kind':'goal','task_ids':['Q1']}], 'assumptions':[]})
     state['schema_version'] = 2
+    # Construct the actual v2 storage shape, rather than relabel a current DTO.
+    state['tasks'] = state.pop('experiments')
+    state['attempts'] = state.pop('executions')
+    state['evidence'] = state.pop('artifacts')
+    state.pop('questions')
+    for task in state['tasks'].values():
+        task['active_attempt'] = task.pop('execution_id')
+        task.pop('question_id')
+        task.pop('report_ref')
     state.pop('feedback');state.pop('faults');state.pop('legacy_records')
     from ai_system.research.models import Issue
     state['issues'] = [Issue(id='science',task_id='Q1',task_revision=1,category='model',message='原文意见',source='original',status='confirmed',action='verify').model_dump(),
@@ -40,7 +49,7 @@ def test_transactional_migration_removes_old_sources_and_preserves_unmapped_hist
     (path.parent / 'results.json').write_bytes(raw)
     migrated = migrate_project(tmp_path)
     state = ResearchStore(tmp_path, 'study', read_only=True).snapshot()
-    assert state['schema_version'] == 3 and 'issues' not in state
+    assert state['schema_version'] == 5 and 'issues' not in state
     assert state['feedback'] == [old['issues'][0]]
     assert state['faults'] == [old['issues'][1]]
     assert state['legacy_records'] == [{'source':'research/study/issues','raw':old['issues'][2]}]
@@ -81,10 +90,10 @@ def test_restarting_current_projects_does_not_reclassify_new_projections_as_lega
         assert not db.execute("SELECT 1 FROM legacy_records WHERE source='.system/results.json'").fetchone()
 
 
-def test_registry_has_four_real_modules_and_rejects_unregistered_or_wrong_products():
+def test_registry_exposes_research_tools_and_rejects_unregistered_or_wrong_products():
     registered = capabilities().describe()
-    assert {c['module'] for c in registered} == {'literature','experiments','writing','experience'}
-    assert {'literature.collect','experiments.compare','writing.write','experience.candidates'} <= {c['name'] for c in registered}
+    assert {c['module'] for c in registered} == {'literature','experiments','writing','experience','research'}
+    assert {'literature.collect','experiments.compare','writing.write','experience.candidates','research.update_question','research.schedule_experiment'} <= {c['name'] for c in registered}
     registry = ModuleRegistry()
     async def wrong(ctx, inputs):
         return CapabilityProduct('paper', {})

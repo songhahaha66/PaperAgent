@@ -61,11 +61,12 @@ def test_clear_local_audit_cannot_close_an_independent_solver_finding(tmp_path):
     store = store_for(tmp_path)
     report = {"status": "completed", "summary": "computed", "requirement_evidence": [{"requirement_id": "RQ1", "evidence_refs": ["R1"]}]}
     finding = IssueReport(task_id="Q1", category="model", message="unresolved solver finding")
-    store.commit(WorkerResult(order=store.claim("Q1", review_required=True), execution_status="succeeded", acceptance="accepted", report=report,
+    store.commit(WorkerResult(order=store.claim("Q1"), execution_status="succeeded", acceptance="accepted", report=report,
         results=[{"id": "R1", "subproblem": "Q1", "name": "demand", "value": "8", "run_id": "run_test"}], issues=[finding],
         reviews=[ReviewRecord(report_hash=report_fingerprint(report), issues=[finding]), ReviewRecord(report_hash=report_fingerprint(report), issues=[])]))
     issues = research_findings(store.snapshot())
-    assert next(i for i in issues if i["source"] == "local_review")["status"] == "resolved"
+    assert next(i for i in issues if i["source"] == "local_review")["status"] == "suspected"
+    assert not next(i for i in issues if i["source"] == "local_review")["blocking"]
     assert next(i for i in issues if i["source"] == "worker")["status"] == "suspected"
     assert not store.delivery_ready(store.snapshot())
 
@@ -75,7 +76,7 @@ def test_downstream_rewrite_cannot_close_a_finding_about_its_frozen_upstream(tmp
     _, upstream = submit(store, "Q1", {"demand": 8})
     report = {"status": "completed", "summary": "computed", "requirement_evidence": [{"requirement_id": "RQ2", "evidence_refs": ["R2"]}]}
     finding = IssueReport(task_id="Q1", category="data", message="上游数据范围需要核验", evidence_refs=[upstream[0]["id"]])
-    store.commit(WorkerResult(order=store.claim("Q2", review_required=True), execution_status="succeeded", acceptance="accepted", report=report,
+    store.commit(WorkerResult(order=store.claim("Q2"), execution_status="succeeded", acceptance="accepted", report=report,
         results=[{"id": "R2", "subproblem": "Q2", "name": "allocation", "value": "8", "run_id": "run_test"},
                  {"id": "R3", "subproblem": "Q2", "name": "residual", "value": "0", "run_id": "run_test"}],
         reviews=[ReviewRecord(report_hash=report_fingerprint(report), issues=[finding]), ReviewRecord(report_hash=report_fingerprint(report), issues=[])]))
@@ -85,9 +86,9 @@ def test_downstream_rewrite_cannot_close_a_finding_about_its_frozen_upstream(tmp
 
 
 @pytest.mark.parametrize("record_kind", ["missing", "stale", "open"])
-def test_commit_requires_fresh_review_and_cannot_hide_open_findings(tmp_path, record_kind):
+def test_optional_reviews_do_not_gate_results_or_relax_execution_ownership(tmp_path, record_kind):
     store = store_for(tmp_path)
-    order = store.claim("Q1", review_required=True)
+    order = store.claim("Q1")
     report = {"status": "completed", "summary": "computed", "requirement_evidence": [{"requirement_id": "RQ1", "evidence_refs": ["R1"]}]}
     record = ReviewRecord(report_hash="stale" if record_kind == "stale" else report_fingerprint(report), issues=[] if record_kind != "open" else [IssueReport(task_id="Q1", category="model", message="unresolved")])
     result = WorkerResult(order=order, execution_status="succeeded", acceptance="accepted", report=report,
@@ -95,9 +96,18 @@ def test_commit_requires_fresh_review_and_cannot_hide_open_findings(tmp_path, re
         reviews=[] if record_kind == "missing" else [record])
     store.commit(result)
     assert not store.delivery_ready(store.snapshot())
-    assert any(i["source"] == "local_review" and i["blocking"] for i in research_findings(store.snapshot()))
+    state = store.snapshot()
+    assert state['experiments']['Q1']['acceptance'] == 'accepted'
+    assert [r['id'] for r in store.registry_payload()['results']] == ['R1']
+    issues = research_findings(state)
+    if record_kind == 'open':
+        assert any(i['source'] == 'local_review' and i['status'] == 'suspected' for i in issues)
+        assert all(not i['blocking'] for i in issues)
+    else:
+        assert not issues, 'missing or stale optional review cannot manufacture a scientific finding'
+    # A real question answer is still required; advisory review is not its replacement.
     with pytest.raises(ResearchConflict, match="冻结输入"):
-        store.commit(result.model_copy(update={"order": order.model_copy(update={"attempt_id": store.claim("Q3").attempt_id, "review_required": False})}))
+        store.commit(result.model_copy(update={"order": order.model_copy(update={"attempt_id": store.claim("Q3").attempt_id})}))
 
 
 

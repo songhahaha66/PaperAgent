@@ -51,22 +51,34 @@ def observe(env,ctx):return run(control.observe(env.state,SimpleNamespace(contex
 
 
 def test_decision_context_uses_products_and_purposes_without_completion_shortcuts(env):
+    from ai_system.research.domain import experiment_report
     snapshot=env.store.snapshot()
-    for task in snapshot['experiments'].values():
-        task['report'].update(summary='all requirements are covered by accepted tasks',
-                              key_findings=['unsubstantiated completion claim'],limitations=['Only the stated conditions were examined.'])
+    qid=snapshot['experiments']['Q1']['question_id']
+    snapshot['questions'][qid].update(judgment='',artifact_refs=[],coverage=None,stop_reason='',answer_status='unanswered')
+    for key,task in snapshot['experiments'].items():
+        refs=[r['id'] for r in env.store.registry_payload(snapshot)['results'] if r['subproblem']==key]
+        experiment_report(snapshot,task).update(summary='all requirements are covered by accepted tasks {{R:'+refs[0]+'}}',
+            key_findings=[{'statement':'local result {{R:'+refs[0]+'}}','strength':'倾向'}],
+            limitations=['Only the stated conditions were examined.'])
     key,context=planner.decision_context(env.store,snapshot)
     assert all('report' not in task and 'execution_id' not in task for task in context['experiments'])
     assert all('execution_status' in task and 'acceptance' in task for task in context['experiments'])
-    assert 'all requirements are covered by accepted tasks' not in json.dumps(context)
-    assert 'unsubstantiated completion claim' not in json.dumps(context)
-    assert all(task['limitations']==['Only the stated conditions were examined.'] for task in context['experiments'])
-    assert context['spec']['requirements']==snapshot['spec']['requirements']
-    assert next(t['objective'] for t in context['experiments'] if t['task_id']=='Q1')==snapshot['experiments']['Q1']['objective']
-    assert {'demand','allocation','residual','independent'}<={e['name'] for e in context['evidence']}
+    [record]=context['experiments']
+    assert record['record']=={k:v for k,v in experiment_report(snapshot,snapshot['experiments']['Q1']).items()
+                             if k in ('summary','key_findings','limitations','status','error')}
+    assert 'all requirements are covered by accepted tasks' in record['record']['summary']
+    assert record['record']['limitations']==['Only the stated conditions were examined.']
+    question=next(q for q in context['questions'] if q['id']==qid)
+    assert question['answer_status']=='unanswered' and not question['coverage'] and not question['judgment']
+    assert not env.store.delivery_ready(snapshot), 'a report cannot declare all user questions answered'
+    assert context['source']['requirements']==snapshot['spec']['requirements']
+    assert record['objective']==snapshot['experiments']['Q1']['objective']
+    assert {e['name'] for e in context['artifacts']}=={'demand'}
+    assert {'demand','allocation','residual','independent'}<={e['name'] for e in context['artifact_index']}
     revised=copy.deepcopy(snapshot);revised['experiments']['Q1']['revision']+=1
     new_key,new_context=planner.decision_context(env.store,revised)
-    assert new_context!=context and new_key!=key, 'A changed attempt frontier requires a new action decision, not a completion inference'
+    assert new_context!=context and new_key!=key, 'an interpretation frontier change requires a fresh research judgment'
+
 
 
 

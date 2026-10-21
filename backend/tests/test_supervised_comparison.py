@@ -73,7 +73,7 @@ def setup(tmp_path,monkeypatch):
         assert set(content['candidate'])=={'name','method_keys','idea','formulation','steps','variant','estimator_contract'}
         chosen=next(c for c in candidates if c['name']==content['candidate']['name'])
         assert all(content['candidate'][key]==chosen[key] for key in ('idea','formulation','steps'))
-        record=cfg.read('Q1',_ctx.experience_order.revision)
+        record=cfg.read(_ctx.experience_order.task_id,_ctx.experience_order.revision)
         row=next(r for r in record['branches'] if r['index']==content['candidate']['variant'])
         history=row.get('history',[])
         if history:
@@ -95,7 +95,7 @@ def run(setup):
     return asyncio.run(work())
 
 
-def accept_formal_comparison(setup):
+def accept_legacy_formal_comparison(setup):
     """Real project measurements and handoff, then the normal store commit."""
     from ai_system.modules.experiments.handoff import handoff,proof_issues
     async def work():
@@ -117,13 +117,41 @@ def accept_formal_comparison(setup):
     return asyncio.run(work())
 
 
+
+def accept_formal_comparison(setup):
+    """Current production CSV execution publishes frozen predictions, not a refit."""
+    from ai_system.research import operations
+    from ai_system.research.control import execute,experiment_dispatch
+    from ai_system.modules.experiments.planning import experiment_design
+    setup.store.recover()
+    candidates=setup.branch['design']['candidates']
+    plan={'conditions':'共同数据与冻结留出划分','evaluation':'共同验证样本上的RMSE',
+          'csv':setup.spec,'candidates':[{'name':c['name'],'instruction':c['idea'],'method_keys':c['method_keys']} for c in candidates]}
+    qid=setup.store.snapshot()['experiments']['Q1']['question_id']
+    planned=operations.schedule_experiment(SimpleNamespace(research=setup.store),operations.ExperimentInput(
+        question_id=qid,title='实测回归方案比较',plan=plan).model_dump())
+    # The generation double validates against these actual current method
+    # declarations; the allocated experiment ID comes only from the operation.
+    candidates[:]=experiment_design(plan)['candidates']
+    eid=planned['experiment_id']
+    asyncio.run(execute(experiment_dispatch(setup.parent,eid),SimpleNamespace(context=setup.parent)))
+    task=setup.store.snapshot()['experiments'][eid]
+    assert task['execution_status']=='succeeded' and task['acceptance']=='accepted'
+    record=setup.cfg.read(eid,task['revision'])
+    assert record['measurements'] and not record.get('formal_handoffs')
+    return record
+
+
 def comparison_writing_prompt(setup,sid='Q1'):
-    from ai_system.research.control import refresh_registry
+    from ai_system.research.control import refresh_registry,graph_view
     from ai_system.modules.writing.sections import section_request
     refresh_registry(setup.parent)
-    state={'task':TASK,'analysis':copy.deepcopy(setup.branch['analysis']),
-           'designs':{'Q1':setup.branch['design']},'solutions':{}}
-    if sid=='Q2':state['analysis']['subproblems'].append({'id':'Q2','title':'其他研究','question':'其他研究','depends_on':[]})
+    state=graph_view(setup.store.snapshot())
+    if sid not in {sp['id'] for sp in state['analysis']['subproblems']}:
+        # An unrelated delivery scope must not inherit this comparison. Use an
+        # explicit section scope; do not invent a persisted experiment/question.
+        state['outline']=[{'key':'custom:unrelated','title':'其他研究','task_ids':[sid]}]
+        return section_request('custom:unrelated','其他研究',state,setup.parent)
     return section_request('solve:'+sid,'回归预测',state,setup.parent)
 
 
@@ -133,18 +161,18 @@ def comparison_in_prompt(prompt):
 
 
 def test_accepted_comparison_reaches_planner_with_measured_candidates_and_boundaries(setup):
-    record=accept_formal_comparison(setup)
+    record=accept_legacy_formal_comparison(setup)
     before=setup.store.snapshot();budget=setup.cfg.budget('Q1')
     _,context=decision_context(setup.store,before)
-    entry=next(e for e in context['evidence'] if e.get('kind')=='comparison')
-    summary=json.loads(entry['text'])
-    assert entry['id']==record['id'] and entry['id'].startswith('P')
+    [summary]=context['comparisons']
+    assert summary['id']==record['id'] and summary['id'].startswith('P')
     assert summary['status']=='winner' and summary['chosen_index']==1
     assert [r['name'] for r in summary['branches']]==['shallow','ridge']
     assert [r['metric'] for r in summary['branches']]==[r['metric'] for r in record['branches']]
     assert summary['branches'][1]['metric']<summary['branches'][0]['metric']
     assert all(r['run_ids'] and r['code_hash'] and r['prediction_hash'] for r in summary['branches'])
-    assert '"prior":' not in entry['text'] and 'FAKE_SCORE' not in entry['text'] and '"scores":' not in entry['text']
+    rendered=json.dumps(summary)
+    assert '"prior":' not in rendered and 'FAKE_SCORE' not in rendered and '"scores":' not in rendered
     protocol=summary['protocol']
     assert protocol['dataset']==setup.spec['dataset'] and protocol['features']==setup.spec['features']
     assert protocol['metric']=='RMSE' and protocol['higher_is_better'] is False
@@ -154,45 +182,54 @@ def test_accepted_comparison_reaches_planner_with_measured_candidates_and_bounda
     provenance=summary['provenance']
     assert provenance['table']=='experiment_comparisons' and provenance['record_id']==record['id']
     assert provenance['protocol_hash']==record['protocol_hash'] and summary['attempt_id']==setup.order.attempt_id
-    assert set(provenance['formal_evidence_refs'])<=set(before['evidence'])
-    assert {e['id'] for e in context['evidence'] if e['id'].startswith('R')}==set(before['evidence'])
+    assert set(provenance['formal_evidence_refs'])<=set(before['artifacts'])
+    expected={ref for ref,entry in before['artifacts'].items() if entry['type']=='result' and entry['active']}
+    assert {e['id'] for e in context['artifact_index']}==expected
+    assert {e['id'] for e in context['artifacts']}<=expected
+    assert not context['artifacts'], 'uncited values remain discoverable by index instead of copying the entire registry'
     assert setup.store.snapshot()==before and setup.cfg.budget('Q1')==budget, 'Reading must not register synthetic results or consume comparison budget'
 
 
 def test_writer_receives_both_measured_candidates_as_registered_renderable_references(setup):
-    record=accept_formal_comparison(setup);before=setup.store.snapshot();budget=setup.cfg.budget('Q1');calls=list(setup.calls)
+    record=accept_formal_comparison(setup);before=setup.store.snapshot();budget=setup.cfg.budget(record['task_id']);calls=list(setup.calls)
     prompt=comparison_writing_prompt(setup);summary=comparison_in_prompt(prompt)
-    assert setup.branch['design']['chosen_index']==record['chosen_index']==1
+    assert record['chosen_index']==1
+    design=before['executions'][before['experiments'][record['task_id']]['execution_id']]['result']['design']
+    assert design['chosen_index'] is None, 'measured alternatives are returned together to the research owner'
     assert summary['id']==record['id'] and summary['status']=='winner' and summary['reason']==record['reason']
     assert [r['name'] for r in summary['branches']]==['shallow','ridge']
     assert summary['protocol']['data_hash']==record['protocol']['data_hash'] and summary['protocol']['metric']=='RMSE'
     assert summary['protocol']['negative_control']=='permute_all_targets_before_split'
-    proof=record['formal_handoffs'][-1];rendered=[]
-    assert proof['fresh_fit'] is False
-    assert '.fit(' not in setup.ctx.fs.read_text(setup.ctx.fs.get_run_info(proof['run_id'])['input'])
+    proof=record['measurements'][-1];rendered=[]
+    assert '.fit(' not in setup.parent.fs.read_text(setup.parent.fs.get_run_info(proof['run_id'])['input'])
+    measured_runs={rid for row in record['branches'] for rid in row['run_ids']}
+    assert len(measured_runs)==2 and len(before['executions'][proof['attempt_id']]['result']['results'])==len(proof['evidence_refs'])
+    assert proof['run_id'] not in measured_runs
+    assert set(setup.parent.fs._manifest['runs'])==measured_runs|{proof['run_id']}, 'two candidate executions plus one registration/plot run; no replay or refit'
     for row,measured in zip(summary['branches'],record['branches']):
         for field in ('metric','baseline'):
             match=re.fullmatch(r'\{\{R:(R\d+)\}\}',row[field]);assert match
             result=setup.parent.registry.get(match[1]);assert result and result.id in proof['evidence_refs']
-            assert result.subproblem=='Q1' and result.run_id==proof['run_id']
+            assert result.subproblem==record['task_id'] and result.run_id==proof['run_id']
             assert float(result.value)==pytest.approx(measured[field])
-            setup.ctx.registry.verify(result.value,result.run_id)
+            setup.parent.registry.verify(result.value,result.run_id)
             assert setup.parent.registry.render(row[field])==result.value
         rendered.append(float(setup.parent.registry.render(row['metric'])))
     assert rendered[1]<rendered[0] and rendered[1]!=0, 'Candidate stdout FAKE_SCORE must not become metric evidence'
-    legacy=next(r for r in setup.parent.registry.results.values() if r.name=='comparison_rmse')
-    assert float(legacy.value)==pytest.approx(record['branches'][1]['metric'])
-    assert legacy.id in proof['evidence_refs'] and legacy.run_id==proof['run_id']
+    winner_ref=re.fullmatch(r'\{\{R:(R\d+)\}\}',summary['branches'][record['chosen_index']]['metric'])[1]
+    winner=setup.parent.registry.get(winner_ref)
+    assert float(winner.value)==pytest.approx(record['branches'][1]['metric'])
+    assert winner.id in proof['evidence_refs'] and winner.run_id==proof['run_id']
     serialized=json.dumps(summary,ensure_ascii=False)
     assert all(str(r['metric']) not in serialized for r in record['branches'])
     assert 'FAKE_SCORE' not in serialized and '"prior"' not in serialized
     assert '不证明统计显著' in prompt and 'only_valid' in prompt and 'tied' in prompt
     assert record['id'] not in comparison_writing_prompt(setup,'Q2')
-    assert setup.cfg.budget('Q1')==budget and setup.calls==calls and setup.store.snapshot()==before
+    assert setup.cfg.budget(record['task_id'])==budget and setup.calls==calls and setup.store.snapshot()==before
 
 
 def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(setup,monkeypatch):
-    record=accept_formal_comparison(setup);snapshot=setup.store.snapshot()
+    record=accept_legacy_formal_comparison(setup);snapshot=setup.store.snapshot()
     damaged=[]
     for status in ('no_valid','budget_exhausted','input_changed','running'):
         altered=copy.deepcopy(record);altered['status']=status;damaged.append((status,altered))
@@ -205,7 +242,7 @@ def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(set
         with monkeypatch.context() as patch:
             patch.setattr(ExperimentStore,'read',lambda *args,record=altered:record)
             _,context=decision_context(setup.store,snapshot)
-            assert not any(e.get('kind')=='comparison' for e in context['evidence']),label
+            assert not context['comparisons'],label
             assert '# 当前共同协议比较' not in comparison_writing_prompt(setup),label
     for label in ('stale task','different revision','different attempt','unpublished attempt','failed attempt',
                   'inactive proof','historical proof','different formal run','different formal metric'):
@@ -217,12 +254,12 @@ def test_stale_failed_and_unbound_comparisons_do_not_become_planner_evidence(set
         elif label=='failed attempt':altered['executions'][task['execution_id']]['execution_status']='failed'
         else:
             ref=record['formal_handoffs'][0]['evidence_refs'][0]
-            if label=='inactive proof':altered['evidence'][ref]['active']=False
-            elif label=='historical proof':altered['evidence'][ref]['producer_attempt']='historical-attempt'
-            elif label=='different formal run':altered['evidence'][ref]['payload']['run_id']='another-run'
-            else:altered['evidence'][ref]['payload']['value']='-999'
+            if label=='inactive proof':altered['artifacts'][ref]['active']=False
+            elif label=='historical proof':altered['artifacts'][ref]['producer_attempt']='historical-attempt'
+            elif label=='different formal run':altered['artifacts'][ref]['payload']['run_id']='another-run'
+            else:altered['artifacts'][ref]['payload']['value']='-999'
         _,context=decision_context(setup.store,altered)
-        assert not any(e.get('kind')=='comparison' for e in context['evidence']),label
+        assert not context['comparisons'],label
     data=setup.root/setup.spec['dataset'];original=data.read_bytes()
     try:
         data.write_bytes(original+b'\n')
@@ -288,7 +325,10 @@ def test_tie_single_failure_and_both_failures_have_complete_records(setup,first,
 
 def test_completed_resume_never_repeats_calls_executions_or_resets_budget(setup):
     first=run(setup).to_record();before=copy.deepcopy(setup.cfg.budget('Q1'))
-    setup.store.recover();order=setup.store.claim('Q1');ctx=worker_context(setup.parent,order);setup.ctx=ctx
+    setup.store.recover()
+    from ai_system.research.operations import continue_experiment
+    continue_experiment(SimpleNamespace(research=setup.store),{'experiment_id':'Q1','information_need':'读取并复用已完成的冻结比较结果'})
+    order=setup.store.claim('Q1');ctx=worker_context(setup.parent,order);setup.ctx=ctx
     second=run(setup).to_record()
     assert second['chosen_index']==first['chosen_index'] and second['branches']==first['branches']
     assert setup.cfg.budget('Q1')==before and len(setup.calls)==2
@@ -392,25 +432,40 @@ def test_automatic_schema_protocol_is_one_reserved_call_without_validation_label
     assert setup.cfg.budget('Q1')['used']['model_calls']==3
 
 
-def test_failed_comparison_blocks_formal_solver_and_commits_complete_failure_record(setup,monkeypatch):
-    from ai_system.research.control import execute
-    setup.codes.update(shallow=BAD_A,ridge=BAD_B);setup.store.recover()
-    async def forbidden(*args,**kwargs):pytest.fail('no-valid experiments cannot fall back to a formal model self-score')
+def test_failed_candidates_keep_execution_diagnostics_without_formal_solver_fallback(setup,monkeypatch):
+    from ai_system.research.control import execute,experiment_dispatch
+    from ai_system.research.operations import schedule_experiment,ExperimentInput
+    setup.store.recover()
+    qid=setup.store.snapshot()['experiments']['Q1']['question_id']
+    scheduled=schedule_experiment(SimpleNamespace(research=setup.store),ExperimentInput(
+        question_id=qid,title='共同条件下比较两种失败实现',plan={
+            'conditions':'同一糖尿病数据与固定留出划分','evaluation':'共同验证样本上的RMSE',
+            'csv':setup.spec,'candidates':[
+                {'name':'shallow','instruction':'实现浅层树回归'},
+                {'name':'ridge','instruction':'实现缩放后的岭回归'}]}).model_dump())
+    eid=scheduled['experiment_id'];calls=[]
+    async def failed_code(ctx,schema,system,prompt,timeout,tokens=2000):
+        assert schema is CandidateCode
+        payload=json.loads(prompt)
+        assert set(payload)=={'candidate','task_type','metric','features','n_train','seed','previous_attempt'}
+        assert 'X_validation' not in payload and 'y_validation' not in payload
+        assert payload['previous_attempt'] is None
+        name=payload['candidate']['name'];calls.append(name)
+        return CandidateCode(code={'shallow':BAD_A,'ridge':BAD_B}[name])
+    monkeypatch.setattr(engine,'ask',failed_code)
+    async def forbidden(*args,**kwargs):pytest.fail('failed candidates cannot fall back to a formal model self-score')
     import importlib
     solve_module=importlib.import_module('ai_system.modules.experiments.execution')
     monkeypatch.setattr(solve_module,'_solve_loop',forbidden)
-    asyncio.run(execute(setup.branch,SimpleNamespace(context=setup.parent)))
+    asyncio.run(execute(experiment_dispatch(setup.parent,eid),SimpleNamespace(context=setup.parent)))
     records=setup.cfg.list();assert len(records)==1 and records[0]['status']=='no_valid'
     assert all(r['run_ids'] and r['error_detail'] for r in records[0]['branches'])
-    assert not setup.store.registry_payload()['results']
-    snapshot=setup.store.snapshot()
-    assert any(i['source']=='comparison' and i['action']=='recompute' for i in research_findings(snapshot))
-    attempted=list(snapshot['executions'].values())[-1]
-    assert attempted['result']['report']['status']=='comparison_blocked'
-
-
-
-
+    assert calls==['shallow','ridge'] and not setup.store.registry_payload()['results']
+    snapshot=setup.store.snapshot();attempted=snapshot['executions'][snapshot['experiments'][eid]['execution_id']]
+    assert attempted['execution_status']=='failed' and attempted['acceptance']!='accepted'
+    assert attempted['result']['report']['status']=='failed'
+    assert attempted['result']['report']['error']==records[0]['reason']
+    assert not any(i['category']=='model' for i in research_findings(snapshot)), 'program errors do not refute either method'
 
 
 def test_gateway_authorization_failure_stops_further_calls_and_is_not_a_method_error(setup,monkeypatch):

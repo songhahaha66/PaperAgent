@@ -215,8 +215,11 @@ class ExperimentStore:
         return {'id':record['id'],'task_id':task['task_id'],'revision':task['revision'],'status':record['status'],
             'chosen_index':record.get('chosen_index'),'reason':record['reason'],
             'conditions':task['experiment']['conditions'],'evaluation':task['experiment']['evaluation'],
-            'protocol':{k:v for k,v in record['protocol'].items() if k not in {'train_ids','validation_ids'}},
-            'branches':[{k:r.get(k) for k in ('name','status','metric','baseline','improvement','error','run_ids','code_hash','prediction_hash')} for r in record['branches']],
+            'protocol':{**{k:v for k,v in record['protocol'].items() if k not in {'train_ids','validation_ids'}},
+                        'train_count':len(record['protocol']['train_ids']),'validation_count':len(record['protocol']['validation_ids'])},
+            'branches':[{**{k:r.get(k) for k in ('index','name','status','metric','baseline','improvement','error','run_ids','code_hash','prediction_hash')},
+                         'metric_name':r['name']+' · 验证'+record['protocol']['metric'],
+                         'baseline_name':'共同基线 · '+record['protocol']['metric']} for r in record['branches']],
             'provenance':{'record_id':record['id'],'protocol_hash':record['protocol_hash'],
                           'formal_run_id':proof['run_id'],'formal_evidence_refs':proof['evidence_refs']}}
 

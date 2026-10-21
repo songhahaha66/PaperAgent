@@ -104,16 +104,19 @@ def test_references_in_all_report_fields_must_be_from_the_frozen_scope(tmp_path,
         submission_schema(ctx, branch(), runs).model_validate(payload)
 
 
-@pytest.mark.parametrize("failure", ["missing_metric", "bad_mapping", "unknown_requirement", "changed_output", "failed_run", "other_attempt"])
-def test_submission_rejects_missing_contract_evidence_and_invalid_execution_sources(tmp_path, failure):
+@pytest.mark.parametrize("failure", ["missing_metric", "unknown_reference", "foreign_reference", "changed_output", "failed_run", "other_attempt"])
+def test_submission_rejects_missing_metrics_out_of_scope_refs_and_invalid_execution_sources(tmp_path, failure):
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
     runs = []
     own = seed(ctx, runs, name="wrong_name" if failure == "missing_metric" else "answer")
-    payload = report(own.id)
-    if failure == "bad_mapping":
-        payload["requirement_evidence"][0]["evidence_refs"] = ["R999"]
-    if failure == "unknown_requirement":
-        payload["requirement_evidence"][0]["requirement_id"] = "RQ999"
+    payload = report(own.id,requirement=None)
+    bad_ref=None
+    if failure == "unknown_reference":
+        bad_ref='R999'
+    elif failure == "foreign_reference":
+        bad_ref=seed(ctx,[],sid='Q9').id
+    if bad_ref:
+        payload['key_findings'][0]['statement']='额外结果 {{R:'+bad_ref+'}}'
     if failure == "changed_output":
         ctx.fs.save_run_stdout(own.run_id, "no result")
     if failure == "failed_run":
@@ -122,8 +125,19 @@ def test_submission_rejects_missing_contract_evidence_and_invalid_execution_sour
         runs.clear()
     with pytest.raises(ValidationError) as error:
         submission_schema(ctx, branch(), runs).model_validate(payload)
-    assert {"missing_metric": "answer_finite", "bad_mapping": "RQ1", "unknown_requirement": "RQ999",
+    assert {"missing_metric": "answer_finite", "unknown_reference": "R999", "foreign_reference": bad_ref,
             "changed_output": "来源无效", "failed_run": "执行失败", "other_attempt": "本次任务"}[failure] in str(error.value)
+
+
+def test_valid_explicit_references_do_not_require_a_per_requirement_mapping(tmp_path):
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None);runs=[]
+    own=seed(ctx,runs)
+    payload=report(own.id,requirement=None)
+    accepted=submission_schema(ctx,branch(),runs).model_validate(payload)
+    assert accepted.requirement_evidence==[]
+    assert accepted.summary==payload['summary']
+    assert accepted.key_findings[0].statement==payload['key_findings'][0]['statement']
+    assert len(runs)==1 and ctx.registry.get(own.id)==own
 
 
 def test_check_threshold_failure_is_not_hidden_by_the_submission_gate(tmp_path):
@@ -137,7 +151,7 @@ def test_check_threshold_failure_is_not_hidden_by_the_submission_gate(tmp_path):
     assert submission_schema(ctx, task, runs).model_validate(report(own.id)).summary
 
 
-def test_submission_grounds_summary_and_equivalent_numeric_formatting(tmp_path):
+def test_submission_preserves_explicit_refs_without_guessing_from_numeric_formatting(tmp_path):
     ctx = GraphContext.create(str(tmp_path), planner_llm=None)
     runs = []
     own = seed(ctx, runs)
@@ -145,17 +159,17 @@ def test_submission_grounds_summary_and_equivalent_numeric_formatting(tmp_path):
     ctx.fs.save_run_stdout(rid, "6\n0.3\n50.0")
     limit = ctx.registry.record_value("Q1", "grid lower bound", "0.3", rid)
     pct = ctx.registry.record_value("Q1", "comparison threshold", "50.0", rid, "%")
-    payload = report(own.id)
-    payload["summary"] = "网格下限0.30，阈值50%。"
-    accepted = submission_schema(ctx, branch(), runs).model_validate(payload)
-    assert f"{{{{R:{limit.id}}}}}" in accepted.summary
-    assert f"{{{{R:{pct.id}}}}}" in accepted.summary
-    # A genuinely different value, ambiguous metric or incompatible unit must
-    # still require the model to choose an explicit, grounded reference.
-    assert "0.31" in ctx.registry.ground_statement("Q1", "下限 0.31")
     ctx.registry.record_value("Q1", "other bound", "0.30", rid)
-    assert "0.300" in ctx.registry.ground_statement("Q1", "下限 0.300")
-    assert "50.00" in ctx.registry.ground_statement("Q1", "下限 50.00")
+    payload = report(own.id,requirement=None)
+    # Matching numeric text is not a reference or a semantic correctness proof.
+    literal="网格下限0.30，阈值50%。"
+    payload['summary']=literal
+    assert submission_schema(ctx,branch(),runs).model_validate(payload).summary==literal
+    explicit='网格下限 {{R:'+limit.id+'}}，阈值 {{R:'+pct.id+'}}。'
+    payload['summary']=explicit
+    assert submission_schema(ctx,branch(),runs).model_validate(payload).summary==explicit
+    assert ctx.registry.ground_statement('Q1','下限0.300，另一个值0.31，50.00%')=='下限0.300，另一个值0.31，50.00%'
+    assert len(runs)==1
 
 
 def test_review_retains_original_computation_and_its_output_after_formatting_retries(tmp_path):
@@ -275,26 +289,29 @@ class FillGapsModel(FakeModel):
 
     def _solver_step(self, task, messages):
         tools = [m for m in messages if isinstance(m, ToolMessage)]
-        errors = [m for m in tools if m.name == "SolveReport" and "报告未提交" in str(m.content)]
+        registrations=[m for m in tools if m.name=='record_results']
+        errors=[m for m in tools if m.name=='SolveReport' and '报告未提交' in str(m.content)]
         if not tools:
-            name, args = "run_python", {"code": "answer = sum([1, 2, 3])\nprint('answer', answer)\nprint('unrelated', 7)"}
-        elif not errors and self.mode not in {"missing_registration", "stuck"} and not any(m.name == "record_results" for m in tools):
-            run_id = re.search(r"\[run_id: (\S+)\]", tools[0].content)[1]
-            name, args = "record_results", {"items": [{"name": "wrong_name" if self.mode == "missing_metric" else "answer",
-                                                      "value": "6", "run_id": run_id}]}
-        elif errors and self.mode != "stuck" and not any(m.name == "record_results" for m in tools[tools.index(errors[-1]) + 1:]) and self.mode != "bad_mapping":
-            self.feedback.append(str(errors[-1].content))
-            run_id = re.search(r"\[run_id: (\S+)\]", tools[0].content)[1]
-            name, args = "record_results", {"items": [{"name": "answer", "value": "6", "run_id": run_id}]}
+            name,args='run_python',{'code':"answer = sum([1, 2, 3])\nprint('answer', answer)\nprint('unrelated', 7)"}
         else:
-            self.submissions += 1
-            refs = [ref for m in tools if m.name == "record_results" for ref in re.findall(r"\{\{R:(R\d+)\}\}", str(m.content))]
-            name, args = "SolveReport", report(refs[-1] if refs else "R999")
-            if self.mode == "bad_mapping" and not errors:
-                args["requirement_evidence"] = []
-            if errors:
-                self.feedback.append(str(errors[-1].content))
-        return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}"}])
+            run_id=re.search(r'\[run_id: (\S+)\]',tools[0].content)[1]
+            # Missing inventory is already returned by computation/registration
+            # tools, before SolveReport is offered. Reuse that actual run.
+            if self.mode!='stuck' and (not registrations or
+                    self.mode=='missing_metric' and len(registrations)==1):
+                self.feedback.append(str(tools[-1].content))
+                assert 'answer_finite' in str(tools[-1].content)
+                name,args='record_results',{'items':[{'name':'wrong_name' if self.mode=='missing_metric' and not registrations else 'answer',
+                                                       'value':'6','run_id':run_id}]}
+            else:
+                refs=[ref for m in registrations for ref in re.findall(r'\{\{R:(R\d+)\}\}',str(m.content))]
+                self.submissions+=1
+                name,args='SolveReport',report(refs[-1] if refs else 'R999',requirement=None)
+                if self.mode=='unknown_reference' and not errors:
+                    args['summary']='未获授权的结果 {{R:R999}}'
+                if errors:
+                    self.feedback.append(str(errors[-1].content))
+        return AIMessage(content='',tool_calls=[{'name':name,'args':args,'id':f'call_{len(messages)}'}])
 
 
 class MixedReportModel(FakeModel):
@@ -315,8 +332,9 @@ class MixedReportModel(FakeModel):
         else:
             deferred = [m for m in messages if isinstance(m, AIMessage) and "本轮报告未提交" in str(m.content)]
             assert deferred, "mixed submissions must not terminate or bypass the producing loop"
-            if not self.valid_mixed:
-                assert "RQ1" in deferred[-1].content, "preserve concrete submission gaps for repair"
+            assert any(m.name=='record_results' and refs[-1] in str(m.content) for m in tools)
+            assert any(m.name=='run_python' and 'answer_finite' in str(m.content) for m in tools)
+            assert '单独调用' in deferred[-1].content
             self.deferred = True
             calls = [("SolveReport", report(refs[-1]))]
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{len(messages)}_{i}"}
@@ -377,8 +395,8 @@ def test_mixed_operations_and_report_finish_operations_before_retrying_submissio
         assert not (len(calls) > 1 and any(c["name"] == "SolveReport" for c in calls))
 
 
-@pytest.mark.parametrize("mode", ["missing_registration", "missing_metric", "bad_mapping"])
-def test_real_tool_loop_rejects_report_fills_gaps_and_submits_without_rerunning_code(tmp_path, mode):
+@pytest.mark.parametrize("mode,expected_reports", [("missing_registration",1), ("missing_metric",1), ("unknown_reference",2)])
+def test_real_tool_feedback_fills_registration_or_reference_gaps_without_rerunning_code(tmp_path, mode, expected_reports):
     model = FillGapsModel(mode=mode, loose_number_once=False)
     ctx = GraphContext.create(str(tmp_path), planner_llm=model, max_solver_steps=12, max_review_rounds=0)
     task = branch()
@@ -392,12 +410,21 @@ def test_real_tool_loop_rejects_report_fills_gaps_and_submits_without_rerunning_
 
     status, error, submitted, reviews = asyncio.run(go())
     assert status == "completed" and error is None and not reviews
-    assert model.feedback and model.submissions == 2
+    assert model.feedback and model.submissions == expected_reports
     assert len(runs) == 1, "the same live kernel/output is reused to fill missing registration"
     own = next(r for r in ctx.registry.results.values() if r.name == "answer")
-    assert submitted["requirement_evidence"] == [{"requirement_id": "RQ1", "evidence_refs": [own.id]}]
+    assert submitted["requirement_evidence"]==[]
+    assert '{{R:'+own.id+'}}' in submitted['summary'] and '{{R:'+own.id+'}}' in submitted['key_findings'][0]['statement']
+    assert own.run_id==runs[0]['run_id'] and runs[0]['ok']
+    ctx.registry.verify(own.value,own.run_id)
+    assert len([r for r in ctx.registry.results.values() if r.name=='answer'])==1
     transcript = json.loads((tmp_path / ".system/transcripts/Q1.json").read_text())
-    assert any(m["type"] == "tool" and "报告未提交" in str(m["data"].get("content")) for m in transcript)
+    observations=[m['data'] for m in transcript if m['type']=='tool']
+    assert any('answer_finite' in str(m.get('content')) for m in observations)
+    if mode=='unknown_reference':
+        assert any(m.get('name')=='SolveReport' and 'R999' in str(m.get('content')) and '报告未提交' in str(m.get('content')) for m in observations)
+    else:
+        assert any(m.get('name')=='record_results' and '必需登记指标已齐' in str(m.get('content')) for m in observations)
 
 
 def test_repeated_invalid_submissions_exhaust_budget_without_a_fake_final_report(tmp_path):

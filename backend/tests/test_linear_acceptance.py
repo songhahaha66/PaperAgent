@@ -99,7 +99,20 @@ def test_delivery_explains_exhausted_budget_even_when_execution_issue_exists(tmp
     store.commit(WorkerResult(order=store.claim('Q3'), execution_status='failed', acceptance='inconclusive', report={},
         issues=[IssueReport(task_id='Q3', category='execution', message='kernel stopped')]))
     snapshot = research_snapshot(tmp_path, 'work', 'failed')
-    assert any('预算已耗尽' in b['message'] and b['action'] == 'recompute' for b in snapshot.delivery['blockers'])
+    task=next(e for e in snapshot.experiments if e['task_id']=='Q3')
+    assert task['progress']['state']=='needs_plan' and task['progress']['executions']==task['progress']['attempt_limit']==1
+    assert any(i['category']=='execution' and i['message']=='kernel stopped' for i in research_findings(store.snapshot()))
+    from research_tools_helpers import continue_experiment,answer
+    from ai_system.research.models import ResearchConflict
+    store.recover();continue_experiment(store,'Q3')
+    with pytest.raises(ResearchConflict,match='尝试预算'):store.claim('Q3')
+    qid=store.snapshot()['experiments']['Q3']['question_id']
+    reason='该实验尝试预算已耗尽，保留执行失败记录；当前问题尚未得到答案。'
+    answer(store,question_id=qid,coverage='unanswered',stop_reason=reason)
+    current=research_snapshot(tmp_path,'work','paused')
+    question=next(q for q in current.delivery['questions'] if q['id']==qid)
+    assert question['coverage']=='unanswered' and question['stop_reason']==reason
+    assert not current.delivery['ready'] and len(store.snapshot()['executions'])==1
 
 
 def test_submission_requires_decisions_not_just_self_reported_residual(tmp_path):

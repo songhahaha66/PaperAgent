@@ -57,7 +57,7 @@ def test_long_chapter_only_selected_short_sentence_changes_and_provenance_is_bou
     assert p['after']==expected and v.store.snapshot()==before
     result=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));after=v.store.snapshot()
     assert result['status']=='applied' and after['sections'][v.key]['text']==expected
-    assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
+    assert all(before[k]==after[k] for k in ('experiments','executions','artifacts','claims','validations'))
     assert all(before['sections'][k]==after['sections'][k] for k in before['sections'] if k!=v.key)
 
 
@@ -216,7 +216,8 @@ def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkey
     compiles=[]
     async def failure(*args):
         compiles.append(1)
-        return SimpleNamespace(pdf_path=None,error='compiler failed')
+        from ai_system.export.latex import LatexResult
+        return LatexResult('paper.tex',error='compiler failed')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',failure)
     if conflict:
         manual=original.decode('utf-8').replace(v.old,'人工修改的目标。')
@@ -294,5 +295,5 @@ def test_applied_fragment_does_not_claim_complete_section_review(scoped):
     v=scoped;v.state['sections'][v.key]='局限与适用条件。'*20+v.old
     v.store.save_sections(v.state['sections'],[]);v.store.publish_paper(assemble(v.state))
     p=propose(v);asyncio.run(editor.decide(v.store,p['id'],True,'markdown'))
-    task=next(t for t in status(v.store)['experiments'] if t['stage']=='sections')
+    task=next(t for t in status(v.store)['tasks'] if t['stage']=='sections')
     assert task['state']=='partial' and task['outcome']=='incomplete' and '局部等义' in task['coverage']

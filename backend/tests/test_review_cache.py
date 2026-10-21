@@ -13,6 +13,8 @@ from ai_system.research.validation import report_fingerprint
 from ai_system.research.review_cache import ReviewCache,run_review,review_context
 from ai_system.research.review_migration import context_from_store,completed_reconcile_proof,section_failure_proof
 from ai_system.graph.state import ConsistencyReview,Conflict,ClaimAudit
+from ai_system.research.control import graph_view
+from research_tools_helpers import answer
 
 
 @pytest.fixture(autouse=True)
@@ -34,12 +36,20 @@ def env(tmp_path):
     (tmp_path/'manifest.json').write_text(json.dumps({'runs':{'one':{'status':'success','input':'runs/one/input.py','stdout':'runs/one/stdout.log'}}}))
     results=[{'id':'R'+str(i+1),'subproblem':'Q1','kind':'number','name':name,'value':str(value),'run_id':'one','path':'','description':'','unit':''} for i,(name,value) in enumerate([('score',1.0),('baseline',2.0)])]
     claims=[{'id':'C'+str(i+1),'subproblem':'Q1','statement':'结论 {{R:R'+str(i+1)+'}}','strength':'倾向','evidence':['R'+str(i+1)]} for i in range(2)]
-    report={'status':'completed','summary':'完成','requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':['R1']}]}
+    report={'status':'completed','summary':'实测score为 {{R:R1}}，基线为 {{R:R2}}。',
+        'key_findings':[{'statement':c['statement'],'strength':c['strength']} for c in claims],
+        'requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':['R1']}]}
     store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',results=results,claims=claims,report=report,
         reviews=[ReviewRecord(report_hash=report_fingerprint(report),issues=[])]))
-    snapshot=store.snapshot();state={'analysis':{'subproblems':[t['subproblem'] for t in snapshot['experiments'].values()],
-        'requirements':snapshot['spec']['requirements'],'assumptions':[]},'solutions':{'Q1':snapshot['experiments']['Q1']['report']},
-        'sections':{'abstract':'摘要正文。'*30,'evaluation':'证据局限。'*30},'consistency':[]}
+    before=store.snapshot()
+    answer(store,question_id=before['experiments']['Q1']['question_id'],
+        statement='本次输入下score为 {{R:R1}}，满足有限数检查。',artifact_refs=['R1'],
+        coverage='answered',stop_reason='冻结的有限数检查已通过。',limitations=['该检查不证明模型效果或外推有效性。'])
+    snapshot=store.snapshot()
+    assert snapshot['executions']==before['executions'] and snapshot['artifacts']==before['artifacts']
+    assert store.delivery_ready(snapshot)
+    state=graph_view(snapshot)
+    state.update(sections={'abstract':'摘要正文。'*30,'evaluation':'证据局限。'*30},consistency=[])
     ctx=context_from_store(store,'offline-model');return SimpleNamespace(store=store,state=state,ctx=ctx)
 
 
@@ -92,7 +102,7 @@ def test_failure_is_not_success_and_only_matching_service_issue_closes(env):
     assert issues[own['id']]['status']=='resolved' and issues[own['id']]['review_resolution']['context_hash']==digest(context)
     assert issues[unrelated['id']]['status']=='confirmed' and issues[citation['id']]['status']=='confirmed'
     assert issues[scientific['id']]['status']=='suspected'
-    assert not env.store.delivery_ready(state)
+    assert env.store.delivery_ready(state), "Advisory findings remain recorded without a global publication gate"
 
 
 def test_only_completed_same_coverage_new_version_supersedes_old_service_failure(env):
@@ -143,21 +153,27 @@ def test_delivery_metadata_does_not_repeat_unchanged_review(env):
     invoke(env,review);assert calls==[1]
 
 
-def test_validate_keeps_scoped_gateway_failure_blocking(env,monkeypatch):
-    from ai_system.modules.writing import consistency, validation as validate
+def test_validate_does_not_force_optional_review_and_failed_explicit_check_is_retained(env,monkeypatch):
+    from ai_system.modules.writing import consistency,validation as validate
     from ai_system.graph.context import GraphContext
-    from ai_system.research.citations import audit_citations
+    from services.chat_services import review_tasks
     ctx=GraphContext.create(str(env.store.root),planner_llm=SimpleNamespace(model_name='offline-model'));ctx.research=env.store
-    ctx.registry=env.ctx.registry
-    async def failed(*args,**kwargs):raise TimeoutError()
-    async def no_citations(*args,**kwargs):return []
+    ctx.registry=env.ctx.registry;calls=[];before=env.store.snapshot()
+    async def failed(*args,**kwargs):calls.append(1);raise TimeoutError('controlled review timeout')
     monkeypatch.setattr(consistency,'call_structured',failed)
-    monkeypatch.setattr('ai_system.research.citations.audit_citations',no_citations)
     monkeypatch.setattr(validate,'check_sections',lambda *args:[])
     outcome=asyncio.run(validate.validate(env.state,SimpleNamespace(context=ctx)))
-    assert outcome['issues'] and outcome['research_blocked'] and not outcome['research_restart']
-    assert any(i.get('review_scope',{}).get('stage')=='sections' for i in outcome['issues'])
-    assert not env.store.delivery_ready(env.store.snapshot())
+    assert not outcome['issues'] and not outcome['research_blocked'] and not outcome['research_restart'] and not calls
+    with pytest.raises(RuntimeError,match='未完成'):
+        asyncio.run(review_tasks.execute(env.store,'sections',ctx.planner_llm))
+    assert calls==[1]
+    failure=next(r for r in review_tasks.records(env.store) if r['state']=='failed')
+    assert failure['error_code']=='TimeoutError' and failure['diagnostic']['reason']=='TimeoutError'
+    assert 'controlled review timeout' not in str(failure['diagnostic'])
+    after=env.store.snapshot()
+    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
+    assert any(i['category']=='service' and not i['blocking'] for i in research_findings(after))
+    assert env.store.delivery_ready(after)
 
 
 def snapshots(env):
@@ -229,12 +245,14 @@ def test_unknown_review_identifiers_are_failed_not_silently_dropped(env,monkeypa
         validate(answer)
         return answer
     monkeypatch.setattr(consistency,'call_structured',malformed)
-    if stage=='reconcile':
-        result=asyncio.run(consistency.reconcile(env.state,SimpleNamespace(context=ctx)))
-        assert result['research_blocked'] is True and result['research_restart'] is False
-    else:asyncio.run(consistency.audit_sections(env.state,ctx))
+    from services.chat_services import review_tasks
+    env.store.save_sections(env.state['sections'],[])
+    monkeypatch.setattr(review_tasks,'call_structured',malformed)
+    with pytest.raises(ValueError if stage=='reconcile' else RuntimeError,match='未知结论|未完成'):
+        asyncio.run(review_tasks.execute(env.store,stage,ctx.planner_llm))
     issues=research_findings(env.store.snapshot())
-    assert any(i['category']=='service' and i['status']=='confirmed' for i in issues)
+    assert any(i['category']=='service' and i['status']=='confirmed' and not i['blocking'] for i in issues)
+    assert env.store.delivery_ready(env.store.snapshot())
     with env.store._connect() as db:
         assert not db.execute("SELECT 1 FROM review_records WHERE state='completed'").fetchone()
         assert db.execute("SELECT 1 FROM review_records WHERE state='failed'").fetchone()
@@ -251,3 +269,18 @@ def test_shared_review_reply_still_runs_each_callers_contract_validation(env):
         with pytest.raises(ValueError,match='caller_contract_rejected'):await second
         assert calls==[1]
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('damage',['changed_result','missing_result','inactive_result','changed_report'])
+def test_legacy_checkpoint_rejects_changed_or_missing_results_and_changed_report(env,damage):
+    from ai_system.research.review_migration import validate_scientific_checkpoint
+    validate_scientific_checkpoint(env.store,env.state)
+    with env.store._transaction() as db:
+        state=env.store._read(db)
+        if damage=='changed_result':state['artifacts']['R1']['payload']['value']='999'
+        elif damage=='missing_result':del state['artifacts']['R1']
+        elif damage=='inactive_result':state['artifacts']['R1']['active']=False
+        else:state['artifacts'][state['experiments']['Q1']['report_ref']]['report']['summary']='changed interpretation'
+        env.store._save(db,state,'fixture_corruption',{})
+    with pytest.raises(ValueError,match='证据已变化|求解结果'):
+        validate_scientific_checkpoint(env.store,env.state)

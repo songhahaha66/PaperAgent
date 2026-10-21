@@ -158,15 +158,21 @@ def test_comment_trace_omits_store_and_model_objects(recorder, monkeypatch, tmp_
     assert 'store-secret-never-traced' not in str(runs)
 
 
-def test_controller_validation_failure_is_a_failed_trace(recorder,monkeypatch):
-    from ai_system.research.planner import Planner
-    from ai_system.graph import llm_utils
-    async def reject(*args,**kwargs):
-        raise ValueError('收敛时必须逐项核对全部原要求')
-    monkeypatch.setattr(llm_utils,'call_structured',reject)
+def test_controller_model_failure_is_a_failed_native_tool_agent_trace(recorder,tmp_path):
+    from ai_system.research.planner import Planner,decision_context
+    from ai_system.graph.context import GraphContext
+    from ai_system.research.store import ResearchStore
+    from research_tools_helpers import ResearchToolsModel
+    def fail(messages):raise RuntimeError('controlled research model failure')
+    model=ResearchToolsModel(respond=fail)
+    ctx=GraphContext.create(str(tmp_path),planner_llm=model);ctx.research=ResearchStore(tmp_path,'research-A')
+    ctx.research.initialize('Observe supplied material')
+    _,context=decision_context(ctx.research,ctx.research.snapshot())
     with research_tracing('project-A','research-A','research'):
-        with pytest.raises(ValueError,match='逐项核对'):
-            asyncio.run(Planner(object()).decide({}, {'evidence':[]}))
-    run=recorder.create_run.call_args.kwargs
-    assert run['name']=='research.decide' and run['inputs']=={'context':{'evidence':[]}}
-    assert '逐项核对' in recorder.update_run.call_args.kwargs['error']
+        with pytest.raises(RuntimeError,match='controlled research model failure'):
+            asyncio.run(Planner(model).run(ctx,context,'observation:trace'))
+    runs=[call.kwargs for call in recorder.create_run.call_args_list]
+    assert any(run['run_type']=='llm' for run in runs)
+    assert all(run['extra']['metadata']['work_id']=='project-A' for run in runs)
+    assert any('controlled research model failure' in str(call.kwargs.get('error','')) for call in recorder.update_run.call_args_list)
+    assert 'ResearchStore(' not in str(runs) and 'test-secret-never-traced' not in str(runs)

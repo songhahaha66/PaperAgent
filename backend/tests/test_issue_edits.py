@@ -25,6 +25,9 @@ def linked(paper,monkeypatch,request):
     if getattr(request,'param',False):
         from test_native_latex import render_native_paper
         store.publish_paper(render_native_paper(store,state),filename='paper.tex');(store.root/'paper.pdf').write_bytes(b'%PDF-old-fixture')
+    from services.chat_services import review_tasks
+    review_state=review_tasks.paper_state(store)
+    review_key='paper.tex' if getattr(request,'param',False) else 'evaluation'
     model=SimpleNamespace(model_name='offline-issue',calls=[],verdict='resolved',error=False)
     async def controlled(llm,schema,messages,validate=None,**kwargs):
         model.calls.append(schema.__name__)
@@ -36,10 +39,10 @@ def linked(paper,monkeypatch,request):
         if validate:validate(answer)
         return answer
     monkeypatch.setattr(issues,'call_structured',controlled);monkeypatch.setattr(edits,'call_structured',controlled)
-    ctx=edits.proposal_context(store,state,model);context=review_context(ctx,state,'sections','system','fixture',ClaimAudit,sections=state['sections'])
-    cache=ReviewCache(store);r=cache.start('sections',context);cache.complete(r,ClaimAudit(issues=[ClaimIssue(section='evaluation',problem='未经检验使用统计显著',quote=old)]).model_dump())
-    source=store.report_issues([IssueReport(task_id='Q1',category='writing',section='evaluation',message='未经检验使用统计显著')],'review-task:sections')[0]
-    issues.bind_findings(store,[source['id']],state['sections'])
+    ctx=edits.proposal_context(store,review_state,model);context=review_context(ctx,review_state,'sections','system','fixture',ClaimAudit,sections=review_state['sections'])
+    cache=ReviewCache(store);r=cache.start('sections',context);cache.complete(r,ClaimAudit(issues=[ClaimIssue(section=review_key,problem='未经检验使用统计显著',quote=old)]).model_dump())
+    source=store.report_issues([IssueReport(task_id='Q1',category='writing',section=review_key,message='未经检验使用统计显著')],'review-task:sections')[0]
+    issues.bind_findings(store,[source['id']],review_state['sections'],source_version=review_state.get('source_version'))
     return SimpleNamespace(store=store,state=state,old=old,new=new,model=model,source=source)
 
 def binding(v):
@@ -58,8 +61,9 @@ def test_issue_candidate_review_diff_and_apply_close_only_verified_source(linked
     applied=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));assert applied['status']=='applied'
     source=current(v);assert source['status']=='resolved' and source['review_resolution']['candidate_id']==p['id'] and source['review_resolution']['review_id']==p['review_id']
     assert v.new in (v.store.root/'paper.md').read_text() and v.old not in (v.store.root/'paper.md').read_text()
-    after=v.store.snapshot();assert all(before[k]==after[k] for k in ('experiments','attempts','evidence','claims','validations'))
-    assert next(i for i in research_findings(after) if i['id']==other['id'])['status']=='confirmed' and not v.store.delivery_ready(after)
+    after=v.store.snapshot();assert all(before[k]==after[k] for k in ('experiments','executions','artifacts','claims','validations'))
+    assert next(i for i in research_findings(after) if i['id']==other['id'])['status']=='confirmed'
+    assert v.store.delivery_ready(after), 'an unrelated advisory finding must not block an answered study'
     assert v.model.calls==(['FragmentReplacement','IssueAudit'] if automatic else ['IssueAudit'])
 
 @pytest.mark.parametrize('mode',['unresolved','uncertain','failure','reject'])
@@ -91,8 +95,14 @@ def test_absent_or_inexact_quote_is_chapter_only_and_science_routes_to_research(
     science=v.store.report_issues([IssueReport(task_id='Q1',category='model',message='实际数据与方法需要核验',evidence_refs=['R1'])],'local_review')[0]
     c=issues.context(v.store,science['id']);assert c['route']=='research' and c['evidence']
     with pytest.raises(ResearchConflict,match='科研问题'):issues.require_binding(v.store,{'id':science['id'],'version':c['version']})
-    with pytest.raises(ResearchConflict):propose(v)
-    assert not v.model.calls
+    before=v.store.snapshot()
+    p=propose(v)
+    assert not p['review_issues'] and p['source_issue']['id']==v.source['id']
+    asyncio.run(editor.decide(v.store,p['id'],True,'markdown'))
+    after=v.store.snapshot()
+    assert next(i for i in research_findings(after) if i['id']==science['id'])['status']==science['status']
+    assert current(v)['status']=='resolved' and v.model.calls==['IssueAudit']
+    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
 
 
 def test_incomplete_review_receipt_cannot_complete_or_resolve_source(linked):
@@ -138,7 +148,8 @@ def test_failed_pdf_export_keeps_issue_source_and_pdf(linked,monkeypatch):
     bound=selection(v.store,v.old,file='paper.tex')
     project.initialize(v.store)
     p=project.propose_change(v.store,None,None,[{**bound,'replacement':v.new}])
-    async def failed(*a):return SimpleNamespace(pdf_path=None,error='controlled export failed')
+    from ai_system.export.latex import LatexResult
+    async def failed(*a):return LatexResult('paper.tex',error='controlled export failed')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',failed)
     applied=asyncio.run(project.decide(v.store,p['id'],'apply'))
     assert applied['status']=='applied' and current(v)['status']=='confirmed'

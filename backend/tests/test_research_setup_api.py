@@ -54,8 +54,8 @@ def test_template_scaffold_is_not_a_published_research_artifact(env,client):
 
 
 @pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),('GET','research-settings',None),
-    ('GET','research/issues/unknown/execution-recovery',None),
-    ('POST','research/issues/unknown/execution-recovery',{'proof_hash':'0'*64})])
+    ('GET','paper/project',None),
+    ('POST','paper/executions/unknown/resume',{'research_id':'unknown'})])
 def test_unified_routes_keep_work_owner_boundary(client,method,path,body):
     assert client.request(method,'/api/workspace/C/'+path,json=body).status_code==403
 

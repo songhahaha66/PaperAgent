@@ -92,13 +92,21 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
     output = asyncio.run(agent.run(TASK))
 
     assert not (ws / "paper.md").exists() and (ws / "paper.tex").exists()
-    assert (ws / ".system/paper_raw.tex").exists()
+    assert not (ws / ".system/paper_raw.tex").exists()
+    from services.chat_services import paper_project
+    from ai_system.research.store import ResearchStore
+    store=ResearchStore(ws,agent._load_thread())
+    project=paper_project.describe(store)
+    assert project["main"]=="paper.tex" and project["compile"]["state"]=="current"
+    assert (ws/paper_project.VERSIONS/project["version"]/"paper.tex").read_bytes()==(ws/"paper.tex").read_bytes()
+    assert project["changes"] and all(c["status"]=="applied" for c in project["changes"])
     assert not (ws / ".system/paper_raw.md").exists()
     assert (ws / "paper.pdf").read_bytes().startswith(b"%PDF")
     assert "paper.pdf" in output
     export_phases = [c["status"] for t, c in events if t == "paper_phase" and c["stage"] == "export"]
-    # 一开始就告诉前端有排版导出这一步，最后完成
-    assert export_phases[0] == "pending" and export_phases[-1] == "completed"
+    # Events reflect actual export execution, without a synthetic pending phase.
+    assert export_phases[0] == "in_progress" and export_phases[-1] == "completed"
+    assert "pending" not in export_phases
     assert any(t == "paper_export" and "paper.pdf" in c for t, c in events)
     from services.chat_services.research_session import research_snapshot
     snapshot = research_snapshot(ws, "work", "completed")
@@ -208,11 +216,15 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     paper = (ws / "paper.md").read_text(encoding="utf-8")
     headings = [line for line in paper.splitlines() if line.startswith("## ")]
     assert headings == ["## 摘要", "## 1 研究背景", "## 2 模型假设", "## 3 模型建立与求解", "## 4 结论与建议", "## 参考文献"]
-    assert "### Q1" in paper
+    assert "用电量预测" in paper and "政策评估" in paper
     texts = [p.text for p in Document(str(ws / "paper.docx")).paragraphs]
     assert "4 结论与建议" in texts
     from services.chat_services.research_session import research_snapshot
     snapshot = research_snapshot(ws, "work", "completed")
+    from ai_system.research.store import ResearchStore
+    saved=ResearchStore(ws,snapshot.research_id).snapshot()
+    assert [item['title'] for item in saved['publication']['outline']]==[
+        '摘要','1 研究背景','2 模型假设','3 模型建立与求解','4 结论与建议','参考文献']
     assert snapshot.delivery_stages["export"]["status"] == "completed"
     assert "paper.docx" in snapshot.artifacts
 

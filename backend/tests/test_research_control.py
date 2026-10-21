@@ -74,9 +74,14 @@ def test_file_correction_during_execution_rejects_result(tmp_path):
     (data / "input.csv").write_text("old")
     order = store.claim("Q1")
     (data / "input.csv").write_text("corrected")
-    assert not finish(store, "Q1", order=order)[1]["published"]
-    assert store.snapshot()["experiments"]["Q1"]["execution_status"] == "pending"
-    assert store.snapshot()["experiments"]["Q1"]["revision"] == 2
+    result,receipt=finish(store, "Q1", order=order)
+    assert not receipt['published']
+    state=store.snapshot();task=state['experiments']['Q1'];attempt=state['executions'][order.attempt_id]
+    assert task['execution_status']==attempt['execution_status']=='succeeded'
+    assert task['validity']==attempt['validity']=='stale' and task['revision']==2
+    assert attempt['result']['results']==result.results
+    assert not store.registry_payload()['results'] and not store.delivery_ready(state)
+    with pytest.raises(ResearchConflict,match='显式重试'):store.claim('Q1')
 
 
 
@@ -89,19 +94,32 @@ def test_recovery_uses_commits_and_reclaims_interrupted_attempt(tmp_path):
     recovered = ResearchStore(tmp_path, "research")
     recovered.recover()
     assert recovered.registry_payload() == before
+    from ai_system.research.operations import continue_experiment
+    from types import SimpleNamespace
+    continue_experiment(SimpleNamespace(research=recovered),{'experiment_id':'Q2','information_need':'显式恢复中断的执行，不重跑已接受的上游结果'})
     replacement = recovered.claim("Q2")
     assert replacement.attempt_id != abandoned.attempt_id
     assert replacement.revision == abandoned.revision
-    assert not finish(recovered, "Q2", order=abandoned)[1]["published"]
+    replacement_task=recovered.snapshot()['experiments']['Q2']
+    late,receipt=finish(recovered, "Q2", order=abandoned)
+    assert not receipt['published']
+    assert recovered.snapshot()['experiments']['Q2']==replacement_task
+    assert replacement_task['execution_status']=='running' and replacement_task['execution_id']==replacement.attempt_id
     assert finish(recovered, "Q2", order=replacement)[1]["published"]
+    completed=recovered.snapshot()
+    assert recovered.commit(late)==receipt
+    assert recovered.snapshot()==completed
 
 
 def test_retry_budget_cannot_be_bypassed_by_recovery(tmp_path):
     store = make_store(tmp_path)
-    for _ in range(3):
+    from research_tools_helpers import continue_experiment
+    for index in range(3):
+        if index:continue_experiment(store,"Q1")
         finish(store, "Q1", acceptance="rejected")
         store.recover()
     assert "Q1" not in ready_tasks(store.snapshot())
+    continue_experiment(store,"Q1")
     with pytest.raises(ResearchConflict, match="预算"):
         store.claim("Q1")
 
@@ -114,8 +132,24 @@ def test_data_correction_after_commit_invalidates_all_coarse_file_consumers(tmp_
     finish(store, "Q1")
     finish(store, "Q2")
     (data / "input.csv").write_text("corrected")
-    assert store.refresh_inputs()["experiments"]["Q1"]["acceptance"] == "pending"
-    assert not store.registry_payload()["results"]
+    before=store.snapshot()
+    after=store.refresh_inputs()
+    assert all(after['experiments'][key]['validity']=='stale' and after['experiments'][key]['acceptance']=='accepted' for key in ('Q1','Q2'))
+    assert after['artifacts']==before['artifacts']
+    for aid,execution in before['executions'].items():
+        assert after['executions'][aid]['result']==execution['result']
+        assert after['executions'][aid]['input_refs']==execution['input_refs']
+    assert not store.registry_payload()['results']
+    from research_tools_helpers import add_experiment,continue_experiment
+    with pytest.raises(ValueError,match='失效'):continue_experiment(store,'Q1')
+    eid=add_experiment(store,question_id=after['experiments']['Q1']['question_id'],
+        method='读取已更正数据，重新计算本问题结果',conditions='已更正的 input.csv 版本',evaluation='原问题下保留实际输出')
+    order=store.claim(eid)
+    assert eid not in before['experiments'] and order.input_refs['data/input.csv']==store.file_inputs()['data/input.csv']
+    assert order.input_refs['data/input.csv']!=next(iter(before['executions'].values()))['input_refs']['data/input.csv']
+    finish(store,eid,order=order)
+    assert {r['subproblem'] for r in store.registry_payload()['results']}=={eid}
+    assert store.snapshot()['artifacts'].keys() >= before['artifacts'].keys()
 
 
 def test_manual_edit_preserves_both_paper_versions(tmp_path):
@@ -147,7 +181,7 @@ def test_snapshot_is_read_only_and_uses_authoritative_database(tmp_path):
     (thread.parent / "results.json").write_text('{broken projection')
     before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
     snapshot = research_snapshot(tmp_path, "work", "paused")
-    assert len(snapshot.results) == 1 and snapshot.tasks
+    assert len(snapshot.results) == 1 and snapshot.experiments
     assert before == {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
 
@@ -172,10 +206,16 @@ def test_duplicate_revision_command_reuses_original_objective(tmp_path):
     command = dict(command_id="human", base_revision=1, change="use corrected assumption", scope=["Q1"])
     requirements = [Requirement(id="RQ4", statement=command["change"], source_quote=command["change"], kind="goal", task_ids=["Q1"])]
     patch = propose_revision(store.snapshot(), **command, requirements=requirements)
+    before=store.snapshot()
     first = store.apply_revision_command(**command, patch=patch)
+    revised=store.snapshot()
     retried = propose_revision(store.snapshot(), **command, requirements=requirements)
     assert store.apply_revision_command(**command, patch=retried) == first
-    assert store.snapshot()["experiments"]["Q1"]["objective"].count("补充要求") == 1
+    assert store.snapshot()==revised
+    assert revised['experiments']==before['experiments']
+    question=revised['questions'][revised['experiments']['Q1']['question_id']]
+    assert question['question'].count(command['change'])==1 and question['version']==2
+    assert len(question['history'])==1
 
 
 
@@ -210,3 +250,29 @@ def test_section_history_retains_previous_text_and_context(tmp_path):
     assert entries[0]["versions"]["solve:Q1"]["text"] == "original"
     assert entries[0]["versions"]["solve:Q1"]["context_hash"] == "context-one"
     assert entries[1]["versions"]["solve:Q1"]["revision"] == 2
+
+
+def test_writer_outline_is_committed_and_reused_after_resume(tmp_path,monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from ai_system.graph.context import GraphContext
+    from ai_system.research import loop
+    from ai_system.research.control import graph_view
+    from ai_system.research.operations import deliver
+    from test_native_latex import accepted_store
+    store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
+    before=store.snapshot()['executions']
+    outline=[{'key':'abstract','title':'摘要'},{'key':'custom:recommendations','title':'结论与建议'}]
+    deliver(ctx,{'title':'研究交付','reason':'当前问题已有带依据的答案'})
+    async def write(_ctx,name,**inputs):
+        assert name=='writing.write'
+        return {'sections':{'abstract':'已有证据与局限。'},'outline':outline,'section_contexts':{}}
+    monkeypatch.setattr(loop,'invoke',write)
+    action=store.snapshot()['action']
+    asyncio.run(loop.act({'action_id':action['id']},SimpleNamespace(context=ctx)))
+    assert store.snapshot()['publication']['outline']==outline
+    assert store.snapshot()['executions']==before
+    loop.resume(store)
+    assert not asyncio.run(loop.prepare_action(ctx))
+    assert store.snapshot()['action']['capability']=='writing.validate'
+    assert graph_view(store.snapshot())['outline']==outline

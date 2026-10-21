@@ -41,8 +41,14 @@ def validate_scientific_checkpoint(store,values):
             if ExperimentStore(store).policy()['version']!=exploration['policy_version']:raise ValueError('旧审查之后比较配置已变化')
         attempt=snapshot['executions'][task['execution_id']]
         if store._inputs(snapshot,task,store.file_inputs())!=attempt['input_refs'] or digest(protocol(snapshot,key))!=attempt['protocol_hash']:raise ValueError('检查点对应输入/冻结验收已变化')
-        original={r['id']:r for r in attempt['result']['results']}
-        if any(original.get(rid)!=entry['payload'] for rid,entry in snapshot['artifacts'].items() if entry['active'] and entry['producer_attempt']==task['execution_id']):raise ValueError('检查点证据已变化')
+        from .domain import execution_lineage,current_results
+        receipts={}
+        for aid in reversed(execution_lineage(snapshot,task['execution_id'])):
+            for result in snapshot['executions'][aid]['result']['results']:
+                receipts.setdefault(result['id'],{'type':'result','active':True,'producer_attempt':aid,'payload':result})
+        original={r['id']:r for r in current_results({**snapshot,'artifacts':receipts},{key})}
+        actual={r['id']:r for r in current_results(snapshot,{key})}
+        if original!=actual:raise ValueError('检查点证据已变化')
         originals={c['id']:c for c in attempt['result']['claims']}
         if any(originals.get(cid)!=entry['payload'] for cid,entry in snapshot['claims'].items() if entry['producer_attempt']==task['execution_id']):raise ValueError('检查点结论已变化')
     return snapshot

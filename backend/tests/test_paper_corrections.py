@@ -25,7 +25,7 @@ def verified_paper(paper,monkeypatch):
     store,state=paper
     candidates=[{'name':'OLS'},{'name':'Ridge'}]
     with store._transaction() as db:
-        snapshot=store._read(db);snapshot['experiments']['Q1']['design']={'candidates':candidates}
+        snapshot=store._read(db);task=snapshot['experiments']['Q1'];snapshot['executions'][task['execution_id']]['result']['design']={'candidates':candidates}
         store._save(db,snapshot,'fixture-methods',{})
     snapshot=store.snapshot();task=snapshot['experiments']['Q1'];comparison=ExperimentStore(store);comparison.set_policy(True)
     branches=[];runs={}
@@ -70,7 +70,7 @@ def test_reviewed_multi_section_candidate_and_atomic_apply_leave_experiments_unc
     assert not p['review_issues'] and p['review_id'] and v.store.snapshot()==before
     result=asyncio.run(editor.decide(v.store,p['id'],True,'markdown'));after=v.store.snapshot()
     assert result['status']=='applied' and set(result['applied_revisions'])=={'solve:Q1','abstract'}
-    for key in ['experiments','attempts','evidence','claims','validations']:assert before[key]==after[key]
+    for key in ['experiments','executions','artifacts','claims','validations']:assert before[key]==after[key]
     assert v.comparison.read('Q1',1)==v.record
     assert after['sections']['evaluation']==before['sections']['evaluation']
     assert v.block in after['sections']['solve:Q1']['text']
@@ -140,6 +140,7 @@ def test_evidence_correction_api_preserves_explicit_multi_section_scope(verified
     from database.database import get_db
     v=verified_paper;calls=[]
     monkeypatch.setattr(workspace,'_paper_store',lambda *args,**kwargs:v.store)
+    monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(work_id='fixture',created_by=7,output_mode='markdown'))
     from ai_system.config import environment
     monkeypatch.setattr(environment,'setup_environment_from_db',lambda _:SimpleNamespace(config_manager=SimpleNamespace(get_model_config=lambda *args:object())))
     from ai_system.core_handlers import llm_providers

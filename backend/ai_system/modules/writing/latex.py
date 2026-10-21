@@ -63,7 +63,9 @@ async def _update(state, runtime, *, repairing=False):
     await ctx.set_stage('validate' if repairing else 'write', 'in_progress', '修改当前 LaTeX 源码')
     from ai_system.research.store import digest
     signature = digest({'source':state['source_version'], 'issues':state.get('issues') or []})
-    if repairing and (store.snapshot().get('publication') or {}).get('repair_inputs', []).count(signature) >= 3:
+    publication=store.snapshot().get('publication') or {}
+    history=publication.get('repair_inputs',[])
+    if repairing and history[publication.get('repair_resume_offset',0):].count(signature) >= 3:
         return {'research_blocked':True, 'message':'论文修订未完成：同一版本的意见反复修复未成功，源码与修改历史已保留。',
                 'log':['同一源码与意见未能修复，源码与修改历史已保留']}
 
