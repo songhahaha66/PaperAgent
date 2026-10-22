@@ -212,7 +212,7 @@ function toggle() {
 .status-dot {
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--pa-radius-circle);
   background: currentColor;
   flex-shrink: 0;
 }

@@ -320,7 +320,7 @@ const formatDateTime = (datetime: string) => {
   max-width: 85%;
   box-sizing: border-box;
   padding: 12px 16px;
-  border-radius: 18px;
+  border-radius: var(--pa-radius-message);
   background: var(--pa-message-user-bg);
   color: var(--pa-message-user-ink);
 }
