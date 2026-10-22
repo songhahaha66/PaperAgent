@@ -368,7 +368,7 @@ class PaperGraphAgent:
         for sp in analysis.get("subproblems") or []:
             status = (solutions.get(sp["id"]) or {}).get("status", "未求解")
             count = len(ctx.registry.for_subproblem(sp["id"]))
-            lines.append(f"- {sp['id']} {sp['title']}：{'完成' if status == 'completed' else status}，登记结果 {count} 项")
+            lines.append(f"- {sp['id']} {sp['title']}：{'完成' if status == 'completed' else status}，计算结果已保存")
         lines.append("")
         lines.append(f"校验剩余问题 {len(issues)} 个。" if issues else "引用有效性与文稿结构校验已完成。")
         return "\n".join(lines)

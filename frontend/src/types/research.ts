@@ -233,6 +233,7 @@ export interface ResearchSnapshot {
   research_revision?: number
   commit_seq?: number
   outcome?: string | null
+  delivery_summary?: { state: string; stage: string | null; label: string }
   delivery_stages?: Record<string, { status: string; note: string }>
   delivery?: {
     ready: boolean

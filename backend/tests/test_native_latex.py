@@ -128,6 +128,25 @@ def write_native_source(ctx,monkeypatch,source):
     return prompts
 
 
+def test_resume_of_already_repaired_source_does_not_call_writer(tmp_path, monkeypatch):
+    if not shutil.which('xelatex'): pytest.skip('requires xelatex')
+    from ai_system.modules.writing import latex
+    from ai_system.modules.registry import invoke
+    from services.chat_services import paper_project as project
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None, output_mode='latex')
+    ctx.research = accepted_store(tmp_path)
+    project.initialize(ctx.research)
+    (tmp_path/'paper.tex').write_text(native_document('已修复报告', '已有结果。', r'\section{结果}保留已完成的计算。'))
+    async def unexpected(*args, **kwargs): raise AssertionError('valid current source must not be rewritten')
+    monkeypatch.setattr(latex, 'call_structured', unexpected)
+    async def run():
+        result = await project.compile_project(ctx.research)
+        assert result['compile']['success']
+        patch = await invoke(ctx, 'writing.repair')
+        assert patch['repair_input'] and not patch.get('research_blocked')
+    asyncio.run(run())
+
+
 def test_native_source_writer_requests_latex_and_compiler_reports_undefined_labels(tmp_path,monkeypatch):
     from ai_system.research.control import refresh_registry
     ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode='latex');ctx.research=accepted_store(tmp_path)

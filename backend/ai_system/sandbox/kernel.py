@@ -37,6 +37,8 @@ class CellResult:
     figures: List[str] = field(default_factory=list)
     timed_out: bool = False
     files: List[str] = field(default_factory=list)
+    delivery_error: Optional[str] = None
+    failure_kind: Optional[str] = None
 
     def to_observation(self) -> str:
         """给模型看的执行结果"""
@@ -47,6 +49,8 @@ class CellResult:
             parts.append("已保存图片: " + ", ".join(self.figures))
         if self.files:
             parts.append("已取回文件: " + ", ".join(self.files))
+        if self.delivery_error:
+            parts.append("计算已结束，文件交付未完成：" + self.delivery_error + "；请调用 retry_outputs，不要重算。")
         if self.error:
             parts.append(self.error.rstrip())
         if self.timed_out:
@@ -99,17 +103,34 @@ class PythonKernel:
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)
             artifacts_dir = f"runs/{run_id}/artifacts"
+            from .artifacts import output_hashes, capture_local_outputs
+            before = output_hashes(self.fs)
+            self.fs.save_run_stdout(run_id, '')
+            self.fs.save_run_stderr(run_id, '')
             proc = await self._ensure_started()
+            sequence = 0
+            async def event(kind, **payload):
+                nonlocal sequence
+                sequence += 1
+                if on_event:
+                    await on_event(dict(type=kind, run_id=run_id, seq=sequence, **payload))
+            await event('running')
 
             request = {"id": uuid.uuid4().hex, "code": code, "artifacts_dir": artifacts_dir}
             proc.stdin.write((json.dumps(request, ensure_ascii=False) + "\n").encode("utf-8"))
             await proc.stdin.drain()
 
             try:
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=self.timeout)
-                if not line:
-                    raise RuntimeError("内核进程意外退出")
-                response = json.loads(line)
+                async def receive():
+                    while True:
+                        line = await proc.stdout.readline()
+                        if not line: raise RuntimeError('内核进程意外退出')
+                        message = json.loads(line)
+                        if message.get('type') != 'output': return message
+                        with (self.fs.run_dir(run_id) / (message['channel'] + '.log')).open('a') as stream:
+                            stream.write(message['text'])
+                        await event('output', channel=message['channel'], text=message['text'])
+                response = await asyncio.wait_for(receive(), timeout=self.timeout)
                 result = CellResult(
                     ok=response["ok"],
                     stdout=response.get("stdout") or "",
@@ -117,6 +138,11 @@ class PythonKernel:
                     run_id=run_id,
                     figures=response.get("figures") or [],
                 )
+            except asyncio.CancelledError:
+                await self._kill()
+                self.fs.finish_run(run_id, 'cancelled')
+                await event('finished', status='cancelled')
+                raise
             except asyncio.TimeoutError:
                 await self._kill()
                 result = CellResult(
@@ -126,11 +152,17 @@ class PythonKernel:
                 await self._kill()
                 result = CellResult(ok=False, stdout="", error=f"内核异常: {exc}", run_id=run_id)
 
-            log = result.stdout + (f"\n{result.error}" if result.error else "")
-            self.fs.save_run_stdout(run_id, log)
+            log = self.fs.read_text(f'runs/{run_id}/stdout.log')
+            stderr = self.fs.read_text(f'runs/{run_id}/stderr.log')
+            if not result.stdout: result.stdout = (log + stderr)[-20000:]
+            if result.error:
+                self.fs.save_run_stdout(run_id, log + '\n' + result.error)
+            result.files = capture_local_outputs(self.fs, run_id, before)
             for figure in result.figures:
                 self.fs.register_run_artifact(run_id, Path(figure).name)
-            self.fs.finish_run(run_id, "success" if result.ok else "error")
+            status = 'success' if result.ok else 'timeout' if result.timed_out else 'error'
+            self.fs.finish_run(run_id, status)
+            await event('finished', status=status, files=result.files, error=result.error)
             return result
 
     async def _kill(self):
@@ -144,6 +176,9 @@ class PythonKernel:
             self._proc.stdin.close()
             try:
                 await asyncio.wait_for(self._proc.wait(), timeout=5)
+            except asyncio.CancelledError:
+                await self._kill()
+                raise
             except asyncio.TimeoutError:
                 await self._kill()
         self._proc = None

@@ -75,18 +75,29 @@ def _truncate(text: str) -> str:
     return f"{text[:half]}\n...[输出过长，省略 {len(text) - MAX_OUTPUT_CHARS} 字符]...\n{text[-half:]}"
 
 
+class _Stream(io.StringIO):
+    def __init__(self, identity, channel):
+        super().__init__()
+        self.identity, self.channel = identity, channel
+    def write(self, text):
+        _proto.write(json.dumps({'id': self.identity, 'type': 'output', 'channel': self.channel, 'text': text}, ensure_ascii=False) + '\n')
+        return super().write(text)
+
+
 def main():
     _setup_matplotlib()
-    namespace = {"__name__": "__main__"}
+    from runtime_helpers import emit_result
+    namespace = {"__name__": "__main__", "emit_result": emit_result}
     figure_count = 0
 
     for line in sys.stdin:
         if not line.strip():
             continue
         request = json.loads(line)
-        buffer = io.StringIO()
+        buffer = _Stream(request.get("id"), "stdout")
+        errors = _Stream(request.get("id"), "stderr")
         error = None
-        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(errors):
             try:
                 exec(compile(request["code"], "<cell>", "exec"), namespace)
             except BaseException as exc:
@@ -106,7 +117,7 @@ def main():
         _proto.write(json.dumps({
             "id": request.get("id"),
             "ok": error is None,
-            "stdout": _truncate(buffer.getvalue()),
+            "stdout": _truncate(buffer.getvalue() + errors.getvalue()),
             "error": _truncate(error) if error else None,
             "figures": figures,
         }, ensure_ascii=False) + "\n")

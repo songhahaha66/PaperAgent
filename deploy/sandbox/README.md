@@ -5,7 +5,7 @@ keeps the existing development subprocess. `opensandbox` uses an authenticated
 remote service; it never falls back to local execution on failure.
 
 `contracts.SandboxSession` is the extension point for another platform: implement
-start/upload/delete/execute/files/download/interrupt/close and add the provider to
+start/upload/delete/execute/files/download/interrupt/close/release and add the provider to
 the factory. `RemoteKernel` owns run IDs, logs, transfer limits, immutable artifact
 copies and terminal statuses. SDK classes never enter research tools or business state.
 `ExecutionKernel` is the shared interface used by research code.
@@ -84,7 +84,7 @@ destroying the sandbox. Unit tests use a fake provider and never call a remote s
 
 ## Data and lifecycle contract
 
-- Only data/, attachment/, code/, outputs/ and inherited run artifacts are uploaded.
+- Inputs are scoped by experiment. Generated files in the current directory are also collected, including directly written CSV files. data/, attachment/, code/, outputs/ and inherited run artifacts are uploaded.
   Hidden backend state, manifests and credentials remain local. Local file changes
   are synchronized before each cell. Files are transferred, not host-mounted.
 - Output logs are appended locally before UI updates. UI previews keep the last
@@ -94,13 +94,14 @@ destroying the sandbox. Unit tests use a fake provider and never call a remote s
   Each run keeps an immutable copy. Default transfer limits: 64 MiB/file,
   256 MiB per synchronization, 1,000 files. These are **transfer limits**, not remote
   disk quotas; host disk needs operational monitoring and cleanup.
-- Files are published under outputs/research/<attempt>/<run>/ even when later model
+- Files are published under outputs/research/<run>/ even when later model
   interpretation fails. Availability does not mean scientific validation. A source
   run's success/error status remains in the run manifest.
 - Timeout/cancel interrupts execution, attempts a bounded partial file retrieval,
   then destroys the sandbox. Lost connections never cause automatic code replay or
   local fallback. When deletion cannot be confirmed, the server TTL is the backstop.
   Outputs not yet downloaded can be lost on remote termination or TTL expiry.
+- A healthy work-scoped container is retained for five idle minutes; separate experiments use separate Python contexts and directories. Concurrent experiments use separate containers when the retained container is busy.
 - Containers have a fixed lifetime (default 30 minutes); interpreter memory is not
   restored after restart. Saved local artifacts can be used by a new attempt.
 - Platform-wide admission control and stronger VM isolation are not implemented
@@ -114,9 +115,29 @@ connectivity returns. The script must remain running while using the remote back
 
 The ASUS integration check covers stateful execution, live output, CSV/PNG retrieval,
 input synchronization, network denial, timeout/cancel cleanup and local persistence.
-The browser research trial also confirmed live log previews and readable CSV/PNG
-files. It exposed fixes for Debian's Noto CJK font names, nested figure artifact paths
-and published figure paths inherited by continued attempts; regression tests cover
-these cases. That trial exhausted its research attempt budget before final report
-delivery. A complete model-driven report run after the fixes has **not** been verified;
-passing the sandbox checks does not establish end-to-end research completion.
+Earlier trials exposed fixes for Debian's Noto CJK font names, nested figure paths,
+and figure paths inherited by continued attempts; regression tests cover these cases.
+
+On 2026-10-22, work `087060e5` completed three real model-directed code cells on ASUS.
+Each cell emitted timeline output before completion. The root-level CSV and Chinese
+chart were published, and the CSV matched independent sample statistics. Exported
+code ran in a fresh Python subprocess in the original sandbox image and reproduced
+the CSV byte-for-byte; a newer local Matplotlib rejected its older `boxplot(labels=)`
+API, so cross-version execution is not claimed.
+
+The initial automatic report failed its bounded LaTeX repairs (document closure,
+filename escaping, and figure references). The report was reviewed and edited using
+the versioned source-change mechanism, compiled to two pages, and visually checked.
+Normal research resume then completed validation/export without another experiment
+or model call. This verifies recovery and delivery, **not a clean fully automatic
+writing pass**. Model writing calls took up to roughly six minutes. The current
+browser inspection was denied by its security policy, so browser interaction/visual
+acceptance remains unverified; frontend tests/build and backend projections passed.
+
+
+File delivery errors retain the successful computation status. `retry_outputs` transfers
+the original immutable version without running code. A pending transfer blocks new
+cells until resolved; if its remote version expires, the missing output is reported
+explicitly. The local manifest retains file-transfer diagnostics separately from
+code errors. Work-container reuse is a live-process optimization, not a checkpoint
+of Python memory. No cross-user or cross-work sandbox sharing is performed.

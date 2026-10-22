@@ -50,13 +50,18 @@ async def _update(state, runtime, *, repairing=False):
               '结果 ID（例如 R25）只标识实验记录，不是章节、图表编号。读取下方结果的 value、unit、meaning 和实验 conditions/evaluation，'
               '把实际数值、单位和适用条件写入正文；使用的结果 ID 填入 result_refs，由系统保存来源关联。'
               '禁止用 \\ref{R25} 或 \\ref{R:R25} 取数，也不要发明对应标签。正常图表、章节的 \\ref/\\eqref 要保留。'
-              '图使用给定的 {{F:Fn}}，文献使用已核实 {{C:Cn}}；系统在写入前解析。'
+              '插图时把给定的 {{F:Fn}} 独占一行，系统生成图片、图题和标签；行内同一引用只生成图号。不要手工插入图片后再用另一个标签引用它。'
+              '文献使用已核实 {{C:Cn}}；系统在写入前解析。'
+              '数值按数据精度和用途合理取舍，通常保留2至4位有效数字；完整精度保留在结果文件，不把长浮点数直接堆入正文。'
+              '区分用户给定样本与实测数据，未提供采集过程时不得声称已实测。过程日志、等待秒数等验收细节不写入学术正文。'
               '不得编造结果、来源、引用键或实验。没有需要修改时返回空 edits。\n'
               '问题判断为空时如实说明尚无判断；实验结果可用不等于研究问题已回答。'
               '保留问题答案的局限和重要未知，主要请求已有可靠答案即可交付，不要求软意见归零。'
               '可讨论历史负结果和撤回观点，但须明确未支持/已撤回及理由，不能当当前事实。'
               '所需结果缺失或含义、适用范围不能明确时，返回research_gap说明具体结果和缺项且edits为空，等待补充，不得猜值。'
-              '文字排版和编译问题自行处理；缺文档结尾可能意味着正文截断，须核对全文补足缺失内容，不得只补结束标记。\n'
+              '文字排版和编译问题自行处理；缺文档结尾可能意味着正文截断，须核对全文补足缺失内容，不得只补结束标记。'
+              '替换文件或最后一个片段时保留完整文档结束标记；文件名中的下划线用\\_或\\detokenize保护。'
+              '首次成稿应填充或删除空白占位；不能留下只有标题、没有内容的摘要页。\n'
               '# 原要求\n'+state.get('task', '')+'\n# 用户模板\n'+(ctx.template_requirements or '')+
               '\n# 研究大纲（可按表达需要调整）\n'+json.dumps(state.get('outline', []), ensure_ascii=False)+
               '\n# 研究问题、已有判断与未解决部分\n'+json.dumps(research_questions, ensure_ascii=False)+
@@ -64,6 +69,8 @@ async def _update(state, runtime, *, repairing=False):
               '\n# 当前项目源码片段（唯一当前正文）\n'+json.dumps(project.source_prompt(state), ensure_ascii=False))
     from ai_system.research.literature import literature_context
     prompt += literature_context(store.root, state.get('task','')+'\n'+evidence)
+    if ctx.compact_paper:
+        prompt += '\n# 篇幅要求\n用户选择简短报告：全文约600至1000字，覆盖问题、假设与方法、主要结果和局限，表格可合并重复指标。沿用已有结果，不添加实验；无需单独摘要封面，避免空白页和重复标题。'
     if repairing:
         prompt += '\n# 本版本待修复意见\n'+json.dumps(state.get('issues') or [], ensure_ascii=False)
         compilation=project.meta(store.root).get('compile',{})
@@ -72,6 +79,12 @@ async def _update(state, runtime, *, repairing=False):
     await ctx.set_stage('validate' if repairing else 'write', 'in_progress', '修改当前 LaTeX 源码')
     from ai_system.research.store import digest
     signature = digest({'source':state['source_version'], 'issues':state.get('issues') or []})
+    compilation = project.meta(store.root).get('compile', {})
+    if repairing and not state.get('issues') and compilation.get('success') and compilation.get('source_version') == state['source_version']:
+        # A source edit may already have repaired the failure while the research
+        # was paused. Resume validation instead of asking a model to rewrite it.
+        return {'repair_input': signature, 'repair_round': state.get('repair_round', 0),
+                'sections': {}, 'log': ['当前源码已编译通过，无待修复意见，继续交付检查']}
     publication=store.snapshot().get('publication') or {}
     history=publication.get('repair_inputs',[])
     if repairing and len(history[publication.get('repair_resume_offset',0):]) >= 2:

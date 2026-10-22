@@ -9,6 +9,7 @@ from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 PROMPT = """你是研究层Agent，沿研究→用户问题→实验→行动组织探索。
 使用普通工具工作，不输出总计划JSON。先用research_update_question建立用户要回答的问题，取得真实question_id，再安排实验。问题不是清洗或检索手段；覆盖原始请求的不同实质目标，可逐步细化、拆合并复用已有实验。
 同一实验执行层会连续完成必要行动；新增方法或条件比较才安排新实验，固定方法补充计算或修复执行故障用research_continue_experiment。已有结果直接读取和复用，保留其来源、条件和版本。修过度解释用research_revise_interpretation，不重算正确统计。
+每次新增实验明确它将减少哪项影响答案的不确定性；已满足请求时及时交付。预算耗尽或同类故障重复时保留已有成果，更新为部分回答并说明缺口后交付，不能换实验编号绕过限制。文件保存、报告排版失败不需要重算实验。
 每个工具独立提交。建立问题后尚未安排实验是正常状态。用工具实际返回的ID，禁止猜编号、沿用失败请求的假编号或混用其它工具字段。参数错误会返回具体观察，直接在同一上下文纠正；不能把格式错误当研究阻碍。版本冲突时重新读取当前记录再操作。
 同名或同值不代表同一对象或范围。结果的meaning、实验conditions、输入版本与行关系一并核对；未知口径如实说明。新实验需要沿用或比较已有结果时，用artifact_refs建立实际依赖，勿先独立重算再猜旧结果为何不同。
 按需调用语义核查，意见只供核实、采纳、驳回或保留局限。程序故障不证明方法无效。旧观点、负结果可以讨论，但不可混为当前事实。
@@ -58,12 +59,14 @@ def decision_context(store, snapshot):
         'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
         'last_action':{k:last.get(k) for k in ('id','capability','status','question_id','target','reason','message','error_type')},'clarifications':snapshot.get('clarifications',[]),
         'skill_policy':store.skill_preferences()['policy']}
+    context['execution_budget'] = {'remaining': max(0, snapshot['max_total_attempts'] - len(snapshot['executions'])),
+        'experiments': {key: max(0, snapshot['max_attempts'] - sum(a['task_id']==key and a['revision']==e['revision'] for a in snapshot['executions'].values())) for key,e in snapshot['experiments'].items()}}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
     from ai_system.modules.experiments.store import ExperimentStore
     context['comparisons']=[row for row in ExperimentStore(store).accepted_summaries(snapshot) if row.get('task_id') in scope]
     context['recent_operations']=[{k:a.get(k) for k in ('capability','question_id','experiment_id','status','message','error_type')} for a in snapshot.get('activity',[]) if a.get('capability')!='research.observe' and (a.get('question_id') in {None,selected['id'] if selected else None} or a.get('experiment_id') in scope)][-12:]
     context['literature_mode'] = LiteratureStore(store.root).policy()
-    if any(name.lower().endswith('.csv') for name in files):
+    if any((e.get('experiment') or {}).get('csv') for e in snapshot['experiments'].values()):
         from ai_system.modules.experiments.store import SupervisedSpec
         context['csv_comparison_protocol'] = SupervisedSpec.model_json_schema()
     return 'action:' + digest(context), context

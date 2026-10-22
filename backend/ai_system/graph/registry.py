@@ -1,7 +1,7 @@
 """
 结果登记表：论文里出现的每个数字和图都必须先在这里登记
 
-求解阶段，模型调用 record_results（批量）/ record_figure 把代码算出的结果登记下来，
+求解阶段，宿主从 emit_result 和实际图片输出建立引用；旧 record_results / record_figure 仍兼容，
 登记时会核对该值确实出现在对应 run 的输出里（不在就拒绝）。
 写作阶段，正文只能写 {{R:R3}} / {{F:F1}} 这样的引用，渲染时替换成真实数值和图片，
 这样论文中的数字天然可以追溯到某次代码执行。
@@ -258,16 +258,23 @@ class ResultRegistry:
 
     def record_figure(self, subproblem: str, run_id: str, artifact: str, caption: str) -> Result:
         self._run_output(run_id)
-        figure_id = self._next_id("F")
         prefix = f"runs/{run_id}/artifacts/"
         artifact_name = artifact.removeprefix(prefix)
         candidate = PurePosixPath(artifact_name)
         if candidate.is_absolute() or ".." in candidate.parts or "\\" in artifact_name or artifact_name.startswith("runs/"):
             raise GroundingError("图片必须来自指定运行的产物目录")
         suffix = artifact_name.rsplit(".", 1)[-1] if "." in artifact_name else "png"
-        path = self.fs.promote_artifact(run_id, artifact_name, f"figures/{figure_id}.{suffix}")
+        path = prefix + artifact_name
+        if not self.fs.exists(path):
+            raise FileNotFoundError('Artifact 不存在: ' + path)
+        same = next((r for r in self.results.values() if r.kind == 'figure' and
+                     r.subproblem == subproblem and r.run_id == run_id and r.path == path), None)
+        if same:
+            same.name = caption.strip()
+            self.save()
+            return same
         result = Result(
-            id=figure_id, kind="figure", subproblem=subproblem, name=caption.strip(),
+            id=self._next_id("F"), kind="figure", subproblem=subproblem, name=caption.strip(),
             value="", run_id=run_id, path=path,
         )
         self.results[result.id] = result

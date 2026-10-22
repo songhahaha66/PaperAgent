@@ -228,7 +228,7 @@ class ResearchStore:
 
     @staticmethod
     def _inputs(state, task, files):
-        refs = dict(files)
+        refs = dict(files) if task.get('input_files') is None else {p: files.get(p, '<missing>') for p in task['input_files']}
         refs.update({f"task:{dep}": state["experiments"][dep]["execution_id"] or ""
                      for dep in task["dependencies"]})
         refs.update({f"assumption:{aid}": str(state["assumptions"][aid]["revision"])
@@ -245,7 +245,8 @@ class ResearchStore:
                 attempt = state["executions"].get(task["execution_id"])
                 if task["acceptance"] == "accepted" and attempt:
                     previous = {k: v for k, v in attempt["input_refs"].items() if not k.startswith(("task:", "assumption:", "continuation"))}
-                    if previous != files:
+                    current = files if task.get('input_files') is None else {p: files.get(p, '<missing>') for p in task['input_files']}
+                    if previous != current:
                         changed.add(key)
             if changed:
                 for key in changed:
@@ -269,9 +270,9 @@ class ResearchStore:
                 raise ResearchConflict("任务依赖的假设已被反证")
             if any(i["blocking"] and i["status"] == "confirmed" and task_id in i["repair_targets"] for i in research_findings(state)):
                 raise ResearchConflict("任务需要先提交修复计划")
-            attempts = [a for a in state["executions"].values() if a["task_id"] == task_id and a["revision"] == task["revision"]]
-            if len(attempts) >= state["max_attempts"] or len(state["executions"]) >= state["max_total_attempts"]:
-                raise ResearchConflict(f"任务 {task_id} 已达到尝试预算")
+            from .operations import attempt_budget_error
+            if error := attempt_budget_error(state, task):
+                raise ResearchConflict(error)
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,

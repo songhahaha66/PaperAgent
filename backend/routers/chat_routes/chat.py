@@ -706,9 +706,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         
                         # 停在"确认建模方案"时工作是待确认，不是已完成
                         failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
-                        solutions = (getattr(main_agent, 'last_result', None) or {}).get('solutions') or {}
-                        incomplete = any(solution.get('status') != 'completed' for solution in solutions.values())
-                        work_status = original_status if action == "ask" else ('failed' if failed_blocks else 'waiting' if getattr(main_agent, 'waiting_confirm', False) else 'paused' if incomplete or (getattr(main_agent, 'last_result', None) or {}).get('research_blocked') else 'completed')
+                        from ai_system.research.views import completed_work_status
+                        work_status = original_status if action == 'ask' else ('failed' if failed_blocks else
+                            await asyncio.to_thread(completed_work_status, workspace_dir))
                         if action != "ask":
                             await loop.run_in_executor(None, set_work_status, work_id, work_status)
                             try:

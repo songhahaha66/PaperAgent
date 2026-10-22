@@ -275,3 +275,38 @@ def activity(ctx, capability, task_id=None, **links):
                 from services.chat_services.conversation_timeline import execution_boundary
                 execution_boundary(store.root, store.research_id, 'activity', item)
                 notify_runtime()
+
+
+def delivery_summary(snapshot, stages=None):
+    """Derived only from current durable stages; no second business state."""
+    stages = snapshot.get('delivery_stages', {}) if stages is None else stages
+    failed = next((name for name in ('write', 'validate', 'render', 'export')
+                   if stages.get(name, {}).get('status') in {'blocked', 'failed', 'interrupted'}), None)
+    labels = {'write': '报告撰写', 'validate': '报告校验', 'render': '报告发布', 'export': '报告导出'}
+    if failed:
+        return {'state': 'incomplete', 'stage': failed, 'label': labels[failed] + '未完成，已有计算和文件已保留'}
+    if stages.get('export', {}).get('status') == 'completed':
+        return {'state': 'completed', 'stage': 'export', 'label': '报告已生成，可查看和下载'}
+    current = next((name for name, value in stages.items() if value.get('status') == 'in_progress'), None)
+    if current:
+        return {'state': 'running', 'stage': current, 'label': labels.get(current, '报告处理') + '中'}
+    if stages.get('render', {}).get('status') == 'completed':
+        return {'state': 'draft', 'stage': 'render', 'label': '正文已保存，导出尚未完成'}
+    return {'state': 'pending', 'stage': None, 'label': '报告尚未生成'}
+
+
+def completed_work_status(root):
+    """Called after the graph exits; an ended coroutine is not a delivered report."""
+    from .store import ResearchStore
+    import json
+    from pathlib import Path
+    thread = Path(root) / '.system/graph_thread.json'
+    if not thread.is_file(): return 'paused'
+    research_id = json.loads(thread.read_text())['thread_id']
+    state = ResearchStore(root, research_id, read_only=True).snapshot() or {}
+    if state.get('outcome') == 'completed':
+        return 'completed'
+    action = state.get('action') or {}
+    if action.get('capability') == 'ask' and action.get('status') == 'waiting':
+        return 'waiting'
+    return 'paused'

@@ -15,7 +15,7 @@
     <header class="overview">
       <div class="status-line" role="status">
         <span class="execution-state" :class="{ running, interrupted }">{{ executionState }}</span>
-        <span>{{ hasReport ? '报告已生成' : '报告尚未生成' }}</span>
+        <span>{{ snapshot?.delivery_summary?.label || (hasReport ? '报告已生成' : '报告尚未生成') }}</span>
       </div>
       <h2>{{ selected?.title || '研究' }}</h2>
       <div class="actions">

@@ -102,6 +102,7 @@ export function researchHeadline(
     const current = currentActivity(snapshot.runtime)
     if (current) return activityHeadline(current, zh)
   }
+  if (zh && snapshot?.delivery_summary?.state === 'incomplete') return snapshot.delivery_summary.label
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
   if (!snapshot?.experiments?.length) {

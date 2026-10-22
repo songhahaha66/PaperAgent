@@ -15,6 +15,7 @@ class ExperimentInput(Inputs):
     plan: ExperimentPlan
     title: str = ''
     artifact_refs: list[str] = Field(default_factory=list)
+    input_files: list[str] | None = Field(default=None, description='本实验需要的原始文件路径；省略表示全部，空列表表示仅使用题内数据。系统只提供这些原始文件，并按其版本判断失效。')
     reason: str = ''
 
 
@@ -83,14 +84,29 @@ def _dispatchable(state):
         raise ResearchConflict('已有行动等待执行或回应，请先处理该行动，再安排其它实验或交付')
 
 
+def attempt_budget_error(state, task=None):
+    if len(state['executions']) >= state['max_total_attempts']:
+        return '研究已达到总执行预算；请用已有结果更新答案，明确缺口后交付，不再安排计算。'
+    if task is not None:
+        count = sum(a['task_id'] == task['task_id'] and a['revision'] == task['revision']
+                    for a in state['executions'].values())
+        if count >= state['max_attempts']:
+            return f"实验 {task['task_id']} 已达到尝试预算；请复用已有文件和结果，记录未完成部分后交付，不要换编号重复计算。"
+    return None
+
+
 def schedule_experiment(ctx,inputs):
     def edit(state):
         _dispatchable(state)
+        if error := attempt_budget_error(state): raise ResearchConflict(error)
         q=state['questions'].get(inputs['question_id'])
         if not q or q.get('retired'):raise ValueError('question_id必须使用建立问题工具实际返回的当前编号')
         refs=inputs['artifact_refs']
         if not set(refs)<=current_result_refs(state,set(state['experiments'])):
             raise ValueError('依赖包含未知或已失效的结果，请读取当前问题/实验结果')
+        selected_files = inputs.get('input_files')
+        if selected_files is not None and not set(selected_files) <= set(ctx.research.file_inputs()):
+            raise ValueError('input_files 包含未知原始文件，请使用输入目录中的真实路径')
         plan=ExperimentPlan.model_validate(inputs['plan'])
         key='E'+str(max((int(k[1:]) for k in state['experiments'] if k.startswith('E') and k[1:].isdigit()),default=0)+1)
         dependencies=list(dict.fromkeys(state['artifacts'][ref]['experiment_id'] for ref in refs))
@@ -105,11 +121,11 @@ def schedule_experiment(ctx,inputs):
             'execution_id':None,'report_ref':None,'method_instruction':'；'.join(c.instruction for c in plan.candidates),
             'experiment':plan.model_dump(),'investigates':[],'reason':inputs['reason'],
             'subproblem':{'id':key,'title':title,'question':q['question'],'kind':'compute','depends_on':dependencies,'deliverables':[]}}
+        if selected_files is not None: task['input_files'] = sorted(set(selected_files))
         state['experiments'][key]=task
         for requirement in state['spec']['requirements']:
             if requirement['id'] in requirement_ids:requirement['task_ids'].append(key)
         ctx.research._bind_assumption_inputs(state)
-        state['max_total_attempts']=max(state['max_total_attempts'],len(state['experiments'])*state['max_attempts']+6)
         state['publication']=None
         from .loop import _set_action
         action=_set_action(state,'experiments.execute',{},inputs['reason'],target=key)
@@ -122,8 +138,9 @@ def continue_experiment(ctx,inputs):
         _dispatchable(state)
         task=state['experiments'].get(inputs['experiment_id'])
         if not task or task['retired'] or task['validity']!='current':raise ValueError('实验不存在或已失效，请读取当前实验')
+        if error := attempt_budget_error(state, task): raise ResearchConflict(error)
         if task['execution_status']=='running':raise ResearchConflict('实验尚在执行，不能重复启动')
-        if task['execution_status']=='succeeded':
+        if task.get('execution_id'):
             task['continuation']={'parent_attempt':task['execution_id'],'information_need':inputs['information_need']}
         task['execution_status']='pending'
         from .loop import _set_action

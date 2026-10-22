@@ -181,7 +181,7 @@ def test_corrupt_download_never_replaces_existing_output(tmp_path):
         path = tmp_path / 'outputs/table.csv'
         path.write_text('old')
         result = await kernel.execute('new')
-        assert not result.ok and path.read_text() == 'old'
+        assert result.ok and result.delivery_error and path.read_text() == 'old'
         assert not path.with_name('table.csv.download').exists()
         await kernel.close()
     asyncio.run(run())

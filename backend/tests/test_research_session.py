@@ -175,10 +175,15 @@ def web(monkeypatch, tmp_path):
             self.stream = stream
             self.last_result = {"solutions": {"Q1": {"status": "completed"}}}
             self.waiting_confirm = False
+        def commit_completion(self):
+            from ai_system.research.store import ResearchStore
+            ResearchStore(root, 'research-1').set_outcome('completed')
         async def run(self, text, **kwargs):
+            self.commit_completion()
             calls.append(("run", (text, kwargs)))
             await self.stream.send_json_block("main_agent_complete", "已完成")
         async def resume_failed(self):
+            self.commit_completion()
             calls.append(("resume", None))
             await self.stream.send_json_block("main_agent_complete", "已恢复")
     monkeypatch.setattr('services.chat_services.chat_history_manager.get_workspaces_path', lambda: tmp_path)

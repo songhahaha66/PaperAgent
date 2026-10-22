@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def safe_path(path: str) -> str:
     p = PurePosixPath(path)
-    if p.is_absolute() or not p.parts or ".." in p.parts or "\\" in path or p.parts[0] not in {"data", "attachment", "code", "outputs", "runs"}:
+    if p.is_absolute() or not p.parts or ".." in p.parts or "\\" in path or any(part.startswith('.') for part in p.parts) or p.parts[0] in {'manifest.json', 'chat_history.json', 'chat_history.json.lock'}:
         raise ValueError(f"非法沙箱文件路径: {path}")
     return p.as_posix()
 
@@ -32,6 +32,8 @@ class RemoteKernel:
         self._known = {}
         self._uploaded = {}
         self._lock = asyncio.Lock()
+        self.pending_run = next((rid for rid, row in reversed(self.fs._manifest.get('runs', {}).items())
+                                 if row.get('delivery_error')), None)
 
     async def _start(self):
         if self._started:
@@ -39,14 +41,19 @@ class RemoteKernel:
             return
         await self.session.start()
         await self._upload_changes()
-        self._known = {f.path: f.sha256 for f in await self.session.files()}
+        pending = (self.fs.get_run_info(self.pending_run) or {}).get('pending_files', {}) if self.pending_run else {}
+        self._known.update({file.path: file.sha256 for file in await self.session.files() if file.path not in pending})
         self._started = True
 
     async def _upload_changes(self):
         total = 0
         current = set()
-        for folder in ("data", "attachment", "code", "outputs", "runs"):
-            for source in sorted((self.workspace_dir / folder).rglob("*")):
+        paths = [(folder, source) for folder in ('data','attachment','code','outputs','runs')
+                 for source in sorted((self.workspace_dir / folder).rglob('*'))]
+        paths += [('generated', self.fs.abs(path)) for path, meta in self.fs._manifest.get('files', {}).items()
+                  if meta.get('source_run') and Path(path).parts[0] not in {'data','attachment','code','outputs','runs'}]
+        for folder, source in paths:
+            if source.exists():
                 if source.is_symlink() or not source.resolve().is_relative_to(self.workspace_dir):
                     raise ValueError("沙箱输入不允许符号链接")
                 if not source.is_file() or "__pycache__" in source.parts:
@@ -64,6 +71,9 @@ class RemoteKernel:
                     raise ValueError("沙箱输入文件数超过 1000")
                 with source.open('rb') as stream:
                     checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
+                pending = (self.fs.get_run_info(self.pending_run) or {}).get('pending_files', {}) if self.pending_run else {}
+                if rel in pending:
+                    continue  # Do not overwrite an undelivered remote version with an older local copy.
                 if self._uploaded.get(rel) != checksum:
                     await self.session.upload(rel, source)
                     self._uploaded[rel] = checksum
@@ -81,7 +91,7 @@ class RemoteKernel:
         total = 0
         for file in files:
             path = safe_path(file.path)
-            if not path.startswith(("outputs/", "code/", f"runs/{run_id}/artifacts/")):
+            if path.startswith(('data/', 'attachment/')) or (path.startswith('runs/') and not path.startswith(f'runs/{run_id}/artifacts/')):
                 continue
             if self._known.get(path) == file.sha256:
                 continue
@@ -89,6 +99,13 @@ class RemoteKernel:
             if file.size < 0 or file.size > self.settings.max_file_bytes or total > self.settings.max_transfer_bytes:
                 raise ValueError("沙箱输出超出传输限额")
             changed.append((path, file))
+        info = self.fs._manifest['runs'][run_id]
+        expected = info.get('pending_files', {})
+        available = {f.path: f.sha256 for f in files}
+        if any(available.get(path) != checksum for path, checksum in expected.items()):
+            raise RuntimeError('待同步的远端文件版本已不可用；已保存文件仍保留，请说明交付缺口，不自动重跑。')
+        info['pending_files'] = {path: file.sha256 for path,file in changed}
+        self.fs._save_manifest()
         saved = []
         for path, file in changed:
             dest = self.fs.abs(path)
@@ -116,7 +133,10 @@ class RemoteKernel:
             self._known[path] = file.sha256
             self._uploaded[path] = file.sha256
             saved.append(path)
-        return saved
+        info['pending_files'] = {}
+        self.fs._save_manifest()
+        prefix = f'runs/{run_id}/artifacts/'
+        return list(dict.fromkeys([*saved, *(p for p in self.fs._manifest['runs'][run_id].get('artifacts', []) if p.startswith(prefix))]))
 
     async def _stop(self):
         try:
@@ -128,12 +148,15 @@ class RemoteKernel:
 
     async def execute(self, code, *, on_event=None):
         async with self._lock:
+            if self.pending_run:
+                return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
+                    run_id=self.pending_run, failure_kind='delivery')
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)
             self.fs.save_run_stdout(run_id, "")
             self.fs.save_run_stderr(run_id, "")
             info = self.fs._manifest["runs"][run_id]
-            info.update(status="starting", provider=self.settings.provider)
+            info.update(status="starting", provider=self.settings.provider, runtime_image=self.settings.image)
             self.fs._save_manifest()
             result = CellResult(ok=False, stdout="", error=None, run_id=run_id)
             sequence = 0
@@ -170,20 +193,31 @@ class RemoteKernel:
                 await event("running")
                 outcome = await asyncio.wait_for(self.session.execute(code, run_id, output), self.timeout)
                 result.error = outcome.error
-                result.files = await asyncio.wait_for(self._collect(run_id), 60)
                 result.ok = result.error is None
+                result.failure_kind = 'code' if result.error else None
+                for attempt in range(2):
+                    try:
+                        result.files = await asyncio.wait_for(self._collect(run_id), 60)
+                        break
+                    except Exception as exc:
+                        if attempt:
+                            result.delivery_error = self._safe_error(exc)
+                            self.pending_run = run_id
             except asyncio.CancelledError:
                 cancelled = abnormal = True
                 result.error = "执行已取消"
+                result.failure_kind = 'cancelled'
                 raise
             except asyncio.TimeoutError:
                 abnormal = True
                 result.timed_out = True
+                result.failure_kind = 'timeout'
                 result.error = "沙箱启动或执行超时，内存变量已失效"
             except Exception as exc:
                 abnormal = True
                 # Provider failures can contain connection headers. Never echo API keys.
-                result.error = str(exc).replace(self.settings.api_key, "[redacted]") if self.settings.api_key else str(exc)
+                result.error = self._safe_error(exc)
+                result.failure_kind = 'transport_unknown'
             finally:
                 if abnormal:
                     try:
@@ -208,14 +242,36 @@ class RemoteKernel:
                     with (self.fs.run_dir(run_id) / "stderr.log").open("a", encoding="utf-8") as stream:
                         stream.write("\n" + result.error)
                 status = "cancelled" if cancelled else "timeout" if result.timed_out else "success" if result.ok else "error"
-                info.update(error=result.error, files=result.files)
+                info.update(error=result.error, files=result.files, delivery_error=result.delivery_error,
+                            failure_kind=result.failure_kind, context_restored=getattr(self.session, 'context_restored', False))
                 self.fs.finish_run(run_id, status)
                 await event("finished", status=status, error=result.error, files=result.files)
             return result
 
+    def _safe_error(self, error):
+        text = str(error)
+        return text.replace(self.settings.api_key, '[redacted]') if self.settings.api_key else text
+
+    async def retry_outputs(self):
+        async with self._lock:
+            if not self.pending_run:
+                return None
+            run_id = self.pending_run
+            await asyncio.wait_for(self._start(), self.settings.startup_timeout)
+            files = await asyncio.wait_for(self._collect(run_id), 60)
+            info = self.fs._manifest['runs'][run_id]
+            info.update(files=list(dict.fromkeys([*info.get('files', []), *files])), delivery_error=None)
+            self.fs._save_manifest()
+            self.pending_run = None
+            return run_id
+
     async def close(self):
         async with self._lock:
-            await self._stop()
+            if self._started and hasattr(self.session, 'release'):
+                await self.session.release()
+                self._started = False
+            else:
+                await self._stop()
 
     async def __aenter__(self):
         return self

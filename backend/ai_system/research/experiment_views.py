@@ -89,7 +89,8 @@ def experiments_view(business, safe_file, current_files=None):
         selected = active or (retained[0] if retained else (attempts[-1] if attempts else {}, []))
         attempt, items = selected
         frozen_files = {p: h for p, h in attempt.get('input_refs', {}).items() if p.startswith(('data/', 'attachment/'))}
-        inputs_match = current_files is None or frozen_files == {p: h for p, h in current_files.items() if p.startswith(('data/', 'attachment/'))}
+        live_files = current_files if task.get('input_files') is None or current_files is None else {p: current_files.get(p, '<missing>') for p in task['input_files']}
+        inputs_match = live_files is None or frozen_files == {p: h for p, h in live_files.items() if p.startswith(('data/', 'attachment/'))}
         current = bool(active and attempt['revision'] == task['revision'] and task['validity'] == 'current' and inputs_match)
         issues = [i for i in research_findings(business) if i['task_id'] == key and i['status'] not in CLOSED]
         report = (experiment_report(business,task) if attempt.get('attempt_id')==task.get('execution_id') else None) or (attempt.get('result') or {}).get('report') or {}

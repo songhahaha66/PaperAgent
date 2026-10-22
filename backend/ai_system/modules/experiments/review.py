@@ -106,20 +106,31 @@ def inventory_presence(ctx,subproblem_id,figure_required=False):
     """One owner for the required result/figure inventory."""
     own=ctx.registry.for_subproblem(subproblem_id);issues=[]
     if not own:
-        issues.append("还没有登记任何结果：请完成方案中的建模计算，print 关键数值，用 record_results 和 record_figure 登记后再提交报告。")
+        issues.append("还没有登记任何结果：请完成方案中的建模计算，用 emit_result 输出关键指标，系统会自动附加来源；已有输出可补充引用，不重复计算。")
     if figure_required and not any(r.kind=='figure' for r in own):
-        issues.append("题目要求可视化，但还没有登记任何图：请画出要求的图，用 record_figure 登记后在报告里引用。")
+        issues.append("题目要求可视化，但还没有登记任何图：请画出要求的图并使用系统自动返回的图引用。")
     return issues
 
 
-def submission_inventory_issues(ctx: GraphContext, branch: BranchInput, runs: List[Dict]) -> List[str]:
+def submission_inventory_issues(ctx: GraphContext, branch: BranchInput, runs: List[Dict], used_refs=None) -> List[str]:
     """Check required metrics and their actual executions, without judging thresholds."""
     sid = branch["subproblem"]["id"]
     own = ctx.registry.for_subproblem(sid)
     issues = inventory_presence(ctx,sid,needs_figure(branch['subproblem']))
     allowed = {sid, *(branch["subproblem"].get("depends_on") or [])}
     successful = {run["run_id"] for run in runs if run.get("ok")}
+    required = set(used_refs or [])
+    for rule in (branch.get('research_contract') or {}).get('checks', []):
+        for selector in DomainCheck.model_validate(rule['check']).selectors():
+            required.update(r.id for r in own if r.name == selector.name)
+    if needs_figure(branch['subproblem']):
+        figure = next((r for r in reversed(own) if r.kind == 'figure' and r.path and ctx.fs.exists(r.path)), None)
+        if figure: required.add(figure.id)
+        else: issues.append('所需图片文件不存在或不可访问，请先同步已有图片或修复引用，不要为路径错误重算。')
+    # Historical unused outputs cannot block a current report. Explicitly cited
+    # refs and frozen contract operands always retain strict provenance checks.
     for result in own:
+        if result.id not in required: continue
         try:
             if result.run_id not in successful:
                 raise GroundingError("来源不是本次任务的成功执行")
@@ -132,7 +143,7 @@ def submission_inventory_issues(ctx: GraphContext, branch: BranchInput, runs: Li
             else:
                 ctx.registry.verify(result.value, result.run_id)
         except (GroundingError, OSError, ValueError) as exc:
-            issues.append(f"登记结果 {result.id}「{result.name}」来源无效：{exc}；请重新执行并登记")
+            issues.append(f"登记结果 {result.id}「{result.name}」来源无效：{exc}；请核对来源并修复引用或文件交付，已有成功计算不要重跑")
     for rule in (branch.get("research_contract") or {}).get("checks", []):
         check = rule["check"]
         for operand in DomainCheck.model_validate(check).selectors():
@@ -151,7 +162,11 @@ def report_submission_issues(ctx: GraphContext, branch: BranchInput, report: Dic
     sid = subproblem["id"]
     deps = subproblem.get("depends_on") or []
     issues = submission_issues(ctx, report, sid, deps)
-    issues += submission_inventory_issues(ctx, branch, runs)
+    import json
+    refs = set(find_refs(json.dumps(report, ensure_ascii=False)))
+    for mapping in report.get('requirement_evidence', []):
+        refs.update(mapping.get('evidence_refs', []))
+    issues += submission_inventory_issues(ctx, branch, runs, refs)
     issues += control_issues(ctx,report)
     return list(dict.fromkeys(issues))
 

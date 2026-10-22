@@ -40,8 +40,8 @@ def test_continued_worker_can_read_published_figure_at_registered_path(tmp_path)
     ctx.research = SimpleNamespace(
         snapshot=lambda: {'experiments': {'E1': {'dependencies': []}},
                           'executions': {'next': {'parent_attempt': 'previous'}}},
-        allocate_ref=lambda kind: kind + '5')
-    local = worker_context(ctx, SimpleNamespace(task_id='E1', attempt_id='next'))
+        allocate_ref=lambda kind: kind + '5', file_inputs=lambda: {})
+    local = worker_context(ctx, SimpleNamespace(task_id='E1', attempt_id='next', revision=1, input_refs={}))
     assert local.fs.read_text(local.registry.results['F4'].path) == 'published image'
     assert local.registry.results['F4'].run_id == 'old-run'
     assert ctx.fs.read_text(path) == 'published image'
@@ -139,9 +139,10 @@ def test_retry_budget_cannot_be_bypassed_by_recovery(tmp_path):
         finish(store, "Q1", acceptance="rejected")
         store.recover()
     assert "Q1" not in ready_tasks(store.snapshot())
-    continue_experiment(store,"Q1")
+    before = store.snapshot()
     with pytest.raises(ResearchConflict, match="预算"):
-        store.claim("Q1")
+        continue_experiment(store,"Q1")
+    assert store.snapshot() == before
 
 
 def test_data_correction_after_commit_invalidates_all_coarse_file_consumers(tmp_path):

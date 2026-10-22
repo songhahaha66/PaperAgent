@@ -2,7 +2,7 @@
 阶段 4：求解（每个子问题一个分支，按依赖关系分批并行）
 
 每个分支是一个小的 CodeAct 循环：模型写代码 → 持久内核执行 → 看输出 → 继续，
-关键数字和图通过 record_results / record_figure 登记，登记时校验数值确实来自某次执行的输出。
+emit_result 和图片输出由宿主自动绑定运行来源；兼容已有 record_results / record_figure。
 最后用结构化输出交一份求解报告，登记引用须有真实执行来源。
 
 候选意图由研究控制器按任务版本冻结；普通实验直接执行，CSV比较是显式执行方式。
@@ -59,7 +59,7 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 有冻结候选实验时，只执行所记录的方法和参数，SolveReport.approach说明实际执行的方法，候选身份由系统记录。无法实现时如实提交失败与原因，不自行改用其他算法或改变评价条件；交回observe，在原问题下记录新实验后再试。
 - 用 run_python 执行代码。内核是持久的：前面定义的变量、读入的数据后面都能直接用，不要每次重新读数据。
 - 每次写一段完整的代码（读数据、计算、打印关键结果可以放在一起），看到输出再决定下一步；出错就读回溯修正。
-- run_python 只做读取、计算和绘图。record_results、record_figure、SolveReport 是外部工具，不能在 Python 代码里当函数调用；登记与报告分别通过工具提交，不在计算代码中编写整篇报告。
+- run_python 做读取、计算、绘图和 emit_result 结构化输出。record_results、record_figure、SolveReport 是外部工具，不能在 Python 代码里当函数调用；登记与报告分别通过工具提交，不在计算代码中编写整篇报告。
 - 只 print 需要看的汇总结果，不要打印整张表或长数组（输出超过约 6000 字会被截断）。
 - 数据文件路径相对于工作目录，例如 data/xxx.csv。
 - 画图用 matplotlib，画完不需要 savefig，系统会自动保存本次执行打开的图并告诉你文件名。
@@ -72,13 +72,15 @@ SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的�
 - 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
 - 内核已自动配置本机可用的中文字体，不要用未安装的SimHei等字体覆盖配置。
 
-结果登记（非常重要）：
-- 论文里会用到的每个关键数字（参数估计、预测值、指标、最优解等），先 print 出来，再用 record_results 登记，run_id 填打印它的那次执行。
+计算输出与来源：
+- 代码里可直接调用 emit_result("名称", 实际计算的值, unit="单位", description="口径") 输出论文关键指标，系统自动保存真实运行来源并返回引用。支持标量和数值列表，不需要再调用 record_results。
+- CSV/图片等文件自动保存和交付，图片自动生成引用；需要调整图题时才调用 record_figure。不要为报告重复计算。
+- 普通 print 是过程日志，不会按相同数字猜指标。已有普通输出需要明确引用时，可用 record_results 兼容登记。
 - 把一批结果放进一次 record_results 调用里登记，不要一个结果调用一次。
 - 执行、登记完成并拿到工具返回的真实编号之后，单独调用 SolveReport；不能与计算或登记工具同时调用报告。
 - 登记的值要和输出一致（可以四舍五入到合理的位数，百分数写成 87.3%）。没出现在输出里的值会被拒绝。
 - 同一变量的拟合值、预测值等完整数值序列可登记为JSON数组字符串（先print完整数组，推荐json.dumps）；顺序和长度必须与输出一致，不能省略或拼接不同指标。数值比较只接受标量，长度、最小值等单独计算登记。
-- 论文要用的图用 record_figure 登记，并写清图题。
+- 论文使用系统返回的图引用；record_figure 只用于补充图题，已有图不重复生成。
 - 按本子问题要求完成验证并登记结果；数据整理只需核对数据完整性和计算。不要提前完成下游预测，或额外加入题目和本问未要求的假设检验、预测实验。
 
 完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。
@@ -170,6 +172,20 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
         return
     body = "\n\n".join(f"# ---- {r['run_id']} ----\n{r['code'].rstrip()}" for r in runs)
     header = f"# {subproblem_id} 已执行代码（按顺序，含探索及出错语句之前的完整前缀）。复用时复制需要的函数和处理步骤。\n\n"
+    images = sorted({info['runtime_image'] for run in runs
+        if (info := ctx.fs.get_run_info(run['run_id']) or {}).get('runtime_image')})
+    if images:
+        header += '# 原执行环境镜像：' + '、'.join(images) + '\n# 在对应依赖环境中运行；不同库版本可能存在 API 差异。\n\n'
+    if any('emit_result(' in r['code'] for r in runs):
+        from inspect import getsource
+        from ai_system.sandbox.runtime_helpers import emit_result
+        header += 'import json\nfrom pathlib import Path\nPath("outputs/intermediate").mkdir(parents=True, exist_ok=True)\n\n' + getsource(emit_result) + '\n'
+    if 'matplotlib' in body:
+        from inspect import getsource
+        from ai_system.sandbox.runtime_helpers import choose_font
+        header += ('import matplotlib\nmatplotlib.use("Agg")\nfrom matplotlib.font_manager import fontManager\n\n'
+            + getsource(choose_font) + '\nmatplotlib.rcParams["font.sans-serif"] = [choose_font({f.name for f in fontManager.ttflist})]\n'
+            + 'matplotlib.rcParams["axes.unicode_minus"] = False\n\n')
     try:
         ctx.fs.write_text(solution_code_path(subproblem_id), header + body)
     except Exception as exc:  # 只是给后续子问题的参考，失败不影响本问
@@ -229,6 +245,8 @@ def build_tools(
         if start < 0 or not 1 <= limit <= 24000:return '读取范围无效'
         from ai_system.research.views import activity
         with activity(ctx,'read_file',subproblem_id,display_file=path,inputs={'path':path,'start':start,'limit':limit}) as operation:
+            if ctx.fs.abs(path).suffix.lower() in {'.png', '.jpg', '.jpeg', '.pdf', '.xlsx', '.zip'}:
+                return f'这是二进制文件，可从文件面板预览或下载：{path}；不要按文本读取，也不需要重新生成。'
             text=ctx.fs.read_text(path)
             operation['output']={'total_chars':len(text),'excerpt':text[start:start+limit]}
             return text[start:start+limit]
@@ -260,6 +278,8 @@ def build_tools(
         if is_placeholder(code):
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
+        from ai_system.sandbox.artifacts import capture_run_files, collect_references
+        publication_note = ''
         with activity(ctx,'run_python',subproblem_id,inputs={'code':code},display_label=' '.join(title.split())[:60]) as operation:
             import time
             from ai_system.research.views import activity_progress
@@ -275,22 +295,56 @@ def build_tools(
                     activity_progress(ctx, operation)
                     last_push = now
             result = await kernel.execute(code, on_event=progress)
+            # Publish the run before its terminal timeline event resolves file links.
+            if getattr(ctx, 'delivery_fs', None) is not None:
+                try:
+                    for path in capture_run_files(ctx.fs, ctx.delivery_fs):
+                        await ctx.delivery_events.file_changed(path)
+                except (OSError, ValueError) as exc:
+                    publication_note = f'文件交付未完成：{exc}。计算结果已保留，不要重算，提交时会再次同步。'
             operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
-                output={**operation.get('output', {}),'ok':result.ok,'run_id':result.run_id, 'files':result.files})
+                output={**operation.get('output', {}),'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
             if not result.ok:
                 operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
                                  message='执行超时，内核已重启。' if result.timed_out else result.error)
+        automatic_refs = collect_references(ctx, subproblem_id, result) if record else []
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
         await ctx.events.emit(
             "paper_code",
             f"{subproblem_id} · {result.run_id} · {'成功' if result.ok else '失败'}",
         )
         observation = clip(result.to_observation(), OBSERVATION_CHARS)
+        for ref in automatic_refs:
+            observation += ('\n输出声明无效：' + ref if isinstance(ref, str) else
+                f'\n{ref.name} = {ref.display()}；引用 {{{{{ref.id[0]}:{ref.id}}}}}')
+        if publication_note: observation += '\n' + publication_note
+        if result.failure_kind == 'transport_unknown':
+            return observation + '\n连接中断，执行是否完成无法确认。保留已收到输出，提交阻碍交回研究层；不要自动重放相同代码。'
+        if result.failure_kind == 'delivery':
+            return observation
         if not result.ok:
             return observation + "\n[执行失败] 本次run不能作为登记来源。请先修复错误并成功执行，再使用实际返回的run_id登记。"
         if submission_gaps is not None:
             observation += "\n已有执行输出请直接按契约原名登记；不要为登记重复执行相同计算。"
         return submission_feedback(observation)
+
+    async def retry_outputs() -> str:
+        """仅重试上次计算的文件同步，不重新执行代码。"""
+        if not hasattr(kernel, 'retry_outputs'):
+            return '当前执行器没有待同步的远端文件。'
+        run_id = await kernel.retry_outputs()
+        if not run_id:
+            return '没有待同步文件，直接使用已有输出。'
+        from ai_system.sandbox.artifacts import capture_run_files, collect_references
+        from ai_system.sandbox.kernel import CellResult
+        info = ctx.fs.get_run_info(run_id)
+        files = info.get('artifacts', [])
+        refs = collect_references(ctx, subproblem_id, CellResult(ok=info['status']=='success', stdout='', error=None,
+            run_id=run_id, files=files, figures=[p for p in files if p.endswith(('.png', '.jpg', '.jpeg'))]))
+        if getattr(ctx, 'delivery_fs', None) is not None:
+            for path in capture_run_files(ctx.fs, ctx.delivery_fs):
+                await ctx.delivery_events.file_changed(path)
+        return '文件同步完成：' + str(files) + '\n引用：' + str([r if isinstance(r, str) else r.id for r in refs])
 
     async def record_results(items: List[ResultItem]) -> str:
         """一次登记多个论文会用到的结果（同一次或多次执行的结果放在一起登记，减少往返）。
@@ -340,7 +394,7 @@ def build_tools(
                 from ai_system.research.review_cache import error_detail
                 raise ToolException(error_detail(exc)) from exc
         return StructuredTool.from_function(coroutine=run,name=fn.__name__,handle_tool_error=True,handle_validation_error=str)
-    tools = [make_tool(run_python),make_tool(read_file),make_tool(search_literature)]
+    tools = [make_tool(run_python),make_tool(read_file),make_tool(search_literature),make_tool(retry_outputs)]
     if record:
         tools += [
             make_tool(record_results),
@@ -382,7 +436,7 @@ def build_task(
         "# 已有核查疑点（按信息需求核实；错误意见可驳回）\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",
         ('# 同一实验继续行动（方法和条件不变）\n'+json.dumps(branch['continuation'],ensure_ascii=False)
          +'\n此前记录：'+json.dumps(branch.get('previous_report'),ensure_ascii=False)
-         +'\n复用已有结果和中间文件，只处理明确的信息需求，不重放已完成计算。') if branch.get('continuation') else '',
+         +'\n复用已有结果和中间文件，只处理明确的信息需求，不重放已完成计算。恢复后内核可能是新建的，先读取已保存文件，不假定旧变量一定存在。') if branch.get('continuation') else '',
         extra,
         ending,
     ]))
@@ -462,6 +516,9 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     await ctx.set_stage("solve", "in_progress")
     run_log: List[Dict] = []
     if branch.get('continuation'):
+        for run_id, info in ctx.fs._manifest.get('runs', {}).items():
+            if info.get('status') == 'success':
+                run_log.append({'run_id': run_id, 'ok': True, 'code': '', 'inherited': True})
         for result in ctx.registry.for_subproblem(subproblem_id):
             info=ctx.fs.get_run_info(result.run_id) or {}
             if not info and ctx.source_workspace:

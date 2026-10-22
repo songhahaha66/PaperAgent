@@ -23,17 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 class KernelPool:
-    """每个子问题一个内核，并行求解互不干扰；共用同一个 WorkspaceFS 保证 manifest 一致"""
+    """实验内持久内核；远端由 provider 按研究工作管理容器租约，业务状态仍在 Store"""
 
-    def __init__(self, workspace: Path, fs: WorkspaceFS, timeout: float = 180.0):
+    def __init__(self, workspace: Path, fs: WorkspaceFS, timeout: float = 180.0, *, work_id=None, experiment_id=None):
         self.workspace = workspace
         self.fs = fs
         self.timeout = timeout
+        self.work_id, self.experiment_id = work_id, experiment_id
         self._kernels: Dict[str, ExecutionKernel] = {}
 
     def get(self, key: str) -> ExecutionKernel:
         if key not in self._kernels:
-            self._kernels[key] = create_kernel(str(self.workspace), timeout=self.timeout, fs=self.fs)
+            self._kernels[key] = create_kernel(str(self.workspace), timeout=self.timeout, fs=self.fs, work_id=self.work_id, experiment_id=self.experiment_id or key)
         return self._kernels[key]
 
     def promote(self, source: str, target: str) -> None:
@@ -93,6 +94,8 @@ class GraphContext:
     planner_llm: Any
     coder_llm: Any
     writer_llm: Any
+    delivery_fs: Any = None
+    delivery_events: Any = None
     research: Any = None
     experience_scope: Any = None
     experience_store: Any = None
@@ -146,7 +149,8 @@ class GraphContext:
             workspace=workspace,
             fs=fs,
             registry=ResultRegistry(fs),
-            kernels=KernelPool(workspace, fs, timeout=options.pop("kernel_timeout", 180.0)),
+            kernels=KernelPool(workspace, fs, timeout=options.pop("kernel_timeout", 180.0),
+                work_id=options.pop("sandbox_work_id", None), experiment_id=options.pop("sandbox_experiment_id", None)),
             events=EventSink(stream_manager),
             planner_llm=planner_llm,
             coder_llm=cap_output(coder_llm or planner_llm, CODER_MAX_TOKENS),

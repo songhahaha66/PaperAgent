@@ -6,6 +6,7 @@ from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import shutil
+import hashlib
 from dataclasses import asdict
 from pathlib import Path
 
@@ -119,7 +120,7 @@ def experiment_dispatch(ctx, key):
 
 def public_snapshot(snapshot, *, work_status=None, source_root=None):
     ready = set(ready_tasks(snapshot))
-    from .views import questions,evidence_uses,execution
+    from .views import questions,evidence_uses,execution,delivery_summary
     stages=snapshot.get('delivery_stages',{})
     if snapshot['spec'].get('output_mode')=='latex' and source_root is not None:
         from pathlib import Path
@@ -130,13 +131,15 @@ def public_snapshot(snapshot, *, work_status=None, source_root=None):
             stages={k:({**stage,'status':'pending','note':'源码已更新，需检查当前版本'}
                        if k in {'validate','render','export'} and stage['status']=='completed' else stage)
                     for k,stage in stages.items()}
+    stages = {key: {**stage, 'status': 'interrupted' if stage['status'] == 'in_progress' and
+        work_status in {'paused', 'cancelled', 'failed'} else stage['status']}
+        for key, stage in stages.items()}
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
         "questions": questions(snapshot), "evidence_uses":evidence_uses(snapshot,source_root),
         "runtime":execution(snapshot,work_status),
         "delivery": delivery_status(snapshot),
-        "delivery_stages": {key: {**stage, "status": "interrupted" if stage["status"] == "in_progress" and
-            work_status in {"paused", "cancelled", "failed"} else stage["status"]}
-            for key, stage in stages.items()},
+        "delivery_summary": delivery_summary(snapshot, stages),
+        "delivery_stages": stages,
         "experiments": [public_task(snapshot, task, ready, work_status) for task in snapshot["experiments"].values() if not task["retired"]],
         "feedback": [i for i in snapshot['feedback'] if i['status'] not in {'resolved', 'dismissed'}],
         "faults": [i for i in snapshot['faults'] if i['status'] not in {'resolved', 'dismissed', 'superseded'}],
@@ -192,9 +195,17 @@ def worker_context(ctx, order):
     """
     work = ctx.workspace / ".system" / "attempts" / order.attempt_id / "workspace"
     work.mkdir(parents=True, exist_ok=True)
-    for folder in ("data", "attachment"):
-        _copy_tree(ctx.workspace / folder, work / folder)
     snapshot = ctx.research.snapshot()
+    task = snapshot['experiments'][order.task_id]
+    if task.get('input_files') is None:
+        for folder in ('data', 'attachment'):
+            _copy_tree(ctx.workspace / folder, work / folder)
+    else:
+        for path in task['input_files']:
+            source = ctx.fs.abs(path)
+            target = work / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
     copied = set()
 
     def copy_dependency(key):
@@ -218,13 +229,26 @@ def worker_context(ctx, order):
             _copy_tree(previous/folder,work/folder)
         if (previous/'manifest.json').is_file():
             shutil.copyfile(previous/'manifest.json',work/'manifest.json')
+            inherited = json.loads((previous/'manifest.json').read_text())
+            for path, meta in inherited.get('files', {}).items():
+                parts = Path(path).parts
+                if meta.get('source_run') and parts and parts[0] not in {'data','attachment','code','outputs','runs'} and not any(part.startswith('.') for part in parts):
+                    source = (previous/path).resolve()
+                    if source.is_relative_to(previous.resolve()) and source.is_file():
+                        target = work/path
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(source,target)
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
         writer_llm=ctx.writer_llm, judge=ctx.judge, stream_manager=ctx.events.stream_manager,
         max_solver_steps=ctx.max_solver_steps,
         template_requirements=ctx.template_requirements, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
-        source_workspace=ctx.workspace)
+        source_workspace=ctx.workspace, sandbox_work_id=str(ctx.workspace),
+        sandbox_experiment_id=order.task_id + ':' + str(order.revision) + ':' +
+            hashlib.sha256(json.dumps({p: h for p,h in order.input_refs.items() if p != 'continuation'}, sort_keys=True).encode()).hexdigest())
     local.compact_paper=ctx.compact_paper
+    local.delivery_fs = ctx.fs
+    local.delivery_events = ctx.events
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref
@@ -291,20 +315,14 @@ async def execute(branch, runtime):
         evidence.update({item["id"]: item for item in results})
         for item in evidence.values():
             if item["path"] and item["id"] not in ctx.research.snapshot()["artifacts"]:
-                src = local.workspace / item["path"]
-                rel = f"outputs/research/{order.attempt_id}/{item['id']}_{Path(item['path']).name}"
-                target = ctx.workspace / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, target)
-                ctx.fs.register_file(rel, kind="image", source_run=item["run_id"], visibility="internal")
-                item["path"] = rel
+                from ai_system.sandbox.artifacts import publish_reference
+                publish_reference(local.fs, ctx.fs, item)
         for review in reviews:
             review["evidence"] = [evidence[item["id"]] for item in review["evidence"]]
         # Immutable run IDs preserve existing grounding and evidence links.
-        _copy_tree(local.workspace / "runs", ctx.workspace / "runs")
-        for run_id, info in local.fs._manifest.get("runs", {}).items():
-            ctx.fs._manifest.setdefault("runs", {})[run_id] = info
-        ctx.fs._save_manifest()
+        from ai_system.sandbox.artifacts import capture_run_files
+        for path in capture_run_files(local.fs, ctx.fs):
+            await ctx.events.file_changed(path)
         result = WorkerResult(order=order,
             execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
             acceptance="inconclusive" if report['status']=='comparison_blocked' else "rejected" if checks else "accepted", report=report,
@@ -333,7 +351,7 @@ async def execute(branch, runtime):
         clear = accepted and not any(i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
                                      for i in research_findings(snapshot))
         if clear:
-            await ctx.events.emit("paper_solved", f"{key} 已通过验收，登记 {len(results)} 项结果")
+            await ctx.events.emit("paper_solved", f"{key} 已完成检查，结果与代码已保存")
         else:
             await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '仍需验收或修复，请查看研究问题'}")
         return {"log": [f"commit {key}: {receipt}"], '_execution_outcome': {
@@ -357,11 +375,8 @@ async def execute(branch, runtime):
             try:
                 # Code output is available even when later interpretation fails.
                 # Publication of a file does not accept the experiment's conclusions.
-                from ai_system.sandbox.artifacts import publish_run_files
-                _copy_tree(local.workspace / 'runs', ctx.workspace / 'runs')
-                ctx.fs._manifest.setdefault('runs', {}).update(local.fs._manifest.get('runs', {}))
-                ctx.fs._save_manifest()
-                for path in publish_run_files(local.fs, ctx.fs, order.attempt_id):
+                from ai_system.sandbox.artifacts import capture_run_files
+                for path in capture_run_files(local.fs, ctx.fs):
                     await ctx.events.file_changed(path)
             finally:
                 await local.kernels.close()
