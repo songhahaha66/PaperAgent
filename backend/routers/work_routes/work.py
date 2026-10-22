@@ -113,18 +113,9 @@ async def get_work_chat_history(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    import json
-    from pathlib import Path
-    chat_file = get_workspace_path(work_id) / "chat_history.json"
-    if not chat_file.exists():
-        return {}
-    with open(chat_file, 'r', encoding='utf-8') as f:
-        chat_history = json.load(f)
-    if isinstance(chat_history, list):
-        return {"messages": chat_history, "context": {}}
-    if isinstance(chat_history, dict):
-        return chat_history
-    return {"messages": [], "context": {}}
+    from services.chat_services.chat_history_manager import ChatHistoryManager
+    root = get_workspace_path(work_id)
+    return ChatHistoryManager(str(root.parent)).get_work_history(work_id)
 
 # 附件相关路由
 def get_attachment_dir(work_id: str) -> Path:

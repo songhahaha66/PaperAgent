@@ -14,7 +14,7 @@ from ai_system.graph import GroundingError, PaperGraphAgent, ResultRegistry, com
 from ai_system.research.store import ResearchStore
 from services.file_services.workspace_fs import WorkspaceFS
 
-from helpers.graph import TASK, _analysis, _Structured, CANDIDATE_PROMPTS, FakeModel, FixedJudge, _make_workspace, _context
+from helpers.graph import TASK, _analysis, _Structured, CANDIDATE_PROMPTS, FakeModel, _make_workspace, _context
 
 
 # ----------------------------------------------------------------------
@@ -32,17 +32,20 @@ def test_graph_end_to_end_offline(tmp_path):
     # Legacy graph fixture; trusted supervised comparison has separate real-data tests.
     ctx = _context(ws, model)
     ctx.research = ResearchStore(ws, "t")
+    ctx.research.initialize(TASK)
 
     async def go():
         graph = compile_graph(InMemorySaver())
         try:
             return await graph.ainvoke(
-                {"task": TASK}, {"configurable": {"thread_id": "t"}, "recursion_limit": 100}, context=ctx
+                {"research_blocked": False}, {"configurable": {"thread_id": "t"}, "recursion_limit": 100}, context=ctx
             )
         finally:
             await ctx.kernels.close()
 
-    result = asyncio.run(go())
+    checkpoint = asyncio.run(go())
+    assert set(checkpoint) == {"research_blocked"}
+    result = PaperGraphAgent._result(ctx)
 
     # Research tools allocate real IDs; writing remains a research-level delivery.
     business=ctx.research.snapshot()
@@ -244,7 +247,7 @@ def test_malformed_tool_call_is_retried_and_never_left_in_history():
 
 def test_explicit_new_run_does_not_resume_an_interrupted_plan(tmp_path):
     ws = _make_workspace(tmp_path)
-    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws), judge=FixedJudge(), confirm_models=True)
+    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws))
     asyncio.run(agent.run(TASK))
     first_thread = agent._load_thread()
     assert not agent.waiting_confirm

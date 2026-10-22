@@ -104,7 +104,6 @@ class GraphContext:
     compact_paper: bool = False
     comparison_proof: Any = None
     skill_policy: Any = None
-    judge: Any = None
     max_solver_steps: int = 40
     max_repair_rounds: int = 2
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
@@ -120,7 +119,6 @@ class GraphContext:
         planner_llm,
         coder_llm=None,
         writer_llm=None,
-        judge=None,
         stream_manager=None,
         **options,
     ) -> "GraphContext":
@@ -139,12 +137,6 @@ class GraphContext:
             from ..research.runtime import ResearchRuntime
             settings=ResearchRuntime(workspace).policy()
             options.setdefault('compact_paper',settings['compact_paper'])
-        # Old request settings are decoded here, without retaining an approval
-        # executor in the graph. Missing information uses controller questions.
-        options.pop('confirm_models',None)
-        options.pop('max_design_rounds',None)
-        options.pop('explore_top_k',None)
-        options.pop('n_candidates',None)
         return cls(
             workspace=workspace,
             fs=fs,
@@ -155,7 +147,6 @@ class GraphContext:
             planner_llm=planner_llm,
             coder_llm=cap_output(coder_llm or planner_llm, CODER_MAX_TOKENS),
             writer_llm=writer_llm or planner_llm,
-            judge=judge,
             **options,
         )
 

@@ -55,6 +55,58 @@ def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     return publish_run_files(source_fs, target_fs, attempt_id, run_ids=selected)
 
 
+def inherit_execution_files(source, target_fs, experiment_id):
+    """Restore one execution's own runs and handoffs, retaining immutable IDs."""
+    from services.file_services.workspace_fs import WorkspaceFS
+    manifest = source / 'manifest.json'
+    if not manifest.is_file(): return set()
+    source_fs = WorkspaceFS(str(source))
+    inventory = source_fs._manifest
+    selected = set(inventory.get('runs', {})) - set(inventory.get('inherited_runs', []))
+    def copy_file(path):
+        parts = PurePosixPath(path).parts
+        if not parts or any(p.startswith('.') for p in parts) or parts[0] in {'manifest.json', 'chat_history.json', 'data', 'attachment'}:
+            raise ValueError('非法实验交接路径')
+        origin = source_fs.abs(path)
+        target = target_fs.abs(path)
+        if origin.is_symlink(): raise ValueError('实验交接不允许符号链接')
+        if origin.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(origin, target)
+    for run_id, info in inventory.get('runs', {}).items():
+        if run_id not in selected: continue
+        if run_id not in target_fs._manifest['runs']:
+            origin = source_fs.run_dir(run_id)
+            if origin.exists():
+                if any(p.is_symlink() for p in origin.rglob('*')): raise ValueError('运行记录不允许符号链接')
+                shutil.copytree(origin, target_fs.run_dir(run_id), dirs_exist_ok=True)
+            target_fs._manifest['runs'][run_id] = deepcopy(info)
+        # Materialize original paths from immutable snapshots, even if the
+        # previous attempt no longer has a mutable working copy.
+        prefix = f'runs/{run_id}/artifacts/'
+        for artifact in info.get('artifacts', []):
+            if not artifact.startswith(prefix): raise ValueError('运行产物不属于对应 run')
+            name = artifact.removeprefix(prefix)
+            parts = PurePosixPath(name).parts
+            if not parts or any(p.startswith('.') for p in parts) or parts[0] in {'data','attachment','manifest.json','chat_history.json'}:
+                raise ValueError('非法实验交接路径')
+            origin = source_fs.abs(artifact)
+            target = target_fs.abs(name)
+            if origin.is_symlink(): raise ValueError('运行产物不允许符号链接')
+            if origin.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(origin, target)
+                target_fs._manifest['files'][name] = {'source_run':run_id, 'kind':'data', 'visibility':'user'}
+    for path, meta in inventory.get('files', {}).items():
+        if meta.get('source_run') in selected:
+            copy_file(path)
+            target_fs._manifest['files'][path] = deepcopy(meta)
+    # The exported solution is produced outside the kernel, so has no run ID.
+    copy_file(f'code/{experiment_id}_solution.py')
+    target_fs._save_manifest()
+    return selected
+
+
 def publish_reference(source_fs, target_fs, item):
     """Resolve a figure to its immutable run file; no experiment-specific renaming."""
     if not item.get('path'):

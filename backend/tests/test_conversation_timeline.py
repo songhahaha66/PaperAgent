@@ -75,24 +75,26 @@ def test_atomic_cross_process_history_updates_preserve_unrelated_messages(tmp_pa
     processes = [ctx.Process(target=_append_history, args=(str(tmp_path), i)) for i in range(3)]
     for process in processes: process.start()
     while any(process.is_alive() for process in processes):
-        path = tmp_path / 'work/chat_history.json'
-        if path.exists(): assert isinstance(json.loads(path.read_text())['messages'], list)
+        assert isinstance(ChatHistoryManager(str(tmp_path)).get_messages('work'), list)
         for process in processes: process.join(.01)
     assert all(process.exitcode == 0 for process in processes)
     messages = ChatHistoryManager(str(tmp_path)).get_messages('work')
     assert len(messages) == len({r['content'] for r in messages}) == 36
 
 
-def test_failed_atomic_replace_keeps_previous_file_and_corrupt_input_is_not_overwritten(tmp_path, monkeypatch):
+def test_failed_transaction_keeps_previous_messages_and_corrupt_legacy_is_not_overwritten(tmp_path, monkeypatch):
     manager, _, reply, _ = writer(tmp_path)
     before = manager.get_messages('work')
-    import services.chat_services.chat_history_manager as module
-    monkeypatch.setattr(module.os, 'replace', lambda *_: (_ for _ in ()).throw(OSError('disk unavailable')))
+    original = manager._write_message
+    def fail_after_write(db, message):
+        original(db, message)
+        raise OSError('disk unavailable')
+    monkeypatch.setattr(manager, '_write_message', fail_after_write)
     with pytest.raises(OSError): manager.save_message('work', 'user', 'not committed')
     assert manager.get_messages('work') == before
-    assert not list((tmp_path / 'work').glob('.chat_history-*'))
-    path = tmp_path / 'work/chat_history.json'; path.write_text('{corrupt')
-    with pytest.raises(ValueError): manager.save_message('work', 'user', 'do not erase')
+    root = tmp_path / 'legacy'; root.mkdir()
+    path = root / 'chat_history.json'; path.write_text('{corrupt')
+    with pytest.raises(ValueError): manager.save_message('legacy', 'user', 'do not erase')
     assert path.read_text() == '{corrupt'
 
 

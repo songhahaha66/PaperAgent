@@ -6,6 +6,5 @@ AI系统核心管理器模块
 # 使用字符串类型注解避免循环导入
 __all__ = [
     'StreamOutputManager',
-    'PersistentStreamManager',
     'SimpleStreamCallback',
 ]

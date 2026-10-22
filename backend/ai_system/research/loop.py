@@ -119,7 +119,9 @@ async def act(request, runtime):
                          experiment_id=action.get('experiment_id') or action.get('target'),
                          question_id=action.get('question_id'),events=ctx.events,
                          research_id=ctx.research.research_id,purpose=action.get('reason')):
-        try:return await _act(request,runtime)
+        try:
+            await _act(request,runtime)
+            return {}
         finally:await ctx.events.emit('research_activity',{'action_id':action['id']})
 
 

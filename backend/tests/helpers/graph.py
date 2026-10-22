@@ -25,7 +25,6 @@ from ai_system.graph.state import (
 )
 from ai_system.research.models import Requirement, Assumption, IssueReport
 from ai_system.research.planner import AmendmentSpec
-from ai_system.judge import Answers, ScoreAnswer
 
 TASK = "某城市给出 2015-2024 年用电量数据。问题一：建立模型预测 2025 年用电量。问题二：在问题一基础上评估节能政策效果。"
 
@@ -296,18 +295,6 @@ class FakeModel(BaseChatModel):
         return body
 
 
-class FixedJudge:
-    name = "fixed"
-
-    async def ask(self, state, questions):
-        # 第二个候选（方案2）分数更高；每次只评一个候选
-        return Answers(
-            scores={k: ScoreAnswer(score=3.0 if "「方案2」" in q.instructions else 1.0, probabilities={}, confidence=None)
-                    for k, q in questions.items()},
-            judge="fixed",
-        )
-
-
 def _make_workspace(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
     (ws / "data").mkdir(parents=True)
@@ -317,5 +304,5 @@ def _make_workspace(tmp_path: Path) -> Path:
 
 def _context(ws: Path, model: FakeModel, **options) -> GraphContext:
     # These fixtures exercise multi-route comparison explicitly.
-    return GraphContext.create(str(ws), planner_llm=model, judge=FixedJudge(),
-                               **({"n_candidates": 2, "explore_top_k": 1} | options))
+    return GraphContext.create(str(ws), planner_llm=model,
+                               **options)

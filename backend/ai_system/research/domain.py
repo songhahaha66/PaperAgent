@@ -93,13 +93,17 @@ def register_execution_artifacts(state, root, execution):
     aid=execution['attempt_id'];eid=execution['task_id']
     workspace=root/'.system'/'attempts'/aid/'workspace'
     manifest=workspace/'manifest.json'
-    runs=json.loads(manifest.read_text(encoding='utf-8'))['runs'] if manifest.is_file() else {}
+    inventory=json.loads(manifest.read_text(encoding='utf-8')) if manifest.is_file() else {}
+    inherited=set(inventory.get('inherited_runs', []))
+    runs={rid: run for rid, run in inventory.get('runs', {}).items() if rid not in inherited}
     files=[]
     for run_id, run in runs.items():
         for kind, path in [('code',run.get('input')),('stdout',run.get('stdout')),('stderr',run.get('stderr'))]:
             if path and (root/path).is_file():files.append((kind,path,run_id))
     for path in sorted((workspace/'outputs'/'intermediate').rglob('*')):
-        if path.is_file():files.append(('data',path.relative_to(root).as_posix(),''))
+        meta=inventory.get('files', {}).get(path.relative_to(workspace).as_posix(), {})
+        if path.is_file() and meta.get('source_run') not in inherited:
+            files.append(('data',path.relative_to(root).as_posix(),meta.get('source_run') or ''))
     for kind,path,run_id in files:
         target=(root/path).resolve()
         if not target.is_relative_to(root):raise ValueError('实验产物超出项目目录')

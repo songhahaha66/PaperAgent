@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.research.store import ResearchStore
-from helpers.graph import FakeModel, FixedJudge, TASK, _Structured
+from helpers.graph import FakeModel, TASK, _Structured
 
 
 class BrokenWriter(FakeModel):
@@ -31,8 +31,8 @@ def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputin
         async def send_json_block(self, kind, content):
             events.append((kind, content))
 
-    agent = PaperGraphAgent(model, workspace_dir=str(tmp_path), judge=FixedJudge(),
-        stream_manager=Recorder(), explore_top_k=1, max_repair_rounds=1)
+    agent = PaperGraphAgent(model, workspace_dir=str(tmp_path),
+        stream_manager=Recorder(), max_repair_rounds=1)
     assert "研究已暂停" in asyncio.run(agent.run(TASK))
     store = ResearchStore(tmp_path, agent._load_thread())
     before = store.snapshot()
@@ -65,7 +65,7 @@ def test_explicit_resume_of_unchanged_bad_writer_is_bounded_and_keeps_history_an
     monkeypatch.setattr(_Structured,'reviewed_q1',True)
     monkeypatch.setattr(_Structured,'audits',10)
     model=BrokenWriter(loose_number_once=False)
-    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),judge=FixedJudge())
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
     assert '研究已暂停' in asyncio.run(agent.run(TASK))
     store=ResearchStore(tmp_path,agent._load_thread());before=store.snapshot()
     history=list(before['publication']['repair_inputs']);written=len(model.text_calls)

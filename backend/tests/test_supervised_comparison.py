@@ -55,7 +55,7 @@ def setup(tmp_path,monkeypatch):
         'requirements':[{'id':'RQ1','statement':'回归预测','source_quote':'预测 target','kind':'goal','task_ids':['Q1'],'checks':[]}],'assumptions':[]}
     store.initialize(TASK,analysis)
     cfg=ExperimentStore(store);spec=SupervisedSpec(dataset='data/diabetes.csv',target='target',features=list(load_diabetes().feature_names),id_column='sample_id',negative_control_tolerance=.15).model_dump();cfg.set_policy(True,spec)
-    parent=GraphContext.create(str(root),planner_llm=None,explore_top_k=2,n_candidates=2);parent.research=store
+    parent=GraphContext.create(str(root),planner_llm=None);parent.research=store
     order=store.claim('Q1');ctx=worker_context(parent,order)
     candidates=[candidate('shallow','gbdt','shallow random forest'),candidate('ridge','regression','scaled ridge')]
     branch={'source':TASK,'analysis':analysis,'subproblem':analysis['subproblems'][0],'data_profile':'442 observations, clinical measurements',

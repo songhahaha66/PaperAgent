@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.export.docx import export_docx
 from ai_system.graph import PaperGraphAgent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from helpers.graph import TASK, FakeModel, FixedJudge, _make_workspace
+from helpers.graph import TASK, FakeModel, _make_workspace
 
 needs_pandoc = pytest.mark.skipif(not shutil.which("pandoc"), reason="没有 pandoc")
 needs_xelatex = pytest.mark.skipif(not shutil.which("xelatex"), reason="没有 xelatex")
@@ -59,7 +59,7 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
             events.append((block_type, content))
 
     agent = PaperGraphAgent(
-        FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), judge=FixedJudge(), output_mode="latex"
+        FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), output_mode="latex"
     )
     output = asyncio.run(agent.run(TASK))
 
@@ -128,7 +128,7 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     (ws / ".system" / "template_contract.md").write_text(MD_CONTRACT, encoding="utf-8")
     # This checks template/export behavior; adversarial prose and its repair are
     # covered by test_graph_end_to_end_offline, including the unregistered number.
-    agent = PaperGraphAgent(FakeModel(loose_number_once=False), workspace_dir=str(ws), judge=FixedJudge(), output_mode="word")
+    agent = PaperGraphAgent(FakeModel(loose_number_once=False), workspace_dir=str(ws), output_mode="word")
     output = asyncio.run(agent.run(TASK))
     assert "paper.docx" in output
 

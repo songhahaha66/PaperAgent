@@ -94,7 +94,7 @@ def _build_agent(pipeline: str, llm, workspace: Path):
         raise ValueError(f"未知 pipeline: {pipeline}")
     from ai_system.graph.agent import PaperGraphAgent
 
-    return PaperGraphAgent(llm, workspace_dir=str(workspace), confirm_models=False, **RESEARCH_VARIANTS[pipeline])
+    return PaperGraphAgent(llm, workspace_dir=str(workspace), **RESEARCH_VARIANTS[pipeline])
 
 
 async def run_problem(

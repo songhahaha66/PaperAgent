@@ -1,3 +1,4 @@
+import { createWorkspaceRefresh } from '@/composables/workspaceRefresh'
 import { ref, shallowRef, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
@@ -45,7 +46,17 @@ export function useWorkStream(options: {
   } = options.session
   const { inputValue, atBottom, panelSession, restorePanelScroll, scrollToBottom, activateChat } =
     options.layout
-  const loadWorkspaceFiles = options.refreshFiles
+  const refresh = createWorkspaceRefresh({
+    research: loadResearchSnapshot,
+    files: options.refreshFiles,
+    history: () => readChatHistory(true),
+    work: readCurrentWork,
+  }, isDisposed)
+  const refreshWorkspace = () => refresh.request(['research', 'files', 'history'])
+  const loadChatHistory = (throwOnError = false) => refresh.request(['history']).catch((error) => {
+    if (throwOnError) throw error
+  })
+  const refreshCurrentWork = () => refresh.request(['work'])
   const authStore = useAuthStore()
   const { ui, isZh } = useStudioCopy()
   // 定义聊天消息类型（使用API中的类型）
@@ -136,7 +147,7 @@ export function useWorkStream(options: {
       applyWorkStatus(result.work_status)
       isStreaming.value = false
       await loadChatHistory()
-      await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
+      await refresh.request(['files', 'research'])
     } catch {
       MessagePlugin.error(isZh.value ? '暂停失败，请重试' : 'Could not pause. Please retry.')
     } finally {
@@ -154,7 +165,7 @@ export function useWorkStream(options: {
       if (authStore.token) await refreshCurrentWork()
       connectionState.value = 'idle'
     }
-    await loadResearchSnapshot()
+    await refresh.request(['research'])
   }
   // 当前恢复任务的消息ID
   const reconnectMessageId = ref<string | null>(null)
@@ -275,12 +286,31 @@ export function useWorkStream(options: {
     reconnectMessageId.value = null
     await loadChatHistory()
     await refreshCurrentWork()
-    await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
+    await refresh.request(['files', 'research'])
   }
 
   const handleStreamMessage = (data: any, messageId: string) => {
     if (isDisposed()) return
     applyWorkStatus(data.work_status)
+    // Workspace notifications do not depend on a chat placeholder surviving a history reload.
+    if (data.type === 'json_block') {
+      const block = data.block
+      if (block?.type === 'research_state' || block?.type === 'research_activity') {
+        scheduleResearchRefresh()
+        return
+      }
+      if (block?.type === 'file_changed') {
+        scheduleFileRefresh()
+        return
+      }
+      if (block?.type === 'research_snapshot') {
+        if (block.content?.schema_version === 5 && block.content.work_id === workId.value) {
+          invalidateSnapshot()
+          applyResearchSnapshot(block.content as ResearchSnapshot)
+        }
+        return
+      }
+    }
     const messageIndex = chatMessages.value.findIndex(
       (m) => m.id === (data.update?.reply_id || data.reply_id || messageId),
     )
@@ -310,16 +340,7 @@ export function useWorkStream(options: {
       case 'json_block':
         const block = data.block
 
-        if (block?.type === 'research_state' || block?.type === 'research_activity') {
-          scheduleResearchRefresh()
-        } else if (block?.type === 'research_snapshot') {
-          if (block.content?.schema_version === 5 && block.content.work_id === workId.value) {
-            invalidateSnapshot()
-            applyResearchSnapshot(block.content as ResearchSnapshot)
-          }
-        } else if (block?.type === 'file_changed') {
-          scheduleFileRefresh()
-        } else if (block?.type === 'plan_updated') {
+        if (block?.type === 'plan_updated') {
           // Plans are projected from the research snapshot, never phase events.
         } else {
           chatMessages.value[messageIndex] = {
@@ -340,8 +361,7 @@ export function useWorkStream(options: {
         void loadChatHistory()
         connectionState.value = 'idle'
         // Refresh the authoritative evidence after research and after reconnect.
-        loadResearchSnapshot()
-        loadWorkspaceFiles()
+        refresh.schedule(['research', 'files'], 0)
         break
 
       case 'error':
@@ -353,7 +373,7 @@ export function useWorkStream(options: {
         isStreaming.value = false
         reconnectMessageId.value = null
         void loadChatHistory()
-        loadResearchSnapshot()
+        refresh.schedule(['research'], 0)
         break
     }
 
@@ -372,21 +392,22 @@ export function useWorkStream(options: {
     }, 1500)
   }
   // Read one display history; comment messages are projected by the server.
-  const loadChatHistory = async (throwOnError = false) => {
+  async function readChatHistory(throwOnError = false) {
     if (isDisposed() || !authStore.token || !workId.value) return
 
     const generation = ++historyGeneration
+    const requestedWork = workId.value
     if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
     try {
       // 使用新的work聊天历史API
       const historyData = await chatAPI.getWorkChatHistory(authStore.token, workId.value)
 
-      if (isDisposed() || generation !== historyGeneration) return
+      if (isDisposed() || requestedWork !== workId.value || generation !== historyGeneration) return
       const hadPendingPaper = chatMessages.value.some((m) => m.paper_execution && m.isStreaming)
       // 转换消息格式
       const live = new Map(
         chatMessages.value
-          .filter((m) => m.isStreaming && m.metadata?.reply_id)
+          .filter((m) => m.isStreaming)
           .map((m) => [m.id, m]),
       )
       chatMessages.value = historyData.messages.map((msg, index) => {
@@ -415,13 +436,13 @@ export function useWorkStream(options: {
       }
       schedulePaperHistory()
       if (hadPendingPaper && !chatMessages.value.some((m) => m.paper_execution && m.isStreaming)) {
-        await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])
+        await refresh.request(['files', 'research'])
       }
       atBottom.value = panelSession.value.followChat
       await restorePanelScroll()
     } catch (error) {
       console.error('加载聊天历史失败:', error)
-      if (isDisposed() || generation !== historyGeneration) return
+      if (isDisposed() || requestedWork !== workId.value || generation !== historyGeneration) return
       schedulePaperHistory()
       if (throwOnError) throw error
     }
@@ -546,25 +567,8 @@ export function useWorkStream(options: {
     scopedVersion = undefined
   }
 
-  const fileRefreshTimers = new Set<ReturnType<typeof setTimeout>>()
-  let researchRefreshTimer: ReturnType<typeof setTimeout> | undefined
-  function scheduleResearchRefresh() {
-    if (researchRefreshTimer) return
-    researchRefreshTimer = setTimeout(() => {
-      researchRefreshTimer = undefined
-      if (!isDisposed()) void loadResearchSnapshot()
-    }, 120)
-  }
-  onUnmounted(() => {
-    if (researchRefreshTimer) clearTimeout(researchRefreshTimer)
-  })
-  function scheduleFileRefresh() {
-    const timer = setTimeout(() => {
-      fileRefreshTimers.delete(timer)
-      if (!isDisposed()) void loadWorkspaceFiles()
-    }, 500)
-    fileRefreshTimers.add(timer)
-  }
+  function scheduleResearchRefresh() { refresh.schedule(['research']) }
+  function scheduleFileRefresh() { refresh.schedule(['files'], 500) }
   function appendAttachment(filename: string, size: number) {
     if (isDisposed()) return
     chatMessages.value.push({
@@ -584,13 +588,13 @@ export function useWorkStream(options: {
         (isStreaming.value ||
           ['in_progress', 'running', 'processing'].includes(currentWork.value?.status || ''))
       )
-        void loadResearchSnapshot()
+        refresh.schedule(['research'])
     }, 1000)
   })
   onUnmounted(() => {
     if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
     if (elapsedTimer) clearInterval(elapsedTimer)
-    fileRefreshTimers.forEach(clearTimeout)
+    refresh.dispose()
     webSocketHandler.value?.disconnect()
     webSocketHandler.value = null
     isStreaming.value = false
@@ -603,10 +607,11 @@ export function useWorkStream(options: {
     { deep: true },
   )
 
-  async function refreshCurrentWork() {
+  async function readCurrentWork() {
     if (!authStore.token || isDisposed()) return
-    const work = await workspaceAPI.getWork(authStore.token, workId.value)
-    if (!isDisposed()) currentWork.value = work
+    const requestedWork = workId.value
+    const work = await workspaceAPI.getWork(authStore.token, requestedWork)
+    if (!isDisposed() && requestedWork === workId.value) currentWork.value = work
   }
 
   return {
@@ -627,6 +632,8 @@ export function useWorkStream(options: {
     pauseTask,
     reconnectTask,
     loadChatHistory,
+    refreshWorkspace,
+    refreshResources: refresh.request,
     checkAndResumeRunningTask,
     sendMessage,
     handleStreamMessage,

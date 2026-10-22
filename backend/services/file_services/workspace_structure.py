@@ -53,23 +53,6 @@ class WorkspaceStructureManager:
             template_id: 可选的模板ID
             output_mode: 输出模式，可选值：markdown, word, latex
         """
-        # 创建初始对话历史文件
-        chat_history = {
-            "work_id": work_id,
-            "session_id": f"{work_id}_session",
-            "messages": [],
-            "context": {
-                "current_topic": "",
-                "generated_files": [],
-                "workflow_state": "created"
-            },
-            "created_at": str(datetime.now()),
-            "version": "2.0"
-        }
-        chat_file = workspace_path / "chat_history.json"
-        with open(chat_file, 'w', encoding='utf-8') as f:
-            json.dump(chat_history, f, ensure_ascii=False, indent=2)
-        
         # 先初始化模板契约，并在可用时把模板骨架复制为初始论文文件。
         initialize_template_contract(workspace_path, template_id, output_mode)
 

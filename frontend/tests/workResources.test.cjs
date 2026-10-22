@@ -86,9 +86,9 @@ function deferred() {
   )
   assert.equal(preview.figureFiles.value.length, 1, 'attachments are not research figures')
   await preview.loadWorkspaceFiles()
-  assert.equal(fileReads, 1)
-  await preview.loadWorkspaceFiles(true)
-  assert.equal(fileReads, 2, 'manual refresh and upload bypass the event throttle')
+  assert.equal(fileReads, 2)
+  await preview.loadWorkspaceFiles()
+  assert.equal(fileReads, 3, 'refresh coalescing belongs to the workspace scheduler')
   await flush()
   assert.equal(imageReads, 0, 'hidden figure panes do not fetch image blobs')
   figuresVisible.value = true
@@ -104,8 +104,8 @@ function deferred() {
   await flush()
   assert.deepEqual(revoked, ['blob:test'], 'late image URLs are immediately released after leaving')
   assert.equal(Object.keys(preview.imageUrls.value).length, 0)
-  await preview.loadWorkspaceFiles(true)
-  assert.equal(fileReads, 2, 'disposed work never starts another file request')
+  await preview.loadWorkspaceFiles()
+  assert.equal(fileReads, 3, 'disposed work never starts another file request')
   console.log(
     'PASS: artifact selection, lazy figures, forced refresh and late blob cleanup remain isolated',
   )

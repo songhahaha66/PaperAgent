@@ -50,5 +50,5 @@ async def resume_saved_contract(agent):
         async with AsyncSqliteSaver.from_conn_string(str(Path(agent.workspace_dir)/'.system/graph.sqlite')) as saver:
             graph=compile_graph(saver)
             await graph.aupdate_state({'configurable':{'thread_id':thread}},
-                                     {'task':TASK,'analysis':problem().model_dump()},as_node='solve_join')
+                                     {'research_blocked':False},as_node='solve_join')
     return await agent.resume_failed()

@@ -108,7 +108,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
                 assert event['type'] == 'reply_update'
                 if any(s.get('block', {}).get('type') == 'paper_stage' for s in event['update']['segments']): break
             else: pytest.fail('paper_stage checkpoint missing')
-            running = json.loads((root / 'chat_history.json').read_text())['messages'][-1]
+            running = ChatHistoryManager(str(root.parent)).get_messages(root.name)[-1]
             assert running['id'] == start['reply_id'] and running['metadata']['status'] == 'running'
             response=client.post('/api/chat/work/pause-test/pause')
             assert response.json()=={'work_status':'paused'}
@@ -119,7 +119,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
             else: pytest.fail('terminal pause receipt missing')
             assert event['work_status']=='paused' and event['reload_history']
             assert work.status=='paused'
-            messages = json.loads((root / 'chat_history.json').read_text())['messages']
+            messages = ChatHistoryManager(str(root.parent)).get_messages(root.name)
             replies = [message for message in messages if message['role'] == 'assistant']
             assert len(replies) == 1 and replies[0]['id'] == start['reply_id']
             assert replies[0]['metadata']['status'] == 'paused'

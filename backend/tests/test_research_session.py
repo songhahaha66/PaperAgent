@@ -199,12 +199,20 @@ def exchange(client, payload):
 
 
 def research_files(root):
-    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*')
-            if p.is_file() and p.relative_to(root).as_posix() not in {'chat_history.json', 'chat_history.json.lock'}}
+    import sqlite3
+    from contextlib import closing
+    files = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*')
+             if p.is_file() and p.relative_to(root).as_posix() not in {
+                 'chat_history.json', 'chat_history.json.lock', '.system/research.sqlite'}}
+    with closing(sqlite3.connect(root / '.system/research.sqlite')) as db:
+        for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+            if name.startswith('chat_') or name == 'sqlite_sequence': continue
+            files['db:' + name] = db.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall()
+    return files
 
 
 def durable_reply(root, reply_id, status):
-    messages = json.loads((root / 'chat_history.json').read_text())['messages']
+    messages = ChatHistoryManager(str(root.parent)).get_messages(root.name)
     replies = [m for m in messages if m['role'] == 'assistant']
     assert len(replies) == 1, 'checkpoints and terminal saves must upsert the same reply'
     reply = replies[0]

@@ -650,7 +650,6 @@ class ResearchSetupRequest(BaseModel):
     request_limit:int|None=Field(default=None,ge=1)
     timeout_seconds:float|None=Field(default=None,gt=0)
     compact_paper:bool=True
-    confirm_models:bool=False
     reuse_experience:bool=True
     literature_mode:Literal['off','on_request','auto']='on_request'
     literature_query:str=Field(default='',max_length=300)
@@ -680,7 +679,7 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
         spec=SupervisedSpec.model_validate(request.comparison_spec).model_dump() if request.comparison_spec else None
         skill=validate_skill_policy({'mode':'selected' if request.skill_keys else 'auto','selected':request.skill_keys,'disabled':[]})
         runtime=ResearchRuntime(root)
-        runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper','confirm_models')})
+        runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper')})
         skills=ResearchStore(root,'workspace-skills');skills.set_skill_preferences(skill,skills.skill_preferences()['version'])
         ExperimentStore(skills).set_policy(request.compare,spec)
         ExperienceScope(current_user,work_id).set_enabled(request.reuse_experience)

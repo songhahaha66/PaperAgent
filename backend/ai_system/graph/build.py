@@ -3,10 +3,10 @@
 from langgraph.graph import END, START, StateGraph
 
 from .context import GraphContext
-from .state import PaperState
+from .state import GraphState
 
 
-def solve_join(state: PaperState) -> dict:
+def solve_join(state: GraphState) -> dict:
     """Barrier for parallel workers; recovery also resumes at this boundary."""
     return {}
 
@@ -15,7 +15,7 @@ def build_graph():
     from ..research.control import observe
     from ..research.loop import select, act
 
-    graph = StateGraph(PaperState, context_schema=GraphContext)
+    graph = StateGraph(GraphState, context_schema=GraphContext)
     for name, node in (("observe", observe), ("act", act), ("solve_join", solve_join)):
         graph.add_node(name, node)
     graph.add_edge(START, "observe")

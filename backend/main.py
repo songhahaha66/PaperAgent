@@ -10,8 +10,6 @@ import logging
 
 # 导入日志配置
 from ai_system.config.logging_config import setup_simple_logging
-# 导入异步配置管理器
-from ai_system.config.async_config import initialize_async_config, shutdown_async_config
 from ai_system.config.observability import tracing_status
 from config.paths import get_project_root, get_pa_data_base, get_workspaces_path, get_templates_path
 
@@ -28,8 +26,6 @@ command.upgrade(_migration_config, 'head')
 from services.migrate_data import migrate_all
 migrate_all()
 
-# 初始化异步配置
-initialize_async_config(max_workers=20, max_processes=4)
 
 # 创建logger
 logger = logging.getLogger(__name__)
@@ -62,8 +58,6 @@ async def lifespan(app: FastAPI):
     # 关闭时执行
     logger.info("正在关闭应用...")
     
-    shutdown_async_config()
-    logger.info("异步配置已关闭")
 
 app = FastAPI(
     title="PaperAgent API",
@@ -101,12 +95,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
-
-@app.get("/async-status")
-async def async_status():
-    """获取异步配置状态"""
-    from ai_system.config.async_config import get_async_config
-    return get_async_config().get_status()
 
 # 注册路由模块（统一）
 for router in all_routers:

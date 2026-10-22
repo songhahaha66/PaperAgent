@@ -18,7 +18,7 @@ from auth.auth import get_current_user, verify_token
 from services.chat_services.chat_service import ChatService
 from services.chat_services.task_manager import task_manager
 from ai_system.config.environment import setup_environment_from_db
-from ai_system.core_managers.stream_manager import PersistentStreamManager, SimpleStreamCallback
+from ai_system.core_managers.stream_manager import StreamOutputManager, SimpleStreamCallback
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
@@ -584,11 +584,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             # 创建流式回调和管理器
             ws_callback = WebSocketStreamCallback(work_id, chat_service)
-            stream_manager = PersistentStreamManager(
-                stream_callback=ws_callback,
-                chat_service=chat_service,  # 传入chat_service实例以支持消息持久化
-                session_id=str(session.session_id)
-            )
+            stream_manager = StreamOutputManager(stream_callback=ws_callback)
             
             # 创建任务记录；task_id 告诉前端，断线重连时据此续传
             task = task_manager.create_task(work_id, user_id, problem, action=action)
@@ -663,7 +659,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             )
 
             # 立即保存用户消息到持久化存储，确保历史记录顺序正确
-            await stream_manager.save_user_message(message_data['problem'])
+            await asyncio.to_thread(chat_service.add_message, work_id, 'user', message_data['problem'])
             logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
 
             ws_callback.writer = ReplyWriter(chat_service.history_manager, work_id, task.task_id,

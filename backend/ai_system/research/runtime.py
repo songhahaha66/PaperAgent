@@ -96,7 +96,7 @@ class ResearchRuntime:
         policy={'policy_version':2,'preference_source':'explicit','request_limit':limit,'timeout_seconds':settings.get('timeout_seconds'),
                 'limit_source':'explicit' if limit is not None else 'default',
                 'timeout_source':'explicit' if settings.get('timeout_seconds') is not None else 'model_connection',
-                'compact_paper':False,'confirm_models':False,**settings}
+                'compact_paper':settings.get('compact_paper', False)}
         with self.store._transaction() as db:db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
 
     def status(self,research_id=None):

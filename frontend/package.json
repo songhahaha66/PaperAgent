@@ -16,7 +16,7 @@
     "test:history": "node --experimental-vm-modules tests/workHistory.test.cjs",
     "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs",
     "test:panels": "node --experimental-vm-modules tests/workPanels.test.cjs && node --experimental-vm-modules tests/workPaneLayout.test.cjs && node --experimental-vm-modules tests/workInteractions.test.cjs && node --experimental-vm-modules tests/workObjects.test.cjs",
-    "test:workspace": "npm run test:panels && npm run test:preview && npm run test:history && npm run test:research && npm run test:resources && npm run test:home && npm run test:messages && npm run test:paper",
+    "test:workspace": "node --experimental-vm-modules tests/workspaceRefresh.test.cjs && npm run test:panels && npm run test:preview && npm run test:history && npm run test:research && npm run test:resources && npm run test:home && npm run test:messages && npm run test:paper",
     "test:paper": "node --experimental-vm-modules tests/paperReader.test.cjs && node --experimental-vm-modules tests/paperAnnotations.test.cjs && node --experimental-vm-modules tests/paperComposer.test.cjs",
     "test:research": "node --experimental-vm-modules tests/researchProgress.test.cjs && node --experimental-vm-modules tests/reviewTasks.test.cjs",
     "test:resources": "node --experimental-vm-modules tests/workResources.test.cjs && node --experimental-vm-modules tests/outcomes.test.cjs",

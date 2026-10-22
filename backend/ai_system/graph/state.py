@@ -1,27 +1,15 @@
 """
 状态图的状态与结构化输出定义
 
-状态里只放可序列化的 dict / list / str，方便 checkpoint 落盘和断点续跑；
+GraphState 只保存流程控制字段；PaperState 是从 ResearchStore 派生的临时写作视图；
 LLM、内核、登记表这类运行时对象放在 GraphContext 里（不进 checkpoint）。
 """
 
-import operator
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from ai_system.research.models import ResultMeaning
 from pydantic import BaseModel, Field, model_validator
 from ..research.models import Contract, AssumptionDraft, IssueReport
-
-
-def merge_dict(left: Optional[Dict], right: Optional[Dict]) -> Dict:
-    """并行分支各自写入自己的 key，合并时后写覆盖先写"""
-    merged = dict(left or {})
-    for key, value in (right or {}).items():
-        if value is None:
-            merged.pop(key, None)
-        else:
-            merged[key] = value
-    return merged
 
 
 # ----------------------------------------------------------------------
@@ -160,7 +148,7 @@ class ResultReview(Contract):
 
 
 # ----------------------------------------------------------------------
-# 图状态
+# 临时写作视图（从 ResearchStore 派生，不进入 checkpoint）
 # ----------------------------------------------------------------------
 
 
@@ -172,20 +160,20 @@ class PaperState(TypedDict, total=False):
     data_profile: str
     analysis: Dict[str, Any]
     # 子问题编号 -> {"methods", "candidates", "scores", "chosen", "critic"}
-    designs: Annotated[Dict[str, Dict[str, Any]], merge_dict]
+    designs: Dict[str, Dict[str, Any]]
     # 子问题编号 -> SolveReport dict + status
-    solutions: Annotated[Dict[str, Dict[str, Any]], merge_dict]
+    solutions: Dict[str, Dict[str, Any]]
     # 收敛决策的结果大纲（含范围/依据）；用户模板结构优先。
     section_contexts: Dict[str, str]
     outline: List[Dict[str, Any]]
     # 章节 key -> 带引用的 markdown 正文
-    sections: Annotated[Dict[str, str], merge_dict]
+    sections: Dict[str, str]
     # 跨子问题的结论冲突及统一口径
     consistency: List[Dict[str, Any]]
     issues: List[Dict[str, str]]
     repair_round: int
     paper_path: str
-    log: Annotated[List[str], operator.add]
+    log: List[str]
 
 
 class BranchInput(TypedDict, total=False):
@@ -200,3 +188,8 @@ class BranchInput(TypedDict, total=False):
     data_profile: str
     design: Dict[str, Any]
     dependencies: Dict[str, Dict[str, Any]]
+
+
+class GraphState(TypedDict, total=False):
+    """Checkpoint control only; business projections come from ResearchStore."""
+    research_blocked: bool

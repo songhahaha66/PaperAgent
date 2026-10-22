@@ -1,6 +1,5 @@
 """
-支持持久化的流式输出管理器
-管理全程流式输出，使用JSON格式，并支持聊天记录持久化
+流式输出适配器；消息持久化由会话时间线负责
 """
 
 import logging
@@ -109,105 +108,6 @@ class StreamOutputManager:
         """设置当前消息的角色"""
         self.current_role = role
         logger.debug(f"设置消息角色: {role}")
-
-
-class PersistentStreamManager(StreamOutputManager):
-    """支持持久化的流式输出管理器"""
-
-    def __init__(self, stream_callback: Optional[StreamCallback] = None,
-                 chat_service=None, session_id: str = None):
-        super().__init__(stream_callback)
-        self.chat_service = chat_service
-        self.session_id = session_id
-        self.message_buffer = []
-        self.buffer_size = 100  # 缓冲区大小
-        # 添加数据库操作锁，防止并发数据库访问
-        self._db_lock = asyncio.Lock()
-
-        if chat_service and session_id:
-            logger.info(f"持久化流式管理器初始化完成，会话ID: {session_id}")
-        else:
-            logger.warning("持久化流式管理器未配置聊天服务或会话ID")
-
-    async def _output(self, content: str):
-        """重写输出方法，支持流式持久化"""
-        # 调用父类方法进行流式输出
-        await super()._output(content)
-
-        # 注释掉自动保存，改为只在finalize_message时保存
-        # 这样可以确保每次对话只产生一个完整的AI消息
-        # if len(self.current_message_buffer) > self.buffer_size or content.endswith('\n'):
-        #     await self._save_message_buffer()
-
-    async def save_user_message(self, content: str):
-        """专门保存用户消息的方法"""
-        if self.chat_service and self.session_id:
-            try:
-                # 从session_id中提取work_id
-                work_id = self.session_id.replace(
-                    "_main_session", "") if "_main_session" in self.session_id else self.session_id
-
-                # 使用锁保护数据库操作
-                async with self._db_lock:
-                    # 在事件循环中运行同步方法
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        None,
-                        self.chat_service.add_message,
-                        work_id,
-                        "user",
-                        content,
-                        None  # metadata
-                    )
-                logger.info(
-                    f"[PERSISTENCE] 用户消息持久化完成，work_id: {work_id}, 长度: {len(content)}")
-            except Exception as e:
-                logger.error(f"用户消息持久化失败: {e}")
-        else:
-            logger.warning("无法持久化用户消息：聊天服务或会话ID未配置")
-
-    async def _save_message_buffer(self):
-        """保存消息缓冲到数据库"""
-        if self.chat_service and self.session_id and self.current_message_buffer.strip():
-            try:
-                # 检查聊天服务是否有add_message方法
-                if hasattr(self.chat_service, 'add_message'):
-                    # ChatService.add_message是同步方法，需要从session_id中提取work_id
-                    work_id = self.session_id.replace(
-                        "_main_session", "") if "_main_session" in self.session_id else self.session_id
-
-                    # 使用锁保护数据库操作
-                    async with self._db_lock:
-                        # 在事件循环中运行同步方法
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(
-                            None,
-                            self.chat_service.add_message,
-                            work_id,
-                            self.current_role,
-                            self.current_message_buffer.strip(),
-                            None  # metadata
-                        )
-                    logger.info(
-                        f"[PERSISTENCE] 缓冲消息已保存，work_id: {work_id}, 角色: {self.current_role}, 长度: {len(self.current_message_buffer)}")
-
-                    # 清空已保存的缓冲区内容
-                    self.current_message_buffer = ""
-                else:
-                    logger.warning("聊天服务没有add_message方法")
-            except Exception as e:
-                logger.error(f"保存消息缓冲失败: {e}")
-
-    async def finalize_message(self):
-        """完成消息，保存剩余内容"""
-        # 注意：AI消息的保存由WebSocket回调的on_message_complete处理
-        # 这里只处理用户消息的保存，避免重复保存AI消息
-
-        # 调用父类方法，触发WebSocket回调
-        await super().finalize_message()
-
-        # 清空缓冲区
-        self.current_message_buffer = ""
 
 
 class SimpleStreamCallback(StreamCallback):

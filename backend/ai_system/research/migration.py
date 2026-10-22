@@ -8,7 +8,7 @@ from contextlib import closing
 
 from .domain import FAULT_CATEGORIES, SCHEMA_VERSION
 
-MIGRATION_VERSION = 7
+MIGRATION_VERSION = 8
 
 
 def migrate_runtime(db, root):
@@ -40,7 +40,7 @@ def migrate_runtime(db, root):
         historical = old or bool(settings)
         settings = {'request_limit': budget.get('request_limit', 40) if historical else None,
                     'timeout_seconds': budget.get('timeout_seconds', 90) if historical else None,
-                    'compact_paper': False, 'confirm_models': False, **settings,
+                    'compact_paper': False, **settings,
                     'policy_version': 2, 'limit_source': 'legacy' if historical else 'default',
                     'timeout_source': 'legacy' if historical else 'model_connection',
                     'preference_source': 'legacy' if historical else 'default'}
@@ -248,5 +248,21 @@ def migrate_workspace(store):
                 if new in names:
                     raise ValueError(f"发现两套 {old}/{new}，停止迁移以避免覆盖")
                 db.execute(f'ALTER TABLE "{old}" RENAME TO "{new}"')
+        db.execute("""CREATE TABLE IF NOT EXISTS research_activity (
+            research_id TEXT NOT NULL, id TEXT NOT NULL, started_at REAL NOT NULL,
+            updated_at REAL NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(research_id,id))""")
+        db.execute('CREATE INDEX IF NOT EXISTS research_activity_recent ON research_activity(research_id,started_at DESC,id DESC)')
+        for row in db.execute('SELECT id,payload FROM research').fetchall():
+            state = json.loads(row[1])
+            for item in state.pop('activity', []):
+                db.execute('INSERT OR IGNORE INTO research_activity VALUES (?,?,?,?,?)',
+                    (row[0], item['id'], item['started_at'], item.get('finished_at') or item['started_at'], json.dumps(item, ensure_ascii=False)))
+            db.execute('UPDATE research SET payload=? WHERE id=?', (json.dumps(state, ensure_ascii=False), row[0]))
+        from services.chat_services.chat_history_manager import migrate_chat
+        migrate_chat(db, store.root)
         migrate_runtime(db, store.root)
+        policy = json.loads(db.execute('SELECT payload FROM runtime_policy WHERE id=1').fetchone()[0])
+        for name in ('confirm_models', 'max_design_rounds', 'explore_top_k', 'n_candidates'):
+            policy.pop(name, None)
+        db.execute('UPDATE runtime_policy SET payload=? WHERE id=1', (json.dumps(policy),))
         db.execute("INSERT INTO domain_migrations VALUES (?)", (MIGRATION_VERSION,))

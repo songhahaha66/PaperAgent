@@ -30,7 +30,8 @@ def refresh_registry(ctx):
 async def observe(state, runtime):
     ctx = runtime.context
     store = ctx.research
-    store.initialize(state["task"], output_mode=ctx.output_mode)
+    if store.snapshot() is None:
+        raise ValueError("研究状态不存在，不能从 checkpoint 恢复业务数据")
     snapshot = store.refresh_inputs()
     if ctx.experience_scope is not None:
         try:
@@ -43,7 +44,7 @@ async def observe(state, runtime):
     if 'materials' not in snapshot:
         with store._transaction() as db:
             saved=store._read(db)
-            saved['materials']={'inputs':store.file_inputs(),'profile':state.get('data_profile','') if not saved['executions'] else ''}
+            saved['materials']={'inputs':store.file_inputs(),'profile':''}
             store._save(db,saved,'materials_profiled',saved['materials'])
     from .loop import prepare_action
     blocked = await prepare_action(ctx)
@@ -57,12 +58,7 @@ async def observe(state, runtime):
         store.set_outcome('running')
     snapshot = store.snapshot()
     await ctx.events.emit('research_state', public_snapshot(snapshot,source_root=ctx.research.root))
-    view = graph_view(snapshot)
-    # Checkpoint reducers need explicit tombstones for invalidated projections.
-    for name in ('solutions','designs','sections'):
-        view[name].update({key:None for key in state.get(name,{}) if key not in view[name]})
-    return {**view, 'research_blocked':blocked, 'research_restart':False,
-            'log':[f"observe: commit {snapshot['commit_seq']}"]}
+    return {'research_blocked': blocked}
 
 
 def graph_view(snapshot):
@@ -206,40 +202,34 @@ def worker_context(ctx, order):
             target = work / path
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+    from .domain import experiment_scope, execution_lineage
+    from ai_system.sandbox.artifacts import inherit_execution_files
+    from services.file_services.workspace_fs import WorkspaceFS
+    scope = experiment_scope(snapshot['experiments'], task['dependencies'])
+    target_fs = WorkspaceFS(str(work))
+    target_fs.init_structure()
+    inherited = set()
+    # Dependency order first; continuation products override their older inputs.
     copied = set()
-
+    def copy_execution(key, execution_id):
+        for aid in reversed(execution_lineage(snapshot, execution_id)):
+            if aid in copied: continue
+            copied.add(aid)
+            source = ctx.workspace / '.system' / 'attempts' / aid / 'workspace'
+            inherited.update(inherit_execution_files(source, target_fs, key))
     def copy_dependency(key):
-        if key in copied:
-            return
-        task = snapshot["experiments"][key]
-        for dep in task["dependencies"]:
-            copy_dependency(dep)
-        copied.add(key)
-        source = ctx.workspace / ".system" / "attempts" / task["execution_id"] / "workspace"
-        _copy_tree(source / "outputs" / "intermediate", work / "outputs" / "intermediate")
-        _copy_tree(source / "code", work / "code")
-
-    for dep in snapshot["experiments"][order.task_id]["dependencies"]:
+        for dependency in snapshot['experiments'][key]['dependencies']:
+            copy_dependency(dependency)
+        copy_execution(key, snapshot['experiments'][key]['execution_id'])
+    for dep in task['dependencies']:
         copy_dependency(dep)
-    parent=snapshot['executions'][order.attempt_id].get('parent_attempt')
+    parent = snapshot['executions'][order.attempt_id].get('parent_attempt')
     if parent:
-        # Continue from saved products. Never replay the old code to recreate a kernel.
-        previous=ctx.workspace/'.system'/'attempts'/parent/'workspace'
-        for folder in ('outputs','code','runs'):
-            _copy_tree(previous/folder,work/folder)
-        if (previous/'manifest.json').is_file():
-            shutil.copyfile(previous/'manifest.json',work/'manifest.json')
-            inherited = json.loads((previous/'manifest.json').read_text())
-            for path, meta in inherited.get('files', {}).items():
-                parts = Path(path).parts
-                if meta.get('source_run') and parts and parts[0] not in {'data','attachment','code','outputs','runs'} and not any(part.startswith('.') for part in parts):
-                    source = (previous/path).resolve()
-                    if source.is_relative_to(previous.resolve()) and source.is_file():
-                        target = work/path
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(source,target)
+        copy_execution(order.task_id, parent)
+    target_fs._manifest['inherited_runs'] = sorted(inherited)
+    target_fs._save_manifest()
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
-        writer_llm=ctx.writer_llm, judge=ctx.judge, stream_manager=ctx.events.stream_manager,
+        writer_llm=ctx.writer_llm, stream_manager=ctx.events.stream_manager,
         max_solver_steps=ctx.max_solver_steps,
         template_requirements=ctx.template_requirements, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
@@ -249,8 +239,9 @@ def worker_context(ctx, order):
     local.compact_paper=ctx.compact_paper
     local.delivery_fs = ctx.fs
     local.delivery_events = ctx.events
-    local.registry.results = dict(ctx.registry.results)
-    local.registry.claims = dict(ctx.registry.claims)
+    allowed = scope | ({order.task_id} if parent else set())
+    local.registry.results = {ref: result for ref, result in ctx.registry.results.items() if result.subproblem in allowed}
+    local.registry.claims = {ref: claim for ref, claim in ctx.registry.claims.items() if claim.subproblem in allowed}
     local.registry.allocate_id = ctx.research.allocate_ref
     # Published figures use root-workspace paths, while a continued attempt's
     # copied files still use their original attempt paths. Materialize the
@@ -321,7 +312,7 @@ async def execute(branch, runtime):
             review["evidence"] = [evidence[item["id"]] for item in review["evidence"]]
         # Immutable run IDs preserve existing grounding and evidence links.
         from ai_system.sandbox.artifacts import capture_run_files
-        for path in capture_run_files(local.fs, ctx.fs):
+        for path in capture_run_files(local.fs, ctx.fs, run_ids=[rid for rid in local.fs._manifest['runs'] if rid not in local.fs._manifest.get('inherited_runs', [])]):
             await ctx.events.file_changed(path)
         result = WorkerResult(order=order,
             execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
@@ -376,7 +367,7 @@ async def execute(branch, runtime):
                 # Code output is available even when later interpretation fails.
                 # Publication of a file does not accept the experiment's conclusions.
                 from ai_system.sandbox.artifacts import capture_run_files
-                for path in capture_run_files(local.fs, ctx.fs):
+                for path in capture_run_files(local.fs, ctx.fs, run_ids=[rid for rid in local.fs._manifest['runs'] if rid not in local.fs._manifest.get('inherited_runs', [])]):
                     await ctx.events.file_changed(path)
             finally:
                 await local.kernels.close()

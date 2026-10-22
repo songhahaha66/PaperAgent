@@ -45,9 +45,12 @@ def test_first_observe_can_inspect_without_tasks_or_extra_model_calls(tmp_path, 
         from ai_system.modules.registry import invoke
         await invoke(ctx,'experiments.inspect')
     monkeypatch.setattr(planner.Planner, 'run', decide)
-    state = asyncio.run(control.observe({'task':SOURCE}, SimpleNamespace(context=ctx)))
+    ctx.research.initialize(SOURCE)
+    state = asyncio.run(control.observe({}, SimpleNamespace(context=ctx)))
     action = loop.select(state, SimpleNamespace(context=ctx))
     assert any(a['capability']=='experiments.inspect' for a in ctx.research.snapshot()['activity'])
     assert len(calls) == 1 and not ctx.research.snapshot()['experiments']
-    assert state['analysis']['subproblems'] == [] and state['analysis']['restatement'] == SOURCE
-    assert state['data_profile'] == ctx.research.snapshot()['materials']['profile']
+    assert state == {'research_blocked': False}
+    view = control.graph_view(ctx.research.snapshot())
+    assert view['analysis']['subproblems'] == [] and view['analysis']['restatement'] == SOURCE
+    assert view['data_profile'] == ctx.research.snapshot()['materials']['profile']

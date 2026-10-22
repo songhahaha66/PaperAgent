@@ -9,7 +9,6 @@ PaperGraphAgent：状态图流水线的入口（构造参数 + async run），�
 import json
 import asyncio
 import logging
-import os
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
@@ -18,7 +17,6 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langsmith import trace as remote_trace
 
 from ..config.observability import research_tracing
-from ..judge import JevJudge, LLMJudge, jev_available
 from ..research import ENGINE_VERSION
 from ..research.store import ResearchStore
 from ..research.control import refresh_registry
@@ -33,14 +31,6 @@ CHECKPOINT_PATH = ".system/graph.sqlite"
 THREAD_PATH = ".system/graph_thread.json"
 CALLS_PATH = ".system/llm_calls.json"
 GRAPH_RECURSION_LIMIT = 200
-DEFAULT_JEV_MODEL = "jev-1.14.0"
-
-
-def default_judge(llm):
-    """建模方案评审：有 Jev key 用 Jev（一次请求评完所有候选），否则用 LLM 结构化打分"""
-    if jev_available():
-        return JevJudge(model=os.getenv("JEV_MODEL", DEFAULT_JEV_MODEL))
-    return LLMJudge(llm)
 
 
 class PaperGraphAgent:
@@ -56,8 +46,6 @@ class PaperGraphAgent:
         codeagent_llm=None,
         output_mode: str = "markdown",
         writer_llm=None,
-        judge: Any = "default",
-        confirm_models: Optional[bool] = None,
         **options,
     ):
         if not workspace_dir:
@@ -79,9 +67,6 @@ class PaperGraphAgent:
         self.template_id = template_id
         self.codeagent_llm = codeagent_llm
         self.writer_llm = writer_llm
-        self.judge = default_judge(llm) if judge == "default" else judge
-        options.pop('explore_top_k',None)
-        options.pop('n_candidates',None)
         self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
         if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
             from ..research.runtime import ResearchRuntime
@@ -122,7 +107,6 @@ class PaperGraphAgent:
             planner_llm=self.llm,
             coder_llm=self.codeagent_llm,
             writer_llm=self.writer_llm,
-            judge=self.judge,
             stream_manager=self.stream_manager,
             **self.options,
         )
@@ -156,6 +140,7 @@ class PaperGraphAgent:
                 config = {"configurable": {"thread_id": thread_id}, "recursion_limit": GRAPH_RECURSION_LIMIT}
                 if graph_input is None:
                     return await self._resume_graph(graph, config, thread_id, ctx)
+                ctx.research.initialize(user_input, output_mode=ctx.output_mode)
                 return await self._invoke(graph, graph_input, config, thread_id, ctx)
         except Exception as exc:
             logger.error("PaperGraphAgent 执行失败: %s", exc, exc_info=True)
@@ -218,14 +203,10 @@ class PaperGraphAgent:
         current = store.snapshot()
         if current["commit_seq"] == snapshot["commit_seq"] and current["outcome"] in {"completed", "needs_attention"}:
             # A delivered command retry must not republish the paper or rerun export.
-            checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
-            async with AsyncSqliteSaver.from_conn_string(str(checkpoint)) as saver:
-                graph = compile_graph(saver)
-                saved = await graph.aget_state({"configurable": {"thread_id": research_id}})
-            self.last_result = saved.values
             ctx = self._context()
             ctx.research = store
             refresh_registry(ctx)
+            self.last_result = self._result(ctx)
             output = self._final_message(self.last_result, ctx)
             await self._emit("main_agent_complete", output)
             return output
@@ -250,28 +231,25 @@ class PaperGraphAgent:
 
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
-        saved=await graph.aget_state(config)
         business = ctx.research.snapshot()
         pending = (business or {}).get('action') or {}
         if pending.get('capability') == 'ask' and pending.get('status') == 'waiting':
             raise ValueError('当前等待必要信息，请先回答待补充问题')
-        if ctx.research.snapshot() is None and saved.values.get('task'):
-            # Normalize old approval/design checkpoints into this same loop;
-            # preserve their analysis and designs, not the obsolete executor.
-            ctx.research.initialize(saved.values['task'],saved.values.get('analysis'), output_mode=ctx.output_mode)
+        if business is None:
+            raise ValueError('研究状态不存在，不能从 checkpoint 恢复业务数据')
         if ctx.research.snapshot() is not None:
             ctx.research.recover()
             from ..research.loop import resume
             resume(ctx.research,planning_limit=ctx.max_planning_calls)
             refresh_registry(ctx)
+            from .checkpoint import discard_business_mirror
+            await discard_business_mirror(graph, config)
             await graph.aupdate_state(config, {"research_blocked": False}, as_node="solve_join")
         return await self._invoke(graph, None, {**config, "recursion_limit": GRAPH_RECURSION_LIMIT}, thread_id, ctx)
 
     async def _invoke(self, graph, graph_input, config, thread_id: str, ctx: GraphContext) -> str:
         self._save_thread(thread_id, "running")
         trace = LLMCallTrace()
-        before = await graph.aget_state(config)
-        log_offset = len(before.values.get("log") or [])
         try:
             from ..research.runtime import budget_scope
             operation = 'resume' if graph_input is None else 'research'
@@ -303,7 +281,7 @@ class PaperGraphAgent:
             raise
         finally:
             trace.dump(Path(self.workspace_dir) / CALLS_PATH)
-        self.last_result = result
+        self.last_result = self._result(ctx)
 
         interrupts = result.get("__interrupt__") or []
         self.waiting_confirm = bool(interrupts)
@@ -315,7 +293,7 @@ class PaperGraphAgent:
 
         blocked = result.get("research_blocked", False)
         self._save_thread(thread_id, "blocked" if blocked else "done")
-        output = self._final_message({**result, "log": (result.get("log") or [])[log_offset:]}, ctx)
+        output = self._final_message(self.last_result, ctx)
         await self._emit("main_agent_complete", output)
         return output
 
@@ -330,13 +308,12 @@ class PaperGraphAgent:
             if snapshot.interrupts and snapshot.next==('act',):
                 logger.info("恢复等待确认的 thread %s", thread_id)
                 store=ResearchStore(self.workspace_dir,thread_id)
-                question=snapshot.interrupts[0].value
-                message=question['message'] if isinstance(question,dict) else str(question)
                 with store._transaction() as db:
                     state=store._read(db)
                     pending = (state or {}).get('action') or {}
                     if pending.get('capability') != 'ask' or pending.get('status') != 'waiting':
                         raise ValueError('待补充问题已改变，请重试')
+                    message = pending['inputs']['message']
                     state.setdefault('clarifications',[]).append({'ref':'clarification:'+str(len(state.get('clarifications',[]))+1),'question':message,'response':user_input})
                     if state['action']:state['action']['status']='done'
                     store._save(db,state,'clarification_received',{'question':message,'response':user_input})
@@ -344,15 +321,27 @@ class PaperGraphAgent:
             raise ValueError('当前没有等待补充信息的研究')
         if thread_id and not new_run:
             raise ValueError('已有研究，请明确恢复、回答待补充信息或重新研究')
-        return {"task": user_input}, uuid.uuid4().hex
+        return {"research_blocked": False}, uuid.uuid4().hex
+
+    @staticmethod
+    def _result(ctx):
+        """Transient compatibility view for callers, never checkpointed."""
+        from ..research.control import graph_view
+        state = ctx.research.snapshot()
+        return {**graph_view(state), 'exports': state.get('exports', []),
+                'paper_path': state.get('paper_version') if state.get('paper_conflict') else None,
+                'artifact_conflict': state.get('paper_conflict', False),
+                'delivery_stages': state.get('delivery_stages', {}),
+                'research_blocked': state['outcome'] == 'blocked'}
 
     @staticmethod
     def _final_message(result: Dict[str, Any], ctx: GraphContext) -> str:
         if result.get("research_blocked"):
-            if ctx.stage_status.get("export") == "blocked":
+            export_stage = (result.get("delivery_stages") or {}).get("export", {})
+            if export_stage.get("status") == "blocked":
                 source = "paper.tex" if ctx.output_mode == "latex" else "paper.md"
                 target = "PDF 编译" if ctx.output_mode == "latex" else "Word 导出"
-                return f"论文源码 {source} 已保存，{target}未完成：{ctx.stage_notes.get('export', '')}。修正源码或导出环境后可继续。"
+                return f"论文源码 {source} 已保存，{target}未完成：{export_stage.get('note', '')}。修正源码或导出环境后可继续。"
             reason=ctx.stage_notes.get('solve') or '当前研究尚未满足交付条件，请查看具体步骤的运行记录。'
             return '研究已暂停：'+reason
         analysis = result.get("analysis") or {}
@@ -362,9 +351,9 @@ class PaperGraphAgent:
         lines = [f"论文《{analysis.get('title', '')}》已写入 {result.get('paper_path') or source}。", ""]
         if result.get("artifact_conflict"):
             lines.append(f"{source} 存在人工修改，已保留人工稿和自动新稿，等待合并。")
-        exported = [line for line in result.get("log") or [] if line.startswith("export:")]
+        exported = result.get("exports") or []
         if exported:
-            lines[0] += f"导出：{exported[-1].split(':', 1)[1].strip()}。"
+            lines[0] += f"导出：{exported[-1]}。"
         for sp in analysis.get("subproblems") or []:
             status = (solutions.get(sp["id"]) or {}).get("status", "未求解")
             count = len(ctx.registry.for_subproblem(sp["id"]))

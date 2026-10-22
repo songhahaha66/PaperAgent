@@ -4,7 +4,6 @@ export interface ResearchSetup {
   request_limit: number | null
   timeout_seconds?: number | null
   compact_paper: boolean
-  confirm_models: boolean
   reuse_experience: boolean
   literature_mode: 'off' | 'on_request' | 'auto'
   literature_query: string
@@ -16,7 +15,6 @@ export interface ResearchSetup {
 export const defaultResearchSetup = (): ResearchSetup => ({
   request_limit: null,
   compact_paper: true,
-  confirm_models: false,
   reuse_experience: true,
   literature_mode: 'on_request',
   literature_query: '',

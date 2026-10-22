@@ -58,38 +58,13 @@ class ChatService:
             raise
 
     def add_message(self, work_id: str, role: str, content: str, metadata: Optional[Dict] = None):
-        """添加消息到JSON文件（兼容旧格式）"""
+        """添加消息到工作区会话库"""
         try:
             self.history_manager.save_message(work_id, role, content, metadata)
-            logger.info(f"消息已保存到JSON: {work_id}, 角色: {role}")
+            logger.info(f"消息已保存: {work_id}, 角色: {role}")
         except Exception as e:
             logger.error(f"保存消息失败: {e}")
             raise
-
-    def add_json_card_message(self, work_id: str, role: str, content: str,
-                              json_blocks: List[Dict] = None, metadata: Optional[Dict] = None):
-        """添加JSON卡片格式的消息"""
-        try:
-            self.history_manager.save_json_card_message(
-                work_id, role, content, json_blocks, metadata)
-            logger.info(
-                f"JSON卡片消息已保存: {work_id}, 角色: {role}, 块数: {len(json_blocks or [])}")
-        except Exception as e:
-            logger.error(f"保存JSON卡片消息失败: {e}")
-            raise
-
-    def add_json_block_to_message(self, work_id: str, message_id: str, json_block: Dict):
-        """向指定消息添加JSON块"""
-        try:
-            success = self.history_manager.add_json_block_to_message(
-                work_id, message_id, json_block)
-            if success:
-                logger.info(
-                    f"JSON块已添加到消息: {work_id}, 消息ID: {message_id}, 类型: {json_block.get('type')}")
-            return success
-        except Exception as e:
-            logger.error(f"添加JSON块失败: {e}")
-            return False
 
     def get_work_chat_history(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
         """获取work的聊天记录（原始格式）"""

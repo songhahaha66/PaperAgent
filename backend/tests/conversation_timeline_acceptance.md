@@ -1,3 +1,5 @@
+> 2026-10-23 更新：会话现已迁移至工作区 `.system/research.sqlite` 的 chat_messages/chat_metadata 表，旧 JSON 保留归档。每次只更新当前消息；研究隔离测试比较业务表内容和产物字节，允许聊天表独立变化。下文记录迁移前的验收背景。
+
 # Conversation execution timeline: dev review (v3)
 
 Base: `b5f473e011a21d585486b7bb637d5ec9bd44f58e` (fetched dev). No AGENTS.md found in `/workspace` or the checkout. The starting checkout was clean. No commit, push, merge, deployment, browser test, regression test, pytest invocation, or model API call was performed.

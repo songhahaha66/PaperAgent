@@ -545,7 +545,7 @@ if (require.main === module) (async () => {
   assert.equal(progress.state.researchSnapshot.value.commit_seq, 10, 'an older streamed snapshot cannot rewind progress')
   assert.equal(progress.state.currentWork.value.status, 'in_progress', 'a stale snapshot cannot end active research')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.id, 'model:2')
-  await progress.state.loadResearchSnapshot()
+  await progress.state.stream.refreshResources(['research'])
   assert.equal(
     progress.state.researchSnapshot.value.commit_seq,
     10,

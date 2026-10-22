@@ -96,22 +96,20 @@ export function useArtifactPreview(options: {
       downloadLoading.value = false
     }
   }
-  // 加载工作空间文件（带防抖）
-  let lastFileUpdateTime = 0
-  const loadWorkspaceFiles = async (force = false) => {
+  // Workspace refresh scheduling belongs to useWorkStream.
+  const loadWorkspaceFiles = async () => {
     if (!workId.value || !authStore.token || disposed) return
 
-    const now = Date.now()
-    if (isFileRefreshing.value || (!force && now - lastFileUpdateTime < 1000)) {
+    if (isFileRefreshing.value) {
       return
     }
 
     try {
       isFileRefreshing.value = true
-      lastFileUpdateTime = now
 
-      const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
-      if (!disposed) workspaceFiles.value = files
+      const requestedWork = workId.value
+      const files = await workspaceFileAPI.listFiles(authStore.token, requestedWork)
+      if (!disposed && requestedWork === workId.value) workspaceFiles.value = files
     } catch (error) {
       console.error('加载工作空间文件失败:', error)
       if (!disposed) MessagePlugin.error('加载工作空间文件失败')

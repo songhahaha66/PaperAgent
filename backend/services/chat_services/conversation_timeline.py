@@ -263,8 +263,11 @@ def resolve_executions(root, reply, ids):
             segment = references.get(segment_id)
             if not segment: continue
             ref = segment['ref']
-            raw = db.execute("SELECT payload FROM journal WHERE research_id=? AND kind IN ('activity_started','activity_finished') AND json_extract(payload,'$.id')=? ORDER BY seq DESC LIMIT 1",
+            raw = db.execute('SELECT payload FROM research_activity WHERE research_id=? AND id=?',
                              (ref['research_id'], ref['id'])).fetchone()
+            if raw is None:
+                raw = db.execute("SELECT payload FROM journal WHERE research_id=? AND kind IN ('activity_started','activity_finished') AND json_extract(payload,'$.id')=? ORDER BY seq DESC LIMIT 1",
+                                 (ref['research_id'], ref['id'])).fetchone()
             detail = execution_projection(root, ref['research_id'], json.loads(raw[0])) if raw else segment.get('execution')
             if detail:
                 if reply.get('metadata', {}).get('status') != 'running' and not detail.get('finished_at'):

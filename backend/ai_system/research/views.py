@@ -135,7 +135,7 @@ def execution(snapshot, work_status=None):
         actions.append(row)
     current=next((row for row in reversed(actions) if row['status']=='running'),None)
     return {'actions':actions,'decisions':snapshot.get('decision_history',[])[-40:],
-            'current':current, 'updated_at':snapshot.get('updated_at')}
+            'current':current, 'updated_at':max(snapshot.get('updated_at', 0), snapshot.get('activity_updated_at', 0))}
 
 
 def research_history(store, snapshot):
@@ -151,6 +151,12 @@ def research_history(store, snapshot):
         rows=db.execute('SELECT seq,kind,payload FROM journal WHERE research_id=? AND kind IN ('+
                         ','.join('?' for _ in labels)+") AND (kind!='activity_finished' OR json_extract(payload,'$.status')='interrupted') AND (kind!='action_prepared' OR json_extract(payload,'$.capability')='pause') ORDER BY seq DESC LIMIT 100",
                         (store.research_id,*labels)).fetchall()
+    known = {json.loads(row['payload']).get('id') for row in rows if row['kind'] == 'activity_finished'}
+    with store._connect() as db:
+        rows = list(rows) + [{'seq': 'activity:' + row['id'], 'kind': 'activity_finished',
+                             'payload': row['payload']} for row in db.execute(
+            "SELECT id,payload FROM research_activity WHERE research_id=? AND json_extract(payload,'$.status')='interrupted' ORDER BY updated_at DESC LIMIT 100",
+            (store.research_id,)) if row['id'] not in known]
     result=[]
     for row in rows:
         data=json.loads(row['payload']);kind=row['kind']
@@ -166,10 +172,10 @@ def research_history(store, snapshot):
                   if artifact['producer_attempt']==data.get('attempt_id') and artifact['type']=='result' and artifact['active']]
         result.append({'id':'journal:'+str(row['seq']),'kind':kind,'label':labels[kind],
             'action_id':data.get('action_id'),'observation_id':data.get('observation_id'),
-            'question_id':question_id,'experiment_id':eid,'recorded_at':data.get('recorded_at'),
+            'question_id':question_id,'experiment_id':eid,'recorded_at':data.get('recorded_at') or data.get('finished_at') or data.get('interruption_detected_at'),
             'reason':data.get('reason') or data.get('message') or data.get('purpose') or '',
             'artifact_refs':refs,'judgments':data.get('judgments',[])})
-    return result
+    return sorted(result, key=lambda row: row["recorded_at"] or 0, reverse=True)[:100]
 
 
 def model_usage(store):
@@ -220,10 +226,7 @@ def activity_progress(ctx, item):
     store = getattr(ctx, 'experience_store', None) or getattr(ctx, 'research', None)
     if store is None:
         return
-    with store._transaction() as db:
-        state = store._read(db)
-        state['activity'] = [dict(item) if row['id'] == item['id'] else row for row in state.get('activity', [])]
-        store._save(db, state, 'activity_progress', item)
+    store.record_activity(item)
     from services.chat_services.conversation_timeline import execution_boundary
     execution_boundary(store.root, store.research_id, 'activity', item)
     notify_runtime()
@@ -249,10 +252,7 @@ def activity(ctx, capability, task_id=None, **links):
     with execution_scope(**{**links,'step':LABELS.get(capability,links.get('step')),'subject':subject},events=getattr(ctx,'events',None),
                          research_id=store.research_id if store else None,parent_call_id=item['id']):
         if store:
-            with store._transaction() as db:
-                state=store._read(db)
-                state['activity']=[*state.get('activity',[]),item][-240:]
-                store._save(db,state,'activity_started',item)
+            store.record_activity(item)
             from services.chat_services.conversation_timeline import execution_boundary
             execution_boundary(store.root, store.research_id, 'activity', item)
             notify_runtime()
@@ -268,10 +268,7 @@ def activity(ctx, capability, task_id=None, **links):
             item['finished_at']=time.time()
             if item['status']=='running':item['status']='completed'
             if store:
-                with store._transaction() as db:
-                    state=store._read(db)
-                    state['activity']=[item if a['id']==item['id'] else a for a in state.get('activity',[])]
-                    store._save(db,state,'activity_finished',item)
+                store.record_activity(item)
                 from services.chat_services.conversation_timeline import execution_boundary
                 execution_boundary(store.root, store.research_id, 'activity', item)
                 notify_runtime()

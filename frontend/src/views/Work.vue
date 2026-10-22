@@ -400,7 +400,6 @@ const {
   loadErrorText,
   researchSnapshot,
   applyResearchSnapshot,
-  loadResearchSnapshot,
 } = session
 const layout = useWorkLayout(workId, researchSnapshot)
 const {
@@ -484,8 +483,7 @@ function openLiteratureEvidence(event: Event) {
   citeLiterature(detail.evidenceId)
 }
 async function refreshPaper() {
-  await loadResearchSnapshot()
-  await artifacts.loadWorkspaceFiles(true)
+  await stream.refreshResources(['research', 'files'])
 }
 function askPaper(message: string, task?: string) {
   questionScope.value = task || null
@@ -628,7 +626,7 @@ async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
 const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
   workId,
   onUploaded: async (filename, size) => {
-    await artifacts.loadWorkspaceFiles(true)
+    await stream.refreshResources(['files'])
     stream.appendAttachment(filename, size)
   },
 })
@@ -690,14 +688,14 @@ async function handlePrimaryAction() {
 }
 async function loadWork() {
   await session.loadWork({
-    loadFiles: artifacts.loadWorkspaceFiles,
+    loadFiles: () => stream.refreshResources(['files']),
     loadHistory: stream.loadChatHistory,
     resume: stream.checkAndResumeRunningTask,
     sendMessage,
   })
 }
 async function handleFileRefresh() {
-  await Promise.all([artifacts.loadWorkspaceFiles(true), session.loadResearchSnapshot()])
+  await stream.refreshResources(['files', 'research'])
 }
 const workActionOptions = computed(() => [
   ...(primaryArtifact.value && primaryAction.value?.kind !== 'download'

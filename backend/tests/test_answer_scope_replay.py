@@ -88,10 +88,8 @@ def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_pat
     prompt=section_request('solve:'+first,'范围与结果',graph_view(before),ctx)
     assert all(v['reference'] in prompt and v['meaning']['scope'] in prompt and v['content_hash'] in prompt for v in values.values())
     assert 'data/rows.csv' in prompt and store.snapshot()==before
-    with store._transaction() as db:
-        state=store._read(db);state.setdefault('activity',[]).append({'id':'old','capability':'run_python','status':'completed',
-            'experiment_id':second,'question_id':qid,'inputs':{'code':'PRIVATE_LONG_CODE'*2000},'output':{'report':'DUPLICATE_REPORT'*2000}})
-        store._save(db,state,'activity_fixture',{})
+    store.record_activity({'id':'old','started_at':1,'capability':'run_python','status':'completed',
+        'experiment_id':second,'question_id':qid,'inputs':{'code':'PRIVATE_LONG_CODE'*2000},'output':{'report':'DUPLICATE_REPORT'*2000}})
     _,context=decision_context(store,store.snapshot())
     assert 'artifacts' not in context and 'PRIVATE_LONG_CODE' not in json.dumps(context) and 'DUPLICATE_REPORT' not in json.dumps(context)
     assert {r['id'] for e in context['experiments'] for r in e['results']}=={r1,r2}

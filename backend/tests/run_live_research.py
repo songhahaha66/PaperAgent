@@ -57,7 +57,7 @@ async def main(owner_work=None, resume_work=None):
                 writer.block(block)
     stream = StreamOutputManager(Callback())
     agent = PaperGraphAgent(llms['brain'], stream, str(root), work_id,
-        codeagent_llm=llms['code'], writer_llm=llms['writing'], output_mode='latex', judge=None)
+        codeagent_llm=llms['code'], writer_llm=llms['writing'], output_mode='latex')
     token = TIMELINE.set(writer)
     try:
         await agent.run(QUESTION, action='resume' if resume_work else 'run')

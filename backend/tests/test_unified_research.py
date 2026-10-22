@@ -44,7 +44,7 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
         async def aget_state(self,config):return SimpleNamespace(values={})
         async def ainvoke(self,*args,**kwargs):raise asyncio.CancelledError()
     runtime=ResearchRuntime(tmp_path);runtime.reserve('example.test')
-    agent=PaperGraphAgent(None,workspace_dir=str(tmp_path),judge=None)
+    agent=PaperGraphAgent(None,workspace_dir=str(tmp_path))
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(agent._invoke(Graph(),None,{},'same-study',SimpleNamespace()))
     saved=json.loads((tmp_path/'.system/graph_thread.json').read_text())
