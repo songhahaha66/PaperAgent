@@ -280,16 +280,19 @@ def activity(ctx, capability, task_id=None, **links):
 def delivery_summary(snapshot, stages=None):
     """Derived only from current durable stages; no second business state."""
     stages = snapshot.get('delivery_stages', {}) if stages is None else stages
-    failed = next((name for name in ('write', 'validate', 'render', 'export')
+    # Markdown is delivered at render; Word and LaTeX require an export.
+    terminal = 'render' if snapshot.get('spec', {}).get('output_mode') == 'markdown' else 'export'
+    required = ('write', 'validate', 'render') + (('export',) if terminal == 'export' else ())
+    failed = next((name for name in required
                    if stages.get(name, {}).get('status') in {'blocked', 'failed', 'interrupted'}), None)
     labels = {'write': '报告撰写', 'validate': '报告校验', 'render': '报告发布', 'export': '报告导出'}
     if failed:
         return {'state': 'incomplete', 'stage': failed, 'label': labels[failed] + '未完成，已有计算和文件已保留'}
-    if stages.get('export', {}).get('status') == 'completed':
-        return {'state': 'completed', 'stage': 'export', 'label': '报告已生成，可查看和下载'}
-    current = next((name for name, value in stages.items() if value.get('status') == 'in_progress'), None)
+    current = next((name for name in required if stages.get(name, {}).get('status') == 'in_progress'), None)
     if current:
         return {'state': 'running', 'stage': current, 'label': labels.get(current, '报告处理') + '中'}
+    if stages.get(terminal, {}).get('status') == 'completed':
+        return {'state': 'completed', 'stage': terminal, 'label': '报告已生成，可查看和下载'}
     if stages.get('render', {}).get('status') == 'completed':
         return {'state': 'draft', 'stage': 'render', 'label': '正文已保存，导出尚未完成'}
     return {'state': 'pending', 'stage': None, 'label': '报告尚未生成'}

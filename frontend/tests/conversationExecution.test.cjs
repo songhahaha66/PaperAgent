@@ -2,7 +2,24 @@ const assert = require('node:assert/strict')
 const { loadModule, vue, flush } = require('./moduleHarness.cjs')
 const { hostRenderer } = require('./vueHost.cjs')
 const text = (node) => [node.text || '', ...(node.children || []).map(text)].join('')
-;(async () => {
+const test = require('node:test')
+const row = (status, extra = {}) => ({
+    id: 'segment',
+    type: 'execution',
+    ref: { id: 'call', kind: 'activity', research_id: 'old' },
+    execution: {
+      id: 'call',
+      label: '读取已有文件 · data.csv',
+      status,
+      started_at: 1,
+      parent_call_id: 'parent',
+      file: 'inputs/data.csv',
+      detail: '读取第 0 个字符起的 1200 个字符。',
+      ...extra,
+    },
+  })
+
+async function mount(t) {
   let pending
   const module = await loadModule(
     'src/components/ConversationExecution.vue',
@@ -20,21 +37,6 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     { setInterval: () => 1, clearInterval() {} },
     true,
   )
-  const row = (status, extra = {}) => ({
-    id: 'segment',
-    type: 'execution',
-    ref: { id: 'call', kind: 'activity', research_id: 'old' },
-    execution: {
-      id: 'call',
-      label: '读取已有文件 · data.csv',
-      status,
-      started_at: 1,
-      parent_call_id: 'parent',
-      file: 'inputs/data.csv',
-      detail: '读取第 0 个字符起的 1200 个字符。',
-      ...extra,
-    },
-  })
   const state = vue.reactive({
     replyId: 'reply',
     groupId: 'segment',
@@ -56,12 +58,18 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   await flush()
   const heading = () =>
     host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === 'calls-reply-segment')
+  const button = (label) => host.find((n) => n.kind === 'button' && text(n).trim() === label)
+  t.after(() => app.unmount())
+  return { state, host, heading, button, opened, results, response: () => pending }
+}
+
+test('streaming output preserves manual expansion', async (t) => {
+  const { state, host, heading, button, opened, results, response } = await mount(t)
   assert.equal(heading().props['aria-expanded'], false, 'running group starts compact')
   heading().props.onClick()
   await flush()
   assert.equal(heading().props['aria-expanded'], true)
   assert.match(text(host.root), /读取第 0 个字符/, 'expanded detail describes the actual operation')
-  const staleResponse = pending
   state.segments = [row('running', { output_tail: 'first print\nsecond print' })]
   await flush()
   const outputToggle = () => host.find((n) => n.kind === 'button' && n.props?.class === 'output-toggle')
@@ -77,6 +85,13 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   outputToggle().props.onClick()
   await flush()
   assert.doesNotMatch(text(host.root), /third print/, 'stdout can be folded again')
+})
+
+test('live finish rejects stale fetches and keeps file/result links', async (t) => {
+  const { state, host, heading, button, opened, results, response } = await mount(t)
+  heading().props.onClick()
+  await flush()
+  const staleResponse = response()
   state.segments = [
     row('completed', { finished_at: 4, result_ids: ['R1'], output_file: 'runs/run-1/stdout.log' }),
   ]
@@ -93,7 +108,6 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     'late resolver response cannot overwrite a newer live finish',
   )
   assert.equal(heading().props['aria-expanded'], true, 'manual expansion survives live finish')
-  const button = (label) => host.find((n) => n.kind === 'button' && text(n).trim() === label)
   assert.ok(button('data.csv'), 'the selected workspace file remains available after finish')
   assert.ok(button('执行输出'), 'a finished operation exposes its output link')
   assert.ok(button('查看结果'), 'a finished operation keeps its result link without showing internal IDs')
@@ -102,6 +116,12 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   button('查看结果').props.onClick()
   assert.deepEqual(opened, ['inputs/data.csv', 'runs/run-1/stdout.log'])
   assert.deepEqual(results, ['R1'])
+})
+
+test('manually collapsed errors keep their diagnostic details', async (t) => {
+  const { state, host, heading, button, opened, results, response } = await mount(t)
+  heading().props.onClick()
+  await flush()
   heading().props.onClick()
   await flush()
   state.segments = [row('failed', { finished_at: 4, message: 'safe failure notice' })]
@@ -120,6 +140,10 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     'the concrete sanitized failure remains available in details',
   )
   heading().props.onClick()
+})
+
+test('recovered child failures remain in history', async (t) => {
+  const { state, host, heading, button, opened, results, response } = await mount(t)
   state.segments = [
     row('completed', { id: 'parent', kind: 'activity', parent_call_id: null, finished_at: 8 }),
     { ...row('failed', { id: 'child', parent_call_id: 'parent', finished_at: 3 }), id: 'child' },
@@ -135,6 +159,10 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   await flush()
   assert.match(text(host.root),/original error/)
   heading().props.onClick()
+})
+
+test('retry progress follows the latest step and retains old errors', async (t) => {
+  const { state, host, heading, button, opened, results, response } = await mount(t)
   const step = (id, status, label, extra = {}) => ({
     ...row(status, { id, label, ...extra }),
     id,
@@ -174,8 +202,4 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   assert.match(group().props.class, /failed/)
   assert.match(text(host.root), /导出失败，请重试。/)
   assert.doesNotMatch(text(host.root), /执行超时/, 'only the latest failure is promoted out of history')
-  app.unmount()
-})().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
 })

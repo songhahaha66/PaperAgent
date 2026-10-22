@@ -22,7 +22,7 @@ def longpaper(paper,monkeypatch,request):
     for k in state['sections']:
         if k.startswith('solve:'):
             sid=k.split(':')[1];state['sections'][k]+=' '.join('{{R:'+r['id']+'}}' for r in store.registry_payload()['results'] if r['subproblem']==sid)
-    from test_native_latex import render_native_paper
+    from helpers.paper import render_native_paper
     store.save_sections(state['sections'],[]);store.publish_paper(render_native_paper(store,state) if getattr(request,'param',False) else assemble(state),filename='paper.tex' if getattr(request,'param',False) else 'paper.md')
     if getattr(request,'param',False):(store.root/'paper.pdf').write_bytes(b'%PDF-original-fixture')
     native=bool(getattr(request,'param',False))

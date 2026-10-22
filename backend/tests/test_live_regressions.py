@@ -16,8 +16,8 @@ from ai_system.graph import llm_utils
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.research.models import IssueReport, Requirement, ResearchConflict
 from ai_system.research.store import ResearchStore
-from test_paper_graph import FakeModel, FixedJudge, TASK, _Structured
-from test_research_p2 import problem, store_for, submit
+from helpers.graph import FakeModel, FixedJudge, TASK, _Structured
+from helpers.contracts import problem, store_for, submit
 
 
 

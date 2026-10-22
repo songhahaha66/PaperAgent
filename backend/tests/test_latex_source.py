@@ -85,7 +85,7 @@ def test_findings_bind_exact_file_quote_and_become_stale(native):
 def test_native_writer_uses_source_changes_and_retains_user_edits(native,monkeypatch,race):
     store=native.store;before=store.snapshot()['sections']
     async def noop(*args):pass
-    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',
+    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',compact_paper=False,
         set_stage=noop,events=SimpleNamespace(file_changed=noop))
     async def reply(llm,schema,messages,validate):
         assert '过期数据库正文' not in messages[-1].content
@@ -152,7 +152,7 @@ def test_duplicate_passages_bind_by_range_and_unlocated_findings_stay_file_scope
     assert anchored['quote']=='重复原文。\n\n'
     assert issue_edits.context(native.store,recorded[1]['id'])['selection'] is None
     async def noop(*args):pass
-    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',
+    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',compact_paper=False,
                         set_stage=noop,events=SimpleNamespace(file_changed=noop))
     async def replace(llm,schema,messages,validate):
         result=latex.SourceEdits(edits=[latex.SourceEdit(target='part.tex#2',replacement='仅修正第二段。\n\n')])

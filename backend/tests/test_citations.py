@@ -87,7 +87,7 @@ def test_design_solver_and_writing_receive_fetched_evidence_without_result_regis
     from ai_system.modules.experiments.execution import build_task
     from ai_system.modules.writing import sections as write
     from ai_system.graph.state import CandidateSet,ModelCandidate
-    from test_research_p2 import problem,TASK
+    from helpers.contracts import problem,TASK
     library,_,e=seed(tmp_path)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     branch={'source':TASK,'analysis':problem().model_dump(),
@@ -115,7 +115,7 @@ def test_solver_reads_source_workspace_citations_first_with_bounded_context(tmp_
     from ai_system.research.control import worker_context
     from ai_system.research.store import ResearchStore
     from ai_system.research import literature as lib
-    from test_research_p2 import problem,TASK
+    from helpers.contracts import problem,TASK
 
     library,source,cited=seed(tmp_path,text='Frozen cited procedure: center on training observations before applying the fitted transform. '*30)
     library.add_passages(source,[{'text':('Estimate demand calibration with independent data using the selected procedure, '
@@ -161,7 +161,7 @@ def test_solver_reads_source_workspace_citations_first_with_bounded_context(tmp_
 def test_solver_without_acquired_literature_does_not_invent_cited_content(tmp_path):
     from ai_system.graph.context import GraphContext
     from ai_system.modules.experiments.execution import build_task
-    from test_research_p2 import problem,TASK
+    from helpers.contracts import problem,TASK
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     chosen={'name':'Direct calculation','method_keys':[],'idea':'Unresolved method reference {{C:C9999}}',
             'formulation':'use supplied observations','steps':['calculate'],'validation':'verify supplied data'}

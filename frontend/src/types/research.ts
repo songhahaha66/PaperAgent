@@ -228,7 +228,7 @@ export interface ResearchSnapshot {
     category: string
   }[]
   execution_reason?: { kind: string; message: string; detail?: string } | null
-  schema_version: 4
+  schema_version: 5
   engine_version?: string | null
   research_revision?: number
   commit_seq?: number

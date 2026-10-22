@@ -29,7 +29,7 @@ const { hostRenderer } = require('./vueHost.cjs')
   })
   const judgment = '当前拆分的误差已得到验证，外推能力仍未确定。'
   const snapshot = vue.ref({
-    schema_version: 4, work_id: 'one', work_status: 'completed', research_id: 'research',
+    schema_version: 5, work_id: 'one', work_status: 'completed', research_id: 'research',
     research_revision: 1, commit_seq: 5, has_research: true,
     questions: [question('question:E1', '怎样预测需求？', 'E1'),
       question('question:E2', '预测误差是否可接受？', 'E2', judgment)],

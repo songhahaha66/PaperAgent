@@ -298,7 +298,7 @@ def build_tools(
             # Publish the run before its terminal timeline event resolves file links.
             if getattr(ctx, 'delivery_fs', None) is not None:
                 try:
-                    for path in capture_run_files(ctx.fs, ctx.delivery_fs):
+                    for path in capture_run_files(ctx.fs, ctx.delivery_fs, run_ids=[result.run_id]):
                         await ctx.delivery_events.file_changed(path)
                 except (OSError, ValueError) as exc:
                     publication_note = f'文件交付未完成：{exc}。计算结果已保留，不要重算，提交时会再次同步。'
@@ -342,7 +342,7 @@ def build_tools(
         refs = collect_references(ctx, subproblem_id, CellResult(ok=info['status']=='success', stdout='', error=None,
             run_id=run_id, files=files, figures=[p for p in files if p.endswith(('.png', '.jpg', '.jpeg'))]))
         if getattr(ctx, 'delivery_fs', None) is not None:
-            for path in capture_run_files(ctx.fs, ctx.delivery_fs):
+            for path in capture_run_files(ctx.fs, ctx.delivery_fs, run_ids=[run_id]):
                 await ctx.delivery_events.file_changed(path)
         return '文件同步完成：' + str(files) + '\n引用：' + str([r if isinstance(r, str) else r.id for r in refs])
 

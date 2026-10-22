@@ -831,6 +831,7 @@ class ResearchStore:
     def save_sections(self, sections: dict, issues: list, contexts: dict | None = None, *, verified=True):
         with self._transaction() as db:
             state = self._read(db)
+            changed = {}
             for key, text in sections.items():
                 old = state["sections"].get(key)
                 context_hash = (contexts or {}).get(key)
@@ -841,8 +842,11 @@ class ResearchStore:
                     "text": text, "content_hash": digest(text), "context_hash": context_hash,
                     "evidence_refs": re.findall(r"\{\{[RF]:([RF][0-9]+)\}\}", text),
                     "task_refs": refs, "validity": "current"}
+                changed[key] = state['sections'][key]
+            if not changed:
+                return
             state["outcome"] = "running"
-            self._save(db, state, "sections_committed", {"versions": {key: state["sections"][key] for key in sections}, "issues": issues})
+            self._save(db, state, "sections_committed", {"versions": changed, "issues": issues})
 
     def publish_paper(self, text: str, *, filename: str = "paper.md"):
         """Keep generated versions and preserve a manually edited active paper."""

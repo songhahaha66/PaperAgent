@@ -69,10 +69,10 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     from types import SimpleNamespace
     from ai_system.modules.writing.validation import render
     from test_literature import seed
-    from test_research_p2 import problem, TASK
+    from helpers.contracts import problem, TASK
     _,_,evidence=seed(tmp_path)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
-    from test_native_latex import accepted_store
+    from helpers.paper import accepted_store
     ctx.research=accepted_store(tmp_path)
     state={'analysis':problem().model_dump(),'task':TASK,
            'sections':{'restatement':'未经核查的主张 {{C:'+evidence['id']+'}}'}}
@@ -113,7 +113,7 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
 
 
 def test_parallel_writing_preserves_finished_sections_when_another_call_fails(tmp_path,monkeypatch):
-    from test_native_latex import accepted_store
+    from helpers.paper import accepted_store
     from ai_system.modules.writing import sections as writing
     store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
     async def section(ctx,state,key,title):
@@ -169,8 +169,8 @@ def test_formal_handoff_protects_frozen_metrics_and_rejects_new_fit(tmp_path,mon
 
 def test_compact_plan_merges_prose_without_removing_validation_sections(tmp_path,monkeypatch):
     from types import SimpleNamespace
-    from test_native_latex import accepted_store
-    from test_research_p2 import problem,TASK
+    from helpers.paper import accepted_store
+    from helpers.contracts import problem,TASK
     from ai_system.modules.writing import sections as writing
     store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None,compact_paper=True);ctx.research=store
     state={'analysis':problem().model_dump(),'task':TASK,'designs':{},'solutions':{}}

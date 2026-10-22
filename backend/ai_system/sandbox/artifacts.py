@@ -1,13 +1,16 @@
 """Publish captured execution files without promoting them to scientific evidence."""
 import shutil
+from copy import deepcopy
 from pathlib import Path, PurePosixPath
 
 
-def publish_run_files(source_fs, target_fs, attempt_id):
+def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     if source_fs.root == target_fs.root:
         return []
     published = []
-    for run_id, info in source_fs._manifest.get('runs', {}).items():
+    runs = source_fs._manifest.get('runs', {})
+    for run_id in runs if run_ids is None else run_ids:
+        info = runs[run_id]
         for rel in info.get('artifacts', []):
             prefix = f'runs/{run_id}/artifacts/'
             if not rel.startswith(prefix):
@@ -31,17 +34,25 @@ def publish_run_files(source_fs, target_fs, attempt_id):
     return published
 
 
-def capture_run_files(source_fs, target_fs, attempt_id=None):
+def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     """Single publication boundary; inherited runs keep their identity and location."""
+    runs = source_fs._manifest.get('runs', {})
+    selected = list(runs if run_ids is None else run_ids)
+    changed = False
     if source_fs.root != target_fs.root:
-        for run_id, info in source_fs._manifest.get('runs', {}).items():
+        for run_id in selected:
+            info = runs[run_id]
+            if info == target_fs.get_run_info(run_id) and target_fs.run_dir(run_id).exists():
+                continue
             source = source_fs.run_dir(run_id)
             target = target_fs.run_dir(run_id)
             if source.exists():
                 shutil.copytree(source, target, dirs_exist_ok=True)
-            target_fs._manifest.setdefault('runs', {})[run_id] = dict(info)
-        target_fs._save_manifest()
-    return publish_run_files(source_fs, target_fs, attempt_id)
+            target_fs._manifest.setdefault('runs', {})[run_id] = deepcopy(info)
+            changed = True
+        if changed:
+            target_fs._save_manifest()
+    return publish_run_files(source_fs, target_fs, attempt_id, run_ids=selected)
 
 
 def publish_reference(source_fs, target_fs, item):

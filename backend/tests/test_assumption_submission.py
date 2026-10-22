@@ -16,9 +16,9 @@ from ai_system.graph.state import CandidateSet
 from ai_system.research.assumptions import unbound_assumptions, premise_definition
 from ai_system.research.models import AssumptionDraft
 from ai_system.research.control import experiment_dispatch as dispatch
-from test_paper_graph import _analysis, _candidate
-from test_report_submission import branch, report
-from test_research_p2 import store_for
+from helpers.graph import _analysis, _candidate
+from helpers.submissions import branch, report
+from helpers.contracts import store_for
 from types import SimpleNamespace
 
 

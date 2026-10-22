@@ -1,4 +1,6 @@
 """Native section writing keeps the evidence and publication protocol intact."""
+
+from helpers.paper import accepted_store, render_native_paper
 import asyncio
 import json
 import shutil
@@ -17,33 +19,10 @@ from ai_system.modules.writing import sections as writing
 from ai_system.modules.writing.validation import check_sections
 from services.file_services.workspace_structure import WorkspaceStructureManager
 from services.chat_services.research_session import research_snapshot
-from test_paper_graph import FakeModel
-from test_research_p2 import store_for, submit, problem, TASK
+from helpers.graph import FakeModel
+from helpers.contracts import store_for, submit, problem, TASK
 from research_tools_helpers import answer
 from ai_system.research.views import questions
-
-
-def accepted_store(root):
-    store = store_for(root)
-    submit(store, 'Q1', {'demand': 8})
-    submit(store, 'Q3', {'independent': 3})
-    submit(store, 'Q2', {'allocation': 8, 'residual': 0})
-    before=store.snapshot()
-    assert not store.delivery_ready(before), 'Execution results alone do not answer the user questions'
-    results=store.registry_payload()['results']
-    for question in questions(before):
-        if question.get('retired'):continue
-        evidence=[r for r in results if r['subproblem'] in question['experiment_ids']]
-        assert evidence, 'An answered fixture question must have actual current results'
-        answer(store,question_id=question['id'],
-            statement='在本次给定条件下，'+'；'.join(r['name']+'为 {{R:'+r['id']+'}}' for r in evidence)+'。',
-            artifact_refs=[r['id'] for r in evidence],coverage='answered',
-            stop_reason='对应实验已完成冻结检查，当前问题已得到给定条件下的结果。',
-            limitations=['仅限本次输入与实验条件，未验证外推适用性。'])
-    after=store.snapshot()
-    assert store.delivery_ready(after)
-    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
-    return store
 
 
 def validate_render_current_native(store):
@@ -60,22 +39,6 @@ def validate_render_current_native(store):
     rendered=asyncio.run(perform())
     assert rendered['paper_path']=='paper.tex'
     return ctx
-
-
-def render_native_paper(store, state):
-    """Build file-project fixtures through the same registry/citation renderers."""
-    from ai_system.research.control import refresh_registry
-    from ai_system.research.citations import render_citations
-    from ai_system.graph.registry import publication_text, REF_PATTERN
-    ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex')
-    ctx.research=store
-    refresh_registry(ctx)
-    from ai_system.export.latex import escape_plain
-    body='\n\n'.join(r'\section{'+escape_plain(key)+'}\n'+text for key,text in state['sections'].items())
-    source=native_document(state['analysis']['title'],'',body)
-    text=publication_text(render_citations(store.root,ctx.registry.render(source,latex=True),True))
-    assert not REF_PATTERN.search(text)
-    return text
 
 
 def test_latex_workspace_starts_with_tex_not_markdown(tmp_path):

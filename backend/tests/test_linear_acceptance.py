@@ -14,7 +14,7 @@ from ai_system.research.models import DomainCheck, LinearModel
 from ai_system.research.store import ResearchStore
 from ai_system.research.planner import ready_tasks
 from services.chat_services.research_session import research_snapshot
-from test_research_p2 import submit
+from helpers.contracts import submit
 
 SOURCE = 'Maximize 3x+2y; 2x+y<=8; x+2y<=8; x,y nonnegative integers. Explain the allocation. Compute another statistic.'
 
@@ -104,8 +104,8 @@ def test_delivery_explains_exhausted_budget_even_when_execution_issue_exists(tmp
     assert any(i['category']=='execution' and i['message']=='kernel stopped' for i in research_findings(store.snapshot()))
     from research_tools_helpers import continue_experiment,answer
     from ai_system.research.models import ResearchConflict
-    store.recover();continue_experiment(store,'Q3')
-    with pytest.raises(ResearchConflict,match='尝试预算'):store.claim('Q3')
+    store.recover()
+    with pytest.raises(ResearchConflict,match='尝试预算'):continue_experiment(store,'Q3')
     qid=store.snapshot()['experiments']['Q3']['question_id']
     reason='该实验尝试预算已耗尽，保留执行失败记录；当前问题尚未得到答案。'
     answer(store,question_id=qid,coverage='unanswered',stop_reason=reason)
@@ -118,8 +118,8 @@ def test_delivery_explains_exhausted_budget_even_when_execution_issue_exists(tmp
 def test_submission_requires_decisions_not_just_self_reported_residual(tmp_path):
     from ai_system.graph.context import GraphContext
     from ai_system.modules.experiments.execution import submission_schema
-    from test_paper_graph import FakeModel
-    from test_report_submission import branch, seed, report
+    from helpers.graph import FakeModel
+    from helpers.submissions import branch, seed, report
     ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
     runs = []
     objective = seed(ctx, runs, name='objective', value='13')

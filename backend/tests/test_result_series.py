@@ -11,7 +11,7 @@ from ai_system.graph.registry import GroundingError, ResultRegistry
 from ai_system.modules.experiments.execution import build_tools, submission_schema
 from ai_system.modules.experiments.review import submission_inventory_issues
 from ai_system.research.validation import evaluate
-from test_report_submission import branch, report
+from helpers.submissions import branch, report
 
 
 def context(tmp_path, output):

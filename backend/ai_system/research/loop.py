@@ -153,10 +153,8 @@ async def _act(request, runtime):
                 state=store._read(db);state['materials']=patch
                 store._save(db,state,'materials_profiled',patch)
         if name.startswith('writing.'):
-            if ctx.output_mode != 'latex' and name in {'writing.write','writing.repair'}:
-                snapshot=store.snapshot()
-                sections={k:s['text'] for k,s in snapshot['sections'].items() if s['validity']=='current'}
-                store.save_sections({**sections,**patch.get('sections',{})},[],patch.get('section_contexts'),verified=False)
+            if ctx.output_mode != 'latex' and name == 'writing.repair':
+                store.save_sections(patch.get('sections',{}),[],patch.get('section_contexts'),verified=False)
         with store._transaction() as db:
             state=store._read(db)
             if name.startswith('writing.'):

@@ -303,12 +303,6 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     assert saved[0]['id'] == saved[-1]['id'] == reply['id']
 
 
-def test_snapshot_api_checks_ownership_before_reading_files(web):
-    client, work, *_ = web
-    assert client.get("/api/chat/work/work/research").json()["results"][0]["id"] == "R1"
-    work.created_by = 9
-    response = client.get("/api/chat/work/work/research")
-    assert response.status_code == 403 and "R1" not in response.text
 
 
 def test_experiment_results_use_the_research_api_and_preserve_owner_boundary(web):

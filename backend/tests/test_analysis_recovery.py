@@ -11,7 +11,7 @@ from ai_system.graph.context import GraphContext
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.research.models import DomainCheck,LinearModel
 from ai_system.research.store import ResearchStore
-from test_paper_graph import FakeModel,FixedJudge,ProblemAnalysis,_analysis,TASK
+from helpers.graph import FakeModel,FixedJudge,ProblemAnalysis,_analysis,TASK
 
 
 def invalid_plan(case):
@@ -80,14 +80,11 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
     assert model.calls==3 and result==_analysis()
 
 
-def test_format_failure_retains_candidate_and_explicit_resume_keeps_cumulative_usage(tmp_path):
-    from test_planner_action_contract import test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_usage
-    test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_usage(tmp_path)
 
 
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
     from ai_system.research.control import experiment_dispatch
-    from test_research_p2 import store_for,TASK as original
+    from helpers.contracts import store_for,TASK as original
     store=store_for(tmp_path);ctx=SimpleNamespace(research=store)
     assert all(experiment_dispatch(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
     store.claim('Q1');store.recover()
@@ -97,7 +94,7 @@ def test_dispatch_uses_committed_original_source_for_initial_and_recovered_worke
 def test_inline_source_data_reaches_solver_and_local_review(tmp_path):
     from ai_system.modules.experiments.execution import build_task
     from ai_system.modules.experiments.review import review_prompt
-    from test_report_submission import branch
+    from helpers.submissions import branch
     source='销量依次为：420、435、410、460、475。售价 15 元、成本 8 元、剩余残值 2 元。'
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     task={**branch(),'source':source,'analysis':_analysis().model_dump()}

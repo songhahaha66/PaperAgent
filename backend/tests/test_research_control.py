@@ -1,5 +1,7 @@
 """Perturbation tests for the authoritative research state and publication rules."""
 
+from helpers.research import make_store, finish
+
 from ai_system.research.domain import findings as research_findings
 import json
 import sys
@@ -12,19 +14,6 @@ from ai_system.research import ENGINE_VERSION
 from ai_system.research.models import WorkerResult, ResearchConflict, IssueReport, Requirement
 from ai_system.research.store import ResearchStore
 from ai_system.research.planner import ready_tasks
-
-
-def make_store(tmp_path, limit=None):
-    store = ResearchStore(tmp_path, "research")
-    quote = "preserve capacity constraints" + (f" <= {limit}" if limit is not None else "")
-    store.initialize("Answer every original question; " + quote, {
-        "subproblems": [{"id": key, "title": key, "question": key, "depends_on": deps}
-                        for key, deps in [("Q1", []), ("Q2", ["Q1"]), ("Q3", [])]],
-        "requirements": [{"id": f"RQ{i}", "statement": key, "source_quote": quote, "kind": "goal", "task_ids": [key],
-            "checks": [{"id": "capacity", "description": "capacity", "left": {"task_id": "Q1", "name": "value"}, "operator": "le", "expected": limit}] if limit is not None and key == "Q1" else []}
-            for i, key in enumerate(("Q1", "Q2", "Q3"), 1)],
-        "assumptions": [{"id": "A1", "statement": "stable input", "task_ids": ["Q1", "Q2"], "checks": []}]})
-    return store
 
 
 def test_continued_worker_can_read_published_figure_at_registered_path(tmp_path):
@@ -47,17 +36,6 @@ def test_continued_worker_can_read_published_figure_at_registered_path(tmp_path)
     assert ctx.fs.read_text(path) == 'published image'
 
 
-def finish(store, key, *, acceptance="accepted", order=None):
-    order = order or store.claim(key)
-    ref = store.allocate_ref("R")
-    result = WorkerResult(order=order, execution_status="succeeded", acceptance=acceptance,
-        report={"status": "completed", "summary": key, "requirement_evidence":
-            [{"requirement_id": rid, "evidence_refs": [ref]} for rid in store.snapshot()["experiments"][key]["requirement_ids"]]},
-        results=[{"id": ref, "subproblem": key, "kind": "number", "name": "value", "value": "42", "run_id": "run_test"}],
-        issues=[IssueReport(task_id=key, category="execution", message="temporary execution failure")] if acceptance == "rejected" else [])
-    return result, store.commit(result)
-
-
 def test_repeat_commit_is_idempotent_and_mismatched_retry_rejected(tmp_path):
     store = make_store(tmp_path)
     result, receipt = finish(store, "Q1")
@@ -67,12 +45,6 @@ def test_repeat_commit_is_idempotent_and_mismatched_retry_rejected(tmp_path):
     with pytest.raises(ResearchConflict):
         store.commit(result.model_copy(update={"report": {"different": True}}))
     assert len(store.registry_payload()["results"]) == 1
-
-
-
-
-
-
 
 
 def test_rejected_execution_never_unblocks_dependents(tmp_path):
@@ -102,8 +74,6 @@ def test_file_correction_during_execution_rejects_result(tmp_path):
     assert attempt['result']['results']==result.results
     assert not store.registry_payload()['results'] and not store.delivery_ready(state)
     with pytest.raises(ResearchConflict,match='显式重试'):store.claim('Q1')
-
-
 
 
 def test_recovery_uses_commits_and_reclaims_interrupted_attempt(tmp_path):
@@ -191,8 +161,6 @@ def test_manual_edit_preserves_both_paper_versions(tmp_path):
     assert store.snapshot()["outcome"] == "needs_attention"
 
 
-
-
 def test_snapshot_is_read_only_and_uses_authoritative_database(tmp_path):
     from services.chat_services.research_session import research_snapshot
     store = make_store(tmp_path)
@@ -239,10 +207,6 @@ def test_duplicate_revision_command_reuses_original_objective(tmp_path):
     assert len(question['history'])==1
 
 
-
-
-
-
 def test_staged_value_change_gets_new_reference_without_rebinding_old_reference(tmp_path):
     from ai_system.graph.registry import ResultRegistry
     from services.file_services.workspace_fs import WorkspaceFS
@@ -264,6 +228,9 @@ def test_section_history_retains_previous_text_and_context(tmp_path):
     import sqlite3
     store = make_store(tmp_path)
     store.save_sections({"solve:Q1": "original"}, [], {"solve:Q1": "context-one"})
+    before = store.snapshot()
+    store.save_sections({"solve:Q1": "original"}, [], {"solve:Q1": "context-one"})
+    assert store.snapshot() == before, 'unchanged sections must not add a journal commit'
     store.save_sections({"solve:Q1": "revised"}, [], {"solve:Q1": "context-two"})
     with sqlite3.connect(store.path) as db:
         entries = [json.loads(row[0]) for row in db.execute(
@@ -280,13 +247,14 @@ def test_writer_outline_is_committed_and_reused_after_resume(tmp_path,monkeypatc
     from ai_system.research import loop
     from ai_system.research.control import graph_view
     from ai_system.research.operations import deliver
-    from test_native_latex import accepted_store
+    from helpers.paper import accepted_store
     store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
     before=store.snapshot()['executions']
     outline=[{'key':'abstract','title':'摘要'},{'key':'custom:recommendations','title':'结论与建议'}]
     deliver(ctx,{'title':'研究交付','reason':'当前问题已有带依据的答案'})
     async def write(_ctx,name,**inputs):
         assert name=='writing.write'
+        _ctx.research.save_sections({'abstract':'已有证据与局限。'}, [])
         return {'sections':{'abstract':'已有证据与局限。'},'outline':outline,'section_contexts':{}}
     monkeypatch.setattr(loop,'invoke',write)
     action=store.snapshot()['action']

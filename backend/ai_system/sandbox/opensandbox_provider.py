@@ -154,11 +154,18 @@ class OpenSandboxSession:
         for value in result.result:
             if value.text:
                 await output("stdout", value.text + "\n")
+        return ExecutionOutcome(error=self._error(result.error) if result.error else None)
+
+    @property
+    def context_id(self):
+        return self.context.id if self.context else None
+
+    async def finalize(self, run_id):
         figures = await self.interpreter.codes.run(f"_pa_runtime.save_figures({run_id!r})", context=self.context)
-        error = self._error(result.error) if result.error else None
         if figures.error:
-            error = (error or "") + "\n保存图片失败: " + self._error(figures.error)
-        return ExecutionOutcome(error=error)
+            raise RuntimeError("保存图片失败: " + self._error(figures.error))
+        if figures.complete is None:
+            raise RuntimeError("保存图片未收到完成回执，请重试文件交付")
 
     async def files(self):
         script = "import sys;from pathlib import Path;sys.path.insert(0,'/tmp');import paperagent_runtime as r;r.ROOT=Path(%r);r.inventory(%d)" % (self.root, self.settings.max_file_bytes)

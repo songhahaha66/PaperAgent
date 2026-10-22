@@ -75,7 +75,7 @@ async function environment() {
           WebSocketChatHandler: Socket,
           chatAPI: {
             getResearchSnapshot: async () => ({
-              schema_version: 4,
+              schema_version: 5,
               work_id: id,
               work_status: 'completed',
               has_research: true,
@@ -189,7 +189,7 @@ if (require.main === module) (async () => {
   const progressWork = await env.work('progress')
   await progressWork.state.loadWork()
   progressWork.state.researchSnapshot.value = {
-    schema_version: 4, work_id: 'progress', work_status: 'completed',
+    schema_version: 5, work_id: 'progress', work_status: 'completed',
     research_id: 'study', research_revision: 1, engine_version: 'research-v3',
     questions: [{ id: 'question:Q1', title: '需求预测', question: '怎样预测需求？',
       experiment_ids: ['Q1'], judgment: '', artifact_refs: [], limitations: [],
@@ -242,7 +242,7 @@ if (require.main === module) (async () => {
   let pauseCount = 0
   const primary = await env.work('primary-action', false, [], {
     getResearchSnapshot: async () => ({
-      schema_version: 4, work_id: 'primary-action', work_status: actionStatus,
+      schema_version: 5, work_id: 'primary-action', work_status: actionStatus,
       has_research: true, research_id: 'research-1', engine_version: 'research-v3',
       artifacts: ['paper.pdf'], questions: [], experiments: [], results: [], runs: [], claims: [],
       research_revision: 1, commit_seq: 0, snapshot_at: 1,
@@ -404,10 +404,22 @@ if (require.main === module) (async () => {
   assert.equal(restored.sent.at(-1).action, 'auto')
   assert.equal(restored.sent.at(-1).subproblemId, 'Q2')
   const replyId = restored.state.chatMessages.value.at(-1).id
+  const pushed = {
+    ...JSON.parse(JSON.stringify(restored.state.researchSnapshot.value)),
+    schema_version: 5, commit_seq: 8, snapshot_at: 8, work_status: 'paused',
+    delivery_summary: { state: 'incomplete', stage: 'export', label: '报告导出未完成，已有计算和文件已保留' },
+  }
+  restored.sockets.at(-1).message({ type: 'json_block', block: { type: 'research_snapshot', content: pushed } })
+  await flush()
+  assert.equal(restored.state.researchSnapshot.value.commit_seq, 8, 'schema 5 push updates the active page snapshot')
+  assert.equal(restored.state.currentWork.value.status, 'paused', 'pushed work status updates the page')
+  assert.equal(restored.state.researchSnapshot.value.delivery_summary.label, pushed.delivery_summary.label)
+  restored.sockets.at(-1).message({ type: 'json_block', block: { type: 'research_snapshot', content: { ...pushed, commit_seq: 7, snapshot_at: 7 } } })
+  assert.equal(restored.state.researchSnapshot.value.commit_seq, 8, 'older pushes cannot roll the page back')
   restored.state.handleStreamMessage(
     {
       type: 'json_block',
-      block: { type: 'research_snapshot', content: { schema_version: 4, work_id: 'another-work' } },
+      block: { type: 'research_snapshot', content: { schema_version: 5, work_id: 'another-work' } },
     },
     replyId,
   )

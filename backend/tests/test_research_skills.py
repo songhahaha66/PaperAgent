@@ -15,8 +15,8 @@ from ai_system.graph.state import MethodPick, CandidateSet, ModelCandidate
 from ai_system.research.models import ResearchConflict
 from ai_system.research.store import ResearchStore
 from ai_system.research.control import worker_context
-from test_native_latex import accepted_store
-from test_research_p2 import problem, TASK
+from helpers.paper import accepted_store
+from helpers.contracts import problem, TASK
 
 SELECTED = {'mode': 'selected', 'selected': ['regression'], 'disabled': ['arima']}
 

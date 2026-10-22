@@ -80,7 +80,7 @@ def test_ordinary_solver_does_not_generate_candidates_or_hide_design_failures(st
 def test_single_experiment_solver_returns_its_record_without_a_graph_patch(study,monkeypatch,pending_premise):
     from ai_system.modules.experiments import execution
     from test_assumption_submission import draft
-    from test_report_submission import branch as solver_input
+    from helpers.submissions import branch as solver_input
     task=solver_input();design=task['design']
     if pending_premise:design['chosen']['assumptions']=[draft()]
     calls=[]

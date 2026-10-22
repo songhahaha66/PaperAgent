@@ -10,8 +10,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
 from ai_system.modules.writing.sections import section_request, STYLE
-from test_paper_graph import FakeModel, _analysis
-from test_report_submission import seed
+from helpers.graph import FakeModel, _analysis
+from helpers.submissions import seed
 from research_tools_helpers import record_writing_inputs
 
 
@@ -21,7 +21,7 @@ def cited_section(tmp_path):
     from ai_system.research.store import ResearchStore
     from ai_system.research.models import WorkerResult
     from ai_system.research.control import graph_view
-    from test_research_p2 import problem,TASK
+    from helpers.contracts import problem,TASK
     library=LiteratureStore(tmp_path)
     background=library.upsert({'title':'Background notes','url':'https://example.org/background'})
     library.add_passages(background,[{'text':'Estimate demand using supplied observations and independent validation. '*30,
@@ -172,7 +172,7 @@ def test_assumptions_section_uses_only_active_premises_and_never_pads_given_fact
 def test_formal_writing_entry_reads_store_without_accepting_a_second_state(tmp_path,monkeypatch,mode):
     from ai_system.modules.registry import invoke,capabilities
     from ai_system.modules.writing import sections,latex
-    from test_native_latex import accepted_store
+    from helpers.paper import accepted_store
     from pydantic import ValidationError
     ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode=mode);ctx.research=accepted_store(tmp_path)
     before=ctx.research.snapshot();received=[]

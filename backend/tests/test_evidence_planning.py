@@ -10,11 +10,11 @@ import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
 from ai_system.research import control,loop,planner
-from test_paper_graph import decision_outline
+from helpers.graph import decision_outline
 from ai_system.research.models import IssueReport
 from ai_system.research.literature import LiteratureStore
-from test_native_latex import accepted_store
-from test_research_p2 import problem,TASK,submit
+from helpers.paper import accepted_store
+from helpers.contracts import problem,TASK,submit
 from test_review_cache import no_network
 
 

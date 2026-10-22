@@ -11,7 +11,7 @@ from ai_system.research.control import public_snapshot
 from ai_system.research.models import IssueReport
 from ai_system.research.store import ResearchStore
 from services.chat_services.research_session import research_snapshot
-from test_research_control import make_store, finish
+from helpers.research import make_store, finish
 
 
 def tasks(store, status=None):

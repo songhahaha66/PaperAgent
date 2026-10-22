@@ -36,13 +36,27 @@ class RemoteKernel:
                                  if row.get('delivery_error')), None)
 
     async def _start(self):
+        if self.pending_run:
+            if not self._started:
+                await self.session.start()
+                self._started = True
+            info = self.fs.get_run_info(self.pending_run)
+            if not info.get('sandbox_id') or info['sandbox_id'] != self.session.id:
+                raise RuntimeError('原沙箱已不可用，不能确认待交付文件；已有结果保留，不自动重跑。')
+            if info.get('sandbox_root') != getattr(self.session, 'root', None):
+                raise RuntimeError('原实验文件目录已不可用，不能确认待交付文件；已有结果保留，不自动重跑。')
+            if info.get('finalize_pending') and info.get('context_id') != getattr(self.session, 'context_id', None):
+                raise RuntimeError('原执行上下文已不可用，无法恢复图片保存；已有结果保留，不自动重跑。')
+            if info.get('pending_files') is None and 'output_baseline' not in info:
+                raise RuntimeError('旧运行缺少文件清单和执行前记录，无法确认交付完整性；不自动重跑。')
+            self._known = dict(info.get('output_baseline', {}))
+            return  # Never upload old local outputs over undelivered remote files.
         if self._started:
             await self._upload_changes()
             return
         await self.session.start()
         await self._upload_changes()
-        pending = (self.fs.get_run_info(self.pending_run) or {}).get('pending_files', {}) if self.pending_run else {}
-        self._known.update({file.path: file.sha256 for file in await self.session.files() if file.path not in pending})
+        self._known.update({file.path: file.sha256 for file in await self.session.files()})
         self._started = True
 
     async def _upload_changes(self):
@@ -71,9 +85,6 @@ class RemoteKernel:
                     raise ValueError("沙箱输入文件数超过 1000")
                 with source.open('rb') as stream:
                     checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
-                pending = (self.fs.get_run_info(self.pending_run) or {}).get('pending_files', {}) if self.pending_run else {}
-                if rel in pending:
-                    continue  # Do not overwrite an undelivered remote version with an older local copy.
                 if self._uploaded.get(rel) != checksum:
                     await self.session.upload(rel, source)
                     self._uploaded[rel] = checksum
@@ -84,6 +95,8 @@ class RemoteKernel:
             self._known.pop(rel, None)
 
     async def _collect(self, run_id):
+        info = self.fs._manifest['runs'][run_id]
+        expected = info.get('pending_files')
         files = await self.session.files()
         if len(files) > 1000:
             raise ValueError("沙箱输出文件数超过 1000")
@@ -93,16 +106,16 @@ class RemoteKernel:
             path = safe_path(file.path)
             if path.startswith(('data/', 'attachment/')) or (path.startswith('runs/') and not path.startswith(f'runs/{run_id}/artifacts/')):
                 continue
-            if self._known.get(path) == file.sha256:
+            if expected is not None and path not in expected:
+                continue
+            if expected is None and self._known.get(path) == file.sha256:
                 continue
             total += file.size
             if file.size < 0 or file.size > self.settings.max_file_bytes or total > self.settings.max_transfer_bytes:
                 raise ValueError("沙箱输出超出传输限额")
             changed.append((path, file))
-        info = self.fs._manifest['runs'][run_id]
-        expected = info.get('pending_files', {})
         available = {f.path: f.sha256 for f in files}
-        if any(available.get(path) != checksum for path, checksum in expected.items()):
+        if any(available.get(path) != checksum for path, checksum in (expected or {}).items()):
             raise RuntimeError('待同步的远端文件版本已不可用；已保存文件仍保留，请说明交付缺口，不自动重跑。')
         info['pending_files'] = {path: file.sha256 for path,file in changed}
         self.fs._save_manifest()
@@ -133,10 +146,20 @@ class RemoteKernel:
             self._known[path] = file.sha256
             self._uploaded[path] = file.sha256
             saved.append(path)
+            info['pending_files'].pop(path, None)
+            info.setdefault('output_baseline', {})[path] = file.sha256
+            self.fs._save_manifest()
         info['pending_files'] = {}
         self.fs._save_manifest()
         prefix = f'runs/{run_id}/artifacts/'
         return list(dict.fromkeys([*saved, *(p for p in self.fs._manifest['runs'][run_id].get('artifacts', []) if p.startswith(prefix))]))
+
+    async def _finalize(self, run_id):
+        info = self.fs._manifest['runs'][run_id]
+        if info.get('finalize_pending'):
+            await asyncio.wait_for(self.session.finalize(run_id), 60)
+            info.update(finalize_pending=False, pending_files=None)
+            self.fs._save_manifest()
 
     async def _stop(self):
         try:
@@ -185,28 +208,47 @@ class RemoteKernel:
                     raise RuntimeError("执行输出超过日志限额，已停止；已收到的日志仍保留")
             abnormal = False
             cancelled = False
+            execution_finished = False
             await event("starting")
             try:
                 await asyncio.wait_for(self._start(), self.settings.startup_timeout)
-                info.update(status="running", sandbox_id=self.session.id)
+                info.update(status="running", sandbox_id=self.session.id,
+                            sandbox_root=getattr(self.session, 'root', None),
+                            context_id=getattr(self.session, 'context_id', None),
+                            output_baseline=dict(self._known), pending_files=None)
                 self.fs._save_manifest()
                 await event("running")
                 outcome = await asyncio.wait_for(self.session.execute(code, run_id, output), self.timeout)
                 result.error = outcome.error
                 result.ok = result.error is None
                 result.failure_kind = 'code' if result.error else None
+                execution_finished = True
+                # Commit the execution receipt before any fallible output preparation.
+                info.update(status='success' if result.ok else 'error', error=result.error,
+                            failure_kind=result.failure_kind, finalize_pending=hasattr(self.session, 'finalize'),
+                            delivery_error='计算已结束，文件交付尚未完成')
+                self.fs._save_manifest()
+                try:
+                    await self._finalize(run_id)
+                except Exception as exc:
+                    result.delivery_error = self._safe_error(exc)
                 for attempt in range(2):
                     try:
                         result.files = await asyncio.wait_for(self._collect(run_id), 60)
                         break
                     except Exception as exc:
                         if attempt:
-                            result.delivery_error = self._safe_error(exc)
-                            self.pending_run = run_id
+                            result.delivery_error = '\n'.join(filter(None, [result.delivery_error, self._safe_error(exc)]))
+                if result.delivery_error:
+                    self.pending_run = run_id
             except asyncio.CancelledError:
-                cancelled = abnormal = True
-                result.error = "执行已取消"
-                result.failure_kind = 'cancelled'
+                if execution_finished:
+                    result.delivery_error = '文件交付已中断，请调用 retry_outputs，不要重算。'
+                    self.pending_run = run_id
+                else:
+                    cancelled = abnormal = True
+                    result.error = "执行已取消"
+                    result.failure_kind = 'cancelled'
                 raise
             except asyncio.TimeoutError:
                 abnormal = True
@@ -245,7 +287,8 @@ class RemoteKernel:
                 info.update(error=result.error, files=result.files, delivery_error=result.delivery_error,
                             failure_kind=result.failure_kind, context_restored=getattr(self.session, 'context_restored', False))
                 self.fs.finish_run(run_id, status)
-                await event("finished", status=status, error=result.error, files=result.files)
+                await event("finished", status=status, error=result.error, files=result.files,
+                            delivery_error=result.delivery_error)
             return result
 
     def _safe_error(self, error):
@@ -258,6 +301,12 @@ class RemoteKernel:
                 return None
             run_id = self.pending_run
             await asyncio.wait_for(self._start(), self.settings.startup_timeout)
+            info = self.fs._manifest['runs'][run_id]
+            if info.get('finalize_pending') and info.get('pending_files') is not None:
+                # Finish the frozen inventory before discovering new finalized files.
+                # A successful figure retry must not bless a changed CSV version.
+                await asyncio.wait_for(self._collect(run_id), 60)
+            await self._finalize(run_id)
             files = await asyncio.wait_for(self._collect(run_id), 60)
             info = self.fs._manifest['runs'][run_id]
             info.update(files=list(dict.fromkeys([*info.get('files', []), *files])), delivery_error=None)

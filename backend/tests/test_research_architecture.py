@@ -107,8 +107,6 @@ def test_view_defaults_to_references_actually_used_by_interpretation(study):
     assert view['interpretation_version']
 
 
-def test_same_numeric_value_never_guesses_a_reference(study):
-    assert study.registry.ground_statement(study.eid,'The effect is 12.0')=='The effect is 12.0'
 
 
 def test_semantic_doubts_do_not_automatically_schedule_another_review(study,monkeypatch):

@@ -1,3 +1,4 @@
+from helpers.sandbox import FakeSession
 import asyncio
 import hashlib
 import sys
@@ -13,51 +14,6 @@ from ai_system.sandbox.remote_kernel import RemoteKernel, safe_path
 from ai_system.sandbox.settings import SandboxSettings
 from ai_system.sandbox.artifacts import publish_run_files
 from services.file_services.workspace_fs import WorkspaceFS
-
-
-class FakeSession:
-    id = 'remote-test'
-
-    def __init__(self):
-        self.content = {}
-        self.started = self.closed = self.interrupted = 0
-        self.calls = []
-        self.ready = asyncio.Event()
-
-    async def start(self):
-        self.started += 1
-
-    async def upload(self, path, source):
-        self.content[path] = source.read_bytes()
-
-    async def delete(self, path):
-        self.content.pop(path, None)
-
-    async def execute(self, code, run_id, output):
-        self.calls.append(code)
-        await output('stdout', 'started\n')
-        self.content['outputs/table.csv'] = code.encode()
-        self.ready.set()
-        if code == 'wait':
-            await asyncio.sleep(10)
-        if code == 'verbose':
-            await output('stderr', 'x' * 100)
-        if code == 'disconnect':
-            raise ConnectionError('connection lost')
-        await output('stderr', 'warning\n')
-        return ExecutionOutcome('ValueError: test' if code == 'error' else None)
-
-    async def files(self):
-        return [SandboxFile(path, len(data), hashlib.sha256(data).hexdigest()) for path, data in self.content.items()]
-
-    async def download(self, path, destination, max_bytes):
-        destination.write_bytes(self.content[path])
-
-    async def interrupt(self):
-        self.interrupted += 1
-
-    async def close(self):
-        self.closed += 1
 
 
 def test_remote_streams_persists_and_versions_files(tmp_path):
@@ -237,4 +193,29 @@ def test_opensandbox_callback_error_stops_even_when_sdk_swallows_handlers():
         with pytest.raises(ValueError, match='quota'):
             await asyncio.wait_for(session.execute('print(1)', 'run-test', output), 1)
         assert stopped.is_set()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('fault', ['error', 'disconnect', 'missing_receipt'])
+def test_opensandbox_keeps_calculation_receipt_when_saving_figures_fails(fault):
+    pytest.importorskip('opensandbox')
+    from types import SimpleNamespace
+    from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
+    async def run():
+        calls = []
+        async def sdk_run(code, **kwargs):
+            calls.append(code)
+            if code == 'calculate':
+                return SimpleNamespace(complete=True, error=None, result=[])
+            if fault == 'disconnect': raise ConnectionError('file channel offline')
+            return SimpleNamespace(complete=None if fault == 'missing_receipt' else True,
+                error=SimpleNamespace(traceback=['cannot save figure']) if fault == 'error' else None)
+        async def output(*args): pass
+        session = OpenSandboxSession(SandboxSettings())
+        session.interpreter = SimpleNamespace(codes=SimpleNamespace(run=sdk_run))
+        outcome = await session.execute('calculate', 'run-test', output)
+        assert outcome.error is None and calls == ['calculate']
+        with pytest.raises((RuntimeError, ConnectionError)):
+            await session.finalize('run-test')
+        assert calls.count('calculate') == 1
     asyncio.run(run())

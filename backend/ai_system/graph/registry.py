@@ -178,7 +178,9 @@ class ResultRegistry:
         }
         if self.staged_history:
             payload["staged_history"] = [asdict(r) for r in self.staged_history]
-        self.fs.write_text(REGISTRY_PATH, json.dumps(payload, ensure_ascii=False, indent=2))
+        content = json.dumps(payload, ensure_ascii=False, indent=2)
+        if not self.fs.exists(REGISTRY_PATH) or self.fs.read_text(REGISTRY_PATH) != content:
+            self.fs.write_text(REGISTRY_PATH, content)
 
     def reset(self) -> None:
         """新任务开始时清空，避免上一篇论文的结果混进来"""

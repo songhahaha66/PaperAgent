@@ -10,7 +10,7 @@ from ai_system.research.models import WorkerResult, ReviewRecord, IssueReport, R
 from ai_system.research.validation import report_fingerprint
 from services.chat_services.research_session import research_snapshot
 from services.chat_services import paper_editor
-from test_research_control import make_store
+from helpers.research import make_store
 
 
 def test_result_explanation_is_optional_not_a_semantic_or_provenance_gate():

@@ -205,7 +205,7 @@ def test_saved_model_proposal_can_resume_only_failed_legacy_full_review(scoped):
 
 @pytest.mark.parametrize('conflict',[False,True])
 def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkeypatch,conflict):
-    from test_native_latex import render_native_paper
+    from helpers.paper import render_native_paper
     from services.chat_services import paper_project as project
     from test_paper_interactions import selection
     v=scoped;v.store.publish_paper(render_native_paper(v.store,v.state),filename='paper.tex');(v.store.root/'paper.pdf').write_bytes(b'previous PDF')

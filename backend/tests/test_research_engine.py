@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import ToolMessage
 
-from test_paper_graph import FakeModel, FixedJudge, _make_workspace, _Structured, TASK, FAIL_ONCE
+from helpers.graph import FakeModel, FixedJudge, _make_workspace, _Structured, TASK, FAIL_ONCE
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.research.store import ResearchStore
 from services.chat_services.research_session import research_snapshot

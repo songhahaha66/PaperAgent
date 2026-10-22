@@ -23,7 +23,7 @@ def linked(paper,monkeypatch,request):
             task=key.split(':')[1];state['sections'][key]+=' '.join('{{R:'+r['id']+'}}' for r in store.registry_payload()['results'] if r['subproblem']==task)
     store.save_sections(state['sections'],[]);store.publish_paper(assemble(state))
     if getattr(request,'param',False):
-        from test_native_latex import render_native_paper
+        from helpers.paper import render_native_paper
         store.publish_paper(render_native_paper(store,state),filename='paper.tex');(store.root/'paper.pdf').write_bytes(b'%PDF-old-fixture')
     from services.chat_services import review_tasks
     review_state=review_tasks.paper_state(store)

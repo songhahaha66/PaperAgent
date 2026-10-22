@@ -2,9 +2,10 @@
 import asyncio
 import json
 from types import SimpleNamespace
+import pytest
 
-from test_sandbox_providers import FakeSession
-from test_research_control import make_store, finish
+from helpers.sandbox import FakeSession
+from helpers.research import make_store, finish
 from ai_system.sandbox.remote_kernel import RemoteKernel
 from ai_system.sandbox.settings import SandboxSettings
 from ai_system.sandbox.kernel import PythonKernel
@@ -12,6 +13,153 @@ from ai_system.sandbox.artifacts import capture_run_files, collect_references
 from ai_system.graph.context import GraphContext
 from ai_system.research.views import delivery_summary
 from services.file_services.workspace_fs import WorkspaceFS
+
+
+@pytest.mark.parametrize('failure,recovery', [
+    ('inventory', 'same'), ('download', 'same'),
+    ('inventory', 'replacement'), ('inventory', 'different_root'),
+    ('download', 'replacement'), ('download', 'changed_file'),
+])
+def test_rebuilt_kernel_recovers_only_original_outputs(tmp_path, failure, recovery):
+    class InterruptedFiles(FakeSession):
+        offline = True
+        async def files(self):
+            if self.calls and self.offline and failure == 'inventory':
+                raise ConnectionError('inventory unavailable')
+            return await super().files()
+        async def download(self, path, destination, max_bytes):
+            if self.offline and failure == 'download':
+                raise ConnectionError('download unavailable')
+            await super().download(path, destination, max_bytes)
+    async def run():
+        session = InterruptedFiles()
+        settings = SandboxSettings(provider='fake')
+        kernel = RemoteKernel(tmp_path, session, settings)
+        kernel.fs.write_text('outputs/table.csv', 'old local version')
+        first = await kernel.execute('new remote version')
+        assert first.ok and first.delivery_error
+        info = kernel.fs.get_run_info(first.run_id)
+        assert (info['pending_files'] is None) == (failure == 'inventory')
+        session.offline = False
+        if recovery == 'replacement':
+            session.id = 'different-sandbox'
+        elif recovery == 'different_root':
+            session.root = '/workspace/another-experiment'
+        elif recovery == 'changed_file':
+            session.content.clear()
+        rebuilt = RemoteKernel(tmp_path, session, settings)
+        if recovery != 'same':
+            with pytest.raises(RuntimeError, match='不可用'):
+                await rebuilt.retry_outputs()
+            assert rebuilt.fs.get_run_info(first.run_id)['delivery_error']
+            assert rebuilt.pending_run == first.run_id
+        else:
+            await rebuilt.retry_outputs()
+            assert rebuilt.fs.get_run_info(first.run_id)['delivery_error'] is None
+            assert (tmp_path/'outputs/table.csv').read_text() == 'new remote version'
+            assert rebuilt.fs.read_text(f'runs/{first.run_id}/artifacts/outputs/table.csv') == 'new remote version'
+        assert session.calls == ['new remote version']
+        await rebuilt.close()
+    asyncio.run(run())
+
+
+def test_unknown_legacy_inventory_cannot_be_marked_delivered(tmp_path):
+    async def run():
+        session = FakeSession()
+        kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
+        run_id = kernel.fs.create_run()
+        kernel.fs._manifest['runs'][run_id].update(delivery_error='offline', sandbox_id=session.id)
+        kernel.fs._save_manifest()
+        rebuilt = RemoteKernel(tmp_path, session, kernel.settings)
+        with pytest.raises(RuntimeError, match='缺少文件清单'):
+            await rebuilt.retry_outputs()
+        assert rebuilt.pending_run == run_id and not session.calls
+        await rebuilt.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('phase', ['finalize', 'download'])
+def test_cancelling_delivery_preserves_computation_for_restart(tmp_path, phase):
+    async def run():
+        entered = asyncio.Event()
+        resume = False
+        class Interrupted(FakeSession):
+            async def finalize(self, run_id):
+                if not resume and phase == 'finalize':
+                    entered.set()
+                    await asyncio.Event().wait()
+            async def download(self, path, destination, max_bytes):
+                if not resume and phase == 'download':
+                    entered.set()
+                    await asyncio.Event().wait()
+                await super().download(path, destination, max_bytes)
+        session = Interrupted()
+        kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
+        task = asyncio.create_task(kernel.execute('42'))
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError): await task
+        info = kernel.fs.get_run_info(kernel.pending_run)
+        assert info['status'] == 'success' and info['error'] is None and info['delivery_error']
+        resume = True
+        rebuilt = RemoteKernel(tmp_path, session, kernel.settings)
+        await rebuilt.retry_outputs()
+        assert (tmp_path/'outputs/table.csv').read_text() == '42' and session.calls == ['42']
+        await rebuilt.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('recovery', ['same', 'lost_context', 'lost_output'])
+def test_figure_finalization_retries_without_reexecuting_calculation(tmp_path, recovery):
+    class Figures(FakeSession):
+        context_id = 'original-context'
+        offline = True
+        async def finalize(self, run_id):
+            if self.offline:
+                raise RuntimeError('save figures failed')
+            self.content[f'runs/{run_id}/artifacts/figure_1.png'] = b'figure'
+        async def download(self, path, destination, max_bytes):
+            if self.offline and recovery == 'lost_output': raise ConnectionError('offline')
+            await super().download(path, destination, max_bytes)
+    async def run():
+        session = Figures()
+        kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
+        first = await kernel.execute('42')
+        assert first.ok and first.error is None and first.failure_kind is None
+        assert 'save figures failed' in first.delivery_error
+        if recovery != 'lost_output': assert (tmp_path/'outputs/table.csv').read_text() == '42'
+        assert kernel.fs.get_run_info(first.run_id)['status'] == 'success'
+        session.offline = False
+        if recovery == 'lost_context': session.context_id = 'new-context'
+        if recovery == 'lost_output': session.content['outputs/table.csv'] = b'different version'
+        rebuilt = RemoteKernel(tmp_path, session, kernel.settings)
+        if recovery != 'same':
+            with pytest.raises(RuntimeError, match='不可用'):
+                await rebuilt.retry_outputs()
+            assert rebuilt.fs.get_run_info(first.run_id)['delivery_error']
+        else:
+            await rebuilt.retry_outputs()
+            info = rebuilt.fs.get_run_info(first.run_id)
+            assert not info['finalize_pending'] and not info['delivery_error']
+            assert rebuilt.fs.read_text(f'runs/{first.run_id}/artifacts/figure_1.png') == 'figure'
+        assert session.calls == ['42']
+        await rebuilt.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('mode,export_status,expected', [
+    ('markdown', 'pending', 'completed'), ('markdown', 'failed', 'completed'),
+    ('word', 'pending', 'draft'), ('latex', 'pending', 'draft'),
+    ('word', 'failed', 'incomplete'), ('latex', 'failed', 'incomplete'),
+    ('word', 'completed', 'completed'), ('latex', 'completed', 'completed'),
+])
+def test_delivery_completion_depends_on_requested_format(mode, export_status, expected):
+    state = {'spec': {'output_mode': mode}, 'delivery_stages': {
+        'write': {'status': 'completed'}, 'validate': {'status': 'completed'},
+        'render': {'status': 'completed'}, 'export': {'status': export_status}}}
+    summary = delivery_summary(state)
+    assert summary['state'] == expected
+    if expected == 'completed': assert '尚未完成' not in summary['label']
 
 
 def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
@@ -37,16 +185,32 @@ def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
     asyncio.run(run())
 
 
-def test_continuation_publishes_each_run_only_once(tmp_path):
+def test_continuation_publishes_each_run_only_once(tmp_path, monkeypatch):
+    import shutil
+    copied = []
+    copytree = shutil.copytree
+    def track(source, target, *args, **kwargs):
+        copied.append(source)
+        return copytree(source, target, *args, **kwargs)
+    monkeypatch.setattr(shutil, 'copytree', track)
     async def run():
         kernel = RemoteKernel(tmp_path/'attempt', FakeSession(), SandboxSettings(provider='fake'))
         cell = await kernel.execute('value\n42\n')
         root = WorkspaceFS(str(tmp_path/'root')); root.init_structure()
         first = capture_run_files(kernel.fs, root, 'attempt-1')
         assert first
+        copied.clear()
         assert capture_run_files(kernel.fs, root, 'attempt-2') == []
+        assert not copied, 'republishing must not recopy historical run directories'
         assert len(root.list_visible_files()) == len(first)
         assert all(root.get_file_meta(p)['source_run'] == cell.run_id for p in first)
+        second = await kernel.execute('value\n43\n')
+        capture_run_files(kernel.fs, root, run_ids=[second.run_id])
+        from pathlib import Path
+        assert copied and all(cell.run_id not in Path(path).parts for path in copied)
+        copied.clear()
+        assert capture_run_files(kernel.fs, root) == [] and not copied
+        assert root.read_text(f'runs/{cell.run_id}/artifacts/outputs/table.csv') == 'value\n42\n'
         await kernel.close()
     asyncio.run(run())
 
@@ -142,7 +306,7 @@ def test_paused_work_cannot_display_report_still_running(tmp_path):
 def test_unused_historical_figure_does_not_force_recomputation(tmp_path):
     from ai_system.graph.registry import Result
     from ai_system.modules.experiments.review import report_submission_issues
-    from test_report_submission import branch, seed, report
+    from helpers.submissions import branch, seed, report
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
     runs=[]
     good=seed(ctx,runs)

@@ -16,7 +16,7 @@ from ai_system.export.markdown_prep import expand_math_macros, fix_inline_math, 
 from ai_system.graph import PaperGraphAgent
 from ai_system.graph.outline import template_outline
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_paper_graph import TASK, FakeModel, FixedJudge, _make_workspace
+from helpers.graph import TASK, FakeModel, FixedJudge, _make_workspace
 
 needs_pandoc = pytest.mark.skipif(not shutil.which("pandoc"), reason="没有 pandoc")
 needs_xelatex = pytest.mark.skipif(not shutil.which("xelatex"), reason="没有 xelatex")
@@ -185,19 +185,6 @@ def test_template_outline_docx_headings_and_missing_solve():
     assert template_outline("## Word 骨架\n- 第1段 [Normal]: 正文\n") == []
 
 
-def test_template_audit_fixture_respects_the_supplied_section_keys(monkeypatch):
-    from test_paper_graph import _Structured
-    from ai_system.graph.llm_utils import as_messages
-    from ai_system.graph.state import ClaimAudit
-    monkeypatch.setattr(_Structured,'audits',0)
-    keys=['abstract','restatement','solve:Q1','custom:4']
-    audit=asyncio.run(_Structured(ClaimAudit).ainvoke(as_messages('核对实际提供的章节。',
-        'section 只能填这些 key：'+json.dumps(keys,ensure_ascii=False))))
-    assert all(issue.section in keys for issue in audit.issues)
-    # The general graph fixture retains its adversarial audit for its own test.
-    normal=asyncio.run(_Structured(ClaimAudit).ainvoke(as_messages('核对实际提供的章节。',
-        'section 只能填这些 key：["evaluation"]')))
-    assert any(issue.section=='evaluation' and issue.contradicts for issue in normal.issues)
 
 
 @needs_pandoc

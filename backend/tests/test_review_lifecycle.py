@@ -18,8 +18,8 @@ from ai_system.research.assumptions import assumption_id
 from ai_system.research.models import AssumptionDraft, AssumptionProposal, DomainCheck, IssueReport, ResearchConflict, ResultSelector, ReviewRecord, WorkerResult
 from ai_system.research.store import ResearchStore
 from ai_system.research.validation import report_fingerprint
-from test_paper_graph import FixedJudge, _candidate
-from test_research_p2 import TASK, store_for, submit, resume_saved_contract
+from helpers.graph import FixedJudge, _candidate
+from helpers.contracts import TASK, store_for, submit, resume_saved_contract
 
 
 
