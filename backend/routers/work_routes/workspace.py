@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 from fastapi import BackgroundTasks, APIRouter, Depends, HTTPException, status, Query, UploadFile, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -11,12 +12,8 @@ import asyncio
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
 def _require_workspace_access(db: Session, work_id: str, user_id: int, *, exporting: bool = False) -> None:
-    work = crud.get_work(db, work_id)
-    if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    if work.created_by != user_id:
-        action = "export" if exporting else "access"
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Not authorized to {action} this workspace")
+    from services.file_services.project_access import require_project
+    return require_project(db, work_id, user_id, exporting=exporting)
 
 
 @router.get("/{work_id}/files")
@@ -50,28 +47,7 @@ async def download_workspace_file(
     try:
         _require_workspace_access(db, work_id, current_user)
 
-        # 构建文件路径
-        workspace_path = workspace_file_service.get_workspace_path(work_id)
-        target_file = workspace_path / file_path
-
-        if not target_file.exists() or not target_file.is_file():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="File not found"
-            )
-
-        # 获取MIME类型
-        import mimetypes
-        mime_type, _ = mimetypes.guess_type(str(target_file))
-        if mime_type is None:
-            mime_type = "application/octet-stream"
-
-        # 返回文件下载响应
-        return FileResponse(
-            path=str(target_file),
-            media_type=mime_type,
-            filename=target_file.name
-        )
+        return workspace_file_service.file_response(work_id, file_path)
 
     except HTTPException:
         raise
@@ -113,34 +89,8 @@ async def get_workspace_image(
     try:
         _require_workspace_access(db, work_id, current_user)
         
-        # 获取图片文件的完整路径
-        workspace_path = workspace_file_service.get_workspace_path(work_id)
-        image_path = workspace_path / unquote(file_path)
-        
-        if not image_path.exists():
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Image file not found"
-            )
-        
-        if not image_path.is_file():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Path is not a file"
-            )
-        
-        # 检查文件大小
-        if image_path.stat().st_size > 50 * 1024 * 1024:  # 50MB限制
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Image file too large"
-            )
-        
-        # 返回文件响应
-        return FileResponse(
-            path=str(image_path),
-            media_type=f"image/{file_path.split('.')[-1].lower()}"
-        )
+        return workspace_file_service.file_response(work_id, file_path, image=True)
+
     except HTTPException:
         raise
     except Exception as e:
@@ -242,17 +192,17 @@ async def export_workspace(
 ):
     """导出工作空间为ZIP文件"""
     try:
-        _require_workspace_access(db, work_id, current_user, exporting=True)
+        project = _require_workspace_access(db, work_id, current_user, exporting=True)
 
         # 生成ZIP文件
-        zip_path = workspace_file_service.export_workspace(work_id)
+        zip_path = workspace_file_service.export_workspace(work_id, legacy=project.architecture_version != 2)
 
         # 返回ZIP文件
         return FileResponse(
             path=zip_path,
             media_type="application/zip",
             filename=f"workspace_{work_id}.zip",
-            headers={"Content-Disposition": f"attachment; filename=workspace_{work_id}.zip"}
+            background=__import__("starlette.background", fromlist=["BackgroundTask"]).BackgroundTask(__import__("shutil").rmtree, str(__import__("pathlib").Path(zip_path).parent))
         )
 
     except HTTPException:
@@ -315,6 +265,10 @@ def _paper_store(db, work_id, user_id, *, mutation=False):
     _require_workspace_access(db, work_id, user_id)
     if mutation and task_manager.get_running_task(work_id):
         raise HTTPException(409, '研究正在执行，请完成后再修改论文')
+    if mutation:
+        from services.file_services.workspace_lock import edit_lock
+        with edit_lock(workspace_file_service.get_workspace_path(work_id)):
+            pass
     try:
         return paper_editor.current_store(workspace_file_service.get_workspace_path(work_id))
     except (OSError, ValueError, KeyError):
@@ -325,7 +279,7 @@ def _paper_store(db, work_id, user_id, *, mutation=False):
 async def get_paper_document(work_id: str, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
     _require_workspace_access(db, work_id, current_user)
     root = workspace_file_service.get_workspace_path(work_id)
-    if not (root / '.system/graph_thread.json').exists():
+    if not (workspace_path(root, '.system/graph_thread.json')).exists():
         return paper_editor.empty_document()
     store = _paper_store(db, work_id, current_user)
     try:
@@ -386,7 +340,7 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
                 if request.fragment_scope is not None:options['fragment_scope']=request.fragment_scope.model_dump()
                 if request.recovery_of is not None:options['recovery_of']=request.recovery_of
                 return await paper_editor.propose(store,request.section,request.instruction,request.content,llm,**options)
-            finally:trace.dump(store.root/'.system/editor_llm_calls.json')
+            finally:trace.dump(workspace_path(store.root, '.system/editor_llm_calls.json'))
     except PatchFailure as exc:
         raise HTTPException(409,exc.detail) from None
     except (ValueError, ResearchConflict, ResearchBudgetExhausted) as exc:
@@ -415,7 +369,7 @@ async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecisi
                 llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
             try:
                 with budget_scope(store.root,store.research_id):return await review_pending_fragment(store,proposal_id,llm)
-            finally:trace.dump(store.root/'.system/editor_llm_calls.json')
+            finally:trace.dump(workspace_path(store.root, '.system/editor_llm_calls.json'))
         return await paper_editor.decide(store, proposal_id, request.decision == 'apply', crud.get_work(db, work_id).output_mode or 'markdown')
     except (ValueError, ResearchConflict) as exc:
         raise HTTPException(409, str(exc))
@@ -433,7 +387,7 @@ def _skill_store(db, work_id, user_id, *, mutation=False):
     import json
     from ai_system.research.store import ResearchStore
     root = workspace_file_service.get_workspace_path(work_id)
-    thread = root / '.system/graph_thread.json'
+    thread = workspace_path(root, '.system/graph_thread.json')
     info = json.loads(thread.read_text()) if thread.exists() else {}
     research_id = info.get('thread_id') if info.get('engine_version') == 'research-v3' else None
     return ResearchStore(root, research_id or 'workspace-skills')
@@ -501,7 +455,7 @@ async def literature_state(work_id: str, db: Session=Depends(get_db), current_us
     service = _literature(work_id,db,current_user)
     from ai_system.research.citations import citation_usage
     suggestion = ''
-    thread = service.store.root/'.system/graph_thread.json'
+    thread = workspace_path(service.store.root, '.system/graph_thread.json')
     try:
         if thread.exists():
             import json
@@ -616,7 +570,7 @@ async def experience_list(work_id:str,db:Session=Depends(get_db),current_user:in
     from ai_system.research.store import ResearchStore
     import json
     result={};root=workspace_file_service.get_workspace_path(work_id)
-    thread=root/'.system/graph_thread.json'
+    thread=workspace_path(root, '.system/graph_thread.json')
     try:
         saved=json.loads(thread.read_text()) if thread.exists() else None
         store=ResearchStore(root,saved['thread_id'],read_only=True) if saved else None
@@ -672,7 +626,7 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
     from services.research_experience import ExperienceScope
     from services.literature_fetch import public_url
     root=workspace_file_service.get_workspace_path(work_id)
-    thread=root/'.system/graph_thread.json'
+    thread=workspace_path(root, '.system/graph_thread.json')
     if thread.exists():raise HTTPException(409,'研究已经开始；入口配置不会覆盖检查点，请使用对应面板明确修订')
     try:
         urls=[public_url(u) for u in request.source_urls]
@@ -817,7 +771,7 @@ async def _execute_paper_comment(store, execution_id, llm, resume=False):
         import logging
         logging.getLogger(__name__).exception('Paper comment did not complete')
     finally:
-        trace.dump(store.root/'.system/editor_llm_calls.json')
+        trace.dump(workspace_path(store.root, '.system/editor_llm_calls.json'))
 
 
 @router.post('/{work_id}/paper/comments',status_code=202)

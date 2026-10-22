@@ -53,7 +53,7 @@ async def create_template_with_file(
         )
     
     # 读取文件内容
-    content = await file.read()
+    content = await file.read(10 * 1024 * 1024 + 1)
     
     # 检查文件大小（限制为10MB）
     if len(content) > 10 * 1024 * 1024:
@@ -164,7 +164,7 @@ async def force_delete_template(
     current_user: int = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    """强制删除模板（同时删除引用该模板的工作）"""
+    """删除模板库条目（已有项目副本保留）"""
     return crud.force_delete_paper_template(db, template_id, current_user)
 
 @router.get("/{template_id}/analysis", response_model=schemas.TemplateAnalysisResponse)
@@ -218,7 +218,8 @@ async def get_template_preview(
     
     # file_path 现在只存储文件名
     if template.file_path:
-        file_path = get_templates_path() / template.file_path
+        from services.file_services.file_helper import FileHelper
+        file_path = FileHelper(get_templates_path()).resolve(template.file_path)
     else:
         file_path = get_templates_path() / f"{template_id}_template.md"
     
@@ -291,7 +292,8 @@ async def download_template_file(
     
     # file_path 现在只存储文件名
     if template.file_path:
-        file_path = get_templates_path() / template.file_path
+        from services.file_services.file_helper import FileHelper
+        file_path = FileHelper(get_templates_path()).resolve(template.file_path)
     else:
         file_path = get_templates_path() / f"{template_id}_template.md"
     

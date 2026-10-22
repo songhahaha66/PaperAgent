@@ -1,48 +1,44 @@
 import base64
+import io
+import uuid
 from pathlib import Path
 from config.paths import get_templates_path
+from .file_helper import FileHelper
+from .workspace_layout import relative_parts
+from .archive_safety import validate_archive
 
 
 class TemplateFileService:
-    """模板文件管理服务"""
-    
     def __init__(self):
         self.base_path = get_templates_path()
-    
-    def save_file(self, template_id: int, filename: str, content: str, is_binary: bool = False) -> str:
-        """保存模板文件，返回文件名"""
-        file_name = f"{template_id}_{filename}"
-        file_path = self.base_path / file_name
-        
-        # 确保目录存在
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if is_binary:
-            # 解码base64并写入二进制文件
-            binary_content = base64.b64decode(content)
-            with open(file_path, 'wb') as f:
-                f.write(binary_content)
-        else:
-            # 写入文本文件
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-        
-        return file_name
-    
-    def get_text_content(self, filename: str) -> str:
-        """获取文本文件内容（用于创建工作空间时）"""
-        file_path = self.base_path / filename
-        if not file_path.exists():
-            raise FileNotFoundError(f"Template file not found: {filename}")
-        return file_path.read_text(encoding='utf-8')
-    
-    def delete_file(self, filename: str) -> bool:
-        """删除模板文件"""
-        file_path = self.base_path / filename
-        if file_path.exists():
-            file_path.unlink()
+
+    def save_file(self, template_id, filename, content, is_binary=False):
+        if len(relative_parts(filename)) != 1:
+            raise ValueError('Invalid template filename')
+        raw = base64.b64decode(content, validate=True) if is_binary else content.encode('utf-8')
+        if not raw or len(raw) > 10 * 1024 * 1024:
+            raise ValueError('模板不能为空或超过 10MB')
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {'.md','.tex','.docx'} or is_binary != (suffix == '.docx'):
+            raise ValueError('模板类型不匹配')
+        name = f'{template_id}_{uuid.uuid4().hex}{suffix}'
+        helper = FileHelper(self.base_path)
+        helper.write_bytes_stream(name, io.BytesIO(raw), max_bytes=10 * 1024 * 1024)
+        try:
+            if suffix == '.docx':
+                validate_archive(helper.resolve(name))
+        except BaseException:
+            helper.delete(name)
+            raise
+        return name
+
+    def get_text_content(self, filename):
+        return FileHelper(self.base_path).read_text(filename)
+
+    def delete_file(self, filename):
+        path = FileHelper(self.base_path).resolve(filename)
+        path.unlink(missing_ok=True)
         return True
 
 
-# 创建全局实例
 template_file_service = TemplateFileService()

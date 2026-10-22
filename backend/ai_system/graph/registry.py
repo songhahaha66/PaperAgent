@@ -201,6 +201,11 @@ class ResultRegistry:
             raise GroundingError(f"run {run_id} 不存在")
         if info.get("status") != "success":
             raise GroundingError(f"run {run_id} 执行失败，不能从中登记结果")
+        from ai_system.sandbox.evidence import verify_run
+        try:
+            verify_run(self.fs, run_id)
+        except (ValueError, OSError) as exc:
+            raise GroundingError(str(exc)) from exc
         if not info.get("stdout"):
             return ""
         return self.fs.read_text(info["stdout"])
@@ -211,6 +216,17 @@ class ResultRegistry:
             raise GroundingError(
                 f"值 {value} 没有出现在 {run_id} 的输出中。请先 print 出这个结果，再用那次执行的 run_id 登记。"
             )
+
+    def _bind_result(self, result):
+        from ai_system.sandbox.evidence import checksum, verify_run
+        verify_run(self.fs, result.run_id)
+        binding = {'result_id': result.id, 'run_id': result.run_id,
+                   'receipt_sha256': checksum(self.fs.run_dir(result.run_id) / 'receipt.json')}
+        bindings = self.fs._manifest.setdefault('result_bindings', {})
+        if result.id in bindings and bindings[result.id] != binding:
+            raise GroundingError('结果编号已绑定其他归档版本')
+        bindings[result.id] = binding
+        self.fs._save_manifest()
 
     def record_value(
         self,
@@ -254,6 +270,7 @@ class ResultRegistry:
             id=same.id if same else self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
             value=value, run_id=run_id, unit=unit.strip(), description=description.strip(), meaning=meaning,
         )
+        self._bind_result(result)
         self.results[result.id] = result
         self.save()
         return result
@@ -279,6 +296,7 @@ class ResultRegistry:
             id=self._next_id("F"), kind="figure", subproblem=subproblem, name=caption.strip(),
             value="", run_id=run_id, path=path,
         )
+        self._bind_result(result)
         self.results[result.id] = result
         self.save()
         return result

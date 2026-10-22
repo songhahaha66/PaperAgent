@@ -1,4 +1,5 @@
 """Versioned, context-bound review results and narrowly scoped service recovery."""
+from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings
 import json,time,uuid,hashlib,re,asyncio
@@ -48,8 +49,8 @@ def _payload(item):
 
 def _file(root,path):
     if not path:return None
-    target=(root/path).resolve()
-    if not target.is_relative_to(root.resolve()) or not target.is_file():return {'unavailable':True}
+    target=workspace_path(root,path)
+    if not target.is_file():return {'unavailable':True}
     try:
         with target.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
     except OSError:return {'unavailable':True}
@@ -59,7 +60,7 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
     store=getattr(ctx,'research',None);snapshot=store.snapshot() if store else None
     registry=ctx.registry;results={k:_payload(v) for k,v in registry.results.items()};claims={k:_payload(v) for k,v in registry.claims.items()}
     root=store.root if store else Path(ctx.workspace)
-    try:manifest=json.loads((root/'manifest.json').read_text()).get('runs',{})
+    try:manifest=json.loads((workspace_path(root, 'manifest.json')).read_text()).get('runs',{})
     except (OSError,ValueError):manifest={}
     artifacts={}
     for key,row in results.items():

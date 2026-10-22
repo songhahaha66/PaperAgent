@@ -1,8 +1,6 @@
-"""Run bookkeeping, bounded logs and artifact transfer shared by remote providers."""
+"""Persistent-volume execution, bounded logs and protected run receipts."""
 import asyncio
-import hashlib
 import logging
-import shutil
 from pathlib import Path, PurePosixPath
 
 from services.file_services.workspace_fs import WorkspaceFS
@@ -29,130 +27,38 @@ class RemoteKernel:
         self.session = session
         self.settings = settings
         self._started = False
-        self._known = {}
-        self._uploaded = {}
         self._lock = asyncio.Lock()
+        self._project_lock = None
         self.pending_run = next((rid for rid, row in reversed(self.fs._manifest.get('runs', {}).items())
-                                 if row.get('delivery_error')), None)
+                                 if row.get('delivery_error') and rid not in self.fs._manifest.get('inherited_runs', [])), None)
 
     async def _start(self):
-        if self.pending_run:
-            if not self._started:
-                await self.session.start()
-                self._started = True
-            info = self.fs.get_run_info(self.pending_run)
-            if not info.get('sandbox_id') or info['sandbox_id'] != self.session.id:
-                raise RuntimeError('原沙箱已不可用，不能确认待交付文件；已有结果保留，不自动重跑。')
-            if info.get('sandbox_root') != getattr(self.session, 'root', None):
-                raise RuntimeError('原实验文件目录已不可用，不能确认待交付文件；已有结果保留，不自动重跑。')
-            if info.get('finalize_pending') and info.get('context_id') != getattr(self.session, 'context_id', None):
-                raise RuntimeError('原执行上下文已不可用，无法恢复图片保存；已有结果保留，不自动重跑。')
-            if info.get('pending_files') is None and 'output_baseline' not in info:
-                raise RuntimeError('旧运行缺少文件清单和执行前记录，无法确认交付完整性；不自动重跑。')
-            self._known = dict(info.get('output_baseline', {}))
-            return  # Never upload old local outputs over undelivered remote files.
         if self._started:
-            await self._upload_changes()
             return
         await self.session.start()
-        await self._upload_changes()
-        self._known.update({file.path: file.sha256 for file in await self.session.files()})
         self._started = True
+        self.fs._manifest['storage'] = {'kind': 'persistent-host-volume',
+            'volume_path': self.session.volume_path, 'sandbox_root': self.session.root}
+        self.fs._save_manifest()
 
-    async def _upload_changes(self):
-        total = 0
-        current = set()
-        paths = [(folder, source) for folder in ('data','attachment','code','outputs','runs')
-                 for source in sorted((self.workspace_dir / folder).rglob('*'))]
-        paths += [('generated', self.fs.abs(path)) for path, meta in self.fs._manifest.get('files', {}).items()
-                  if meta.get('source_run') and Path(path).parts[0] not in {'data','attachment','code','outputs','runs'}]
-        for folder, source in paths:
-            if source.exists():
-                if source.is_symlink() or not source.resolve().is_relative_to(self.workspace_dir):
-                    raise ValueError("沙箱输入不允许符号链接")
-                if not source.is_file() or "__pycache__" in source.parts:
-                    continue
-                rel = source.relative_to(self.workspace_dir).as_posix()
-                # Runtime bookkeeping stays local; inherited artifacts can be reused.
-                if folder == "runs" and "/artifacts/" not in rel:
-                    continue
-                size = source.stat().st_size
-                total += size
-                if size > self.settings.max_file_bytes or total > self.settings.max_transfer_bytes:
-                    raise ValueError("沙箱输入超出传输限额")
-                current.add(rel)
-                if len(current) > 1000:
-                    raise ValueError("沙箱输入文件数超过 1000")
-                with source.open('rb') as stream:
-                    checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
-                if self._uploaded.get(rel) != checksum:
-                    await self.session.upload(rel, source)
-                    self._uploaded[rel] = checksum
-                    self._known[rel] = checksum
-        for rel in set(self._uploaded) - current:
-            await self.session.delete(rel)
-            self._uploaded.pop(rel)
-            self._known.pop(rel, None)
+    def _freeze_inputs(self, run_id):
+        from .evidence import freeze_inputs
+        freeze_inputs(self.fs, run_id)
 
     async def _collect(self, run_id):
+        from .artifacts import capture_local_outputs
         info = self.fs._manifest['runs'][run_id]
-        expected = info.get('pending_files')
-        files = await self.session.files()
-        if len(files) > 1000:
-            raise ValueError("沙箱输出文件数超过 1000")
-        changed = []
-        total = 0
-        for file in files:
-            path = safe_path(file.path)
-            if path.startswith(('data/', 'attachment/')) or (path.startswith('runs/') and not path.startswith(f'runs/{run_id}/artifacts/')):
-                continue
-            if expected is not None and path not in expected:
-                continue
-            if expected is None and self._known.get(path) == file.sha256:
-                continue
-            total += file.size
-            if file.size < 0 or file.size > self.settings.max_file_bytes or total > self.settings.max_transfer_bytes:
-                raise ValueError("沙箱输出超出传输限额")
-            changed.append((path, file))
-        available = {f.path: f.sha256 for f in files}
-        if any(available.get(path) != checksum for path, checksum in (expected or {}).items()):
-            raise RuntimeError('待同步的远端文件版本已不可用；已保存文件仍保留，请说明交付缺口，不自动重跑。')
-        info['pending_files'] = {path: file.sha256 for path,file in changed}
-        self.fs._save_manifest()
-        saved = []
-        for path, file in changed:
-            dest = self.fs.abs(path)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            temporary = dest.with_name(dest.name + ".download")
-            try:
-                await self.session.download(path, temporary, self.settings.max_file_bytes)
-                with temporary.open("rb") as stream:
-                    checksum = hashlib.file_digest(stream, "sha256").hexdigest()
-                if temporary.stat().st_size != file.size or checksum != file.sha256:
-                    raise ValueError(f"输出文件在传输中改变: {path}")
-                temporary.replace(dest)
-            finally:
-                temporary.unlink(missing_ok=True)
-            # Preserve each execution's version even when later cells overwrite outputs.
-            prefix = f"runs/{run_id}/artifacts/"
-            archive = path if path.startswith(prefix) else prefix + path
-            if archive != path:
-                target = self.fs.abs(archive)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(dest, target)
-            self.fs.register_run_artifact(run_id, archive.removeprefix(prefix))
-            kind = "image" if dest.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg"} else "code" if path.startswith("code/") else "data"
-            self.fs.register_file(path, kind=kind, source_run=run_id, visibility="user")
-            self._known[path] = file.sha256
-            self._uploaded[path] = file.sha256
-            saved.append(path)
-            info['pending_files'].pop(path, None)
-            info.setdefault('output_baseline', {})[path] = file.sha256
+        from .artifacts import output_hashes
+        current = output_hashes(self.fs)
+        if info.get('pending_output_hashes') is None:
+            info['pending_output_hashes'] = {path: checksum for path, checksum in current.items()
+                if info['output_baseline'].get(path) != checksum}
             self.fs._save_manifest()
-        info['pending_files'] = {}
-        self.fs._save_manifest()
-        prefix = f'runs/{run_id}/artifacts/'
-        return list(dict.fromkeys([*saved, *(p for p in self.fs._manifest['runs'][run_id].get('artifacts', []) if p.startswith(prefix))]))
+        expected = info['pending_output_hashes']
+        if any(current.get(path) != checksum for path, checksum in expected.items()):
+            raise RuntimeError('原运行待归档产物版本已改变或丢失，不能登记新版本；不会重算')
+        capture_local_outputs(self.fs, run_id, info['output_baseline'], expected=expected)
+        return list(info['artifacts'])
 
     async def _finalize(self, run_id):
         info = self.fs._manifest['runs'][run_id]
@@ -166,11 +72,17 @@ class RemoteKernel:
             await asyncio.wait_for(self.session.close(), 20)
         finally:
             self._started = False
-            self._known = {}
-            self._uploaded = {}
 
     async def execute(self, code, *, on_event=None):
+        from services.file_services.workspace_lock import execution_lock
         async with self._lock:
+            if self._project_lock is None:
+                self._project_lock = execution_lock(self.workspace_dir)
+                try:
+                    await self._project_lock.__aenter__()
+                except BaseException:
+                    self._project_lock = None
+                    raise
             if self.pending_run:
                 return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
                     run_id=self.pending_run, failure_kind='delivery')
@@ -211,11 +123,14 @@ class RemoteKernel:
             execution_finished = False
             await event("starting")
             try:
+                from .artifacts import output_hashes
+                info['output_baseline'] = output_hashes(self.fs)
+                self._freeze_inputs(run_id)
                 await asyncio.wait_for(self._start(), self.settings.startup_timeout)
                 info.update(status="running", sandbox_id=self.session.id,
                             sandbox_root=getattr(self.session, 'root', None),
                             context_id=getattr(self.session, 'context_id', None),
-                            output_baseline=dict(self._known), pending_files=None)
+                            pending_files=None)
                 self.fs._save_manifest()
                 await event("running")
                 outcome = await asyncio.wait_for(self.session.execute(code, run_id, output), self.timeout)
@@ -287,6 +202,15 @@ class RemoteKernel:
                 info.update(error=result.error, files=result.files, delivery_error=result.delivery_error,
                             failure_kind=result.failure_kind, context_restored=getattr(self.session, 'context_restored', False))
                 self.fs.finish_run(run_id, status)
+                if execution_finished and not result.delivery_error:
+                    try:
+                        from .evidence import seal_run
+                        seal_run(self.fs, run_id)
+                    except Exception as exc:
+                        result.delivery_error = self._safe_error(exc)
+                        info['delivery_error'] = result.delivery_error
+                        self.fs._save_manifest()
+                        self.pending_run = run_id
                 await event("finished", status=status, error=result.error, files=result.files,
                             delivery_error=result.delivery_error)
             return result
@@ -296,31 +220,42 @@ class RemoteKernel:
         return text.replace(self.settings.api_key, '[redacted]') if self.settings.api_key else text
 
     async def retry_outputs(self):
+        from services.file_services.workspace_lock import execution_lock
+        from .evidence import seal_run
         async with self._lock:
+            if self._project_lock is None:
+                self._project_lock = execution_lock(self.workspace_dir)
+                try:
+                    await self._project_lock.__aenter__()
+                except BaseException:
+                    self._project_lock = None
+                    raise
             if not self.pending_run:
                 return None
             run_id = self.pending_run
-            await asyncio.wait_for(self._start(), self.settings.startup_timeout)
-            info = self.fs._manifest['runs'][run_id]
-            if info.get('finalize_pending') and info.get('pending_files') is not None:
-                # Finish the frozen inventory before discovering new finalized files.
-                # A successful figure retry must not bless a changed CSV version.
-                await asyncio.wait_for(self._collect(run_id), 60)
-            await self._finalize(run_id)
-            files = await asyncio.wait_for(self._collect(run_id), 60)
-            info = self.fs._manifest['runs'][run_id]
-            info.update(files=list(dict.fromkeys([*info.get('files', []), *files])), delivery_error=None)
+            info = self.fs.get_run_info(run_id)
+            if not self._started and info.get('pending_output_hashes') is None:
+                raise RuntimeError('原执行未保存产物版本清单，重启后不能确认归档完整性；保留真实缺口，不重跑')
+            # Persistent files survive containers. In-memory figures do not.
+            if info.get('finalize_pending'):
+                if not self._started or info.get('context_id') != getattr(self.session, 'context_id', None):
+                    raise RuntimeError('原 Python 内存已失效，无法确认尚未保存的图；保留真实未完成状态，不重跑')
+                await self._finalize(run_id)
+            info['files'] = await self._collect(run_id)
+            seal_run(self.fs, run_id)
+            info['delivery_error'] = None
             self.fs._save_manifest()
             self.pending_run = None
             return run_id
 
     async def close(self):
         async with self._lock:
-            if self._started and hasattr(self.session, 'release'):
-                await self.session.release()
-                self._started = False
-            else:
+            try:
                 await self._stop()
+            finally:
+                if self._project_lock is not None:
+                    await self._project_lock.__aexit__(None, None, None)
+                    self._project_lock = None
 
     async def __aenter__(self):
         return self

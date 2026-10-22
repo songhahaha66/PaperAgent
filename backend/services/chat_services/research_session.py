@@ -3,7 +3,9 @@
 Questions never enter the graph or receive tools. Registry/manifest data is
 projected through an allowlist; model configuration and raw transcripts stay out.
 """
+from services.file_services.workspace_layout import workspace_path
 
+from services.file_services.workspace_layout import workspace_path
 from ai_system.research.domain import findings as research_findings
 import json
 import asyncio
@@ -109,8 +111,8 @@ class ResearchSnapshot(BaseModel):
 
 
 def _read_json(root: Path, path: str) -> dict:
-    target = (root / path).resolve()
-    if not target.is_relative_to(root) or not target.exists():
+    target = workspace_path(root, path)
+    if not target.exists():
         return {}
     try:
         if target.stat().st_size > 8_000_000:
@@ -127,10 +129,10 @@ def _read_json(root: Path, path: str) -> dict:
 def _file(root: Path, path: str | None, prefix: str = "") -> str | None:
     if not path or not isinstance(path, str):
         return None
-    target = (root / path).resolve()
-    if not target.is_relative_to(root) or not target.is_file():
+    target = workspace_path(root, path)
+    if not target.is_file():
         return None
-    relative = target.relative_to(root).as_posix()
+    relative = path
     return relative if not prefix or relative.startswith(prefix) else None
 
 
@@ -138,7 +140,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     root = Path(workspace).resolve()
     thread = _read_json(root, ".system/graph_thread.json")
     business = None
-    if thread.get("engine_version") == ENGINE_VERSION and (root / ".system/research.sqlite").exists():
+    if thread.get("engine_version") == ENGINE_VERSION and (workspace_path(root, ".system/research.sqlite")).exists():
         from ai_system.research.store import ResearchStore
         from ai_system.research.control import public_snapshot
         store = ResearchStore(root, thread["thread_id"], read_only=True)

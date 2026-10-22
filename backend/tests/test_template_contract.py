@@ -9,7 +9,7 @@ from docx import Document
 from services.file_services.template_contract import CONTRACT_PATH, STYLE_PROFILE_FILENAME, _copy_template_to_workspace, _prepare_template_workspace, analyze_and_store_template, apply_stored_template_analysis
 
 
-def test_prepare_workspace_reuses_upload_time_analysis(tmp_path: Path, monkeypatch):
+def test_prepare_workspace_invalidates_analysis_when_source_changes(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "services.file_services.template_contract.get_templates_path",
         lambda: tmp_path,
@@ -23,8 +23,8 @@ def test_prepare_workspace_reuses_upload_time_analysis(tmp_path: Path, monkeypat
     workspace.mkdir()
     contract = _prepare_template_workspace(source, workspace, 11, "实验模板", "markdown")
 
-    assert "宋体小三居中" in contract
-    assert "被改掉的模板" not in (workspace / CONTRACT_PATH).read_text(encoding="utf-8")
+    assert "被改掉的模板" in contract
+    assert "被改掉的模板" in (workspace / CONTRACT_PATH).read_text(encoding="utf-8")
     assert (workspace / "paper.md").exists()
 
 

@@ -3,6 +3,7 @@
 使用JSON存储聊天记录，简化WebSocket逻辑
 支持断线重连恢复AI任务
 """
+from services.file_services.workspace_layout import workspace_path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -369,6 +370,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 'message': '无权限访问此工作'
             }))
             await websocket.close()
+            return
+
+        if work and getattr(work, 'architecture_version', 1) != 2:
+            await websocket.send_json({'type': 'error', 'message': '历史项目仅支持导出，请新建项目上传旧资料。'})
+            await websocket.close(code=1008)
             return
 
         # 认证成功
@@ -882,7 +888,7 @@ async def generate_work_title(
             try:
                 with budget_scope(get_workspace_path(work_id)),labelled('title'):
                     response = await llm.ainvoke(messages,config={'callbacks':[title_trace]})
-            finally:title_trace.dump(get_workspace_path(work_id)/'.system/title_llm_calls.json')
+            finally:title_trace.dump(workspace_path(get_workspace_path(work_id), '.system/title_llm_calls.json'))
             title = response.content
 
             # 清理标题（移除可能的引号、换行等）

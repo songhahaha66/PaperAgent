@@ -3,18 +3,15 @@
     One forwarded API port is sufficient, including for dynamically created sandboxes.
 """
 import asyncio
-import hashlib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import json
 import re
-import shlex
 from datetime import timedelta
-from contextlib import aclosing
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .contracts import ExecutionOutcome, SandboxFile
+from .contracts import ExecutionOutcome
 from .settings import SandboxSettings
 
 
@@ -22,18 +19,12 @@ from .settings import SandboxSettings
 class _WorkSandbox:
     sandbox: object = None
     interpreter: object = None
-    contexts: dict = field(default_factory=dict)
-    expires_at: float = 0
-    busy: bool = True
-    cleanup: object = None
 
 
-# Only live leases, never business state. Server TTL is the crash-cleanup backstop.
-_WORK_SANDBOXES = {}
 
 
 class OpenSandboxSession:
-    def __init__(self, settings: SandboxSettings, *, work_id=None, experiment_id=None):
+    def __init__(self, settings: SandboxSettings, *, work_id=None, experiment_id=None, workspace_dir=None):
         self.settings = settings
         self.id = None
         self.sandbox = None
@@ -42,11 +33,35 @@ class OpenSandboxSession:
         self.execution_id = None
         self.work_id = work_id
         self.experiment_id = experiment_id or 'default'
-        self.root = '/workspace/' + hashlib.sha256(self.experiment_id.encode()).hexdigest()[:24]
+        self.root = '/workspace'
+        if workspace_dir is None:
+            raise ValueError('持久沙箱需要服务端工作区路径')
+        self.workspace_dir = Path(workspace_dir).absolute()
+        from config.paths import get_workspaces_path, get_pa_data_base
+        from services.file_services.workspace_layout import safe_join, private_root, workspace_path
+        from services.file_services.workspace_layout import evidence_root
+        base = get_workspaces_path().absolute()
+        storage_roots = [base, evidence_root(self.workspace_dir).parent, get_pa_data_base() / 'project-state']
+        for index, first in enumerate(storage_roots):
+            for second in storage_roots[index+1:]:
+                if first.is_relative_to(second) or second.is_relative_to(first):
+                    raise ValueError('项目可写目录、后端状态和只读证据目录必须互不嵌套')
+        host_roots = [Path(settings.host_workspace_root), Path(settings.host_evidence_root)]
+        if any(not value.is_absolute() or '..' in value.parts for value in host_roots):
+            raise ValueError('沙箱主机存储根目录必须是明确的绝对路径')
+        if host_roots[0].is_relative_to(host_roots[1]) or host_roots[1].is_relative_to(host_roots[0]):
+            raise ValueError('沙箱主机文件与证据根目录必须互不嵌套')
+        relative = self.workspace_dir.relative_to(base).as_posix()
+        if not settings.host_workspace_root or not settings.host_evidence_root:
+            raise ValueError('必须配置沙箱服务器持久文件和证据根目录；不会使用临时容器存储')
+        self.volume_path = str(safe_join(settings.host_workspace_root, relative))
+        archive = workspace_path(self.workspace_dir, 'runs')
+        archive.mkdir(parents=True, exist_ok=True)
+        self.evidence_path = str(safe_join(settings.host_evidence_root, private_root(self.workspace_dir).name + '/runs'))
         self.host = None
         self.context_restored = False
-        # Configuration changes must never borrow a container created with old limits.
-        self.cache_key = (work_id, hashlib.sha256((repr(settings) + settings.api_key).encode()).hexdigest())
+        from services.file_services.workspace_lock import project_root
+        self.lease_path = private_root(project_root(self.workspace_dir)) / 'sandbox-lease.json'
 
     async def start(self):
         try:
@@ -62,44 +77,52 @@ class OpenSandboxSession:
             api_key=self.settings.api_key, use_server_proxy=True,
             retry_policy=RetryPolicy.disabled(),
             request_timeout=timedelta(seconds=max(300, self.settings.startup_timeout)))
-        host = _WORK_SANDBOXES.get(self.cache_key) if self.work_id else None
-        if host and not host.busy and host.expires_at > time.monotonic() + 180:
-            host.busy = True
-            if host.cleanup: host.cleanup.cancel()
-            self.host = host
-            self.sandbox, self.interpreter = host.sandbox, host.interpreter
-        else:
-            self.host = _WorkSandbox()
-            if self.work_id and (not host or not host.busy):
-                _WORK_SANDBOXES[self.cache_key] = self.host
-                if host:
-                    await self._destroy_host(host)
-            await self._create(config, Sandbox, NetworkPolicy)
+        import uuid
+        from services.file_services.file_helper import atomic_write
+        probe = self.workspace_dir / '.volume-probe'
+        from services.file_services.workspace_layout import workspace_path
+        evidence_probe = workspace_path(self.workspace_dir, 'runs/.volume-probe')
+        expected = uuid.uuid4().hex
+        atomic_write(probe, lambda f: f.write(expected.encode()))
+        atomic_write(evidence_probe, lambda f: f.write(expected.encode()))
+        self.host = _WorkSandbox()
+        await self._create(config, Sandbox, NetworkPolicy)
         self.id = self.sandbox.id
+        mounted = await self.sandbox.files.read_file('/workspace/.volume-probe')
+        archived = await self.sandbox.files.read_file('/evidence/.volume-probe')
+        if mounted != expected or archived != expected:
+            raise RuntimeError('沙箱持久卷与后端共享目录不一致；拒绝执行，不创建文件镜像')
+        probe.unlink(missing_ok=True)
+        evidence_probe.unlink(missing_ok=True)
         await self.sandbox.files.create_directories([WriteEntry(path=self.root + '/' + p, mode=755)
-            for p in ('data', 'attachment', 'code', 'outputs/intermediate', 'runs')])
-        self.context = self.host.contexts.get(self.experiment_id)
-        self.context_restored = self.context is not None
-        if self.context is None:
-            self.context = await self.interpreter.codes.create_context('python')
-            ready = await self.interpreter.codes.run(
-                "import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\nfrom paperagent_runtime import emit_result\n_pa_runtime.setup(" + repr(self.root) + ")", context=self.context)
-            if ready.error:
-                raise RuntimeError(self._error(ready.error))
-            self.host.contexts[self.experiment_id] = self.context
+            for p in ('data', 'attachment', 'code', 'outputs/intermediate')])
+        self.context_restored = False
+        self.context = await self.interpreter.codes.create_context('python')
+        ready = await self.interpreter.codes.run(
+            "import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\nfrom paperagent_runtime import emit_result\n_pa_runtime.setup(" + repr(self.root) + ")", context=self.context)
+        if ready.error or ready.complete is None:
+            raise RuntimeError(self._error(ready.error) if ready.error else "Python 初始化缺少完成回执")
 
     async def _create(self, config, Sandbox, NetworkPolicy):
         from code_interpreter import CodeInterpreter
+        from opensandbox.models import Volume, Host
+        from services.file_services.file_helper import atomic_write
+        self.lease_path.parent.mkdir(parents=True, exist_ok=True)
+        lease = {'expires_at': time.time() + self.settings.lifetime + self.settings.startup_timeout, 'sandbox_id': None}
+        atomic_write(self.lease_path, lambda f: f.write(json.dumps(lease).encode()))
         self.sandbox = await Sandbox.create(self.settings.image, connection_config=config,
             timeout=timedelta(seconds=self.settings.lifetime),
             ready_timeout=timedelta(seconds=self.settings.startup_timeout),
             entrypoint=["/opt/code-interpreter/code-interpreter.sh"],
             resource={"cpu": self.settings.cpu, "memory": self.settings.memory},
             network_policy=NetworkPolicy(default_action="deny"),
+            volumes=[Volume(name='project', host=Host(path=self.volume_path), mount_path='/workspace'),
+                     Volume(name='evidence', host=Host(path=self.evidence_path), mount_path='/evidence', read_only=True)],
             metadata={"application": "paperagent"},
             env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2"})
         self.host.sandbox = self.sandbox
-        self.host.expires_at = time.monotonic() + self.settings.lifetime
+        lease['sandbox_id'] = self.sandbox.id
+        atomic_write(self.lease_path, lambda f: f.write(json.dumps(lease).encode()))
         await self.sandbox.files.write_file('/tmp/paperagent_runtime.py', Path(__file__).with_name('runtime_helpers.py').read_bytes())
         self.interpreter = await CodeInterpreter.create(sandbox=self.sandbox)
         self.host.interpreter = self.interpreter
@@ -108,16 +131,6 @@ class OpenSandboxSession:
     def _error(error):
         text = "\n".join(error.traceback) or f"{error.name}: {error.value}"
         return re.sub(r'\x1b\[[0-9;]*m', '', text)
-
-    async def upload(self, path, source):
-        from opensandbox.models import WriteEntry
-        target = self.root + "/" + path
-        await self.sandbox.files.create_directories([WriteEntry(path=str(Path(target).parent), mode=755)])
-        with source.open("rb") as stream:
-            await self.sandbox.files.write_file(target, stream, mode=644)
-
-    async def delete(self, path):
-        await self.sandbox.files.delete_files([self.root + "/" + path])
 
     async def execute(self, code, run_id, output):
         from opensandbox.models.execd import ExecutionHandlers
@@ -167,24 +180,45 @@ class OpenSandboxSession:
         if figures.complete is None:
             raise RuntimeError("保存图片未收到完成回执，请重试文件交付")
 
-    async def files(self):
-        script = "import sys;from pathlib import Path;sys.path.insert(0,'/tmp');import paperagent_runtime as r;r.ROOT=Path(%r);r.inventory(%d)" % (self.root, self.settings.max_file_bytes)
-        result = await self.sandbox.commands.run("python3 -c " + shlex.quote(script))
-        if result.error or result.exit_code not in (None, 0):
-            raise RuntimeError("读取沙箱文件清单失败: " + str(result))
-        text = "".join(m.text for m in result.logs.stdout)
-        return [SandboxFile(**item) for item in json.loads(text)]
-
-    async def download(self, path, destination, max_bytes):
+    async def command(self, command, timeout):
+        from opensandbox.models import RunCommandOpts
+        from opensandbox.models.execd import ExecutionHandlers
+        logs = {'stdout': [], 'stderr': []}
         size = 0
-        chunks = await self.sandbox.files.read_bytes_stream(self.root + "/" + path)
-        with destination.open("wb") as stream:
-            async with aclosing(chunks):
-                async for chunk in chunks:
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise ValueError("文件下载超过大小上限")
-                    stream.write(chunk)
+        failed = asyncio.get_running_loop().create_future()
+        async def emit(channel, message):
+            nonlocal size
+            raw = message.text.encode('utf-8')
+            remaining = max(0, self.settings.max_log_bytes - size)
+            size += len(raw)
+            logs[channel].append(raw[:remaining].decode('utf-8', errors='ignore'))
+            if size > self.settings.max_log_bytes and not failed.done():
+                failed.set_result(RuntimeError('编译输出超过日志上限，执行已停止'))
+        async def stdout(message): await emit('stdout', message)
+        async def stderr(message): await emit('stderr', message)
+        async def initialized(message): self.execution_id = message.id
+        task = asyncio.create_task(self.sandbox.commands.run(command,
+            opts=RunCommandOpts(timeout=timedelta(seconds=timeout), working_directory=self.root),
+            handlers=ExecutionHandlers(on_stdout=stdout, on_stderr=stderr, on_init=initialized, skip_accumulation=True)))
+        try:
+            await asyncio.wait({task, failed}, return_when=asyncio.FIRST_COMPLETED)
+            if failed.done():
+                if self.execution_id:
+                    await self.sandbox.commands.interrupt(self.execution_id)
+                raise failed.result()
+            result = await task
+            if result.exit_code is None or result.error:
+                raise RuntimeError('编译缺少成功完成回执：' + (self._error(result.error) if result.error else 'unknown exit code'))
+            return result.exit_code, ''.join(logs['stdout']), ''.join(logs['stderr'])
+        except BaseException as exc:
+            exc.sandbox_stdout = ''.join(logs['stdout'])
+            exc.sandbox_stderr = ''.join(logs['stderr'])
+            raise
+        finally:
+            if not task.done(): task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            failed.cancel()
+            self.execution_id = None
 
     async def interrupt(self):
         if self.interpreter and self.execution_id:
@@ -192,7 +226,6 @@ class OpenSandboxSession:
 
     @staticmethod
     async def _destroy_host(host):
-        if host.cleanup: host.cleanup.cancel()
         try:
             if host.sandbox:
                 await host.sandbox.destroy()
@@ -200,36 +233,17 @@ class OpenSandboxSession:
             if host.interpreter:
                 await host.interpreter.aclose()
             host.sandbox = host.interpreter = None
-            host.contexts.clear()
 
     async def release(self):
-        host = self.host
-        if not host:
-            return
-        if _WORK_SANDBOXES.get(self.cache_key) is not host:
-            await self.close()
-            return
-        host.busy = False
-        key = self.cache_key
-        async def expire():
-            if _WORK_SANDBOXES.get(key) is host and not host.busy:
-                _WORK_SANDBOXES.pop(key, None)
-                try:
-                    await self._destroy_host(host)
-                except Exception:
-                    pass  # Server TTL still reclaims the container.
-        host.cleanup = asyncio.get_running_loop().call_later(300, lambda: asyncio.create_task(expire()))
-        self.host = None
-        self.sandbox = self.interpreter = self.context = None
-        self.id = self.execution_id = None
+        await self.close()
 
     async def close(self):
         host = self.host
         if host:
-            if _WORK_SANDBOXES.get(self.cache_key) is host:
-                _WORK_SANDBOXES.pop(self.cache_key, None)
             try:
-                await self._destroy_host(host)
+                if host.sandbox:
+                    await self._destroy_host(host)
+                    self.lease_path.unlink(missing_ok=True)
             finally:
                 self.host = None
                 self.sandbox = self.interpreter = self.context = None

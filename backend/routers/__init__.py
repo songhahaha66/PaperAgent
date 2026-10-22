@@ -35,3 +35,27 @@ __all__ = [
     'mcp_router',
     'all_routers'
 ]
+
+
+# Apply the same version/ownership gate to all HTTP project routes, including future routes.
+from fastapi import Depends, HTTPException
+from starlette.requests import HTTPConnection
+from database.database import get_db
+from auth.auth import verify_token
+from services.file_services.project_access import require_project
+
+
+def project_route_access(request: HTTPConnection, db=Depends(get_db)):
+    if request.scope['type'] == 'websocket':
+        return
+    work_id = request.path_params.get('work_id')
+    if not work_id:
+        return
+    authorization = request.headers.get('authorization', '')
+    token = authorization[7:] if authorization.lower().startswith('bearer ') else ''
+    user_id = verify_token(token) if token else None
+    if user_id is None:
+        raise HTTPException(401, 'Authentication required')
+    metadata = request.scope.get('method') == 'GET' and request.url.path == '/api/works/' + work_id
+    exporting = request.scope.get('method') == 'GET' and request.url.path == '/api/workspace/' + work_id + '/export'
+    require_project(db, work_id, user_id, exporting=metadata or exporting)

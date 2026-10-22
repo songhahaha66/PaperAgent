@@ -250,3 +250,6 @@ VITE_APP_VERSION=
 跨研究经验的验证等级、权限、冻结输入和使用方法见 [研究经验说明](ARCHITECTURE.md)。
 
 双方案监督学习比较的冻结协议、持久预算和验证范围见 [方案比较说明](ARCHITECTURE.md)。
+
+
+工作区 v2：旧项目只读导出；新项目须配置沙箱服务器持久文件树及后端对同一文件系统的显式访问。Python、Pandoc、LaTeX/BibTeX 均在 OpenSandbox 内执行，不回退后端。部署映射、版本边界、恢复语义与用户实测清单见 [持久工作区说明](deploy/sandbox/README.md)。本次代码变更未部署或验证 ASUS 现场环境。

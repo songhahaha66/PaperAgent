@@ -1,4 +1,5 @@
 """Durable request usage, explicit/legacy limits and operation failure guards."""
+from services.file_services.workspace_layout import workspace_path
 import json
 import time
 import asyncio
@@ -210,7 +211,7 @@ class ResearchRuntime:
 @contextmanager
 def budget_scope(root,research_id=None):
     if research_id is None:
-        path=root/'.system/graph_thread.json'
+        path=workspace_path(root, '.system/graph_thread.json')
         research_id=json.loads(path.read_text()).get('thread_id') if path.exists() else None
     runtime=ResearchRuntime(root,research_id or 'preparation');token=ACTIVE_BUDGET.set(runtime)
     try:yield runtime
@@ -256,13 +257,13 @@ def execution_reason(root,status):
     if status=='waiting':return {'kind':'waiting_confirmation','message':'等待补充必要研究信息'}
     if status not in {'paused','failed','cancelled'}:return None
     import sqlite3
-    path=root/'.system/research.sqlite'
+    path=workspace_path(root, '.system/research.sqlite')
     if not path.exists():return None
     try:
         preparation=None
         with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
             row=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
-            thread=root/'.system/graph_thread.json'
+            thread=workspace_path(root, '.system/graph_thread.json')
             if thread.is_file():
                 research_id=json.loads(thread.read_text()).get('thread_id')
                 latest=db.execute('SELECT payload FROM research WHERE id=?',(research_id,)).fetchone()

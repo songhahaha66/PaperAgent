@@ -7,16 +7,17 @@ from urllib.parse import urlsplit
 
 @dataclass(frozen=True)
 class SandboxSettings:
-    provider: str = "local"
+    provider: str = "opensandbox"
     endpoint: str = "http://127.0.0.1:18080"
     api_key: str = field(default="", repr=False)
-    image: str = "paperagent-research:opensandbox-1.1.0"
+    image: str = "paperagent-research:workspace-v2"
     cpu: str = "2"
     memory: str = "2Gi"
     lifetime: int = 1800
     startup_timeout: int = 120
     max_file_bytes: int = 64 * 1024 * 1024
-    max_transfer_bytes: int = 256 * 1024 * 1024
+    host_workspace_root: str = ""
+    host_evidence_root: str = ""
     max_log_bytes: int = 8 * 1024 * 1024
 
     @classmethod
@@ -36,7 +37,7 @@ class SandboxSettings:
             if value is not None:
                 fields[name] = int(value) if isinstance(getattr(cls, name, None), int) else value
         settings = cls(**fields)
-        if any(getattr(settings, n) <= 0 for n in ("lifetime", "startup_timeout", "max_file_bytes", "max_transfer_bytes", "max_log_bytes")):
+        if any(getattr(settings, n) <= 0 for n in ("lifetime", "startup_timeout", "max_file_bytes", "max_log_bytes")):
             raise ValueError("沙箱限额必须为正数")
         if settings.provider != "local":
             url = urlsplit(settings.endpoint)

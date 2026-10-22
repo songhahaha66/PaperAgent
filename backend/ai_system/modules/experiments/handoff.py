@@ -1,4 +1,5 @@
 """Auditable formal handoff of the exact frozen estimator, separate from model prose."""
+from services.file_services.workspace_layout import workspace_path
 import hashlib
 import json
 from dataclasses import asdict
@@ -22,7 +23,7 @@ async def handoff(ctx,branch,exploration,run_log):
     if digest(frozen)!=record['protocol_hash']:raise ValueError('正式求解协议不匹配')
     # Reuse frozen project predictions, never a candidate's printed score. This
     # also works when the comparison was completed by an earlier attempt.
-    comparison_workspace=(root_store(ctx).root/'.system/attempts'/record['owner_attempt']/'workspace'
+    comparison_workspace=(root_store(ctx).root/'experiments'/record['owner_attempt']/'workspace'
                           if record.get('owner_attempt') else ctx.workspace)
     candidate_predictions={}
     for item in record['branches']:
@@ -112,14 +113,14 @@ async def publish_comparison(ctx,branch,record,run_log):
         return {'status':'failed','error':record['reason'],'summary':record['reason'],'reviews':[]}
     frozen,_,truth,_,train,_=prepare(ctx.workspace,record['protocol'])
     if digest(frozen)!=record['protocol_hash']:raise ValueError('比较输入或评价条件已改变，不能登记旧实验')
-    source=(root_store(ctx).root/'.system/attempts'/record['owner_attempt']/'workspace'
+    source=(root_store(ctx).root/'experiments'/record['owner_attempt']/'workspace'
             if record.get('owner_attempt') else ctx.workspace)
     if source!=ctx.workspace:
         import shutil
-        manifest=json.loads((source/'manifest.json').read_text())
+        manifest=json.loads((workspace_path(source, 'manifest.json')).read_text())
         for row in record['branches']:
             for rid in row.get('run_ids',[]):
-                shutil.copytree(source/'runs'/rid,ctx.workspace/'runs'/rid,dirs_exist_ok=True)
+                shutil.copytree(workspace_path(source, 'runs')/rid,workspace_path(ctx.workspace, 'runs')/rid,dirs_exist_ok=True)
                 ctx.fs._manifest.setdefault('runs',{})[rid]=manifest['runs'][rid]
         ctx.fs._save_manifest()
     for row in record['branches']:

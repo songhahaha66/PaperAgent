@@ -4,6 +4,7 @@ Each command holds BEGIN IMMEDIATE through validation and publication. Documents
 are intentionally coarse in this first schema: old revisions and attempts remain
 in the journal, while reads see a single committed, consistent snapshot.
 """
+from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings, SCHEMA_VERSION, attach_question, save_report_artifact, execution_lineage, current_results
 import hashlib
@@ -52,14 +53,13 @@ def validate_dependencies(tasks: dict) -> None:
 class ResearchStore:
     def __init__(self, workspace: str | Path, research_id: str, *, read_only: bool = False, experience_scope=None):
         self.root = Path(workspace).resolve()
-        self.path = self.root / DB_PATH
+        self.path = workspace_path(self.root, DB_PATH)
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", research_id):
             raise ValueError("研究标识格式错误")
         self.research_id = research_id
         self.read_only = read_only
         self.experience_scope = experience_scope
-        if not self.path.resolve().is_relative_to(self.root):
-            raise ValueError("研究数据库必须位于工作区内")
+
         if read_only:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,9 +188,7 @@ class ResearchStore:
     def _artifact_hash(self, item):
         if not item.get("path"):
             return None
-        path = (self.root / item["path"]).resolve()
-        if not path.is_relative_to(self.root):
-            raise ValueError("产物路径超出工作区")
+        path = workspace_path(self.root, item["path"])
         with path.open("rb") as stream:
             return hashlib.file_digest(stream, "sha256").hexdigest()
 
@@ -235,9 +233,9 @@ class ResearchStore:
             folder = self.root / name
             for path in sorted(folder.rglob("*")) if folder.exists() else []:
                 if path.is_file():
-                    if not path.resolve().is_relative_to(self.root):
-                        raise ValueError("研究输入不能指向工作区外部")
-                    with path.open("rb") as stream:
+                    path = workspace_path(self.root, path.relative_to(self.root).as_posix())
+                    from services.file_services.file_helper import open_read
+                    with open_read(path) as stream:
                         refs[path.relative_to(self.root).as_posix()] = hashlib.file_digest(stream, "sha256").hexdigest()
         return refs
 
@@ -874,9 +872,10 @@ class ResearchStore:
                 raise ResearchConflict("研究仍有阻塞问题，不能发布论文")
             suffix = Path(filename).suffix
             relative = f".system/research/{self.research_id}/papers/{state['commit_seq'] + 1}{suffix}"
-            target = self.root / relative
+            target = workspace_path(self.root, relative)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
+            from services.file_services.file_helper import atomic_write
+            atomic_write(target, lambda f: f.write(text.encode("utf-8")))
             paper = self.root / filename
             existing = paper.read_text(encoding="utf-8") if paper.exists() else None
             previous = state.get("paper_hash") if Path(state.get("paper_version", "")).suffix == suffix else None
@@ -889,9 +888,7 @@ class ResearchStore:
                     category="writing", section="paper", message=f"{filename} 有人工修改，自动新稿保存在 {relative}")
                 self._record_issue(state, report, "confirmed")
             else:
-                temp = paper.with_suffix(suffix + ".tmp")
-                temp.write_text(text, encoding="utf-8")
-                temp.replace(paper)
+                atomic_write(paper, lambda f: f.write(text.encode('utf-8')))
                 state["paper_hash"] = digest(text)
                 state["exports"] = []
             self._save(db, state, "paper_published", {"path": relative, "content_hash": digest(text), "conflict": conflict})

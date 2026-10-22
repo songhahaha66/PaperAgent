@@ -5,6 +5,7 @@ boundary. Only committed deltas are published. A hard process loss can discard
 at most the unpublished text buffer. Execution hooks are synchronous: they run
 at the durable activity boundary, never through deferred invalidation events.
 """
+from services.file_services.workspace_layout import workspace_path
 from contextvars import ContextVar
 from copy import deepcopy
 from datetime import datetime
@@ -39,8 +40,11 @@ def safe_file(root, value):
     path = Path(value)
     public_internal = value in {'.system/validation.json', '.system/consistency.json'}
     if path.is_absolute() or (not public_internal and any(p.startswith('.') or p in {'..', 'node_modules'} for p in path.parts)): return None
-    target = (Path(root) / path).resolve()
-    if not target.is_relative_to(Path(root).resolve()) or not target.is_file(): return None
+    try:
+        target = workspace_path(Path(root), value)
+    except ValueError:
+        return None
+    if not target.is_file(): return None
     if path.suffix.lower() not in {'.md','.txt','.log','.csv','.json','.png','.jpg','.jpeg','.svg','.pdf','.docx','.tex','.bib','.py','.xlsx'}: return None
     return path.as_posix()
 
@@ -254,8 +258,8 @@ class ReplyWriter:
 def resolve_executions(root, reply, ids):
     """Resolve only refs actually in this authorized reply, including old journal rows."""
     root = Path(root)
-    path = root / '.system/research.sqlite'
-    if not path.is_file() or not path.resolve().is_relative_to(root.resolve()): return []
+    path = workspace_path(root, '.system/research.sqlite')
+    if not path.is_file(): return []
     references = {r['id']: r for r in reply.get('segments', []) if r.get('type') == 'execution' and r['ref']['kind'] == 'activity'}
     result = []
     with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:

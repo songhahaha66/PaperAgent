@@ -3,6 +3,7 @@
 Research sections are a projection used by the scheduler, never an alternative
 editable manuscript. Legacy TeX is imported byte-for-byte; no reverse conversion.
 """
+from services.file_services.workspace_layout import workspace_path
 import difflib
 import hashlib
 import json
@@ -13,6 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
+from services.file_services.workspace_lock import edit_lock
 from ai_system.research.store import digest
 from ai_system.research.models import ResearchConflict
 
@@ -28,21 +30,20 @@ def read_utf8(path):
 
 
 def atomic_text(path, text):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + '.paper-tmp')
-    temporary.write_text(text, encoding='utf-8')
-    temporary.replace(path)
+    from services.file_services.file_helper import atomic_write
+    atomic_write(path, lambda f: f.write(text.encode('utf-8')))
 
 
 def meta(root):
-    path = Path(root) / META
+    path = workspace_path(Path(root), META)
     return json.loads(read_utf8(path)) if path.exists() else {}
 
 
 def safe_path(root, name):
     root = Path(root).resolve()
-    path = (root / name).resolve()
-    if not path.is_relative_to(root) or '.system' in Path(name).parts or path.suffix.lower() not in TEXT_SUFFIXES | ASSET_SUFFIXES:
+    from services.file_services.workspace_layout import safe_join
+    path = safe_join(root, name)
+    if '.system' in Path(name).parts or path.suffix.lower() not in TEXT_SUFFIXES | ASSET_SUFFIXES:
         raise ValueError('请选择论文项目内的源码或图片文件')
     if (root/name).is_symlink() or path.is_symlink() or any(p.is_symlink() for p in (root / name).parents if p != root and p.is_relative_to(root)):
         raise ValueError('论文文件不能使用符号链接')
@@ -100,14 +101,14 @@ def files(root, main=None):
 def snapshot(root):
     entries = files(root)
     version = digest({name: row['version'] for name,row in sorted(entries.items())})
-    archive = Path(root) / VERSIONS / version
+    archive = workspace_path(Path(root), VERSIONS) / version
     archive.mkdir(parents=True, exist_ok=True)
     for name,row in entries.items():
         target = archive/name
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(safe_path(root,name),target)
-    manifest = archive/'manifest.json'
+    manifest = (archive/'manifest.json')
     if not manifest.exists():
         atomic_text(manifest,json.dumps({name:{k:v for k,v in row.items() if k!='text'} for name,row in entries.items()}))
     return {'version':version,'files':list(entries.values()),'main':meta(root).get('main') or ('paper.tex' if 'paper.tex' in entries else 'paper.md')}
@@ -117,8 +118,8 @@ def base_text(root, version, name):
     if not re.fullmatch(r'[a-f0-9]{64}',version):
         raise ValueError('源码版本无效')
     safe_path(root,name)
-    archive = Path(root)/VERSIONS/version
-    manifest = json.loads(read_utf8(archive/'manifest.json'))
+    archive = workspace_path(Path(root), VERSIONS)/version
+    manifest = json.loads(read_utf8((archive/'manifest.json')))
     if name not in manifest:
         raise ValueError('该文件不属于选区所绑定的版本')
     text = read_utf8(archive/name)
@@ -200,7 +201,7 @@ def put(db, store, table, value):
 
 
 def recover(store):
-    marker = store.root/MARKER
+    marker = workspace_path(store.root, MARKER)
     if not marker.exists():
         return
     with store._transaction() as db:
@@ -218,7 +219,7 @@ def recover(store):
                 elif active!=text:
                     data=meta(store.root)
                     data['migration_notice']='中断保存后该文件又有编辑，已保留人工稿和历史版本；请比较修改集后重新应用。'
-                    atomic_text(store.root/META,json.dumps(data,ensure_ascii=False))
+                    atomic_text(workspace_path(store.root, META),json.dumps(data,ensure_ascii=False))
         marker.unlink()
 
 
@@ -251,7 +252,7 @@ def propose_change(store, thread_id, execution_id, patches):
 
 async def decide(store, change_id, decision, *, compile_after=True, expected_version=None):
     initialize(store)
-    with store._transaction() as db:
+    with edit_lock(store.root), store._transaction() as db:
         row = db.execute('SELECT payload FROM paper_changes WHERE research_id=? AND id=?',(store.research_id,change_id)).fetchone()
         if not row:
             raise ValueError('修改集不存在')
@@ -273,7 +274,7 @@ async def decide(store, change_id, decision, *, compile_after=True, expected_ver
         for name,value in grouped.items():
             validate_references(store.root,value['before'],value['after'])
         status = 'reverted' if decision=='revert' else 'applied'
-        atomic_text(store.root/MARKER,json.dumps({'id':change_id,'decision':status,'before':{k:v['before'] for k,v in grouped.items()},'after':{k:v['after'] for k,v in grouped.items()}}))
+        atomic_text(workspace_path(store.root, MARKER),json.dumps({'id':change_id,'decision':status,'before':{k:v['before'] for k,v in grouped.items()},'after':{k:v['after'] for k,v in grouped.items()}}))
         try:
             for name,value in grouped.items():
                 # Recheck immediately before replace, including outside-editor writes.
@@ -307,9 +308,9 @@ async def decide(store, change_id, decision, *, compile_after=True, expected_ver
                 # Do not roll back a third-party write that raced a failed group.
                 if read_utf8(safe_path(store.root,name))==value['after']:
                     atomic_text(safe_path(store.root,name),value['before'])
-            (store.root/MARKER).unlink(missing_ok=True)
+            (workspace_path(store.root, MARKER)).unlink(missing_ok=True)
             raise
-    (store.root/MARKER).unlink(missing_ok=True)
+    (workspace_path(store.root, MARKER)).unlink(missing_ok=True)
     if compile_after and meta(store.root).get('main','paper.tex').endswith('.tex') and (store.root/'paper.tex').exists():
         await compile_project(store)
     return change
@@ -319,11 +320,12 @@ async def compile_project(store):
     """Compile an immutable source snapshot; failed builds retain the last PDF."""
     from ai_system.export.latex import compile_pdf, BUILD_DIR, LatexResult
     before=snapshot(store.root);version=before['version'];main=before['main']
-    with tempfile.TemporaryDirectory(prefix='paper-project-') as folder:
+    (store.root/'.build').mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='paper-project-', dir=store.root/'.build') as folder:
         staging=Path(folder)
         for row in before['files']:
             target=staging/row['path'];target.parent.mkdir(parents=True,exist_ok=True)
-            shutil.copyfile(store.root/VERSIONS/version/row['path'],target)
+            shutil.copyfile(workspace_path(store.root, VERSIONS)/version/row['path'],target)
         try:
             result=await compile_pdf(staging,main)
         except Exception as exc:
@@ -357,7 +359,7 @@ async def compile_project(store):
                 if closed:store._save(db,state,'latex_source_errors_resolved',{'issues':closed,'source_version':version})
             else:
                 data['compile']={**compilation,'state':'failed','message':result.error or 'PDF 编译失败，上次成功预览已保留'}
-            atomic_text(store.root/META,json.dumps(data,ensure_ascii=False))
+            atomic_text(workspace_path(store.root, META),json.dumps(data,ensure_ascii=False))
     return meta(store.root)
 
 
@@ -366,7 +368,7 @@ def describe(store):
     doc=snapshot(store.root);data=meta(store.root)
     if doc['files'] and not data:
         data={'main':doc['main'],'migration_notice':'原有源码及原文件已保留，当前阅读与编辑使用同一项目版本；旧章节提案仅供历史参考。'}
-        atomic_text(store.root/META,json.dumps(data,ensure_ascii=False))
+        atomic_text(workspace_path(store.root, META),json.dumps(data,ensure_ascii=False))
     pdf=store.root/'paper.pdf'
     compile_state=data.get('compile',{'state':'untracked','message':'尚未记录编译版本；已有 PDF 仅供参考，请编译以同步源码。'})
     if data.get('pdf_version') and data['pdf_version']!=doc['version'] and compile_state['state']=='current':

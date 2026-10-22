@@ -17,6 +17,7 @@ export interface WorkUpdate {
 }
 
 export interface Work {
+  architecture_version?: number
   execution_reason?: { kind: string; message: string } | null
   id: number
   work_id: string

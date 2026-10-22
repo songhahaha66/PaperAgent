@@ -77,6 +77,7 @@ async function environment() {
             getResearchSnapshot: async () => ({
               schema_version: 5,
               work_id: id,
+                architecture_version: 2,
               work_status: 'completed',
               has_research: true,
               research_id: 'research-1',
@@ -116,6 +117,7 @@ async function environment() {
               return {
                 id: 1,
                 work_id: id,
+                architecture_version: 2,
                 title: 'Research',
                 status: 'completed',
                 output_mode: 'latex',

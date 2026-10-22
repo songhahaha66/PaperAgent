@@ -203,7 +203,7 @@ class ExperimentStore:
         actual={e['payload']['name']:e['payload']['value'] for e in evidence if e['payload']['kind']!='figure'}
         if any(name not in actual or not math.isclose(float(actual[name]),value,rel_tol=1e-9,abs_tol=1e-10)
                for name,value in proof['values'].items()):return None
-        folder=self.store.root/'.system/attempts'/record['owner_attempt']/'workspace/outputs/intermediate/comparisons'/record['id']
+        folder=self.store.root/'experiments'/record['owner_attempt']/'workspace/outputs/intermediate/comparisons'/record['id']
         for measured in proof['measurements']:
             row=next(r for r in record['branches'] if r['index']==measured['index'])
             candidate=experiment_design(snapshot,task)['candidates'][row['index']]

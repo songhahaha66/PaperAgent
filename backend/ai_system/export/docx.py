@@ -22,7 +22,9 @@ from .markdown_prep import (
     run_command,
 )
 
-DEFAULT_REFERENCE = ".system/export/reference.docx"
+from ai_system.sandbox.commands import sandbox_operation
+
+DEFAULT_REFERENCE = ".build/reference.docx"
 BODY_FONT = "宋体"
 HEADING_FONT = "黑体"
 LATIN_FONT = "Times New Roman"
@@ -124,6 +126,7 @@ def _title(markdown: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+@sandbox_operation
 async def export_docx(
     workspace: Path, markdown: str, docx_name: str = "paper.docx", template_docx: Optional[Path] = None
 ) -> DocxResult:
@@ -133,9 +136,12 @@ async def export_docx(
         reference, kind = Path(template_docx), "template"
     else:
         reference, kind = await build_default_reference(workspace), "default"
-    args = ["-t", "docx", "-o", docx_name, "--shift-heading-level-by=-1", f"--reference-doc={reference}"]
+    args = ["-t", "docx", "-o", ".build/export.docx", "--shift-heading-level-by=-1", f"--reference-doc={reference}"]
     title = _title(markdown)
     if title:
         args += ["-M", f"title={title}"]
     await pandoc(prepare_markdown(markdown), workspace, args)
+    from services.file_services.workspace_layout import safe_join
+    from services.file_services.file_helper import atomic_write
+    atomic_write(safe_join(workspace, docx_name), lambda f: f.write((workspace/".build/export.docx").read_bytes()))
     return DocxResult(docx_path=docx_name, reference=kind)

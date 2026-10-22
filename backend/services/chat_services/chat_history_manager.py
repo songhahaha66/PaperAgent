@@ -3,6 +3,7 @@
 Legacy JSON is imported once by the workspace migration. Each reply update
 commits one message; concurrent writers never read/replace the whole history.
 """
+from services.file_services.workspace_layout import workspace_path
 import json
 import uuid
 from contextlib import contextmanager
@@ -24,7 +25,7 @@ def migrate_chat(db, root):
     if db.execute('SELECT 1 FROM chat_metadata WHERE id=1').fetchone():
         return
     history = default_history(root.name)
-    source = root / 'chat_history.json'
+    source = workspace_path(root, 'chat_history.json')
     if source.is_file():
         if not source.resolve().is_relative_to(root.resolve()):
             raise ValueError('聊天历史必须位于工作区内')

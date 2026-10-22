@@ -1,4 +1,5 @@
 """Source cards contain retrieved text only, never model-created quotations."""
+from services.file_services.workspace_layout import workspace_path
 import json
 import re
 from urllib.parse import urlsplit
@@ -34,7 +35,7 @@ def cards(store):
     # Experimental sources are actual frozen inputs, code and stdout, not guessed
     # associations based on matching numbers in recent logs.
     snapshot=store.snapshot() or {}
-    manifest_path=store.root/'manifest.json'
+    manifest_path=workspace_path(store.root, 'manifest.json')
     manifest=json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     for key,row in snapshot.get('artifacts',{}).items():
         payload=row.get('payload',{});run=payload.get('run_id','')
@@ -44,10 +45,10 @@ def cards(store):
         paths=[]
         for field in ('input','stdout'):
             name=info.get(field)
-            if name and name.startswith('runs/'+run+'/') and (store.root/name).resolve().is_relative_to(store.root) and (store.root/name).is_file():
+            if name and name.startswith('runs/'+run+'/') and workspace_path(store.root,name).is_file():
                 paths.append(name)
         stdout=next((p for p in paths if p.endswith('.log')),None)
-        excerpt=(store.root/stdout).read_text(errors='replace')[:4000] if stdout else ''
+        excerpt=workspace_path(store.root,stdout).read_text(errors='replace')[:4000] if stdout else ''
         rows.append({'key':key,'title':payload.get('name') or '实验结果','excerpt':excerpt,
                      'boundary':'实验实际输出','locator':stdout or '原始输出不可用','paths':paths,
                      'page':None,'url':'','version':digest([payload,excerpt]),'source_id':run,
@@ -59,10 +60,10 @@ def cards(store):
         for key,result in execution_results(execution):
             paths=[]
             for name in (result.get('code_path'),result.get('stdout_path')):
-                if name and (store.root/name).resolve().is_relative_to(store.root) and (store.root/name).is_file():
+                if name and workspace_path(store.root,name).is_file():
                     paths.append(name)
             output=result.get('stdout_path')
-            excerpt=(store.root/output).read_text(errors='replace')[:4000] if output in paths else ''
+            excerpt=workspace_path(store.root,output).read_text(errors='replace')[:4000] if output in paths else ''
             rows.append({'key':key,'title':'评论中的辅助计算','excerpt':excerpt,
                          'boundary':'辅助计算实际输出（未自动通过研究验收）','locator':output if output in paths else '原始输出不可用',
                          'paths':paths,'inputs':result.get('inputs',[]),'page':None,'url':'',
@@ -92,7 +93,7 @@ def write_bibliography(root):
     block=begin+'\n\n'.join(entries)+end
     text=read_utf8(path) if path.exists() else ''
     original=text
-    state_path=root/'.system/paper-sources-bib.json'
+    state_path=workspace_path(root, '.system/paper-sources-bib.json')
     state=json.loads(state_path.read_text()) if state_path.exists() else {}
     conflict=False
     if begin in text and end in text:
@@ -110,7 +111,7 @@ def write_bibliography(root):
         if conflict or active!=original:
             data=meta(root)
             data['migration_notice']='参考文献文件有人工编辑，已保留原文件；新增来源可在来源面板核对后合并。'
-            atomic_text(root/META,json.dumps(data,ensure_ascii=False))
+            atomic_text(workspace_path(root, META),json.dumps(data,ensure_ascii=False))
             return
         atomic_text(path,text)
         atomic_text(state_path,json.dumps({'block_hash':digest(block)}))
@@ -124,14 +125,14 @@ def validate_references(root,before,after):
     if REF_PATTERN.search(after) or CITATION.search(after):
         raise ValueError('源码补丁应使用已有来源键或已渲染结果，不得留下未解析的内部标记')
     import sqlite3
-    with sqlite3.connect('file:'+str(root/'.system/research.sqlite')+'?mode=ro',uri=True) as db:
+    with sqlite3.connect('file:'+str(workspace_path(root, '.system/research.sqlite'))+'?mode=ro',uri=True) as db:
         exists=db.execute("SELECT 1 FROM sqlite_master WHERE name='literature_passages'").fetchone()
         known={json.loads(r[0])['id'] for r in db.execute('SELECT payload FROM literature_passages')} if exists else set()
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_executions'").fetchone():
             for row in db.execute('SELECT payload FROM paper_executions'):
                 for key,result in execution_results(json.loads(row[0])):
                     output=result.get('stdout_path')
-                    if output and (root/output).resolve().is_relative_to(root) and (root/output).is_file():
+                    if output and workspace_path(root,output).is_file():
                         known.add(key)
     added=set(re.findall(r'paperagent\.local/citations/([A-Za-z0-9_-]+)',after))-set(re.findall(r'paperagent\.local/citations/([A-Za-z0-9_-]+)',before))
     if added-known:

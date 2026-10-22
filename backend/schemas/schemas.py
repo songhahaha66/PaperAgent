@@ -113,11 +113,10 @@ class PaperTemplateCreate(PaperTemplateBase):
     pass
 
 class PaperTemplateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
-    output_format: Optional[str] = None  # 输出格式：md, word, latex
-    file_path: Optional[str] = None  # 允许更新文件路径
     is_public: Optional[bool] = None
 
 class PaperTemplateResponse(PaperTemplateBase):
@@ -158,6 +157,7 @@ class WorkUpdate(BaseModel):
     output_mode: Optional[str] = None  # 输出模式：markdown, word, latex
 
 class WorkResponse(WorkBase):
+    architecture_version: int = 1
     execution_reason: Optional[dict] = None
     id: int
     work_id: str

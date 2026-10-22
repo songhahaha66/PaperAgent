@@ -3,6 +3,7 @@
 Generated Python is trusted to follow fit/predict: this is not an adversarial sandbox.
 Validation targets are kept out of generation prompts and the fit/predict payload.
 """
+from services.file_services.workspace_layout import workspace_path
 import ast
 import asyncio
 import hashlib
@@ -212,14 +213,14 @@ async def compare(ctx,branch):
         if record.pop('recovery_requested',False):
             # Explicit recovery corrects failed candidates under the same frozen
             # method. Valid predictions and original runs are copied, never replayed.
-            previous=store.root/'.system/attempts'/record['owner_attempt']/'workspace' if record.get('owner_attempt') else ctx.workspace
+            previous=store.root/'experiments'/record['owner_attempt']/'workspace' if record.get('owner_attempt') else ctx.workspace
             if previous!=ctx.workspace:
                 folder=previous/'outputs/intermediate/comparisons'/record['id']
                 if folder.exists():shutil.copytree(folder,ctx.workspace/'outputs/intermediate/comparisons'/record['id'],dirs_exist_ok=True)
-                manifest=json.loads((previous/'manifest.json').read_text())
+                manifest=json.loads((workspace_path(previous, 'manifest.json')).read_text())
                 for row in record['branches']:
                     for rid in row.get('run_ids',[]):
-                        shutil.copytree(previous/'runs'/rid,ctx.workspace/'runs'/rid,dirs_exist_ok=True)
+                        shutil.copytree(workspace_path(previous, 'runs')/rid,workspace_path(ctx.workspace, 'runs')/rid,dirs_exist_ok=True)
                         ctx.fs._manifest['runs'][rid]=manifest['runs'][rid]
                 ctx.fs._save_manifest()
             for row in record['branches']:

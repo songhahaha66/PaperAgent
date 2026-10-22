@@ -3,6 +3,7 @@
 Only this module reads the retired issue collection and comparison table names.
 Archives are provenance, never input to the active scheduler or publication gate.
 """
+from services.file_services.workspace_layout import workspace_path
 import json
 from contextlib import closing
 
@@ -25,15 +26,15 @@ def migrate_runtime(db, root):
     frozen = db.execute("SELECT payload FROM request_budgets WHERE research_id='workspace-model-budget'").fetchone()
     traces = []
     for name in ('llm_calls.json', 'editor_llm_calls.json'):
-        path = root / '.system' / name
-        if path.is_file() and path.resolve().is_relative_to(root):
+        path = workspace_path(root, '.system') / name
+        if path.is_file():
             raw = path.read_bytes()
             db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)', (f'.system/{name}', raw))
             try:
                 traces.extend(json.loads(raw).get('calls', []))
             except (ValueError, TypeError, AttributeError):
                 pass  # Raw bytes are preserved; no invented usage.
-    old = bool(frozen or traces or (root / '.system/graph_thread.json').exists() or (root / '.system/graph.sqlite').exists())
+    old = bool(frozen or traces or (workspace_path(root, '.system/graph_thread.json')).exists() or (workspace_path(root, '.system/graph.sqlite')).exists())
     settings = json.loads(row[0]) if row else {}
     if settings.get('policy_version') != 2:
         budget = json.loads(frozen[0]) if frozen else {}
@@ -148,8 +149,8 @@ def migrate_workspace(store):
             return
         db.execute("CREATE TABLE IF NOT EXISTS legacy_records(source TEXT PRIMARY KEY, raw BLOB NOT NULL)")
         for name in ('.system/results.json','.system/validation.json','.system/consistency.json','plan.md','plan.json','metadata.json'):
-            source=store.root/name
-            if source.is_file() and source.resolve().is_relative_to(store.root):
+            source=workspace_path(store.root, name)
+            if source.is_file():
                 db.execute('INSERT OR IGNORE INTO legacy_records VALUES (?,?)',(name,source.read_bytes()))
         for row in db.execute("SELECT id,payload FROM research").fetchall():
             state = json.loads(row[1])

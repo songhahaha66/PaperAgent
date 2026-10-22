@@ -1,4 +1,5 @@
 """Adapters between checkpoint execution and committed research state."""
+from services.file_services.workspace_layout import workspace_path
 
 from .domain import experiment_report, experiment_design
 
@@ -121,7 +122,7 @@ def public_snapshot(snapshot, *, work_status=None, source_root=None):
     if snapshot['spec'].get('output_mode')=='latex' and source_root is not None:
         from pathlib import Path
         from services.chat_services.paper_project import snapshot as source_snapshot
-        path=Path(source_root)/'.system/validation.json'
+        path=workspace_path(Path(source_root), '.system/validation.json')
         checked=json.loads(path.read_text()) if path.exists() else {}
         if checked.get('source_version')!=source_snapshot(source_root)['version']:
             stages={k:({**stage,'status':'pending','note':'源码已更新，需检查当前版本'}
@@ -178,7 +179,7 @@ from .questions import delivery_status
 
 def _copy_tree(source, target):
     if source.exists():
-        if any(p.is_symlink() and not p.resolve().is_relative_to(source.resolve()) for p in source.rglob("*")):
+        if any(p.is_symlink() for p in source.rglob("*")):
             raise ValueError("执行输入包含工作区外的文件链接")
         shutil.copytree(source, target, dirs_exist_ok=True)
 
@@ -189,7 +190,7 @@ def worker_context(ctx, order):
     Inputs and predecessor handoffs are copied before execution. The submission
     checks source data hashes again, catching a correction during the copy/run.
     """
-    work = ctx.workspace / ".system" / "attempts" / order.attempt_id / "workspace"
+    work = ctx.workspace / "experiments" / order.attempt_id / "workspace"
     work.mkdir(parents=True, exist_ok=True)
     snapshot = ctx.research.snapshot()
     task = snapshot['experiments'][order.task_id]
@@ -215,7 +216,7 @@ def worker_context(ctx, order):
         for aid in reversed(execution_lineage(snapshot, execution_id)):
             if aid in copied: continue
             copied.add(aid)
-            source = ctx.workspace / '.system' / 'attempts' / aid / 'workspace'
+            source = ctx.workspace / 'experiments' / aid / 'workspace'
             inherited.update(inherit_execution_files(source, target_fs, key))
     def copy_dependency(key):
         for dependency in snapshot['experiments'][key]['dependencies']:

@@ -133,26 +133,12 @@ def expand_math_macros(markdown: str) -> str:
     return MATH_SPAN.sub(lambda m: MACRO_PATTERN.sub(lambda c: MATH_MACROS[c.group(1)], m.group(0)), markdown)
 
 
-async def run_command(cmd: List[str], cwd: Path, stdin: Optional[str] = None, timeout: int = PANDOC_TIMEOUT):
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(cwd),
-        stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(stdin.encode("utf-8") if stdin is not None else None), timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
-        raise RuntimeError(f"{cmd[0]} 超时（{timeout} 秒）")
-    return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+from ai_system.sandbox.commands import run_command
 
 
 def require_pandoc() -> None:
-    if not shutil.which("pandoc"):
-        raise PandocUnavailable("服务器没有安装 pandoc，无法导出")
+    # Availability is checked by the actual sandbox command, never the API host.
+    return None
 
 
 async def pandoc(markdown: str, cwd: Path, args: List[str]) -> str:

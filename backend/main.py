@@ -4,7 +4,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from models import models
 from database.database import engine
 from sqlalchemy.orm import Session
-from routers import all_routers
+from routers import all_routers, project_route_access
+from fastapi import Depends
 import uvicorn
 import logging
 
@@ -98,7 +99,7 @@ async def health_check():
 
 # 注册路由模块（统一）
 for router in all_routers:
-    app.include_router(router)
+    app.include_router(router, dependencies=[Depends(project_route_access)])
 
 # 设置app实例引用，供WebSocket路由使用
 from routers.chat_routes.chat import set_app_instance

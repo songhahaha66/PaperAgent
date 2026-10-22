@@ -1,445 +1,258 @@
-import os
+"""Project-relative public file gateway. Storage is selected exclusively by the server."""
+import base64
 import json
+import mimetypes
+import os
 import shutil
-import zipfile
+import sqlite3
 import tempfile
-import logging
+import zipfile
 from pathlib import Path
-from fastapi import HTTPException, status, UploadFile
-from typing import List, Dict, Any, Optional
-from .file_helper import FileHelper
-from ..data_services.utils import handle_service_errors
-from config.paths import get_workspaces_path
+from fastapi import HTTPException
+from config.paths import get_workspaces_path, get_workspace_path, get_legacy_workspace_path
+from .file_helper import FileHelper, open_read
+from .workspace_layout import relative_parts, safe_join, workspace_path, PRIVATE_NAMES
+from .workspace_lock import edit_lock
 
-logger = logging.getLogger(__name__)
+# Public research files; runtime databases, credentials, caches and checkpoints are excluded.
+EXPORT_SUFFIXES = set('md txt csv tsv json jsonl parquet xlsx xls pdf docx tex bib sty cls bst def cfg bbx cbx py r m ipynb png jpg jpeg svg webp gif eps ttf otf zip log out'.split())
+FORBIDDEN_NAMES = PRIVATE_NAMES | {'owner.json', 'metadata.json', 'credentials.json', 'token.json', 'config.json', '__pycache__', 'node_modules'}
 
-try:
-    from docx import Document
-    from docx.shared import Pt, Inches
-    from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
-    from docx.enum.style import WD_STYLE_TYPE
-    DOCX_AVAILABLE = True
-except ImportError:
-    logger.warning("python-docx not available. DOCX export will be disabled.")
-    DOCX_AVAILABLE = False
+
+def public_parts(path):
+    parts = relative_parts(path)
+    if any(p.startswith('.') or p in FORBIDDEN_NAMES for p in parts) or Path(path).suffix.lower() in {'.sqlite', '.sqlite3', '.db', '.pem', '.key'}:
+        raise ValueError('Private workspace path')
+    return parts
+
+
+def safe_files(root):
+    if not root.exists():
+        return
+    for directory, dirs, names in os.walk(root, followlinks=False):
+        for name in list(dirs):
+            path = Path(directory) / name
+            if path.is_symlink():
+                raise ValueError('Workspace contains symbolic links')
+            if name.startswith('.') or name in FORBIDDEN_NAMES:
+                dirs.remove(name)
+        for name in names:
+            path = Path(directory) / name
+            relative = path.relative_to(root).as_posix()
+            try:
+                public_parts(relative)
+            except ValueError:
+                continue
+            yield safe_join(root, relative)
+
 
 class WorkspaceFileService:
     def __init__(self):
         self.base_path = get_workspaces_path()
-        self.helper = FileHelper(self.base_path)
 
-    def get_workspace_path(self, work_id: str) -> Path:
-        """获取工作空间路径"""
-        return self.base_path / work_id
+    def get_workspace_path(self, work_id):
+        return get_workspace_path(work_id)
 
-    def ensure_workspace_exists(self, work_id: str) -> Path:
-        """确保工作空间存在"""
-        workspace_path = self.get_workspace_path(work_id)
-        if not workspace_path.exists():
-            # 只创建工作空间目录，不创建子目录
-            workspace_path.mkdir(parents=True, exist_ok=True)
-        return workspace_path
+    def ensure_workspace_exists(self, work_id):
+        root = self.get_workspace_path(work_id)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
 
-    def list_files(self, work_id: str, relative_path: str = "", recursive: bool = True) -> List[Dict[str, Any]]:
-        """列出工作空间中的文件（新版本：按分类返回）
+    def resolve(self, work_id, path, *, reading=True):
+        try:
+            parts = relative_parts(path)
+            root = self.get_workspace_path(work_id)
+            if reading and path in {'.system/validation.json', '.system/consistency.json'}:
+                return workspace_path(root, path)
+            if parts[0] == '.build' and reading and Path(path).suffix.lower() in {'.log', '.blg'}:
+                public_parts('/'.join(parts[1:]))
+                return safe_join(root, path)
+            if 'runs' in parts and reading:
+                index = parts.index('runs')
+                allowed = (index == 0 or parts[0] == 'experiments') and len(parts) >= index + 3
+                if not allowed or parts[index+2] not in {'input.py','stdout.log','stderr.log','artifacts'}:
+                    raise ValueError('Private run path')
+                from .workspace_fs import WorkspaceFS
+                run_root = safe_join(root, '/'.join(parts[:index])) if index else root
+                fs = WorkspaceFS(str(run_root))
+                if not fs.get_run_info(parts[index+1]):
+                    raise ValueError('Unknown run')
+                return workspace_path(root, path)
+            public_parts(path)
+            return safe_join(root, path)
+        except ValueError as exc:
+            raise HTTPException(400, 'Invalid workspace path') from exc
 
-        Args:
-            work_id: 工作ID
-            relative_path: 相对路径，默认为根目录
-            recursive: 是否递归遍历子目录，默认为True
-        """
-        # 直接调用新的分类方法，然后转换为平面列表格式
-        categorized_files = self.list_files_by_category(work_id)
-        result = []
+    def list_files(self, work_id, relative_path='', recursive=True):
+        rows = [row for group in self.list_files_by_category(work_id).values() for row in group]
+        if relative_path:
+            self.resolve(work_id, relative_path)
+            rows = [r for r in rows if r['path'].startswith(relative_path.rstrip('/') + '/')]
+        return rows
 
-        for category, files in categorized_files.items():
-            for file_info in files:
-                result.append(file_info)
-
+    def list_files_by_category(self, work_id):
+        root = self.get_workspace_path(work_id)
+        result = {k: [] for k in ('code', 'outputs', 'papers', 'attachments', 'data', 'template')}
+        for path in safe_files(root):
+            relative = path.relative_to(root).as_posix()
+            first = relative.split('/')[0]
+            # Execution scratch is persisted but surfaced through run provenance.
+            if first == 'experiments':
+                continue
+            category = 'attachments' if first == 'attachment' else first if first in result else 'papers'
+            stat = path.stat()
+            result[category].append({'name':path.name,'type':'file','size':stat.st_size,'modified':stat.st_mtime,
+                'path':relative,'category_path':relative.split('/',1)[-1],'category':category})
+        for rows in result.values():
+            rows.sort(key=lambda r:r['path'])
         return result
 
-    def list_files_by_category(self, work_id: str) -> Dict[str, List[Dict[str, Any]]]:
-        """按分类列出工作空间中的文件（排除 runs/ 和 .system/ 等内部目录）
-
-        Args:
-            work_id: 工作ID
-
-        Returns:
-            包含分类的字典：{'code': [...], 'outputs': [...], 'papers': [...], 'attachments': [...]}
-        """
-        try:
-            workspace_path = self.ensure_workspace_exists(work_id)
-
-            categories = {
-                'code': workspace_path / 'code',
-                'outputs': workspace_path / 'outputs',
-            }
-
-            for category_name, category_path in categories.items():
-                if not category_path.exists():
-                    category_path.mkdir(parents=True, exist_ok=True)
-
-            result = {}
-
-            for category_name, category_path in categories.items():
-                files = []
-
-                if category_path.exists():
-                    for item in category_path.rglob('*'):
-                        if item.is_file():
-                            if item.name.startswith('autosave_'):
-                                continue
-                            rel_path = str(item.relative_to(category_path))
-                            full_path = str(item.relative_to(workspace_path))
-
-                            file_info = {
-                                "name": item.name,
-                                "type": "file",
-                                "size": item.stat().st_size,
-                                "modified": item.stat().st_mtime,
-                                "path": full_path,
-                                "category_path": rel_path,
-                                "category": category_name
-                            }
-                            files.append(file_info)
-
-                files.sort(key=lambda x: x["name"].lower())
-                result[category_name] = files
-
-            # papers 分类：根目录的论文正文和导出结果（paper.docx / paper.tex / paper.pdf）
-            papers_files = []
-            for name in ("paper.md", "paper.docx", "paper.tex", "paper.pdf"):
-                paper_file = workspace_path / name
-                if paper_file.exists():
-                    papers_files.append({
-                        "name": name,
-                        "type": "file",
-                        "size": paper_file.stat().st_size,
-                        "modified": paper_file.stat().st_mtime,
-                        "path": name,
-                        "category_path": name,
-                        "category": "papers"
-                    })
-
-            result["papers"] = papers_files
-
-            # 处理attachments分类：扫描attachment文件夹
-            attachments_files = []
-            attachment_dir = workspace_path / 'attachment'
-            if attachment_dir.exists():
-                for item in attachment_dir.rglob('*'):
-                    if item.is_file():
-                        # 计算相对路径
-                        rel_path = str(item.relative_to(attachment_dir))
-                        full_path = str(item.relative_to(workspace_path))
-
-                        file_info = {
-                            "name": item.name,
-                            "type": "file",
-                            "size": item.stat().st_size,
-                            "modified": item.stat().st_mtime,
-                            "path": full_path,
-                            "category_path": rel_path,
-                            "category": "attachments"
-                        }
-                        attachments_files.append(file_info)
-
-            # 按名称排序
-            attachments_files.sort(key=lambda x: x["name"].lower())
-            result["attachments"] = attachments_files
-
-            return result
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"按分类列出文件失败: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to list files by category: {str(e)}"
-            )
-
-    
-    @handle_service_errors()
-    def read_file(self, work_id: str, file_path: str) -> Dict[str, Any]:
-        """读取工作空间中的文件内容"""
-        workspace_path = self.ensure_workspace_exists(work_id)
-        target_file = workspace_path / file_path
-
-        if not target_file.exists() or not target_file.is_file():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-
-        # 检测文件类型
-        file_type = self.detect_file_type(file_path)
-
-        if file_type == 'image':
-            # 图片文件：返回base64编码的内容
-            import base64
-            if target_file.stat().st_size > 10 * 1024 * 1024:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image file too large to read")
-            with open(target_file, 'rb') as f:
-                content = base64.b64encode(f.read()).decode('utf-8')
-            return {
-                "type": "image",
-                "content": content,
-                "filename": target_file.name,
-                "size": target_file.stat().st_size
-            }
-
-        elif file_type == 'text':
-            # 文本文件：返回文件内容
-            helper = FileHelper(workspace_path)
-            content = helper.read_text(file_path)
-            return {
-                "type": "text",
-                "content": content,
-                "filename": target_file.name,
-                "size": target_file.stat().st_size
-            }
-
-        else:  # binary
-            # 二进制文件：返回元数据和下载信息
-            import mimetypes
-            mime_type, _ = mimetypes.guess_type(str(target_file))
-            if not mime_type:
-                mime_type = "application/octet-stream"
-
-            return {
-                "type": "binary",
-                "filename": target_file.name,
-                "size": target_file.stat().st_size,
-                "mime_type": mime_type,
-                "download_url": f"/api/workspace/{work_id}/download/{file_path}",
-                "message": "Binary file - use download button to view"
-            }
-
-    def detect_file_type(self, file_path: str) -> str:
-        """检测文件类型：返回 'text', 'image', 'binary'"""
-
-        # 图片文件扩展名
-        image_extensions = {
-            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp',
-            '.ico', '.tiff', '.tif'
-        }
-
-        # 文本文件扩展名
-        text_extensions = {
-            '.txt', '.md', '.tex', '.bib', '.cls', '.sty', '.csv', '.tsv', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
-            '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
-            '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
-            '.java', '.kt', '.scala', '.rs', '.go', '.php', '.rb', '.swift',
-            '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
-            '.sql', '.r', '.m', '.pl', '.lua', '.vim', '.dockerfile',
-            '.gitignore', '.gitattributes', '.editorconfig', '.eslintrc', '.prettierrc',
-            '.log', '.out', '.err', '.debug', '.trace'
-        }
-
-        # 获取文件扩展名
-        ext = Path(file_path).suffix.lower()
-
-        # 根据扩展名判断文件类型
-        if ext in image_extensions:
+    def detect_file_type(self, file_path):
+        mime = mimetypes.guess_type(file_path)[0] or ''
+        if mime.startswith('image/'):
             return 'image'
-        elif ext in text_extensions:
+        if mime.startswith('text/') or Path(file_path).suffix.lower() in {'.py','.tex','.bib','.json','.yaml','.yml','.toml','.csv','.r','.sty','.cls','.log'}:
             return 'text'
         return 'binary'
 
-    @handle_service_errors()
-    def write_file(self, work_id: str, file_path: str, content: str) -> Dict[str, Any]:
-        """写入文件到工作空间"""
-        self.ensure_workspace_exists(work_id)
-        helper = FileHelper(self.base_path / work_id)
-        written_path = helper.write_text(Path(file_path).as_posix(), content)
-        return {
-            "message": "File written successfully",
-            "path": Path(written_path).relative_to(self.base_path / work_id).as_posix(),
-            "size": len(content)
-        }
+    def read_file(self, work_id, file_path):
+        target = self.resolve(work_id, file_path)
+        if not target.is_file():
+            raise HTTPException(404, 'File not found')
+        kind = self.detect_file_type(file_path)
+        size = target.stat().st_size
+        if kind in {'text','image'} and size > 10 * 1024 * 1024:
+            raise HTTPException(400, 'File too large to preview')
+        result = {'type':kind,'filename':target.name,'size':size}
+        if kind in {'text', 'image'}:
+            with open_read(target) as stream:
+                raw = stream.read(10 * 1024 * 1024 + 1)
+            if len(raw) > 10 * 1024 * 1024:
+                raise HTTPException(400, 'File too large to preview')
+            result['content'] = raw.decode('utf-8') if kind == 'text' else base64.b64encode(raw).decode()
+        else:
+            result.update(mime_type=mimetypes.guess_type(file_path)[0] or 'application/octet-stream',
+                          download_url=f'/api/workspace/{work_id}/download/{file_path}')
+        return result
 
-    @handle_service_errors()
-    def upload_file(self, work_id: str, file_path: str, file: UploadFile) -> Dict[str, Any]:
-        """上传文件到工作空间"""
-        self.ensure_workspace_exists(work_id)
-        helper = FileHelper(self.base_path / work_id)
-        written_path = helper.write_bytes_stream(Path(file_path).as_posix(), file.file)
-        size = Path(written_path).stat().st_size
-        return {
-            "message": "File uploaded successfully",
-            "path": Path(written_path).relative_to(self.base_path / work_id).as_posix(),
-            "size": size,
-            "filename": file.filename
-        }
-
-    @handle_service_errors()
-    def delete_file(self, work_id: str, file_path: str) -> Dict[str, str]:
-        """删除工作空间中的文件或目录"""
-        workspace_path = self.ensure_workspace_exists(work_id)
-        # 防止删除整个工作空间
-        if file_path.strip() in ("", ".", "/"):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete entire workspace")
-        helper = FileHelper(workspace_path)
-        helper.delete(Path(file_path).as_posix())
-        return {"message": "File or directory deleted successfully"}
-
-    @handle_service_errors()
-    def create_directory(self, work_id: str, dir_path: str) -> Dict[str, str]:
-        """在工作空间中创建目录"""
-        workspace_path = self.ensure_workspace_exists(work_id)
-        target_dir = workspace_path / dir_path
-        if target_dir.exists():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Directory already exists")
-        target_dir.mkdir(parents=True, exist_ok=True)
-        return {"message": "Directory created successfully"}
-
-    @handle_service_errors()
-    def get_file_info(self, work_id: str, file_path: str) -> Dict[str, Any]:
-        """获取文件信息"""
-        workspace_path = self.ensure_workspace_exists(work_id)
-        target_file = workspace_path / file_path
-        if not target_file.exists():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-        stat = target_file.stat()
-        return {
-            "name": target_file.name,
-            "type": "directory" if target_file.is_dir() else "file",
-            "size": stat.st_size if target_file.is_file() else None,
-            "created": stat.st_ctime,
-            "modified": stat.st_mtime,
-            "path": str(target_file.relative_to(workspace_path))
-        }
-
-    def export_workspace(self, work_id: str) -> str:
-        """导出工作空间为ZIP文件，返回临时文件路径"""
+    def file_response(self, work_id, path, *, image=False):
+        from fastapi.responses import FileResponse
+        from starlette.background import BackgroundTask
+        target = self.resolve(work_id, path)
         try:
-            workspace_path = self.ensure_workspace_exists(work_id)
+            stream = open_read(target)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(404, 'File not found') from None
+        fd = os.dup(stream.fileno())
+        stream.close()
+        mime = mimetypes.guess_type(target.name)[0] or 'application/octet-stream'
+        if image and not mime.startswith('image/'):
+            os.close(fd)
+            raise HTTPException(400, 'Not an image')
+        return FileResponse('/proc/self/fd/' + str(fd), stat_result=os.fstat(fd),
+            media_type=mime, filename=None if image else target.name,
+            headers={'X-Content-Type-Options':'nosniff', 'Content-Security-Policy':"sandbox; default-src 'none'; style-src 'unsafe-inline'"},
+            background=BackgroundTask(os.close, fd))
 
-            # 创建临时ZIP文件
-            temp_dir = tempfile.mkdtemp()
-            zip_filename = f"workspace_{work_id}.zip"
-            zip_path = os.path.join(temp_dir, zip_filename)
+    def _editable(self, work_id):
+        from services.chat_services.task_manager import task_manager
+        if task_manager.get_running_task(work_id):
+            raise HTTPException(409, '研究正在执行，请暂停后修改文件')
+        return edit_lock(self.get_workspace_path(work_id))
 
-            # 创建ZIP文件
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                # 遍历工作空间目录
-                for root, dirs, files in os.walk(workspace_path):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        # 计算相对路径
-                        arcname = os.path.relpath(file_path, workspace_path)
-                        zip_file.write(file_path, arcname)
+    def write_file(self, work_id, file_path, content):
+        self.resolve(work_id, file_path, reading=False)
+        with self._editable(work_id):
+            path = FileHelper(self.ensure_workspace_exists(work_id)).write_text(file_path, content)
+        return {'message':'File written successfully','path':file_path,'size':Path(path).stat().st_size}
 
-                # 生成并添加docx文件
-                try:
-                    docx_content = self._generate_docx_from_paper(work_id)
-                    if docx_content:
-                        zip_file.writestr("paper.docx", docx_content)
-                        logger.info(f"Successfully added paper.docx to workspace {work_id} export")
-                    else:
-                        logger.info(f"No paper.md found or docx generation failed for workspace {work_id}")
-                except Exception as e:
-                    logger.error(f"Failed to generate docx for workspace {work_id}: {str(e)}")
-                    # 继续导出其他文件，不因docx生成失败而中断整个导出过程
+    def upload_file(self, work_id, file_path, file):
+        self.resolve(work_id, file_path, reading=False)
+        with self._editable(work_id):
+            path = FileHelper(self.ensure_workspace_exists(work_id)).write_bytes_stream(file_path, file.file)
+        return {'message':'File uploaded successfully','path':file_path,'filename':file.filename,'size':Path(path).stat().st_size}
 
-                # 如果工作空间为空，添加一个空的README文件
-                if not os.listdir(workspace_path):
-                    zip_file.writestr("README.txt", "This workspace is empty.")
+    def delete_file(self, work_id, file_path):
+        self.resolve(work_id, file_path, reading=False)
+        with self._editable(work_id):
+            FileHelper(self.get_workspace_path(work_id)).delete(file_path)
+        return {'message':'File or directory deleted successfully'}
 
-            return zip_path
+    def create_directory(self, work_id, dir_path):
+        with self._editable(work_id):
+            self.resolve(work_id, dir_path, reading=False).mkdir(parents=True, exist_ok=False)
+        return {'message':'Directory created successfully'}
 
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to export workspace: {str(e)}"
-            )
+    def get_file_info(self, work_id, file_path):
+        path = self.resolve(work_id, file_path)
+        if not path.exists():
+            raise HTTPException(404,'File not found')
+        stat = path.stat()
+        return {'name':path.name,'path':file_path,'type':'file' if path.is_file() else 'directory','size':stat.st_size,'modified':stat.st_mtime}
 
-    def _generate_docx_from_paper(self, work_id: str) -> Optional[bytes]:
-        """生成paper.md对应的docx文件内容"""
-        if not DOCX_AVAILABLE:
-            logger.warning("python-docx not available, skipping docx generation")
-            return None
-
+    def export_workspace(self, work_id, *, legacy=False):
+        root = get_legacy_workspace_path(work_id) if legacy else self.get_workspace_path(work_id)
+        folder = Path(tempfile.mkdtemp(prefix='paperagent-export-'))
+        target = folder / f'workspace_{work_id}.zip'
         try:
-            workspace_path = self.ensure_workspace_exists(work_id)
-            paper_md_path = workspace_path / "paper.md"
-
-            if not paper_md_path.exists():
-                logger.info(f"paper.md not found in workspace {work_id}, skipping docx generation")
-                return None
-
-            # 读取paper.md内容
-            with open(paper_md_path, 'r', encoding='utf-8') as f:
-                markdown_content = f.read()
-
-            # 转换为docx
-            docx_content = self._convert_markdown_to_docx(markdown_content)
-            return docx_content
-
-        except Exception as e:
-            logger.error(f"Failed to generate docx for workspace {work_id}: {str(e)}")
-            return None
-
-    def _convert_markdown_to_docx(self, markdown_content: str) -> bytes:
-        """将Markdown内容转换为docx格式"""
-        try:
-            # 创建Word文档
-            doc = Document()
-
-            # 设置默认字体
-            style = doc.styles['Normal']
-            font = style.font
-            font.name = 'Times New Roman'
-            font.size = Pt(12)
-
-            # 分割Markdown内容为行
-            lines = markdown_content.split('\n')
-
-            i = 0
-            while i < len(lines):
-                line = lines[i].strip()
-
-                # 处理标题
-                if line.startswith('# '):
-                    heading = doc.add_heading(line[2:], level=1)
-                    heading.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
-                elif line.startswith('## '):
-                    heading = doc.add_heading(line[3:], level=2)
-                elif line.startswith('### '):
-                    heading = doc.add_heading(line[4:], level=3)
-                elif line.startswith('#### '):
-                    heading = doc.add_heading(line[5:], level=4)
-                elif line.startswith('##### '):
-                    heading = doc.add_heading(line[6:], level=5)
-                # 处理空行
-                elif line == '':
-                    doc.add_paragraph()
-                # 处理普通段落
-                else:
-                    # 简单的Markdown格式处理
-                    processed_line = self._process_markdown_line(line)
-                    paragraph = doc.add_paragraph(processed_line)
-
-                i += 1
-
-            # 保存到内存中的字节流
-            from io import BytesIO
-            doc_stream = BytesIO()
-            doc.save(doc_stream)
-            return doc_stream.getvalue()
-
-        except Exception as e:
-            logger.error(f"Failed to convert markdown to docx: {str(e)}")
+            with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+                for path in safe_files(root):
+                    if path.suffix.lower().lstrip('.') in EXPORT_SUFFIXES:
+                        self._zip_file(archive, path, path.relative_to(root).as_posix())
+                # Historical attempts may contain the only copy of code/results.
+                if legacy:
+                    attempts = safe_join(root, '.system/attempts')
+                    for path in safe_files(attempts):
+                        if path.suffix.lower().lstrip('.') in EXPORT_SUFFIXES:
+                            self._zip_file(archive, path, 'historical-attempts/' + path.relative_to(attempts).as_posix())
+                run_base = safe_join(root, 'runs') if legacy else workspace_path(root, 'runs')
+                if run_base.exists():
+                    for run in run_base.iterdir():
+                        if run.is_symlink() or not run.is_dir():
+                            continue
+                        for name in ('input.py', 'stdout.log', 'stderr.log'):
+                            path = safe_join(run, name)
+                            if path.is_file():
+                                self._zip_file(archive, path, '运行记录/' + run.name + '/' + name)
+                        for path in safe_files(run / 'artifacts'):
+                            if path.suffix.lower().lstrip('.') in EXPORT_SUFFIXES:
+                                self._zip_file(archive, path, '运行记录/' + run.name + '/artifacts/' + path.relative_to(run/'artifacts').as_posix())
+                archive.writestr('研究记录.md', self._readable_records(root, legacy))
+                archive.writestr('README.txt', '资料、源码、论文和成果导出。旧项目仅供阅读；新建项目上传资料不会恢复旧执行状态。数据库、checkpoint、凭证和原始模型追踪不在导出范围。')
+            return str(target)
+        except BaseException:
+            shutil.rmtree(folder)
             raise
 
-    def _process_markdown_line(self, line: str) -> str:
-        """处理单行Markdown格式，转换为纯文本"""
-        # 简单处理，去除一些常见的Markdown标记
-        line = line.replace('**', '').replace('*', '').replace('`', '')
-        line = line.replace('[', '').replace(']', '').replace('(', '').replace(')', '')
-        return line
+    @staticmethod
+    def _zip_file(archive, path, name):
+        with open_read(path) as source, archive.open(name, 'w') as target:
+            shutil.copyfileobj(source, target)
 
-# 创建全局实例
+    def _readable_records(self, root, legacy):
+        path = safe_join(root, '.system/research.sqlite') if legacy else workspace_path(root, '.system/research.sqlite')
+        lines = ['# 研究记录\n']
+        if path.is_file():
+            with sqlite3.connect(path.as_uri() + '?mode=ro', uri=True) as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if 'research' in tables:
+                    for (payload,) in db.execute('SELECT payload FROM research'):
+                        state = json.loads(payload)
+                        for name in ('spec','questions','experiments','artifacts','claims','validations','feedback','faults'):
+                            if name in state:
+                                lines.append('## ' + name + '\n\n```json\n' + json.dumps(state[name],ensure_ascii=False,indent=2) + '\n```\n')
+                if 'chat_messages' in tables:
+                    lines.append('## 对话\n')
+                    for (payload,) in db.execute('SELECT payload FROM chat_messages ORDER BY sequence'):
+                        message = json.loads(payload)
+                        lines.append(str(message.get('role','')) + ': ' + str(message.get('content','')) + '\n')
+        elif legacy:
+            history = safe_join(root, 'chat_history.json')
+            if history.is_file():
+                data = json.loads(history.read_text())
+                for row in data if isinstance(data,list) else data.get('messages',[]):
+                    lines.append(str(row.get('role','')) + ': ' + str(row.get('content','')) + '\n')
+        return '\n'.join(lines)
+
+
 workspace_file_service = WorkspaceFileService()

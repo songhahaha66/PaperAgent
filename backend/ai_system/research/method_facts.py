@@ -3,6 +3,7 @@
 Never infer an estimator from its display name or execute frozen model code here.
 Unverified, stale and unsupported model families yield no correction authority.
 """
+from services.file_services.workspace_layout import workspace_path
 
 from .domain import experiment_design
 import hashlib,json
@@ -20,7 +21,7 @@ def verified_methods(store):
         records=[json.loads(r[0]) for r in db.execute('SELECT payload FROM experiment_comparisons WHERE research_id=?',(store.research_id,))]
         policy=db.execute('SELECT version FROM experiment_policy WHERE id=1').fetchone()
     files=store.file_inputs();facts=[]
-    try:manifest=json.loads((store.root/'manifest.json').read_text()).get('runs',{})
+    try:manifest=json.loads((workspace_path(store.root, 'manifest.json')).read_text()).get('runs',{})
     except (OSError,ValueError):return []
     for row in records:
         task=state['experiments'].get(row['task_id'])
@@ -42,13 +43,13 @@ def verified_methods(store):
             expected='LinearRegression' if audit['family']=='ols' else 'Ridge'
             if not audit.get('estimator','').startswith('sklearn.') or not audit['estimator'].endswith('.'+expected):continue
             try:
-                artifact=store.root/'.system/attempts'/task['execution_id']/'workspace/outputs/intermediate/comparisons'/row['id']/f"predictions-{branch['index']}.json"
+                artifact=store.root/'experiments'/task['execution_id']/'workspace/outputs/intermediate/comparisons'/row['id']/f"predictions-{branch['index']}.json"
                 if not artifact.resolve().is_relative_to(store.root.resolve()):continue
                 raw=artifact.read_bytes()
                 if hashlib.sha256(raw).hexdigest()!=branch['prediction_hash'] or json.loads(raw)['estimator_audit']!=audit:continue
                 run=manifest[branch['run_ids'][-1]]
-                paths=[(store.root/run[k]).resolve() for k in ('input','stdout')]
-                if run['status']!='success' or any(not p.is_relative_to(store.root.resolve()) for p in paths):continue
+                paths=[workspace_path(store.root,run[k]) for k in ('input','stdout')]
+                if run['status']!='success' or not run.get('evidence_archived'):continue
                 if any(hashlib.sha256(p.read_bytes()).hexdigest()!=h for p,h in zip(paths,[branch['driver_hash'],branch['stdout_hash']])):continue
             except (OSError,KeyError,ValueError,IndexError):continue
             facts.append({'task_id':row['task_id'],'revision':task['revision'],'attempt_id':task['execution_id'],

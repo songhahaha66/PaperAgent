@@ -5,9 +5,26 @@ services:
     restart: unless-stopped
     ports:
       - "8002:8000"
+    environment:
+      PA_DATA_PATH: /app/pa_data
+      PAPERAGENT_WORKSPACE_ROOT: /shared/files
+      PAPERAGENT_EVIDENCE_ROOT: /shared/evidence
+      PAPERAGENT_SANDBOX_CONFIG: /app/.sandbox.env
     volumes:
       - ./backend/.env:/app/.env:ro  # 挂载 .env 文件，只读模式
-      - ./pa_data:/app/pa_data       # 持久化工作目录数据
+      - ./pa_data:/app/pa_data       # private state and historical projects, never mounted into execution containers
+      - ./backend/.sandbox.env:/app/.sandbox.env:ro
+      # These source mounts MUST already expose the sandbox server filesystems.
+      - type: bind
+        source: ${PAPERAGENT_SHARED_FILES:?Configure the backend shared filesystem mount}
+        target: /shared/files
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PAPERAGENT_SHARED_EVIDENCE:?Configure the backend evidence filesystem mount}
+        target: /shared/evidence
+        bind:
+          create_host_path: false
 
 networks:
   default:

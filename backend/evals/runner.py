@@ -7,6 +7,7 @@
     <out>/<problem_id>/score.json   评分：确定性指标 + 4 维度判分
     <out>/summary.json / summary.md 汇总
 """
+from services.file_services.workspace_layout import workspace_path
 
 import json
 import logging
@@ -134,7 +135,7 @@ async def run_problem(
     record["usage"] = _sum_usage(usage_cb.usage_metadata)
     record["usage_by_model"] = usage_cb.usage_metadata
     record["paper_exists"] = (workspace / PAPER_FILENAME).exists()
-    calls_path = workspace / ".system" / "llm_calls.json"
+    calls_path = workspace_path(workspace, ".system") / "llm_calls.json"
     if calls_path.exists():
         # 逐次模型调用的耗时汇总：慢调用、截断、出错次数和各节点耗时
         record["llm_calls"] = json.loads(calls_path.read_text(encoding="utf-8")).get("summary")

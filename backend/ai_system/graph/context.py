@@ -3,6 +3,7 @@
 
 这些对象不能也不需要进 checkpoint，通过 LangGraph 的 context 传给每个节点。
 """
+from services.file_services.workspace_layout import workspace_path
 
 import asyncio
 import json
@@ -77,8 +78,8 @@ class EventSink:
 
 EXPORT_STAGE_TITLES = {"latex": "LaTeX 排版并编译 PDF", "word": "导出 Word 文档"}
 # 上传模板时由 services/file_services/template_contract.py 放进工作空间
-TEMPLATE_CONTRACT = ".system/template_contract.md"
-TEMPLATE_DOCX = ".system/_template_original.docx"
+TEMPLATE_CONTRACT = "template/contract.md"
+TEMPLATE_DOCX = "template/original.docx"
 TEMPLATE_REQUIREMENTS_CHARS = 4000
 # 编码循环每步只写一段代码，4096 token 足够；不设上限时一次重复输出能把请求拖到网关 300 秒超时
 CODER_MAX_TOKENS = 4096
@@ -132,8 +133,8 @@ class GraphContext:
             from ..research.store import ResearchStore, DB_PATH
             from ai_system.modules.methods import DEFAULT_SKILL_POLICY
             options['skill_policy'] = (ResearchStore(workspace, 'workspace-skills', read_only=True).skill_preferences()['policy']
-                                       if (workspace / DB_PATH).exists() else dict(DEFAULT_SKILL_POLICY))
-        if (workspace/'.system/research.sqlite').exists():
+                                       if (workspace_path(workspace, DB_PATH)).exists() else dict(DEFAULT_SKILL_POLICY))
+        if (workspace_path(workspace, '.system/research.sqlite')).exists():
             from ..research.runtime import ResearchRuntime
             settings=ResearchRuntime(workspace).policy()
             options.setdefault('compact_paper',settings['compact_paper'])

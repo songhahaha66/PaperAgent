@@ -150,10 +150,10 @@
           <t-input v-model="templateForm.category" placeholder="请输入模板分类" />
         </t-form-item>
         <t-form-item label="输出格式" name="output_format">
-          <t-select v-model="templateForm.output_format" placeholder="请选择输出格式">
+          <t-select v-model="templateForm.output_format" :disabled="!!editingTemplate" placeholder="请选择输出格式">
             <t-option value="markdown" label="Markdown (.md)" />
             <t-option value="word" label="Word (.docx)" />
-            <t-option value="latex" label="LaTeX (.tex)" disabled />
+            <t-option value="latex" label="LaTeX (.tex)" />
           </t-select>
         </t-form-item>
         <t-form-item label="是否公开" name="is_public">
@@ -311,7 +311,7 @@
     >
       <div class="delete-confirm-content">
         <p>{{ deleteConfirmMessage }}</p>
-        <p class="warning-text">⚠️ 强制删除将同时删除所有引用该模板的工作，此操作不可恢复！</p>
+        <p class="warning-text">删除模板库条目不会影响已有项目的模板副本。</p>
       </div>
       <template #footer>
         <t-space>
@@ -622,7 +622,6 @@ const saveTemplate = async () => {
       if (templateForm.name) updateData.name = templateForm.name
       if (templateForm.description !== '') updateData.description = templateForm.description
       if (templateForm.category !== '') updateData.category = templateForm.category
-      if (templateForm.file_path !== '') updateData.file_path = templateForm.file_path
       updateData.is_public = templateForm.is_public
 
       console.log('更新数据:', updateData)
@@ -795,7 +794,7 @@ const confirmForceDelete = async () => {
 
   try {
     const result = await templateAPI.forceDeleteTemplate(authStore.token, templateToDelete.value.id)
-    MessagePlugin.success(`强制删除成功！${result.deleted_works_count} 个相关工作已被删除`)
+    MessagePlugin.success("模板已删除，已有项目副本保留")
     loadTemplates() // 重新加载列表
     showDeleteConfirmDialog.value = false
     templateToDelete.value = null

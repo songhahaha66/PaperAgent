@@ -1,4 +1,5 @@
 """Deterministic experience cards. Historical advice never becomes current evidence."""
+from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings
 import csv
@@ -40,15 +41,15 @@ def grounded(root,state,refs):
     if root is None:return []
     root=Path(root).resolve()
     try:
-        if (root/'manifest.json').stat().st_size>4_000_000:return []
-        manifest=json.loads((root/'manifest.json').read_text())
+        if (workspace_path(root, 'manifest.json')).stat().st_size>4_000_000:return []
+        manifest=json.loads((workspace_path(root, 'manifest.json')).read_text())
         from ..graph.registry import value_in_output
         result=[]
         for ref in refs:
             row=state['artifacts'][ref]['payload'];run=manifest['runs'][row['run_id']]
             if run['status']!='success':return []
-            path=(root/run['stdout']).resolve()
-            if not path.is_relative_to(root) or path.stat().st_size>4_000_000:return []
+            path=workspace_path(root,run['stdout'])
+            if not run.get('evidence_archived') or path.stat().st_size>4_000_000:return []
             raw=path.read_bytes()
             if row['kind']=='figure' or not value_in_output(str(row['value']),raw.decode('utf-8',errors='replace')):return []
             result.append({'id':ref,'run_id':row['run_id'],'stdout_hash':hashlib.sha256(raw).hexdigest()})

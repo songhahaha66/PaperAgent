@@ -5,6 +5,7 @@
 - section_coverage：数模论文标准章节是否齐全
 - number_traceability：论文中的小数/百分数能否追溯到当前已验收、来源执行成功的登记值
 """
+from services.file_services.workspace_layout import workspace_path
 
 import json
 import re
@@ -35,7 +36,7 @@ _DECIMAL = re.compile(r"(?<![\w.])-?\d+\.\d+(?:[eE][-+]?\d+)?%?")
 
 
 def code_runs(workspace: Path) -> Dict:
-    manifest_path = Path(workspace) / "manifest.json"
+    manifest_path = workspace_path(Path(workspace), "manifest.json")
     runs = {}
     if manifest_path.exists():
         runs = json.loads(manifest_path.read_text(encoding="utf-8")).get("runs", {})
@@ -72,14 +73,14 @@ def _paper_numbers(paper: str) -> List[str]:
 def _verified_values(workspace: Path) -> list[str]:
     """Use the business store, never historical files or the registry projection."""
     root = Path(workspace).resolve()
-    thread = json.loads((root / ".system/graph_thread.json").read_text())
+    thread = json.loads((workspace_path(root, ".system/graph_thread.json")).read_text())
     if thread.get("engine_version") != ENGINE_VERSION:
         raise ValueError("研究引擎版本不支持证据评测")
     store = ResearchStore(root, thread["thread_id"], read_only=True)
     state = store.snapshot()
     if not state or state["engine_version"] != ENGINE_VERSION:
         raise ValueError("缺少当前研究状态")
-    manifest = json.loads((root / "manifest.json").read_text())
+    manifest = json.loads((workspace_path(root, "manifest.json")).read_text())
     values = []
     for item in store.registry_payload(state)["results"]:
         result = Result(**item)
@@ -89,7 +90,7 @@ def _verified_values(workspace: Path) -> list[str]:
         if run.get("status") != "success" or not run.get("stdout"):
             continue
         output = (root / run["stdout"]).resolve()
-        if not output.is_relative_to(root / "runs" / result.run_id) or not output.is_file():
+        if not output.is_relative_to(workspace_path(root, "runs") / result.run_id) or not output.is_file():
             continue
         if value_in_output(result.value, output.read_text(encoding="utf-8")):
             # Normalize percentages, without letting digits in units become evidence.

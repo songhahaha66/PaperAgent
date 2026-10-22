@@ -26,6 +26,14 @@
         </div>
       </section>
     </main>
+    <main v-else-if="currentWork && currentWork.architecture_version !== 2" class="workspace-container">
+      <section class="work-load-error">
+        <h1>{{ currentWork.title || '历史项目' }}</h1>
+        <p>此项目使用旧版工作区，仅支持导出资料、源码、论文、成果和可读研究记录。</p>
+        <p>如需继续研究，请新建项目并上传旧资料；旧执行状态不会恢复。</p>
+        <t-button theme="primary" @click="exportWorkspace()">下载项目资料</t-button>
+      </section>
+    </main>
     <main v-else class="workspace-container">
       <header class="workspace-header">
         <div class="work-heading">

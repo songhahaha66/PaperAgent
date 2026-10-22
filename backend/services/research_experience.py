@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 """Owner-scoped experience projection in the existing application database."""
 import hashlib
 import sqlite3
@@ -85,7 +86,7 @@ class ExperienceScope:
             works=[w.work_id for w in db.query(Project).filter(Project.created_by==self.user_id)]
         for wid in works:
             root=Path(self.workspace(wid))
-            if not (root/DB_PATH).is_file():continue
+            if not (workspace_path(root, DB_PATH)).is_file():continue
             try:
                 probe=ResearchStore(root,'experience-index',read_only=True)
                 with closing(probe._connect()) as conn:
@@ -102,7 +103,7 @@ class ExperienceScope:
         try:
             card=row.payload;source=card['source'];root=Path(self.workspace(row.source_work_id))
             if card['evidence_refs'] and not card.get('evidence_provenance'):return False
-            if not (root/DB_PATH).is_file():return False
+            if not (workspace_path(root, DB_PATH)).is_file():return False
             store=ResearchStore(root,source['research_id'],read_only=True);state=store.snapshot()
             if state is None or source['attempt_id'] not in state['executions']:return False
             actual=card_for(state,source['attempt_id'],store.root)

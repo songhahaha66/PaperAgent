@@ -1,143 +1,62 @@
-# Remote sandbox execution
+# Persistent workspace v2
 
-PaperAgent's `KernelPool` uses `sandbox.factory.create_kernel`. The `local` backend
-keeps the existing development subprocess. `opensandbox` uses an authenticated
-remote service; it never falls back to local execution on failure.
+This is a code/configuration contract, **not a claim that the ASUS server has been configured or tested**. No deployment or remote smoke test was performed for this cutover. Server/SDK dependencies are pinned to OpenSandbox 1.1.1. Linux file locking and `/proc/self/fd` are required by the backend.
 
-`contracts.SandboxSession` is the extension point for another platform: implement
-start/upload/delete/execute/files/download/interrupt/close/release and add the provider to
-the factory. `RemoteKernel` owns run IDs, logs, transfer limits, immutable artifact
-copies and terminal statuses. SDK classes never enter research tools or business state.
-`ExecutionKernel` is the shared interface used by research code.
+## Storage that must be provisioned first
 
-## Execution host (ASUS)
+Use one persistent file tree on the sandbox server and make that **same filesystem** visible to the backend. A backend on another machine must have an explicitly provisioned shared filesystem (for example NFS), with compatible ownership, atomic rename, fsync and advisory-lock behavior. An SSH API tunnel does **not** provide filesystem sharing. A host path is resolved on the Docker/OpenSandbox server, never on the API client machine.
 
-Requires Linux, Docker and UV. The current tested combination uses server/SDK 1.1.1,
-code-interpreter/execd v1.1.0, and egress v1.1.7. The research image supplies Python
-3.11 numerical packages and Chinese fonts; the PaperAgent API can use Python 3.14.
-No model credentials or backend source are mounted inside execution containers.
+The implementation does not create an NFS service, mount remote folders, connect a user's computer, or substitute uploads/downloads when sharing is absent. If shared storage is unavailable, configure it before using new projects. There is no disk quota in this release.
 
-```sh
-uv tool install opensandbox-server==1.1.1
-mkdir -p ~/paperagent-sandbox
-# Copy Dockerfile and .dockerignore from this directory into that directory.
-docker build -t paperagent-research:opensandbox-1.1.0 ~/paperagent-sandbox
-python3 setup_remote.py
-```
+Two trees are shared, with different mount permissions:
 
-`setup_remote.py` creates a dedicated user systemd service on **127.0.0.1:18080**,
-an API key and a mode-0600 `~/paperagent-sandbox/client.env`. It does not modify
-other services. Docker sandbox ports also bind loopback; outbound network policy
-uses `dns+nft` plus `defaultAction=deny`. The service can manage Docker and must
-remain a trusted private service. This deployment uses Docker isolation, not a VM.
+| Setting | Backend-visible path example | Sandbox-host path example | Execution container |
+|---|---|---|---|
+| `PAPERAGENT_WORKSPACE_ROOT` / `PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT` | `/srv/paperagent-shared/files` | `/home/operator/paperagent-sandbox/volumes/files` | only the current execution workspace, read/write at `/workspace` |
+| `PAPERAGENT_EVIDENCE_ROOT` / `PAPERAGENT_SANDBOX_HOST_EVIDENCE_ROOT` | `/srv/paperagent-shared/evidence` | `/home/operator/paperagent-sandbox/volumes/evidence` | only that workspace's `runs` subtree, **read-only** at `/evidence` |
 
-```sh
-systemctl --user status paperagent-sandbox
-journalctl --user -u paperagent-sandbox -n 50
-systemctl --user restart paperagent-sandbox  # after editing server.toml
-loginctl show-user "$USER" -p Linger       # yes keeps the service after logout
-```
+These examples are mappings to configure after mounting the actual shared filesystem, not directories to create independently on both machines. On a single host the two columns may contain the same paths. Each new sandbox reads a random probe written by the backend and refuses execution when the mounted file tree differs. Evidence uses a separate tree; the backend alone stores ResearchStore, chat, owner/metadata, manifest, checkpoints and durable container leases under `PA_DATA_PATH/project-state`. Never share or mount that private tree into execution containers.
 
-## PaperAgent host (Mac / another server)
+Keep the backend-visible workspace path stable across restarts: its absolute path determines the private state/evidence key. Preserve all three trees and the application database in backups. Container destruction and TTL expiry do not delete project files or evidence.
 
-Only install the client extra, **not** OpenSandbox Server or Docker:
+## Configuration (run only when authorized on the server)
+
+Build the image in this directory as `paperagent-research:workspace-v2`; it includes Python, Pandoc, XeLaTeX and BibTeX. Install `opensandbox-server==1.1.1`. `setup_remote.py` configures the loopback service and server-side allowed host paths; it **does not** establish shared storage. Its private `client.env` contains the API key. Fill the two required backend mount paths before using it; never commit that file.
+
+Backend: `uv sync --extra sandbox`, then select the private env file with `PAPERAGENT_SANDBOX_CONFIG`. Environment variables override the file, including file-storage path settings. Copy the field names from `client.env.example`. Non-loopback API endpoints require HTTPS; the optional SSH tunnel only carries the authenticated API. Do not expose the API publicly or mount Docker sockets/backend environment variables into execution containers.
+
+The backend Docker image uses Python 3.14 and the sandbox SDK. Bind the *already provisioned* backend-visible shared mounts into that container and set their backend-visible paths consistently. `docker-compose.yml` requires those mount sources explicitly; it cannot provision sharing.
+
+## Runtime and recovery contract
+
+- Alembic assigns architecture 1 to pre-existing projects, with no file migration/deletion. New ORM-created projects use architecture 2. Historical project pages expose one download action. Backend guards reject their research, uploads, edits and compilation. Old files stay in `PA_DATA_PATH/workspaces`; export traverses allowed user files and renders readable research/chat records without copying databases, credentials, checkpoints or raw model traces. Create a new project and upload exported material to research again.
+- New templates are parsed and copied during project creation after permission validation. Template metadata updates/deletion cannot change an existing project's files, change server paths, or delete referencing projects. Parser failures roll back creation; source hash, format and parser version identify cached analysis. Compressed documents have member-count, expanded-size, ratio, link and traversal checks before parsing.
+- Python cells access persistent files directly. There is no per-cell file mirror/upload/download path. Each attempt has its own task-selected inputs and temporary products in the same project volume. Project locking serializes active kernel sessions and compilation, and blocks API file changes. Healthy sessions retain Python memory only until the solver releases them, then destroy their containers. There is no idle container cache.
+- Code, selected input snapshots, changed outputs, logs, hashes, runtime image and real completion status are retained outside writable mounts. A sealed receipt is required before results become registerable. Repeated sealing is idempotent; altered receipts/files fail verification. The existing scientific/semantic review and research acceptance logic remain separate from file integrity. A result binding records the existing result ID and run ID in the private manifest.
+- Timeout/cancel/transport loss never replay code or invoke a backend Python/Pandoc/TeX fallback. Unknown execution remains a failure. A persistent container lease prevents new writes/execution after a backend crash or unconfirmed destroy until the server TTL plus startup allowance expires. This wait is conservative and visible. A new process reconstructs files, ResearchStore and checkpoints; it does not reconstruct Python memory or unsaved figures. Completed durable run receipts can be reused; unfinished tools are reported as interrupted.
+- Compiler commands also run inside scoped sandboxes, with timeouts, network deny and exit-code receipts. LaTeX uses `-no-shell-escape`; failed builds retain the last published PDF. Logs live in `.build` and are read-only through the public file gateway. The backend does not require local Pandoc/TeX installations.
+
+## Checks and user acceptance
+
+Local automated checks must not contact a real model, sandbox or production database. The focused contract suite is:
 
 ```sh
 cd backend
-uv sync --extra sandbox
-# Copy ASUS's paperagent-sandbox/client.env to .sandbox.env; chmod 600 .sandbox.env.
+# Set DATABASE_URL to a temporary local SQLite file and SECRET_KEY to a test-only value.
+uv run --extra sandbox python -m pytest tests/test_workspace_contract.py tests/test_workspace_routes.py tests/test_template_contract.py
+cd ../frontend
+npm ci
+npm run test:workspace
+npm run build
 ```
 
-From the repository root, keep the tunnel running:
+The historical transfer-provider tests describe the removed mirror protocol and are not evidence for v2. Do not run the existing `smoke_remote_sandbox.py` / `smoke_work_sandbox.py` as v2 acceptance; they are blocked with a migration explanation to prevent accidental paid/remote work.
 
-```sh
-sh deploy/sandbox/connect.sh ASUS-remote
-```
+User-run acceptance on the actual server (not run by the implementer):
 
-The SSH alias can use an Aliyun jump host. No public sandbox listener is required.
-The SDK's `use_server_proxy=True` routes both lifecycle and execution/file calls
-through this single port; forwarding just the API without that setting is insufficient.
-
-Start the backend with an explicit configuration path (or put this pointer in its
-existing private `.env`):
-
-```sh
-cd backend
-PAPERAGENT_SANDBOX_CONFIG=.sandbox.env uv run --extra sandbox main.py
-```
-
-Environment variables override the selected file. `PAPERAGENT_SANDBOX_PROVIDER=local`
-explicitly selects local development execution. Non-loopback endpoints require HTTPS.
-The example env file lists endpoint, image, CPU/memory and lifetime settings.
-
-## Verification
-
-```sh
-cd backend
-PAPERAGENT_SANDBOX_PROVIDER=local uv run --extra sandbox python -m pytest tests/test_sandbox_providers.py tests/test_kernel.py
-PAPERAGENT_SANDBOX_CONFIG=.sandbox.env uv run --extra sandbox python tests/smoke_remote_sandbox.py
-```
-
-The explicit integration check creates a real remote sandbox, checks stateful Python,
-streaming stdout/stderr/native/subprocess output and downloads a CSV and PNG before
-destroying the sandbox. Unit tests use a fake provider and never call a remote service.
-
-## Data and lifecycle contract
-
-- Inputs are scoped by experiment. Generated files in the current directory are also collected, including directly written CSV files. data/, attachment/, code/, outputs/ and inherited run artifacts are uploaded.
-  Hidden backend state, manifests and credentials remain local. Local file changes
-  are synchronized before each cell. Files are transferred, not host-mounted.
-- Output logs are appended locally before UI updates. UI previews keep the last
-  6,000 characters; model observations keep a bounded excerpt. Full received logs
-  are saved up to the configured quota (default 8 MiB, then execution is stopped).
-- Changed output files are verified against size/SHA-256 and downloaded atomically.
-  Each run keeps an immutable copy. Default transfer limits: 64 MiB/file,
-  256 MiB per synchronization, 1,000 files. These are **transfer limits**, not remote
-  disk quotas; host disk needs operational monitoring and cleanup.
-- Files are published under outputs/research/<run>/ even when later model
-  interpretation fails. Availability does not mean scientific validation. A source
-  run's success/error status remains in the run manifest.
-- Timeout/cancel interrupts execution, attempts a bounded partial file retrieval,
-  then destroys the sandbox. Lost connections never cause automatic code replay or
-  local fallback. When deletion cannot be confirmed, the server TTL is the backstop.
-  Outputs not yet downloaded can be lost on remote termination or TTL expiry.
-- A healthy work-scoped container is retained for five idle minutes; separate experiments use separate Python contexts and directories. Concurrent experiments use separate containers when the retained container is busy.
-- Containers have a fixed lifetime (default 30 minutes); interpreter memory is not
-  restored after restart. Saved local artifacts can be used by a new attempt.
-- Platform-wide admission control and stronger VM isolation are not implemented
-  by this adapter. Set appropriate concurrency outside the SDK when increasing load.
-
-The tunnel script reconnects SSH after a network interruption; it never replays code.
-Interrupted executions are reported as failures. Explicitly resume the study after
-connectivity returns. The script must remain running while using the remote backend.
-
-## Validation scope
-
-The ASUS integration check covers stateful execution, live output, CSV/PNG retrieval,
-input synchronization, network denial, timeout/cancel cleanup and local persistence.
-Earlier trials exposed fixes for Debian's Noto CJK font names, nested figure paths,
-and figure paths inherited by continued attempts; regression tests cover these cases.
-
-On 2026-10-22, work `087060e5` completed three real model-directed code cells on ASUS.
-Each cell emitted timeline output before completion. The root-level CSV and Chinese
-chart were published, and the CSV matched independent sample statistics. Exported
-code ran in a fresh Python subprocess in the original sandbox image and reproduced
-the CSV byte-for-byte; a newer local Matplotlib rejected its older `boxplot(labels=)`
-API, so cross-version execution is not claimed.
-
-The initial automatic report failed its bounded LaTeX repairs (document closure,
-filename escaping, and figure references). The report was reviewed and edited using
-the versioned source-change mechanism, compiled to two pages, and visually checked.
-Normal research resume then completed validation/export without another experiment
-or model call. This verifies recovery and delivery, **not a clean fully automatic
-writing pass**. Model writing calls took up to roughly six minutes. The current
-browser inspection was denied by its security policy, so browser interaction/visual
-acceptance remains unverified; frontend tests/build and backend projections passed.
-
-
-File delivery errors retain the successful computation status. `retry_outputs` transfers
-the original immutable version without running code. A pending transfer blocks new
-cells until resolved; if its remote version expires, the missing output is reported
-explicitly. The local manifest retains file-transfer diagnostics separately from
-code errors. Work-container reuse is a live-process optimization, not a checkpoint
-of Python memory. No cross-user or cross-work sandbox sharing is performed.
+1. Verify both shared trees map to the **same bytes** from each machine, the v2 image has Pandoc/XeLaTeX/BibTeX/fonts, server allowed paths cover only the two shared trees, and the backend private tree is absent from container mounts.
+2. Create one project, upload source data and a template, then run research/compile. Inspect actual mounts: current execution directory writable, evidence read-only, other project/backend state inaccessible, network denied and no backend/model keys in env.
+3. While executing, try editing/uploading/compiling from another tab/process; verify serialization/rejection. Check stdout/stderr, timeout, cancel and true compiler failures. Verify `/evidence` cannot be modified, and that an altered mutable result does not change archived hashes.
+4. Stop the backend/container during a step. Check the durable lease/TTL behavior, retained files and real completed receipts. Restart/resume without replaying an uncertain cell or claiming memory restoration. Test an unsaved-figure interruption explicitly.
+5. Export a historical project; inspect material completeness and absence of databases/checkpoints/credentials. Verify all mutation/research routes are denied. Create a new project from exported material without old execution state.
+6. Delete/update a template library entry and verify another user's project files survive. Try path traversal, nested symlinks and oversized compressed documents. Back up before the Alembic cutover; rollback requires restoring the complete backup, not reverse-migrating new projects.

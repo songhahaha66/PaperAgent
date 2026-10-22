@@ -94,6 +94,7 @@ def test_application_migration_moves_real_rows_without_promoting_experience(tmp_
         assert 'work_flow_states' not in sa.inspect(db).get_table_names()
         row = db.execute(sa.text('SELECT work_id,title,description,created_by FROM projects')).one()
         assert tuple(row) == ('original','原研究','原始需求',1)
+        assert db.execute(sa.text('SELECT architecture_version FROM projects')).scalar_one() == 1
         row = db.execute(sa.text('SELECT status,version,payload,history FROM research_experiences')).one()
         assert row.status == 'candidate' and row.version == 7
         assert json.loads(row.payload) == {'original':'原文'}

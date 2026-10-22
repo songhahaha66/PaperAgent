@@ -152,8 +152,9 @@ async def read_artifact(ctx, inputs):
     path=inputs['path']
     known={a['payload'].get('path') for a in state['artifacts'].values()} | set(ctx.research.file_inputs())
     if path not in known:raise ValueError('只能读取已登记产物或当前原始资料')
-    target=(ctx.research.root/path).resolve()
-    if not target.is_relative_to(ctx.research.root) or not target.is_file():raise ValueError('资料文件不可用')
+    from services.file_services.workspace_layout import workspace_path
+    target=workspace_path(ctx.research.root,path)
+    if not target.is_file():raise ValueError('资料文件不可用')
     raw=target.read_bytes()
     try:text=raw.decode('utf-8')
     except UnicodeError:raise ValueError('该文件不是UTF-8文本，请在实验中按其真实格式读取')

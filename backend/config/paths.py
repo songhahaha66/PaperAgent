@@ -39,9 +39,18 @@ def get_pa_data_base() -> Path:
     return get_project_root() / "pa_data"
 
 
+
+def storage_setting(name, default):
+    values = {}
+    if config := os.environ.get('PAPERAGENT_SANDBOX_CONFIG'):
+        from dotenv import dotenv_values
+        values.update(dotenv_values(config))
+    values.update(os.environ)
+    return Path(values.get(name) or default).absolute()
+
 def get_workspaces_path() -> Path:
     """获取工作空间目录路径"""
-    path = get_pa_data_base() / "workspaces"
+    path = storage_setting("PAPERAGENT_WORKSPACE_ROOT", get_pa_data_base() / "project-files")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -55,7 +64,8 @@ def get_templates_path() -> Path:
 
 def get_workspace_path(work_id: str) -> Path:
     """获取指定工作的工作空间路径"""
-    path = get_workspaces_path() / work_id
+    from services.file_services.workspace_layout import safe_join
+    path = safe_join(get_workspaces_path(), work_id)
     return path
 
 
@@ -63,3 +73,8 @@ def get_workspace_path(work_id: str) -> Path:
 PA_DATA_BASE = get_pa_data_base()
 WORKSPACES_PATH = get_workspaces_path()
 TEMPLATES_PATH = get_templates_path()
+
+
+def get_legacy_workspace_path(work_id: str) -> Path:
+    from services.file_services.workspace_layout import safe_join
+    return safe_join(get_pa_data_base() / "workspaces", work_id)

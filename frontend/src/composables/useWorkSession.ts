@@ -123,6 +123,7 @@ export function useWorkSession(workId: Ref<string>) {
       if (disposed) return
       currentWork.value = work
       historyStore.upsert(work)
+      if (work.architecture_version !== 2) return
 
       // 加载工作空间文件
       await Promise.all([dependencies.loadFiles(), loadResearchSnapshot()])

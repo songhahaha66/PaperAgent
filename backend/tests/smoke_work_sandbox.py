@@ -1,4 +1,8 @@
 """Explicit remote lease lifecycle acceptance, no model calls."""
+
+if __name__ == '__main__':
+    raise SystemExit('此脚本针对已移除的文件镜像协议；v2 请按 deploy/sandbox/README.md 用户实测清单验证，禁止误连旧远端沙箱。')
+
 import asyncio
 import tempfile
 import sys

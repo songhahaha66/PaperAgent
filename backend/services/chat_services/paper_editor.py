@@ -3,6 +3,8 @@
 Candidates do not mutate research. Publication is a compare-and-swap against the
 whole research commit and active source, including changes made outside this UI.
 """
+from services.file_services.workspace_layout import workspace_path
+from services.file_services.workspace_lock import edit_lock
 import asyncio
 import json
 import re
@@ -35,7 +37,7 @@ def recover_publication(store):
     keeps its files; a rolled-back decision restores every previous artifact.
     Backups survive failed recovery so a later request can retry safely.
     """
-    marker = store.root / PUBLICATION_MARKER
+    marker = workspace_path(store.root, PUBLICATION_MARKER)
     if not marker.exists():
         return
     with store._transaction() as db:
@@ -66,7 +68,7 @@ def recover_publication(store):
 
 def prepare_publication(store, proposal_id, staging, names):
     """Called under the SQLite writer lock, before replacing any active file."""
-    marker = store.root / PUBLICATION_MARKER
+    marker = workspace_path(store.root, PUBLICATION_MARKER)
     if marker.exists():
         raise ResearchConflict('尚有待恢复的论文发布，请刷新后重试')
     folder = marker.parent / 'paper-publication' / proposal_id
@@ -88,7 +90,7 @@ def prepare_publication(store, proposal_id, staging, names):
 
 
 def current_store(root):
-    thread = json.loads((Path(root) / '.system/graph_thread.json').read_text())
+    thread = json.loads((workspace_path(Path(root), '.system/graph_thread.json')).read_text())
     if thread.get('engine_version') != 'research-v3':
         raise ValueError('当前研究不支持章节修改')
     store = ResearchStore(root, thread['thread_id'])
@@ -286,7 +288,8 @@ async def decide(store, proposal_id, apply, output_mode):
     if REF_PATTERN.search(rendered):
         raise ValueError('论文包含未解析的引用，禁止发布')
     # Compile in isolation; a failed export must not replace a good paper/PDF.
-    with tempfile.TemporaryDirectory(prefix='paper-edit-') as folder:
+    (store.root/'.build').mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='paper-edit-', dir=store.root/'.build') as folder:
         staging = Path(folder)
         (staging / filename).write_text(rendered, encoding='utf-8')
         if (store.root / 'outputs').exists():
@@ -295,11 +298,16 @@ async def decide(store, proposal_id, apply, output_mode):
         if output_mode == 'word':
             from ai_system.graph.context import TEMPLATE_DOCX
             template = store.root / TEMPLATE_DOCX
-            result = await export_docx(staging, rendered, template_docx=template if template.exists() else None)
+            reference = None
+            if template.exists():
+                reference = staging / TEMPLATE_DOCX
+                reference.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(template, reference)
+            result = await export_docx(staging, rendered, template_docx=reference)
             exports = [result.docx_path]
         store.refresh_inputs()
         try:
-            with store._transaction() as db:
+            with edit_lock(store.root), store._transaction() as db:
                 latest = json.loads(db.execute('SELECT response FROM commands WHERE research_id=? AND id=?', (store.research_id, 'paper-edit:' + proposal_id)).fetchone()[0])
                 if latest['status'] != 'pending':
                     return latest
@@ -316,7 +324,7 @@ async def decide(store, proposal_id, apply, output_mode):
                     from .issue_edits import require_review as require_issue_review
                     issue_proof=require_issue_review(store,proposal,state)
                 # Persist both sides in the existing version journal and paper archive.
-                archive = store.root / '.system/research' / store.research_id / 'papers'
+                archive = workspace_path(store.root, '.system/research') / store.research_id / 'papers'
                 archive.mkdir(parents=True, exist_ok=True)
                 old_name = f'{current["commit_seq"]}-before-edit{Path(filename).suffix}'
                 (archive / old_name).write_text(source, encoding='utf-8')
@@ -331,7 +339,7 @@ async def decide(store, proposal_id, apply, output_mode):
                     references = current['sections']['references']
                     references.update(text=reference_update,content_hash=digest(reference_update),revision=references['revision']+1)
                     versions['references'] = references
-                current.update(paper_hash=digest(rendered), paper_version=version.relative_to(store.root).as_posix(), paper_conflict=False,
+                current.update(paper_hash=digest(rendered), paper_version=f'.system/research/{store.research_id}/papers/{version.name}', paper_conflict=False,
                                exports=[filename] + exports)
                 prepare_publication(store, proposal_id, staging, [filename] + exports)
                 proposal.update(status='applied', applied_revision=current['sections'][proposal['section']]['revision'],

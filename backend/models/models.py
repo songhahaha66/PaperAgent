@@ -66,6 +66,7 @@ class Project(Base):
     __tablename__ = "projects"
     
     id = Column(Integer, primary_key=True, index=True)
+    architecture_version = Column(Integer, nullable=False, default=2, server_default="1")
     work_id = Column(String(50), unique=True, nullable=False, index=True)  # 唯一工作ID
     title = Column(String(200), nullable=False)  # 工作标题
     description = Column(Text)  # 工作描述

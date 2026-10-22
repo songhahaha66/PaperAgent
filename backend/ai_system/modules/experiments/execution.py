@@ -517,7 +517,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
     run_log: List[Dict] = []
     if branch.get('continuation'):
         for run_id, info in ctx.fs._manifest.get('runs', {}).items():
-            if info.get('status') == 'success':
+            if info.get('status') == 'success' and info.get('evidence_archived'):
                 run_log.append({'run_id': run_id, 'ok': True, 'code': '', 'inherited': True})
         for result in ctx.registry.for_subproblem(subproblem_id):
             info=ctx.fs.get_run_info(result.run_id) or {}
@@ -525,7 +525,7 @@ async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
                 from services.file_services.workspace_fs import WorkspaceFS
                 source_fs=WorkspaceFS(ctx.source_workspace)
                 info=source_fs.get_run_info(result.run_id) or {}
-            if info and info.get('status')=='success' and not any(r['run_id']==result.run_id for r in run_log):
+            if info and info.get('status')=='success' and info.get('evidence_archived') and not any(r['run_id']==result.run_id for r in run_log):
                 run_log.append({'run_id':result.run_id,'ok':True,'code':'','inherited':True})
     if branch.get('experiment'):
         from .planning import experiment_design

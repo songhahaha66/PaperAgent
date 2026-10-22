@@ -31,7 +31,7 @@ def test_websocket_reconnect_replays_only_after_last_seq(monkeypatch):
     import routers.chat_routes.chat as chat_module
 
     monkeypatch.setattr(chat_module, "verify_token", lambda token: 7)
-    monkeypatch.setattr("services.data_services.crud.get_work", lambda db, work_id: SimpleNamespace(created_by=7))
+    monkeypatch.setattr("services.data_services.crud.get_work", lambda db, work_id: SimpleNamespace(created_by=7, architecture_version=2))
     monkeypatch.setattr(chat_module, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
 
     manager = chat_module.task_manager

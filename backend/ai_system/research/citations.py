@@ -1,4 +1,5 @@
 """Source-bound citations and fail-closed claim support checks, separate from R/F."""
+from services.file_services.workspace_layout import workspace_path
 import hashlib
 import asyncio
 import json
@@ -56,7 +57,7 @@ class SupportBatch(BaseModel):
 def citation_research_store(workspace):
     from pathlib import Path
     root=Path(workspace)
-    try:rid=json.loads((root/'.system/graph_thread.json').read_text())['thread_id']
+    try:rid=json.loads((workspace_path(root, '.system/graph_thread.json')).read_text())['thread_id']
     except (OSError,ValueError,KeyError):rid='workspace-literature'
     return ResearchStore(root,rid)
 
@@ -250,7 +251,7 @@ def bibliography(workspace, latex=False):
 
 def citation_usage(workspace):
     store = LiteratureStore(workspace)
-    path = store.root/'.system/graph_thread.json'
+    path = workspace_path(store.root, '.system/graph_thread.json')
     if not path.exists():
         return []
     thread = json.loads(path.read_text())

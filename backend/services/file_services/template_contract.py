@@ -8,6 +8,7 @@ workspace so the paper pipeline can follow it (ai_system/graph/outline.py).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -30,13 +31,13 @@ from ai_system.core_tools.docx_styles import (
 
 logger = logging.getLogger(__name__)
 
-CONTRACT_PATH = ".system/template_contract.md"
+CONTRACT_PATH = "template/contract.md"
 ANALYSIS_DIRNAME = ".analysis"
 CONTRACT_FILENAME = "contract.md"
 STYLE_PROFILE_FILENAME = "style_profile.json"
 IMAGES_DIRNAME = "images"
 META_FILENAME = "meta.json"
-WORKSPACE_IMAGES_DIR = Path(".system") / "docx_images" / "template"
+WORKSPACE_IMAGES_DIR = Path("template") / "images"
 
 FORMAT_KEYWORDS = (
     "宋体",
@@ -95,6 +96,9 @@ def analyze_and_store_template(
 ) -> str:
     """Parse a template once at upload time and persist the analysis sidecars."""
     source_path = Path(source_path)
+    from .archive_safety import validate_archive
+    if source_path.suffix.lower() == '.docx':
+        validate_archive(source_path)
     analysis_dir = get_template_analysis_dir(template_id)
     if analysis_dir.exists():
         shutil.rmtree(analysis_dir)
@@ -134,7 +138,9 @@ def analyze_and_store_template(
         "template_id": template_id,
         "template_name": template_name,
         "output_mode": output_mode,
-        "status": "ready" if contract else "failed",
+        "status": "ready" if contract and not error else "failed",
+        "source_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "parser_version": 2,
         "image_count": image_count,
         "has_style_profile": has_style_profile,
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
@@ -145,6 +151,8 @@ def analyze_and_store_template(
         json.dumps(meta, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    if error or not contract:
+        raise ValueError('模板解析未完整完成：' + (error or 'empty contract'))
     return contract
 
 
@@ -154,10 +162,10 @@ def apply_stored_template_analysis(
     output_mode: str = "",
 ) -> bool:
     """Copy upload-time analysis into a workspace. Returns True if a contract was applied."""
-    del output_mode
     analysis_dir = get_template_analysis_dir(template_id)
     contract_file = analysis_dir / CONTRACT_FILENAME
-    if not contract_file.exists():
+    meta = json.loads((analysis_dir / META_FILENAME).read_text()) if (analysis_dir / META_FILENAME).exists() else {}
+    if meta.get('status') != 'ready' or meta.get('parser_version') != 2 or (output_mode and meta.get('output_mode') != output_mode) or not contract_file.exists():
         return False
 
     _write_contract(workspace_path, contract_file.read_text(encoding="utf-8"))
@@ -188,7 +196,7 @@ def read_template_analysis(template_id: int) -> dict[str, Any]:
         except Exception:
             meta = {}
     contract = contract_file.read_text(encoding="utf-8") if contract_file.exists() else ""
-    status = meta.get("status") or ("ready" if contract else "missing")
+    status = meta.get("status") if meta.get("parser_version") == 2 else "missing"
     return {
         "template_id": template_id,
         "status": status,
@@ -205,17 +213,22 @@ def read_template_analysis(template_id: int) -> dict[str, Any]:
 
 def ensure_template_analysis(template) -> dict[str, Any]:
     """Return stored analysis, backfilling old templates that were uploaded before this pipeline."""
-    analysis_dir = get_template_analysis_dir(template.id)
-    if not (analysis_dir / CONTRACT_FILENAME).exists() and getattr(template, "file_path", None):
-        source_path = get_templates_path() / template.file_path
-        if source_path.exists():
-            analyze_and_store_template(
-                source_path,
-                template.id,
-                template.name,
-                getattr(template, "output_format", None) or "markdown",
-            )
+    from .file_helper import FileHelper
+    source = FileHelper(get_templates_path()).resolve(template.file_path)
+    _ensure_analysis(source, template.id, template.name, template.output_format)
     return read_template_analysis(template.id)
+
+
+def _ensure_analysis(source, template_id, name, mode):
+    directory = get_template_analysis_dir(template_id)
+    meta_file = directory / META_FILENAME
+    try:
+        meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
+    except ValueError:
+        meta = {}
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    if meta.get('source_sha256') != expected or meta.get('output_mode') != mode or meta.get('template_name') != name or meta.get('parser_version') != 2 or meta.get('status') != 'ready':
+        analyze_and_store_template(source, template_id, name, mode)
 
 
 def delete_template_analysis(template_id: int) -> None:
@@ -232,19 +245,11 @@ def _prepare_template_workspace(
     output_mode: str,
 ) -> str:
     """Reuse upload-time analysis when present; otherwise parse now and persist for later workspaces."""
-    analysis_dir = get_template_analysis_dir(template_id)
-    if not (analysis_dir / CONTRACT_FILENAME).exists():
-        analyze_and_store_template(source_path, template_id, template_name, output_mode)
-
-    applied = apply_stored_template_analysis(template_id, workspace_path, output_mode)
+    _ensure_analysis(source_path, template_id, template_name, output_mode)
+    if not apply_stored_template_analysis(template_id, workspace_path, output_mode):
+        raise ValueError('模板解析缓存不可用')
     _copy_template_to_workspace(source_path, workspace_path, output_mode)
-    if applied:
-        return read_template_contract(workspace_path)
-
-    contract = _build_contract(source_path, template_name, output_mode)
-    _write_contract(workspace_path, contract)
-    _capture_template_assets(source_path, workspace_path, output_mode)
-    return contract
+    return read_template_contract(workspace_path)
 
 
 def initialize_template_contract(
@@ -256,8 +261,7 @@ def initialize_template_contract(
     Copy the uploaded template into the workspace and write a template contract.
 
     Prefers the analysis produced at upload time. Returns the contract text.
-    Failures are logged and result in an empty contract so workspace creation
-    can continue.
+    A parsing or copy failure aborts project creation.
     """
     if template_id is None:
         return ""
@@ -270,11 +274,11 @@ def initialize_template_contract(
         try:
             template = db.query(PaperTemplate).filter(PaperTemplate.id == template_id).first()
             if not template or not template.file_path:
-                return ""
-            source_path = get_templates_path() / template.file_path
+                raise ValueError("Template file missing")
+            from .file_helper import FileHelper
+            source_path = FileHelper(get_templates_path()).resolve(template.file_path)
             if not source_path.exists():
-                logger.warning("模板文件不存在: %s", source_path)
-                return ""
+                raise ValueError("Template file missing")
             return _prepare_template_workspace(
                 source_path,
                 workspace_path,
@@ -285,20 +289,19 @@ def initialize_template_contract(
         finally:
             db.close()
     except Exception as exc:
-        logger.warning("初始化模板契约失败: %s", exc, exc_info=True)
-        return ""
+        raise ValueError("初始化模板契约失败") from exc
 
 
 def _copy_template_to_workspace(source_path: Path, workspace_path: Path, output_mode: str) -> None:
-    if output_mode == "markdown":
-        target = workspace_path / "paper.md"
+    if output_mode in {"markdown", "latex"}:
+        target = workspace_path / ("paper.tex" if output_mode == "latex" else "paper.md")
         if not target.exists():
             shutil.copyfile(source_path, target)
     elif output_mode == "word":
         target = workspace_path / "paper.docx"
         if not target.exists():
             shutil.copyfile(source_path, target)
-        backup = workspace_path / ".system" / "_template_original.docx"
+        backup = workspace_path / "template" / "original.docx"
         backup.parent.mkdir(parents=True, exist_ok=True)
         if not backup.exists():
             shutil.copyfile(source_path, backup)
@@ -308,7 +311,7 @@ def _capture_template_assets(source_path: Path, workspace_path: Path, output_mod
     if output_mode != "word" or source_path.suffix.lower() != ".docx":
         return
     try:
-        extract_docx_images(source_path, workspace_path / ".system" / "docx_images" / "template")
+        extract_docx_images(source_path, workspace_path / "template" / "images")
     except Exception as exc:
         logger.warning("提取模板图片失败: %s", exc)
     try:
@@ -330,8 +333,10 @@ def _build_contract(source_path: Path, template_name: str, output_mode: str) -> 
         body = _markdown_contract(content)
     elif suffix == ".docx":
         body = _docx_contract(source_path)
+    elif suffix == ".tex":
+        body = "## LaTeX 源码\n\n```tex\n" + source_path.read_text(encoding="utf-8")[:30000] + "\n```"
     else:
-        body = f"- 未支持的模板类型: {suffix}\n"
+        raise ValueError("Unsupported template type")
 
     return (
         "# 模板契约\n\n"
@@ -427,7 +432,7 @@ def _docx_contract(source_path: Path) -> str:
         return "\n".join(result) + "\n"
     except Exception as exc:
         logger.warning("抽取 Word 模板契约失败: %s", exc)
-        return "## Word 骨架\n- 无法读取 docx 细节；必须以上传的 paper.docx 作为模板底稿继续写作。\n"
+        raise ValueError("Word 模板解析失败") from exc
 
 
 def _has_format_requirement(text: str) -> bool:

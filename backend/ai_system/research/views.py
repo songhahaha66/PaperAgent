@@ -1,4 +1,5 @@
 """Shared read-only question, provenance and execution projections."""
+from services.file_services.workspace_layout import workspace_path
 import re
 from .store import digest
 from .domain import findings, experiment_scope, current_result_refs
@@ -300,7 +301,7 @@ def completed_work_status(root):
     from .store import ResearchStore
     import json
     from pathlib import Path
-    thread = Path(root) / '.system/graph_thread.json'
+    thread = workspace_path(Path(root), '.system/graph_thread.json')
     if not thread.is_file(): return 'paused'
     research_id = json.loads(thread.read_text())['thread_id']
     state = ResearchStore(root, research_id, read_only=True).snapshot() or {}

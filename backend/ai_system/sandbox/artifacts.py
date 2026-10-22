@@ -1,4 +1,6 @@
 """Publish captured execution files without promoting them to scientific evidence."""
+from services.file_services.file_helper import open_read
+from services.file_services.workspace_layout import workspace_path
 import shutil
 from copy import deepcopy
 from pathlib import Path, PurePosixPath
@@ -34,6 +36,32 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     return published
 
 
+def _copy_run_archive(source, target):
+    from .evidence import checksum
+    from services.file_services.workspace_layout import safe_join
+    import json
+    receipt = source / 'receipt.json'
+    existing = target / 'receipt.json'
+    def validate(directory):
+        data = json.loads((directory/'receipt.json').read_text())
+        for name, expected in data['files'].items():
+            if checksum(safe_join(directory,name)) != expected:
+                raise ValueError('运行归档完整性检查失败')
+    if existing.exists():
+        if not receipt.exists() or checksum(receipt) != checksum(existing):
+            raise ValueError('拒绝覆盖已归档运行的其他版本')
+        validate(source)
+        validate(target)
+        return
+    if receipt.exists():
+        validate(source)
+    if any(path.is_symlink() for path in source.rglob('*')):
+        raise ValueError('运行归档不允许符号链接')
+    shutil.copytree(source, target, dirs_exist_ok=True)
+    if receipt.exists():
+        validate(target)
+
+
 def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     """Single publication boundary; inherited runs keep their identity and location."""
     runs = source_fs._manifest.get('runs', {})
@@ -47,8 +75,11 @@ def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
             source = source_fs.run_dir(run_id)
             target = target_fs.run_dir(run_id)
             if source.exists():
-                shutil.copytree(source, target, dirs_exist_ok=True)
+                _copy_run_archive(source, target)
             target_fs._manifest.setdefault('runs', {})[run_id] = deepcopy(info)
+            for result_id, binding in source_fs._manifest.get('result_bindings', {}).items():
+                if binding['run_id'] == run_id:
+                    target_fs._manifest.setdefault('result_bindings', {})[result_id] = deepcopy(binding)
             changed = True
         if changed:
             target_fs._save_manifest()
@@ -58,7 +89,7 @@ def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
 def inherit_execution_files(source, target_fs, experiment_id):
     """Restore one execution's own runs and handoffs, retaining immutable IDs."""
     from services.file_services.workspace_fs import WorkspaceFS
-    manifest = source / 'manifest.json'
+    manifest = workspace_path(source, 'manifest.json')
     if not manifest.is_file(): return set()
     source_fs = WorkspaceFS(str(source))
     inventory = source_fs._manifest
@@ -79,7 +110,7 @@ def inherit_execution_files(source, target_fs, experiment_id):
             origin = source_fs.run_dir(run_id)
             if origin.exists():
                 if any(p.is_symlink() for p in origin.rglob('*')): raise ValueError('运行记录不允许符号链接')
-                shutil.copytree(origin, target_fs.run_dir(run_id), dirs_exist_ok=True)
+                _copy_run_archive(origin, target_fs.run_dir(run_id))
             target_fs._manifest['runs'][run_id] = deepcopy(info)
         # Materialize original paths from immutable snapshots, even if the
         # previous attempt no longer has a mutable working copy.
@@ -123,13 +154,7 @@ def publish_reference(source_fs, target_fs, item):
         if original.is_file() and hashlib.sha256(original.read_bytes()).hexdigest() == digest:
             item['path'] = 'outputs/research/' + run_id + '/' + rel.split('/artifacts/', 1)[1]
             return
-    # Compatibility for older results without an immutable run inventory.
-    dest = f"outputs/research/{run_id}/{source.name}"
-    target = target_fs.abs(dest)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, target)
-    target_fs.register_file(dest, kind='image', source_run=run_id)
-    item['path'] = dest
+    raise ValueError('引用缺少已归档运行产物，不能登记')
 
 
 def collect_references(ctx, subproblem_id, result):
@@ -169,21 +194,37 @@ def output_hashes(fs):
     paths += [p for p in fs.root.iterdir() if p.is_file() and not p.name.startswith('.') and
               p.name not in {'manifest.json','chat_history.json','chat_history.json.lock','paper.tex','paper.md','paper.pdf'}]
     for path in sorted(paths):
+        from services.file_services.workspace_layout import safe_join
+        path = safe_join(fs.root, path.relative_to(fs.root).as_posix())
         if path.is_symlink(): raise ValueError('输出不允许符号链接')
         if path.is_file() and '__pycache__' not in path.parts:
-            with path.open('rb') as stream:
+            with open_read(path) as stream:
                 result[fs.rel(path)] = hashlib.file_digest(stream, 'sha256').hexdigest()
     return result
 
 
-def capture_local_outputs(fs, run_id, before):
+def capture_local_outputs(fs, run_id, before, *, expected=None):
     saved = []
-    for path, checksum in output_hashes(fs).items():
-        if before.get(path) == checksum: continue
+    for path, checksum in (expected if expected is not None else output_hashes(fs)).items():
+        if expected is None and before.get(path) == checksum: continue
         target = fs.abs(f'runs/{run_id}/artifacts/{path}')
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(fs.abs(path), target)
+        from services.file_services.file_helper import atomic_write
+        from .evidence import checksum as file_hash
+        if target.exists():
+            if file_hash(target) != checksum:
+                raise ValueError('已归档运行产物版本冲突')
+        else:
+            atomic_write(target, lambda f: _copy_output(fs.abs(path), f))
+        if file_hash(target) != checksum:
+            target.unlink(missing_ok=True)
+            raise ValueError('归档期间产物发生变化，保留未完成状态')
         fs.register_run_artifact(run_id, path)
         fs.register_file(path, source_run=run_id, kind='code' if path.endswith('.py') else 'data')
         saved.append(path)
     return saved
+
+
+def _copy_output(path, target):
+    with open_read(path) as source:
+        shutil.copyfileobj(source, target)

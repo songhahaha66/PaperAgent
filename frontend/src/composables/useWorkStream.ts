@@ -172,7 +172,7 @@ export function useWorkStream(options: {
 
   // 检查并恢复正在进行的AI任务
   const checkAndResumeRunningTask = async () => {
-    if (isDisposed() || !authStore.token || !workId.value) return
+    if (isDisposed() || !authStore.token || !workId.value || currentWork.value?.architecture_version !== 2) return
 
     try {
       // 查询任务状态
@@ -393,7 +393,7 @@ export function useWorkStream(options: {
   }
   // Read one display history; comment messages are projected by the server.
   async function readChatHistory(throwOnError = false) {
-    if (isDisposed() || !authStore.token || !workId.value) return
+    if (isDisposed() || !authStore.token || !workId.value || currentWork.value?.architecture_version !== 2) return
 
     const generation = ++historyGeneration
     const requestedWork = workId.value

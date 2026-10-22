@@ -1,7 +1,7 @@
 """
 用户模板 → 论文章节结构
 
-上传模板时 services/file_services/template_contract.py 会在工作空间写一份模板契约（.system/template_contract.md），
+上传模板时 services/file_services/template_contract.py 会在工作空间写一份模板契约（template/contract.md），
 其中列出模板的标题骨架：Markdown 模板是 "- L2 第3行: 摘要"，Word 模板是 "- 第5段 [Heading 1]: 一、问题重述"。
 这里取出最上层的章节，按标题关键词对应到流水线的章节内容（摘要、问题重述……），对不上的记为模板自定义章节，
 写作时按模板标题单独撰写。章节顺序和标题都用模板的。

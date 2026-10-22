@@ -1,4 +1,5 @@
 """Issue-to-candidate bindings over existing issues, reviews and editor commands."""
+from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings
 import json
@@ -85,7 +86,7 @@ def context(store,issue_id):
         'section_revision':section['revision'] if section else None,'origin':origin}
     refs=list(issue.get('evidence_refs',[])) or (section.get('evidence_refs',[]) if section else [])
     evidence=[]
-    try:manifest=json.loads((store.root/'manifest.json').read_text()).get('runs',{})
+    try:manifest=json.loads((workspace_path(store.root, 'manifest.json')).read_text()).get('runs',{})
     except (OSError,ValueError):manifest={}
     for ref in dict.fromkeys(refs):
         row=state['artifacts'].get(ref)

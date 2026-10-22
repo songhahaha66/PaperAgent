@@ -1,4 +1,5 @@
 """Versioned views and recoveries over review_records, never a second queue store."""
+from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings
 import asyncio,json,time
@@ -231,7 +232,7 @@ async def _run_owned(store,stage,record,llm):
             row=next(r for r in records(store) if r['id']==proof[0])
             with store._transaction():
                 if intent_context(store,stage)!=context:raise ReviewSuperseded('结论审查完成时材料已变化')
-                path=store.root/'.system/consistency.json';temporary=path.with_suffix('.review-tmp')
+                path=workspace_path(store.root, '.system/consistency.json');temporary=path.with_suffix('.review-tmp')
                 temporary.write_text(json.dumps(row['result'],ensure_ascii=False));temporary.replace(path)
         finding_ids=_save_findings(store,stage,reports,context,proof[0])
         if reports:
@@ -244,7 +245,7 @@ async def _run_owned(store,stage,record,llm):
     except asyncio.CancelledError:
         cache.failed(record,RuntimeError('interrupted'),diagnostic={'reason':'worker_cancelled','recoverable':True},current_context=lambda:intent_context(store,stage));raise
     except Exception as exc:cache.failed(record,exc,current_context=lambda:intent_context(store,stage))
-    finally:trace.dump(store.root/f'.system/review-task-{record["id"]}-llm_calls.json')
+    finally:trace.dump(workspace_path(store.root, f'.system/review-task-{record["id"]}-llm_calls.json'))
 
 
 def start(store,stage,version,command_id,llm=None,*,model_factory=None):

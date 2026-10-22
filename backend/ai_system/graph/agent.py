@@ -5,6 +5,7 @@ PaperGraphAgent：状态图流水线的入口（构造参数 + async run），�
 - 仅在缺少必要信息时 interrupt；用户回复进入同一研究循环；
 - 恢复观察已提交成果与行动记录，由同一控制器选择下一步，不自动改写原目标。
 """
+from services.file_services.workspace_layout import workspace_path
 
 import json
 import asyncio
@@ -68,7 +69,7 @@ class PaperGraphAgent:
         self.codeagent_llm = codeagent_llm
         self.writer_llm = writer_llm
         self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
-        if (Path(self.workspace_dir)/'.system/research.sqlite').exists():
+        if (workspace_path(Path(self.workspace_dir), '.system/research.sqlite')).exists():
             from ..research.runtime import ResearchRuntime
             if ResearchRuntime(Path(self.workspace_dir)).policy()['compact_paper']:
                 self.options.setdefault('max_solver_steps',12)
@@ -78,7 +79,7 @@ class PaperGraphAgent:
     # ------------------------------------------------------------------
 
     def _thread_file(self) -> Path:
-        return Path(self.workspace_dir) / THREAD_PATH
+        return workspace_path(Path(self.workspace_dir), THREAD_PATH)
 
     def _load_thread(self) -> Optional[str]:
         path = self._thread_file()
@@ -127,7 +128,7 @@ class PaperGraphAgent:
                 raise ValueError('恢复操作不能新建研究')
             return await self.resume_failed()
         ctx = self._context()
-        checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
+        checkpoint = workspace_path(Path(self.workspace_dir), CHECKPOINT_PATH)
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         await self._emit("main_agent_start", f"开始执行: {user_input[:100]}")
         try:
@@ -188,7 +189,7 @@ class PaperGraphAgent:
             except Exception:
                 self._save_thread(research_id,'failed')
                 raise
-            finally:trace.dump(Path(self.workspace_dir)/'.system/planner_llm_calls.json')
+            finally:trace.dump(workspace_path(Path(self.workspace_dir), '.system/planner_llm_calls.json'))
             patch = propose_revision(snapshot, command_id, base_revision, change, scope, requirements)
             if source_issue:require_binding(store,source_issue,writing=False)
         store.apply_revision_command(command_id, base_revision, change, scope, patch,**issue_options)
@@ -216,7 +217,7 @@ class PaperGraphAgent:
         """从当前提交状态恢复；重新领取未验收任务，不回放历史结果。"""
         self._require_current_thread()
         ctx = self._context()
-        checkpoint = Path(self.workspace_dir) / CHECKPOINT_PATH
+        checkpoint = workspace_path(Path(self.workspace_dir), CHECKPOINT_PATH)
         thread_id = self._load_thread()
         if not thread_id or not checkpoint.exists():
             raise RuntimeError("没有可恢复的运行记录")
@@ -280,7 +281,7 @@ class PaperGraphAgent:
                         logger.warning("更新失败阶段状态失败", exc_info=True)
             raise
         finally:
-            trace.dump(Path(self.workspace_dir) / CALLS_PATH)
+            trace.dump(workspace_path(Path(self.workspace_dir), CALLS_PATH))
         self.last_result = self._result(ctx)
 
         interrupts = result.get("__interrupt__") or []

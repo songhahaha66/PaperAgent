@@ -62,7 +62,7 @@ const deadline = setTimeout(() => {
       'tdesign-vue-next': { MessagePlugin: { warning() {}, error() {}, info() {} } },
       '@/stores/auth': { useAuthStore: () => ({ token: 'test' }) },
       '@/lang/studio': { useStudioCopy: () => ({ ui: vue.ref({}), isZh: vue.ref(true) }) },
-      '@/api/workspace': { workspaceAPI: { getWork: async () => ({ status: 'completed' }) } },
+      '@/api/workspace': { workspaceAPI: { getWork: async () => ({ status: 'completed', architecture_version: 2 }) } },
       '@/api/chat': {
         WebSocketChatHandler: Socket,
         chatAPI: {
@@ -85,7 +85,7 @@ const deadline = setTimeout(() => {
     module.useWorkStream({
       session: {
         workId: vue.ref('work'),
-        currentWork: vue.ref({ status: 'in_progress' }),
+        currentWork: vue.ref({ status: 'in_progress', architecture_version: 2 }),
         researchSnapshot: vue.ref(null),
         applyWorkStatus() {},
         applyResearchSnapshot() {},

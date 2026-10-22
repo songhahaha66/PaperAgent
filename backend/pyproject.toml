@@ -41,7 +41,8 @@ dependencies = [
 
 [project.optional-dependencies]
 sandbox = [
-    "opensandbox-code-interpreter>=1.1.1",
+    "opensandbox-code-interpreter==1.1.1",
+    "opensandbox==1.1.1",
 ]
 
 [tool.uv.workspace]

@@ -33,8 +33,6 @@ class WorkspaceStructureManager:
             fs = WorkspaceFS(str(workspace_path))
             fs.init_structure()
 
-            for legacy in ("code", "outputs", "logs", "temp"):
-                (workspace_path / legacy).mkdir(parents=True, exist_ok=True)
 
             cls._create_workspace_files(workspace_path, work_id, template_id, output_mode)
 

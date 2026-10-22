@@ -15,7 +15,7 @@ def migrate_all():
     from database.database import SessionLocal
     from models.models import Project
     with SessionLocal() as db:
-        ids = [row[0] for row in db.query(Project.work_id)]
+        ids = [row[0] for row in db.query(Project.work_id).filter(Project.architecture_version == 2)]
     count = 0
     for project_id in ids:
         root = (get_workspaces_path() / project_id).resolve()

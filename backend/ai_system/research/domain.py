@@ -1,4 +1,5 @@
 """Question → experiment → artifact. Only ResearchStore owns research state."""
+from services.file_services.workspace_layout import workspace_path
 from itertools import chain
 
 SCHEMA_VERSION = 5
@@ -91,22 +92,21 @@ def register_execution_artifacts(state, root, execution):
     import hashlib
     import json
     aid=execution['attempt_id'];eid=execution['task_id']
-    workspace=root/'.system'/'attempts'/aid/'workspace'
-    manifest=workspace/'manifest.json'
+    workspace=root/'experiments'/aid/'workspace'
+    manifest=workspace_path(workspace, 'manifest.json')
     inventory=json.loads(manifest.read_text(encoding='utf-8')) if manifest.is_file() else {}
     inherited=set(inventory.get('inherited_runs', []))
     runs={rid: run for rid, run in inventory.get('runs', {}).items() if rid not in inherited}
     files=[]
     for run_id, run in runs.items():
         for kind, path in [('code',run.get('input')),('stdout',run.get('stdout')),('stderr',run.get('stderr'))]:
-            if path and (root/path).is_file():files.append((kind,path,run_id))
+            if path and workspace_path(workspace, path).is_file():files.append((kind,workspace.relative_to(root).as_posix()+'/'+path,run_id))
     for path in sorted((workspace/'outputs'/'intermediate').rglob('*')):
         meta=inventory.get('files', {}).get(path.relative_to(workspace).as_posix(), {})
         if path.is_file() and meta.get('source_run') not in inherited:
             files.append(('data',path.relative_to(root).as_posix(),meta.get('source_run') or ''))
     for kind,path,run_id in files:
-        target=(root/path).resolve()
-        if not target.is_relative_to(root):raise ValueError('实验产物超出项目目录')
+        target=workspace_path(root, path)
         ref='artifact:'+aid+':'+hashlib.sha256(path.encode()).hexdigest()[:16]
         payload={'id':ref,'kind':'text','subproblem':eid,'name':target.name,
                  'value':'','run_id':run_id,'path':path,'unit':'','description':''}

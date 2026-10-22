@@ -41,7 +41,7 @@ def test_all_workspace_operations_preserve_ownership(client, monkeypatch, method
     assert client.request(method, '/api/workspace/example' + path, **kwargs).status_code == expected
 
 def test_empty_paper_api_is_readable_before_research(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=7))
+    monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=7, architecture_version=2))
     monkeypatch.setattr(workspace.workspace_file_service, 'get_workspace_path', lambda _: tmp_path)
     response = client.get('/api/workspace/example/paper')
     assert response.status_code == 200

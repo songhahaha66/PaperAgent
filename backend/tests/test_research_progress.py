@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from services.file_services.workspace_layout import workspace_path
 from ai_system.graph.context import GraphContext
 from ai_system.research.control import public_snapshot
 from services.chat_services.research_session import research_snapshot
@@ -16,7 +17,7 @@ def test_delivery_progress_is_persisted_projected_and_read_only(tmp_path):
     store = make_store(tmp_path)
     for key in ("Q1", "Q2", "Q3"):
         finish(store, key)
-    (tmp_path / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research", "engine_version": "research-v3", "status": "running"}))
+    workspace_path(tmp_path, ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research", "engine_version": "research-v3", "status": "running"}))
     events = []
     class Stream:
         async def send_json_block(self, kind, content): events.append((kind, content))

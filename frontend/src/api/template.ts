@@ -28,8 +28,6 @@ export interface PaperTemplateUpdate {
   name?: string
   description?: string
   category?: string
-  output_format?: string // 添加输出格式字段
-  file_path?: string // 允许更新文件路径
   is_public?: boolean
 }
 

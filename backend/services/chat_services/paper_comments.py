@@ -3,6 +3,7 @@
 Request IDs deduplicate executions, not locations. Tool outputs commit before
 writing so a failed writing call can resume without repeating search/experiments.
 """
+from services.file_services.workspace_layout import workspace_path
 import json
 import asyncio
 import os
@@ -124,15 +125,16 @@ def finish(store, record, answer):
 
 def freeze_inputs(store, record, context):
     """Reuse the isolated comment workspace and freeze its inputs once."""
-    folder=store.root/'.system/paper-comment-runs'/record['id']
-    manifest=folder/'inputs.json'
+    folder=store.root/'experiments'/'paper-comments'/record['id']
+    from services.file_services.workspace_layout import workspace_path
+    manifest=workspace_path(folder, '.system/inputs.json')
     if not manifest.exists():
         names=dict.fromkeys([*context['input_files'],*[r['path'] for r in context['project']['files']],
             *[name for source in context['sources'] for name in source.get('paths',[])]])
         frozen=[]
         for name in names:
-            path=(store.root/name).resolve()
-            if not path.is_relative_to(store.root) or path.is_symlink() or not path.is_file() or path.stat().st_size>20_000_000:
+            path=workspace_path(store.root,name)
+            if not path.is_file() or path.stat().st_size>20_000_000:
                 raise ValueError('评论输入不存在或超出文件范围：'+name)
             target=folder/name;target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(path,target)
@@ -145,12 +147,12 @@ def cell_result(store, folder, run_id):
     from services.file_services.workspace_fs import WorkspaceFS
     fs=WorkspaceFS(str(folder));run=fs.get_run_info(run_id)
     prefix=folder.relative_to(store.root).as_posix()
-    return {'ok':run['status']=='success','run_id':run_id,
+    return {'ok':run['status']=='success' and run.get('evidence_archived',False),'run_id':run_id,
             'stdout':fs.read_text(run['stdout']) if run['stdout'] else '',
             'error':fs.read_text(run['stderr']) if run['stderr'] else '',
             'code_path':prefix+'/'+run['input'] if run['input'] else None,
             'stdout_path':prefix+'/'+run['stdout'] if run['stdout'] else None,
-            'inputs':json.loads((folder/'inputs.json').read_text())}
+            'inputs':json.loads(workspace_path(folder, '.system/inputs.json').read_text())}
 
 
 async def comment_agent(store, record, llm, context):
@@ -193,7 +195,7 @@ async def comment_agent(store, record, llm, context):
                 return ToolMessage(content=step['output'],tool_call_id=call['id'],name=call['name'],status='error' if step['state']=='failed' else 'success')
             if step:
                 manifest=ctx.fs._load_manifest()
-                completed=[rid for rid,r in manifest['runs'].items() if rid not in step['prior_runs'] and r['status'] in {'success','error'}]
+                completed=[rid for rid,r in manifest['runs'].items() if rid not in step['prior_runs'] and r['status'] in {'success','error'} and r.get('evidence_archived')]
                 if call['name']=='run_python' and completed:
                     step['result']=cell_result(store,folder,completed[-1])
                     step['output']=json.dumps(step['result'],ensure_ascii=False)
@@ -229,7 +231,7 @@ async def comment_agent(store, record, llm, context):
     try:
         tools=build_tools(ctx,None,runs,record=False)
         tools.append(StructuredTool.from_function(coroutine=propose_edits,handle_tool_error=True,handle_validation_error=str))
-        async with AsyncSqliteSaver.from_conn_string(str(store.root/'.system/graph.sqlite')) as saver:
+        async with AsyncSqliteSaver.from_conn_string(str(workspace_path(store.root, '.system/graph.sqlite'))) as saver:
             agent=create_agent(model=cap_output(llm,6000),tools=tools,system_prompt=SYSTEM,
                 response_format=ToolStrategy(CommentReply),checkpointer=saver,
                 middleware=[receipt,StepBudgetMiddleware(COMMENT_STEPS,2,'请根据已有实际输出完成回复，未核实的内容明确说明，不要重复已有计算。'),
@@ -296,7 +298,7 @@ def chat_history(root):
     import sqlite3
     from contextlib import closing
     from datetime import datetime, timezone
-    path=Path(root)/'.system/research.sqlite'
+    path=workspace_path(Path(root), '.system/research.sqlite')
     if not path.is_file():return []
     with closing(sqlite3.connect('file:'+str(path)+'?mode=ro',uri=True)) as db:
         db.execute('BEGIN')

@@ -3,6 +3,7 @@
 Scientific conclusions are reviewed against actual evidence, never inferred from
 text length, literal-number regexes or whether every registered figure is used.
 """
+from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings
 
@@ -188,7 +189,7 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
         import json
         from services.chat_services.paper_project import snapshot as source_snapshot, source_state
         state=source_state(ctx.research,state)
-        checked = json.loads((ctx.workspace/'.system/validation.json').read_text())
+        checked = json.loads((workspace_path(ctx.workspace, '.system/validation.json')).read_text())
         if checked.get('source_version') != source_snapshot(ctx.workspace)['version']:
             from ai_system.research.review_cache import ReviewSuperseded
             raise ReviewSuperseded('源码已更新，需重新检查当前正文')

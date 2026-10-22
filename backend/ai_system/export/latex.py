@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import List, Optional
 
 from .markdown_prep import run_command
+from ai_system.sandbox.commands import sandbox_operation
 
 TEMPLATE_PATH = Path(__file__).with_name("template.tex")
-BUILD_DIR = ".system/latex"
+BUILD_DIR = ".build/latex"
 COMPILE_TIMEOUT = 180
 
 
@@ -115,6 +116,7 @@ def source_diagnostics(workspace: Path, tex_name: str) -> List[dict]:
     return diagnostics
 
 
+@sandbox_operation
 async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResult:
     """One delivery gate for native source, compiler status and final references."""
     result = LatexResult(tex_path=tex_name, log_path=f'{BUILD_DIR}/compile.log')
@@ -140,8 +142,6 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
     if result.diagnostics:
         transcript.append('\n\n'.join(d['message']+'\n'+d['context'] for d in result.diagnostics))
         return finish('LaTeX 源码检查失败：'+summary())
-    if not shutil.which("xelatex"):
-        return finish('编译环境缺少 xelatex；源码已保存，未生成新 PDF')
     cmd = ["xelatex", "-no-shell-escape", "-file-line-error", "-interaction=nonstopmode", "-halt-on-error", f"-output-directory={BUILD_DIR}", tex_name]
     log_file = build / f"{stem}.log"
     log_file.unlink(missing_ok=True)
@@ -156,8 +156,6 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
             if iteration == 0:
                 aux = build / f"{stem}.aux"
                 if aux.exists() and r'\bibdata{' in aux.read_text(errors='replace'):
-                    if not shutil.which('bibtex'):
-                        return finish('编译环境缺少 bibtex，无法完成参考文献编译')
                     code, out, err = await run_command(['bibtex', f'{BUILD_DIR}/{stem}'], workspace, timeout=COMPILE_TIMEOUT)
                     result.exit_code = code
                     blg = build/f'{stem}.blg'
@@ -168,6 +166,7 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
                         return finish('参考文献编译失败：'+(summary() if result.diagnostics else biblog.strip()[:1200]))
     except Exception as exc:
         from ai_system.research.review_cache import error_detail
+        transcript.append(getattr(exc, 'sandbox_stdout', '') + '\n' + getattr(exc, 'sandbox_stderr', ''))
         if log_file.exists(): transcript.append(log_file.read_text(errors='replace'))
         return finish('编译进程未完成：'+error_detail(exc))
     result.diagnostics = compile_diagnostics(log)
@@ -178,7 +177,8 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
         return finish('xelatex 编译失败：'+(summary() if result.diagnostics else f'退出码 {result.exit_code}；'+log.strip()[:1200]))
 
     target = workspace / f"{stem}.pdf"
-    shutil.copyfile(pdf, target)
+    from services.file_services.file_helper import atomic_write
+    atomic_write(target, lambda f: f.write(pdf.read_bytes()))
     result.pdf_path = target.name
     pages = re.search(r"Output written on .*?\((\d+) pages?", log, re.DOTALL)
     result.pages = int(pages.group(1)) if pages else None

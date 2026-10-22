@@ -3,6 +3,7 @@
 A bare JSON file, an empty legacy result, or a gateway response alone is not
 sufficient. This module never constructs a model client or invokes a model.
 """
+from services.file_services.workspace_layout import workspace_path
 
 from .domain import experiment_report, experiment_design
 
@@ -109,14 +110,14 @@ async def migrate(store,model_id,*,apply=False):
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from ..graph.build import compile_graph
     ctx=context_from_store(store,model_id)
-    async with AsyncSqliteSaver.from_conn_string(str(store.root/'.system/graph.sqlite')) as saver:
+    async with AsyncSqliteSaver.from_conn_string(str(workspace_path(store.root, '.system/graph.sqlite'))) as saver:
         graph=compile_graph(saver)
         history=[cp async for cp in graph.aget_state_history({'configurable':{'thread_id':store.research_id}})]
-    saved=json.loads((store.root/'.system/consistency.json').read_text())
-    trace=json.loads((store.root/'.system/llm_calls.json').read_text())['calls']
+    saved=json.loads((workspace_path(store.root, '.system/consistency.json')).read_text())
+    trace=json.loads((workspace_path(store.root, '.system/llm_calls.json')).read_text())['calls']
     from .runtime import ResearchRuntime
     requests=ResearchRuntime(store.root,store.research_id).requests()
-    validation=json.loads((store.root/'.system/validation.json').read_text())
+    validation=json.loads((workspace_path(store.root, '.system/validation.json')).read_text())
     successes=[];failures=[]
     for post in history:
         pre=next((cp for cp in history if cp.config==post.parent_config),None)
