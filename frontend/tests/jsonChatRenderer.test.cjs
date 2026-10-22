@@ -54,7 +54,7 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   app.mount(host.root)
   await flush()
   const header = (id) =>
-    host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === `event-m1-${id}`)
+    host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === `event-m1-legacy-${id}`)
   assert.match(text(header(0)), /执行分析代码/)
   assert.doesNotMatch(text(header(0)), /Type:|call_exec_py|print/)
   assert.equal(header(0).props['aria-expanded'], false)

@@ -5,10 +5,13 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, Field
+from services.chat_services.conversation_timeline import ReplyWriter, TIMELINE, resolve_executions
 from sqlalchemy.orm import Session
 import asyncio
 import logging
 import json
+import sqlite3
 
 from database.database import get_db
 from auth.auth import get_current_user, verify_token
@@ -116,17 +119,17 @@ class ConnectionManager:
             await self._send_locked(work_id, {
                 'type': 'reconnect',
                 'message': '检测到正在进行的AI任务，正在恢复...',
-                'task_id': task.task_id, 'action': task.action,
+                'task_id': task.task_id, 'reply_id': task.reply_id, 'action': task.action,
             })
             outputs = task_manager.get_outputs_after(work_id, after_seq)
             logger.info(f"[RECONNECT] {task.task_id} 从 seq {after_seq} 补发 {len(outputs)} 条输出")
             for output in outputs:
-                key = 'content' if output.type == 'content' else 'block'
+                key = 'update' if output.type == 'reply_update' else 'content' if output.type == 'content' else 'block'
                 await self._send_locked(work_id, {'type': output.type, key: output.data}, output.seq)
             await self._send_locked(work_id, {
                 'type': 'reconnect_complete',
                 'message': '历史输出恢复完成，继续接收新输出...',
-                'task_id': task.task_id, 'action': task.action,
+                'task_id': task.task_id, 'reply_id': task.reply_id, 'action': task.action,
             })
 
     def is_connected(self, work_id: str) -> bool:
@@ -173,6 +176,33 @@ async def get_work_chat_history(
         "messages": messages,
         "context": context
     }
+
+
+class ExecutionReferences(BaseModel):
+    reply_id: str = Field(min_length=1, max_length=128)
+    segment_ids: list[str] = Field(max_length=100)
+
+
+@router.post('/work/{work_id}/execution-references')
+@route_guard
+async def get_execution_references(work_id: str, request: ExecutionReferences,
+                                   current_user_id: int = Depends(get_current_user),
+                                   db: Session = Depends(get_db)):
+    chat_service = ChatService(db)
+    session = chat_service.get_session_by_work_id(work_id, current_user_id)
+    if not session:
+        from services.data_services.crud import get_work
+        work = get_work(db, work_id)
+        if not work or work.created_by != current_user_id:
+            raise HTTPException(status_code=403, detail='无权限访问')
+    reply = next((m for m in chat_service.get_work_chat_history(work_id)
+                  if m.get('id') == request.reply_id and m.get('role') == 'assistant'), None)
+    if reply is None: raise HTTPException(status_code=404, detail='回复不存在')
+    try:
+        rows = await asyncio.to_thread(resolve_executions, get_workspace_path(work_id), reply, request.segment_ids)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=503, detail='执行记录暂不可用') from exc
+    return {'reply_id': request.reply_id, 'executions': rows}
 
 
 @router.get("/work/{work_id}/history/raw")
@@ -480,51 +510,67 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             db, chat_service, session = await loop.run_in_executor(None, init_message_processing)
 
-            # 创建流式回调
             class WebSocketStreamCallback(SimpleStreamCallback):
-                def __init__(self, work_id: str, chat_service: ChatService):
+                def __init__(self, work_id, chat_service):
                     super().__init__()
                     self.work_id = work_id
-                    self.chat_service = chat_service
-                    self.content = ""
-                    self.json_blocks = []
-                    logger.info(f"WebSocket回调初始化完成，work_id: {work_id}")
+                    self.writer = None
+                    self.queue = asyncio.Queue()
+                    self.sender = asyncio.create_task(self.send_updates())
+                    self.timer = None
+                    self.loop = asyncio.get_running_loop()
 
-                async def on_content(self, content: str):
-                    """实时发送流式内容到WebSocket"""
-                    self.content += content
-                    
-                    # 记录到任务管理器（用于断线重连恢复），带序号发给当前连接
-                    seq = task_manager.add_output(self.work_id, 'content', content)
-                    try:
-                        await manager.send(self.work_id, {'type': 'content', 'content': content}, seq)
+                @property
+                def json_blocks(self): return self.writer.reply['json_blocks']
 
-                        # 使用配置参数优化延迟
-                        from ai_system.config.async_config import AsyncConfig
-                        config = AsyncConfig.get_websocket_config()
-                        if len(content) > config["content_yield_threshold"]:
-                            await asyncio.sleep(config["content_yield_delay"])
-                    except Exception as e:
-                        logger.error(f"发送WebSocket内容失败: {e}")
+                def publish(self, update):
+                    # Called under ReplyWriter's lock, including from worker threads.
+                    # Assign replay seq synchronously; one FIFO consumer sends live deltas.
+                    current = task_manager.get_task(self.work_id)
+                    if not current or current.task_id != update['chat_task_id']: return
+                    if self.writer is not None:
+                        current.final_content = self.writer.reply['content']
+                        current.json_blocks = self.writer.reply['json_blocks'].copy()
+                    seq = task_manager.add_output(self.work_id, 'reply_update', update)
+                    self.loop.call_soon_threadsafe(self.queue.put_nowait,
+                        ({'type': 'reply_update', 'update': update, 'reply_id': update['reply_id']}, seq))
 
-                async def on_message_complete(self, role: str, content: str):
-                    """消息完成回调"""
-                    logger.debug(f"消息完成，角色: {role}, 长度: {len(content)}, JSON块数: {len(self.json_blocks)}")
+                async def send_updates(self):
+                    while True:
+                        payload, seq = await self.queue.get()
+                        try:
+                            current = task_manager.get_task(self.work_id)
+                            if self.writer and current and current.task_id == self.writer.reply['metadata']['chat_task_id']:
+                                await manager.send(self.work_id, payload, seq)
+                        finally: self.queue.task_done()
 
-                async def on_json_block(self, block: dict):
-                    """处理JSON格式的数据块"""
-                    active_task = task_manager.get_task(self.work_id)
-                    block = {**block, "schema_version": 1, "work_id": self.work_id,
-                             "task_id": active_task.task_id if active_task else None}
-                    if block.get('type') not in TRANSIENT_BLOCK_TYPES:
-                        self.json_blocks.append(block)
-                    # Stable identifiers travel with both live events and replay.
-                    seq = task_manager.add_output(self.work_id, 'json_block', block)
-                    try:
-                        await manager.send(self.work_id, {'type': 'json_block', 'block': block}, seq)
-                        logger.debug(f"发送JSON块: {block.get('type', 'unknown')}")
-                    except Exception as e:
-                        logger.error(f"发送JSON块失败: {e}")
+                async def flush_text(self):
+                    while True:
+                        await asyncio.sleep(0.5)
+                        self.writer.flush()
+
+                async def on_content(self, content):
+                    self.writer.text(content)
+
+                async def on_message_complete(self, role, content):
+                    self.writer.flush()
+
+                async def on_json_block(self, block):
+                    if block.get('type') in TRANSIENT_BLOCK_TYPES:
+                        # Invalidation payloads are never execution rows.
+                        with self.writer.lock:
+                            seq = task_manager.add_output(self.work_id, 'json_block', block)
+                            self.loop.call_soon_threadsafe(self.queue.put_nowait, ({'type': 'json_block', 'block': block}, seq))
+                    else:
+                        self.writer.block(block)
+
+                async def finalize(self, status, notice=None):
+                    if self.timer: self.timer.cancel()
+                    self.writer.finish(status, notice)
+                    # Publish callbacks queued with call_soon_threadsafe must enter FIFO first.
+                    await asyncio.sleep(0)
+                    await self.queue.join()
+                    self.sender.cancel()
 
             # 创建工作空间目录 - 使用统一路径配置
             workspace_dir = str(get_workspace_path(work_id))
@@ -549,8 +595,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             start_status = original_status if action == "ask" else "in_progress"
             if action != "ask":
                 await loop.run_in_executor(None, set_work_status, work_id, start_status)
-            await manager.send(work_id, {'type': 'start', 'message': '正在回答...' if action == "ask" else '开始研究...',
-                                         'task_id': task.task_id, 'action': action, 'work_status': start_status})
+
 
             # 创建支持多AI提供商的LLM处理器
             llm_handler = LLMHandler(
@@ -621,6 +666,13 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             await stream_manager.save_user_message(message_data['problem'])
             logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
 
+            ws_callback.writer = ReplyWriter(chat_service.history_manager, work_id, task.task_id,
+                                               workspace_dir, ws_callback.publish)
+            task.reply_id = ws_callback.writer.id
+            ws_callback.timer = asyncio.create_task(ws_callback.flush_text())
+            await manager.send(work_id, {'type': 'start', 'message': '正在回答...' if action == "ask" else '开始研究...',
+                                         'task_id': task.task_id, 'reply_id': task.reply_id, 'action': action, 'work_status': start_status})
+
             # 执行AI任务 - 使用异步任务避免阻塞
             try:
                 # 标记任务开始
@@ -628,11 +680,13 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
                 # 定义AI任务执行函数
                 async def run_ai_task():
+                    timeline_token = TIMELINE.set(ws_callback.writer)
                     try:
                         if action == "ask":
                             history = await loop.run_in_executor(
-                                None, chat_service.get_work_chat_history, work_id, 8,
+                                None, chat_service.get_work_chat_history, work_id, 9,
                             )
+                            history = [m for m in history if m.get('id') != ws_callback.writer.id][-8:]
                             from config.paths import get_workspace_path
                             from ai_system.research.runtime import budget_scope
                             with budget_scope(get_workspace_path(work_id)):
@@ -650,36 +704,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             await main_agent.run(graph_input, action='answer' if action in {'confirm', 'revise'} else 'run',
                                                  new_run=action == 'run' and snapshot.has_research)
                         
-                        # AI处理完成后，保存最终的AI消息
-                        # 使用新的数据库连接，避免长时间运行后连接断开的问题
-                        final_content = ws_callback.content.strip()
-                        
-                        def save_final_message():
-                            save_db = next(get_db())
-                            try:
-                                save_chat_service = ChatService(save_db)
-                                if ws_callback.json_blocks:
-                                    save_chat_service.add_json_card_message(
-                                        work_id,
-                                        "assistant",
-                                        final_content,
-                                        ws_callback.json_blocks,
-                                        {"system_type": "brain"}
-                                    )
-                                    logger.info(f"[PERSISTENCE] JSON卡片消息已保存，块数: {len(ws_callback.json_blocks)}")
-                                else:
-                                    save_chat_service.add_message(
-                                        work_id,
-                                        "assistant",
-                                        final_content,
-                                        {"system_type": "brain"}
-                                    )
-                                    logger.info(f"[PERSISTENCE] 普通文本消息已保存，长度: {len(final_content)}")
-                            finally:
-                                save_db.close()
-                        
-                        await loop.run_in_executor(None, save_final_message)
-
                         # 停在"确认建模方案"时工作是待确认，不是已完成
                         failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
                         solutions = (getattr(main_agent, 'last_result', None) or {}).get('solutions') or {}
@@ -693,12 +717,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                             except ValueError:
                                 logger.warning("研究快照暂不可读，保留任务完成状态: %s", work_id)
 
+                        await ws_callback.finalize('failed' if failed_blocks else 'completed')
+
                         # 标记任务完成
                         task_manager.complete_task(work_id)
                         
                         # 发送完成消息到前端（通过manager获取当前活跃连接）
                         try:
-                            await manager.send(work_id, {'type': 'complete', 'message': 'AI分析完成', 'work_status': work_status})
+                            await manager.send(work_id, {'type': 'complete', 'reply_id': ws_callback.writer.id, 'message': 'AI分析完成', 'work_status': work_status, 'reload_history': True})
                             logger.info(f"[COMPLETE] 完成消息已发送到前端: {work_id}")
                         except Exception as e:
                             logger.debug(f"发送完成消息失败: {e}")
@@ -710,43 +736,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         
                         task = task_manager.get_task(work_id)
                         interrupted_status = original_status if action == "ask" else ('paused' if task and task.cancel_reason == 'paused' else 'failed' if task and task.error else 'cancelled')
-                        # 取消时也保存已生成的内容
-                        partial_content = ws_callback.content.strip()
-                        partial_json_blocks = ws_callback.json_blocks
-                        
-                        if partial_content or partial_json_blocks:
-                            logger.info(f"[CANCELLED] 保存取消前已生成的内容")
-                            
-                            def save_cancelled_message():
-                                save_db = next(get_db())
-                                try:
-                                    save_chat_service = ChatService(save_db)
-                                    notices = {
-                                        'paused': "任务已暂停，进度已保存。可从断点继续。",
-                                        'failed': "任务意外中断，已有结果已保存。可从断点继续。",
-                                        'cancelled': "任务已取消，已有结果已保存。可从断点继续。",
-                                    }
-                                    cancel_notice = "\n\n---\n" + ("回复已停止。" if action == "ask" else notices[interrupted_status])
-                                    final_content = partial_content + cancel_notice
-                                    
-                                    if partial_json_blocks:
-                                        save_chat_service.add_json_card_message(
-                                            work_id, "assistant", final_content,
-                                            partial_json_blocks,
-                                            {"system_type": "brain", "status": interrupted_status}
-                                        )
-                                    else:
-                                        save_chat_service.add_message(
-                                            work_id, "assistant", final_content,
-                                            {"system_type": "brain", "status": interrupted_status}
-                                        )
-                                except Exception as save_error:
-                                    logger.error(f"[CANCELLED] 保存部分内容失败: {save_error}")
-                                finally:
-                                    save_db.close()
-                            
-                            await loop.run_in_executor(None, save_cancelled_message)
-                        
+                        notices = {'paused': '任务已暂停，进度已保存。可从断点继续。',
+                                   'failed': '任务意外中断，已有结果已保存。可从断点继续。',
+                                   'cancelled': '任务已取消，已有结果已保存。可从断点继续。'}
+                        await ws_callback.finalize('cancelled' if action == 'ask' else interrupted_status, '回复已停止。' if action == 'ask' else notices[interrupted_status])
+
                         if action != "ask":
                             await loop.run_in_executor(None, set_work_status, work_id, interrupted_status)
                         try:
@@ -757,44 +751,19 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     except Exception as e:
                         logger.error(f"AI任务执行失败: {e}")
 
-                        # 失败时也保存已生成的内容
-                        partial_content = ws_callback.content.strip()
-                        partial_json_blocks = ws_callback.json_blocks
-
-                        logger.info(f"[FAILED] 保存失败前已生成的内容")
-
-                        def save_failed_message():
-                            save_db = next(get_db())
-                            try:
-                                save_chat_service = ChatService(save_db)
-                                error_notice = "\n\n---\n回答失败，请重试。" if action == "ask" else f"\n\n---\n⚠️ *任务执行失败: {str(e)[:100]}*"
-                                final_content = partial_content + error_notice
-
-                                if partial_json_blocks:
-                                    save_chat_service.add_json_card_message(
-                                        work_id, "assistant", final_content,
-                                        partial_json_blocks,
-                                        {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
-                                    )
-                                else:
-                                    save_chat_service.add_message(
-                                        work_id, "assistant", final_content,
-                                        {"system_type": "brain", "status": "failed", "error": "answer_failed" if action == "ask" else str(e)}
-                                    )
-                            except Exception as save_error:
-                                logger.error(f"[FAILED] 保存部分内容失败: {save_error}")
-                            finally:
-                                save_db.close()
-
-                        await loop.run_in_executor(None, save_failed_message)
+                        await ws_callback.finalize('failed', '回答失败，请重试。' if action == 'ask' else '任务执行失败，已有结果已保存。可从断点继续。')
 
                         if action != "ask":
                             await loop.run_in_executor(None, set_work_status, work_id, 'failed')
                         task_manager.fail_task(work_id, str(e))
                         
                         # 通知前端（之前这里调用了不存在的方法，失败时前端会一直停在"生成中"）
-                        await manager.send(work_id, {'type': 'error', 'message': (str(e) if isinstance(e, ResearchContextPermissionError) else '回答失败，请重试') if action == 'ask' else f'AI处理失败: {str(e)}', 'work_status': original_status if action == 'ask' else 'failed'})
+                        await manager.send(work_id, {'type': 'error', 'reply_id': ws_callback.writer.id, 'reload_history': True, 'message': (str(e) if isinstance(e, ResearchContextPermissionError) else '回答失败，请重试') if action == 'ask' else '任务执行失败，已有记录已保存。', 'work_status': original_status if action == 'ask' else 'failed'})
                         raise
+                    finally:
+                        TIMELINE.reset(timeline_token)
+                        if ws_callback.timer: ws_callback.timer.cancel()
+                        ws_callback.sender.cancel()
 
                 ai_task = asyncio.create_task(run_ai_task())
                 task_manager.set_async_task(work_id, ai_task)

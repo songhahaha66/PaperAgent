@@ -48,6 +48,7 @@ class AITask:
     # 体积最大的 plan_updated 只保留最新一条
     outputs: list = field(default_factory=list)
     last_seq: int = 0
+    reply_id: Optional[str] = None
     # 最终内容
     final_content: str = ""
     json_blocks: list = field(default_factory=list)
@@ -204,6 +205,7 @@ class TaskManager:
             "has_task": True,
             "task_id": task.task_id,
             "action": task.action,
+            "reply_id": task.reply_id,
             "status": task.status.value,
             "message": task.message,
             "created_at": task.created_at,

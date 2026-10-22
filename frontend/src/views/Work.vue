@@ -114,6 +114,7 @@
                   <t-loading :text="ui.loading" />
                 </div>
                 <JsonChatRenderer
+                  :work-id="workId"
                   v-else
                   :messages="chatMessages"
                   :tasks="researchSnapshot?.experiments"

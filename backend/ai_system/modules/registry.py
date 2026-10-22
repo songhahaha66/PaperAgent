@@ -112,7 +112,7 @@ class ModuleRegistry:
                         if result.value.get('question_id'):execution['question_id']=result.value['question_id']
                         if result.value.get('experiment_id'):execution['experiment_id']=result.value['experiment_id']
                     if isinstance(result.value,dict) and result.value.get('research_blocked'):
-                        execution.update(status='failed',message=result.value.get('message'))
+                        execution.update(status='failed',error_type='ResearchBlocked',message=result.value.get('message'))
                     if span is not None:
                         span.end(outputs={'kind': result.kind, 'value': result.value})
         finally:

@@ -227,7 +227,7 @@ def build_tools(
         """读取工作区已有文本文件，不重跑计算；使用start/limit分段读取。"""
         if start < 0 or not 1 <= limit <= 24000:return '读取范围无效'
         from ai_system.research.views import activity
-        with activity(ctx,'read_file',subproblem_id) as operation:
+        with activity(ctx,'read_file',subproblem_id,display_file=path) as operation:
             operation['inputs']={'path':path,'start':start,'limit':limit}
             text=ctx.fs.read_text(path)
             operation['output']={'total_chars':len(text),'excerpt':text[start:start+limit]}
@@ -262,6 +262,9 @@ def build_tools(
             result = await kernel.execute(code)
             operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
                 output={'ok':result.ok,'run_id':result.run_id})
+            if not result.ok:
+                operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
+                                 message='执行超时，内核已重启。' if result.timed_out else result.error)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
         await ctx.events.emit(
             "paper_code",

@@ -235,6 +235,8 @@ def activity(ctx, capability, task_id=None, **links):
                 state=store._read(db)
                 state['activity']=[*state.get('activity',[]),item][-240:]
                 store._save(db,state,'activity_started',item)
+            from services.chat_services.conversation_timeline import execution_boundary
+            execution_boundary(store.root, store.research_id, 'activity', item)
             notify_runtime()
         try:
             yield item
@@ -252,4 +254,6 @@ def activity(ctx, capability, task_id=None, **links):
                     state=store._read(db)
                     state['activity']=[item if a['id']==item['id'] else a for a in state.get('activity',[])]
                     store._save(db,state,'activity_finished',item)
+                from services.chat_services.conversation_timeline import execution_boundary
+                execution_boundary(store.root, store.research_id, 'activity', item)
                 notify_runtime()

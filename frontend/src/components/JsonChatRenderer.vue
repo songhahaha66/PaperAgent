@@ -9,122 +9,103 @@
         >
           <template #content>
             <div class="chat-markdown">
-              <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
-              <template v-if="technicalReceipt(message)"
-                ><p>本次操作未完成。</p>
-                <details class="technical-receipt">
-                  <summary>查看当时的技术记录</summary>
-                  <MarkdownRenderer :content="getTextContent(message)" /></details
-              ></template>
-              <MarkdownRenderer
-                v-else-if="getTextContent(message)"
-                :content="getTextContent(message)"
-              />
-
-              <!-- 保留每次研究运行的过程记录 -->
-              <PaperPipelineCard
-                v-if="isPipelineMessage(getJsonBlocks(message))"
-                :blocks="getJsonBlocks(message)"
-                :tasks="index === messages.length - 1 ? tasks : undefined"
-                :streaming="message.isStreaming"
-                :external-status="!!snapshot?.has_research"
-                :superseded="index < messages.length - 1"
-                :can-confirm="
-                  index === messages.length - 1 &&
-                  workStatus === 'waiting' &&
-                  !message.isStreaming &&
-                  !confirmBusy
-                "
-                @confirm-plan="$emit('confirm-plan')"
-                @open-progress="$emit('open-progress')"
-              />
-
-              <div
-                v-for="context in getResearchContexts(message)"
-                :key="context.research_id || 'context'"
-                class="answer-sources"
-              >
-                <span>参考材料</span>
-                <button
-                  v-for="path in context.files"
-                  :key="path"
-                  :title="path"
-                  @click="$emit('open-file', path)"
-                >
-                  {{ researchSourceLabel(path, context.files) }}
-                </button>
-                <button
-                  v-for="id in context.result_ids || []"
-                  :key="id"
-                  @click="$emit('open-result', id)"
-                >
-                  {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
-                </button>
-              </div>
-
-              <!-- JSON 块内容（内部也用 Markdown 渲染） -->
-              <div
-                v-for="{ block, index: bIndex } in getEventBlocks(message)"
-                :key="bIndex"
-                class="json-block"
-                :class="`event-${eventKind(block)}`"
-              >
-                <button
-                  type="button"
-                  class="json-block-header"
-                  :aria-expanded="!isBlockCollapsed(message.id, bIndex, block)"
-                  :aria-controls="`event-${message.id}-${bIndex}`"
-                  @click="toggleBlock(message.id, bIndex, block)"
-                >
-                  <span class="header-text"
-                    >{{ eventTitle(block)
-                    }}<span v-if="eventKind(block) === 'error'"> · 需要处理</span></span
-                  >
-                  <span class="content-preview">{{ eventSummary(block) }}</span>
-                  <t-icon
-                    :name="
-                      isBlockCollapsed(message.id, bIndex, block) ? 'chevron-down' : 'chevron-up'
-                    "
-                    class="toggle-icon"
-                  />
-                </button>
-                <div
-                  :id="`event-${message.id}-${bIndex}`"
-                  class="json-block-content"
-                  v-if="!isBlockCollapsed(message.id, bIndex, block)"
-                >
-                  <MarkdownRenderer v-if="readableEvent(block)" :content="readableEvent(block)" />
-                  <p v-else>操作记录已保存。可在运行状态中查看相关步骤和产物。</p>
-                </div>
-                <div v-if="eventKind(block) !== 'normal'" class="event-actions">
-                  <button
-                    v-if="
-                      eventKind(block) === 'confirm' &&
-                      index === messages.length - 1 &&
-                      workStatus === 'waiting' &&
-                      !message.isStreaming &&
-                      !confirmBusy
-                    "
-                    type="button"
-                    @click="$emit('confirm-plan')"
-                  >
-                    继续研究
-                  </button>
-                  <button type="button" @click="$emit('open-progress')">查看运行状态</button>
-                </div>
-              </div>
+              <template v-for="group in timelineGroups(message)" :key="group.id">
+                <ConversationExecution
+                  v-if="group.execution"
+                  :reply-id="message.id"
+                  :group-id="group.id"
+                  :segments="group.segments"
+                  :work-id="workId"
+                  @file="$emit('open-file', $event)"
+                  @result="$emit('open-result', $event)"
+                />
+                <template v-else v-for="segment in group.segments" :key="segment.id">
+                  <MarkdownRenderer v-if="segment.type === 'text'" :content="segment.text" />
+                  <template v-else-if="segment.type === 'event'">
+                    <div v-if="segment.block.type === 'research_context'" class="answer-sources">
+                      <span>参考材料</span>
+                      <button
+                        v-for="path in sourceFiles(segment.block)"
+                        :key="path"
+                        @click="
+                          isResearchSource(path) ? $emit('open-progress') : $emit('open-file', path)
+                        "
+                      >
+                        {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
+                      </button>
+                      <button
+                        v-for="id in sourceResults(segment.block)"
+                        :key="id"
+                        @click="$emit('open-result', id)"
+                      >
+                        {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
+                      </button>
+                    </div>
+                    <MarkdownRenderer
+                      v-else-if="segment.block.type === 'main_agent_complete'"
+                      :content="readableEvent(segment.block)"
+                    />
+                    <div v-else class="json-block" :class="`event-${eventKind(segment.block)}`">
+                      <button
+                        type="button"
+                        class="json-block-header"
+                        :aria-expanded="!isBlockCollapsed(message.id, segment.id, segment.block)"
+                        :aria-controls="`event-${message.id}-${segment.id}`"
+                        @click="toggleBlock(message.id, segment.id, segment.block)"
+                      >
+                        <span class="header-text"
+                          >{{ eventTitle(segment.block)
+                          }}<span v-if="eventKind(segment.block) === 'error'">
+                            · 需要处理</span
+                          ></span
+                        >
+                        <span class="content-preview">{{ eventSummary(segment.block) }}</span>
+                        <t-icon
+                          :name="
+                            isBlockCollapsed(message.id, segment.id, segment.block)
+                              ? 'chevron-down'
+                              : 'chevron-up'
+                          "
+                        />
+                      </button>
+                      <div
+                        v-if="!isBlockCollapsed(message.id, segment.id, segment.block)"
+                        :id="`event-${message.id}-${segment.id}`"
+                        class="json-block-content"
+                      >
+                        <MarkdownRenderer
+                          v-if="readableEvent(segment.block)"
+                          :content="readableEvent(segment.block)"
+                        />
+                        <p v-else>操作记录已保存。</p>
+                      </div>
+                      <div v-if="eventKind(segment.block) !== 'normal'" class="event-actions">
+                        <button
+                          v-if="
+                            eventKind(segment.block) === 'confirm' &&
+                            index === messages.length - 1 &&
+                            workStatus === 'waiting' &&
+                            !message.isStreaming &&
+                            !confirmBusy
+                          "
+                          type="button"
+                          @click="$emit('confirm-plan')"
+                        >
+                          继续研究
+                        </button>
+                        <button type="button" @click="$emit('open-progress')">查看运行状态</button>
+                      </div>
+                    </div>
+                  </template>
+                </template>
+              </template>
+              <p v-if="message.metadata?.status === 'interrupted'" class="event-error">
+                本次回复已中断，已保存的内容保留。
+              </p>
             </div>
           </template>
         </ChatItem>
       </div>
-      <ResearchRuntime
-        v-if="snapshot?.has_research"
-        :snapshot="snapshot"
-        :work-status="workStatus"
-        compact
-        @progress="$emit('open-progress')"
-        @file="(path) => $emit('open-file', path)"
-      />
       <slot />
     </div>
   </div>
@@ -132,12 +113,12 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import ResearchRuntime from './ResearchRuntime.vue'
+import ConversationExecution from './ConversationExecution.vue'
+import { timelineGroups, type ConversationSegment } from '@/utils/conversationTimeline'
 import type { ResearchSnapshot } from '@/types/research'
 import { ChatItem } from '@tdesign-vue-next/chat'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
-import PaperPipelineCard from '@/components/PaperPipelineCard.vue'
-import { isPipelineMessage, isPaperEvent, asText, type PipelineBlock } from '@/utils/paperPipeline'
+type PipelineBlock = { type: string; content: unknown }
 
 // 定义消息类型
 interface ChatMessage {
@@ -148,40 +129,48 @@ interface ChatMessage {
   avatar: string
   isStreaming?: boolean
   json_blocks?: any[]
-  message_type?: 'text' | 'json_card'
+  message_type?: string
+  segments?: ConversationSegment[]
+  metadata?: { status?: string }
 }
 
 // Props
 interface Props {
   messages: ChatMessage[]
+  workId?: string
   confirmBusy?: boolean
   workStatus?: string
   tasks?: ResearchSnapshot['experiments']
   snapshot?: ResearchSnapshot | null
 }
 
-const props = defineProps<Props>()
-const technicalReceipt = (message: ChatMessage) =>
-  message.role !== 'user' &&
-  /EvidenceDecision|ResearchIntent|结构化输出.*失败|系统未能生成可执行的下一步操作|下一步操作准备失败/.test(
-    getTextContent(message),
-  )
+defineProps<Props>()
 defineEmits<{
   'open-file': [path: string]
   'open-progress': []
   'confirm-plan': []
   'open-result': [id: string]
 }>()
+const isResearchSource = (path: string) =>
+  ['research:feedback', 'research:consistency'].includes(path)
 const researchSourceLabel = (path: string, files: string[]) => {
+  if (path === 'research:feedback') return '校验问题'
+  if (path === 'research:consistency') return '结论审查'
   if (path === '.system/validation.json') return '校验问题'
   if (path === '.system/consistency.json') return '结论审查'
   if (path.startsWith('runs/'))
     return '执行输出 ' + (files.filter((p) => p.startsWith('runs/')).indexOf(path) + 1)
   return path.split('/').pop()
 }
-const getResearchContexts = (message: ChatMessage) =>
-  (message.json_blocks || []).filter((b) => b.type === 'research_context').map((b) => b.content)
+const sourceFiles = (block: PipelineBlock): string[] =>
+  (block.content as { files?: string[] })?.files || []
+const sourceResults = (block: PipelineBlock): string[] =>
+  (block.content as { result_ids?: string[] })?.result_ids || []
 const eventLabels: Record<string, [string, string]> = {
+  paper_confirm: ['研究需要你的输入', '请补充必要信息后继续。'],
+  paper_analysis: ['研究分析', '展开查看研究分析。'],
+  paper_stage: ['执行记录', '展开查看操作说明。'],
+  paper_phase: ['阶段记录', '展开查看操作说明。'],
   main: ['研究说明', '本次研究的说明。'],
   main_agent_start: ['开始研究', '已接收本次研究请求。'],
   main_agent_complete: ['本次操作结果', '本次操作已返回结果。'],
@@ -200,7 +189,6 @@ const eventLabels: Record<string, [string, string]> = {
   generate_figure: ['生成图表', '本次图表生成记录。'],
   confirm: ['研究需要你的输入', '请在输入框补充必要信息或说明研究调整。'],
 }
-const knownEvent = (block: PipelineBlock) => Object.hasOwn(eventLabels, block.type)
 const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {
   const content =
     block.content && typeof block.content === 'object'
@@ -215,7 +203,7 @@ const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {
   )
     return 'error'
   if (
-    block.type === 'confirm' ||
+    ['confirm', 'paper_confirm'].includes(block.type) ||
     ['waiting', 'needs_confirmation'].includes(String(content?.status))
   )
     return 'confirm'
@@ -238,31 +226,13 @@ const eventSummary = (block: PipelineBlock) =>
   (eventKind(block) === 'normal' ? '展开查看操作记录。' : '这条记录需要处理，请查看详情。')
 // Keep user choices keyed to message and event position while streaming appends content.
 const collapsedBlocks = ref<Map<string, boolean>>(new Map())
-const isBlockCollapsed = (messageId: string, blockIndex: number, block: PipelineBlock) =>
+const isBlockCollapsed = (messageId: string, blockIndex: string, block: PipelineBlock) =>
   collapsedBlocks.value.get(`${messageId}-${blockIndex}`) ?? eventKind(block) === 'normal'
-const toggleBlock = (messageId: string, blockIndex: number, block: PipelineBlock) =>
+const toggleBlock = (messageId: string, blockIndex: string, block: PipelineBlock) =>
   collapsedBlocks.value.set(
     `${messageId}-${blockIndex}`,
     !isBlockCollapsed(messageId, blockIndex, block),
   )
-const getEventBlocks = (message: ChatMessage) => {
-  const blocks = getJsonBlocks(message)
-  const pipeline = isPipelineMessage(blocks)
-  return blocks
-    .map((block, index) => ({ block, index }))
-    .filter(
-      ({ block }) =>
-        !pipeline ||
-        (!isPaperEvent(block) &&
-          ![
-            'main_agent_start',
-            'main_agent_complete',
-            'main_agent_error',
-            'research_activity',
-          ].includes(block.type)),
-    )
-}
-
 // 获取系统头像
 const getSystemAvatar = (message: ChatMessage) => {
   // 直接使用消息中的头像
@@ -306,89 +276,6 @@ const formatDateTime = (datetime: string) => {
     // 如果解析失败，返回原始字符串
     return datetime
   }
-}
-
-// 解析JSON块
-const parseJsonBlocks = (content: string) => {
-  const blocks: any[] = []
-  const lines = content.split('\n')
-  let currentBlock = ''
-  let inJsonBlock = false
-
-  for (const line of lines) {
-    if (line.trim().startsWith('{') && line.trim().endsWith('}')) {
-      // 单行JSON
-      try {
-        const block = JSON.parse(line.trim())
-        blocks.push(block)
-      } catch (e) {
-        // 不是有效的JSON，作为普通文本处理
-        if (!inJsonBlock) {
-          currentBlock += line + '\n'
-        }
-      }
-    } else if (line.trim().startsWith('{')) {
-      // 多行JSON开始
-      inJsonBlock = true
-      currentBlock = line + '\n'
-    } else if (line.trim().endsWith('}') && inJsonBlock) {
-      // 多行JSON结束
-      currentBlock += line
-      try {
-        const block = JSON.parse(currentBlock)
-        blocks.push(block)
-      } catch (e) {
-        // 解析失败，作为普通文本处理
-        currentBlock = ''
-      }
-      inJsonBlock = false
-      currentBlock = ''
-    } else if (inJsonBlock) {
-      // 多行JSON中间
-      currentBlock += line + '\n'
-    } else {
-      // 普通文本
-      currentBlock += line + '\n'
-    }
-  }
-
-  return { blocks, remainingText: currentBlock.trim() }
-}
-
-// 提取供渲染的纯文本 Markdown
-const getTextContent = (message: ChatMessage) => {
-  if (!message) return ''
-  // 对 assistant，如果有显式 json_blocks，则文本就是 content；
-  // 否则需要从 content 里解析掉 JSON，返回剩余文本。
-  if (message.role === 'assistant') {
-    if (message.json_blocks && message.json_blocks.length > 0) {
-      return message.content || ''
-    }
-    const { remainingText } = parseJsonBlocks(message.content || '')
-    return remainingText || ''
-  }
-  return message.content || ''
-}
-
-// 进度与文件变更事件由右侧面板展示，不进聊天卡片（历史记录里也会保存这些块）
-const HIDDEN_BLOCK_TYPES = new Set([
-  'plan_updated',
-  'file_changed',
-  'research_context',
-  'research_snapshot',
-  'research_state',
-])
-
-// 提取 JSON 块数组
-const getJsonBlocks = (message: ChatMessage) => {
-  if (!message) return [] as any[]
-  const blocks =
-    message.json_blocks && message.json_blocks.length > 0
-      ? message.json_blocks
-      : parseJsonBlocks(message.content || '').blocks
-  return blocks.filter(
-    (block) => block && typeof block === 'object' && !HIDDEN_BLOCK_TYPES.has(block.type),
-  )
 }
 </script>
 

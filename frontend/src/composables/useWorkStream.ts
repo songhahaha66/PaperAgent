@@ -4,6 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import { workspaceAPI } from '@/api/workspace'
 import { chatAPI, WebSocketChatHandler, type ChatMessage } from '@/api/chat'
 import type { ResearchAction, ResearchSnapshot } from '@/types/research'
+import { applyReplyUpdate } from '@/utils/conversationTimeline'
 import { researchHeadline } from '@/utils/researchProgress'
 import { useStudioCopy } from '@/lang/studio'
 import type { useWorkSession } from '@/composables/useWorkSession'
@@ -174,23 +175,24 @@ export function useWorkStream(options: {
         isStreaming.value = true
         runningAction.value = taskStatus.action || 'run'
 
-        // 创建AI回复消息框架
-        const aiMessageId = `reconnect_${Date.now()}`
+        // Bind the durable reply; replay revisions safely ignore already-loaded deltas.
+        const aiMessageId = taskStatus.reply_id || `reconnect_${Date.now()}`
         reconnectMessageId.value = aiMessageId
-
-        const aiMessage: ChatMessageDisplay = {
-          id: aiMessageId,
-          role: 'assistant' as const,
-          content: '',
-          datetime: taskStatus.started_at
-            ? new Date(taskStatus.started_at * 1000).toLocaleString()
-            : '',
-          avatar: ASSISTANT_AVATAR,
-          isStreaming: true,
-          json_blocks: [],
-          message_type: 'json_card' as const,
-        }
-        chatMessages.value.push(aiMessage)
+        const existing = chatMessages.value.find((m) => m.id === aiMessageId)
+        if (existing) existing.isStreaming = true
+        else
+          chatMessages.value.push({
+            id: aiMessageId,
+            role: 'assistant',
+            content: '',
+            datetime: taskStatus.started_at
+              ? new Date(taskStatus.started_at * 1000).toLocaleString()
+              : '',
+            avatar: ASSISTANT_AVATAR,
+            isStreaming: true,
+            segments: [],
+            message_type: 'timeline',
+          })
 
         // 建立WebSocket连接恢复流式输出
         await setupWebSocketForReconnect()
@@ -213,6 +215,17 @@ export function useWorkStream(options: {
     })
     handler.onMessage((data) => {
       if (isDisposed() || webSocketHandler.value !== handler) return
+      if (data.type === 'start' || data.type === 'reconnect') {
+        if (data.reply_id) {
+          const message = chatMessages.value.find((m) => m.id === messageId)
+          const durable = chatMessages.value.find((m) => m.id === data.reply_id)
+          if (message && !durable) message.id = data.reply_id
+          else if (message && durable && message !== durable)
+            chatMessages.value = chatMessages.value.filter((m) => m !== message)
+          messageId = data.reply_id
+          reconnectMessageId.value = messageId
+        }
+      }
       if (data.type === 'start' || data.type === 'auth_success') {
         applyWorkStatus(data.work_status)
         if (data.action) runningAction.value = data.action
@@ -268,11 +281,23 @@ export function useWorkStream(options: {
   const handleStreamMessage = (data: any, messageId: string) => {
     if (isDisposed()) return
     applyWorkStatus(data.work_status)
-    const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
+    const messageIndex = chatMessages.value.findIndex(
+      (m) => m.id === (data.update?.reply_id || data.reply_id || messageId),
+    )
     if (messageIndex === -1) return
 
     const currentMessage = chatMessages.value[messageIndex]
     if (!currentMessage) return
+
+    if (data.type === 'reply_update') {
+      chatMessages.value[messageIndex] = {
+        ...applyReplyUpdate(currentMessage, data.update),
+        message_type: 'timeline',
+        isStreaming: data.update.status === 'running',
+      }
+      scrollToBottom()
+      return
+    }
 
     switch (data.type) {
       case 'content':
@@ -312,7 +337,7 @@ export function useWorkStream(options: {
         }
         isStreaming.value = false
         reconnectMessageId.value = null
-        if (data.reload_history) loadChatHistory()
+        void loadChatHistory()
         connectionState.value = 'idle'
         // Refresh the authoritative evidence after research and after reconnect.
         loadResearchSnapshot()
@@ -327,6 +352,7 @@ export function useWorkStream(options: {
         }
         isStreaming.value = false
         reconnectMessageId.value = null
+        void loadChatHistory()
         loadResearchSnapshot()
         break
     }
@@ -358,7 +384,14 @@ export function useWorkStream(options: {
       if (isDisposed() || generation !== historyGeneration) return
       const hadPendingPaper = chatMessages.value.some((m) => m.paper_execution && m.isStreaming)
       // 转换消息格式
+      const live = new Map(
+        chatMessages.value
+          .filter((m) => m.isStreaming && m.metadata?.reply_id)
+          .map((m) => [m.id, m]),
+      )
       chatMessages.value = historyData.messages.map((msg, index) => {
+        const newer = live.get(msg.id)
+        if (newer && (newer.metadata?.revision || 0) > (msg.metadata?.revision || 0)) return newer
         return {
           id: msg.id || `msg_${index}`,
           role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
@@ -366,13 +399,20 @@ export function useWorkStream(options: {
           datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
           avatar: getAvatarByRole(msg.role),
           json_blocks: msg.json_blocks || [],
+          segments: msg.segments,
+          metadata: msg.metadata,
           message_type: msg.message_type || 'text',
           paper_execution: msg.paper_execution,
           isStreaming:
-            msg.role === 'assistant' && ['pending', 'running'].includes(msg.paper_execution?.state),
+            msg.role === 'assistant' &&
+            (['pending', 'running'].includes(msg.paper_execution?.state) ||
+              msg.metadata?.status === 'running'),
         }
       })
 
+      for (const message of live.values()) {
+        if (!chatMessages.value.some((m) => m.id === message.id)) chatMessages.value.push(message)
+      }
       schedulePaperHistory()
       if (hadPendingPaper && !chatMessages.value.some((m) => m.paper_execution && m.isStreaming)) {
         await Promise.all([loadWorkspaceFiles(), loadResearchSnapshot()])

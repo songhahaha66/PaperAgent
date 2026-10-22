@@ -107,6 +107,15 @@ class ChatService:
         from pathlib import Path
         from .paper_comments import chat_history
         messages=self.history_manager.get_messages(work_id)
+        from .task_manager import task_manager
+        task = task_manager.get_task(work_id)
+        for index, reply in enumerate(messages):
+            metadata = reply.get('metadata', {})
+            if metadata.get('reply_id') and metadata.get('status') == 'running':
+                active = task and task.task_id == metadata.get('chat_task_id') and not task_manager._is_stale(task) and (task.status.value in {'pending', 'running'} or task._async_task is not None)
+                if not active:
+                    recovered = self.history_manager.interrupt_reply(work_id, reply['id'], metadata['revision'])
+                    if recovered: messages[index] = recovered
         messages=messages+chat_history(Path(self.history_manager.workspace_base)/work_id)
         messages.sort(key=lambda m:(datetime.fromisoformat(m['timestamp'].replace('Z','+00:00')).timestamp() if m.get('timestamp') else 0,
                                     m['role']!='user',str(m.get('id',''))))

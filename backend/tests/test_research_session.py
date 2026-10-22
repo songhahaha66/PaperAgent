@@ -17,6 +17,8 @@ from services.chat_services.research_session import (
     research_snapshot, resolve_action, answer_research_question, scoped_snapshot, infer_question_scope,
 )
 from ai_system.judge.base import Answers, ChoiceAnswer
+from services.chat_services.chat_history_manager import ChatHistoryManager
+from services.chat_services.chat_service import ChatService as DurableChatService
 
 
 class ReadOnlyChoice:
@@ -145,15 +147,24 @@ def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp
 @pytest.fixture
 def web(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
-    seed(tmp_path)
+    root = tmp_path / 'work'
+    root.mkdir()
+    seed(root)
     work = SimpleNamespace(created_by=7, status="completed", template_id=None, output_mode="markdown")
     calls, saved, statuses = [], [], []
-    class Service:
-        def __init__(self, db): pass
-        def create_or_get_work_session(self, *args): return SimpleNamespace(session_id="main")
-        def get_work_chat_history(self, *args): return [{"role": "user", "content": "原问题"}]
-        def add_message(self, *args, **kwargs): saved.append(args)
-        def add_json_card_message(self, *args, **kwargs): saved.append(args)
+    class ObservedHistory(ChatHistoryManager):
+        def upsert_reply(self, work_id, reply):
+            super().upsert_reply(work_id, reply)
+            # Capture actual committed checkpoints, not obsolete terminal save calls.
+            saved.append(json.loads(json.dumps(reply)))
+    history = ObservedHistory(str(tmp_path))
+    history.save_message('work', 'user', '原问题')
+    class Service(DurableChatService):
+        def __init__(self, db):
+            self.db_session = db
+            self.history_manager = history
+        def create_or_get_work_session(self, work_id, *args):
+            return SimpleNamespace(session_id=f'{work_id}_main_session')
     class Model:
         async def astream(self, messages):
             calls.append(("ask", messages))
@@ -170,8 +181,8 @@ def web(monkeypatch, tmp_path):
         async def resume_failed(self):
             calls.append(("resume", None))
             await self.stream.send_json_block("main_agent_complete", "已恢复")
-    monkeypatch.setattr('services.chat_services.chat_history_manager.ChatHistoryManager.get_messages',
-        lambda *args: [{'role':'user','content':'原问题'}])
+    monkeypatch.setattr('services.chat_services.chat_history_manager.get_workspaces_path', lambda: tmp_path)
+    monkeypatch.setattr('config.paths.get_workspace_path', lambda _: root)
     monkeypatch.setattr(chat, "verify_token", lambda token: 7)
     monkeypatch.setattr(chat, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr("services.data_services.crud.get_work", lambda *args: work)
@@ -181,10 +192,10 @@ def web(monkeypatch, tmp_path):
     monkeypatch.setattr("services.data_services.crud.update_work_status", update)
     monkeypatch.setattr(chat, "ChatService", Service)
     monkeypatch.setattr(chat, "PaperGraphAgent", Agent)
-    monkeypatch.setattr(chat, "get_workspace_path", lambda work_id: tmp_path)
+    monkeypatch.setattr(chat, "get_workspace_path", lambda work_id: root)
     monkeypatch.setattr(chat, "LLMHandler", lambda **kwargs: SimpleNamespace(get_llm_instance=lambda: Model()))
     monkeypatch.setattr(chat, "setup_environment_from_db", lambda *args: SimpleNamespace(
-        get_workspace_dir=lambda: str(tmp_path), config_manager=SimpleNamespace(get_model_config=lambda *args: SimpleNamespace(base_url="https://api.deepseek.com/v1") if args[0] == "brain" else None),
+        get_workspace_dir=lambda: str(root), config_manager=SimpleNamespace(get_model_config=lambda *args: SimpleNamespace(base_url="https://api.deepseek.com/v1") if args[0] == "brain" else None),
     ))
     chat.task_manager._tasks.clear()
     app = FastAPI()
@@ -192,7 +203,7 @@ def web(monkeypatch, tmp_path):
     app.dependency_overrides[get_current_user] = lambda: 7
     app.dependency_overrides[get_db] = lambda: None
     with TestClient(app) as client:
-        yield client, work, calls, statuses, saved, tmp_path
+        yield client, work, calls, statuses, saved, root
     chat.task_manager._tasks.clear()
 
 
@@ -210,23 +221,57 @@ def exchange(client, payload):
         return events
 
 
+
+def research_files(root):
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*')
+            if p.is_file() and p.relative_to(root).as_posix() not in {'chat_history.json', 'chat_history.json.lock'}}
+
+
+def durable_reply(root, reply_id, status):
+    messages = json.loads((root / 'chat_history.json').read_text())['messages']
+    replies = [m for m in messages if m['role'] == 'assistant']
+    assert len(replies) == 1, 'checkpoints and terminal saves must upsert the same reply'
+    reply = replies[0]
+    assert reply['id'] == reply_id == reply['metadata']['reply_id']
+    assert reply['metadata']['status'] == status
+    assert reply['message_type'] == 'timeline' and reply['metadata']['chat_task_id']
+    assert messages[0]['content'] == '原问题', 'incremental updates preserve previous history'
+    return reply
+
+
+def receive_until(ws, predicate):
+    events = []
+    for _ in range(30):
+        event = ws.receive_json()
+        events.append(event)
+        if predicate(event): return events
+        assert event['type'] != 'error', event
+    pytest.fail('expected durable reply update or terminal event was not received')
+
 def test_websocket_followup_never_constructs_graph_or_changes_research_status(web, monkeypatch):
     judge=ReadOnlyChoice()
     monkeypatch.setattr('ai_system.judge.JevJudge', lambda **kwargs: judge)
     monkeypatch.setattr('ai_system.config.environment.DatabaseConfigManager.get_model_config',
         lambda *args: SimpleNamespace(model_id='offline', api_key='unused', base_url='https://example.test/v1', timeout_seconds=30))
     client, work, calls, statuses, saved, root = web
-    original = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    original = research_files(root)
     events = exchange(client, {"problem": "解释 Q1 的结果", "subproblem_id": "Q1"})
     assert judge.close_calls==1
     assert events[0]["action"] == "ask"
     assert events[-1]["work_status"] == "completed"
     assert [name for name, _ in calls] == ["ask"]
     assert statuses == [] and work.status == "completed"
-    context = next(e["block"] for e in events if e["type"] == "json_block")
-    assert context["work_id"] == "work" and context["task_id"] == events[0]["task_id"] and context["schema_version"] == 1
-    assert any("research_context" in str(args) for args in saved)
-    assert original == {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    context_update = next(e['update'] for e in events if e['type'] == 'reply_update' and
+                          any(segment.get('block', {}).get('type') == 'research_context' for segment in e['update']['segments']))
+    context = next(segment['block']['content'] for segment in context_update['segments']
+                   if segment.get('block', {}).get('type') == 'research_context')
+    assert context['work_id'] == 'work' and context['schema_version'] == 1
+    assert context_update['chat_task_id'] == events[0]['task_id']
+    reply = durable_reply(root, events[0]['reply_id'], 'completed')
+    assert context_update['reply_id'] == reply['id']
+    assert reply['content'] == '已有数值是 0.82 [R1]'
+    assert 'research_context' in str(saved[-1]['segments'])
+    assert original == research_files(root), 'conversation checkpoints must not mutate research evidence'
 
 
 @pytest.mark.parametrize("action,expected", [("run", "run"), ("resume", "resume"), ("confirm", "run"), ("revise", "run")])
@@ -247,6 +292,10 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     evidence = next(e["block"]["content"] for e in events if e["type"] == "json_block" and e["block"]["type"] == "research_snapshot")
     assert evidence["results"][0]["run_id"] == "run_one"
     assert statuses == ["in_progress", "completed"]
+    reply = durable_reply(root, events[0]['reply_id'], 'completed')
+    assert reply['metadata']['chat_task_id'] == events[0]['task_id']
+    assert any(segment.get('block', {}).get('type') == 'main_agent_complete' for segment in reply['segments'])
+    assert saved[0]['id'] == saved[-1]['id'] == reply['id']
 
 
 def test_snapshot_api_checks_ownership_before_reading_files(web):
@@ -316,6 +365,9 @@ def test_question_failure_preserves_research_status_and_hides_provider_error(web
     assert "provider-secret" not in json.dumps(events)
     assert not statuses and work.status == "completed"
     assert (root / "paper.md").read_text() == "# 研究\n已有报告，不得改写"
+    reply = durable_reply(root, events[0]['reply_id'], 'failed')
+    assert '回答失败，请重试' in reply['content']
+    assert 'provider-secret' not in json.dumps(reply)
 
 
 def test_asking_about_waiting_plan_does_not_confirm_or_redesign(web, monkeypatch):
@@ -344,14 +396,23 @@ def test_stopping_reply_saves_partial_answer_without_pausing_the_completed_resea
         ws.send_json({"token": "test"})
         assert ws.receive_json()["type"] == "auth_success"
         ws.send_json({"problem": "解释结果", "action": "ask"})
-        assert ws.receive_json()["type"] == "start"
-        assert ws.receive_json()["block"]["type"] == "research_context"
-        assert ws.receive_json()["content"] == "已有结果"
+        start = ws.receive_json()
+        assert start['type'] == 'start'
+        partial = receive_until(ws, lambda event: event['type'] == 'reply_update' and
+                                any(s.get('type') == 'text' and s.get('text') == '已有结果' for s in event['update']['segments']))
+        assert any(s.get('block', {}).get('type') == 'research_context'
+                   for e in partial if e['type'] == 'reply_update' for s in e['update']['segments'])
+        running = durable_reply(root, start['reply_id'], 'running')
+        assert running['content'] == '已有结果'
         response = client.post("/api/chat/work/work/pause")
         assert response.json() == {"work_status": "completed"}
-        assert ws.receive_json()["work_status"] == "completed"
+        terminal = receive_until(ws, lambda event: event['type'] == 'complete')[-1]
+        assert terminal['work_status'] == 'completed' and terminal['reload_history']
     assert not statuses and work.status == "completed"
-    assert any("回复已停止" in str(args) for args in saved)
+    reply = durable_reply(root, start['reply_id'], 'cancelled')
+    assert reply['content'].startswith('已有结果') and '回复已停止' in reply['content']
+    assert any('已有结果' in item['content'] and item['metadata']['status'] == 'running' for item in saved)
+    assert saved[-1]['metadata']['status'] == 'cancelled'
 
 
 
@@ -405,3 +466,40 @@ def test_unversioned_history_is_read_only_and_cannot_enter_graph(tmp_path, actio
     assert asyncio.run(resolve_action("ask", "解释已有结果", snapshot)) == "ask"
     with pytest.raises(ValueError, match="不支持恢复"):
         asyncio.run(resolve_action(action, "继续", snapshot))
+
+
+@pytest.mark.parametrize('action', ['ask', 'run'])
+def test_normal_completion_sends_terminal_receipt_after_durable_final_checkpoint(web, monkeypatch, action):
+    """A persisted success must still send complete; missing receipts fail promptly.
+
+    In particular, the cancellation branch's local task variable must never be
+    read by the normal completion path. Observe the actual transport send before
+    reading the receipt so this regression cannot hang on a missing event.
+    """
+    from threading import Event
+    client, work, calls, statuses, saved, root = web
+    complete_sent = Event()
+    delivered = []
+    send = chat.manager.send
+    async def observe_send(work_id, payload, seq=None):
+        await send(work_id, payload, seq)
+        delivered.append(json.loads(json.dumps(payload)))
+        if payload.get('type') == 'complete': complete_sent.set()
+    monkeypatch.setattr(chat.manager, 'send', observe_send)
+    with client.websocket_connect('/api/chat/ws/work') as ws:
+        ws.send_json({'token':'test'})
+        assert ws.receive_json()['type'] == 'auth_success'
+        ws.send_json({'problem':'解释已有结果' if action == 'ask' else '重新研究', 'action':action})
+        start = ws.receive_json()
+        assert start['type'] == 'start'
+        assert complete_sent.wait(5), 'normal success did not send its WebSocket completion receipt'
+        terminal = receive_until(ws, lambda event: event['type'] == 'complete')[-1]
+        assert terminal['reply_id'] == start['reply_id']
+        assert terminal['work_status'] == 'completed' and terminal['reload_history'] is True
+    final_updates = [event['update'] for event in delivered if event['type'] == 'reply_update'
+                     and event['update']['status'] == 'completed']
+    assert final_updates, 'completion must follow the authoritative terminal checkpoint'
+    reply = durable_reply(root, terminal['reply_id'], 'completed')
+    assert final_updates[-1]['reply_id'] == reply['id']
+    assert final_updates[-1]['revision'] == reply['metadata']['revision']
+    assert delivered[-1]['type'] == 'complete'

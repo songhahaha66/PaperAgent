@@ -9,9 +9,27 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import uuid
+import tempfile
+import threading
+import fcntl
+from contextlib import contextmanager
+from functools import wraps
 from config.paths import get_workspaces_path
 
 logger = logging.getLogger(__name__)
+
+
+_history_locks = {}
+_history_locks_guard = threading.Lock()
+
+
+def serialized_update(method):
+    """One read/modify/replace transaction, shared by all writers and processes."""
+    @wraps(method)
+    def update(self, work_id, *args, **kwargs):
+        with self._history_lock(work_id):
+            return method(self, work_id, *args, **kwargs)
+    return update
 
 
 class ChatHistoryManager:
@@ -36,8 +54,9 @@ class ChatHistoryManager:
                 return json.load(f)
         except Exception as e:
             logger.error(f"读取聊天记录失败 {work_id}: {e}")
-            return self._create_default_history(work_id)
+            raise
 
+    @serialized_update
     def save_message(self, work_id: str, role: str, content: str, metadata: Optional[Dict] = None):
         """保存新消息到JSON文件（兼容旧格式）"""
         history = self.get_work_history(work_id)
@@ -58,6 +77,7 @@ class ChatHistoryManager:
         logger.info(
             f"消息已保存 {work_id}: {role}, ID: {message['id']}, 时间: {timestamp}")
 
+    @serialized_update
     def save_json_card_message(self, work_id: str, role: str, content: str,
                                json_blocks: List[Dict] = None, metadata: Optional[Dict] = None):
         """保存JSON卡片格式的消息"""
@@ -82,6 +102,7 @@ class ChatHistoryManager:
         logger.info(
             f"JSON卡片消息已保存 {work_id}: {role}, ID: {message_id}, 块数: {len(json_blocks or [])}")
 
+    @serialized_update
     def add_json_block_to_message(self, work_id: str, message_id: str, json_block: Dict):
         """向指定消息添加JSON块"""
         history = self.get_work_history(work_id)
@@ -101,6 +122,7 @@ class ChatHistoryManager:
         logger.warning(f"未找到消息 {work_id}: {message_id}")
         return False
 
+    @serialized_update
     def update_context(self, work_id: str, context_updates: Dict):
         """更新工作上下文"""
         history = self.get_work_history(work_id)
@@ -120,6 +142,7 @@ class ChatHistoryManager:
             return messages[-limit:]  # 返回最新的limit条消息
         return messages
 
+    @serialized_update
     def clear_history(self, work_id: str):
         """清空聊天记录"""
         history = self._create_default_history(work_id)
@@ -151,11 +174,64 @@ class ChatHistoryManager:
         work_dir = os.path.join(self.workspace_base, work_id)
         os.makedirs(work_dir, exist_ok=True)
 
-        # 保存到文件
         history_file = self._get_history_file_path(work_id)
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=work_dir,
+                                             prefix='.chat_history-', delete=False) as f:
+                temporary = f.name
+                json.dump(history, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, history_file)
+            directory = os.open(work_dir, os.O_RDONLY)
+            try: os.fsync(directory)
+            finally: os.close(directory)
+        finally:
+            if temporary and os.path.exists(temporary): os.unlink(temporary)
 
+    @contextmanager
+    def _history_lock(self, work_id):
+        path = os.path.abspath(self._get_history_file_path(work_id))
+        with _history_locks_guard:
+            lock = _history_locks.setdefault(path, threading.RLock())
+        with lock:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + '.lock', 'a') as guard:
+                fcntl.flock(guard, fcntl.LOCK_EX)
+                try: yield
+                finally: fcntl.flock(guard, fcntl.LOCK_UN)
+
+    @serialized_update
+    def upsert_reply(self, work_id, reply):
+        history = self.get_work_history(work_id)
+        messages = history.setdefault('messages', [])
+        for index, message in enumerate(messages):
+            if message.get('id') == reply['id']:
+                if message.get('metadata', {}).get('revision', 0) > reply['metadata']['revision']:
+                    return
+                messages[index] = reply
+                break
+        else:
+            messages.append(reply)
+        self._save_history(work_id, history)
+
+    @serialized_update
+    def interrupt_reply(self, work_id, reply_id, expected_revision):
+        history = self.get_work_history(work_id)
+        for reply in history.get('messages', []):
+            metadata = reply.get('metadata', {})
+            if reply.get('id') != reply_id or metadata.get('status') != 'running' or metadata.get('revision') != expected_revision:
+                continue
+            metadata.update(status='interrupted', revision=expected_revision + 1)
+            for segment in reply.get('segments', []):
+                item = segment.get('execution')
+                if item and not item.get('finished_at'): item['status'] = 'interrupted'
+            self._save_history(work_id, history)
+            return reply
+        return None
+
+    @serialized_update
     def migrate_old_format(self, work_id: str):
         """迁移旧格式的聊天记录到新格式"""
         history = self.get_work_history(work_id)
@@ -169,12 +245,12 @@ class ChatHistoryManager:
         new_messages = []
 
         for msg in old_messages:
-            # 解析内容中的JSON块
-            json_blocks = self._extract_json_blocks_from_content(
-                msg.get("content", ""))
+            # Only explicit historical blocks are protocol; preserve all prose.
+            json_blocks = msg.get("json_blocks", [])
 
             new_msg = {
-                "id": str(uuid.uuid4()),  # 生成新的UUID
+                **msg,
+                "id": msg.get("id") or str(uuid.uuid4()),
                 "role": msg.get("role", "assistant"),
                 "content": msg.get("content", ""),
                 "timestamp": msg.get("timestamp", ""),
@@ -190,38 +266,3 @@ class ChatHistoryManager:
 
         self._save_history(work_id, history)
         logger.info(f"聊天记录格式迁移完成 {work_id}: {len(new_messages)} 条消息")
-
-    def _extract_json_blocks_from_content(self, content: str) -> List[Dict]:
-        """从内容中提取JSON块"""
-        json_blocks = []
-        lines = content.split('\n')
-        current_block = ''
-        in_json_block = False
-
-        for line in lines:
-            if line.strip().startswith('{') and line.strip().endswith('}'):
-                # 单行JSON
-                try:
-                    block = json.loads(line.strip())
-                    json_blocks.append(block)
-                except:
-                    pass
-            elif line.strip().startswith('{'):
-                # 多行JSON开始
-                in_json_block = True
-                current_block = line + '\n'
-            elif line.strip().endswith('}') and in_json_block:
-                # 多行JSON结束
-                current_block += line
-                try:
-                    block = json.loads(current_block)
-                    json_blocks.append(block)
-                except:
-                    pass
-                in_json_block = False
-                current_block = ''
-            elif in_json_block:
-                # 多行JSON中间
-                current_block += line + '\n'
-
-        return json_blocks

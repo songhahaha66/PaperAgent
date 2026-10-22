@@ -19,6 +19,8 @@ from database.database import get_db
 from models.models import Base, ModelConfig
 from routers.config_routes import model_config as configs
 from routers.chat_routes import chat
+from services.chat_services.chat_service import ChatService as DurableChatService
+from services.chat_services.chat_history_manager import ChatHistoryManager
 
 
 @pytest.fixture
@@ -134,12 +136,15 @@ def test_connection_errors_never_return_provider_secrets(config_client,monkeypat
 
 def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeypatch,tmp_path):
     work = SimpleNamespace(created_by=7,status='created',template_id=None,output_mode='markdown')
-    saved = []
-    class ChatService:
-        def __init__(self,db): pass
-        def create_or_get_work_session(self,*args):return SimpleNamespace(session_id='main')
-        def add_message(self,*args,**kwargs):saved.append(args)
-        def add_json_card_message(self,*args,**kwargs):saved.append(args)
+    root = tmp_path / 'pause-test'
+    root.mkdir()
+    history = ChatHistoryManager(str(tmp_path))
+    class ChatService(DurableChatService):
+        def __init__(self,db):
+            self.db_session = db
+            self.history_manager = history
+        def create_or_get_work_session(self,work_id,*args):
+            return SimpleNamespace(session_id=f'{work_id}_main_session')
     class Agent:
         def __init__(self,llm,stream,*args,**kwargs):self.stream=stream
         async def run(self,problem,**kwargs):
@@ -151,9 +156,9 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
     monkeypatch.setattr('services.data_services.crud.update_work_status',lambda db,w,status:setattr(work,'status',status))
     monkeypatch.setattr(chat,'ChatService',ChatService)
     monkeypatch.setattr(chat,'PaperGraphAgent',Agent)
-    monkeypatch.setattr(chat,'get_workspace_path',lambda work_id:tmp_path)
+    monkeypatch.setattr(chat,'get_workspace_path',lambda work_id:root)
     monkeypatch.setattr(chat,'LLMHandler',lambda **kw:SimpleNamespace(get_llm_instance=lambda:None))
-    monkeypatch.setattr(chat,'setup_environment_from_db',lambda *a:SimpleNamespace(get_workspace_dir=lambda:str(tmp_path),config_manager=SimpleNamespace(get_model_config=lambda *a:None)))
+    monkeypatch.setattr(chat,'setup_environment_from_db',lambda *a:SimpleNamespace(get_workspace_dir=lambda:str(root),config_manager=SimpleNamespace(get_model_config=lambda *a:None)))
     manager = chat.task_manager
     manager._tasks.clear()
     app=FastAPI()
@@ -165,14 +170,30 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
             ws.send_json({'token':'test'})
             assert ws.receive_json()['type']=='auth_success'
             ws.send_json({'problem':'test','action':'run'})
-            assert ws.receive_json()['type']=='start'
-            assert ws.receive_json()['block']['type']=='paper_stage'
+            start = ws.receive_json()
+            assert start['type'] == 'start'
+            for _ in range(10):
+                event = ws.receive_json()
+                assert event['type'] == 'reply_update'
+                if any(s.get('block', {}).get('type') == 'paper_stage' for s in event['update']['segments']): break
+            else: pytest.fail('paper_stage checkpoint missing')
+            running = json.loads((root / 'chat_history.json').read_text())['messages'][-1]
+            assert running['id'] == start['reply_id'] and running['metadata']['status'] == 'running'
             response=client.post('/api/chat/work/pause-test/pause')
             assert response.json()=={'work_status':'paused'}
-            event=ws.receive_json()
-            assert event['type']=='complete' and event['work_status']=='paused'
+            for _ in range(10):
+                event = ws.receive_json()
+                if event['type'] == 'complete': break
+                assert event['type'] == 'reply_update'
+            else: pytest.fail('terminal pause receipt missing')
+            assert event['work_status']=='paused' and event['reload_history']
             assert work.status=='paused'
-            assert any('任务已暂停' in str(args) and 'paper_stage' in str(args) for args in saved)
+            messages = json.loads((root / 'chat_history.json').read_text())['messages']
+            replies = [message for message in messages if message['role'] == 'assistant']
+            assert len(replies) == 1 and replies[0]['id'] == start['reply_id']
+            assert replies[0]['metadata']['status'] == 'paused'
+            assert '任务已暂停' in replies[0]['content'] and 'paper_stage' in str(replies[0]['segments'])
+            assert any(message['role'] == 'user' and message['content'] == 'test' for message in messages)
         work.created_by=9
         assert client.post('/api/chat/work/pause-test/pause').status_code==403
     manager._tasks.clear()
