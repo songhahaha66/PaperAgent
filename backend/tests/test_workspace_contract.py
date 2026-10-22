@@ -313,3 +313,15 @@ def test_application_wide_version_gate(tmp_path,monkeypatch,version,path,expecte
     app.dependency_overrides[get_db]=lambda:object()
     with TestClient(app) as client:
         assert client.get(path,headers={'Authorization':'Bearer unit-test'}).status_code==expected
+
+
+def test_word_template_export_creates_scratch_before_pandoc(tmp_path,monkeypatch):
+    import ai_system.export.docx as module
+    root=tmp_path/'files'/'project';template=root/'template/original.docx';template.parent.mkdir(parents=True);template.write_bytes(b'template')
+    async def fake_pandoc(markdown,cwd,args):
+        assert (cwd/'.build').is_dir()
+        assert f'--reference-doc={template}' in args
+        (cwd/'.build/export.docx').write_bytes(b'new-docx')
+    monkeypatch.setattr(module,'pandoc',fake_pandoc)
+    result=asyncio.run(module.export_docx.__wrapped__(root,'# Title',template_docx=template))
+    assert result.reference=='template' and (root/'paper.docx').read_bytes()==b'new-docx'

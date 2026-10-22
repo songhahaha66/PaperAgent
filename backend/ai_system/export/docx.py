@@ -131,9 +131,12 @@ async def export_docx(
     workspace: Path, markdown: str, docx_name: str = "paper.docx", template_docx: Optional[Path] = None
 ) -> DocxResult:
     """在工作空间根目录转换（图片路径相对工作空间）"""
-    workspace = Path(workspace)
+    from services.file_services.workspace_layout import safe_join
+    workspace = Path(workspace).absolute()
+    safe_join(workspace, '.build').mkdir(parents=True, exist_ok=True)
     if template_docx is not None and Path(template_docx).exists():
-        reference, kind = Path(template_docx), "template"
+        relative = Path(template_docx).absolute().relative_to(workspace).as_posix()
+        reference, kind = safe_join(workspace, relative), "template"
     else:
         reference, kind = await build_default_reference(workspace), "default"
     args = ["-t", "docx", "-o", ".build/export.docx", "--shift-heading-level-by=-1", f"--reference-doc={reference}"]
