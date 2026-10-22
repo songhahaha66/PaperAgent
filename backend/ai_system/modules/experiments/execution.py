@@ -261,9 +261,22 @@ def build_tools(
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
         with activity(ctx,'run_python',subproblem_id,inputs={'code':code},display_label=' '.join(title.split())[:60]) as operation:
-            result = await kernel.execute(code)
+            import time
+            from ai_system.research.views import activity_progress
+            last_push = 0.0
+            async def progress(event):
+                nonlocal last_push
+                operation['run_id'] = event['run_id']
+                output = operation.setdefault('output', {})
+                if event['type'] == 'output':
+                    output['output_tail'] = (output.get('output_tail', '') + event['text'])[-6000:]
+                now = time.monotonic()
+                if event['type'] != 'output' or now - last_push >= 1:
+                    activity_progress(ctx, operation)
+                    last_push = now
+            result = await kernel.execute(code, on_event=progress)
             operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
-                output={'ok':result.ok,'run_id':result.run_id})
+                output={**operation.get('output', {}),'ok':result.ok,'run_id':result.run_id, 'files':result.files})
             if not result.ok:
                 operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
                                  message='执行超时，内核已重启。' if result.timed_out else result.error)

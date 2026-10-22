@@ -228,6 +228,16 @@ def worker_context(ctx, order):
     local.registry.results = dict(ctx.registry.results)
     local.registry.claims = dict(ctx.registry.claims)
     local.registry.allocate_id = ctx.research.allocate_ref
+    # Published figures use root-workspace paths, while a continued attempt's
+    # copied files still use their original attempt paths. Materialize the
+    # registered paths too, preserving references and execution provenance.
+    for result in local.registry.results.values():
+        if result.path:
+            source = ctx.fs.abs(result.path)
+            if source.is_file():
+                target = local.fs.abs(result.path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
     # Attempt-relative paths do not exist in the user's root workspace. Publish
     # their final paths only after the coordinator accepts the commit below.
     local.events.publish_files = False
@@ -344,4 +354,14 @@ async def execute(branch, runtime):
         return {"log": [f"attempt {key} failed: {exc}"], '_execution_outcome': {'status': 'failed', 'message': str(exc)}}
     finally:
         if local:
-            await local.kernels.close()
+            try:
+                # Code output is available even when later interpretation fails.
+                # Publication of a file does not accept the experiment's conclusions.
+                from ai_system.sandbox.artifacts import publish_run_files
+                _copy_tree(local.workspace / 'runs', ctx.workspace / 'runs')
+                ctx.fs._manifest.setdefault('runs', {}).update(local.fs._manifest.get('runs', {}))
+                ctx.fs._save_manifest()
+                for path in publish_run_files(local.fs, ctx.fs, order.attempt_id):
+                    await ctx.events.file_changed(path)
+            finally:
+                await local.kernels.close()

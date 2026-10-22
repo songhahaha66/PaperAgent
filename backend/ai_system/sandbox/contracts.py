@@ -1,0 +1,46 @@
+"""Provider-neutral execution contract. Providers never own research state."""
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Awaitable, Callable, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .kernel import CellResult
+
+OutputHandler = Callable[[str, str], Awaitable[None]]
+EventHandler = Callable[[dict], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class ExecutionOutcome:
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class SandboxFile:
+    path: str
+    size: int
+    sha256: str
+
+
+class SandboxSession(Protocol):
+    """One isolated, stateful Python session; paths are workspace-relative.
+
+    Implementations must not retry submitted code after an ambiguous failure.
+    close terminates remote computation, not just the client connection.
+    """
+    id: str | None
+
+    async def start(self) -> None: ...
+    async def upload(self, path: str, source: Path) -> None: ...
+    async def delete(self, path: str) -> None: ...
+    async def execute(self, code: str, run_id: str, output: OutputHandler) -> ExecutionOutcome: ...
+    async def files(self) -> list[SandboxFile]: ...
+    async def download(self, path: str, destination: Path, max_bytes: int) -> None: ...
+    async def interrupt(self) -> None: ...
+    async def close(self) -> None: ...
+
+
+class ExecutionKernel(Protocol):
+    timeout: float
+    async def execute(self, code: str, *, on_event: EventHandler | None = None) -> "CellResult": ...
+    async def close(self) -> None: ...

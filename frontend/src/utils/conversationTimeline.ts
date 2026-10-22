@@ -7,6 +7,7 @@ export interface ExecutionDetail extends ResearchActivity {
   research_id?: string
   file?: string
   output_file?: string | null
+  output_tail?: string
   result_ids?: string[]
   segment_id?: string
 }

@@ -214,6 +214,20 @@ def model_activity(store, work_status):
 
 from contextlib import contextmanager
 
+def activity_progress(ctx, item):
+    """Persist a bounded execution preview; full logs stay in run files."""
+    from .runtime import notify_runtime
+    store = getattr(ctx, 'experience_store', None) or getattr(ctx, 'research', None)
+    if store is None:
+        return
+    with store._transaction() as db:
+        state = store._read(db)
+        state['activity'] = [dict(item) if row['id'] == item['id'] else row for row in state.get('activity', [])]
+        store._save(db, state, 'activity_progress', item)
+    from services.chat_services.conversation_timeline import execution_boundary
+    execution_boundary(store.root, store.research_id, 'activity', item)
+    notify_runtime()
+
 @contextmanager
 def activity(ctx, capability, task_id=None, **links):
     """Persist one actual call; inherit explicit execution ownership, not UI state."""

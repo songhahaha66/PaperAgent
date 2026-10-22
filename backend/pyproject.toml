@@ -39,5 +39,10 @@ dependencies = [
     "langsmith>=0.8.18",
 ]
 
+[project.optional-dependencies]
+sandbox = [
+    "opensandbox-code-interpreter>=1.1.1",
+]
+
 [tool.uv.workspace]
 members = []

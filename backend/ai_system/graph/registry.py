@@ -12,6 +12,7 @@
 import json
 import math
 import re
+from pathlib import PurePosixPath
 from dataclasses import asdict, dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -258,7 +259,11 @@ class ResultRegistry:
     def record_figure(self, subproblem: str, run_id: str, artifact: str, caption: str) -> Result:
         self._run_output(run_id)
         figure_id = self._next_id("F")
-        artifact_name = artifact.split("/")[-1]
+        prefix = f"runs/{run_id}/artifacts/"
+        artifact_name = artifact.removeprefix(prefix)
+        candidate = PurePosixPath(artifact_name)
+        if candidate.is_absolute() or ".." in candidate.parts or "\\" in artifact_name or artifact_name.startswith("runs/"):
+            raise GroundingError("图片必须来自指定运行的产物目录")
         suffix = artifact_name.rsplit(".", 1)[-1] if "." in artifact_name else "png"
         path = self.fs.promote_artifact(run_id, artifact_name, f"figures/{figure_id}.{suffix}")
         result = Result(

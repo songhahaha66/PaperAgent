@@ -37,6 +37,22 @@
           </div>
           <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
           <p v-if="entry.row.message">{{ entry.row.message }}</p>
+          <template v-if="entry.row.output_tail">
+            <button
+              class="output-toggle"
+              :aria-expanded="!!outputExpanded[entry.id]"
+              :aria-controls="`output-${replyId}-${groupId}-${entry.id}`"
+              @click="outputExpanded[entry.id] = !outputExpanded[entry.id]"
+            >
+              <span aria-hidden="true">{{ outputExpanded[entry.id] ? '⌄' : '›' }}</span>
+              {{ outputExpanded[entry.id] ? '收起输出' : '展开输出' }}
+            </button>
+            <pre
+              v-if="outputExpanded[entry.id]"
+              :id="`output-${replyId}-${groupId}-${entry.id}`"
+              class="execution-output"
+            >{{ entry.row.output_tail }}</pre>
+          </template>
           <div class="step-links">
             <button v-if="entry.row.file" @click="$emit('file', entry.row.file)">
               {{ entry.row.file.split('/').pop() }}
@@ -82,6 +98,7 @@ const props = defineProps<{
 }>()
 defineEmits<{ file: [path: string]; result: [id: string] }>()
 const expanded = ref(false)
+const outputExpanded = ref<Record<string, boolean>>({})
 const details = ref<Record<string, ExecutionDetail>>({})
 const detailError = ref(false)
 const now = ref(Date.now() / 1000)
@@ -217,6 +234,28 @@ function toggle() {
 }
 </script>
 <style scoped>
+.output-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--pa-muted);
+  font-size: 12px;
+}
+.output-toggle:hover {
+  color: var(--pa-ink);
+}
+.execution-output {
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  margin: 8px 0;
+  background: var(--pa-surface-muted);
+  border-radius: var(--pa-radius-inline);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .execution-group {
   margin: 6px 0;
   font-size: 13px;

@@ -27,6 +27,26 @@ def make_store(tmp_path, limit=None):
     return store
 
 
+def test_continued_worker_can_read_published_figure_at_registered_path(tmp_path):
+    from types import SimpleNamespace
+    from ai_system.graph.context import GraphContext
+    from ai_system.graph.registry import Result
+    from ai_system.research.control import worker_context
+    ctx = GraphContext.create(str(tmp_path), planner_llm=None)
+    path = 'outputs/research/previous/F4_F4.png'
+    ctx.fs.write_text(path, 'published image')
+    figure = Result('F4', 'figure', 'E1', '图', '', 'old-run', path=path)
+    ctx.registry.results['F4'] = figure
+    ctx.research = SimpleNamespace(
+        snapshot=lambda: {'experiments': {'E1': {'dependencies': []}},
+                          'executions': {'next': {'parent_attempt': 'previous'}}},
+        allocate_ref=lambda kind: kind + '5')
+    local = worker_context(ctx, SimpleNamespace(task_id='E1', attempt_id='next'))
+    assert local.fs.read_text(local.registry.results['F4'].path) == 'published image'
+    assert local.registry.results['F4'].run_id == 'old-run'
+    assert ctx.fs.read_text(path) == 'published image'
+
+
 def finish(store, key, *, acceptance="accepted", order=None):
     order = order or store.claim(key)
     ref = store.allocate_ref("R")

@@ -36,6 +36,7 @@ class CellResult:
     # 相对工作空间的图片路径
     figures: List[str] = field(default_factory=list)
     timed_out: bool = False
+    files: List[str] = field(default_factory=list)
 
     def to_observation(self) -> str:
         """给模型看的执行结果"""
@@ -44,6 +45,8 @@ class CellResult:
             parts.append(self.stdout.rstrip())
         if self.figures:
             parts.append("已保存图片: " + ", ".join(self.figures))
+        if self.files:
+            parts.append("已取回文件: " + ", ".join(self.files))
         if self.error:
             parts.append(self.error.rstrip())
         if self.timed_out:
@@ -91,7 +94,7 @@ class PythonKernel:
         )
         return self._proc
 
-    async def execute(self, code: str) -> CellResult:
+    async def execute(self, code: str, *, on_event=None) -> CellResult:
         async with self._lock:
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)

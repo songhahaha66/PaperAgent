@@ -121,6 +121,8 @@ def execution_projection(root, research_id, item):
         row['script_file'] = safe_file(root, info.get('input'))
         row['error_file'] = safe_file(root, info.get('stderr'))
     output = item.get('output') or {}
+    if item.get('capability') == 'run_python' and isinstance(output.get('output_tail'), str):
+        row['output_tail'] = output['output_tail'][-6000:]
     refs = output.get('artifact_refs', []) if isinstance(output, dict) else []
     row['result_ids'] = [r for r in refs if isinstance(r, str) and re.fullmatch(r'[RF]\d+', r)]
     # Raw requests and inherited planning purposes are not user-facing progress.

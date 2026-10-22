@@ -62,6 +62,21 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   assert.equal(heading().props['aria-expanded'], true)
   assert.match(text(host.root), /读取第 0 个字符/, 'expanded detail describes the actual operation')
   const staleResponse = pending
+  state.segments = [row('running', { output_tail: 'first print\nsecond print' })]
+  await flush()
+  const outputToggle = () => host.find((n) => n.kind === 'button' && n.props?.class === 'output-toggle')
+  assert.equal(outputToggle().props['aria-expanded'], false, 'stdout starts folded inside an expanded execution')
+  assert.doesNotMatch(text(host.root), /first print/, 'folded stdout does not fill the conversation')
+  outputToggle().props.onClick()
+  await flush()
+  assert.match(text(host.root), /first print\nsecond print/, 'expanded execution updates its received stdout')
+  state.segments = [row('running', { output_tail: 'first print\nsecond print\nthird print' })]
+  await flush()
+  assert.equal(outputToggle().props['aria-expanded'], true, 'manual output expansion survives streaming updates')
+  assert.match(text(host.root), /third print/)
+  outputToggle().props.onClick()
+  await flush()
+  assert.doesNotMatch(text(host.root), /third print/, 'stdout can be folded again')
   state.segments = [
     row('completed', { finished_at: 4, result_ids: ['R1'], output_file: 'runs/run-1/stdout.log' }),
   ]

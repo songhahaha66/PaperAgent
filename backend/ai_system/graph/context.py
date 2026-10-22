@@ -13,7 +13,8 @@ from typing import Any, Dict, List
 
 from services.file_services.workspace_fs import WorkspaceFS
 
-from ..sandbox import PythonKernel
+from ..sandbox.contracts import ExecutionKernel
+from ..sandbox.factory import create_kernel
 from .llm_utils import cap_output
 from .registry import ResultRegistry
 from ..research import DEFAULT_PLANNING_CALL_LIMIT
@@ -28,11 +29,11 @@ class KernelPool:
         self.workspace = workspace
         self.fs = fs
         self.timeout = timeout
-        self._kernels: Dict[str, PythonKernel] = {}
+        self._kernels: Dict[str, ExecutionKernel] = {}
 
-    def get(self, key: str) -> PythonKernel:
+    def get(self, key: str) -> ExecutionKernel:
         if key not in self._kernels:
-            self._kernels[key] = PythonKernel(str(self.workspace), timeout=self.timeout, fs=self.fs)
+            self._kernels[key] = create_kernel(str(self.workspace), timeout=self.timeout, fs=self.fs)
         return self._kernels[key]
 
     def promote(self, source: str, target: str) -> None:

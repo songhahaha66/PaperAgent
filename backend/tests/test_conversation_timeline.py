@@ -215,6 +215,15 @@ def test_operation_details_show_selected_inputs_and_concrete_sanitized_failure(t
     assert 'hidden-source-literal' not in json.dumps(failed)
 
 
+def test_running_code_preview_is_bounded_and_survives_projection(tmp_path):
+    from services.chat_services.conversation_timeline import execution_projection
+    item = call('python', capability='run_python', status='running',
+                output={'output_tail': 'x' * 7000 + '\nreceived'})
+    row = execution_projection(tmp_path, 'research', item)
+    assert row['status'] == 'running'
+    assert len(row['output_tail']) == 6000 and row['output_tail'].endswith('received')
+
+
 def test_failure_detail_redacts_credentials_provider_urls_and_external_paths(tmp_path):
     from services.chat_services.conversation_timeline import safe_diagnostic
     diagnostic = safe_diagnostic(tmp_path,
