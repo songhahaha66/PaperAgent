@@ -16,6 +16,7 @@
               v-if="group.execution"
               :reply-id="message.id"
               :group-id="group.id"
+              :label="group.label"
               :segments="group.segments"
               :work-id="workId"
               :reply-status="message.metadata?.status"
@@ -23,7 +24,12 @@
               @result="$emit('open-result', $event)"
             />
             <template v-else v-for="segment in group.segments" :key="segment.id">
-              <MarkdownRenderer v-if="segment.type === 'text'" :content="segment.text" />
+              <MarkdownRenderer
+                v-if="segment.type === 'text'"
+                :content="segment.phase === 'commentary' ? progressText(segment.text) : segment.text"
+                :work-id="workId"
+                :class="{ 'progress-prose': segment.phase === 'commentary' }"
+              />
               <template v-else-if="segment.type === 'event'">
                 <div v-if="segment.block.type === 'research_context'" class="answer-sources">
                   <span>参考材料</span>
@@ -118,7 +124,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ConversationExecution from './ConversationExecution.vue'
-import { timelineGroups, type ConversationSegment } from '@/utils/conversationTimeline'
+import { timelineGroups, progressText, type ConversationSegment } from '@/utils/conversationTimeline'
 import type { ResearchSnapshot } from '@/types/research'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 type PipelineBlock = { type: string; content: unknown }
@@ -282,6 +288,10 @@ const formatDateTime = (datetime: string) => {
 </script>
 
 <style scoped>
+.progress-prose {
+  margin: 12px 0;
+}
+
 .json-chat-renderer {
   height: 100%;
   display: flex;

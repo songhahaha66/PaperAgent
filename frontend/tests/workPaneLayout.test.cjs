@@ -91,7 +91,13 @@ const { hostRenderer } = require('./vueHost.cjs')
       host.find((node) => node.props?.class?.includes(`split-drop-preview ${edge}`)),
       `dragging to ${edge} shows a drop preview`,
     )
-    surface.props.onDrop({ dataTransfer: { getData: () => 'paper' }, preventDefault() {} })
+    Object.values(bars)[0]('drag-over')
+    await flush()
+    assert.ok(!host.find((node) => node.props?.class?.includes('split-drop-preview')), 'entering a tab bar clears the split preview')
+    surface.props.onDrop({
+      clientX: points[edge][0], clientY: points[edge][1],
+      dataTransfer: { getData: () => 'paper' }, preventDefault() {},
+    })
     await flush()
     assert.strictEqual(
       host.find((node) => node.props?.['data-panel'] === 'paper'),

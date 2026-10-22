@@ -102,7 +102,7 @@ def execution_projection(root, research_id, item):
             'finished_at','run_id','subject') if item.get(key) is not None}
     row.update(id=item['id'], research_id=research_id, kind='activity',
                capability=item.get('capability'),
-               label=LABELS.get(item.get('capability'), '执行步骤'),
+               label=item.get('display_label') or LABELS.get(item.get('capability'), '执行步骤'),
                status=item.get('status', 'unknown'), started_at=item.get('started_at'))
     row['detail'] = operation_detail(root, item)
     if item.get('error_type') or row['status'] in {'failed','error'}:
@@ -168,7 +168,7 @@ class ReplyWriter:
         with self.lock:
             if self.reply['metadata']['status'] != 'running': return
             rows = self.reply['segments']
-            if not rows or rows[-1]['type'] != 'text':
+            if not rows or rows[-1]['type'] != 'text' or rows[-1].get('phase') == 'commentary':
                 rows.append({'id': uuid4().hex, 'type': 'text', 'text': ''})
             rows[-1]['text'] += text
             self.reply['content'] += text
@@ -176,7 +176,28 @@ class ReplyWriter:
             self.pending_chars += len(text)
             if self.pending_chars >= 4096: self.flush()
 
+    def commentary(self, content):
+        # One complete authored message per stable ID; never append across tools
+        # or another experiment's commentary. Persist before notifying clients.
+        if not isinstance(content, dict): return
+        identity, text = content.get('id'), content.get('text')
+        if not isinstance(identity, str) or not re.fullmatch(r'[a-f0-9]{64}', identity): return
+        if not isinstance(text, str) or not text.strip() or len(text) > 800: return
+        with self.lock:
+            if self.reply['metadata']['status'] != 'running': return
+            key = 'commentary:' + identity
+            if any(row['id'] == key for row in self.reply['segments']): return
+            row = {'id': key, 'type': 'text', 'phase': 'commentary', 'text': text.strip(),
+                   'scope': str(content.get('scope') or '')[:160]}
+            self.reply['segments'].append(row)
+            self.reply['content'] += ('\n\n' if self.reply['content'] else '') + row['text']
+            self.dirty[key] = row
+            self.flush()
+
     def block(self, block):
+        if block.get('type') == 'research_commentary':
+            self.commentary(block.get('content'))
+            return
         with self.lock:
             if self.reply['metadata']['status'] != 'running': return
             block = public_block(self.root, block)

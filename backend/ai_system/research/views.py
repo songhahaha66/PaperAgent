@@ -130,7 +130,7 @@ def execution(snapshot, work_status=None):
     active=work_status in {'in_progress','running','processing'} or (work_status is None and snapshot['outcome']=='running')
     actions=[]
     for item in snapshot.get('activity',[])[-120:]:
-        row={**item,'label':LABELS.get(item['capability'],'研究操作')}
+        row={**item,'label':item.get('display_label') or LABELS.get(item['capability'],'研究操作')}
         if row['status']=='running' and not active:row['status']='interrupted'
         actions.append(row)
     current=next((row for row in reversed(actions) if row['status']=='running'),None)

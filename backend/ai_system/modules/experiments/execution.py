@@ -8,6 +8,7 @@
 候选意图由研究控制器按任务版本冻结；普通实验直接执行，CSV比较是显式执行方式。
 """
 
+from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 from ai_system.research.domain import findings as research_findings
 
 import ast
@@ -245,8 +246,11 @@ def build_tools(
             operation['output']=value
             return json.dumps(value,ensure_ascii=False)
 
-    async def run_python(code: str) -> str:
-        """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名"""
+    async def run_python(code: str, title: str = '') -> str:
+        """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名。
+
+        title: 给用户看的简短操作名称，如“计算线性趋势预测”或“保存预测结果表”。说明代码实际用途，不含内部编号。可省略。
+        """
         code = strip_template_tokens(code)
         if ctx.comparison_proof:
             try:
@@ -256,7 +260,7 @@ def build_tools(
         if is_placeholder(code):
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
-        with activity(ctx,'run_python',subproblem_id,inputs={'code':code}) as operation:
+        with activity(ctx,'run_python',subproblem_id,inputs={'code':code},display_label=' '.join(title.split())[:60]) as operation:
             result = await kernel.execute(code)
             operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
                 output={'ok':result.ok,'run_id':result.run_id})
@@ -526,9 +530,9 @@ async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict
     agent = create_agent(
         model=ctx.coder_llm,
         tools=tools,
-        system_prompt=SYSTEM,
+        system_prompt=SYSTEM + PROGRESS_PROMPT,
         response_format=ToolStrategy(schema),
-        middleware=[recorder, CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
+        middleware=[recorder, ProgressMiddleware(ctx.events, scope='experiment:'+subproblem_id), CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
                         report_ready=lambda: not inventory()),
                     DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(),
                     ReportOrderingMiddleware(schema.__name__, report_ready=lambda: not inventory())],

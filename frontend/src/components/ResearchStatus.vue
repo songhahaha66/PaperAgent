@@ -1,14 +1,11 @@
 <template>
   <section class="research-status">
-    <header>
-      <h2>研究</h2>
-      <button v-if="actionLabel && !running" :disabled="actionBusy" @click="emit('action')">
-        {{ actionLabel }}
-      </button>
-    </header>
     <ResearchProgress
       :snapshot="snapshot"
       :work-status="workStatus"
+      :action-label="actionLabel"
+      :action-busy="actionBusy"
+      @action="emit('action')"
       @object="(o) => emit('object', o)"
       @issue="(id) => emit('issue', id)"
       @ask="(id) => emit('ask', id)"
@@ -51,36 +48,22 @@ const emit = defineEmits<{
 <style scoped>
 .research-status {
   padding: 24px;
-  max-width: 1000px;
+  max-width: 880px;
   margin: auto;
 }
-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.resources {
+  margin-top: 16px;
+  border-top: 1px solid var(--pa-line);
+  padding-top: 16px;
 }
-article {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--pa-line);
-}
-summary {
+.resources > summary {
   cursor: pointer;
   color: var(--pa-muted);
-  font-size: 12px;
-  margin: 20px 0;
+  font-size: 13px;
 }
-h2 {
-  font-size: 20px;
-}
-h3 {
-  font-size: 16px;
-}
-button {
-  cursor: pointer;
-  padding: 6px 12px;
-}
-p {
-  line-height: 1.7;
-  color: var(--pa-muted);
+@media (max-width: 600px) {
+  .research-status {
+    padding: 18px;
+  }
 }
 </style>

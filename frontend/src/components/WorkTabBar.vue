@@ -1,5 +1,10 @@
 <template>
-  <div class="work-tab-bar" @dragover.prevent @drop.prevent="dropOnTab($event)">
+  <div
+    class="work-tab-bar"
+    @dragenter.stop.prevent="$emit('drag-over')"
+    @dragover.stop.prevent="$emit('drag-over')"
+    @drop.stop.prevent="dropOnTab($event)"
+  >
     <div
       ref="tabList"
       class="work-tab-list"
@@ -68,6 +73,7 @@ const emit = defineEmits<{
   close: [id: string]
   drag: [id: string | null]
   drop: [id: string, beforeId?: string]
+  'drag-over': []
 }>()
 const { isZh } = useStudioCopy()
 const tabList = ref<HTMLElement | null>(null)

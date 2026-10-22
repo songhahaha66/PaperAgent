@@ -1,7 +1,7 @@
 <template>
   <section class="paper-editor">
     <header class="toolbar">
-      <nav aria-label="论文视图">
+      <nav class="view-switch" aria-label="论文视图">
         <button :aria-pressed="view === 'read'" @click="setView('read')">
           {{ isLatex ? 'PDF 预览' : '阅读' }}</button
         ><button
@@ -12,13 +12,26 @@
           源码
         </button>
       </nav>
-      <button v-if="isLatex && project?.has_source" :disabled="compiling" @click="compile">
-        {{ compiling ? '正在编译…' : '编译 PDF' }}
+      <span
+        v-if="isLatex && project?.has_source && project.compile.state === 'current'"
+        class="compile-state"
+        :title="project.compile.message"
+        role="status"
+        ><t-icon name="check-circle" /><span>已同步</span></span
+      >
+      <button
+        v-if="isLatex && project?.has_source"
+        class="compile-action"
+        :disabled="compiling"
+        @click="compile"
+      >
+        <t-icon name="refresh" :class="{ spinning: compiling }" />
+        {{ compiling ? '编译中…' : '编译 PDF' }}
       </button>
     </header>
     <p v-if="error && !side && !sourceCard" class="error" role="alert">{{ error }}</p>
     <p
-      v-if="isLatex && project?.has_source"
+      v-if="isLatex && project?.has_source && project.compile.state !== 'current'"
       class="notice"
       :class="{ stale: project.compile.state !== 'current' }"
       role="status"
@@ -1069,6 +1082,73 @@ button[aria-pressed='true'] {
 button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+.toolbar {
+  min-height: 44px;
+  padding: 7px 12px;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+.toolbar .view-switch {
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--pa-radius-control);
+  background: var(--pa-surface-muted);
+}
+.toolbar .view-switch button {
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--pa-radius-inline);
+  color: var(--pa-muted);
+  white-space: nowrap;
+}
+.toolbar .view-switch button[aria-pressed='true'] {
+  background: var(--pa-surface);
+  color: var(--pa-ink);
+  box-shadow: var(--pa-shadow-card);
+}
+.compile-state,
+.toolbar .compile-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.compile-state {
+  font-size: 11px;
+  color: var(--pa-muted);
+}
+.compile-state > .t-icon {
+  color: var(--pa-accent);
+}
+.toolbar .compile-action {
+  min-height: var(--pa-control-height-sm);
+  padding: 4px 8px;
+}
+.toolbar button:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: 2px;
+}
+@container paper (max-width: 420px) {
+  .compile-state {
+    display: none;
+  }
+  .toolbar {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .spinning {
+    animation: compile-spin 1s linear infinite;
+  }
+}
+@keyframes compile-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .workspace {
   display: flex;

@@ -71,8 +71,52 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     exec('child', 'running', {parent_call_id:'call'}),
     after,
   ] })
-  assert.equal(grouped.length, 2, 'stage receipts share the existing execution group; prose stays outside')
-  assert.equal(grouped[0].segments.length, 3)
+  assert.equal(grouped.length, 2, 'adjacent visible operations group across hidden receipts')
+  assert.equal(grouped.some(g => g.segments.some(s => s.id === 'phase')), false)
+  const reads = timeline.timelineGroups({ id:'reads',content:'', segments:[
+    before, exec('r1','completed',{ capability:'read_file',parent_call_id:'p',experiment_id:'E1' }),
+    exec('r2','completed',{ capability:'read_file',parent_call_id:'p',experiment_id:'E1' }),
+    { ...after, phase:'commentary',scope:'E1' },
+    exec('r3','completed',{ capability:'read_file',parent_call_id:'p',experiment_id:'E1' }),
+    exec('r4','completed',{ capability:'read_file',parent_call_id:'p',experiment_id:'E2' }),
+    exec('maintenance','completed',{capability:'experience.candidates'}),
+    exec('failed-maintenance','failed',{capability:'record_results'}),
+  ] })
+  assert.equal(reads[1].segments.length,2)
+  assert.equal(reads[1].label,'执行记录')
+  assert.equal(reads[2].segments[0].text,'After')
+  assert.equal(reads[3].segments.length,3,'all adjacent operations group, including different scopes and failures')
+  assert.equal(reads[3].segments[2].id,'failed-maintenance','failure remains inside the visible group')
+  assert.equal(reads.length,4,'prose remains the grouping boundary')
+  const actual = timeline.timelineGroups({ id:'actual', content:'', segments:[
+    exec('experiment','running',{capability:'experiments.execute'}),
+    before,
+    exec('code','completed',{capability:'run_python'}),
+    exec('save','completed',{capability:'record_results'}),
+    after,
+  ] })
+  assert.equal(actual.map(g=>g.id).join(','),'before,code,after','outer experiment is not a second running status; real operations remain inline')
+  assert.equal(timeline.progressText('子问题E1：实验E2已完成，现在登记这些结果。'),'当前实验：当前实验已完成，现在保存这些计算结果。')
+  const recoverySegments = [exec('write-failed','failed',{capability:'writing.write'}),
+    after,exec('write-ok','completed',{capability:'writing.write',finished_at:4})]
+  const recovered = timeline.timelineGroups({id:'recovery',content:'',segments:recoverySegments})
+  assert.equal(recovered[0].segments[0].execution.recovered,true)
+  assert.equal(recoverySegments[0].execution.recovered,undefined,'projection never rewrites historical failure')
+  assert.equal(recovered[0].segments[0].execution.status,'failed')
+  const publication = timeline.timelineGroups({id:'publication',content:'',segments:[before,
+    exec('write','completed',{capability:'writing.write'}),
+    {id:'receipt',type:'event',block:{type:'paper_stage',content:'Saved'}},
+    exec('save-source','completed',{capability:'writing.save_source'}),
+    exec('housekeeping','completed',{capability:'experience.candidates'}),
+    exec('compile','completed',{capability:'writing.compile',parent_call_id:'write'}),after,
+    exec('later-write','running',{capability:'writing.write'}),
+  ]})
+  assert.equal(publication.length,4,'report steps share one row but never cross prose')
+  assert.equal(publication[1].label,'执行记录')
+  assert.equal(publication[1].segments.length,3,'stage receipts do not create additional steps')
+  assert.equal(publication[3].segments.length,1)
+  assert.equal(JSON.stringify(timeline.timelineGroups(JSON.parse(JSON.stringify(message)))),
+    JSON.stringify(timeline.timelineGroups(message)), 'reload preserves the same groups')
   const prose = 'Here is JSON:\n```json\n{"type":"confirm","content":"example"}\n```\n{"a":1}\nend'
   const legacy = timeline.messageSegments({
     id: 'old',
@@ -120,7 +164,7 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
         default: {
           props: ['segments'],
           setup: (p) => () =>
-            vue.h('aside', {}, p.segments.map((s) => s.execution.label).join('|')),
+            vue.h('aside', {}, p.segments.map((s) => s.type === 'execution' ? s.execution.label : 'receipt').join('|')),
         },
       },
     },

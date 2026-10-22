@@ -4,6 +4,7 @@ import json
 from .models import Contract, Requirement, ResearchRevision
 from .domain import findings, experiment_scope
 from .store import digest
+from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 
 PROMPT = """你是研究层Agent，沿研究→用户问题→实验→行动组织探索。
 使用普通工具工作，不输出总计划JSON。先用research_update_question建立用户要回答的问题，取得真实question_id，再安排实验。问题不是清洗或检索手段；覆盖原始请求的不同实质目标，可逐步细化、拆合并复用已有实验。
@@ -180,8 +181,8 @@ class Planner:
                 prompted_for_action=True
                 return {'messages':[HumanMessage(content='尚未调用工具或安排可执行行动。请现在调用与当前信息需求对应的工具；先建立问题须使用返回的真实ID。若确需用户补充必要信息可提问，无可行路径则明确暂停。保留已有成果，不要重复计算。')],'jump_to':'model'}
         recorder=HistoryRecorder()
-        agent=create_agent(model=cap_output(self.llm,4800),tools=tools,system_prompt=PROMPT,
-                           middleware=[recorder,feedback,dispatched,malformed])
+        agent=create_agent(model=cap_output(self.llm,4800),tools=tools,system_prompt=PROMPT + PROGRESS_PROMPT,
+                           middleware=[recorder,ProgressMiddleware(ctx.events, scope=observation_id),feedback,dispatched,malformed])
         common={'original_request':context['source']['requirement'],'available_method_keys':context['available_method_keys'],
                 'skill_policy':context['skill_policy'],'inputs':context['inputs'],'materials':context['materials']}
         dynamic={k:v for k,v in context.items() if k not in {'available_method_keys','skill_policy','inputs','materials'}}

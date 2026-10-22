@@ -252,7 +252,7 @@ async def execute(branch, runtime):
         order = ctx.research.claim(key)
     except ResearchConflict as exc:
         await ctx.events.stage(str(exc))
-        return {}
+        return {'_execution_outcome': {'status': 'interrupted', 'message': str(exc)}}
     await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
     local = None
     receipt = None
@@ -326,18 +326,22 @@ async def execute(branch, runtime):
             await ctx.events.emit("paper_solved", f"{key} 已通过验收，登记 {len(results)} 项结果")
         else:
             await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '仍需验收或修复，请查看研究问题'}")
-        return {"log": [f"commit {key}: {receipt}"]}
+        return {"log": [f"commit {key}: {receipt}"], '_execution_outcome': {
+            'status': 'completed' if result.execution_status == 'succeeded' else 'failed',
+            'message': report.get('error')}}
     except asyncio.CancelledError:
         raise  # Recovery records cancellation and acquires a new lease.
     except Exception as exc:
         if receipt is not None:
             await ctx.events.stage(f"{key} 已提交，结果视图更新失败，将在恢复时重建：{exc}")
-            return {"log": [f"projection {key} failed after commit: {exc}"]}
+            return {"log": [f"projection {key} failed after commit: {exc}"], '_execution_outcome': {
+                'status': 'completed' if result.execution_status == 'succeeded' else 'failed',
+                'message': report.get('error')}}
         ctx.research.commit(WorkerResult(order=order, execution_status="failed", acceptance="inconclusive",
             report={"status": "failed", "error": str(exc)}, issues=[IssueReport(task_id=key, category="execution", message=str(exc))]))
         await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
         await ctx.events.stage(f"{key} 执行失败：{exc}")
-        return {"log": [f"attempt {key} failed: {exc}"]}
+        return {"log": [f"attempt {key} failed: {exc}"], '_execution_outcome': {'status': 'failed', 'message': str(exc)}}
     finally:
         if local:
             await local.kernels.close()

@@ -95,6 +95,7 @@
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import type { ResearchSnapshot, ResearchActivity, ResearchHistory } from '@/types/research'
 import {
+  activityHeadline,
   researchRunning,
   callRunning,
   executionDuration,
@@ -130,9 +131,7 @@ const current = computed(() => {
   const active =
     props.snapshot?.runtime?.current ||
     calls.value.filter(callRunning).sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0]
-  return active?.kind === 'model'
-    ? calls.value.find((r) => r.id === active.parent_call_id && callRunning(r)) || active
-    : active
+  return active
 })
 const currentScope = computed(
   () =>
@@ -143,9 +142,13 @@ const headline = computed(() =>
   waiting.value
     ? '等待补充信息'
     : paused.value
-      ? '研究已暂停'
+      ? state.value === 'failed'
+        ? '本次执行失败'
+        : state.value === 'cancelled'
+          ? '执行已取消'
+          : '研究已暂停'
       : running.value
-        ? current.value?.label || '研究执行中'
+        ? current.value ? activityHeadline(current.value) : '研究执行中'
         : state.value === 'completed'
           ? '本次执行已结束'
           : '当前研究',

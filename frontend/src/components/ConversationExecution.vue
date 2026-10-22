@@ -9,7 +9,12 @@
     >
       <span class="status-dot" :class="{ pulse: running }" aria-hidden="true"></span>
       <span>{{ headline }}</span>
-      <span v-if="current?.subject" class="subject">{{ current.subject }}</span>
+      <span v-if="grouped && (!failed || running)" class="call-state">{{ groupState }}</span>
+      <span v-if="grouped" class="call-state">{{ rows.length }} 步</span>
+      <span v-if="current?.subject && !grouped" class="subject">{{ current.subject }}</span>
+      <span v-if="!running && !failure && !props.label && rows.length === 1" class="call-state">{{
+        status(rows[0]!)
+      }}</span>
       <time v-if="current">{{ duration(current) }}</time>
       <span class="chevron" aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
     </button>
@@ -70,6 +75,7 @@ import type { ConversationSegment, ExecutionDetail } from '@/utils/conversationT
 const props = defineProps<{
   replyId: string
   groupId: string
+  label?: string
   segments: ConversationSegment[]
   workId?: string
   replyStatus?: string
@@ -90,22 +96,32 @@ watch(
   () => {
     detailGeneration++
     details.value = {}
-    if (props.replyStatus && props.replyStatus !== 'running') void loadDetails()
+    if (expanded.value && props.replyStatus && props.replyStatus !== 'running') void loadDetails()
   },
   { immediate: true },
 )
 const rows = computed(() =>
   props.segments.flatMap((s) =>
-    s.type === 'execution' ? [details.value[s.id] || s.execution] : [],
+    s.type === 'execution' ? [{ ...s.execution, ...details.value[s.id], recovered: s.execution.recovered }] : [],
   ),
 )
 const isFailed = (row: ExecutionDetail) =>
   ['failed', 'error', 'interrupted', 'cancelled'].includes(row.status)
 const running = computed(() => rows.value.some(callRunning))
+const grouped = computed(() => !!props.label)
+const groupState = computed(() => {
+  if (current.value) return current.value.label
+  if (failed.value) return '未完成'
+  if (rows.value.every(row => row.status === 'completed' || row.recovered))
+    return '完成'
+  if (props.replyStatus && props.replyStatus !== 'running') return '已结束'
+  return '等待下一步'
+})
 const current = computed(() => {
   return [...rows.value].reverse().find(callRunning)
 })
 const failure = computed(() => {
+  if (grouped.value) return [...rows.value].reverse().find(row => isFailed(row) && !row.recovered)
   if (running.value) return undefined
   const ids = new Set(rows.value.map((r) => r.id))
   const last = rows.value
@@ -117,9 +133,14 @@ const failure = computed(() => {
     .at(-1)
   return last && isFailed(last) ? last : undefined
 })
-const failed = computed(() => !!failure.value)
-const headline = computed(
-  () => current.value?.label || (failure.value ? `${failure.value.label}未完成` : '执行记录'),
+const failed = computed(() => !!failure.value && !failure.value.recovered)
+const headline = computed(() =>
+  failure.value
+    ? failure.value.recovered ? `${failure.value.label} · 后续已完成` : `${failure.value.label}未完成`
+    : props.label ||
+      current.value?.label ||
+      (rows.value.length === 1 ? rows.value[0]?.label : '') ||
+      '执行记录',
 )
 function note(segment: ConversationSegment) {
   if (segment.type !== 'event' || segment.block.type === 'paper_code') return ''
@@ -197,23 +218,33 @@ function toggle() {
 </script>
 <style scoped>
 .execution-group {
-  margin: 10px 0 18px;
+  margin: 6px 0;
   font-size: 13px;
-  color: var(--pa-muted);
+  color: var(--pa-ink);
 }
-.execution-heading {
+.execution-group > .execution-heading {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: fit-content;
   max-width: 100%;
-  color: inherit;
+  padding: 5px 7px;
+  margin-left: -7px;
+  border-radius: var(--pa-radius-inline);
+  color: var(--pa-ink);
+  font-size: 14px;
+  font-weight: 500;
   text-align: left;
+  transition: background 150ms ease;
+}
+.execution-group > .execution-heading:hover {
+  background: var(--pa-surface-muted);
 }
 .status-dot {
   width: 6px;
   height: 6px;
   border-radius: var(--pa-radius-circle);
-  background: currentColor;
+  background: var(--pa-accent);
   flex-shrink: 0;
 }
 .pulse {
@@ -234,6 +265,7 @@ function toggle() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.call-state,
 .chevron,
 small,
 time {
@@ -288,6 +320,9 @@ button {
 button:focus-visible {
   outline: 2px solid var(--pa-accent);
   outline-offset: 2px;
+}
+.failed .status-dot {
+  background: var(--pa-danger);
 }
 .failed > .execution-heading,
 .failure-reason,

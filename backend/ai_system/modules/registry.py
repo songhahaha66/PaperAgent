@@ -50,6 +50,8 @@ class ExperienceInputs(Inputs):
 class CapabilityProduct:
     kind: Literal["research_state", "literature", "experiment", "experience", "paper"]
     value: Any
+    execution_status: Literal['completed', 'failed', 'interrupted'] | None = None
+    execution_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,10 @@ class ModuleRegistry:
                         result = await result
                     if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
                         raise TypeError(f"能力产物不符合接口：{request.name}")
+                    if result.execution_status:
+                        execution['status'] = result.execution_status
+                        if result.execution_status != 'completed':
+                            execution.update(error_type='ExecutionIncomplete',message=result.execution_message or '本次操作未完成，已有输出已保留。')
                     if isinstance(result.value,dict) and not request.name.startswith('writing.'):
                         execution['output'] = result.value
                         if result.value.get('question_id'):execution['question_id']=result.value['question_id']

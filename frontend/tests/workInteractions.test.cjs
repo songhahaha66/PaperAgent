@@ -506,7 +506,7 @@ if (require.main === module) (async () => {
   }
   progress.state.currentWork.value.status = 'in_progress'
   progress.state.applyResearchSnapshot(snapshot)
-  assert.equal(progress.state.stageText.value, '正在执行实验')
+  assert.equal(progress.state.stageText.value, '等待模型响应')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.label, '等待模型响应')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.question_id, 'question:E2')
   assert.equal(progress.state.researchSnapshot.value.experiments[0].title, '固定区间误差验证')
@@ -519,7 +519,7 @@ if (require.main === module) (async () => {
   ]
   assert.equal(
     progress.state.stageText.value,
-    '正在执行实验',
+    '等待模型响应',
     'old phase events cannot reset recorded experiment progress',
   )
   const olderSnapshot = {

@@ -112,6 +112,13 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   await flush()
   assert.doesNotMatch(text(heading()), /未完成/, 'a recovered child failure does not mark a completed parent failed')
   assert.equal(heading().props['aria-expanded'], false, 'finished history stays compact')
+  state.segments = [row('failed', { recovered:true,finished_at:4,message:'original error' })]
+  await flush()
+  assert.match(text(heading()),/后续已完成/)
+  assert.doesNotMatch(text(host.root),/original error/,'resolved error is retained only in expanded detail')
+  heading().props.onClick()
+  await flush()
+  assert.match(text(host.root),/original error/)
   app.unmount()
 })().catch((error) => {
   console.error(error)

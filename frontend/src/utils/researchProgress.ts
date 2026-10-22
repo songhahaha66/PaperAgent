@@ -8,6 +8,15 @@ export const currentActivity = (runtime: NonNullable<ResearchSnapshot['runtime']
   [...(runtime.actions || []), ...(runtime.models || [])]
     .filter(callRunning)
     .sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0] || null
+export function activityHeadline(row: ResearchActivity, zh = true) {
+  if (row.kind === 'model')
+    return row.status === 'http_response'
+      ? zh ? '正在接收模型响应' : 'Receiving model response'
+      : zh ? '等待模型响应' : 'Waiting for model response'
+  if (row.capability === 'experiments.execute')
+    return zh ? '正在处理实验' : 'Working on experiment'
+  return row.label
+}
 export const executionLabel = (status: string) =>
   ({
     planned: '待执行',
@@ -89,6 +98,10 @@ export function researchHeadline(
   zh: boolean,
 ) {
   if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
+  if (researchRunning(workStatus) && snapshot?.runtime) {
+    const current = currentActivity(snapshot.runtime)
+    if (current) return activityHeadline(current, zh)
+  }
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
   if (!snapshot?.experiments?.length) {
@@ -101,7 +114,7 @@ export function researchHeadline(
     return zh ? '等待建立研究任务' : 'Waiting for research tasks'
   }
   const running = snapshot.experiments.filter((t) => taskState(t, workStatus) === 'running')
-  if (running.length) return zh ? '正在执行实验' : 'Running experiments'
+  if (running.length && researchRunning(workStatus)) return zh ? '正在处理实验' : 'Working on experiments'
   if (['paused', 'failed', 'cancelled'].includes(workStatus)) {
     for (const [key, label] of Object.entries(deliveryLabels)) {
       if (snapshot.delivery_stages?.[key]?.status === 'blocked')

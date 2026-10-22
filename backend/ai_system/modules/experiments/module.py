@@ -10,7 +10,9 @@ async def compare(ctx, inputs):
 
 async def execute(ctx, inputs):
     from ai_system.research.control import execute
-    return CapabilityProduct("research_state", await execute(inputs["branch"], SimpleNamespace(context=ctx)))
+    result = await execute(inputs["branch"], SimpleNamespace(context=ctx))
+    outcome = result.pop('_execution_outcome', {})
+    return CapabilityProduct("research_state", result, outcome.get('status'), outcome.get('message'))
 
 
 async def inspect_materials(ctx, inputs):

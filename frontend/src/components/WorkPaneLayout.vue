@@ -4,6 +4,7 @@
     :class="['work-pane-layout', { stacked: vertical, resizing, dragging: !!dragged }]"
     @dragover.prevent="updateDropHint"
     @drop.prevent="dropAtEdge"
+    @dragleave="leaveLayout"
   >
     <template v-for="(group, index) in groups" :key="group">
       <div
@@ -42,10 +43,12 @@
           @select="(id) => $emit('select', id)"
           @close="(id) => $emit('close', id)"
           @drag="(id) => (dragged = id)"
+          @drag-over="dropHint = null"
           @drop="
             (id, before) => {
               $emit('move', id, group, before)
               dragged = null
+              dropHint = null
             }
           "
         />
@@ -140,12 +143,14 @@ function updateDropHint(event: DragEvent) {
   dropHint.value = edges[0]![1] < 0.22 ? edges[0]![0] : null
 }
 function dropAtEdge(event: DragEvent) {
+  updateDropHint(event)
   const id = event.dataTransfer?.getData('application/x-paperagent-panel') || dragged.value
   if (id && dropHint.value) emit('split', id, dropHint.value)
   dragged.value = null
   dropHint.value = null
 }
 function drop(event: DragEvent, group: PanelGroup) {
+  updateDropHint(event)
   if (dropHint.value) {
     dropAtEdge(event)
     return
@@ -153,6 +158,9 @@ function drop(event: DragEvent, group: PanelGroup) {
   const id = event.dataTransfer?.getData('application/x-paperagent-panel') || dragged.value
   if (id) emit('move', id, group)
   dragged.value = null
+}
+function leaveLayout(event: DragEvent) {
+  if (!layout.value?.contains(event.relatedTarget as Node | null)) dropHint.value = null
 }
 function startResize(event: PointerEvent) {
   if (event.button !== 0) return
