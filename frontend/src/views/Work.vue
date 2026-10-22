@@ -941,9 +941,6 @@ onUnmounted(() => {
   box-sizing: border-box;
   scrollbar-width: thin;
 }
-.chat-messages-container :deep(.t-chat__inner) {
-  padding: 0;
-}
 .chat-messages-container :deep(.chat-markdown) {
   min-width: 0;
   overflow-wrap: anywhere;

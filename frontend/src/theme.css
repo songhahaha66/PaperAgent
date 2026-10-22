@@ -10,6 +10,8 @@
 }
 
 :root {
+  --pa-message-user-bg: #e8f3ff;
+  --pa-message-user-ink: #1d3b5c;
   --pa-radius-inline: 4px;
   --pa-radius-control: 8px;
   --pa-radius-card: 12px;
@@ -106,6 +108,8 @@
 }
 
 :root[theme-mode='dark'] {
+  --pa-message-user-bg: #19364d;
+  --pa-message-user-ink: #e1eeff;
   color-scheme: dark;
   --pa-logo-filter: invert(1);
   --pa-page: #161a18;

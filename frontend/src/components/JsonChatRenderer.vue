@@ -1,117 +1,115 @@
 <template>
   <div class="json-chat-renderer">
     <div class="chat-messages">
-      <div v-for="(message, index) in messages" :key="message.id" class="chat-message-wrapper">
-        <ChatItem
-          :role="message.role"
-          :datetime="formatDateTime(message.datetime)"
-          :avatar="getSystemAvatar(message)"
-        >
-          <template #content>
-            <div class="chat-markdown">
-              <template v-for="group in timelineGroups(message)" :key="group.id">
-                <ConversationExecution
-                  v-if="group.execution"
-                  :reply-id="message.id"
-                  :group-id="group.id"
-                  :segments="group.segments"
-                  :work-id="workId"
-                  :reply-status="message.metadata?.status"
-                  @file="$emit('open-file', $event)"
-                  @result="$emit('open-result', $event)"
-                />
-                <template v-else v-for="segment in group.segments" :key="segment.id">
-                  <MarkdownRenderer v-if="segment.type === 'text'" :content="segment.text" />
-                  <template v-else-if="segment.type === 'event'">
-                    <div v-if="segment.block.type === 'research_context'" class="answer-sources">
-                      <span>参考材料</span>
-                      <button
-                        v-for="path in sourceFiles(segment.block)"
-                        :key="path"
-                        @click="
-                          isResearchSource(path) ? $emit('open-progress') : $emit('open-file', path)
-                        "
-                      >
-                        {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
-                      </button>
-                      <button
-                        v-for="id in sourceResults(segment.block)"
-                        :key="id"
-                        @click="$emit('open-result', id)"
-                      >
-                        {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
-                      </button>
-                    </div>
-                    <template v-else-if="segment.block.type === 'main_agent_complete'">
-                      <MarkdownRenderer :content="completionText(segment.block).summary" />
-                      <details
-                        v-if="completionText(segment.block).diagnostic"
-                        class="completion-diagnostic"
-                      >
-                        <summary>编译详情</summary>
-                        <pre>{{ completionText(segment.block).diagnostic }}</pre>
-                      </details>
-                    </template>
-                    <div v-else class="json-block" :class="`event-${eventKind(segment.block)}`">
-                      <button
-                        type="button"
-                        class="json-block-header"
-                        :aria-expanded="!isBlockCollapsed(message.id, segment.id, segment.block)"
-                        :aria-controls="`event-${message.id}-${segment.id}`"
-                        @click="toggleBlock(message.id, segment.id, segment.block)"
-                      >
-                        <span class="header-text"
-                          >{{ eventTitle(segment.block)
-                          }}<span v-if="eventKind(segment.block) === 'error'">
-                            · 需要处理</span
-                          ></span
-                        >
-                        <t-icon
-                          :name="
-                            isBlockCollapsed(message.id, segment.id, segment.block)
-                              ? 'chevron-down'
-                              : 'chevron-up'
-                          "
-                        />
-                      </button>
-                      <div
-                        v-if="!isBlockCollapsed(message.id, segment.id, segment.block)"
-                        :id="`event-${message.id}-${segment.id}`"
-                        class="json-block-content"
-                      >
-                        <MarkdownRenderer
-                          v-if="readableEvent(segment.block)"
-                          :content="readableEvent(segment.block)"
-                        />
-                        <p v-else>操作记录已保存。</p>
-                      </div>
-                      <div v-if="eventKind(segment.block) !== 'normal'" class="event-actions">
-                        <button
-                          v-if="
-                            eventKind(segment.block) === 'confirm' &&
-                            index === messages.length - 1 &&
-                            workStatus === 'waiting' &&
-                            !message.isStreaming &&
-                            !confirmBusy
-                          "
-                          type="button"
-                          @click="$emit('confirm-plan')"
-                        >
-                          继续研究
-                        </button>
-                        <button type="button" @click="$emit('open-progress')">查看运行状态</button>
-                      </div>
-                    </div>
-                  </template>
+      <article
+        v-for="(message, index) in messages"
+        :key="message.id"
+        class="chat-message-wrapper"
+        :class="message.role === 'user' ? 'message-user' : 'message-assistant'"
+      >
+        <time v-if="message.datetime" class="message-time" :datetime="message.datetime">{{
+          formatDateTime(message.datetime)
+        }}</time>
+        <div class="chat-markdown">
+          <template v-for="group in timelineGroups(message)" :key="group.id">
+            <ConversationExecution
+              v-if="group.execution"
+              :reply-id="message.id"
+              :group-id="group.id"
+              :segments="group.segments"
+              :work-id="workId"
+              :reply-status="message.metadata?.status"
+              @file="$emit('open-file', $event)"
+              @result="$emit('open-result', $event)"
+            />
+            <template v-else v-for="segment in group.segments" :key="segment.id">
+              <MarkdownRenderer v-if="segment.type === 'text'" :content="segment.text" />
+              <template v-else-if="segment.type === 'event'">
+                <div v-if="segment.block.type === 'research_context'" class="answer-sources">
+                  <span>参考材料</span>
+                  <button
+                    v-for="path in sourceFiles(segment.block)"
+                    :key="path"
+                    @click="
+                      isResearchSource(path) ? $emit('open-progress') : $emit('open-file', path)
+                    "
+                  >
+                    {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
+                  </button>
+                  <button
+                    v-for="id in sourceResults(segment.block)"
+                    :key="id"
+                    @click="$emit('open-result', id)"
+                  >
+                    {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
+                  </button>
+                </div>
+                <template v-else-if="segment.block.type === 'main_agent_complete'">
+                  <MarkdownRenderer :content="completionText(segment.block).summary" />
+                  <details
+                    v-if="completionText(segment.block).diagnostic"
+                    class="completion-diagnostic"
+                  >
+                    <summary>编译详情</summary>
+                    <pre>{{ completionText(segment.block).diagnostic }}</pre>
+                  </details>
                 </template>
+                <div v-else class="json-block" :class="`event-${eventKind(segment.block)}`">
+                  <button
+                    type="button"
+                    class="json-block-header"
+                    :aria-expanded="!isBlockCollapsed(message.id, segment.id, segment.block)"
+                    :aria-controls="`event-${message.id}-${segment.id}`"
+                    @click="toggleBlock(message.id, segment.id, segment.block)"
+                  >
+                    <span class="header-text"
+                      >{{ eventTitle(segment.block)
+                      }}<span v-if="eventKind(segment.block) === 'error'"> · 需要处理</span></span
+                    >
+                    <t-icon
+                      :name="
+                        isBlockCollapsed(message.id, segment.id, segment.block)
+                          ? 'chevron-down'
+                          : 'chevron-up'
+                      "
+                    />
+                  </button>
+                  <div
+                    v-if="!isBlockCollapsed(message.id, segment.id, segment.block)"
+                    :id="`event-${message.id}-${segment.id}`"
+                    class="json-block-content"
+                  >
+                    <MarkdownRenderer
+                      v-if="readableEvent(segment.block)"
+                      :content="readableEvent(segment.block)"
+                    />
+                    <p v-else>操作记录已保存。</p>
+                  </div>
+                  <div v-if="eventKind(segment.block) !== 'normal'" class="event-actions">
+                    <button
+                      v-if="
+                        eventKind(segment.block) === 'confirm' &&
+                        index === messages.length - 1 &&
+                        workStatus === 'waiting' &&
+                        !message.isStreaming &&
+                        !confirmBusy
+                      "
+                      type="button"
+                      @click="$emit('confirm-plan')"
+                    >
+                      继续研究
+                    </button>
+                    <button type="button" @click="$emit('open-progress')">查看运行状态</button>
+                  </div>
+                </div>
               </template>
-              <p v-if="message.metadata?.status === 'interrupted'" class="event-error">
-                本次回复已中断，已保存的内容保留。
-              </p>
-            </div>
+            </template>
           </template>
-        </ChatItem>
-      </div>
+          <p v-if="message.metadata?.status === 'interrupted'" class="event-error">
+            本次回复已中断，已保存的内容保留。
+          </p>
+        </div>
+      </article>
       <slot />
     </div>
   </div>
@@ -122,7 +120,6 @@ import { ref } from 'vue'
 import ConversationExecution from './ConversationExecution.vue'
 import { timelineGroups, type ConversationSegment } from '@/utils/conversationTimeline'
 import type { ResearchSnapshot } from '@/types/research'
-import { ChatItem } from '@tdesign-vue-next/chat'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 type PipelineBlock = { type: string; content: unknown }
 
@@ -244,12 +241,6 @@ const toggleBlock = (messageId: string, blockIndex: string, block: PipelineBlock
     `${messageId}-${blockIndex}`,
     !isBlockCollapsed(messageId, blockIndex, block),
   )
-// 获取系统头像
-const getSystemAvatar = (message: ChatMessage) => {
-  // 直接使用消息中的头像
-  return message.avatar || (message.role === 'user' ? '/avatar-user.svg' : '/logo.png')
-}
-
 // 格式化时间为人类可读格式
 const formatDateTime = (datetime: string) => {
   if (!datetime) return ''
@@ -305,41 +296,49 @@ const formatDateTime = (datetime: string) => {
 }
 
 .chat-message-wrapper {
+  min-width: 0;
   margin-bottom: 28px;
 }
-:deep(.t-chat__avatar) {
-  width: 28px;
-  height: 28px;
-}
-:deep(.t-chat__datetime) {
+.message-time {
+  display: block;
+  margin-bottom: 8px;
   color: var(--pa-muted);
   font-size: 11px;
-  margin-bottom: 8px;
 }
-
-/* Ensure chat-markdown container uses full width */
 .chat-markdown {
   width: 100%;
-  display: block;
+  min-width: 0;
+  line-height: 1.75;
 }
-
-/* 让 Chat 内部的 Markdown 容器与气泡样式协调，避免内外 padding 叠加导致公式错位 */
-:deep(.t-chat__message-content) .chat-markdown > .markdown-content {
-  padding: 0; /* 由外层气泡控制内边距 */
-  background: transparent; /* 去掉 MarkdownRenderer 的背景，避免视觉偏移 */
-  overflow: visible; /* 避免嵌套滚动影响定位 */
+.message-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
-
-/* KaTeX 对齐与间距（块级） */
-:deep(.t-chat__message-content) .katex-display {
-  margin: 12px 0; /* 合理上下间距 */
+.message-user > .chat-markdown {
+  width: fit-content;
+  max-width: 85%;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: var(--pa-message-user-bg);
+  color: var(--pa-message-user-ink);
 }
-
-/* 行内公式与文本的基线对齐通常由 KaTeX 默认处理，这里确保 line-height 不被异常覆盖 */
-:deep(.t-chat__message-content) {
-  width: 100%;
-  max-width: none;
-  line-height: 1.7; /* 略增大，给行内公式留足空间，减少上/下溢出导致的视觉错位 */
+.chat-markdown > :deep(.markdown-content) {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.chat-markdown > :deep(.markdown-content > :first-child) {
+  margin-top: 0;
+}
+.chat-markdown > :deep(.markdown-content > :last-child) {
+  margin-bottom: 0;
+}
+.chat-markdown :deep(.katex-display) {
+  margin: 12px 0;
+  overflow-x: auto;
 }
 
 .completion-diagnostic {
@@ -442,7 +441,7 @@ const formatDateTime = (datetime: string) => {
   outline-offset: -2px;
 }
 /* 代码块样式 */
-:deep(.t-chat__message-content) {
+.chat-markdown {
   line-height: 1.7;
 }
 
@@ -461,33 +460,6 @@ const formatDateTime = (datetime: string) => {
   border-radius: var(--pa-radius-inline);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
-}
-
-/* 流式消息样式 */
-:deep(.t-chat__message--assistant) {
-  animation: fadeIn 0.3s ease-in-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .chat-messages {
-    padding: 8px;
-  }
-
-  .divider-icon {
-    opacity: 0.45;
-  }
 }
 
 .answer-sources {
