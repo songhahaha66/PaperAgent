@@ -42,6 +42,7 @@ export interface ResearchActivity {
   question_id?: string | null
   experiment_id?: string | null
   parent_call_id?: string | null
+  subject?: string | null
   purpose?: string | null
   inputs?: Record<string, unknown>
   output?: Record<string, unknown>

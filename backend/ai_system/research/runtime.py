@@ -17,7 +17,7 @@ class ModelServiceError(RuntimeError):pass
 
 ACTIVE_MODEL_REQUEST=ContextVar('paperagent_model_request',default=None)
 CURRENT_EXECUTION=ContextVar('paperagent_execution',default={})
-LINK_FIELDS=('action_id','observation_id','question_id','experiment_id','parent_call_id','step','purpose')
+LINK_FIELDS=('action_id','observation_id','question_id','experiment_id','parent_call_id','step','purpose','subject')
 
 
 def execution_links():

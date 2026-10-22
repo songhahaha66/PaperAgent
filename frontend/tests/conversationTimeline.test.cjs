@@ -64,6 +64,15 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     refreshed,
     'mid-run refresh binds the same durable revision',
   )
+  const grouped = timeline.timelineGroups({ id: 'progress', content: '', segments: [
+    { id:'start', type:'event', block:{type:'main_agent_start',content:'started'} },
+    exec('call'),
+    { id:'phase', type:'event', block:{type:'paper_phase',content:{stage:'write',note:'保存源码'}} },
+    exec('child', 'running', {parent_call_id:'call'}),
+    after,
+  ] })
+  assert.equal(grouped.length, 2, 'stage receipts share the existing execution group; prose stays outside')
+  assert.equal(grouped[0].segments.length, 3)
   const prose = 'Here is JSON:\n```json\n{"type":"confirm","content":"example"}\n```\n{"a":1}\nend'
   const legacy = timeline.messageSegments({
     id: 'old',

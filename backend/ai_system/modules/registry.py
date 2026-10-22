@@ -99,8 +99,7 @@ class ModuleRegistry:
             from ai_system.research.views import activity
             branch=request.inputs.get('branch') or {}
             task_id=request.inputs.get('task_id') or request.inputs.get('experiment_id') or branch.get('subproblem',{}).get('id')
-            with activity(ctx,request.name,task_id,**({'question_id':request.inputs['question_id']} if request.inputs.get('question_id') else {})) as execution:
-                execution['inputs'] = request.inputs if not request.name.startswith('writing.') else {'source':'当前研究与版本化正文'}
+            with activity(ctx,request.name,task_id,inputs=request.inputs if not request.name.startswith('writing.') else {},**({'question_id':request.inputs['question_id']} if request.inputs.get('question_id') else {})) as execution:
                 with capability_span(request.name, capability.module, request.inputs) as span:
                     result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
                     if inspect.isawaitable(result):

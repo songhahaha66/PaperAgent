@@ -81,14 +81,28 @@ export function applyReplyUpdate<T extends TimelineMessage>(message: T, update: 
     },
   }
 }
-// Only directly adjacent operations fold together; text and decisions are boundaries.
+// Fold progress receipts with their calls. Actual prose, questions and final answers
+// remain boundaries: execution never moves across something the agent said.
+const progressEvents = new Set([
+  'paper_stage',
+  'paper_phase',
+  'paper_code',
+  'paper_solved',
+  'paper_export',
+  'paper_validation',
+])
 export function timelineGroups(message: TimelineMessage) {
+  const segments = messageSegments(message)
+  const hasCalls = segments.some((s) => s.type === 'execution')
   const groups: { id: string; segments: ConversationSegment[]; execution: boolean }[] = []
-  for (const segment of messageSegments(message)) {
+  for (const segment of segments) {
+    if (segment.type === 'event' && segment.block.type === 'main_agent_start') continue
+    const execution =
+      segment.type === 'execution' ||
+      (hasCalls && segment.type === 'event' && progressEvents.has(segment.block.type))
     const last = groups.at(-1)
-    if (segment.type === 'execution' && last?.execution) last.segments.push(segment)
-    else
-      groups.push({ id: segment.id, segments: [segment], execution: segment.type === 'execution' })
+    if (execution && last?.execution) last.segments.push(segment)
+    else groups.push({ id: segment.id, segments: [segment], execution })
   }
   return groups
 }

@@ -7,7 +7,8 @@ from .questions import answer_gaps
 from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
-LABELS = {'research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
+LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
+    'record_results':'登记计算结果','record_figure':'保存图表','writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用未完成',
     'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
@@ -202,7 +203,7 @@ def model_activity(store, work_status):
         result.append({'id':'model:'+str(item['sequence']),
             **{key:item.get(key) for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id')},
             'task_id':item.get('experiment_id'), 'kind':'model',
-            'purpose':item.get('purpose'),
+            'subject':item.get('subject'),
             'label':item.get('step') or ('接收模型响应' if status=='http_response' else '等待模型响应'),
             'started_at':item['sent_at'],'finished_at':item.get('finished_at'),
             'updated_at':max(item.get('finished_at') or 0,item.get('headers_at') or 0,item['sent_at']),
@@ -225,10 +226,13 @@ def activity(ctx, capability, task_id=None, **links):
     if task_id is not None:
         experiment=(snapshot or {}).get('experiments',{}).get(task_id) or {}
         links.update(experiment_id=task_id,question_id=experiment.get('question_id'))
+    question=((snapshot or {}).get('questions',{}).get(links.get('question_id')) or {})
+    experiment=((snapshot or {}).get('experiments',{}).get(links.get('experiment_id')) or {})
+    subject=(experiment.get('subproblem') or {}).get('title') or question.get('title') or ''
     item={'id':uuid4().hex,'capability':capability,'task_id':task_id,
           'parent_call_id':execution_links().get('parent_call_id'),
-          **execution_links(),**links,'started_at':time.time(),'status':'running'}
-    with execution_scope(**links,events=getattr(ctx,'events',None),
+          **execution_links(),'subject':subject,**links,'started_at':time.time(),'status':'running'}
+    with execution_scope(**{**links,'step':LABELS.get(capability,links.get('step')),'subject':subject},events=getattr(ctx,'events',None),
                          research_id=store.research_id if store else None,parent_call_id=item['id']):
         if store:
             with store._transaction() as db:

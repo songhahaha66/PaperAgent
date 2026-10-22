@@ -118,7 +118,10 @@ async def _update(state, runtime, *, repairing=False):
         raise ResearchConflict('写作期间项目已更新，未覆盖新源码；请基于当前版本继续')
     change = project.propose_change(store, None, None, patches) if patches else None
     if change:
-        await project.decide(store, change['id'], 'apply', compile_after=False, expected_version=state['source_version'])
+        from ai_system.research.views import activity
+        with activity(ctx,'writing.save_source') as operation:
+            await project.decide(store, change['id'], 'apply', compile_after=False, expected_version=state['source_version'])
+            operation['output']={'files':sorted({p['file'] for p in patches})}
     await ctx.events.file_changed('paper.tex')
     await ctx.set_stage('write' if not repairing else 'validate', 'completed' if not repairing else 'in_progress', '源码已更新，等待引用与编译检查')
     result = {'log':['LaTeX 项目源码已更新'], 'sections':{}}

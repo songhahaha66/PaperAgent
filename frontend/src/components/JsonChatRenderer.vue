@@ -16,6 +16,7 @@
                   :group-id="group.id"
                   :segments="group.segments"
                   :work-id="workId"
+                  :reply-status="message.metadata?.status"
                   @file="$emit('open-file', $event)"
                   @result="$emit('open-result', $event)"
                 />
@@ -59,7 +60,6 @@
                             · 需要处理</span
                           ></span
                         >
-                        <span class="content-preview">{{ eventSummary(segment.block) }}</span>
                         <t-icon
                           :name="
                             isBlockCollapsed(message.id, segment.id, segment.block)
@@ -166,28 +166,27 @@ const sourceFiles = (block: PipelineBlock): string[] =>
   (block.content as { files?: string[] })?.files || []
 const sourceResults = (block: PipelineBlock): string[] =>
   (block.content as { result_ids?: string[] })?.result_ids || []
-const eventLabels: Record<string, [string, string]> = {
-  paper_confirm: ['研究需要你的输入', '请补充必要信息后继续。'],
-  paper_analysis: ['研究分析', '展开查看研究分析。'],
-  paper_stage: ['执行记录', '展开查看操作说明。'],
-  paper_phase: ['阶段记录', '展开查看操作说明。'],
-  main: ['研究说明', '本次研究的说明。'],
-  main_agent_start: ['开始研究', '已接收本次研究请求。'],
-  main_agent_complete: ['本次操作结果', '本次操作已返回结果。'],
-  main_agent_error: ['研究遇到问题', '请查看错误说明和任务进度。'],
-  call_code_agent: ['准备分析代码', '本次计算的输入与分析要求。'],
-  code_agent: ['编写分析代码', '本次分析代码的生成记录。'],
-  call_exec_py: ['执行分析代码', '本次分析代码的执行请求。'],
-  exec_py: ['分析代码执行结果', '本次计算返回的输出。'],
-  call_writing_agent: ['准备更新论文', '本次写作的要求与材料。'],
-  writing_agent: ['更新论文', '本次论文写作的记录。'],
-  writemd_result: ['论文更新结果', '本次正文的写入结果。'],
-  tree_result: ['查看工作文件', '本次读取的文件列表。'],
-  word_tool_call: ['编辑 Word 论文', '本次文档编辑请求。'],
-  word_tool_result: ['Word 编辑结果', '本次文档编辑的返回结果。'],
-  word_tool_error: ['Word 编辑遇到问题', '请查看错误说明。'],
-  generate_figure: ['生成图表', '本次图表生成记录。'],
-  confirm: ['研究需要你的输入', '请在输入框补充必要信息或说明研究调整。'],
+const eventLabels: Record<string, string> = {
+  paper_confirm: '需要补充信息',
+  paper_analysis: '研究分析',
+  paper_stage: '执行记录',
+  paper_phase: '阶段记录',
+  main: '研究说明',
+  main_agent_complete: '研究结果',
+  main_agent_error: '研究遇到问题',
+  call_code_agent: '准备分析代码',
+  code_agent: '编写分析代码',
+  call_exec_py: '执行分析代码',
+  exec_py: '代码输出',
+  call_writing_agent: '准备撰写论文',
+  writing_agent: '撰写论文',
+  writemd_result: '论文更新',
+  tree_result: '工作文件',
+  word_tool_call: '编辑 Word 文档',
+  word_tool_result: '文档更新',
+  word_tool_error: '文档编辑失败',
+  generate_figure: '生成图表',
+  confirm: '需要补充信息',
 }
 const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {
   const content =
@@ -213,17 +212,14 @@ const readableEvent = (block: PipelineBlock): string => {
   if (typeof block.content === 'string') return block.content
   if (block.content && typeof block.content === 'object') {
     const c = block.content as Record<string, unknown>
-    return ['message', 'summary', 'reason', 'error']
+    return ['message', 'summary', 'reason', 'error', 'note']
       .map((k) => c[k])
       .filter((v) => typeof v === 'string')
       .join('\n\n')
   }
   return ''
 }
-const eventTitle = (block: PipelineBlock) => eventLabels[block.type]?.[0] || '其他执行记录'
-const eventSummary = (block: PipelineBlock) =>
-  eventLabels[block.type]?.[1] ||
-  (eventKind(block) === 'normal' ? '展开查看操作记录。' : '这条记录需要处理，请查看详情。')
+const eventTitle = (block: PipelineBlock) => eventLabels[block.type] || '执行记录'
 // Keep user choices keyed to message and event position while streaming appends content.
 const collapsedBlocks = ref<Map<string, boolean>>(new Map())
 const isBlockCollapsed = (messageId: string, blockIndex: string, block: PipelineBlock) =>
@@ -335,11 +331,8 @@ const formatDateTime = (datetime: string) => {
 :deep(.json-block) {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-card);
   margin: 8px 0;
   overflow: hidden;
-  background-color: var(--pa-surface-muted);
 }
 
 :deep(.json-block-header) {
@@ -347,12 +340,11 @@ const formatDateTime = (datetime: string) => {
   border: 0;
   font-family: inherit;
   text-align: left;
-  background-color: var(--pa-surface-hover);
-  padding: 8px 12px;
+  background: transparent;
+  padding: 5px 0;
   font-weight: 600;
   font-size: 14px;
-  border-bottom: 1px solid var(--pa-line);
-  color: var(--pa-ink);
+  color: var(--pa-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -373,25 +365,14 @@ const formatDateTime = (datetime: string) => {
   flex-shrink: 0;
 }
 
-:deep(.json-block-header .content-preview) {
-  flex: 1;
-  font-weight: 400;
-  font-size: 13px;
-  color: var(--pa-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin: 0 8px;
-}
-
 :deep(.json-block-header .toggle-icon) {
   flex-shrink: 0;
   transition: transform 0.2s ease;
 }
 
 :deep(.json-block-content) {
-  padding: 12px 12px 12px 16px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  padding: 8px 0 8px 14px;
+  border-left: 1px solid var(--pa-line);
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;

@@ -58,7 +58,7 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   assert.match(text(header(0)), /执行分析代码/)
   assert.doesNotMatch(text(header(0)), /Type:|call_exec_py|print/)
   assert.equal(header(0).props['aria-expanded'], false)
-  assert.match(text(header(1)), /其他执行记录/)
+  assert.match(text(header(1)), /执行记录/)
   assert.doesNotMatch(text(header(1)), /future_tool|raw-content/)
   assert.equal(header(1).props['aria-expanded'], false)
   assert.equal(header(2).props['aria-expanded'], true, 'failures start expanded')
@@ -108,7 +108,7 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     { type: 'future_tool', content: '不要丢掉未知记录' },
   ]
   await flush()
-  assert.match(text(host.root), /其他执行记录/, 'mixed pipeline messages retain unknown records')
+  assert.match(text(host.root), /执行记录/, 'mixed pipeline messages retain unknown records')
   app.unmount()
   console.log(
     'PASS: typed event titles, accessible controls, severity actions and stream expansion state stay consistent',

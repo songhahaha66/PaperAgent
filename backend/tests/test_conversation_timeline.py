@@ -234,3 +234,21 @@ def test_source_projection_retains_only_known_semantic_sources_and_safe_files(tm
         'result_ids':['R1','invalid-secret']}})
     assert block['content']['files'] == ['data.csv','research:feedback','research:consistency']
     assert block['content']['result_ids'] == ['R1']
+
+
+def test_progress_projection_uses_recorded_steps_and_preserves_stage_notes(tmp_path):
+    from services.chat_services.conversation_timeline import execution_projection, public_block
+    experience = execution_projection(tmp_path, 'research', 'activity', call(
+        capability='experience.candidates', output={'candidates':3}))
+    assert experience['label'] == '更新经验索引' and '3 项' in experience['detail']
+    model = execution_projection(tmp_path, 'research', 'model', {
+        'sequence':1, 'step':'撰写论文', 'state':'sent', 'sent_at':1,
+        'purpose':'inherited old plan'})
+    assert model['label'] == '撰写论文' and model['detail'] == ''
+    assert 'inherited old plan' not in json.dumps(model)
+    phase = public_block(tmp_path, {'type':'paper_phase','content':{
+        'stage':'export','status':'in_progress','note':'编译 PDF','inputs':'private'}})
+    assert phase['content'] == {'stage':'export','status':'in_progress','note':'编译 PDF'}
+    refs = execution_projection(tmp_path, 'research', 'activity', call(
+        capability='record_results', output={'artifact_refs':['R1','R2'],'rejected':1}))
+    assert refs['result_ids'] == ['R1','R2'] and '2 项结果' in refs['detail'] and '1 项未通过' in refs['detail']

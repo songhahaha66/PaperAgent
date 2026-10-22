@@ -227,8 +227,7 @@ def build_tools(
         """读取工作区已有文本文件，不重跑计算；使用start/limit分段读取。"""
         if start < 0 or not 1 <= limit <= 24000:return '读取范围无效'
         from ai_system.research.views import activity
-        with activity(ctx,'read_file',subproblem_id,display_file=path) as operation:
-            operation['inputs']={'path':path,'start':start,'limit':limit}
+        with activity(ctx,'read_file',subproblem_id,display_file=path,inputs={'path':path,'start':start,'limit':limit}) as operation:
             text=ctx.fs.read_text(path)
             operation['output']={'total_chars':len(text),'excerpt':text[start:start+limit]}
             return text[start:start+limit]
@@ -257,8 +256,7 @@ def build_tools(
         if is_placeholder(code):
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
-        with activity(ctx,'run_python',subproblem_id) as operation:
-            operation['inputs']={'code':code}
+        with activity(ctx,'run_python',subproblem_id,inputs={'code':code}) as operation:
             result = await kernel.execute(code)
             operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
                 output={'ok':result.ok,'run_id':result.run_id})
@@ -281,31 +279,40 @@ def build_tools(
         """一次登记多个论文会用到的结果（同一次或多次执行的结果放在一起登记，减少往返）。
         每个 value 必须出现在对应 run_id 那次执行的输出里，未通过核对的逐条说明原因，其余照常登记。
         返回可在报告和论文中使用的引用"""
-        lines = []
-        for item in items:
-            item = item if isinstance(item, ResultItem) else ResultItem.model_validate(item)
-            if ctx.comparison_proof and any(r['name']==item.name for r in ctx.comparison_proof['protected'].values()):
-                lines.append('- '+item.name+'：这是项目保护的冻结指标，请直接使用已有引用，不重新登记替换。');continue
-            try:
-                result = ctx.registry.record_value(
-                    subproblem_id, item.name, item.value, item.run_id, item.unit, item.description,
-                    item.meaning.model_dump() if item.meaning else None,
-                )
-            except GroundingError as exc:
-                lines.append(f"- {item.name}：登记失败，{exc} 请核对原始执行输出并使用其实际 run_id；不会按相同数值自动改写来源。")
-                logger.info("%s 登记「%s」被拒：%s", subproblem_id, item.name, exc)
-                continue
-            lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}")
-        return submission_feedback("\n".join(lines) or "没有要登记的结果")
+        from ai_system.research.views import activity
+        with activity(ctx,'record_results',subproblem_id,inputs={'count':len(items)}) as operation:
+            lines, refs = [], []
+            for item in items:
+                item = item if isinstance(item, ResultItem) else ResultItem.model_validate(item)
+                if ctx.comparison_proof and any(r['name']==item.name for r in ctx.comparison_proof['protected'].values()):
+                    lines.append('- '+item.name+'：这是项目保护的冻结指标，请直接使用已有引用，不重新登记替换。');continue
+                try:
+                    result = ctx.registry.record_value(
+                        subproblem_id, item.name, item.value, item.run_id, item.unit, item.description,
+                        item.meaning.model_dump() if item.meaning else None,
+                    )
+                except GroundingError as exc:
+                    lines.append(f"- {item.name}：登记失败，{exc} 请核对原始执行输出并使用其实际 run_id；不会按相同数值自动改写来源。")
+                    logger.info("%s 登记「%s」被拒：%s", subproblem_id, item.name, exc)
+                    continue
+                refs.append(result.id)
+                lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}")
+            operation['output']={'artifact_refs':refs,'rejected':len(items)-len(refs)}
+            return submission_feedback("\n".join(lines) or "没有要登记的结果")
 
     async def record_figure(run_id: str, figure: str, caption: str) -> str:
         """登记一张论文要用的图。figure 是执行结果里给出的图片文件名，caption 是图题"""
-        try:
-            result = ctx.registry.record_figure(subproblem_id, run_id, figure, caption)
-        except (GroundingError, FileNotFoundError, KeyError) as exc:
-            return f"登记失败：{exc}"
-        await ctx.events.file_changed(result.path)
-        return submission_feedback(f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）")
+        from ai_system.research.views import activity
+        with activity(ctx,'record_figure',subproblem_id) as operation:
+            try:
+                result = ctx.registry.record_figure(subproblem_id, run_id, figure, caption)
+            except (GroundingError, FileNotFoundError, KeyError) as exc:
+                operation.update(status='failed',error_type=type(exc).__name__,message=str(exc))
+                return f"登记失败：{exc}"
+            operation['output']={'artifact_refs':[result.id],'caption':result.name}
+            operation['display_file']=result.path
+            await ctx.events.file_changed(result.path)
+            return submission_feedback(f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）")
 
     from functools import wraps
     def make_tool(fn):

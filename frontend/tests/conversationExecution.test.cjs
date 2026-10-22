@@ -81,10 +81,10 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   const button = (label) => host.find((n) => n.kind === 'button' && text(n).trim() === label)
   assert.ok(button('data.csv'), 'the selected workspace file remains available after finish')
   assert.ok(button('执行输出'), 'a finished operation exposes its output link')
-  assert.ok(button('查看实测结果 R1'), 'a finished operation exposes its explicit result ID')
+  assert.ok(button('查看结果'), 'a finished operation keeps its result link without showing internal IDs')
   button('data.csv').props.onClick()
   button('执行输出').props.onClick()
-  button('查看实测结果 R1').props.onClick()
+  button('查看结果').props.onClick()
   assert.deepEqual(opened, ['inputs/data.csv', 'runs/run-1/stdout.log'])
   assert.deepEqual(results, ['R1'])
   heading().props.onClick()
@@ -96,7 +96,7 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     false,
     'manual collapse persists through error updates',
   )
-  assert.match(text(host.root), /执行未完成/, 'failure stays visible even when manually folded')
+  assert.match(text(host.root), /未完成/, 'failure stays visible even when manually folded')
   heading().props.onClick()
   await flush()
   assert.match(
@@ -104,6 +104,14 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     /safe failure notice/,
     'the concrete sanitized failure remains available in details',
   )
+  heading().props.onClick()
+  state.segments = [
+    row('completed', { id: 'parent', kind: 'activity', parent_call_id: null, finished_at: 8 }),
+    { ...row('failed', { id: 'child', parent_call_id: 'parent', finished_at: 3 }), id: 'child' },
+  ]
+  await flush()
+  assert.doesNotMatch(text(heading()), /未完成/, 'a recovered child failure does not mark a completed parent failed')
+  assert.equal(heading().props['aria-expanded'], false, 'finished history stays compact')
   app.unmount()
 })().catch((error) => {
   console.error(error)

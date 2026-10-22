@@ -18,7 +18,12 @@ EXPORT_MODES = ("latex", "word")
 
 async def _latex(ctx: GraphContext) -> dict:
     from services.chat_services.paper_project import compile_project, source_state
-    data=await compile_project(ctx.research)
+    from ai_system.research.views import activity
+    with activity(ctx,'writing.compile') as operation:
+        data=await compile_project(ctx.research)
+        operation['display_file']='paper.pdf' if data['compile']['success'] else 'paper.tex'
+        if not data['compile']['success']:
+            operation.update(status='failed',error_type='LatexCompileError',message=data['compile']['message'])
     compilation=data['compile']
     await ctx.events.file_changed('paper.tex')
     if compilation['success']:

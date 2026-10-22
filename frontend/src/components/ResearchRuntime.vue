@@ -12,9 +12,8 @@
       <button v-if="compact" @click="emit('progress')">查看研究</button>
     </header>
     <template v-if="current">
-      <p class="scope">{{ currentScope }}</p>
+      <p v-if="currentScope" class="scope">{{ currentScope }}</p>
       <p v-if="current.experiment_id">{{ experimentTitle(current.experiment_id) }}</p>
-      <p v-if="current.purpose" class="muted">{{ current.purpose }}</p>
       <p
         v-if="questionId && current.question_id && current.question_id !== questionId"
         class="muted"
@@ -126,18 +125,19 @@ const calls = computed(() => [
   ...(props.snapshot?.runtime?.actions || []),
   ...(props.snapshot?.runtime?.models || []),
 ])
-const current = computed(() =>
-  running.value
-    ? props.snapshot?.runtime?.current ||
-      calls.value.filter(callRunning).sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0]
-    : undefined,
-)
-const currentScope = computed(() =>
-  current.value?.question_id
-    ? questionTitle(current.value.question_id)
-    : current.value?.action_id || current.value?.observation_id
-      ? '项目级操作'
-      : '归属未记录',
+const current = computed(() => {
+  if (!running.value) return undefined
+  const active =
+    props.snapshot?.runtime?.current ||
+    calls.value.filter(callRunning).sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0]
+  return active?.kind === 'model'
+    ? calls.value.find((r) => r.id === active.parent_call_id && callRunning(r)) || active
+    : active
+})
+const currentScope = computed(
+  () =>
+    current.value?.subject ||
+    (current.value?.question_id ? questionTitle(current.value.question_id) : ''),
 )
 const headline = computed(() =>
   waiting.value

@@ -39,34 +39,6 @@ def safe_file(root, value):
 
 
 
-OPERATION_DETAILS = {
-    'research.observe': '核对已有证据与未完成事项，选择下一步研究操作。',
-    'research.update_question': '更新问题范围与研究要求。',
-    'research.read_question': '读取问题、已有判断和关联证据。',
-    'research.schedule_experiment': '为当前研究问题安排实验。',
-    'research.continue_experiment': '从已有实验结果继续处理未完成事项。',
-    'research.update_answer': '依据已登记结果更新研究判断与局限。',
-    'research.read_artifact': '读取已保存的研究证据。',
-    'research.ask_user': '收集继续研究所必需的信息。',
-    'research.pause': '保存当前进度并暂停研究。',
-    'research.deliver': '核对研究结论并准备交付结果。',
-    'research.tool_error': '检查未完成的研究能力调用。',
-    'experiments.inspect': '检查实验输入材料与已有数据。',
-    'experiments.execute': '执行当前实验并登记可核对的产物。',
-    'read_file': '读取工作区已有文件的指定内容范围。',
-    'run_python': '在持久 Python 内核中运行实验代码。',
-    'literature.collect': '检索并保存研究所需的文献证据。',
-    'check_interpretation': '核查实验解释与已登记结果是否一致。',
-    'research.check_interpretation': '核查实验解释与已登记结果是否一致。',
-    'research.revise_interpretation': '修订实验解释并保留已有执行结果。',
-    'writing.write': '根据已有研究依据更新论文正文。',
-    'writing.validate': '检查论文结构、引用与结果一致性。',
-    'writing.repair': '修订论文中已定位的问题。',
-    'writing.render': '渲染当前论文源码并检查排版。',
-    'writing.export': '导出当前论文的可交付文档。',
-}
-
-
 def safe_diagnostic(root, value, limit=400):
     """Bound existing error_detail output; remove secrets, prompt dumps and paths.
 
@@ -96,31 +68,39 @@ def safe_diagnostic(root, value, limit=400):
 
 
 def operation_detail(root, item, model):
-    if model:
-        known_steps = {'检查实验报告': '检查实验报告', 'observe': '选择下一步研究操作',
-                       'amendment': '更新研究要求', 'abstract': '撰写摘要', 'references': '整理参考文献'}
-        step = item.get('step') or item.get('label')
-        return known_steps.get(step, '等待并接收当前步骤的模型响应。')
+    # Describe recorded inputs and receipts, never invent progress from elapsed time.
+    if model:return ''
     capability = item.get('capability')
-    detail = OPERATION_DETAILS.get(capability, '执行当前研究能力并保存结果。')
-    inputs = item.get('inputs') or {}
-    if isinstance(inputs, dict):
-        if capability == 'read_file':
-            start, size = inputs.get('start'), inputs.get('limit')
-            if type(start) is int and type(size) is int and start >= 0 and 1 <= size <= 24000:
-                detail += f' 从第 {start} 个字符起读取，最多 {size} 个字符。'
-        if capability == 'run_python' and isinstance(inputs.get('code'), str):
-            detail += f" 本次代码共 {len(inputs['code'].splitlines())} 行。"
-    return detail
+    inputs, output = item.get('inputs') or {}, item.get('output') or {}
+    if capability == 'read_file':
+        total = output.get('total_chars')
+        if total is not None:return f"已读取 {len(output.get('excerpt', ''))} 个字符，文件共 {total} 个字符。"
+        start, size = inputs.get('start'), inputs.get('limit')
+        if type(start) is int and type(size) is int:return f'从第 {start} 个字符起读取，最多 {size} 个字符。'
+    if capability == 'run_python' and isinstance(inputs.get('code'), str):
+        return f"本次代码共 {len(inputs['code'].splitlines())} 行。"
+    if capability == 'experience.candidates' and 'candidates' in output:
+        return f"已更新经验索引，共 {output['candidates']} 项。"
+    if capability == 'record_results' and 'artifact_refs' in output:
+        return f"已登记 {len(output['artifact_refs'])} 项结果。" + (f"另有 {output['rejected']} 项未通过核对。" if output.get('rejected') else '')
+    if capability == 'record_figure':return output.get('caption', '')
+    if capability == 'writing.save_source' and 'files' in output:
+        return '已保存：' + '、'.join(output['files'])
+    if capability == 'literature.collect':return safe_diagnostic(root, inputs.get('query', ''))
+    return ''
+
 
 def execution_projection(root, research_id, kind, item):
     from ai_system.research.views import LABELS
     model = kind == 'model'
     identity = 'model:' + str(item['sequence']) if model else item['id']
     row = {key: item[key] for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id',
-            'finished_at','run_id','input_tokens','output_tokens') if item.get(key) is not None}
+            'finished_at','run_id','input_tokens','output_tokens','subject') if item.get(key) is not None}
     row.update(id=identity, research_id=research_id, kind=kind,
-               label='模型请求' if model else LABELS.get(item.get('capability'), '研究操作'),
+               capability=item.get('capability'),
+               label=(item.get('step') if item.get('step') in LABELS.values() else
+                      {'observe':'判断下一步','title':'整理研究标题','amendment':'更新研究要求','abstract':'撰写摘要','references':'整理参考文献','检查实验报告':'检查实验报告'}.get(item.get('label'), '生成内容'))
+                     if model else LABELS.get(item.get('capability'), '执行步骤'),
                status=item.get('state' if model else 'status', 'unknown'),
                started_at=item.get('sent_at' if model else 'started_at'))
     row['detail'] = operation_detail(root, item, model)
@@ -142,19 +122,24 @@ def execution_projection(root, research_id, kind, item):
     output = item.get('output') or {}
     refs = output.get('artifact_refs', []) if isinstance(output, dict) else []
     row['result_ids'] = [r for r in refs if isinstance(r, str) and re.fullmatch(r'[RF]\d+', r)]
-    # Intentionally omit raw inputs/output, prompts, host, purpose and labels.
+    # Raw requests and inherited planning purposes are not user-facing progress.
     return row
 
 
 def public_block(root, block):
     kind, content = block.get('type', 'unknown'), block.get('content')
-    if kind in {'call_code_agent', 'call_writing_agent', 'word_tool_call', 'main_agent_error'}:
-        content = '操作未完成，已有记录已保存。' if kind == 'main_agent_error' else '操作记录已保存。'
+    if kind == 'main_agent_error':
+        content = safe_diagnostic(root, content if isinstance(content,str) else (content or {}).get('message')) or '操作失败，未记录具体原因。'
+    elif kind in {'call_code_agent', 'call_writing_agent', 'word_tool_call'}:
+        content = '操作记录已保存。'
     if kind == 'research_context' and isinstance(content, dict):
         content = {**{k: content[k] for k in ('schema_version','work_id','subproblem_id','truncated') if k in content},
                    'research_id': content.get('research_id'),
                    'files': [p for p in content.get('files', []) if isinstance(p, str) and (p in RESEARCH_SOURCE_REFS or safe_file(root, p))],
                    'result_ids': [r for r in content.get('result_ids', []) if isinstance(r,str) and re.fullmatch(r'[RF]\d+',r)]}
+    elif kind == 'paper_phase' and isinstance(content, dict):
+        content = {key: content[key] for key in ('stage', 'status', 'note') if isinstance(content.get(key), str)}
+        if 'note' in content:content['note'] = safe_diagnostic(root, content['note'])
     elif not isinstance(content, str):
         content = {key: content[key] for key in ('message','summary','reason','status','ok','success')
                    if isinstance(content,dict) and isinstance(content.get(key), (str,bool))}
