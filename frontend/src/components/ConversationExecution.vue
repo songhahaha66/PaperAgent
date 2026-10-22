@@ -21,57 +21,48 @@
           v-if="entry.type === 'execution'"
           :class="{ nested: entry.row.parent_call_id, error: isFailed(entry.row) }"
         >
-          <details v-if="entry.row.kind === 'model'" class="model-detail">
-            <summary>
-              响应记录
-              <small
-                >{{ status(entry.row)
-                }}<template v-if="duration(entry.row)">
-                  · {{ duration(entry.row) }}</template
-                ></small
-              >
-            </summary>
-            <p v-if="entry.row.message">{{ entry.row.message }}</p>
-            <p>{{ entry.row.label }}</p>
-          </details>
-          <template v-else>
-            <div class="step-heading">
-              <span>{{ entry.row.label }}</span>
-              <small
-                >{{ status(entry.row)
-                }}<template v-if="duration(entry.row)">
-                  · {{ duration(entry.row) }}</template
-                ></small
-              >
-            </div>
-            <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
-            <p v-if="entry.row.message && entry.row.id !== failure?.id">{{ entry.row.message }}</p>
-            <div class="step-links">
-              <button v-if="entry.row.file" @click="$emit('file', entry.row.file)">
-                {{ entry.row.file.split('/').pop() }}
-              </button>
-              <button
-                v-for="(id, index) in entry.row.result_ids || []"
-                :key="id"
-                @click="$emit('result', id)"
-              >
-                {{ (entry.row.result_ids?.length || 0) > 1 ? `查看结果 ${index + 1}` : '查看结果' }}
-              </button>
-              <button v-if="entry.row.script_file" @click="$emit('file', entry.row.script_file)">
-                查看代码
-              </button>
-              <button v-if="entry.row.error_file" @click="$emit('file', entry.row.error_file)">
-                错误输出
-              </button>
-              <button v-if="entry.row.output_file" @click="$emit('file', entry.row.output_file)">
-                执行输出
-              </button>
-            </div>
-          </template>
+          <div class="step-heading">
+            <span>{{ entry.row.label }}</span>
+            <small
+              >{{ status(entry.row)
+              }}<template v-if="duration(entry.row)"> · {{ duration(entry.row) }}</template></small
+            >
+          </div>
+          <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
+          <p v-if="entry.row.message && entry.row.id !== failure?.id">{{ entry.row.message }}</p>
+          <div class="step-links">
+            <button v-if="entry.row.file" @click="$emit('file', entry.row.file)">
+              {{ entry.row.file.split('/').pop() }}
+            </button>
+            <button
+              v-for="(id, index) in entry.row.result_ids || []"
+              :key="id"
+              @click="$emit('result', id)"
+            >
+              {{ (entry.row.result_ids?.length || 0) > 1 ? `查看结果 ${index + 1}` : '查看结果' }}
+            </button>
+            <button v-if="entry.row.script_file" @click="$emit('file', entry.row.script_file)">
+              查看代码
+            </button>
+            <button v-if="entry.row.error_file" @click="$emit('file', entry.row.error_file)">
+              错误输出
+            </button>
+            <button v-if="entry.row.output_file" @click="$emit('file', entry.row.output_file)">
+              执行输出
+            </button>
+          </div>
         </li>
         <li v-else class="execution-note">{{ entry.text }}</li>
       </template>
     </ol>
+    <details v-if="expanded && modelRows.length" class="model-detail">
+      <summary>模型通信记录 · {{ modelRows.length }} 次</summary>
+      <p v-for="row in modelRows" :key="row.id">
+        {{ rows.find((parent) => parent.id === row.parent_call_id)?.label || row.label }}
+        <small>{{ status(row) }} · {{ duration(row) }}</small>
+        <span v-if="row.message">{{ row.message }}</span>
+      </p>
+    </details>
     <p v-if="detailError" class="failure-reason">
       执行详情加载失败。<button @click="loadDetails">重试</button>
     </p>
@@ -101,17 +92,20 @@ onUnmounted(() => {
   if (timer) clearInterval(timer)
 })
 watch(
-  () => props.segments,
+  () => [props.segments, props.replyStatus],
   () => {
     detailGeneration++
     details.value = {}
+    if (props.replyStatus && props.replyStatus !== 'running') void loadDetails()
   },
+  { immediate: true },
 )
 const rows = computed(() =>
   props.segments.flatMap((s) =>
     s.type === 'execution' ? [details.value[s.id] || s.execution] : [],
   ),
 )
+const modelRows = computed(() => rows.value.filter((r) => r.kind === 'model'))
 const isFailed = (row: ExecutionDetail) =>
   ['failed', 'error', 'interrupted', 'cancelled'].includes(row.status)
 const running = computed(() => rows.value.some(callRunning))
@@ -158,6 +152,7 @@ type Entry =
   | { id: string; type: 'note'; text: string }
 const entries = computed(() =>
   props.segments.flatMap<Entry>((s) => {
+    if (s.type === 'execution' && s.execution.kind === 'model') return []
     if (s.type === 'execution')
       return [{ id: s.id, type: 'execution' as const, row: details.value[s.id] || s.execution }]
     const text = note(s)
@@ -182,13 +177,6 @@ watch(
           now.value = Date.now() / 1000
         }, 1000)
       : undefined
-  },
-  { immediate: true },
-)
-watch(
-  () => props.replyStatus,
-  (status) => {
-    if (status && status !== 'running') void loadDetails()
   },
   { immediate: true },
 )

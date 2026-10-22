@@ -42,10 +42,16 @@
                         {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
                       </button>
                     </div>
-                    <MarkdownRenderer
-                      v-else-if="segment.block.type === 'main_agent_complete'"
-                      :content="readableEvent(segment.block)"
-                    />
+                    <template v-else-if="segment.block.type === 'main_agent_complete'">
+                      <MarkdownRenderer :content="completionText(segment.block).summary" />
+                      <details
+                        v-if="completionText(segment.block).diagnostic"
+                        class="completion-diagnostic"
+                      >
+                        <summary>编译详情</summary>
+                        <pre>{{ completionText(segment.block).diagnostic }}</pre>
+                      </details>
+                    </template>
                     <div v-else class="json-block" :class="`event-${eventKind(segment.block)}`">
                       <button
                         type="button"
@@ -219,6 +225,15 @@ const readableEvent = (block: PipelineBlock): string => {
   }
   return ''
 }
+// Older compiler replies include a source excerpt after the error summary.
+// Keep the full diagnostic available without presenting source code as prose.
+const completionText = (block: PipelineBlock) => {
+  const text = readableEvent(block)
+  const split = text.indexOf('\n\n')
+  return text.startsWith('论文源码') && text.includes('PDF 编译未完成') && split !== -1
+    ? { summary: text.slice(0, split), diagnostic: text.slice(split + 2) }
+    : { summary: text, diagnostic: '' }
+}
 const eventTitle = (block: PipelineBlock) => eventLabels[block.type] || '执行记录'
 // Keep user choices keyed to message and event position while streaming appends content.
 const collapsedBlocks = ref<Map<string, boolean>>(new Map())
@@ -325,6 +340,15 @@ const formatDateTime = (datetime: string) => {
   width: 100%;
   max-width: none;
   line-height: 1.7; /* 略增大，给行内公式留足空间，减少上/下溢出导致的视觉错位 */
+}
+
+.completion-diagnostic {
+  margin: 10px 0;
+  color: var(--pa-muted);
+  font-size: 13px;
+}
+.completion-diagnostic summary {
+  cursor: pointer;
 }
 
 /* JSON块样式 */
