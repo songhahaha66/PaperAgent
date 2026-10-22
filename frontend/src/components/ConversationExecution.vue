@@ -14,7 +14,7 @@
       <span class="chevron" aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
     </button>
     <p v-if="running && progressNote" class="current-note">{{ progressNote }}</p>
-    <p v-if="failed && failure?.message" class="failure-reason">{{ failure.message }}</p>
+    <p v-if="failed && failure?.message" class="failure-reason">{{ failure.message.split('；')[0] }}</p>
     <ol v-if="expanded" :id="`calls-${replyId}-${groupId}`">
       <template v-for="entry in entries" :key="entry.id">
         <li
@@ -29,7 +29,7 @@
             >
           </div>
           <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
-          <p v-if="entry.row.message && entry.row.id !== failure?.id">{{ entry.row.message }}</p>
+          <p v-if="entry.row.message">{{ entry.row.message }}</p>
           <div class="step-links">
             <button v-if="entry.row.file" @click="$emit('file', entry.row.file)">
               {{ entry.row.file.split('/').pop() }}
