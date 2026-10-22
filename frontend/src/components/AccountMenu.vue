@@ -20,7 +20,6 @@
       <span v-if="!collapsed" class="account-trigger-details"
         ><strong :title="userName">{{ userName }}</strong></span
       >
-      <t-icon v-if="!collapsed" name="more" class="account-trigger-chevron" />
     </button>
     <template #content>
       <section
@@ -137,11 +136,6 @@ function logout() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.account-trigger-chevron {
-  font-size: 16px;
-  color: var(--pa-muted);
-  margin-left: auto;
 }
 .account-trigger.compact {
   width: var(--pa-control-height-lg);
