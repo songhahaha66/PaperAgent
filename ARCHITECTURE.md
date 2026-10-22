@@ -17,9 +17,9 @@ OpenSandbox 1.1.1 mounts only the current execution tree at `/workspace` and tha
 
 Experiments and paper-comment calculations use scoped persistent directories under the project's `experiments/` tree. Task-selected inputs and dependency handoffs are copied there; run input snapshots, code, changed products, logs and hashes are archived outside writable mounts. Temporary products remain available independently of the container.
 
-A per-project OS lock covers a kernel session through release and all compiler operations. Public file mutations fail while busy. Container leases are persisted before creation; crashes and unconfirmed cleanup conservatively block writes until TTL expiry. Recovery uses files, ResearchStore and confirmed receipts, not Python memory. Uncertain computations and unsaved figures are never reported as completed or silently replayed.
+A KernelPool owns the per-project OS lock through the lifetime of its retained kernels; their actual computations are serialized with bounded lock waits. Candidate containers retain separate Python memory and identical individual CPU/memory limits. Only a live winning kernel can be promoted for estimator handoff; lost memory never triggers an implicit fit. Observation publication uses frozen predictions without fitting. Every live or unconfirmed container has its own entry in the durable project lease ledger. The same project lock covers all compiler operations. Public file mutations fail while busy. Container leases are persisted before creation; crashes and unconfirmed cleanup conservatively block writes until TTL expiry. Recovery uses files, ResearchStore and confirmed receipts, not Python memory. Uncertain computations and unsaved figures are never reported as completed or silently replayed.
 
-`ai_system/export` dispatches Pandoc, XeLaTeX and BibTeX through the same scoped sandbox boundary. Failed compilation preserves prior delivered files. The backend has no compiler fallback.
+`ai_system/export` dispatches Pandoc, XeLaTeX and BibTeX through the same scoped sandbox boundary. Failed compilation preserves prior delivered files. The backend has no compiler fallback. Source discovery excludes internal build/experiment trees. Final source-version validation and PDF replacement share a short edit-lock critical section after the compiler releases its execution lock. Hashing, input snapshots and artifact copies enforce the configured single-file limit during streaming reads, independently of log limits; there is no aggregate project quota.
 
 ## Templates and delivery
 
@@ -28,3 +28,5 @@ Template permission and format checks precede project initialization. A transact
 The Vue workspace preserves its existing panes/tabs. Historical project views load metadata only and show the export action. Both client gates and server gates apply.
 
 See [deployment and user acceptance](deploy/sandbox/README.md) for the explicit shared-storage mappings and checks that must be run on the actual server. No remote acceptance or deployment is implied by static checks.
+
+Explicit project deletion currently removes its public file tree and database project row; the separately stored private state and evidence remain retained. This change does not automatically clean up those retained trees.

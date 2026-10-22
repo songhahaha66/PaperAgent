@@ -19,7 +19,7 @@ def safe_path(path: str) -> str:
 
 
 class RemoteKernel:
-    def __init__(self, workspace_dir, session: SandboxSession, settings: SandboxSettings, timeout=180, fs=None):
+    def __init__(self, workspace_dir, session: SandboxSession, settings: SandboxSettings, timeout=180, fs=None, execution_scope=None):
         self.workspace_dir = Path(workspace_dir).resolve()
         self.fs = fs or WorkspaceFS(str(self.workspace_dir))
         self.fs.init_structure()
@@ -28,7 +28,8 @@ class RemoteKernel:
         self.settings = settings
         self._started = False
         self._lock = asyncio.Lock()
-        self._project_lock = None
+        from .execution_scope import KernelExecutionScope
+        self.execution_scope = execution_scope or KernelExecutionScope(self.workspace_dir)
         self.pending_run = next((rid for rid, row in reversed(self.fs._manifest.get('runs', {}).items())
                                  if row.get('delivery_error') and rid not in self.fs._manifest.get('inherited_runs', [])), None)
 
@@ -43,13 +44,13 @@ class RemoteKernel:
 
     def _freeze_inputs(self, run_id):
         from .evidence import freeze_inputs
-        freeze_inputs(self.fs, run_id)
+        freeze_inputs(self.fs, run_id, max_file_bytes=self.settings.max_file_bytes)
 
     async def _collect(self, run_id):
         from .artifacts import capture_local_outputs
         info = self.fs._manifest['runs'][run_id]
         from .artifacts import output_hashes
-        current = output_hashes(self.fs)
+        current = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
         if info.get('pending_output_hashes') is None:
             info['pending_output_hashes'] = {path: checksum for path, checksum in current.items()
                 if info['output_baseline'].get(path) != checksum}
@@ -57,7 +58,7 @@ class RemoteKernel:
         expected = info['pending_output_hashes']
         if any(current.get(path) != checksum for path, checksum in expected.items()):
             raise RuntimeError('原运行待归档产物版本已改变或丢失，不能登记新版本；不会重算')
-        capture_local_outputs(self.fs, run_id, info['output_baseline'], expected=expected)
+        capture_local_outputs(self.fs, run_id, info['output_baseline'], expected=expected, max_file_bytes=self.settings.max_file_bytes)
         return list(info['artifacts'])
 
     async def _finalize(self, run_id):
@@ -74,18 +75,13 @@ class RemoteKernel:
             self._started = False
 
     async def execute(self, code, *, on_event=None):
-        from services.file_services.workspace_lock import execution_lock
-        async with self._lock:
-            if self._project_lock is None:
-                self._project_lock = execution_lock(self.workspace_dir)
-                try:
-                    await self._project_lock.__aenter__()
-                except BaseException:
-                    self._project_lock = None
-                    raise
+        async with self._lock, self.execution_scope.operation(self, self.timeout):
             if self.pending_run:
                 return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
                     run_id=self.pending_run, failure_kind='delivery')
+            if len(code.encode('utf-8')) > self.settings.max_file_bytes:
+                from .file_limits import FileLimitExceeded
+                raise FileLimitExceeded('执行代码超过单文件上限；代码尚未提交')
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)
             self.fs.save_run_stdout(run_id, "")
@@ -124,7 +120,7 @@ class RemoteKernel:
             await event("starting")
             try:
                 from .artifacts import output_hashes
-                info['output_baseline'] = output_hashes(self.fs)
+                info['output_baseline'] = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
                 self._freeze_inputs(run_id)
                 await asyncio.wait_for(self._start(), self.settings.startup_timeout)
                 info.update(status="running", sandbox_id=self.session.id,
@@ -134,7 +130,7 @@ class RemoteKernel:
                 self.fs._save_manifest()
                 await event("running")
                 outcome = await asyncio.wait_for(self.session.execute(code, run_id, output), self.timeout)
-                result.error = outcome.error
+                result.error = self._safe_error(outcome.error) if outcome.error else None
                 result.ok = result.error is None
                 result.failure_kind = 'code' if result.error else None
                 execution_finished = True
@@ -174,7 +170,8 @@ class RemoteKernel:
                 abnormal = True
                 # Provider failures can contain connection headers. Never echo API keys.
                 result.error = self._safe_error(exc)
-                result.failure_kind = 'transport_unknown'
+                from .file_limits import FileLimitExceeded
+                result.failure_kind = 'resource' if isinstance(exc, FileLimitExceeded) else 'transport_unknown'
             finally:
                 if abnormal:
                     try:
@@ -196,8 +193,10 @@ class RemoteKernel:
                 combined = log + ("\n" + stderr if stderr else "")
                 result.stdout = combined if len(combined) <= 20000 else combined[:10000] + "\n[输出省略；完整内容见运行日志]\n" + combined[-10000:]
                 if result.error:
+                    remaining = max(0, self.settings.max_log_bytes - size)
+                    diagnostic = ('\n' + result.error).encode('utf-8')[:remaining].decode('utf-8', errors='ignore')
                     with (self.fs.run_dir(run_id) / "stderr.log").open("a", encoding="utf-8") as stream:
-                        stream.write("\n" + result.error)
+                        stream.write(diagnostic)
                 status = "cancelled" if cancelled else "timeout" if result.timed_out else "success" if result.ok else "error"
                 info.update(error=result.error, files=result.files, delivery_error=result.delivery_error,
                             failure_kind=result.failure_kind, context_restored=getattr(self.session, 'context_restored', False))
@@ -217,19 +216,12 @@ class RemoteKernel:
 
     def _safe_error(self, error):
         text = str(error)
-        return text.replace(self.settings.api_key, '[redacted]') if self.settings.api_key else text
+        text = text.replace(self.settings.api_key, '[redacted]') if self.settings.api_key else text
+        return text.encode('utf-8')[:self.settings.max_log_bytes].decode('utf-8', errors='ignore')
 
     async def retry_outputs(self):
-        from services.file_services.workspace_lock import execution_lock
         from .evidence import seal_run
-        async with self._lock:
-            if self._project_lock is None:
-                self._project_lock = execution_lock(self.workspace_dir)
-                try:
-                    await self._project_lock.__aenter__()
-                except BaseException:
-                    self._project_lock = None
-                    raise
+        async with self._lock, self.execution_scope.operation(self, self.timeout):
             if not self.pending_run:
                 return None
             run_id = self.pending_run
@@ -253,9 +245,7 @@ class RemoteKernel:
             try:
                 await self._stop()
             finally:
-                if self._project_lock is not None:
-                    await self._project_lock.__aexit__(None, None, None)
-                    self._project_lock = None
+                await self.execution_scope.release(self)
 
     async def __aenter__(self):
         return self

@@ -62,6 +62,30 @@ class OpenSandboxSession:
         self.context_restored = False
         from services.file_services.workspace_lock import project_root
         self.lease_path = private_root(project_root(self.workspace_dir)) / 'sandbox-lease.json'
+        import uuid
+        self.lease_id = uuid.uuid4().hex
+
+    def _save_lease(self, lease):
+        from services.file_services.file_helper import atomic_write
+        data = json.loads(self.lease_path.read_text()) if self.lease_path.exists() else {}
+        leases = data.get('leases', {})
+        if data and 'leases' not in data:
+            # A prior unconfirmed container cannot be forgotten during upgrade.
+            leases['previous'] = data
+        leases[self.lease_id] = lease
+        data = {'leases': leases, 'expires_at': max(row['expires_at'] for row in leases.values())}
+        atomic_write(self.lease_path, lambda f: f.write(json.dumps(data).encode()))
+
+    def _remove_lease(self):
+        from services.file_services.file_helper import atomic_write
+        data = json.loads(self.lease_path.read_text())
+        leases = data['leases']
+        leases.pop(self.lease_id, None)
+        if not leases:
+            self.lease_path.unlink()
+        else:
+            data['expires_at'] = max(row['expires_at'] for row in leases.values())
+            atomic_write(self.lease_path, lambda f: f.write(json.dumps(data).encode()))
 
     async def start(self):
         try:
@@ -109,7 +133,7 @@ class OpenSandboxSession:
         from services.file_services.file_helper import atomic_write
         self.lease_path.parent.mkdir(parents=True, exist_ok=True)
         lease = {'expires_at': time.time() + self.settings.lifetime + self.settings.startup_timeout, 'sandbox_id': None}
-        atomic_write(self.lease_path, lambda f: f.write(json.dumps(lease).encode()))
+        self._save_lease(lease)
         self.sandbox = await Sandbox.create(self.settings.image, connection_config=config,
             timeout=timedelta(seconds=self.settings.lifetime),
             ready_timeout=timedelta(seconds=self.settings.startup_timeout),
@@ -122,7 +146,7 @@ class OpenSandboxSession:
             env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2"})
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
-        atomic_write(self.lease_path, lambda f: f.write(json.dumps(lease).encode()))
+        self._save_lease(lease)
         await self.sandbox.files.write_file('/tmp/paperagent_runtime.py', Path(__file__).with_name('runtime_helpers.py').read_bytes())
         self.interpreter = await CodeInterpreter.create(sandbox=self.sandbox)
         self.host.interpreter = self.interpreter
@@ -243,7 +267,7 @@ class OpenSandboxSession:
             try:
                 if host.sandbox:
                     await self._destroy_host(host)
-                    self.lease_path.unlink(missing_ok=True)
+                    self._remove_lease()
             finally:
                 self.host = None
                 self.sandbox = self.interpreter = self.context = None

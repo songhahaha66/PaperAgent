@@ -33,22 +33,18 @@ async def handoff(ctx,branch,exploration,run_log):
         if hashlib.sha256(raw).hexdigest()!=item['prediction_hash']:
             raise ValueError('比较预测产物已改变，禁止登记候选指标')
         candidate_predictions[str(item['index'])]=json.loads(raw)['prediction']
-    sid=branch['subproblem']['id'];live=sid in ctx.kernels._kernels
+    sid=branch['subproblem']['id']
+    key = row.get('kernel_key')
+    if key in ctx.kernels._kernels:
+        ctx.kernels.promote(key, sid)
+    kernel = ctx.kernels._kernels.get(sid)
+    if kernel is None or getattr(kernel, 'comparison_origin', None) != (record['id'], row['index']):
+        raise ValueError('冻结胜者的 Python 内存已失效；不能静默重新训练。可发布已冻结预测，或明确新建实验。')
     folder=ctx.workspace/'outputs/intermediate/comparisons'/record['id'];folder.mkdir(parents=True,exist_ok=True)
     module=folder/'formal_estimator.py';inputs=folder/'formal_inputs.json';output=folder/'formal_metrics.json'
     module.write_text(row['code']);inputs.write_text(json.dumps(payload,allow_nan=False))
     rel=lambda path:path.relative_to(ctx.workspace).as_posix()
-    prefix='' if live else f'''import json,numpy as np,pandas as pd
-from pathlib import Path
-_handoff_data=json.loads(Path({rel(inputs)!r}).read_text())
-_handoff_scope={{}}
-exec(compile(Path({rel(module)!r}).read_text(),'<frozen-formal-estimator>','exec'),_handoff_scope)
-_X=pd.DataFrame(_handoff_data['X_train'],columns=_handoff_data['columns'])
-_V=pd.DataFrame(_handoff_data['X_validation'],columns=_handoff_data['columns'])
-comparison_estimator=_handoff_scope['make_estimator'](_handoff_data['seed'])
-comparison_estimator.fit(_X,np.asarray(_handoff_data['y_train']))
-'''
-    code=prefix+f'''import json,numpy as np,math
+    code=f'''import json,numpy as np,math
 from pathlib import Path
 from sklearn.metrics import mean_absolute_error,mean_squared_error,roc_auc_score
 _formal_truth=np.asarray({truth.tolist()!r})
@@ -75,7 +71,7 @@ for _index,_values in _formal_candidates.items():
     for _name,_value in _values.items():print('candidate',_index,_name,_value)
 '''
     result=await ctx.kernels.get(sid).execute(code);run_log.append({'run_id':result.run_id,'code':code,'ok':result.ok})
-    if not result.ok:raise ValueError('冻结模型的正式证据复核执行失败')
+    if not result.ok or result.delivery_error:raise ValueError('冻结模型的正式证据复核执行或归档未完成')
     actual=json.loads(output.read_text());expected=[p['prediction'] for p in row['predictions']]
     if not np.allclose(actual['predictions'],expected,rtol=1e-9,atol=1e-10) or not np.isclose(actual['values']['metric'],row['metric'],rtol=1e-9,atol=1e-10) or not np.isclose(actual['values']['baseline'],row['baseline'],rtol=1e-9,atol=1e-10):
         raise ValueError('正式模型与冻结胜者的预测不一致，禁止沿用比较结论')
@@ -94,7 +90,7 @@ for _index,_values in _formal_candidates.items():
             entry=ctx.registry.record_value(sid,name,str(value),result.run_id,description='冻结比较预测的项目指标复核，不重新训练')
             protected[entry.id]=asdict(entry)
     proof={'comparison_id':record['id'],'code_hash':row['code_hash'],'protocol_hash':record['protocol_hash'],'run_id':result.run_id,
-        'artifact_hash':hashlib.sha256(output.read_bytes()).hexdigest(),'protected':protected,'fresh_fit':not live}
+        'artifact_hash':hashlib.sha256(output.read_bytes()).hexdigest(),'protected':protected,'fresh_fit':False}
     ctx.comparison_proof=proof
     record.setdefault('formal_handoffs',[]).append({**{k:v for k,v in proof.items() if k!='protected'},'evidence_refs':list(protected)})
     ExperimentStore(root_store(ctx)).save(record)
@@ -108,6 +104,11 @@ async def publish_comparison(ctx,branch,record,run_log):
     stdout and model estimates are never used as measurements.
     """
     from .supervised import metric_value,baseline_value
+    # This path publishes saved predictions, not a live-estimator handoff.
+    # Close every candidate before constructing the publication kernel.
+    for row in record['branches']:
+        if row.get('kernel_key'):
+            await ctx.kernels.release(row['kernel_key'])
     from ai_system.graph.state import SolveReport
     if record.get('protocol_error') or not record.get('protocol') or not current(ctx,record,branch):
         return {'status':'failed','error':record['reason'],'summary':record['reason'],'reviews':[]}
@@ -148,7 +149,7 @@ async def publish_comparison(ctx,branch,record,run_log):
     code+="plt.title('共同验证样本上的候选预测')\nplt.xlabel('验证样本顺序')\nplt.ylabel('目标值')\nplt.legend()\nplt.tight_layout()\n"
     result=await ctx.kernels.get(branch['subproblem']['id']).execute(code)
     run_log.append({'run_id':result.run_id,'code':code,'ok':result.ok})
-    if not result.ok:raise ValueError('比较结果登记执行失败')
+    if not result.ok or result.delivery_error:raise ValueError('比较结果登记执行或归档未完成')
     refs=[]
     for name,value in values.items():
         item=ctx.registry.record_value(branch['subproblem']['id'],name,str(value),result.run_id,

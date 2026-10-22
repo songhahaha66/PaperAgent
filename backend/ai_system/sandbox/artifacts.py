@@ -1,5 +1,6 @@
 """Publish captured execution files without promoting them to scientific evidence."""
 from services.file_services.file_helper import open_read
+from .file_limits import DEFAULT_MAX_FILE_BYTES, bounded_hash, bounded_copy
 from services.file_services.workspace_layout import workspace_path
 import shutil
 from copy import deepcopy
@@ -187,8 +188,7 @@ def collect_references(ctx, subproblem_id, result):
     return refs
 
 
-def output_hashes(fs):
-    import hashlib
+def output_hashes(fs, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
     result = {}
     paths = [p for folder in ('outputs', 'code') for p in fs.abs(folder).rglob('*')]
     paths += [p for p in fs.root.iterdir() if p.is_file() and not p.name.startswith('.') and
@@ -198,33 +198,26 @@ def output_hashes(fs):
         path = safe_join(fs.root, path.relative_to(fs.root).as_posix())
         if path.is_symlink(): raise ValueError('输出不允许符号链接')
         if path.is_file() and '__pycache__' not in path.parts:
-            with open_read(path) as stream:
-                result[fs.rel(path)] = hashlib.file_digest(stream, 'sha256').hexdigest()
+            result[fs.rel(path)] = bounded_hash(path, max_file_bytes)
     return result
 
 
-def capture_local_outputs(fs, run_id, before, *, expected=None):
+def capture_local_outputs(fs, run_id, before, *, expected=None, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
     saved = []
-    for path, checksum in (expected if expected is not None else output_hashes(fs)).items():
+    for path, checksum in (expected if expected is not None else output_hashes(fs, max_file_bytes=max_file_bytes)).items():
         if expected is None and before.get(path) == checksum: continue
         target = fs.abs(f'runs/{run_id}/artifacts/{path}')
         target.parent.mkdir(parents=True, exist_ok=True)
         from services.file_services.file_helper import atomic_write
-        from .evidence import checksum as file_hash
         if target.exists():
-            if file_hash(target) != checksum:
+            if bounded_hash(target, max_file_bytes) != checksum:
                 raise ValueError('已归档运行产物版本冲突')
         else:
-            atomic_write(target, lambda f: _copy_output(fs.abs(path), f))
-        if file_hash(target) != checksum:
+            atomic_write(target, lambda f: bounded_copy(fs.abs(path), f, max_file_bytes))
+        if bounded_hash(target, max_file_bytes) != checksum:
             target.unlink(missing_ok=True)
             raise ValueError('归档期间产物发生变化，保留未完成状态')
         fs.register_run_artifact(run_id, path)
         fs.register_file(path, source_run=run_id, kind='code' if path.endswith('.py') else 'data')
         saved.append(path)
     return saved
-
-
-def _copy_output(path, target):
-    with open_read(path) as source:
-        shutil.copyfileobj(source, target)

@@ -334,14 +334,16 @@ async def compare(ctx,branch):
         code.write_text(row['code']);inputs.write_text(json.dumps(payload,allow_nan=False));output.unlink(missing_ok=True)
         driver=DRIVER.format(payload=inputs.relative_to(ctx.workspace).as_posix(),code=code.relative_to(ctx.workspace).as_posix(),output=output.relative_to(ctx.workspace).as_posix(),guard=inspect.getsource(check_estimator),contract=row.get('estimator_contract'))
         row['driver_code']=driver;row['driver_hash']=hashlib.sha256(driver.encode()).hexdigest()
-        key=f"{tid}~comparison{row['index']}";row.update(status='running',phase='execution');db.save(record)
+        key=f"{tid}~comparison{row['index']}";row.update(status='running',phase='execution',kernel_key=key);db.save(record)
         kernel=ctx.kernels.get(key);kernel.timeout=25;started=time.monotonic()
+        kernel.comparison_origin = (record['id'], row['index'])
         try:
             run=await kernel.execute(driver)
             row['run_ids'].append(run.run_id);row['stdout_hash']=hashlib.sha256(run.stdout.encode()).hexdigest()
-            if not run.ok:
-                row['error_detail']=diagnostic(run.error)
-                raise (TimeoutError(run.error) if run.timed_out else RuntimeError(run.error))
+            if not run.ok or run.delivery_error:
+                detail = run.error or run.delivery_error
+                row['error_detail']=diagnostic(detail)
+                raise (TimeoutError(detail) if run.timed_out else RuntimeError(detail))
             if not output.is_file() or output.stat().st_size>2_000_000:raise ValueError('预测产物缺失或超预算')
             if hashlib.sha256(code.read_bytes()).hexdigest()!=row['code_hash']:raise ValueError('候选代码在执行期间被改动')
             predictions=json.loads(output.read_text());row['implementation_audit']=predictions['estimator_audit']
@@ -367,4 +369,7 @@ async def compare(ctx,branch):
     for row in record['branches']:
         row['selection_reason']=row.get('error') or reason if index is None else reason if row['index']==index else row.get('error') or '保留同一条件下的实测结果，不宣称该方法无效'
     if not current(ctx,record,branch):record.update(status='input_changed',chosen_index=None,reason='执行期间输入已改变，比较结果仅作历史，不晋升')
+    for row in record['branches']:
+        if record.get('chosen_index') != row['index'] and row.get('kernel_key'):
+            await ctx.kernels.release(row['kernel_key'])
     db.save(record);return record

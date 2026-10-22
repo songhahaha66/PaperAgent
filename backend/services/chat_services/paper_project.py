@@ -4,6 +4,7 @@ Research sections are a projection used by the scheduler, never an alternative
 editable manuscript. Legacy TeX is imported byte-for-byte; no reverse conversion.
 """
 from services.file_services.workspace_layout import workspace_path
+import os
 import difflib
 import hashlib
 import json
@@ -39,8 +40,34 @@ def meta(root):
     return json.loads(read_utf8(path)) if path.exists() else {}
 
 
+INTERNAL_SOURCE_ROOTS = {'.build', '.system', 'experiments', 'runs'}
+
+
+def _source_name(name):
+    from services.file_services.workspace_layout import relative_parts
+    parts = relative_parts(name)
+    if parts[0] in INTERNAL_SOURCE_ROOTS or any(part.startswith('.') or part in {'__pycache__', 'node_modules'} for part in parts):
+        raise ValueError('论文依赖不能引用内部构建或执行目录')
+
+
+def _user_source_files(root):
+    def permitted(path):
+        try:
+            _source_name(path.relative_to(root).as_posix())
+            return not path.is_symlink()
+        except ValueError:
+            return False
+    for directory, dirs, names in os.walk(root, followlinks=False):
+        dirs[:] = [name for name in dirs if permitted(Path(directory)/name)]
+        for name in names:
+            path = Path(directory)/name
+            if permitted(path):
+                yield path
+
+
 def safe_path(root, name):
     root = Path(root).resolve()
+    _source_name(name)
     from services.file_services.workspace_layout import safe_join
     path = safe_join(root, name)
     if '.system' in Path(name).parts or path.suffix.lower() not in TEXT_SUFFIXES | ASSET_SUFFIXES:
@@ -73,19 +100,17 @@ def files(root, main=None):
             for command, value in re.findall(r'\\(input|include|bibliography|addbibresource|includegraphics)(?:\[[^\]]*\])?\{([^{}]+)\}', dependency_text):
                 for item in value.split(','):
                     relative = (Path(name).parent / item.strip()).as_posix()
+                    _source_name(relative)
                     suffixes = [''] if Path(relative).suffix else (['.bib'] if command in {'bibliography','addbibresource'} else ['.tex'] if command in {'input','include'} else sorted(ASSET_SUFFIXES))
                     for suffix in suffixes:
                         candidate = relative + suffix
-                        try:
-                            if safe_path(root, candidate).is_file():
-                                pending.append(candidate)
-                                break
-                        except ValueError:
-                            continue
+                        if safe_path(root, candidate).is_file():
+                            pending.append(candidate)
+                            break
         if len(found) > 200:
             raise ValueError('论文项目超过 200 个文件')
     if main.endswith('.tex'):
-        for path in root.rglob('*'):
+        for path in _user_source_files(root):
             if path.is_file() and path.suffix in {'.sty','.cls','.bst','.def','.cfg','.bbx','.cbx','.ttf','.otf'} and '.system' not in path.parts:
                 name=path.relative_to(root).as_posix()
                 safe_path(root,name)
@@ -340,7 +365,7 @@ async def compile_project(store):
         compilation={'success':result.success,'error_summary':result.error,'diagnostics':result.diagnostics,
                      'source_version':version,'log_path':log_path,'exit_code':result.exit_code,
                      'warnings':result.warnings,'pages':result.pages}
-        with store._transaction() as db:
+        with edit_lock(store.root), store._transaction() as db:
             data=meta(store.root)
             if snapshot(store.root)['version']!=version:
                 compilation.update(success=False,error_summary='编译期间源码已更新，请重新编译。上次成功 PDF 已保留。')

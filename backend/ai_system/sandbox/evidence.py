@@ -1,9 +1,9 @@
 """Selective run receipts stored outside writable sandbox mounts."""
 import hashlib
 import json
-import shutil
 from services.file_services.workspace_layout import safe_join
 from services.file_services.file_helper import atomic_write, open_read
+from .file_limits import DEFAULT_MAX_FILE_BYTES, bounded_copy, bounded_hash
 
 
 def checksum(path):
@@ -11,7 +11,7 @@ def checksum(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def freeze_inputs(fs, run_id):
+def freeze_inputs(fs, run_id, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
     info = fs.get_run_info(run_id)
     frozen = {}
     # Attempt inputs are already the task-selected inputs. Do not copy outputs or project history.
@@ -26,17 +26,12 @@ def freeze_inputs(fs, run_id):
                 continue
             target = fs.run_dir(run_id) / 'inputs' / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(target, lambda f, p=path: _copy(p, f))
-            frozen[relative] = checksum(target)
-            if frozen[relative] != checksum(path):
+            atomic_write(target, lambda f, p=path: bounded_copy(p, f, max_file_bytes))
+            frozen[relative] = bounded_hash(target, max_file_bytes)
+            if frozen[relative] != bounded_hash(path, max_file_bytes):
                 raise ValueError('冻结输入期间文件发生变化，拒绝执行')
     info['input_hashes'] = frozen
     fs._save_manifest()
-
-
-def _copy(path, dest):
-    with open_read(path) as source:
-        shutil.copyfileobj(source, dest)
 
 
 def seal_run(fs, run_id):
