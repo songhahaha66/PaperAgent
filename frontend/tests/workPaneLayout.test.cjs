@@ -47,6 +47,7 @@ const { hostRenderer } = require('./vueHost.cjs')
       return () => vue.h('article', { 'data-panel': props.panel.id }, props.panel.id)
     },
   }
+  const narrow = vue.ref(false)
   const Shell = {
     setup() {
       return () =>
@@ -56,7 +57,7 @@ const { hostRenderer } = require('./vueHost.cjs')
             session: state,
             panels: state.panels.map((panel) => ({ ...panel, label: panel.id, icon: 'file-1' })),
             options: [],
-            stacked: false,
+            stacked: narrow.value,
             onMove: (id, group, before) => store.move('one', id, group, before),
             onSplit: (id, edge) => store.split('one', id, edge),
             onRatio: (ratio) => {
@@ -145,6 +146,26 @@ const { hostRenderer } = require('./vueHost.cjs')
   await flush()
   assert.equal(state.splitRatio, 0.3, 'stacked panes resize along the vertical axis')
   console.log('PASS: pointer and keyboard resizing retain the split ratio on either axis')
+  state.splitAxis = 'horizontal'
+  narrow.value = true
+  await flush()
+  const countPanes = (node) =>
+    (node.props?.class === 'workspace-pane' ? 1 : 0) +
+    (node.children || []).reduce((sum, child) => sum + countPanes(child), 0)
+  assert.equal(countPanes(host.root), 1, 'narrow screens use one tab group')
+  assert.ok(
+    !host.find((node) => node.props?.class?.includes('work-pane-layout stacked')),
+    'narrow width never forces vertical splitting',
+  )
+  assert.strictEqual(
+    host.find((node) => node.props?.['data-panel'] === 'paper'),
+    paper,
+  )
+  assert.equal(mounted.paper, 1, 'resizing preserves the current document')
+  narrow.value = false
+  await flush()
+  assert.equal(countPanes(host.root), 2, 'desktop groups return on widening')
+  assert.equal(mounted.paper, 1)
   app.unmount()
   assert.equal(removed.paper, 1)
   console.log('PASS: leaving the work disposes each moved document exactly once')

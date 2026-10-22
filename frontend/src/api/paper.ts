@@ -145,6 +145,13 @@ export interface PaperExecution {
   change_id?: string
   selection?: SourceSelection
   references?: PaperReference[]
+  steps?: {
+    id: string
+    tool: string
+    state: 'running' | 'completed' | 'failed'
+    output?: string
+    result?: PaperExecution['tool_result']
+  }[]
   tool_result?: {
     ok?: boolean
     stdout?: string

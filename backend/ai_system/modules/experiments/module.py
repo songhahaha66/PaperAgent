@@ -1,17 +1,5 @@
 """Execution tools used by the single research controller."""
 from types import SimpleNamespace
-from pydantic import Field
-from ai_system.modules.registry import Inputs
-
-class CommentInputs(Inputs):
-    request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    code: str = Field(min_length=1,max_length=12000)
-    inputs: list[str] = Field(default_factory=list,max_length=100)
-
-async def comment(ctx, inputs):
-    from services.chat_services.paper_comments import calculate
-    return await calculate(ctx, inputs)
-
 from ai_system.modules.registry import CapabilityProduct, BranchInputs
 
 
@@ -37,7 +25,6 @@ async def inspect_materials(ctx, inputs):
 
 
 def register(registry):
-    registry.register("experiments", "experiments.comment", "experiment", comment, CommentInputs)
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
                       model_callable=True, purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览不是本研究已验收数值成果。')
     for name, product, handler in (("compare", "experiment", compare), ("execute", "research_state", execute)):

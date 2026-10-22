@@ -50,7 +50,7 @@ class WorkspaceFS:
     def abs(self, rel_path: str) -> Path:
         """将 workspace-relative 路径转为绝对路径，并做安全检查。"""
         resolved = (self._root / rel_path).resolve()
-        if not str(resolved).startswith(str(self._root)):
+        if not resolved.is_relative_to(self._root):
             raise ValueError(f"路径 {rel_path} 超出工作空间范围")
         return resolved
 

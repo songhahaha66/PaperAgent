@@ -235,7 +235,37 @@
                 {{ execution.error || '上次处理被中断，已保存原稿与完成步骤。'
                 }}<button :disabled="busy" @click="resume(execution.id)">继续未完成的步骤</button>
               </p>
-              <template v-if="execution.tool_result"
+              <details v-if="execution.steps?.length">
+                <summary>核查记录 · {{ execution.steps.length }} 步</summary>
+                <article v-for="step in execution.steps" :key="step.id">
+                  <p>
+                    {{ commentToolLabels[step.tool] || '处理评论' }} ·
+                    {{
+                      step.state === 'running'
+                        ? '进行中'
+                        : step.state === 'failed'
+                          ? '未完成'
+                          : '完成'
+                    }}
+                  </p>
+                  <pre v-if="step.result?.stdout || step.output">{{
+                    step.result?.stdout || step.output
+                  }}</pre>
+                  <button
+                    v-if="step.result?.code_path"
+                    @click="$emit('open-file', step.result.code_path)"
+                  >
+                    查看代码
+                  </button>
+                  <button
+                    v-if="step.result?.stdout_path"
+                    @click="$emit('open-file', step.result.stdout_path)"
+                  >
+                    查看输出
+                  </button>
+                </article>
+              </details>
+              <template v-else-if="execution.tool_result"
                 ><p>检索 / 计算结果已保存</p>
                 <pre v-if="execution.tool_result.stdout">{{ execution.tool_result.stdout }}</pre>
                 <button
@@ -357,6 +387,12 @@ import PaperSourcePopover from './PaperSourcePopover.vue'
 import PaperChecks from './PaperChecks.vue'
 import PaperPopover from './PaperPopover.vue'
 import PaperTextAnnotations from './PaperTextAnnotations.vue'
+const commentToolLabels: Record<string, string> = {
+  read_file: '查看文件',
+  run_python: '读取与计算',
+  search_literature: '检索文献',
+  propose_edits: '提出修改',
+}
 const props = defineProps<{
   workId: string
   ownerId?: number | string

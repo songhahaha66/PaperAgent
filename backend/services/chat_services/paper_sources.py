@@ -8,6 +8,16 @@ from ai_system.research.store import digest
 SOURCE_LINK = 'https://paperagent.local/citations/'
 
 
+def execution_results(execution):
+    # Old completed executions remain readable; all new calls use step receipts.
+    result=execution.get('tool_result') or {}
+    if result.get('ok') is True:yield 'E'+execution['id'],result
+    for index,step in enumerate(execution.get('steps',[])):
+        result=step.get('result') or {}
+        if step['state']=='completed' and result.get('ok') is True:
+            yield 'E'+execution['id']+'_'+str(index),result
+
+
 def cards(store):
     from ai_system.research.citations import BOUNDARIES
     rows=[]
@@ -46,20 +56,18 @@ def cards(store):
         exists=db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_executions'").fetchone()
         executions=[json.loads(r[0]) for r in db.execute('SELECT payload FROM paper_executions WHERE research_id=?',(store.research_id,))] if exists else []
     for execution in executions:
-        result=execution.get('tool_result') or {}
-        if result.get('ok') is not True:
-            continue
-        paths=[]
-        for name in (result.get('code_path'),result.get('stdout_path')):
-            if name and (store.root/name).resolve().is_relative_to(store.root) and (store.root/name).is_file():
-                paths.append(name)
-        output=result.get('stdout_path')
-        excerpt=(store.root/output).read_text(errors='replace')[:4000] if output in paths else ''
-        rows.append({'key':'E'+execution['id'],'title':'评论中的辅助计算','excerpt':excerpt,
-                     'boundary':'辅助计算实际输出（未自动通过研究验收）','locator':output if output in paths else '原始输出不可用',
-                     'paths':paths,'inputs':result.get('inputs',[]),'page':None,'url':'',
-                     'version':digest(result),'source_id':execution['id'],
-                     'note':'输入、代码、输出已独立保留；该辅助计算没有自动改动主研究的验收状态。'})
+        for key,result in execution_results(execution):
+            paths=[]
+            for name in (result.get('code_path'),result.get('stdout_path')):
+                if name and (store.root/name).resolve().is_relative_to(store.root) and (store.root/name).is_file():
+                    paths.append(name)
+            output=result.get('stdout_path')
+            excerpt=(store.root/output).read_text(errors='replace')[:4000] if output in paths else ''
+            rows.append({'key':key,'title':'评论中的辅助计算','excerpt':excerpt,
+                         'boundary':'辅助计算实际输出（未自动通过研究验收）','locator':output if output in paths else '原始输出不可用',
+                         'paths':paths,'inputs':result.get('inputs',[]),'page':None,'url':'',
+                         'version':digest(result),'source_id':execution['id'],
+                         'note':'输入、代码、输出已独立保留；该辅助计算没有自动改动主研究的验收状态。'})
     return rows
 
 
@@ -121,10 +129,10 @@ def validate_references(root,before,after):
         known={json.loads(r[0])['id'] for r in db.execute('SELECT payload FROM literature_passages')} if exists else set()
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_executions'").fetchone():
             for row in db.execute('SELECT payload FROM paper_executions'):
-                execution=json.loads(row[0]);result=execution.get('tool_result') or {}
-                output=result.get('stdout_path')
-                if result.get('ok') is True and output and (root/output).resolve().is_relative_to(root) and (root/output).is_file():
-                    known.add('E'+execution['id'])
+                for key,result in execution_results(json.loads(row[0])):
+                    output=result.get('stdout_path')
+                    if output and (root/output).resolve().is_relative_to(root) and (root/output).is_file():
+                        known.add(key)
     added=set(re.findall(r'paperagent\.local/citations/([A-Za-z0-9_-]+)',after))-set(re.findall(r'paperagent\.local/citations/([A-Za-z0-9_-]+)',before))
     if added-known:
         raise ValueError('补丁包含未知来源键，不能编造引用')

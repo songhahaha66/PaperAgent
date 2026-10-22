@@ -99,66 +99,71 @@ def test_thread_reanchors_to_applied_range_for_followups(paper):
     project.current_selection(store.root,record2['selection'])
 
 
-def test_explain_does_not_create_patch(paper,monkeypatch):
-    store,_=paper;bound=selection(store,'原来的表述')
-    record,_=comments.create(store,'explain','这是什么意思',bound)
-    async def model(*args,**kwargs):return comments.CommentPlan(intent='explain',answer='这里是在说明局限。')
-    monkeypatch.setattr(comments,'call_structured',model)
-    before=(store.root/'paper.md').read_text()
-    result=run(comments.execute(store,record['id'],object()))
-    assert result['state']=='completed' and result['answer']=='这里是在说明局限。'
-    assert project.read_records(store,'paper_changes')==[] and (store.root/'paper.md').read_text()==before
-
-
-
-def test_multiple_references_keep_ranges_and_produce_one_change_set(paper,monkeypatch):
+def test_comment_explains_without_patch_and_multiple_references_share_one_change_set(paper):
+    from research_tools_helpers import ResearchToolsModel,tool
     store,_=paper
+    record,_=comments.create(store,'explain','这是什么意思',selection(store,'原来的表述'))
+    before=(store.root/'paper.md').read_text()
+    model=ResearchToolsModel(respond=lambda messages:tool('CommentReply',{'answer':'这里是在说明局限。'}))
+    result=run(comments.execute(store,record['id'],model))
+    assert result['answer']=='这里是在说明局限。' and not project.read_records(store,'paper_changes')
+    assert (store.root/'paper.md').read_text()==before
     (store.root/'paper.md').write_text('第一段。第二段。')
-    refs=[{'selection':selection(store,quote),'quote':quote,'read_quote':None,'read_version':None}
-          for quote in ('第一段','第二段')]
-    record,created=comments.create(store,'multi','分别改进这两段',references=refs)
-    assert created and comments.create(store,'multi','分别改进这两段',references=refs)[1] is False
-    seen=[]
-    async def model(llm,schema,messages,**kwargs):
-        context=json.loads(messages[-1].content)
-        assert len(context['references'])==2
-        if schema is comments.CommentPlan:return comments.CommentPlan(intent='edit')
-        quote=context['selection']['quote'];seen.append(quote)
-        return comments.CommentReply(answer='改进'+quote,replacement=quote+'改进')
-    monkeypatch.setattr(comments,'call_structured',model)
-    result=run(comments.execute(store,record['id'],object()))
-    assert result['state']=='completed' and set(seen)=={'第一段','第二段'}
+    refs=[{'selection':selection(store,q),'quote':q} for q in ('第一段','第二段')]
+    record,_=comments.create(store,'multi','分别改进这两段',references=refs)
+    def respond(messages):
+        if not any(getattr(m,'name',None)=='propose_edits' for m in messages):
+            return tool('propose_edits',{'edits':[{'reference':i,'replacement':q+'改进'} for i,q in enumerate(('第一段','第二段'))]},'edit')
+        return tool('CommentReply',{'answer':'两处修改已提出，等待接受。'})
+    result=run(comments.execute(store,record['id'],ResearchToolsModel(respond=respond)))
     patches=project.read_records(store,'paper_changes')[0]['patches']
     assert [p['quote'] for p in patches]==['第一段','第二段']
-    assert project.read_records(store,'paper_threads')[0]['references']==refs
     assert (store.root/'paper.md').read_text()=='第一段。第二段。'
+    assert result['steps'][0]['state']=='completed'
 
-def test_completed_calculation_reused_when_writing_fails(paper,monkeypatch):
-    store,_=paper;bound=selection(store,'原来的表述')
-    record,_=comments.create(store,'compute','计算后修改',bound)
-    calls={'tool':0,'model':0}
-    async def model(*args,**kwargs):
-        calls['model']+=1
-        if calls['model']==1:return comments.CommentPlan(intent='calculate',code='print(2+2)',edit_after=True)
-        if calls['model']==2:raise RuntimeError('writing unavailable')
-        return comments.CommentReply(answer='实际结果为4，候选已提出。',replacement='依据实际结果修订的表述')
-    async def invoke(ctx,name,**inputs):
-        assert name=='experiments.comment';calls['tool']+=1
-        return {'ok':True,'stdout':'4','code_path':'runs/mock/input.py','stdout_path':'runs/mock/stdout.log'}
-    monkeypatch.setattr(comments,'call_structured',model)
-    monkeypatch.setattr('ai_system.modules.registry.invoke',invoke)
-    with pytest.raises(RuntimeError):run(comments.execute(store,record['id'],object()))
+
+def test_comment_reads_excel_corrects_errors_and_resumes_without_replaying_tools(paper,monkeypatch):
+    from research_tools_helpers import ResearchToolsModel,tool
+    from langchain_core.messages import ToolMessage
+    from openpyxl import Workbook
+    store,_=paper;before=store.snapshot()
+    folder=store.root/'attachment';folder.mkdir(exist_ok=True)
+    book=Workbook();sheet=book.active;sheet.title='名单'
+    sheet.append(['姓名','队伍']);sheet.append(['同名学生','A队']);sheet.append(['同名学生','B队'])
+    book.save(folder/'名单.xlsx')
+    record,_=comments.create(store,'lookup','他们在两支队伍吗？在哪？')
+    calls=[];failed=[False]
+    async def unavailable(self,query,**kwargs):
+        return {'sources':[],'search':{'status':'failed','errors':[{'message':'检索服务不可用'}]}}
+    monkeypatch.setattr('ai_system.research.literature.LiteratureService.search',unavailable)
+    def respond(messages):
+        observations=[m for m in messages if isinstance(m,ToolMessage)]
+        if len(observations)==0:return tool('search_literature',{'query':'队伍名单'},'search')
+        if len(observations)==1:
+            assert observations[-1].status=='error' and '检索服务不可用' in observations[-1].content
+            return tool('run_python',{'code':"import pandas as pd; df=pd.read_excel('attachment/错误.xlsx')"},'bad-path')
+        if len(observations)==2:
+            assert observations[-1].status=='error'
+            return tool('run_python',{'code':"import pandas as pd; df=pd.read_excel('attachment/名单.xlsx', sheet_name='名单'); print(df.to_string(index=False))"},'read')
+        if len(observations)==3:
+            return tool('run_python',{'code':"print('Excel行号:', (df.index+2).tolist()); print('不同队伍数:', df['队伍'].nunique())"},'check')
+        assert '不同队伍数: 2' in observations[-1].content
+        if not failed[0]:failed[0]=True;raise RuntimeError('reply unavailable')
+        return tool('CommentReply',{'answer':'附件名单.xlsx 的名单工作表，第2、3行分属A队、B队；姓名相同，尚不能确认同一人。'})
+    model=ResearchToolsModel(respond=respond)
+    with pytest.raises(RuntimeError,match='reply unavailable'):run(comments.execute(store,record['id'],model))
     saved=project.read_records(store,'paper_executions')[0]
-    assert saved['tool_result']['stdout']=='4' and saved['phase']=='write'
-    assert saved['error_type']=='RuntimeError'
-    result=run(comments.execute(store,record['id'],object(),resume=True))
-    assert result['state']=='completed' and result['change_id'] and calls=={'tool':1,'model':3}
-    assert all(key not in result for key in ('error','error_type','owner_pid'))
-    persisted=project.read_records(store,'paper_executions')[0]
-    assert all(key not in persisted for key in ('error','error_type','owner_pid'))
-    history=project.read_records(store,'paper_threads')[0]['messages']
-    assert any(m.get('error_type')=='RuntimeError' and m['phase']=='write' for m in history)
-    assert history[-1]['text']==result['answer']
+    assert [s['state'] for s in saved['steps']]==['failed','failed','completed','completed']
+    assert 'reply unavailable' in saved['error']
+    assert len(list((store.root/'.system/paper-comment-runs/lookup/runs').iterdir()))==3
+    result=run(comments.execute(store,record['id'],model,resume=True))
+    assert result['state']=='completed' and '第2、3行' in result['answer']
+    assert len(result['steps'])==4 and len(list((store.root/'.system/paper-comment-runs/lookup/runs').iterdir()))==3
+    assert not project.read_records(store,'paper_changes')
+    assert store.snapshot()['executions']==before['executions'] and store.snapshot()['artifacts']==before['artifacts']
+    for step in result['steps'][2:]:
+        assert (store.root/step['result']['code_path']).is_file() and (store.root/step['result']['stdout_path']).is_file()
+    assert any(c['key'].startswith('Elookup_') for c in paper_sources.cards(store))
 
 
 def test_finish_preserves_preexisting_failure_in_thread_history(paper):
@@ -172,48 +177,6 @@ def test_finish_preserves_preexisting_failure_in_thread_history(paper):
     assert history[-2]['text']=='先前写作未完成' and history[-2]['error_type']=='RuntimeError'
     assert history[-2]['at']==1 and history[-1]['text']=='已完成'
 
-
-@pytest.mark.parametrize('repair_ok',[True,False])
-def test_comment_writing_has_one_format_repair_without_repeating_tools(paper,monkeypatch,repair_ok):
-    from langchain_core.messages import AIMessage
-    from ai_system.graph import llm_utils
-    store,_=paper;bound=selection(store,'原来的表述')
-    record,_=comments.create(store,'one-repair','计算后修改',bound)
-    calls={'plan':0,'write':0,'repair':0,'tool':0}
-    candidate='{"replacement":"依据实际结果修订的表述"}'  # Missing required answer; never guess it.
-    class Model:
-        def with_structured_output(self,schema,**kwargs):
-            async def structured(messages):
-                if schema is comments.CommentPlan:
-                    calls['plan']+=1
-                    return comments.CommentPlan(intent='calculate',code='print(4)',edit_after=True)
-                calls['write']+=1
-                assert 'replacement字段只包含' in messages[0].content and 'answer' in messages[0].content
-                return {'raw':AIMessage(content=candidate,additional_kwargs={'reasoning_content':'private reasoning'}),
-                        'parsed':None,'parsing_error':None}
-            return SimpleNamespace(ainvoke=structured)
-        async def ainvoke(self,messages):
-            calls['repair']+=1
-            assert messages[-2].content==candidate and not messages[-2].additional_kwargs
-            assert 'private reasoning' not in str(messages)
-            return AIMessage(content=json.dumps({'answer':'实际结果为4，候选已提出。','replacement':'依据实际结果修订的表述'}) if repair_ok else candidate)
-    async def invoke(ctx,name,**inputs):
-        assert name=='experiments.comment';calls['tool']+=1
-        return {'ok':True,'stdout':'4'}
-    monkeypatch.setattr('ai_system.modules.registry.invoke',invoke)
-    before=(store.root/'paper.md').read_bytes()
-    if repair_ok:
-        result=run(comments.execute(store,record['id'],Model()))
-        assert result['state']=='completed' and result['change_id'] and result['answer']=='实际结果为4，候选已提出。'
-        assert all(key not in result for key in ('error','error_type','owner_pid'))
-    else:
-        with pytest.raises(llm_utils.InvalidStructuredReply,match='CommentReply'):
-            run(comments.execute(store,record['id'],Model()))
-        saved=project.read_records(store,'paper_executions')[0]
-        assert saved['state']=='failed' and saved['phase']=='write' and saved['tool_result']['stdout']=='4'
-        assert not project.read_records(store,'paper_changes')
-    assert calls=={'plan':1,'write':1,'repair':1,'tool':1}
-    assert (store.root/'paper.md').read_bytes()==before
 
 
 def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
@@ -329,22 +292,10 @@ def test_initial_empty_file_can_be_edited_and_reverted(paper):
     assert path.read_text()==''
 
 
-def test_real_auxiliary_calculation_freezes_inputs_and_keeps_run_provenance(paper):
-    from ai_system.graph.context import GraphContext
-    from ai_system.modules.registry import invoke
-    store,_=paper;(store.root/'data').mkdir(exist_ok=True);(store.root/'data/value.txt').write_text('4')
-    ctx=GraphContext.create(str(store.root),planner_llm=None);ctx.research=store
-    before=store.snapshot()
-    result=run(invoke(ctx,'experiments.comment',request_id='offline-calc',code="from pathlib import Path\nprint(int(Path('data/value.txt').read_text()) * 2)",inputs=['data/value.txt']))
-    assert result['ok'] and result['stdout'].strip()=='8'
-    assert (store.root/result['code_path']).is_file() and (store.root/result['stdout_path']).read_text().strip()=='8'
-    (store.root/'data/value.txt').write_text('100')
-    frozen=store.root/result['folder']/'data/value.txt'
-    assert frozen.read_text()=='4' and result['inputs'][0]['hash']
-    assert store.snapshot()['executions']==before['executions']
-
 
 def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monkeypatch):
+    store,_=paper
+    monkeypatch.setenv('DATABASE_URL','sqlite:///'+str(store.root/'api-test.sqlite'))
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from routers.work_routes import workspace
@@ -356,9 +307,9 @@ def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monk
     app.dependency_overrides[get_db]=lambda:object()
     monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(created_by=7,output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda *args:store.root)
-    monkeypatch.setattr(workspace,'_paper_writing_model',lambda *args:object())
-    async def model(*args,**kwargs):return comments.CommentPlan(intent='explain',answer='已解释选区。')
-    monkeypatch.setattr(comments,'call_structured',model)
+    from research_tools_helpers import ResearchToolsModel,tool
+    model=ResearchToolsModel(respond=lambda messages:tool('CommentReply',{'answer':'已解释选区。'}))
+    monkeypatch.setattr(workspace,'_paper_writing_model',lambda *args:model)
     with TestClient(app) as client:
         doc=client.get('/api/workspace/work/paper/project').json()
         bound=selection(store,'原来的表述')

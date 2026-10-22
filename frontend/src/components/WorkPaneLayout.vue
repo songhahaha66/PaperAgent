@@ -29,13 +29,13 @@
             ? { flexBasis: `${(index ? 1 - session.splitRatio : session.splitRatio) * 100}%` }
             : undefined
         "
-        @focusin="$emit('focus', group)"
-        @pointerdown="$emit('focus', group)"
+        @focusin="$emit('focus', compact ? session.focusedGroup : group)"
+        @pointerdown="$emit('focus', compact ? session.focusedGroup : group)"
         @dragover.prevent
         @drop.stop.prevent="drop($event, group)"
       >
         <WorkTabBar
-          :panels="panels.filter((panel) => panel.group === group)"
+          :panels="panels.filter((panel) => displayGroup(panel) === group)"
           :active-id="activeId(group)"
           :id-prefix="`${layoutId}-${group}`"
           :options="openOptions(group)"
@@ -58,17 +58,17 @@
     <Teleport
       v-for="panel in panels"
       :key="panel.id"
-      :to="`#${layoutId}-${panel.group}-content`"
+      :to="`#${layoutId}-${displayGroup(panel)}-content`"
       defer
     >
       <div
-        v-show="activeId(panel.group) === panel.id"
-        :id="`${layoutId}-${panel.group}-panel-${groupIndex(panel)}`"
+        v-show="activeId(displayGroup(panel)) === panel.id"
+        :id="`${layoutId}-${displayGroup(panel)}-panel-${groupIndex(panel)}`"
         class="panel-surface"
         role="tabpanel"
-        :aria-labelledby="`${layoutId}-${panel.group}-tab-${groupIndex(panel)}`"
+        :aria-labelledby="`${layoutId}-${displayGroup(panel)}-tab-${groupIndex(panel)}`"
       >
-        <slot :panel="panel" :active="activeId(panel.group) === panel.id" />
+        <slot :panel="panel" :active="activeId(displayGroup(panel)) === panel.id" />
       </div>
     </Teleport>
   </div>
@@ -102,19 +102,23 @@ const dropHint = ref<SplitEdge | null>(null)
 watch(dragged, (id) => {
   if (!id) dropHint.value = null
 })
-const vertical = computed(() => props.stacked || props.session.splitAxis === 'vertical')
+const vertical = computed(() => props.session.splitAxis === 'vertical')
+const compact = computed(() => props.stacked && !vertical.value)
+const displayGroup = (panel: WorkPanel): PanelGroup => (compact.value ? 'main' : panel.group)
 const groups = computed<PanelGroup[]>(() =>
-  props.session.secondaryActiveId
+  !compact.value && props.session.secondaryActiveId
     ? props.session.secondaryFirst
       ? ['secondary', 'main']
       : ['main', 'secondary']
     : ['main'],
 )
 const activeId = (group: PanelGroup) =>
-  group === 'main' ? props.session.activeId : props.session.secondaryActiveId || ''
+  (compact.value ? props.session.focusedGroup : group) === 'main'
+    ? props.session.activeId
+    : props.session.secondaryActiveId || props.session.activeId
 const groupIndex = (panel: WorkPanel) =>
   props.panels
-    .filter((item) => item.group === panel.group)
+    .filter((item) => displayGroup(item) === displayGroup(panel))
     .findIndex((item) => item.id === panel.id)
 const openOptions = (group: PanelGroup) =>
   props.options.map((option) => ({ ...option, onClick: () => emit('open', option.value, group) }))
