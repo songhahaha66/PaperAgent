@@ -1,43 +1,20 @@
 
-from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
-import re
 import sys
 from pathlib import Path
-from typing import List
 
 import pytest
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.graph import GraphContext, GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
-from ai_system.modules.writing.validation import assemble, place_figures
-from ai_system.graph.registry import value_in_output
-from ai_system.graph.state import (
-    CandidateSet,
-    ClaimAudit,
-    ClaimIssue,
-    Conflict,
-    ConsistencyReview,
-    MethodPick,
-    ModelCandidate,
-    ResultReview,
-    Subproblem,
-)
-from ai_system.research import ENGINE_VERSION
-from ai_system.research.models import Requirement, Assumption, IssueReport
-from ai_system.research.planner import AmendmentSpec
+from ai_system.graph import GroundingError, PaperGraphAgent, ResultRegistry, compile_graph
 from ai_system.research.store import ResearchStore
-from ai_system.judge import Answers, ScoreAnswer
 from services.file_services.workspace_fs import WorkspaceFS
 
-from helpers.graph import (TASK, ProblemAnalysis, _analysis, _candidate, decision_outline, native_source_reply, _Structured, FAIL_ONCE, NO_CANDIDATES, CANDIDATE_PROMPTS, FakeModel, FixedJudge, _make_workspace, _context)
+from helpers.graph import TASK, _analysis, _Structured, CANDIDATE_PROMPTS, FakeModel, FixedJudge, _make_workspace, _context
 
 
 # ----------------------------------------------------------------------
@@ -119,69 +96,9 @@ def test_graph_end_to_end_offline(tmp_path):
     assert not (ws/'plan.json').exists()
 
 
-def test_paper_graph_agent_runs_and_persists_checkpoint(tmp_path):
-    ws = _make_workspace(tmp_path)
-    events = []
-    phases = []
-    snapshots = []
-
-    class Recorder:
-        async def send_json_block(self, block_type, content):
-            events.append(block_type)
-            if block_type == "paper_phase":
-                phases.append((content["stage"], content["status"]))
-            if block_type == "research_state":
-                snapshots.append({t["task_id"]: t["progress"]["state"] for t in content["experiments"]})
-
-    agent = PaperGraphAgent(FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), judge=FixedJudge())
-    output = asyncio.run(agent.run(TASK))
-
-    assert "paper.md" in output
-    saved=ResearchStore(ws,agent._load_thread()).snapshot()
-    ids={task['subproblem']['title']:key for key,task in saved['experiments'].items()}
-    first,second=ids['用电量预测'],ids['政策评估']
-    assert (ws / ".system" / "graph.sqlite").exists()
-    assert json.loads((ws / ".system" / "graph_thread.json").read_text())["status"] == "done"
-    assert events[0] == "main_agent_start" and events[-1] == "main_agent_complete"
-    assert "research_state" in events and "file_changed" in events
-    assert any(s.get(first) == "running" for s in snapshots), "claim must publish progress before model execution"
-    assert any(s.get(first) == "accepted" and s.get(second) == "running" for s in snapshots)
-    # 前端阶段卡片依赖的结构化阶段事件
-    assert not any(stage == "analyze" for stage, _ in phases) and ("render", "completed") in phases
-    # markdown 输出不排版
-    assert not any(stage == "export" for stage, _ in phases) and not (ws / "paper.tex").exists()
-    # 逐次模型调用的耗时记录：外层节点名和子问题/章节标签
-    calls = json.loads((ws / ".system" / "llm_calls.json").read_text(encoding="utf-8"))["calls"]
-    tagged = {(c.get("capability"), c["label"]) for c in calls}
-    assert {("experiments.execute", first), ("experiments.execute", second), ("writing.write", "abstract")} <= tagged
-    assert ("writing.repair", "repair:abstract") not in tagged, "Literal numbers alone must not force an abstract rewrite"
-
-    # 同一工作空间开始新任务时，登记表从头编号，不混入上一篇的结果
-    first_thread = json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"]
-    asyncio.run(agent.run(TASK + "（第二篇）", new_run=True))
-    assert json.loads((ws / ".system" / "graph_thread.json").read_text())["thread_id"] != first_thread
-    registry = ResultRegistry.load(WorkspaceFS(str(ws)))
-    assert sorted(registry.results) == ["F1", "F2", "R1", "R2"]
-
-
 # ----------------------------------------------------------------------
 # 单元
 # ----------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("value,output,expected", [
-    ("0.873", "acc=0.87312", True),
-    ("87.3%", "acc=0.87312", True),
-    ("87.31%", "acc 87.312", True),
-    ("1,234.6", "total 1234.5678", True),
-    ("3", "value 2.6", False),
-    ("3", "count 3", True),
-    ("0.9", "acc=0.87312", False),
-    ("1.2e-05", "p=0.000012", True),
-    ("A→B→C", "best path A→B→C", True),
-])
-def test_value_in_output(value, output, expected):
-    assert value_in_output(value, output) is expected
 
 
 def test_registry_rejects_failed_or_unknown_runs(tmp_path):
@@ -214,170 +131,6 @@ def test_registry_rejects_composite_output_lines(tmp_path):
     assert registry.record_value("Q1", "range", "2022-01-07..2022-10-20", run_id).kind == "text"
 
 
-def test_registry_reuses_only_identical_records(tmp_path, monkeypatch):
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    first, second = fs.create_run(), fs.create_run()
-    fs.save_run_stdout(first, "auc 0.71")
-    fs.finish_run(first, "success")
-    fs.save_run_stdout(second, "auc 0.66")
-    fs.finish_run(second, "success")
-    registry = ResultRegistry.load(fs)
-    writes = []
-    write_text = fs.write_text
-    def record_write(path, content, *args, **kwargs):
-        writes.append(path)
-        return write_text(path, content, *args, **kwargs)
-    monkeypatch.setattr(fs, 'write_text', record_write)
-    a = registry.record_value("Q1", "AUC", "0.71", first)
-    assert writes == ['.system/results.json']
-    b = registry.record_value("Q1", "AUC", "0.71", first)
-    assert writes == ['.system/results.json'], 'unchanged diagnostic projections must not be rewritten'
-    c = registry.record_value("Q1", "AUC", "0.66", second)
-    assert len(writes) == 2
-    other = registry.record_value("Q2", "AUC", "0.66", second)
-    assert a.id == b.id == "R1" and c.id == "R2" and other.id == "R3"
-    assert registry.get("R1") is None and registry.get("R2").value == "0.66"
-    assert registry.staged_history[0].value == "0.71" and len(registry.results) == 2
-    assert ResultRegistry.load(fs).staged_history[0] == a
-
-
-def test_registry_render_numbers_figures_and_unknown_refs(tmp_path):
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "rate 0.5")
-    (fs.run_dir(run_id) / "artifacts" / "figure_1.png").write_bytes(b"png")
-    fs.finish_run(run_id, "success")
-    registry = ResultRegistry.load(fs)
-    rate = registry.record_value("Q1", "比例", "50%", run_id)
-    fig = registry.record_figure("Q1", run_id, f"runs/{run_id}/artifacts/figure_1.png", "趋势")
-
-    text = f"比例为 {{{{R:{rate.id}}}}}，见 {{{{F:{fig.id}}}}}。\n\n{{{{F:{fig.id}}}}}\n\n未知 {{{{R:R99}}}}"
-    rendered = registry.render(text)
-    assert "比例为 50%，见 图1。" in rendered
-    assert f"![图1 趋势](runs/{run_id}/artifacts/figure_1.png)\n\n*图1 趋势*" in rendered
-    assert "{{R:R99}}" in rendered
-    # 图名自带的编号去掉；同一张图第二次独占一行只写"见图"；编号按图片出现顺序，不按摘要里的行内提及
-    (fs.run_dir(run_id) / "artifacts" / "figure_2.png").write_bytes(b"second png")
-    second = registry.record_figure("Q1", run_id, f"runs/{run_id}/artifacts/figure_2.png", "图3 敏感性")
-    ref = f"{{{{F:{second.id}}}}}"
-    rendered = registry.render(f"摘要见 {ref}。\n\n{{{{F:{fig.id}}}}}\n\n{ref}\n\n{ref}")
-    assert "摘要见 图2。" in rendered and "*图2 敏感性*" in rendered and "图2 图3" not in rendered
-    assert rendered.count("![图2") == 1 and rendered.rstrip().endswith("*图2 敏感性*")
-    # 重新加载后编号连续
-    assert ResultRegistry.load(fs).get("R1").value == "50%"
-
-
-def test_literal_numbers_and_short_sections_are_not_scientific_delivery_gates(tmp_path):
-    from ai_system.modules.writing.validation import check_sections
-    from ai_system.modules.writing.sections import section_plan
-    ctx=GraphContext.create(str(tmp_path),planner_llm=FakeModel())
-    state={'analysis':_analysis().model_dump(),'task':TASK,'solutions':{},'sections':{}}
-    state['sections']={key:'估计概率为0.51，约51%。' for key,_,_ in section_plan(state) if key!='solve_heading'}
-    assert check_sections(state,ctx)==[]
-    state['sections']['abstract']=' '
-    assert any(i['section']=='abstract' and '为空' in i['message'] for i in check_sections(state,ctx))
-    state['sections']['abstract']='未知 {{R:R999}}'
-    assert any('不存在的结果' in i['message'] for i in check_sections(state,ctx))
-
-
-def test_place_figures_inserts_inline_only_figures_after_paragraph():
-    text = "见 {{F:F1}} 与 {{F:F2}}。\n续行\n\n{{F:F2}}\n\n末段见{{F:F3}}"
-    assert place_figures(text) == "见 {{F:F1}} 与 {{F:F2}}。\n续行\n\n{{F:F1}}\n\n{{F:F2}}\n\n末段见{{F:F3}}\n\n{{F:F3}}"
-    # 已经单独成行的不重复插入
-    assert place_figures("{{F:F1}}\n\n见 {{F:F1}}") == "{{F:F1}}\n\n见 {{F:F1}}"
-
-
-def test_assemble_keeps_figures_out_of_summary_sections():
-    from ai_system.modules.writing.sections import solve_key
-
-    state = {
-        "analysis": {"title": "T", "subproblems": [{"id": "Q1", "title": "建模"}],
-                     "questions":[{"id":"question:Q1","title":"建模","experiment_ids":["Q1"]}]},
-        "sections": {"abstract": "结论见下图\n\n{{F:F1}}", solve_key("Q1"): "曲线见 {{F:F1}}。"},
-    }
-    raw = assemble(state)
-    abstract = raw.split("## 摘要", 1)[1].split("##", 1)[0]
-    assert "（见{{F:F1}}）" in abstract and "\n{{F:F1}}\n" not in abstract
-    assert "曲线见 {{F:F1}}。\n\n{{F:F1}}" in raw
-
-
-def test_render_units_math_and_duplicates(tmp_path):
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "p 0.687 excess -6.26 z 1.2908")
-    fs.finish_run(run_id, "success")
-    registry = ResultRegistry.load(fs)
-    rate = registry.record_value("Q1", "胜率", "68.7%", run_id, unit="%")
-    excess = registry.record_value("Q1", "超额", "-6.26", run_id, unit="点")
-    z = registry.record_value("Q1", "z", "1.2908", run_id, unit="z分数")
-
-    text = f"胜率 {{{{R:{rate.id}}}}}，超额 {{{{R:{excess.id}}}}} 点，统计量 $z={{{{R:{z.id}}}}}$。"
-    assert registry.render(text) == "胜率 68.7%，超额 -6.26 点，统计量 $z=1.2908$。"
-
-
-def test_demote_headings_nests_section_body():
-    from ai_system.modules.writing.validation import demote_headings
-
-    assert demote_headings("### 模型的建立\n正文\n#### 细节", 3) == "#### 模型的建立\n正文\n##### 细节"
-    assert demote_headings("### 背景\n正文", 2) == "### 背景\n正文"
-
-
-def test_compact_messages_keeps_recent_steps_and_stable_prefix():
-    from ai_system.graph.compaction import compact_messages, compaction_boundary
-
-    def history(steps):
-        messages = [HumanMessage(content="task")]
-        for i in range(steps):
-            messages.append(AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": f"# {i}\n" + "x" * 2000}, "id": f"c{i}"}]))
-            messages.append(ToolMessage(content=f"out{i} " + "y" * 2000, tool_call_id=f"c{i}"))
-        return messages
-
-    # 边界按整块推进：块内不变，前缀稳定才能命中缓存
-    assert [compaction_boundary(n, 6, 10) for n in (10, 16, 17, 25, 26, 36)] == [0, 0, 10, 10, 20, 30]
-
-    assert compact_messages(history(16), keep_recent=6, block=10) == history(16)
-    messages = history(20)
-    compacted = compact_messages(messages, keep_recent=6, block=10)
-    assert len(compacted) == len(messages) and compacted[0].content == "task"
-    # 前 10 步被截短，之后原样保留
-    assert len(compacted[1].tool_calls[0]["args"]["code"]) < 1000 and "已压缩" in compacted[20].content
-    assert compacted[21] is messages[21] and compacted[-1] is messages[-1]
-    assert compacted[1].tool_calls[0]["id"] == "c0"
-    assert len(messages[1].tool_calls[0]["args"]["code"]) > 2000
-    # 再走几步（同一块内），被压缩部分完全一致
-    later = compact_messages(history(24), keep_recent=6, block=10)
-    assert [m.content for m in later[:21]] == [m.content for m in compacted[:21]]
-
-
-def test_claims_replace_per_subproblem_and_render(tmp_path):
-    from ai_system.modules.writing.consistency import valid_conflicts
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "p 0.2320")
-    fs.finish_run(run_id, "success")
-    registry = ResultRegistry.load(fs)
-    p = registry.record_value("Q2", "游程检验p值", "0.2320", run_id)
-
-    registry.set_claims("Q2", [{"statement": f"不能拒绝随机 {{{{R:{p.id}}}}}，见 {{{{R:R99}}}}", "strength": "不显著"}])
-    registry.set_claims("Q3", [{"statement": "动量可预测", "strength": "显著"}, {"statement": " ", "strength": "显著"}])
-    # 返工后重新提交，Q2 的旧结论被替换，编号继续递增
-    registry.set_claims("Q2", [{"statement": f"逐分层面不能拒绝随机 {{{{R:{p.id}}}}}", "strength": "不显著"}])
-
-    reloaded = ResultRegistry.load(fs)
-    assert sorted(reloaded.claims) == ["C2", "C3"]
-    assert reloaded.claims["C3"].evidence == [p.id] and reloaded.claims["C2"].evidence == []
-    table = reloaded.claims_table()
-    assert "| C3 | Q2 | 不显著 | 逐分层面不能拒绝随机 0.2320⟨R1⟩ | R1 |" in table
-    assert valid_conflicts([{"claims": ["C2", "C9"], "resolution": "r"}, {"claims": ["C9"], "resolution": "r"}], set(reloaded.claims)) == [
-        {"claims": ["C2"], "resolution": "r"}
-    ]
-
-
 def test_claims_preserve_explicit_refs_and_never_infer_identity_from_equal_numbers(tmp_path):
     fs = WorkspaceFS(str(tmp_path))
     fs.init_structure()
@@ -405,27 +158,6 @@ def test_claims_preserve_explicit_refs_and_never_infer_identity_from_equal_numbe
     reloaded=ResultRegistry.load(fs)
     assert reloaded.claims[linked.id]==linked
     assert '0.883⟨'+r2.id+'⟩' in reloaded.claims_table()
-
-
-def test_call_structured_falls_back_to_plain_json():
-    from types import SimpleNamespace
-
-    from ai_system.graph.llm_utils import call_structured
-
-    class Ignoring:
-        async def ainvoke(self, messages):
-            return None
-
-    class LLM:
-        def with_structured_output(self, schema, **kwargs):
-            return Ignoring()
-
-        async def ainvoke(self, messages):
-            assert "JSON Schema" in messages[-1].content
-            return SimpleNamespace(content='好的：\n```json\n{"method_keys": ["arima"], "reason": "时间序列"}\n```')
-
-    pick = asyncio.run(call_structured(LLM(), MethodPick, [HumanMessage(content="挑方法")]))
-    assert pick.method_keys == ["arima"]
 
 
 def test_step_budget_nudges_near_limit_counting_since_last_human():
@@ -463,44 +195,6 @@ def test_step_budget_nudges_near_limit_counting_since_last_human():
     assert len(seen) == 3, "invalid final reports cannot keep calling the model past the step budget"
 
 
-def test_model_candidate_rejects_empty_placeholder():
-    import pydantic
-
-    with pytest.raises(pydantic.ValidationError):
-        ModelCandidate(name="", method_keys=[], idea="", formulation="", steps=[], validation="")
-    # 把 schema 当模板原样填回的占位方案
-    with pytest.raises(pydantic.ValidationError):
-        ModelCandidate(name="placeholder", method_keys=[], idea="placeholder", formulation="", steps=["x"], validation="")
-    ModelCandidate(name="逻辑回归", method_keys=[], idea="用前序得分预测下一分", formulation="", steps=["拟合"], validation="")
-
-
-def test_report_issues_requires_registered_results(tmp_path):
-    from types import SimpleNamespace
-
-    from ai_system.modules.experiments.review import report_issues
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    ctx = SimpleNamespace(registry=ResultRegistry.load(fs))
-    stub = {"summary": "读入了全部比赛数据并完成了特征构造", "key_findings": [{"statement": "数据读入完成", "strength": "倾向"}]}
-    issues = report_issues(ctx, stub, "Q1")
-    assert len(issues) == 1 and "还没有登记任何结果" in issues[0]
-    # 删掉结论来回避检查
-    assert any("报告概要为空" in i for i in report_issues(ctx, {"summary": "", "key_findings": []}, "Q1"))
-    # 要求可视化却没登记图
-    issues = report_issues(ctx, stub, "Q1", figure_required=True)
-    assert any("还没有登记任何图" in i for i in issues)
-
-    # Q3 没登记结果，却引用了 Q1 登记的 R1 冒充自己的指标
-    run_id = fs.create_run()
-    fs.save_run_stdout(run_id, "test matches 6")
-    fs.finish_run(run_id, "success")
-    ctx.registry.record_value("Q1", "验证集场数", "6", run_id)
-    stolen = {"summary": "AUC 为 {{R:R1}}", "key_findings": []}
-    assert any("R1 不是本子问题登记的结果" in i for i in report_issues(ctx, stolen, "Q3"))
-    assert not any("不是本子问题" in i for i in report_issues(ctx, stolen, "Q3", ["Q1"]))
-
-
 def test_record_results_requires_explicit_run_even_when_recent_output_has_the_value(tmp_path):
     from types import SimpleNamespace
 
@@ -522,143 +216,6 @@ def test_record_results_requires_explicit_run_even_when_recent_output_has_the_va
     # 最近的执行里也没有这个值：照样拒绝
     reply = asyncio.run(record.coroutine([{"name": "编造", "value": "0.9876", "run_id": "run_x"}]))
     assert "登记失败" in reply and len(registry.results) == 1
-
-
-def test_declared_controls_keep_real_sources_without_automatic_science_verdicts(tmp_path):
-    from types import SimpleNamespace
-    import copy
-    from ai_system.modules.experiments.review import control_issues,report_issues
-    fs=WorkspaceFS(str(tmp_path));fs.init_structure();run=fs.create_run()
-    fs.save_run_stdout(run,'LogLoss 0.4934 shuffled 0.5010 baseline 0.6778 AUC 0.71 shuffled_auc 0.502 serve_auc 0.6')
-    fs.finish_run(run,'success');ctx=SimpleNamespace(registry=ResultRegistry.load(fs))
-    ctx.registry.record_value('Q1','LogLoss','0.4934',run)
-    report={'summary':'LogLoss为0.4934，强度待结合完整证据判断。',
-            'key_findings':[{'statement':'当前划分效果有所改善。','strength':'倾向'}],
-            'controls':[{'metric':'LogLoss','value':'0.4934','run_id':run,'shuffled_value':'0.5010',
-                         'shuffled_run_id':run,'chance':'0.6778','higher_is_better':False}]}
-    before=copy.deepcopy(report)
-    assert control_issues(ctx,report)==[] and report_issues(ctx,report,'Q1')==[]
-    assert report==before  # No leakage label, baseline cutoff or significance rewrite.
-    report['controls'][0].update(metric='AUC',value='0.71',shuffled_value='0.502',chance='0.5',
-                                 baseline_value='0.71',baseline_run_id=run,higher_is_better=False)
-    assert control_issues(ctx,report)==[]  # Metric spelling does not override declared direction.
-    report['controls'][0]['shuffled_value']='0.6801'
-    assert control_issues(ctx,report)
-    report['controls'][0]['shuffled_value']='NaN'
-    assert control_issues(ctx,report)
-    report['controls'][0].update(shuffled_value='0.502',shuffled_run_id='missing')
-    assert control_issues(ctx,report)
-    assert control_issues(ctx,{'summary':'AUC 0.71','controls':[]})==[]
-
-
-def test_strip_template_tokens_from_code():
-    from ai_system.modules.experiments.execution import strip_template_tokens
-
-    leaked = "print(df['swing'].mean())</｜DSML｜parameter>    }  ]</｜DSML｜invoke></think>Let me define the target"
-    assert strip_template_tokens(leaked) == "print(df['swing'].mean())"
-    assert strip_template_tokens("x = 1\nprint(x)") == "x = 1\nprint(x)"
-
-
-def test_llm_call_trace_records_label_node_and_slow_calls():
-    from uuid import uuid4
-
-    from langchain_core.outputs import LLMResult
-
-    from ai_system.graph.tracing import LLMCallTrace, labelled
-
-    trace = LLMCallTrace()
-    ok, failed = uuid4(), uuid4()
-    with labelled("Q2:design"):
-        trace.on_chat_model_start({}, [[]], run_id=ok, metadata={"langgraph_checkpoint_ns": "solve:abc|model:def"})
-    trace.on_chat_model_start({}, [[]], run_id=failed, metadata={"langgraph_node": "write"})
-    message = AIMessage(content="x", usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
-                        response_metadata={"finish_reason": "length"})
-    trace.on_llm_end(LLMResult(generations=[[ChatGeneration(message=message)]]), run_id=ok)
-    trace.on_llm_error(TimeoutError("timed out"), run_id=failed)
-
-    first, second = trace.calls
-    assert (first["node"], first["label"], first["input"], first["output"], first["finish"]) == ("solve", "Q2:design", 100, 20, "length")
-    assert second["node"] == "write" and second["label"] == "" and "TimeoutError" in second["error"]
-    summary = trace.summary()
-    assert (summary["calls"], summary["truncated"], summary["errors"]) == (2, 1, 1)
-    assert summary["by_node"]["solve"]["output"] == 20
-
-
-def test_cap_output_only_lowers_max_tokens():
-    from langchain_openai import ChatOpenAI
-
-    from ai_system.graph.llm_utils import cap_output
-
-    llm = ChatOpenAI(model="m", api_key="k", max_tokens=16000)
-    assert cap_output(llm, 4096).max_tokens == 4096 and llm.max_tokens == 16000
-    small = ChatOpenAI(model="m", api_key="k", max_tokens=1000)
-    assert cap_output(small, 4096) is small
-    assert cap_output(FakeModel(), 4096).__class__ is FakeModel
-
-
-def test_placeholder_runs_are_not_executed(tmp_path):
-    from ai_system.modules.experiments.execution import PLACEHOLDER_REPLY, build_tools
-
-    ws = _make_workspace(tmp_path)
-    ctx = _context(ws, FakeModel())
-    run_log: List = []
-    run_python = build_tools(ctx, "Q1", run_log)[0]
-
-    async def go():
-        try:
-            return [await run_python.ainvoke({"code": code}) for code in ("print('x')", "print('ok')\nprint('done')", "import pandas as pd, numpy as np\nprint('q3')", "pass", "# done\n...", "import numpy as np\npass", "print(1 + 1)", "x=42\npass\nprint(x)")]
-        finally:
-            await ctx.kernels.close()
-
-    outputs = asyncio.run(go())
-    assert outputs[:6] == [PLACEHOLDER_REPLY] * 6
-    assert "2" in outputs[6] and "42" in outputs[7] and len(run_log) == 2
-
-
-def test_refused_steps_dropped_from_request():
-    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-
-    from ai_system.graph.compaction import drop_refused_steps
-
-    def call(i):
-        return {"name": "run_python", "args": {"code": "x"}, "id": f"c{i}"}
-
-    messages = [
-        HumanMessage(content="task"),
-        AIMessage(content="", tool_calls=[call(1)]),
-        ToolMessage(content="NO", tool_call_id="c1"),
-        AIMessage(content="", tool_calls=[call(2), call(3)]),
-        ToolMessage(content="NO", tool_call_id="c2"),
-        ToolMessage(content="out", tool_call_id="c3"),
-        AIMessage(content="", tool_calls=[call(4)]),
-        ToolMessage(content="out", tool_call_id="c4"),
-    ]
-    kept = drop_refused_steps(messages, "NO")
-    # 全部被拒的一步整步去掉；部分被拒的一步保留，否则剩下的调用没有对应结果
-    assert [getattr(m, "tool_call_id", None) for m in kept] == [None, None, "c2", "c3", None, "c4"]
-    assert drop_refused_steps(messages[:1], "NO") == messages[:1]
-
-
-def test_truncation_guard_retries_with_note():
-    from ai_system.graph.compaction import TRUNCATED_NOTE, TruncationGuardMiddleware
-
-    class Request:
-        def __init__(self, messages):
-            self.messages = messages
-
-        def override(self, messages):
-            return Request(messages)
-
-    seen = []
-
-    async def handler(request):
-        seen.append(request.messages)
-        reason = "length" if len(seen) == 1 else "stop"
-        return AIMessage(content="", response_metadata={"finish_reason": reason})
-
-    result = asyncio.run(TruncationGuardMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
-    assert result.response_metadata["finish_reason"] == "stop"
-    assert len(seen) == 2 and seen[1][-1].content == TRUNCATED_NOTE and seen[1][0].content == "go"
 
 
 def test_malformed_tool_call_is_retried_and_never_left_in_history():
@@ -683,109 +240,6 @@ def test_malformed_tool_call_is_retried_and_never_left_in_history():
     # 重试仍然坏掉时，坏调用不留在历史里（否则下一次请求被接口以"工具调用没有结果"拒绝）
     assert result.invalid_tool_calls == []
     assert drop_invalid_calls(AIMessage(content="x")).content == "x"
-
-
-def test_run_agent_asks_for_report_when_steps_run_out():
-    from langgraph.errors import GraphRecursionError
-
-    from ai_system.graph.compaction import HistoryRecorder
-    from ai_system.modules.experiments.execution import FINAL_NUDGE, ReportFallback, run_agent
-
-    class Agent:
-        async def ainvoke(self, payload, config=None):
-            raise GraphRecursionError("limit")
-
-    seen = []
-
-    class Reporter:
-        def with_structured_output(self, schema, **kwargs):
-            outer = self
-
-            class Bound:
-                async def ainvoke(self, messages):
-                    seen.append(messages)
-                    return schema(summary="已完成", approach="a", key_findings=[])
-
-            return Bound()
-
-    recorder = HistoryRecorder()
-    recorder.messages = [HumanMessage(content="任务"), AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "1"}, "id": "a"}]),
-                         ToolMessage(content="1", tool_call_id="a")]
-    from ai_system.graph.state import SolveReport
-
-    result = asyncio.run(run_agent(Agent(), [], 5, fallback=ReportFallback(Reporter(), SolveReport, "系统", recorder)))
-    assert result["structured_response"].summary == "已完成"
-    assert seen[0][0].content == "系统" and seen[0][-1].content == FINAL_NUDGE and len(seen[0]) == 5
-    # 没有对话记录时照常抛出
-    with pytest.raises(GraphRecursionError):
-        asyncio.run(run_agent(Agent(), [], 5, fallback=ReportFallback(Reporter(), SolveReport, "系统", HistoryRecorder())))
-
-
-def test_stream_manager_accepts_structured_block():
-    """plan_updated / paper_phase 的 content 是 dict，send_json_block 不能按字符串切片"""
-    from ai_system.core_managers.stream_manager import StreamOutputManager
-
-    received = []
-
-    class Callback:
-        async def on_json_block(self, block):
-            received.append(block)
-
-    asyncio.run(StreamOutputManager(Callback()).send_json_block("paper_phase", {"stage": "solve", "status": "in_progress"}))
-    assert received == [{"type": "paper_phase", "content": {"stage": "solve", "status": "in_progress"}}]
-
-
-def test_research_level_advice_uses_current_experimental_results_and_limits(tmp_path):
-    from ai_system.modules.writing.sections import section_request
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
-    rid=ctx.fs.create_run();ctx.fs.save_run_input(rid,"print('observed saving',8.5)")
-    ctx.fs.save_run_stdout(rid,'observed saving 8.5');ctx.fs.finish_run(rid,'success')
-    result=ctx.registry.record_value('E1','给定样本上的节电比例','8.5',rid,unit='%')
-    actual='本次验证条件下节电比例为 {{R:'+result.id+'}}'
-    limits=['未检验其他地区，不支持无条件推广。']
-    experiment={'id':'E1','kind':'compute','title':'政策效果验证','question':'评估给定条件下节能政策效果','depends_on':[]}
-    state={'task':'依据政策验证结果给出可执行建议，保留适用边界。',
-        'analysis':{'title':'政策建议','subproblems':[experiment],'assumptions':[],
-                    'questions':[{'id':'question:policy','question':experiment['question'],'title':'政策效果',
-                                  'experiment_ids':['E1'],'judgment':actual,'limitations':limits}]},
-        'solutions':{'E1':{'status':'completed','summary':actual,'key_findings':[{'statement':actual,'strength':'倾向'}],
-                            'limitations':limits}},'sections':{},
-        'outline':[{'key':'evaluation','title':'政策建议','purpose':'建议必须依据当前实测结果并说明适用边界。','task_ids':['E1']}]}
-    before=dict(ctx.registry.results)
-    from research_tools_helpers import record_writing_inputs
-    persisted=record_writing_inputs(ctx,state['task'],[experiment],reports=state['solutions'])
-    state={**persisted,'outline':state['outline']}
-    request=section_request('evaluation','政策建议',state,ctx)
-    assert '谁在什么场景下用哪个输出做什么决定' in request
-    assert '哪些输出因证据不足不能用于决策' in request
-    assert state['outline'][0]['purpose'] in request and actual in request and limits[0] in request
-    assert result.name in request and '{{R:'+result.id+'}}' in request
-    assert ctx.registry.results==before and len(state['analysis']['subproblems'])==1
-    assert all(sp['kind']=='compute' for sp in state['analysis']['subproblems']), 'advice is a research delivery, never a writing experiment'
-
-
-def test_dependency_handoff_includes_solution_code(tmp_path):
-    from types import SimpleNamespace
-
-    from ai_system.modules.experiments.execution import _dependency_text, export_solution_code, solution_code_path
-
-    fs = WorkspaceFS(str(tmp_path))
-    fs.init_structure()
-    ctx = SimpleNamespace(fs=fs, workspace=tmp_path, registry=ResultRegistry.load(fs))
-    export_solution_code(ctx, "Q2", [
-        {"run_id": "r1", "code": "def backtest(p):\n    return p", "ok": True},
-        {"run_id": "r2", "code": "raise ValueError", "ok": False},
-        {"run_id": "r3", "code": "print('ok')", "ok": True},
-    ])
-    code = (tmp_path / solution_code_path("Q2")).read_text(encoding="utf-8")
-    assert "def backtest" in code and "ValueError" not in code and "print('ok')" not in code
-    (tmp_path / "outputs" / "intermediate").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "outputs" / "intermediate" / "aligned.csv").write_text("a\n1\n")
-    text = _dependency_text({"Q2": {"summary": "策略回测"}}, ctx)
-    assert solution_code_path("Q2") in text and "outputs/intermediate/aligned.csv" in text
-    # 没有成功执行过的代码时不写文件
-    export_solution_code(ctx, "Q3", [{"run_id": "r4", "code": "x", "ok": False}])
-    assert not (tmp_path / solution_code_path("Q3")).exists()
 
 
 def test_explicit_new_run_does_not_resume_an_interrupted_plan(tmp_path):

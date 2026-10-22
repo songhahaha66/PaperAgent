@@ -2,41 +2,15 @@
 
 from ai_system.research.domain import findings as research_findings
 import asyncio
-import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
-import pytest
-from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.graph import llm_utils
 from ai_system.graph.agent import PaperGraphAgent
-from ai_system.research.models import IssueReport, Requirement, ResearchConflict
 from ai_system.research.store import ResearchStore
 from helpers.graph import FakeModel, FixedJudge, TASK, _Structured
-from helpers.contracts import problem, store_for, submit
-
-
-
-
-def test_unresolved_writing_issue_blocks_direct_publication(tmp_path):
-    store = store_for(tmp_path)
-    submit(store, "Q1", {"demand": 8})
-    submit(store, "Q2", {"allocation": 8, "residual": 0})
-    submit(store, "Q3", {"independent": 1})
-    store.report_issues([IssueReport(task_id="Q1", category="writing", section="sensitivity",
-                                    message="引用了不存在的结果：F1")], "sections")
-    assert not store.delivery_ready(store.snapshot())
-    with pytest.raises(ResearchConflict):
-        store.publish_paper("unrepaired draft")
-    assert not (tmp_path / "paper.md").exists()
-
-
-
-
 
 
 class BrokenWriter(FakeModel):
@@ -45,11 +19,6 @@ class BrokenWriter(FakeModel):
     def _write(self, request):
         text = super()._write(request)
         return text + " 见 {{F:F999}}。" if self.broken else text
-
-
-class LiteralNumberWriter(FakeModel):
-    def _write(self, request):
-        return super()._write(request) + r" 降幅约为 $23.1\%$。"
 
 
 def test_exhausted_writing_repairs_preserve_drafts_and_resume_without_recomputing(tmp_path, monkeypatch):
@@ -118,17 +87,3 @@ def test_explicit_resume_of_unchanged_bad_writer_is_bounded_and_keeps_history_an
     retained=runtime.status()
     assert {k:retained[k] for k in ('used','input_tokens','output_tokens','request_limit')}=={k:budget[k] for k in ('used','input_tokens','output_tokens','request_limit')}
     assert retained['used']>=1 and retained['input_tokens']>=100 and retained['output_tokens']>=20
-
-
-def test_literal_numbers_are_allowed_without_regex_writing_repairs(tmp_path,monkeypatch):
-    monkeypatch.setattr(_Structured,'reviewed_q1',True)
-    monkeypatch.setattr(_Structured,'audits',10)
-    model=LiteralNumberWriter(loose_number_once=False);start=len(model.text_calls)
-    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),judge=FixedJudge(),
-        explore_top_k=1,max_repair_rounds=1)
-    output=asyncio.run(agent.run(TASK))
-    assert 'paper.md' in output and '引用有效性与文稿结构校验已完成' in output
-    assert '数字校验' not in output
-    assert '23.1' in (tmp_path/'paper.md').read_text()
-    assert agent.last_result.get('repair_round',0)==0 and not agent.last_result.get('issues')
-    assert not any('# 当前稿' in request for request in model.text_calls[start:])

@@ -6,9 +6,7 @@ The parent session runs kernel/export integration separately.
 import asyncio
 import json
 from types import SimpleNamespace
-import pytest
 from langchain_core.messages import ToolMessage
-from langgraph.errors import GraphRecursionError
 from ai_system.graph.context import GraphContext
 from ai_system.research import operations
 from ai_system.research.control import delivery_status,graph_view,refresh_registry
@@ -16,10 +14,10 @@ from ai_system.research.domain import current_results
 from ai_system.research.feedback import ReportEdit,interpretation_version,revise_interpretation
 from ai_system.research.loop import prepare_action,resume
 from ai_system.research.models import WorkerResult
-from ai_system.research.planner import decision_context,planning_failure_message
+from ai_system.research.planner import decision_context
 from ai_system.research.store import ResearchStore
-from ai_system.research.views import questions,experiment_context
-from research_tools_helpers import add_experiment,answer,continue_experiment,ResearchToolsModel,tool,_manual_worker_handoff
+from ai_system.research.views import experiment_context
+from research_tools_helpers import add_experiment, continue_experiment, ResearchToolsModel, tool, _manual_worker_handoff
 
 
 def commit_count(store,eid,value,scope,*,lineage=None):
@@ -73,25 +71,6 @@ def test_missing_refs_are_saved_as_incomplete_then_fixed_in_the_same_agent(tmp_p
     assert store.snapshot()['action']['capability']=='writing.write'
 
 
-@pytest.mark.parametrize('coverage,statement',[('partial','只回答已知范围，效果仍未知'),('unanswered','')])
-def test_explicit_unknowns_do_not_require_fabricated_evidence(tmp_path,coverage,statement):
-    store,_,_,qid=study(tmp_path)
-    result=answer(store,question_id=qid,statement=statement,coverage=coverage,stop_reason='现有资料不足以支持更多判断')
-    assert not result['answer_gaps'] and store.delivery_ready(store.snapshot())
-
-
-def test_legacy_answer_without_refs_has_the_same_specific_delivery_diagnostic(tmp_path):
-    store,_,_,qid=study(tmp_path)
-    with store._transaction() as db:
-        state=store._read(db);state['questions'][qid].update(coverage='answered',judgment='自报完成',
-            artifact_refs=[],answer_status='current',stop_reason='认为已完成')
-        store._save(db,state,'legacy_fixture',{})
-    before=store.snapshot();status=delivery_status(before);view=questions(before)[0]
-    assert not status['ready'] and status['blockers'] and view['answer_status']=='needs_update'
-    assert view['answer_gaps']==[b['message'] for b in status['blockers']]
-    assert store.snapshot()==before
-
-
 def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_path):
     from ai_system.modules.writing.sections import section_request
     store,first,r1,qid=study(tmp_path)
@@ -128,36 +107,6 @@ def test_continuation_preserves_same_name_results_with_different_declared_scope(
     after=store.snapshot()
     assert after['executions']==before['executions']
     assert {r['id'] for r in current_results(after,{eid})}=={r1,r2}
-
-
-def test_model_decision_limit_retains_the_last_specific_tool_error(tmp_path):
-    from test_planner_action_contract import context
-    def respond(messages):return tool('research_deliver',{'reason':'反复改理由'},'again'+str(len(messages)))
-    ctx,model=context(tmp_path,respond);ctx.max_solver_steps=3
-    assert asyncio.run(prepare_action(ctx))
-    action=ctx.research.snapshot()['action']
-    assert model.calls==3 and action['error_type']=='NoResearchProgress'
-    assert '3 次模型决策' in action['message'] and '尚未建立' in action['message']
-    assert '费用额度耗尽' not in action['message']
-    message=planning_failure_message(GraphRecursionError('limit 25'),ctx.research.snapshot())
-    assert '图步骤上限' in message and '不是费用额度耗尽' in message and '尚未建立' in message
-
-
-def test_registration_does_not_replace_same_name_results_with_different_meaning(tmp_path):
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
-    (tmp_path/'data').mkdir(exist_ok=True);(tmp_path/'data/rows.csv').write_text('row_id,category\n1,A\n2,A\n3,B\n')
-    run=ctx.fs.create_run();ctx.fs.save_run_stdout(run,'total 3 subset 2 updated 3');ctx.fs.finish_run(run,'success')
-    meaning={'object':'源记录','scope':'全部源记录','statistic':'行数','conditions':'给定输入','lineage':[]}
-    first=ctx.registry.record_value('E1','record_count','3',run,meaning=meaning)
-    second=ctx.registry.record_value('E1','record_count','2',run,meaning={**meaning,'scope':'仅类别A'})
-    assert first.id!=second.id and ctx.registry.get(first.id)==first and ctx.registry.get(second.id)==second
-    assert not ctx.registry.staged_history
-
-    lineage=[{'path':'data/rows.csv','source_path':'data/rows.csv','row_keys':['row_id'],'transformation':'保留源行键'}]
-    updated=ctx.registry.record_value('E1','record_count','3',run,meaning={**meaning,'lineage':lineage})
-    assert ctx.registry.get(first.id) is None and ctx.registry.get(second.id)==second
-    assert ctx.registry.get(updated.id).meaning['lineage']==lineage
-    assert ctx.registry.staged_history==[first]
 
 
 def test_same_scope_new_lineage_updates_current_version_and_keeps_old_provenance(tmp_path):

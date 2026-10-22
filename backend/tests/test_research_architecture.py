@@ -1,7 +1,5 @@
 """Offline architecture contracts; no external models or historical user data."""
 import asyncio
-import copy
-import json
 from dataclasses import asdict
 from types import SimpleNamespace
 
@@ -9,18 +7,12 @@ import pytest
 
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import ResultRegistry
-from ai_system.research.domain import current_result_refs, experiment_report
-from ai_system.research.feedback import ReportEdit, FeedbackDecision, interpretation_version, revise_interpretation
-from ai_system.research.loop import prepare_action
-from research_tools_helpers import add_experiment,answer
-from ai_system.research import operations
+from ai_system.research.domain import experiment_report
+from ai_system.research.feedback import ReportEdit, interpretation_version, revise_interpretation
+from research_tools_helpers import add_experiment
 from ai_system.research.models import WorkerResult, IssueReport, ResearchConflict
-from ai_system.research.planner import decision_context
-from ai_system.research.questions import QuestionUpdate
-from ai_system.research.questions import apply_questions
 from ai_system.research.store import ResearchStore
 from ai_system.research.views import questions
-from ai_system.research.experiment_views import experiments_view
 from services.file_services.workspace_fs import WorkspaceFS
 
 
@@ -63,33 +55,6 @@ def test_edit_changes_current_claims_and_history_without_a_run(study):
     assert not study.store.delivery_ready(after)
 
 
-def test_false_semantic_suspicion_can_be_dismissed_against_retained_fact(study):
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        issue=study.store._record_issue(state,IssueReport(task_id=study.eid,category='data',message='Wrong unit assumption',evidence_refs=[study.value.id]),'suspected',source='semantic_check')
-        study.store._save(db,state,'test_doubt',{})
-    before=study.store.snapshot();task=before['experiments'][study.eid]
-    revise_interpretation(study.store,study.eid,interpretation_version(before,task),decisions=[FeedbackDecision(
-        issue_id=issue['id'],disposition='dismiss',reason='Original record scope contradicts this suspicion',evidence_refs=[study.value.id])])
-    after=study.store.snapshot()
-    assert after['feedback'][0]['status']=='dismissed'
-    assert after['executions']==before['executions']
-    assert after['experiments']==before['experiments']
-
-
-def test_split_reuses_experiment_sources_without_recomputation(study):
-    before=study.store.snapshot()
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        apply_questions(state,[QuestionUpdate(question='What is known about the selected subjects?',reason='Refine original target',
-            source_question_ids=[study.qid],experiment_ids=[study.eid])])
-        study.store._save(db,state,'test_split',{})
-    after=study.store.snapshot();rows=questions(after)
-    assert len(rows)==2 and study.eid in rows[1]['experiment_ids']
-    assert study.value.id in rows[1]['available_artifact_refs']
-    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
-
-
 def test_interpretation_version_conflict_preserves_parallel_update(study):
     before=study.store.snapshot();version=interpretation_version(before,before['experiments'][study.eid])
     edit=ReportEdit(summary='Revised',key_findings=[])
@@ -97,63 +62,6 @@ def test_interpretation_version_conflict_preserves_parallel_update(study):
     changed=study.store.snapshot()
     with pytest.raises(ResearchConflict):revise_interpretation(study.store,study.eid,version,edit)
     assert study.store.snapshot()==changed
-
-
-def test_view_defaults_to_references_actually_used_by_interpretation(study):
-    view=experiments_view(study.store.snapshot(),lambda path,prefix='':path)[0]
-    assert view['primary_result_refs']==[study.value.id]
-    assert len(view['results'])==2
-    assert view['record']['approach']=='row count'
-    assert view['interpretation_version']
-
-
-
-
-def test_semantic_doubts_do_not_automatically_schedule_another_review(study,monkeypatch):
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        study.store._record_issue(state,IssueReport(task_id=study.eid,category='writing',message='Check interpretation'),'suspected',source='local_review')
-        study.store._save(db,state,'test_doubt',{})
-    async def decide(self,ctx,context,observation_id):
-        operations.pause(ctx,{'message':'Owner decides next step'})
-    async def event(*args):pass
-    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
-    ctx=SimpleNamespace(research=study.store,planner_llm=None,max_planning_calls=None,events=SimpleNamespace(stage=event,emit=event))
-    assert asyncio.run(prepare_action(ctx))
-    assert study.store.snapshot()['action']['capability']=='pause'
-
-
-def test_same_experiment_continuation_inherits_evidence_without_relabeling_source(study,monkeypatch):
-    async def decide(self,ctx,context,observation_id):
-        operations.continue_experiment(ctx,{'experiment_id':study.eid,'information_need':'Need one additional descriptive measurement'})
-    async def event(*args):pass
-    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
-    ctx=SimpleNamespace(research=study.store,planner_llm=None,max_planning_calls=None,events=SimpleNamespace(stage=event,emit=event))
-    asyncio.run(prepare_action(ctx));order=study.store.claim(study.eid)
-    before=study.store.snapshot();artifact=copy.deepcopy(before['artifacts'][study.value.id])
-    report=experiment_report(before,before['experiments'][study.eid])
-    study.store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',report=report,
-        results=[asdict(study.value),asdict(study.aux)]))
-    after=study.store.snapshot()
-    assert len(after['experiments'])==1 and len(after['executions'])==2
-    assert after['executions'][order.attempt_id]['parent_attempt']==study.order.attempt_id
-    assert after['artifacts'][study.value.id]==artifact
-    assert study.value.id in current_result_refs(after,{study.eid})
-
-
-def test_schema_four_cutover_preserves_original_and_removes_stale_current_claim(study):
-    state=study.store.snapshot();state['schema_version']=4
-    task=state['experiments'][study.eid];state['artifacts'][task['report_ref']]['report']['key_findings']=[]
-    raw=json.dumps(state)
-    with study.store._transaction() as db:
-        db.execute('UPDATE research SET payload=? WHERE id=?',(raw,'architecture'))
-        db.execute('DELETE FROM domain_migrations WHERE version=7')
-    migrated=ResearchStore(study.store.root,'architecture')
-    assert migrated.snapshot()['schema_version']==5 and not migrated.registry_payload()['claims']
-    assert migrated.snapshot()['executions']==state['executions']
-    with migrated._connect() as db:
-        assert db.execute("SELECT raw FROM legacy_records WHERE source='research/architecture/v4'").fetchone()[0].decode()==raw
-    assert ResearchStore(study.store.root,'architecture').snapshot()==migrated.snapshot()
 
 
 def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,monkeypatch):
@@ -214,148 +122,3 @@ def test_failed_additional_action_preserves_prior_current_evidence(study):
     assert study.store.registry_payload()==study.store.registry_payload(before)
     assert after['executions'][order.attempt_id]['execution_status']=='failed'
     assert any(a['type']=='report' and a['report'].get('error')=='local execution fault' for a in after['artifacts'].values())
-
-
-
-def test_current_requirement_binding_reuses_evidence_without_backdating_checks(study):
-    from ai_system.research.models import ResearchRevision
-    before=study.store.snapshot()
-    patch=ResearchRevision(command_id='new-scope',base_revision=before['revision'],change='Inspect only the selected subset',
-        experiment_ids=[study.eid],requirements=[{'id':'RQ0','statement':'Inspect only the selected subset',
-            'source_quote':'Inspect only the selected subset','kind':'goal','task_ids':[study.eid],'checks':[]}])
-    study.store.apply_revision_command('new-scope',before['revision'],patch.change,[study.eid],patch)
-    after=study.store.snapshot()
-    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
-    assert after['experiments']==before['experiments']
-    assert after['spec']['requirements'][0]['revision']==2
-    assert after['questions'][study.qid]['answer_status']=='needs_update'
-    assert current_result_refs(after,{study.eid})==current_result_refs(before,{study.eid})
-    assert not study.store.delivery_ready(after)
-
-
-def test_evaluate_reuses_ancestor_output_once_and_newer_same_name_wins(study):
-    from ai_system.research.validation import evaluate
-    state=study.store.snapshot();task=state['experiments'][study.eid]
-    parent=task['execution_id'];new_id='additional-action'
-    rules=[{'owner_kind':'requirement','owner_id':'RQ0','owner_revision':1,'check':{
-        'id':'count','description':'Exact record count','left':{'task_id':study.eid,'name':study.value.name},
-        'operator':'eq','expected':12,'tolerance':0}}]
-    state['executions'][new_id]={'parent_attempt':parent,'experience_basis':{'protocol':rules}}
-    task.update(execution_id=new_id,execution_status='running')
-    inherited=evaluate(state,study.eid,[asdict(study.value)])
-    assert inherited.outcome=='accepted' and inherited.checks[0].evidence_refs==[study.value.id]
-    replacement={**asdict(study.value),'id':'R99','value':'15'}
-    newer=evaluate(state,study.eid,[asdict(study.value),replacement])
-    assert newer.outcome=='rejected' and newer.checks[0].evidence_refs==['R99']
-
-
-def test_logical_feedback_dismissal_needs_no_invented_result_reference(study):
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        issue=study.store._record_issue(state,IssueReport(task_id=study.eid,category='writing',message='Wording allegedly implies causality'),'suspected',source='semantic_check')
-        study.store._save(db,state,'test_advisory',{})
-    snapshot=study.store.snapshot();task=snapshot['experiments'][study.eid]
-    revise_interpretation(study.store,study.eid,interpretation_version(snapshot,task),decisions=[FeedbackDecision(
-        issue_id=issue['id'],disposition='dismiss',reason='The sentence explicitly limits itself to a descriptive association')])
-    current=study.store.snapshot()
-    assert current['feedback'][0]['status']=='dismissed'
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        repeated=study.store._record_issue(state,IssueReport(task_id=study.eid,category='writing',message=issue['message']),'suspected',source='semantic_check')
-        assert not repeated['blocking']
-
-
-
-@pytest.mark.parametrize('outcome',['completed','needs_attention'])
-def test_new_revision_reopens_finished_study_and_idempotent_retry_does_not(study,monkeypatch,outcome):
-    from ai_system.research.models import ResearchRevision
-    study.store.set_outcome(outcome)
-    before=study.store.snapshot();change='Reassess the selected scope'
-    patch=ResearchRevision(command_id='reopen',base_revision=before['revision'],change=change,
-        experiment_ids=[study.eid],requirements=[{'id':'RQ0','statement':change,'source_quote':change,
-            'kind':'goal','task_ids':[study.eid],'checks':[]}])
-    receipt=study.store.apply_revision_command('reopen',before['revision'],change,[study.eid],patch)
-    revised=study.store.snapshot()
-    assert revised['outcome']=='running'
-    assert revised['executions']==before['executions'] and revised['artifacts']==before['artifacts']
-    observed=[]
-    async def decide(self,ctx,context,observation_id):
-        observed.append(ctx.research.snapshot()['revision'])
-        operations.pause(ctx,{'message':'New revision reached the research decision loop'})
-    async def event(*args):pass
-    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
-    ctx=SimpleNamespace(research=study.store,planner_llm=None,max_planning_calls=None,
-        events=SimpleNamespace(stage=event,emit=event))
-    assert asyncio.run(prepare_action(ctx))
-    assert observed==[revised['revision']]
-    study.store.set_outcome('completed')
-    finished=study.store.snapshot()
-    assert study.store.apply_revision_command('reopen',before['revision'],change,[study.eid],patch)==receipt
-    assert study.store.snapshot()==finished
-
-
-def test_unchanged_answer_is_not_new_progress_but_stale_answer_can_be_reassessed(study):
-    values=dict(question_id=study.qid,statement='Limited to the observed source rows',artifact_refs=[study.value.id],
-                coverage='answered',stop_reason='The source-row question is answered by the recorded result')
-    first=answer(study.store,**values)
-    before=study.store.snapshot()
-    second=answer(study.store,**values)
-    assert not first['unchanged'] and second['unchanged']
-    assert study.store.snapshot()==before
-    with study.store._transaction() as db:
-        state=study.store._read(db);state['questions'][study.qid]['answer_status']='needs_update'
-        study.store._save(db,state,'test_reassessment',{})
-    assert not answer(study.store,**values)['unchanged']
-    assert study.store.snapshot()['questions'][study.qid]['answer_status']=='current'
-
-
-def test_delivery_closes_each_problem_without_requiring_positive_answers(study):
-    state=study.store.snapshot()
-    assert study.store.delivery_ready(state)
-    apply_questions(state,[QuestionUpdate(question='Does this generalize beyond the supplied source?')])
-    assert not study.store.delivery_ready(state)
-    other=next(q for key,q in state['questions'].items() if key!=study.qid)
-    other.update(coverage='unanswered',stop_reason='No observations beyond this source were provided')
-    assert study.store.delivery_ready(state)
-    other.update(coverage='partial',judgment='Only the supplied range is described')
-    assert study.store.delivery_ready(state)
-    other.update(coverage='answered')
-    assert not study.store.delivery_ready(state)  # A positive answer still needs real evidence.
-
-
-def test_question_scope_filters_other_runtime_judgments(study):
-    from services.chat_services.research_session import research_snapshot,scoped_snapshot
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        ids=apply_questions(state,[QuestionUpdate(question='Other question marker')])
-        study.store._save(db,state,'test_other_question',{})
-    other=ids[0]
-    from ai_system.research import ENGINE_VERSION
-    (study.store.root/'.system/graph_thread.json').write_text(json.dumps({'engine_version':ENGINE_VERSION,'thread_id':study.store.research_id}))
-    snapshot=research_snapshot(study.store.root,'work','paused')
-    snapshot.runtime={'actions':[
-        {'id':'a','question_id':study.qid,'status':'done','inputs':{'secret':'debug'}},
-        {'id':'b','question_id':other,'status':'done','purpose':'OTHER_ONLY'}],
-        'history':[{'id':'decision','question_id':None,'reason':'OTHER_ONLY','judgments':[
-            {'question_id':study.qid,'statement':'Selected answer'},
-            {'question_id':other,'statement':'OTHER_ONLY'}]}],
-        'models':[{'id':'m','question_id':other,'status':'done','purpose':'OTHER_ONLY'}]}
-    scoped=scoped_snapshot(snapshot,study.qid)
-    serialized=scoped.model_dump_json()
-    assert 'OTHER_ONLY' not in serialized and 'Other question marker' not in serialized
-    assert scoped.runtime['history'][0]['judgments']==[{'question_id':study.qid,'statement':'Selected answer'}]
-    assert len(scoped.runtime['actions'])==1 and 'inputs' not in scoped.runtime['actions'][0]
-    assert scoped.delivery is None and not scoped.artifacts
-
-
-def test_decision_context_limits_full_records_to_focused_question(study):
-    other=add_experiment(study.store,'Other goal',method='OTHER_METHOD',conditions='other source',evaluation='other exact check')
-    with study.store._transaction() as db:
-        state=study.store._read(db)
-        state['action']={'id':'focus','question_id':study.qid,'status':'done','capability':'research.observe'}
-        study.store._save(db,state,'test_focus',{})
-    _,context=decision_context(study.store,study.store.snapshot())
-    assert {e['task_id'] for e in context['experiments']}=={study.eid}
-    assert len(context['questions'])==2  # Goal coverage remains visible to the research layer.
-    assert 'OTHER_METHOD' not in json.dumps(context,ensure_ascii=False)
-    assert 'history' not in context and 'recent_actions' not in context

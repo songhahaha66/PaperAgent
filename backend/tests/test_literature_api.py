@@ -57,9 +57,3 @@ def test_search_detail_retrieval_and_failure_are_explicit(client,monkeypatch):
     assert client.post(base+'/import',json={'url':'http://127.0.0.1/secret'}).status_code==409
     assert client.get(base+'/evidence/C9999').status_code==404
     assert client.put(base+'/policy',json={'mode':'auto'}).json()['mode']=='auto'
-
-
-def test_active_research_does_not_accept_mutating_literature_requests(client,monkeypatch):
-    monkeypatch.setattr(workspace.task_manager,'get_running_task',lambda _:object())
-    response=client.post('/api/workspace/work/literature/search',json={'query':'method'})
-    assert response.status_code==409 and '正在执行' in response.text

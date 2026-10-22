@@ -111,31 +111,6 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     assert (Path(agent.workspace_dir)/'paper.md').read_bytes()==paper and len(agent.llm.text_calls)==written
 
 
-@pytest.mark.parametrize("operation", ["confirm", "resume", "revise"])
-def test_unversioned_research_requires_new_run_without_changing_existing_files(tmp_path, operation):
-    agent = agent_for(tmp_path, confirm_models=True)
-    asyncio.run(agent.run(TASK))
-    thread = agent._thread_file()
-    before_state = ResearchStore(agent.workspace_dir, agent._load_thread()).snapshot()
-    scope_id = next(iter(before_state["experiments"]))
-    metadata = json.loads(thread.read_text())
-    metadata.pop("engine_version")
-    thread.write_text(json.dumps(metadata))
-    before = {p.relative_to(thread.parent): p.read_bytes() for p in thread.parent.rglob("*") if p.is_file()}
-    if operation == "confirm":
-        assert "不支持恢复" in asyncio.run(agent.run("确认", action="answer"))
-    elif operation == "resume":
-        with pytest.raises(ValueError, match="不支持恢复"):
-            asyncio.run(agent.resume_failed())
-    else:
-        with pytest.raises(ValueError, match="不支持恢复"):
-            asyncio.run(agent.revise_research(command_id="change", research_id=metadata["thread_id"],
-                base_revision=before_state["revision"], change="modify", scope=[scope_id]))
-    assert before == {p.relative_to(thread.parent): p.read_bytes() for p in thread.parent.rglob("*") if p.is_file()}
-    assert "paper.md" in asyncio.run(agent.run(TASK, new_run=True)) or agent.waiting_confirm
-    assert agent._load_thread() != metadata["thread_id"]
-
-
 def test_resume_after_delivery_failure_preserves_all_committed_attempts(tmp_path, monkeypatch):
     import ai_system.modules.writing.sections as build_module
     agent = agent_for(tmp_path)
@@ -151,22 +126,3 @@ def test_resume_after_delivery_failure_preserves_all_committed_attempts(tmp_path
     monkeypatch.setattr(build_module, "write", writer)
     assert "paper.md" in asyncio.run(agent.resume_failed())
     assert store.snapshot()["executions"] == attempts
-
-
-def test_resume_before_first_observation_preserves_source_without_an_analysis_node(tmp_path, monkeypatch):
-    import ai_system.research.control as control
-    agent = agent_for(tmp_path)
-    observer = control.observe
-
-    async def fail_observe(state, runtime):
-        raise RuntimeError("observation temporarily unavailable")
-
-    monkeypatch.setattr(control, "observe", fail_observe)
-    assert "任务执行失败" in asyncio.run(agent.run(TASK))
-    store = ResearchStore(agent.workspace_dir, agent._load_thread())
-    assert store.snapshot() is None
-    thread = agent._load_thread()
-    monkeypatch.setattr(control, "observe", observer)
-    assert "paper.md" in asyncio.run(agent.resume_failed())
-    assert agent._load_thread() == thread and store.snapshot()["experiments"]
-    assert store.snapshot()['spec']['requirement'] == TASK

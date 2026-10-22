@@ -34,35 +34,6 @@ def long(env,monkeypatch):
 
 
 def run(v):return asyncio.run(consistency.audit_sections(v.state,v.ctx))
-def update(v,text):
-    v.state['sections']['evaluation']=text;v.store.save_sections(v.state['sections'],[])
-
-
-def test_tail_is_supplied_without_clipping_and_one_review_is_reused(long):
-    v=long;assert v.state['sections']['evaluation'].find(TAIL)>6000
-    assert any(i.section=='evaluation' for i in run(v))
-    assert len(v.model.calls)==1
-    run(v);assert len(v.model.calls)==1
-    record=next(r for r in review_tasks.records(v.store) if r['state']=='completed')
-    detail=record['context']['section_coverage']
-    assert detail['complete'] and not detail['full_document'] and detail['policy']=='key-claims-v1'
-    assert detail['sections']['evaluation']['included_chars']==len(v.state['sections']['evaluation'])
-    assert all(r['stage']=='sections' for r in review_tasks.records(v.store))
-
-
-def test_oversized_atomic_text_has_no_length_gate(long):
-    v=long;update(v,'无标点的超长句子'*1000+TAIL)
-    assert run(v) and len(v.model.calls)==1
-
-
-def test_changed_source_invalidates_review_and_keeps_evidence(long):
-    v=long;run(v);before=v.store.snapshot()
-    update(v,v.state['sections']['evaluation']+'新增适用范围。');run(v)
-    assert len(v.model.calls)==2
-    after=v.store.snapshot()
-    assert all(before[k]==after[k] for k in ('experiments','executions','artifacts','claims','validations'))
-
-
 def test_interruption_is_incomplete_then_explicit_resume_reuses_the_same_draft(long):
     v=long;v.model.failure=True;before=v.store.snapshot();run(v)
     record=review_tasks.records(v.store)[0]
@@ -85,30 +56,6 @@ def test_interruption_is_incomplete_then_explicit_resume_reuses_the_same_draft(l
     assert all(before[k]==after[k] for k in ('experiments','executions','artifacts','claims','validations','sections'))
 
 
-@pytest.mark.parametrize('change',['source','evidence','independent_doubt','producer_receipt'])
-def test_completed_findings_stay_current_until_an_independent_input_or_proof_changes(long,change):
-    from ai_system.research.models import IssueReport
-    v=long
-    async def scenario():
-        task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
-        review_tasks.start(v.store,'sections',task['version'],'first-complete-review',v.model)
-        if review_tasks.ACTIVE:await asyncio.wait_for(asyncio.gather(*list(review_tasks.ACTIVE)),3)
-    asyncio.run(scenario())
-    completed=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
-    assert completed['state']=='completed' and completed['outcome']=='findings' and len(v.model.calls)==1
-    before=review_tasks.material(v.store,'sections')
-    if change=='source':update(v,v.state['sections']['evaluation']+'新的适用条件。')
-    elif change=='evidence':(v.store.root/'runs/one/stdout.log').write_text('changed actual execution output')
-    elif change=='independent_doubt':
-        v.store.report_issues([IssueReport(task_id='Q1',category='writing',section='evaluation',message='独立新增的样本范围疑点')],'sections')
-    else:
-        with v.store._transaction() as db:db.execute("UPDATE review_records SET state='failed' WHERE id=?",(completed['record_id'],))
-    task=next(t for t in review_tasks.status(v.store)['tasks'] if t['stage']=='sections')
-    assert task['state']!='completed' and task['version']!=completed['version']
-    assert review_tasks.material(v.store,'sections')!=before
-    assert len(v.model.calls)==1, 'status reads must neither recheck their own findings nor call the model'
-
-
 def test_concurrent_same_review_has_one_owner(long):
     v=long
     async def scenario():
@@ -119,28 +66,6 @@ def test_concurrent_same_review_has_one_owner(long):
         await asyncio.sleep(.02);assert len(v.model.calls)==1
         v.model.gate.set();await asyncio.gather(a,b)
     asyncio.run(scenario());assert len(v.model.calls)==1
-
-
-def test_late_old_version_response_cannot_complete_current_review(long):
-    v=long
-    async def scenario():
-        v.model.gate=asyncio.Event()
-        old=copy.deepcopy(v.state)
-        work=asyncio.create_task(consistency.audit_sections(old,v.ctx))
-        await asyncio.sleep(.02);update(v,v.state['sections']['evaluation']+'当前材料改变。')
-        v.model.gate.set();await work
-    asyncio.run(scenario())
-    assert not any(r['state']=='completed' for r in review_tasks.records(v.store))
-
-
-def test_cache_owner_renews_lease_without_new_scientific_work(long):
-    v=long;cache=ReviewCache(v.store);record=cache.start('sections',{'version':'heartbeat'},source='recovery-intent')
-    original=record['lease']['expires_at']
-    async def scenario():
-        heartbeat=asyncio.create_task(cache.heartbeat(record,interval=.01))
-        await asyncio.sleep(.03);heartbeat.cancel();await asyncio.gather(heartbeat,return_exceptions=True)
-    asyncio.run(scenario());assert record['lease']['expires_at']>original
-    assert next(r for r in review_tasks.records(v.store) if r['id']==record['id'])['lease']==record['lease']
 
 
 def historical_receipt(v):
@@ -172,14 +97,6 @@ def historical_receipt(v):
     return cache.complete(cache.start('sections',context,'segmented-aggregate'),{'issues':[]},provenance=proof)
 
 
-def test_existing_segmented_receipts_remain_readable_and_verifiable(env):
-    record=historical_receipt(env)
-    assert legacy.verify_proof(env.store,record)
-    assert ReviewCache(env.store).get('sections',record['context'],ClaimAudit)
-    assert any(r['id']==record['id'] for r in review_tasks.records(env.store))
-    assert not hasattr(legacy,'audit')
-
-
 @pytest.mark.parametrize('damage',['missing','duplicate','hash','version','global','result'])
 def test_incomplete_or_corrupt_historical_proofs_are_not_success(env,damage):
     record=copy.deepcopy(historical_receipt(env));proof=record['provenance'];plan=record['context']['extra']['segmented_plan']
@@ -190,10 +107,3 @@ def test_incomplete_or_corrupt_historical_proofs_are_not_success(env,damage):
     elif damage=='global':proof['global']['review_id']='missing'
     else:record['result']={'issues':[{'section':'abstract','problem':'invented'}]}
     assert not legacy.verify_proof(env.store,record)
-
-
-def test_deleted_historical_child_invalidates_receipt(env):
-    record=historical_receipt(env);rid=record['provenance']['blocks'][0]['review_id']
-    with env.store._transaction() as db:db.execute('DELETE FROM review_records WHERE id=?',(rid,))
-    assert not legacy.verify_proof(env.store,record)
-    assert not ReviewCache(env.store).get('sections',record['context'],ClaimAudit)

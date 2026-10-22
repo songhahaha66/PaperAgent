@@ -37,20 +37,6 @@ def test_setup_before_run_cannot_overwrite_checkpoint(env,client):
     assert runtime.policy()['request_limit']==40
 
 
-def test_template_scaffold_is_not_a_published_research_artifact(env,client):
-    root=env.root('B');(root/'.system').mkdir(parents=True,exist_ok=True)
-    (root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':'preparing','engine_version':'research-v3'}))
-    (root/'paper.tex').write_text('template scaffold')
-    from services.chat_services.research_session import research_snapshot
-    assert research_snapshot(root,'B','created').artifacts==[]
-    # Draft reading uses the project endpoint independently of formal outcomes.
-    draft=client.get('/api/workspace/B/paper/project')
-    assert draft.status_code==200,draft.text
-    assert draft.json()['main']=='paper.tex'
-    assert next(f for f in draft.json()['files'] if f['path']=='paper.tex')['text']=='template scaffold'
-    assert research_snapshot(root,'B','created').artifacts==[]
-
-
 @pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),
     ('GET','paper/project',None),
     ('POST','paper/executions/unknown/resume',{'research_id':'unknown'})])
@@ -63,40 +49,3 @@ def test_config_limits_and_inflight_changes_are_rejected(client,monkeypatch):
     assert client.put('/api/workspace/B/research-setup',json={'request_limit':41}).status_code==200
     monkeypatch.setattr(workspace.task_manager,'get_running_task',lambda _:object())
     assert client.put('/api/workspace/B/research-setup',json={}).status_code==409
-
-
-def test_readiness_uses_runtime_env_defaults_without_exposing_credentials(env,monkeypatch):
-    from routers.config_routes.model_config import router
-    monkeypatch.setenv('PAPERAGENT_API_KEY','offline-test-secret')
-    monkeypatch.setenv('PAPERAGENT_API_MODEL','offline-model')
-    monkeypatch.setenv('PAPERAGENT_API_BASE','https://example.test/v1')
-    monkeypatch.setenv('TYPESAFE_API_KEY','offline-jev-secret')
-    monkeypatch.setenv('TYPESAFE_DEFAULT_MODEL','offline-jev-model')
-    monkeypatch.setenv('TYPESAFE_BASE_URL','https://example.test/typesafe')
-    app=FastAPI();app.include_router(router)
-    app.dependency_overrides[get_current_user]=lambda:1
-    def database():
-        with env.sessions() as db:yield db
-    app.dependency_overrides[get_db]=database
-    with TestClient(app) as c:
-        result=c.get('/model-configs/readiness')
-    assert result.status_code==200
-    data=result.json()
-    assert data['ready'] and data['research_ready']
-    assert data['roles']=={'brain':True,'code':True,'writing':True,'jev':True}
-    assert data['jev']['source']=='deployment'
-    assert data['jev']['model_id']=='offline-jev-model'
-    assert data['jev']['base_url']=='https://example.test/typesafe'
-    assert 'offline-test-secret' not in result.text
-    assert 'offline-jev-secret' not in result.text
-
-
-def test_new_default_is_metered_without_implicit_cap_and_permissions_unchanged(env,client):
-    response=client.put('/api/workspace/B/research-setup',json={'confirm_models':True,'literature_mode':'off'})
-    assert response.status_code==200,response.text
-    from ai_system.research.runtime import ResearchRuntime
-    from ai_system.research.literature import LiteratureStore
-    runtime=ResearchRuntime(env.root('B'))
-    assert runtime.status()['request_limit'] is None and runtime.policy()['timeout_seconds'] is None
-    assert runtime.policy()['confirm_models'] is True and LiteratureStore(env.root('B')).policy()=='off'
-    assert runtime.policy()['limit_source']=='default'

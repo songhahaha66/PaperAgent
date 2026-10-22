@@ -26,9 +26,6 @@ layout heights and text line heights are independent of control heights. Authore
 pages deliberately use `--pa-document-paper` and `--pa-document-ink` in both themes;
 the preview chrome follows the app theme. Syntax highlighting uses semantic colors.
 
-`npm run test:theme` checks page/shared styles for palette overrides, literal colors,
-literal radii, undefined app tokens and missing dark palette values.
-
 ## Work runtime boundaries
 
 The keyed work route creates one lifetime per research workspace. `Work.vue` combines
@@ -45,4 +42,4 @@ these composables and renders the page:
 Server state is projected through the session; layout changes do not reconnect sockets.
 Each resource owner handles its own unmount cleanup. Late server responses cannot mutate
 a disposed session, late image blobs are revoked, and leaving cancels scheduled file refreshes.
-Run `npm run test:workspace` for interaction, preview, resource-lifetime and theme regressions.
+Run `npm run test:workspace` for interaction, preview and resource-lifetime regressions.

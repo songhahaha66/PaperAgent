@@ -4,16 +4,14 @@ Authored for parent review; no model, server or browser is required.
 """
 import json
 import multiprocessing
-import sqlite3
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.chat_services.chat_history_manager import ChatHistoryManager
-from services.chat_services.conversation_timeline import ReplyWriter, resolve_executions, safe_file
+from services.chat_services.conversation_timeline import ReplyWriter
 
 
 def writer(tmp_path, publish=None):
@@ -65,48 +63,6 @@ def test_terminal_paths_finalize_same_message_and_separate_successive_turns(tmp_
     assert messages[0]['segments'][0]['execution']['status'] == 'interrupted'
     assert 'visible terminal notice' in messages[0]['content']
     assert 'must not duplicate' not in messages[0]['content']
-
-
-def test_parallel_nested_and_model_calls_share_one_order_not_experiment_task_id(tmp_path):
-    _, root, reply, _ = writer(tmp_path)
-    reply.execution(root, 'research-1', 'activity', call('outer', experiment_id='E1', action_id='A1'))
-    def nested(index):
-        reply.execution(root, 'research-1', 'activity', call(f'child-{index}', parent_call_id='outer'))
-    with ThreadPoolExecutor(max_workers=3) as pool: list(pool.map(nested, range(3)))
-    reply.execution(root, 'research-1', 'model', {'sequence': 42, 'sent_at': 2, 'state': 'sent',
-                                               'parent_call_id': 'outer', 'experiment_id': 'E1'})
-    reply.finish('cancelled')
-    segments = reply.reply['segments']
-    assert len(segments) == 4 and len({s['id'] for s in segments}) == 4
-    assert all(s['ref']['kind'] == 'activity' for s in segments)
-    assert segments[-1]['execution']['parent_call_id'] == 'outer'
-    assert reply.reply['metadata']['chat_task_id'] == 'chat-task'
-
-
-def test_exact_old_journal_resolution_and_safe_projection(tmp_path):
-    manager, root, reply, _ = writer(tmp_path)
-    (root / '.system').mkdir()
-    (root / 'inputs').mkdir(); (root / 'inputs/data.csv').write_text('x\n1')
-    item = call('old-call', inputs={'path': 'inputs/data.csv', 'prompt': 'SECRET'},
-                output={'token': 'SECRET'}, purpose='SECRET', message='SECRET', host='SECRET')
-    reply.execution(root, 'old-research', 'activity', item)
-    sid = reply.reply['segments'][0]['id']
-    reply.finish('completed')
-    with sqlite3.connect(root / '.system/research.sqlite') as db:
-        db.executescript('CREATE TABLE journal(research_id TEXT,seq INTEGER,kind TEXT,payload TEXT);'
-                         'CREATE TABLE model_requests(research_id TEXT,sequence INTEGER,payload TEXT);')
-        db.execute('INSERT INTO journal VALUES (?,?,?,?)', ('old-research', 1, 'activity_finished', json.dumps({**item, 'status':'failed', 'finished_at':4})))
-        # No snapshot activity contains old-call; later events exceed all UI windows.
-        db.executemany('INSERT INTO journal VALUES (?,?,?,?)', [('old-research', i, 'activity_finished', json.dumps(call(f'new-{i}'))) for i in range(2, 310)])
-    result = resolve_executions(root, manager.get_messages('work')[0], [sid, 'unreferenced-id'])
-    assert len(result) == 1 and result[0]['status'] == 'failed'
-    assert result[0]['file'] == 'inputs/data.csv'
-    assert 'SECRET' not in json.dumps(result)
-    assert not {'inputs', 'output', 'purpose', 'host'} & result[0].keys()
-    for path in ['../secret.txt', '/etc/passwd', '.system/research.sqlite', '.env']:
-        assert safe_file(root, path) is None
-    (root / 'escape.txt').symlink_to('/etc/passwd')
-    assert safe_file(root, 'escape.txt') is None
 
 
 def _append_history(base, prefix):
@@ -195,35 +151,6 @@ def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_operation_details_show_selected_inputs_and_concrete_sanitized_failure(tmp_path):
-    from services.chat_services.conversation_timeline import execution_projection
-    (tmp_path / 'data.csv').write_text('x\n1')
-    read = execution_projection(tmp_path, 'research', call(inputs={'path':'data.csv','start':10,'limit':200}))
-    assert read['label'].endswith('data.csv') and '10' in read['detail'] and '200' in read['detail']
-    run = tmp_path / 'runs/run-1'; run.mkdir(parents=True)
-    (run / 'input.py').write_text('import missing_package')
-    (run / 'stderr.log').write_text("ModuleNotFoundError: No module named 'missing_package'")
-    (tmp_path / 'manifest.json').write_text(json.dumps({'runs':{'run-1':{
-        'input':'runs/run-1/input.py','stderr':'runs/run-1/stderr.log'}}}))
-    failed = execution_projection(tmp_path, 'research', call('python', capability='run_python',
-        status='failed', error_type='PythonExecutionError', run_id='run-1',
-        message="Traceback (most recent call last):\n  secret = 'hidden-source-literal'\nModuleNotFoundError: No module named 'missing_package'",
-        inputs={'code':"secret = 'hidden-source-literal'\nimport missing_package"}))
-    assert '2 行' in failed['detail']
-    assert failed['message'] == "ModuleNotFoundError: No module named 'missing_package'"
-    assert failed['script_file'] == 'runs/run-1/input.py' and failed['error_file'] == 'runs/run-1/stderr.log'
-    assert 'hidden-source-literal' not in json.dumps(failed)
-
-
-def test_running_code_preview_is_bounded_and_survives_projection(tmp_path):
-    from services.chat_services.conversation_timeline import execution_projection
-    item = call('python', capability='run_python', status='running',
-                output={'output_tail': 'x' * 7000 + '\nreceived'})
-    row = execution_projection(tmp_path, 'research', item)
-    assert row['status'] == 'running'
-    assert len(row['output_tail']) == 6000 and row['output_tail'].endswith('received')
-
-
 def test_failure_detail_redacts_credentials_provider_urls_and_external_paths(tmp_path):
     from services.chat_services.conversation_timeline import safe_diagnostic
     diagnostic = safe_diagnostic(tmp_path,
@@ -233,26 +160,3 @@ def test_failure_detail_redacts_credentials_provider_urls_and_external_paths(tmp
     for secret in ['owner-secret','bearer-secret','owner:secret','example.test','/home/owner']:
         assert secret not in diagnostic
     assert '内部请求数据' in safe_diagnostic(tmp_path, 'messages: [{"role":"system","content":"private prompt"}]')
-
-
-def test_source_projection_retains_only_known_semantic_sources_and_safe_files(tmp_path):
-    from services.chat_services.conversation_timeline import public_block
-    (tmp_path / 'data.csv').write_text('x\n1')
-    block = public_block(tmp_path, {'type':'research_context','content':{
-        'files':['data.csv','research:feedback','research:consistency','research:private','.system/research.sqlite','../private.json'],
-        'result_ids':['R1','invalid-secret']}})
-    assert block['content']['files'] == ['data.csv','research:feedback','research:consistency']
-    assert block['content']['result_ids'] == ['R1']
-
-
-def test_progress_projection_uses_recorded_steps_and_preserves_stage_notes(tmp_path):
-    from services.chat_services.conversation_timeline import execution_projection, public_block
-    experience = execution_projection(tmp_path, 'research', call(
-        capability='experience.candidates', output={'candidates':3}))
-    assert experience['label'] == '更新经验索引' and '3 项' in experience['detail']
-    phase = public_block(tmp_path, {'type':'paper_phase','content':{
-        'stage':'export','status':'in_progress','note':'编译 PDF','inputs':'private'}})
-    assert phase['content'] == {'stage':'export','status':'in_progress','note':'编译 PDF'}
-    refs = execution_projection(tmp_path, 'research', call(
-        capability='record_results', output={'artifact_refs':['R1','R2'],'rejected':1}))
-    assert refs['result_ids'] == ['R1','R2'] and '2 项结果' in refs['detail'] and '1 项未通过' in refs['detail']

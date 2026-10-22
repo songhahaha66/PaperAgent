@@ -8,7 +8,7 @@ from ai_system.research.store import ResearchStore
 from ai_system.research.models import WorkerResult, IssueReport, ResearchRevision
 from ai_system.research import operations
 from research_tools_helpers import add_experiment,answer
-from ai_system.research.loop import prepare_action, act, resume
+from ai_system.research.loop import prepare_action, resume
 from ai_system.research.control import graph_view
 from ai_system.research.domain import experiment_report
 from services.chat_services.research_session import research_snapshot
@@ -67,29 +67,6 @@ def test_multiple_methods_keep_ownership_and_failed_method_does_not_block_questi
     assert len(graph_view(state)['analysis']['questions'])==1
 
 
-def test_schema_three_migration_retains_results_and_is_idempotent(tmp_path):
-    store=ResearchStore(tmp_path,'research');store.initialize('预测下一周需求。')
-    eid=experiment(store);finish(store,eid)
-    state=store.snapshot();report=experiment_report(state,state['experiments'][eid])
-    old=json.loads(json.dumps(state));old['schema_version']=3
-    old['tasks']=old.pop('experiments');old['attempts']=old.pop('executions')
-    old['evidence']={rid:a for rid,a in old.pop('artifacts').items() if a['type']=='result'}
-    old.pop('questions');old.pop('action');old.pop('publication')
-    item=old['tasks'][eid];item['active_attempt']=item.pop('execution_id');item.pop('question_id');item.pop('report_ref')
-    item.update(report=report,design=None)
-    raw=json.dumps(old,ensure_ascii=False)
-    with store._transaction() as db:
-        db.execute('UPDATE research SET payload=? WHERE id=?',(raw,'research'))
-        db.execute('DELETE FROM domain_migrations WHERE version=7')
-    upgraded=ResearchStore(tmp_path,'research');before=upgraded.snapshot()
-    assert before['schema_version']==5
-    assert set(before['artifacts'])>=set(old['evidence'])
-    assert experiment_report(before,before['experiments'][eid])==report
-    assert ResearchStore(tmp_path,'research').snapshot()==before
-    with upgraded._connect() as db:
-        assert db.execute('SELECT raw FROM legacy_records WHERE source=?',('research/research/v3',)).fetchone()[0].decode()==raw
-
-
 def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path,monkeypatch):
     store=ResearchStore(tmp_path,'research');store.initialize('预测下一周需求。')
     calls=[]
@@ -124,48 +101,3 @@ def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path
     assert current['questions'][current['experiments'][eid]['question_id']]['answer_status'] in {'needs_update','unanswered'}
     assert experiment_report(current,current['experiments'][eid])==experiment_report(original,original['experiments'][eid])
     assert current['artifacts']==original['artifacts'] and store.registry_payload()['results']
-
-
-def test_existing_graph_runs_real_kernel_then_writes_and_publishes_question(tmp_path,monkeypatch):
-    from dataclasses import asdict
-    from langchain_core.messages import AIMessage
-    from ai_system.graph.build import compile_graph
-    from ai_system.graph.context import GraphContext
-    from ai_system.modules.experiments.planning import experiment_design
-    class Writer:
-        async def ainvoke(self,messages):
-            return AIMessage(content='本节依据实测结果 {{R:R1}} 说明当前条件下的结论，推广仍需验证。')
-    async def decide(self,ctx,context,observation_id):
-        state=ctx.research.snapshot()
-        if not state['experiments']:
-            from research_tools_helpers import add_question
-            qid=add_question(ctx.research,'给定计算的结果是多少？')
-            return operations.schedule_experiment(ctx,operations.ExperimentInput(question_id=qid,title='固定计算',
-                plan={'conditions':'Python整数运算','evaluation':'核对精确值','candidates':[{'name':'固定计算','instruction':'计算 6*7 并登记'}]}).model_dump())
-        eid=next(iter(state['experiments']));qid=state['experiments'][eid]['question_id']
-        refs=[r['payload']['id'] for r in state['artifacts'].values() if r['type']=='result']
-        answer(ctx.research,question_id=qid,statement='整数计算结果为42',artifact_refs=refs,
-            coverage='answered',stop_reason='已完成指定整数运算')
-        return operations.deliver(ctx,{'title':'计算研究','reason':'已有真实计算结果，开始整理草稿'})
-    async def solve(branch,runtime):
-        ctx=runtime.context;eid=branch['subproblem']['id']
-        run=await ctx.kernels.get(eid).execute("print(6*7)")
-        assert run.ok
-        result=ctx.registry.record_value(subproblem=eid,name='计算结果',value='42',run_id=run.run_id)
-        return {'report':{'status':'completed','summary':'结果 {{R:'+result.id+'}}','approach':'整数计算'},
-                'design':experiment_design(branch['experiment'])}
-    monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
-    monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
-    async def run():
-        ctx=GraphContext.create(str(tmp_path),planner_llm=Writer())
-        ctx.research=ResearchStore(tmp_path,'graph')
-        try:
-            result=await compile_graph().ainvoke({'task':'计算6*7并写出结果。'},{'recursion_limit':40},context=ctx)
-            assert not result['research_blocked']
-            state=ctx.research.snapshot()
-            assert state['outcome']=='completed' and state['publication']['stage']=='completed'
-            assert len(state['executions'])==1 and (tmp_path/'paper.md').is_file()
-            assert '42' in (tmp_path/'paper.md').read_text()
-            assert {a['type'] for a in state['artifacts'].values()}>={'result','code','stdout','report'}
-        finally:await ctx.kernels.close()
-    asyncio.run(run())

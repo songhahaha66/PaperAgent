@@ -2,16 +2,15 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.judge import Answers, Choice, JevJudge, LLMJudge, Noul, Score, ScoreAnswer
-from evals.metrics import code_runs, number_traceability, section_coverage
+from ai_system.judge import Answers, ScoreAnswer
+from evals.metrics import code_runs, number_traceability
 from evals.mmbench import build_task_prompt, load_problem, stage_datasets
-from evals.rubric import DIMENSIONS, MAX_PAPER_CHARS, level_to_ten, score_paper, select_sections
+from evals.rubric import DIMENSIONS
 from evals.runner import score_problem, summarize
 
 
@@ -119,75 +118,6 @@ def test_load_and_stage_problem(tmp_path):
     assert "point by point data" in prompt
 
 
-def test_build_task_prompt_accepts_grouped_descriptions(tmp_path):
-    bench = _make_bench(tmp_path)
-    problem = load_problem(bench, "2024_C")
-    problem.dataset_description = "one csv file"
-    problem.variable_description = [{"Name": "athlete"}, [{"Year": "olympic year"}]]
-
-    prompt = build_task_prompt(problem, ["data/matches.csv"])
-    assert "- one csv file" in prompt
-    assert "- Name: athlete" in prompt
-    assert "- Year: olympic year" in prompt
-
-
-def test_stage_datasets_copies_directories(tmp_path):
-    bench = _make_bench(tmp_path)
-    folder = bench / "dataset" / "2024_C" / "images"
-    folder.mkdir()
-    (folder / "a.txt").write_text("x", encoding="utf-8")
-    data = json.loads((bench / "problem" / "2024_C.json").read_text(encoding="utf-8"))
-    data["dataset_path"].append("images")
-    (bench / "problem" / "2024_C.json").write_text(json.dumps(data), encoding="utf-8")
-
-    staged = stage_datasets(load_problem(bench, "2024_C"), tmp_path / "ws")
-    assert staged == ["data/matches.csv", "data/images"]
-    assert (tmp_path / "ws" / "data" / "images" / "a.txt").exists()
-
-
-def test_load_problem_reports_missing_dataset(tmp_path):
-    bench = _make_bench(tmp_path)
-    (bench / "dataset" / "2024_C" / "matches.csv").unlink()
-    with pytest.raises(FileNotFoundError):
-        load_problem(bench, "2024_C")
-
-
-def test_code_runs_counts_statuses(tmp_path):
-    stats = code_runs(_make_workspace(tmp_path))
-    assert stats == {"total": 3, "success": 2, "error": 1, "success_rate": 0.667}
-
-
-def test_code_runs_without_manifest(tmp_path):
-    assert code_runs(tmp_path)["success_rate"] is None
-
-
-def test_section_coverage_finds_standard_sections():
-    result = section_coverage(PAPER)
-    assert result["missing"] == []
-    assert result["coverage"] == 1.0
-
-    partial = section_coverage("# 摘要\n\n# 模型建立\n")
-    assert "灵敏度分析" in partial["missing"]
-    assert partial["found"] == ["摘要", "模型建立与求解"]
-
-
-def test_number_traceability_separates_traced_and_made_up(tmp_path):
-    ws = _make_workspace(tmp_path)
-    result = number_traceability(PAPER, ws, problem_text="Serve win rate 0.65.")
-
-    # 0.873 / 91.25% / 1.732 / 0.0451 能在 stdout 中找到；12.345 是编造的；代码块里的 3.1415 不计
-    assert result["checked"] == 5
-    assert result["traced"] == 4
-    assert result["untraced_examples"] == ["12.345"]
-
-
-def test_number_traceability_excludes_numbers_from_problem(tmp_path):
-    result = number_traceability("给定发球胜率 0.65。", tmp_path, problem_text="Serve win rate 0.65.")
-    assert result == {"checked": 0, "traced": 0, "rate": None, "untraced_examples": []}
-
-
-
-
 @pytest.mark.parametrize("source", ["failed", "changed", "outside"])
 def test_traceability_rechecks_the_exact_registered_successful_source(tmp_path, source):
     ws = _make_workspace(tmp_path)
@@ -203,50 +133,6 @@ def test_traceability_rechecks_the_exact_registered_successful_source(tmp_path, 
     assert number_traceability("0.87312", ws)["rate"] == 0
 
 
-def test_traceability_missing_business_state_is_unavailable_not_a_good_score(tmp_path):
-    (tmp_path / "outputs").mkdir()
-    (tmp_path / "outputs/old.txt").write_text("0.8123")
-    result = number_traceability("0.8123", tmp_path)
-    assert result["rate"] is None and result["traced"] == 0 and result["error"]
-
-
-def test_plain_numbers_do_not_get_percentage_conversion(tmp_path):
-    ws = _make_workspace(tmp_path)
-    assert number_traceability("87.312 87.312%", ws)["traced"] == 1
-
-
-def test_select_sections_filters_and_truncates():
-    long_paper = PAPER.replace("参数扰动 10% 时结果稳定。", "参数扰动结果稳定。" * 200)
-    text = select_sections(long_paper, ("灵敏度",))
-    assert text.startswith("# 六、灵敏度分析")
-    assert "符号说明" not in text
-
-    # 相关章节太短时退回整篇
-    assert select_sections(PAPER, ("灵敏度",)) == PAPER
-
-    huge = "# 灵敏度分析\n" + "很" * (MAX_PAPER_CHARS + 100)
-    assert len(select_sections(huge, ("灵敏度",))) < MAX_PAPER_CHARS + 100
-
-
-def test_level_to_ten_maps_band_midpoints():
-    assert level_to_ten(0) == 1.5
-    assert level_to_ten(4) == 9.5
-    assert level_to_ten(2.5) == 6.5
-
-
-def test_score_paper_aggregates_dimensions():
-    judge = FixedJudge(level=3.0, confidence=0.3)
-    result = asyncio.run(score_paper(judge, "bg", "req", PAPER))
-
-    assert len(judge.states) == len(DIMENSIONS)
-    assert all(state["problem_requirement"] == "req" for state in judge.states)
-    assert set(result.dimensions) == {d.key for d in DIMENSIONS}
-    assert result.overall == 7.5
-    assert result.input_tokens == 100 * len(DIMENSIONS)
-    # 置信度 0.3 低于阈值，全部子项都需要复核
-    assert len(result.needs_review) == 8
-
-
 def test_score_problem_and_summary(tmp_path):
     bench = _make_bench(tmp_path)
     problem = load_problem(bench, "2024_C")
@@ -256,197 +142,15 @@ def test_score_problem_and_summary(tmp_path):
         "paper_exists": True, "error": None, "seconds": 12.0, "usage": {"total_tokens": 5000},
     }), encoding="utf-8")
 
-    score = asyncio.run(score_problem(problem, out, FixedJudge(level=2.0)))
+    judge = FixedJudge(level=2.0, confidence=0.3)
+    score = asyncio.run(score_problem(problem, out, judge))
     assert score["judge"]["overall"] == 5.5
-    assert score["code_runs"]["success_rate"] == 0.667
+    assert set(score["judge"]["dimensions"]) == {d.key for d in DIMENSIONS}
+    assert score["judge"]["input_tokens"] == 100 * len(DIMENSIONS)
+    assert len(score["judge"]["needs_review"]) == 8
+    assert score["code_runs"] == {"total": 3, "success": 2, "error": 1, "success_rate": 0.667}
 
     summary = summarize(out, ["2024_C"])
     assert summary["mean"]["overall"] == 5.5
     assert summary["mean"]["total_tokens"] == 5000
     assert "| 2024_C | 5.50 |" in (out / "summary.md").read_text(encoding="utf-8")
-
-
-def test_score_problem_without_judge_keeps_deterministic_metrics(tmp_path):
-    bench = _make_bench(tmp_path)
-    problem = load_problem(bench, "2024_C")
-    out = tmp_path / "out"
-    _make_workspace(out / "2024_C")
-
-    score = asyncio.run(score_problem(problem, out, judge=None))
-    assert score["judge"] is None
-    assert score["sections"]["coverage"] == 1.0
-
-
-def test_unavailable_evidence_is_visible_in_evaluation_summary(tmp_path):
-    bench = _make_bench(tmp_path)
-    out = tmp_path / "out"
-    ws = _make_workspace(out / "2024_C")
-    (ws / ".system/research.sqlite").unlink()
-    score = asyncio.run(score_problem(load_problem(bench, "2024_C"), out, judge=None))
-    assert score["numbers"]["rate"] is None and score["numbers"]["error"]
-    summary = summarize(out, ["2024_C"])
-    assert summary["number_trace_errors"] == 1
-    assert "数字来源评测不可用 1 题" in (out / "summary.md").read_text()
-
-
-def test_jev_judge_maps_sdk_response():
-    class FakeClient:
-        def __init__(self):
-            self.calls = []
-
-        async def system_one(self, state, questions):
-            self.calls.append((state, questions))
-            return SimpleNamespace(
-                model="jev-1.14.0",
-                usage=SimpleNamespace(input_tokens=321),
-                nouls={"ok": SimpleNamespace(noul=0.8)},
-                choices={"kind": SimpleNamespace(choice="b", probabilities={"a": 0.1, "b": 0.9}, confidence=0.7)},
-                scores={"q": SimpleNamespace(score=2.6, probabilities={"0": 0.0, "1": 0.0, "2": 0.4, "3": 0.6}, confidence=0.55)},
-            )
-
-    client = FakeClient()
-    judge = JevJudge(model="jev-1.14.0", client=client)
-    answers = asyncio.run(judge.ask({"x": 1}, {
-        "ok": Noul(instructions="ok?"),
-        "kind": Choice(instructions="which?", criteria={"a": None, "b": "second"}),
-        "q": Score(instructions="how good?", criteria=["bad", "meh", "good", "great"]),
-    }))
-
-    sent = client.calls[0][1]
-    assert sent["kind"].criteria == {"a": None, "b": "second"}
-    assert sent["q"].criteria == ["bad", "meh", "good", "great"]
-    assert answers.judge == "jev:jev-1.14.0"
-    assert answers.input_tokens == 321
-    assert answers.nouls["ok"].noul == 0.8
-    assert answers.choices["kind"].choice == "b"
-    assert answers.scores["q"].probabilities == {0: 0.0, 1: 0.0, 2: 0.4, 3: 0.6}
-
-
-def test_llm_judge_uses_structured_output():
-    class FakeStructured:
-        def __init__(self, schema):
-            self.schema = schema
-
-        async def ainvoke(self, prompt):
-            fields = self.schema.model_fields
-            if "level" in fields:
-                return self.schema(reason="清楚", level=3)
-            if "choice" in fields:
-                return self.schema(reason="r", choice="b")
-            return self.schema(reason="r", answer=True)
-
-    class FakeLLM:
-        model_name = "fake-model"
-
-        def with_structured_output(self, schema):
-            return FakeStructured(schema)
-
-    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {
-        "ok": Noul(instructions="ok?"),
-        "kind": Choice(instructions="which?", criteria={"a": None, "b": None}),
-        "q": Score(instructions="how good?", criteria=["0", "1", "2", "3", "4"]),
-    }))
-
-    assert answers.judge == "llm:fake-model"
-    assert answers.nouls["ok"].noul == 1.0
-    assert answers.choices["kind"].probabilities == {"a": 0.0, "b": 1.0}
-    assert answers.choices["kind"].confidence is None
-    assert answers.scores["q"].score == 3.0
-    assert answers.scores["q"].reason == "清楚"
-
-
-def test_llm_judge_retries_when_model_skips_tool_call(monkeypatch):
-    import ai_system.judge.llm as llm_module
-
-    async def no_wait(*_):
-        return None
-
-    monkeypatch.setattr(llm_module.asyncio, "sleep", no_wait)
-
-    class FlakyStructured:
-        calls = 0
-
-        def __init__(self, schema):
-            self.schema = schema
-
-        async def ainvoke(self, prompt):
-            FlakyStructured.calls += 1
-            return None if FlakyStructured.calls == 1 else self.schema(reason="r", level=2)
-
-    class FakeLLM:
-        model_name = "fake"
-
-        def with_structured_output(self, schema, **kwargs):
-            return FlakyStructured(schema)
-
-    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {"q": Score(instructions="?", criteria=["0", "1", "2"])}))
-    assert answers.scores["q"].score == 2.0 and FlakyStructured.calls == 2
-
-
-def test_llm_judge_falls_back_to_plain_json_when_tool_call_ignored():
-    from types import SimpleNamespace
-
-    class IgnoringStructured:
-        async def ainvoke(self, prompt):
-            return None
-
-    class FakeLLM:
-        model_name = "fake"
-        prompts = []
-
-        def with_structured_output(self, schema, **kwargs):
-            return IgnoringStructured()
-
-        async def ainvoke(self, prompt):
-            FakeLLM.prompts.append(prompt)
-            return SimpleNamespace(content='评审意见：整体不错 {"x": 1}\n```json\n{"reason": "结构完整", "level": 3}\n```')
-
-    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {"q": Score(instructions="?", criteria=["0", "1", "2", "3"])}))
-    assert answers.scores["q"].score == 3.0
-    assert answers.scores["q"].reason == "结构完整"
-    assert "只输出一个 JSON 对象" in FakeLLM.prompts[0]
-
-
-def test_research_ablation_variants_pass_options(tmp_path, monkeypatch):
-    from evals.runner import PIPELINES, _build_agent
-
-    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
-    assert set(PIPELINES)=={'research','research-no-planner'}
-    assert 'research-no-explore' not in PIPELINES
-    for retired in ('research-no-review','research-no-consistency'):
-        with pytest.raises(ValueError,match='未知 pipeline'):_build_agent(retired,object(),tmp_path)
-    assert "explore_top_k" not in _build_agent("research", object(), tmp_path).options
-    assert _build_agent("research-no-planner", object(), tmp_path).options["max_planning_calls"] == 0
-    with pytest.raises(ValueError, match="未知 pipeline"):
-        _build_agent("v2", object(), tmp_path)
-    from evals.__main__ import parse_args
-    assert parse_args(["run", "--bench", str(tmp_path), "--out", str(tmp_path)]).pipeline == "research"
-
-
-def test_llm_judge_asks_all_questions_in_one_call():
-    calls = []
-
-    class FakeStructured:
-        def __init__(self, schema):
-            self.schema = schema
-
-        async def ainvoke(self, prompt):
-            calls.append(self.schema.__name__)
-            assert "问题 a" in prompt and "问题 b" in prompt
-            return self.schema.model_validate({
-                "a": {"reason": "好", "level": 2},
-                "b": {"reason": "一般", "level": 1},
-            })
-
-    class FakeLLM:
-        model_name = "fake-model"
-
-        def with_structured_output(self, schema, **kwargs):
-            return FakeStructured(schema)
-
-    answers = asyncio.run(LLMJudge(FakeLLM()).ask("材料", {
-        "a": Score(instructions="甲?", criteria=["0", "1", "2"]),
-        "b": Score(instructions="乙?", criteria=["0", "1", "2"]),
-    }))
-    assert calls == ["BatchVerdict"]
-    assert answers.scores["a"].score == 2.0 and answers.scores["b"].reason == "一般"

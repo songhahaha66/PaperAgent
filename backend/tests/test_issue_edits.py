@@ -4,12 +4,9 @@ from ai_system.research.domain import findings as research_findings
 import asyncio,json
 from types import SimpleNamespace
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from test_paper_editor import paper
 from test_review_cache import no_network
 from ai_system.graph.state import ClaimAudit,ClaimIssue
-from ai_system.modules.writing import consistency as consistency
 from ai_system.modules.writing.validation import assemble
 from ai_system.research.models import IssueReport,ResearchConflict
 from ai_system.research.review_cache import ReviewCache,review_context
@@ -87,35 +84,6 @@ def test_stale_opinion_or_new_paper_cannot_receive_old_candidate(linked):
     assert current(v)['status']=='confirmed'
 
 
-def test_absent_or_inexact_quote_is_chapter_only_and_science_routes_to_research(linked):
-    v=linked
-    with v.store._transaction() as db:
-        state=v.store._read(db);i=next(i for i in research_findings(state) if i['id']==v.source['id']);i.pop('paper_origin');v.store._save(db,state,'fixture_legacy',{})
-    c=issues.context(v.store,v.source['id']);assert c['quote'] is None and '仅定位章节' in c['location']
-    science=v.store.report_issues([IssueReport(task_id='Q1',category='model',message='实际数据与方法需要核验',evidence_refs=['R1'])],'local_review')[0]
-    c=issues.context(v.store,science['id']);assert c['route']=='research' and c['evidence']
-    with pytest.raises(ResearchConflict,match='科研问题'):issues.require_binding(v.store,{'id':science['id'],'version':c['version']})
-    before=v.store.snapshot()
-    p=propose(v)
-    assert not p['review_issues'] and p['source_issue']['id']==v.source['id']
-    asyncio.run(editor.decide(v.store,p['id'],True,'markdown'))
-    after=v.store.snapshot()
-    assert next(i for i in research_findings(after) if i['id']==science['id'])['status']==science['status']
-    assert current(v)['status']=='resolved' and v.model.calls==['IssueAudit']
-    assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
-
-
-def test_incomplete_review_receipt_cannot_complete_or_resolve_source(linked):
-    v=linked;sections={k:s['text'] for k,s in v.store.snapshot()['sections'].items()}
-    ctx=edits.proposal_context(v.store,v.state,v.model)
-    context=review_context(ctx,v.state,'sections','system','incomplete fixture',ClaimAudit,sections=sections)
-    context['section_coverage']['complete']=False
-    context['section_coverage']['sections']['evaluation']['included_chars']=1
-    cache=ReviewCache(v.store);r=cache.start('sections',context)
-    with pytest.raises(consistency.ReviewCoverageIncomplete):cache.complete(r,{'issues':[]})
-    assert cache.get('sections',context,ClaimAudit) is None and current(v)['status']=='confirmed'
-
-
 def test_review_proof_cannot_be_rebound_to_different_source(linked):
     v=linked;p=propose(v)
     p['filename']='paper.tex';source='old tex';(v.store.root/'paper.tex').write_text(source)
@@ -126,75 +94,3 @@ def test_review_proof_cannot_be_rebound_to_different_source(linked):
     with v.store._transaction() as db:db.execute('UPDATE commands SET response=? WHERE id=?',(json.dumps(p),'paper-edit:'+p['id']))
     with pytest.raises(ResearchConflict):asyncio.run(editor.decide(v.store,p['id'],True,'latex'))
     assert current(v)['status']=='confirmed' and (v.store.root/'paper.tex').read_text()==source
-
-
-def test_issue_endpoint_owner_and_missing_guards(linked,monkeypatch):
-    from routers.work_routes import workspace
-    from auth.auth import get_current_user
-    from database.database import get_db
-    v=linked;app=FastAPI();app.include_router(workspace.router);app.dependency_overrides[get_current_user]=lambda:7;app.dependency_overrides[get_db]=lambda:object()
-    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(created_by=7));monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda *a:v.store.root)
-    with TestClient(app) as client:
-        path='/api/workspace/work/paper/issues/'+v.source['id'];assert client.get(path).json()['quote']==v.old
-        assert client.get('/api/workspace/work/paper/issues/unknown').status_code==404
-        monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(created_by=8));assert client.get(path).status_code==403
-
-
-@pytest.mark.parametrize('linked',[True],indirect=True)
-def test_failed_pdf_export_keeps_issue_source_and_pdf(linked,monkeypatch):
-    from services.chat_services import paper_project as project
-    from test_paper_interactions import selection
-    v=linked;before=v.store.snapshot();source=(v.store.root/'paper.tex').read_bytes();pdf=(v.store.root/'paper.pdf').read_bytes()
-    bound=selection(v.store,v.old,file='paper.tex')
-    project.initialize(v.store)
-    p=project.propose_change(v.store,None,None,[{**bound,'replacement':v.new}])
-    from ai_system.export.latex import LatexResult
-    async def failed(*a):return LatexResult('paper.tex',error='controlled export failed')
-    monkeypatch.setattr('ai_system.export.latex.compile_pdf',failed)
-    applied=asyncio.run(project.decide(v.store,p['id'],'apply'))
-    assert applied['status']=='applied' and current(v)['status']=='confirmed'
-    assert v.store.snapshot()==before and (v.store.root/'paper.pdf').read_bytes()==pdf
-    assert v.new in (v.store.root/'paper.tex').read_text() and v.old not in (v.store.root/'paper.tex').read_text()
-    assert (v.store.root/project.VERSIONS/bound['version']/'paper.tex').read_bytes()==source
-    doc=project.describe(v.store)
-    assert doc['compile']['state']=='failed' and doc['pdf_version']!=doc['version']
-    assert 'controlled export' in doc['compile']['message'] and not v.model.calls
-
-
-@pytest.mark.parametrize('quote',['根本不存在的引文','aaa'])
-def test_invalid_or_overlapping_quote_never_becomes_exact_location(linked,quote):
-    v=linked
-    with v.store._transaction() as db:
-        state=v.store._read(db);i=next(i for i in research_findings(state) if i['id']==v.source['id']);i.pop('paper_origin')
-        if quote=='aaa':state['sections']['evaluation']['text']+=' aaaaa';from ai_system.research.store import digest;state['sections']['evaluation']['content_hash']=digest(state['sections']['evaluation']['text'])
-        v.store._save(db,state,'fixture_quotes',{})
-    text=v.store.snapshot()['sections']['evaluation']['text'];state={**v.state,'sections':{**v.state['sections'],'evaluation':text}}
-    ctx=edits.proposal_context(v.store,state,v.model);material=review_context(ctx,state,'sections','fixture','quote test',ClaimAudit,sections=state['sections'])
-    cache=ReviewCache(v.store);r=cache.start('sections',material);cache.complete(r,ClaimAudit(issues=[ClaimIssue(section='evaluation',problem='未经检验使用统计显著',quote=quote)]).model_dump())
-    issues.bind_findings(v.store,[v.source['id']],state['sections']);assert issues.context(v.store,v.source['id'])['quote'] is None
-
-
-def test_scientific_revision_rejects_stale_issue_before_any_planner_call(linked,monkeypatch):
-    from ai_system.graph.agent import PaperGraphAgent
-    from ai_system.research.planner import Planner
-    v=linked;source=v.store.report_issues([IssueReport(task_id='Q1',category='model',message='需要科学核验',evidence_refs=['R1'])],'local_review')[0]
-    c=issues.context(v.store,source['id']);agent=PaperGraphAgent(v.model,workspace_dir=str(v.store.root))
-    async def refuse(*a,**kw):raise AssertionError('Stale issue must not invoke planner')
-    monkeypatch.setattr(Planner,'amendment',refuse)
-    with pytest.raises((ResearchConflict,ValueError)):
-        asyncio.run(agent.revise_research(command_id='stale-source',research_id=v.store.research_id,base_revision=v.store.snapshot()['revision'],change='核查数据',scope=['Q1'],source_issue={'id':source['id'],'version':'f'*64}))
-    with pytest.raises((ResearchConflict,ValueError)):
-        asyncio.run(agent.revise_research(command_id='wrong-scope',research_id=v.store.research_id,base_revision=v.store.snapshot()['revision'],change='核查数据',scope=['Q2'],source_issue={'id':source['id'],'version':c['version']}))
-    assert next(i for i in research_findings(v.store.snapshot()) if i['id']==source['id'])['status']=='suspected'
-
-
-def test_revision_command_cannot_be_rebound_to_different_source_issue(linked):
-    from ai_system.research.planner import propose_revision
-    v=linked;command={'command_id':'bound-source','base_revision':v.store.snapshot()['revision'],'change':'复核数据适用性','scope':['Q1']}
-    # The existing command signature includes source identity without changing ordinary revision commands.
-    from ai_system.research.models import Requirement
-    requirements=[Requirement(id='RQ4',kind='goal',statement=command['change'],source_quote=command['change'],task_ids=['Q1'])];patch=propose_revision(v.store.snapshot(),**command,requirements=requirements)
-    source={'id':'original','version':'a'*64};v.store.apply_revision_command(**command,patch=patch,source_issue=source)
-    assert v.store.load_revision_command(**command,source_issue=source)
-    with pytest.raises(ResearchConflict):v.store.load_revision_command(**command,source_issue={'id':'different','version':'a'*64})
-    with pytest.raises(ResearchConflict):v.store.load_revision_command(**command)

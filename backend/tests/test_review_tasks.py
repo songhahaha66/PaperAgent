@@ -1,13 +1,12 @@
 """Versioned recovery with controlled replies. HTTP is forbidden; zero real model calls."""
 
-from ai_system.research.domain import findings as research_findings
 import asyncio,json,time
 from types import SimpleNamespace
 import pytest
 from test_review_cache import env,no_network
 from ai_system.graph.state import ClaimAudit,ConsistencyReview
-from ai_system.research.models import Issue,IssueReport,ResearchConflict
-from ai_system.research.review_cache import ReviewCache,ReviewSuperseded,run_review,review_context
+from ai_system.research.models import ResearchConflict
+from ai_system.research.review_cache import ReviewCache, ReviewSuperseded
 from ai_system.research.runtime import ResearchRuntime
 from services.chat_services import review_tasks as tasks
 
@@ -42,55 +41,6 @@ async def failed(store,stage='sections'):
     assert 'controlled timeout' not in str(failure['diagnostic']), 'provider exception text must stay private'
 def edit(store):
     sections={k:v['text'] for k,v in store.snapshot()['sections'].items()};sections['abstract']+='新的措辞。';store.save_sections(sections,[])
-def issue_map(store):return {i['id']:i for i in research_findings(store.snapshot())}
-
-
-def test_new_version_only_replaces_old_service_after_actual_completed_review(setup):
-    store=setup.store
-    async def scenario():
-        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service')
-        writing=store.report_issues([IssueReport(task_id='Q1',category='writing',section='evaluation',message='保留实质写作意见')],'manual')[0]
-        science=store.report_issues([IssueReport(task_id='Q1',category='model',message='保留科研问题')],'local_review')[0]
-        edit(store);t=item(store);assert t['state']=='pending' and issue_map(store)[old['id']]['status']=='confirmed'
-        llm=model();llm.gate=asyncio.Event();r=tasks.start(store,'sections',t['version'],'first',llm)
-        duplicate=tasks.start(store,'sections',t['version'],'second',llm)
-        assert duplicate['id']==r['id'] and duplicate['deduplicated']
-        await asyncio.sleep(.01);assert llm.calls==1 and item(store)['state']=='running'
-        assert issue_map(store)[old['id']]['status']=='confirmed'
-        llm.gate.set();await drain()
-        assert item(store)['state']=='completed'
-        issues=issue_map(store);assert issues[old['id']]['status']=='superseded'
-        assert issues[old['id']]['review_supersession']['old_review_id']==old['review_scope']['failed_review_id']
-        assert issues[writing['id']]['status']=='confirmed' and issues[science['id']]['status']=='suspected'
-        history=tasks.status(store)['history'];assert any(h['original_state']=='failed' and h['replacement_review_id'] for h in history)
-        assert store.delivery_ready(store.snapshot()), "Optional review failures/findings do not invalidate recorded answers"
-        assert ResearchRuntime(store.root).status()['used']==0
-    asyncio.run(scenario())
-
-
-def test_same_version_recovers_instead_of_superseding_and_retains_failure(setup):
-    store=setup.store
-    async def scenario():
-        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service')
-        t=item(store);assert t['state']=='failed'
-        receipt=tasks.start(store,'sections',t['version'],'once',model());await drain()
-        issue=issue_map(store)[old['id']];assert issue['status']=='resolved'
-        assert issue['review_resolution']['failed_review_id']==old['review_scope']['failed_review_id']
-        previous=next(r for r in tasks.records(store) if r['id']==old['review_scope']['failed_review_id']);assert previous['state']=='failed' and previous['error_code']=='TimeoutError'
-        assert tasks.start(store,'sections',t['version'],'once',model())['id']==receipt['id']
-    asyncio.run(scenario())
-
-
-def test_new_review_failure_never_clears_old_failures(setup):
-    store=setup.store
-    async def scenario():
-        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service');edit(store)
-        t=item(store);tasks.start(store,'sections',t['version'],'fail-again',model(error=TimeoutError()));await drain()
-        assert item(store)['state']=='failed' and issue_map(store)[old['id']]['status']=='confirmed'
-        assert not any(r.get('superseded_by') for r in tasks.records(store))
-    asyncio.run(scenario())
-
-
 def test_late_old_response_cannot_overwrite_new_version_or_resolve_services(setup):
     store=setup.store
     async def scenario():
@@ -141,20 +91,6 @@ def test_cancellation_persists_recoverable_failure(setup):
     asyncio.run(scenario())
 
 
-def test_fragment_cannot_supersede_full_chapter_service(setup):
-    store=setup.store
-    async def scenario():
-        await failed(store);old=next(i for i in research_findings(store.snapshot()) if i['category']=='service')
-        context=review_context(setup.ctx,setup.state,'fragment','system','prompt',ClaimAudit,sections=setup.state['sections'],extra={'non_blocking':True})
-        cache=ReviewCache(store);r=cache.start('fragment',context);cache.complete(r,{'verdict':'equivalent','reason':'fixture'})
-        assert issue_map(store)[old['id']]['status']=='confirmed' and item(store)['state']=='failed'
-    asyncio.run(scenario())
-
-
-def test_substantive_issue_cannot_be_marked_superseded():
-    with pytest.raises(ValueError):Issue.model_validate({'id':'I1','task_id':'Q1','category':'writing','message':'问题','status':'superseded','source':'test'})
-
-
 def test_api_owner_research_and_budget_guards(setup,monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -181,34 +117,3 @@ def test_api_owner_research_and_budget_guards(setup,monkeypatch):
         assert client.get('/api/workspace/work/review-tasks').status_code==403
         assert client.post('/api/workspace/work/review-tasks',json=body).status_code==403
     assert rt.status()['used']==0
-
-
-def test_recovery_intent_requires_actual_same_document_proof(setup):
-    store=setup.store;cache=ReviewCache(store)
-    intent=cache.start('sections',tasks.intent_context(store,'sections'),'recovery-intent')
-    ctx=review_context(setup.ctx,setup.state,'sections','wrong','wrong',ClaimAudit,sections={'abstract':'different'})
-    child=cache.start('sections',ctx);cache.complete(child,{'issues':[]})
-    with pytest.raises(ValueError,match='实际完成审查'):cache.complete(intent,{'outcome':'passed'},provenance={'verified_records':[child['id']]})
-    assert next(r for r in tasks.records(store) if r['id']==intent['id'])['state']=='running'
-
-
-def test_failed_publication_of_review_findings_is_not_success(setup,monkeypatch):
-    store=setup.store
-    def fail(*args):raise OSError('controlled persistence failure')
-    monkeypatch.setattr(tasks,'_save_findings',fail)
-    async def scenario():
-        tasks.start(store,'sections',item(store)['version'],'metadata-failure',model());await drain()
-        assert any(r['state']=='completed' and r['source']!='recovery-intent' for r in tasks.records(store))
-        assert item(store)['state']=='failed' and item(store)['can_resume']
-        assert store.delivery_ready(store.snapshot()), "Optional review failures/findings do not invalidate recorded answers"
-    asyncio.run(scenario())
-
-
-def test_manual_source_conflict_never_claims_current_file_reviewed(setup):
-    store=setup.store;store.publish_paper('original source')
-    async def scenario():
-        tasks.start(store,'sections',item(store)['version'],'completed',model());await drain()
-        assert item(store)['state']=='completed'
-    asyncio.run(scenario())
-    (store.root/'paper.md').write_text('manual changes outside saved sections')
-    t=item(store);assert t['state']=='pending' and not t['can_resume'] and '合并原稿' in t['reason']

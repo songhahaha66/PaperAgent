@@ -1,14 +1,11 @@
 """Lightweight entry, lazy execution contracts and recovery boundaries (offline)."""
 import asyncio
-import copy
 from types import SimpleNamespace
 
-import pytest
 
 from ai_system.graph.context import GraphContext
 from ai_system.graph.build import compile_graph
 from ai_system.research import control, loop, planner
-from ai_system.research.models import Requirement, ResearchConflict
 from ai_system.research.store import ResearchStore
 
 SOURCE = '计算需求。容量最多10；保留完整数据和代码，中文报告。'

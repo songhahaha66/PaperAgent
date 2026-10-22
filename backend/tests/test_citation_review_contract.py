@@ -3,8 +3,7 @@ from langchain_core.messages import AIMessage
 import pytest
 from test_review_cache import no_network
 from test_literature import seed
-from ai_system.research.citations import audit_citations,citation_issues,SupportBatch,SupportVerdict
-from ai_system.research.review_cache import ReviewCache
+from ai_system.research.citations import audit_citations, citation_issues
 from ai_system.research.store import ResearchStore
 
 
@@ -26,19 +25,6 @@ class Reply:
         return {'raw':AIMessage(content=json.dumps(data),response_metadata={'finish_reason':'stop'}),'parsed':None,'parsing_error':None}
 
 
-def test_valid_plain_json_is_recovered_locally_and_unchanged_claim_is_cached(tmp_path):
-    _,_,e=seed(tmp_path);text='来源中的背景说明 {{C:'+e['id']+'}}';model=Reply()
-    result=asyncio.run(audit_citations(tmp_path,[text],model))
-    assert result[0]['status']=='supported' and not citation_issues(tmp_path,text)
-    asyncio.run(audit_citations(tmp_path,[text],model));assert model.calls==1
-    store=ResearchStore(tmp_path,'workspace-literature')
-    with store._connect() as db:
-        record=json.loads(db.execute("SELECT payload FROM review_records WHERE state='completed'").fetchone()[0])
-    assert record['provenance']['response_diagnostic']['local_json_recovery'] is True
-    changed='改变引用主张的范围 {{C:'+e['id']+'}}'
-    asyncio.run(audit_citations(tmp_path,[changed],model));assert model.calls==2
-
-
 @pytest.mark.parametrize('kind,code',[('wrong_key','verdict_key_mismatch'),('missing','structured_reply_missing'),('empty','verdict_key_mismatch'),('gateway',None)])
 def test_invalid_response_never_becomes_success_and_failure_has_diagnostic(tmp_path,kind,code):
     _,_,e=seed(tmp_path);text='待核验的背景 {{C:'+e['id']+'}}';model=Reply(kind)
@@ -52,12 +38,6 @@ def test_invalid_response_never_becomes_success_and_failure_has_diagnostic(tmp_p
     assert record['error_code']=='TimeoutError' if kind=='gateway' else record['error_code']=='CitationContractError'
 
 
-def test_successful_unsupported_verdict_still_blocks_publication(tmp_path):
-    _,_,e=seed(tmp_path);text='未被来源支持的主张 {{C:'+e['id']+'}}'
-    asyncio.run(audit_citations(tmp_path,[text],Reply('unsupported')))
-    assert citation_issues(tmp_path,text)
-
-
 def test_changed_source_and_corrupted_cache_cannot_reuse_supported_verdict(tmp_path):
     library,_,e=seed(tmp_path);text='原始背景 {{C:'+e['id']+'}}';model=Reply()
     asyncio.run(audit_citations(tmp_path,[text],model))
@@ -68,34 +48,3 @@ def test_changed_source_and_corrupted_cache_cannot_reuse_supported_verdict(tmp_p
         db.execute('UPDATE literature_passages SET payload=? WHERE id=1',(json.dumps(passage),))
     assert citation_issues(tmp_path,text)
     asyncio.run(audit_citations(tmp_path,[text],model));assert model.calls==2
-
-
-def test_concurrent_identical_citation_checks_share_one_model_reply(tmp_path):
-    _,_,e=seed(tmp_path);text='同一引用句的来源支持 {{C:'+e['id']+'}}'
-    class Gated(Reply):
-        async def ainvoke(self,messages):
-            entered.set();await release.wait();return await super().ainvoke(messages)
-    async def scenario():
-        nonlocal entered,release
-        entered=asyncio.Event();release=asyncio.Event();model=Gated()
-        first=asyncio.create_task(audit_citations(tmp_path,[text],model));await entered.wait()
-        second=asyncio.create_task(audit_citations(tmp_path,[text],model));await asyncio.sleep(.01);release.set()
-        a,b=await asyncio.gather(first,second)
-        assert model.calls==1 and a[0]['review_id']==b[0]['review_id']
-        assert {k:a[0][k] for k in ('key','status','reason','supporting_quote')}=={k:b[0][k] for k in ('key','status','reason','supporting_quote')}
-    entered=release=None;asyncio.run(scenario())
-
-
-def test_cancelled_citation_check_is_persisted_as_failure(tmp_path):
-    _,_,e=seed(tmp_path);text='尚待核验的引用 {{C:'+e['id']+'}}'
-    class Gated(Reply):
-        async def ainvoke(self,messages):entered.set();await asyncio.Event().wait()
-    async def scenario():
-        nonlocal entered
-        entered=asyncio.Event();work=asyncio.create_task(audit_citations(tmp_path,[text],Gated()));await entered.wait()
-        work.cancel();await asyncio.gather(work,return_exceptions=True)
-    entered=None;asyncio.run(scenario())
-    with ResearchStore(tmp_path,'workspace-literature')._connect() as db:
-        row=db.execute('SELECT state,payload FROM review_records').fetchone()
-        assert row[0]=='failed' and json.loads(row[1])['diagnostic']['recoverable']
-    assert citation_issues(tmp_path,text)

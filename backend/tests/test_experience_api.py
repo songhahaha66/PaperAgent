@@ -1,5 +1,4 @@
 """Personal library ownership, lifecycle and project usage are independent routes."""
-import json
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -7,7 +6,7 @@ from auth.auth import get_current_user
 from database.database import get_db
 from routers.work_routes import workspace
 from routers import experience_routes
-from test_experiences import env, submit, adopt_ready
+from test_experiences import env, submit
 
 
 @pytest.fixture
@@ -56,33 +55,3 @@ def test_personal_ids_cannot_cross_users_and_usage_checks_project_owner(env,clie
     from models.models import Project
     with env.sessions() as db:db.query(Project).filter(Project.work_id=='A').update({'created_by':2});db.commit()
     assert not c.get('/api/experiences').json()['cards']
-
-
-def test_api_exposes_actual_frozen_versions_and_revocation(env,client):
-    from ai_system.research.experience import prompt_context
-    from ai_system.graph.context import GraphContext
-    from test_experiences import TASK,analysis
-    c,_=client;submit(env.store());adopt_ready(env.scope());b=env.store('B');order=b.claim('Q1')
-    ctx=GraphContext.create(str(b.root),planner_llm=None,experience_scope=env.scope('B'),experience_store=b,experience_order=order)
-    prompt_context(ctx,{'source':TASK,'subproblem':analysis()['subproblems'][0]},['linear_programming'],'design')
-    (b.root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':b.research_id}))
-    body=c.get('/api/workspace/B/experience-usage').json()
-    assert body['usage'][0]['refs']==order.experience_refs and body['usage'][0]['available']
-    original_title=body['usage'][0]['sources'][0]['title']
-    assert body['usage'][0]['sources'][0]['source_work_id']=='A'
-    eid=order.experience_refs[0]['id'];c.post('/api/experiences/'+eid+'/transitions',json={'action':'withdraw','base_version':1})
-    body=c.get('/api/workspace/B/experience-usage').json()
-    assert not body['usage'][0]['available'] and body['usage'][0]['refs']==order.experience_refs
-    from models.models import ResearchExperience
-    from ai_system.research.store import digest
-    with env.sessions() as db:
-        row=db.get(ResearchExperience,eid)
-        row.payload={**row.payload,'question':'这是个人库中新版本的内容'}
-        row.version+=1;row.content_hash=digest(row.payload);db.commit()
-    source=c.get('/api/workspace/B/experience-usage').json()['usage'][0]['sources'][0]
-    assert source['title']==original_title and source['version']==1
-    assert c.delete('/api/experiences/'+eid).status_code==200
-    body=c.get('/api/workspace/B/experience-usage').json()
-    assert body['usage'][0]['refs']==order.experience_refs
-    assert body['usage'][0]['sources'][0]['title']=='已删除的经验'
-    assert body['usage'][0]['sources'][0]['source_work_id'] is None

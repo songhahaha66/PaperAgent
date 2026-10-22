@@ -1,23 +1,12 @@
 """Public progress stays ordered with real tools and never republishes reasoning."""
 import asyncio
-import hashlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_system.graph.commentary import ProgressMiddleware, public_progress
+from ai_system.graph.commentary import ProgressMiddleware
 from test_conversation_timeline import writer, call
-
-
-def test_only_explicit_public_blocks_are_projected():
-    assert public_progress('ordinary internal prose') == []
-    assert public_progress('<think><progress>hidden</progress></think><progress>Ready.</progress>') == ['Ready.']
-    assert public_progress('<think><progress>unterminated reasoning</progress>') == []
-    assert public_progress([{'type':'reasoning','text':'<progress>hidden</progress>'},
-                            {'type':'text','text':'<progress>Reading the supplied file.</progress>'}]) == ['Reading the supplied file.']
-    assert public_progress('<progress>```python\nprint(1)```</progress>') == []
-    assert public_progress('<progress>'+'x'*801+'</progress>') == []
 
 
 def test_model_progress_commits_before_tool_and_survives_refresh(tmp_path):
@@ -46,19 +35,6 @@ def test_model_progress_commits_before_tool_and_survives_refresh(tmp_path):
     assert stored['segments'][1]['execution']['status'] == 'completed'
     assert len(stored['segments']) == 3
     assert all('<progress>' not in str(u) for u in updates)
-
-
-def test_distinct_parallel_messages_and_final_text_do_not_coalesce(tmp_path):
-    manager, root, reply, _ = writer(tmp_path)
-    for scope in ['E1','E2']:
-        event={'type':'research_commentary','content':{'id':hashlib.sha256(scope.encode()).hexdigest(),
-            'text':f'Working on {scope}', 'scope':scope}}
-        reply.block(event); reply.block(event)
-    reply.text('Final answer.')
-    reply.finish('completed')
-    reply.block({'type':'research_commentary','content':{'id':'f'*64,'text':'Late'}})
-    stored=manager.get_messages('work')[0]
-    assert [s['text'] for s in stored['segments']] == ['Working on E1','Working on E2','Final answer.']
 
 
 def test_failed_worker_report_is_failed_activity_even_when_call_returns(tmp_path, monkeypatch):

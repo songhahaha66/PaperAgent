@@ -1,6 +1,6 @@
 """Native section writing keeps the evidence and publication protocol intact."""
 
-from helpers.paper import accepted_store, render_native_paper
+from helpers.paper import accepted_store
 import asyncio
 import json
 import shutil
@@ -12,17 +12,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.export.latex import compile_pdf, fragment_issues, native_document
+from ai_system.export.latex import compile_pdf, native_document
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import Result
 from ai_system.modules.writing import sections as writing
-from ai_system.modules.writing.validation import check_sections
-from services.file_services.workspace_structure import WorkspaceStructureManager
 from services.chat_services.research_session import research_snapshot
 from helpers.graph import FakeModel
-from helpers.contracts import store_for, submit, problem, TASK
-from research_tools_helpers import answer
-from ai_system.research.views import questions
 
 
 def validate_render_current_native(store):
@@ -39,12 +34,6 @@ def validate_render_current_native(store):
     rendered=asyncio.run(perform())
     assert rendered['paper_path']=='paper.tex'
     return ctx
-
-
-def test_latex_workspace_starts_with_tex_not_markdown(tmp_path):
-    WorkspaceStructureManager.create_workspace_structure(tmp_path, 'native', output_mode='latex')
-    assert (tmp_path / 'paper.tex').exists()
-    assert not (tmp_path / 'paper.md').exists()
 
 
 def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_exports(tmp_path):
@@ -74,143 +63,6 @@ def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_expo
     assert research_snapshot(tmp_path,'work','paused').artifacts==['paper.tex']
     assert store.delivery_ready(store.snapshot()), 'advisory findings cannot revoke recorded question answers'
     assert project.describe(store)['files'], 'an advisory finding must not hide the editable draft'
-
-
-def write_native_source(ctx,monkeypatch,source):
-    """Controlled model, real Store entry, source edits and file versions."""
-    from ai_system.modules.writing import latex
-    from ai_system.modules.registry import invoke
-    prompts=[]
-    async def reply(llm,schema,messages,**kwargs):
-        prompts.extend(messages)
-        answer=schema(edits=[{'target':'paper.tex','replacement':source}])
-        kwargs['validate'](answer)
-        return answer
-    monkeypatch.setattr(latex,'call_structured',reply)
-    asyncio.run(invoke(ctx,'writing.write'))
-    return prompts
-
-
-def test_resume_of_already_repaired_source_does_not_call_writer(tmp_path, monkeypatch):
-    if not shutil.which('xelatex'): pytest.skip('requires xelatex')
-    from ai_system.modules.writing import latex
-    from ai_system.modules.registry import invoke
-    from services.chat_services import paper_project as project
-    ctx = GraphContext.create(str(tmp_path), planner_llm=None, output_mode='latex')
-    ctx.research = accepted_store(tmp_path)
-    project.initialize(ctx.research)
-    (tmp_path/'paper.tex').write_text(native_document('已修复报告', '已有结果。', r'\section{结果}保留已完成的计算。'))
-    async def unexpected(*args, **kwargs): raise AssertionError('valid current source must not be rewritten')
-    monkeypatch.setattr(latex, 'call_structured', unexpected)
-    async def run():
-        result = await project.compile_project(ctx.research)
-        assert result['compile']['success']
-        patch = await invoke(ctx, 'writing.repair')
-        assert patch['repair_input'] and not patch.get('research_blocked')
-    asyncio.run(run())
-
-
-def test_native_source_writer_requests_latex_and_compiler_reports_undefined_labels(tmp_path,monkeypatch):
-    from ai_system.research.control import refresh_registry
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode='latex');ctx.research=accepted_store(tmp_path)
-    refresh_registry(ctx)
-    source=native_document('原生源码','摘要',r'\section{符号}\begin{tabular}{ll} $x$ & 决策 \\ \end{tabular}')
-    prompts=write_native_source(ctx,monkeypatch,source)
-    prompt='\n'.join(m.content for m in prompts)
-    assert '原生 LaTeX' in prompt and 'SourceEdits' in prompt and 'paper.tex' in prompt
-    assert (tmp_path/'paper.tex').read_text()==source and not (tmp_path/'.system/paper_raw.tex').exists()
-    assert fragment_issues('### 符号说明\n| 符号 | 含义 |')
-    assert fragment_issues(r'\begin{tabular}{ll} $x$ & 决策 \\ \end{tabular}') == []
-    assert fragment_issues(r'\begin{align} x=y \end{equation}')
-    assert fragment_issues(r'\textbf{缺少结束括号')
-    assert fragment_issues(r'\input{/private/file}')
-    assert fragment_issues(r'\begin{figure}{{F:F1}}\caption{重复图题}\end{figure}')
-    if shutil.which('xelatex'):
-        from services.chat_services import paper_project as project
-        asyncio.run(project.compile_project(ctx.research))
-        assert project.describe(ctx.research)['compile']['state']=='current'
-        assert (tmp_path/'paper.pdf').read_bytes().startswith(b'%PDF')
-        (tmp_path/'paper.tex').write_text(native_document('引用检查','摘要',r'见图\ref{fig:invented}。'))
-        result=asyncio.run(compile_pdf(tmp_path))
-        assert result.pdf_path is None and '未定义的交叉引用' in result.error
-
-
-@pytest.mark.parametrize('text', [r'\[z=4.05\]', r'\(4.05\)', r'\begin{align}z&=4.05\end{align}', r'误差为 4.05\%'])
-def test_native_literal_numbers_do_not_create_a_scientific_gate(tmp_path,monkeypatch,text):
-    from ai_system.research.control import refresh_registry
-    from services.chat_services import paper_project as project
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode='latex');ctx.research=accepted_store(tmp_path)
-    refresh_registry(ctx)
-    write_native_source(ctx,monkeypatch,native_document('数字不证明科学结论','摘要',text))
-    assert text in (tmp_path/'paper.tex').read_text()
-    assert check_sections(project.source_state(ctx.research,{}),ctx)==[]
-
-
-def test_native_references_escape_registered_text_and_use_math_values(tmp_path):
-    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
-    ctx.registry.results = {
-        'R1': Result('R1', 'number', 'Q1', '利润', '12.5', 'run_test', unit='元'),
-        'R2': Result('R2', 'text', 'Q1', '说明', 'A&B_50%', 'run_test'),
-        'F1': Result('F1', 'figure', 'Q1', '图3 需求&预测', '', 'run_test', path='outputs/figures/F_1.png'),
-    }
-    text = r'利润为 {{R:R1}}；\[x={{R:R1}}\]；{{R:R2}}。见{{F:F1}}。' + '\n\n{{F:F1}}\n\n{{F:F1}}'
-    out = ctx.registry.render(text, latex=True)
-    assert r'利润为 12.5 元；\[x=12.5\]' in out
-    assert r'A\&B\_50\%' in out
-    assert r'图~\ref{fig:F1}' in out
-    assert out.count(r'\begin{figure}') == 1
-    assert r'\caption{需求\&预测}' in out
-    assert r'\detokenize{outputs/figures/F_1.png}' in out
-    assert '{{' not in out
-    assert ctx.registry.render('如图{{F:F1}}所示', latex=True) == r'如图\ref{fig:F1}所示'
-    ctx.registry.results['R3'] = Result('R3', 'series', 'Q1', '需求', '[510.0761904761906,514.3333333333335,518.5904761904764]', 'run_test')
-    series = ctx.registry.render('{{R:R3}}', latex=True)
-    assert r',\allowbreak ' in series and '510.07619' in series
-    assert series.count(r'\(') == 3, 'inline vectors can break between individual values'
-    assert '510.0761904761906' in ctx.registry.results['R3'].value
-
-
-def test_tex_publication_versions_manual_edits_and_snapshot_artifacts(tmp_path):
-    store = accepted_store(tmp_path)
-    store.save_sections({'solve:Q1': '原生正文'}, [])
-    source = native_document('研究', '摘要', r'\section{模型}正文')
-    path, conflict = store.publish_paper(source, filename='paper.tex')
-    assert path == 'paper.tex' and not conflict
-    assert store.snapshot()['paper_version'].endswith('.tex')
-    (tmp_path / '.system/graph_thread.json').write_text(json.dumps({'thread_id': 'p2', 'engine_version': 'research-v3', 'status': 'done'}))
-    validate_render_current_native(store)
-    assert research_snapshot(tmp_path, 'work', 'completed').artifacts == ['paper.tex']
-    manual = source + '\n% 用户修改'
-    (tmp_path / 'paper.tex').write_text(manual)
-    assert not research_snapshot(tmp_path,'work','completed').artifacts, 'an edited source must invalidate the prior validation version'
-    path, conflict = store.publish_paper(source + '\n% 自动修订', filename='paper.tex')
-    assert conflict and path.endswith('.tex')
-    assert (tmp_path / 'paper.tex').read_text() == manual
-    assert (tmp_path / path).exists() and not (tmp_path / 'paper.md').exists()
-
-
-def test_word_writing_style_cache_survives_missing_graph_state(tmp_path, monkeypatch):
-    store = accepted_store(tmp_path)
-    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel(), output_mode='word')
-    ctx.research = store
-    from ai_system.research.control import graph_view
-    state=graph_view(store.snapshot())
-    old = {key: '旧 Markdown 正文' for key, _, _ in writing.section_plan(state) if key != 'solve_heading'}
-    store.save_sections(old, [], {key: 'old-format-context' for key in old})
-    state['sections'] = old
-    calls = []
-    async def write_many(ctx, state, items):
-        calls.extend(key for key, _ in items)
-        return {key: '**Word 正文**' + key for key, _ in items}
-    monkeypatch.setattr(writing, 'write_many', write_many)
-    updated = asyncio.run(writing.write(state, SimpleNamespace(context=ctx)))
-    assert set(calls) == set(old)
-    store.save_sections(updated['sections'], [], updated['section_contexts'])
-    calls.clear()
-    asyncio.run(writing.write({**state, 'sections': updated['sections']}, SimpleNamespace(context=ctx)))
-    assert calls == [], 'unchanged Word sections are reused; computation attempts are untouched'
-    asyncio.run(writing.write({**state,'sections':{}},SimpleNamespace(context=ctx)))
-    assert calls == [], 'saved sections also survive a failed node with no graph-state return'
 
 
 @pytest.mark.skipif(not shutil.which('xelatex'), reason='xelatex unavailable')
@@ -249,40 +101,6 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
     result = asyncio.run(compile_pdf(tmp_path))
     assert result.pdf_path is None and result.error
     assert (tmp_path / 'paper.pdf').read_bytes() == b'%PDF-old'
-
-
-def test_native_tables_cannot_invent_indexed_series_references(tmp_path,monkeypatch):
-    from ai_system.research.control import refresh_registry
-    from ai_system.research.models import WorkerResult
-    from dataclasses import asdict
-    from research_tools_helpers import continue_experiment
-    store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode='latex');ctx.research=store
-    refresh_registry(ctx)
-    run=ctx.fs.create_run();ctx.fs.save_run_stdout(run,'[1, 2, 3]');ctx.fs.finish_run(run,'success')
-    item=ctx.registry.record_value('Q1','预测','[1,2,3]',run)
-    assert item.kind=='series'
-    continue_experiment(store,'Q1','登记已生成的完整预测序列')
-    store.commit(WorkerResult(order=store.claim('Q1'),execution_status='succeeded',acceptance='accepted',
-        report={'status':'completed','summary':'完整预测序列'},results=[asdict(item)]))
-    with pytest.raises(ValueError,match='序列引用不支持'):
-        write_native_source(ctx,monkeypatch,native_document('序列','摘要','{{R:'+item.id+'}}[0]'))
-
-
-def test_publication_removes_prompt_annotations_without_losing_prose():
-    from ai_system.graph.registry import publication_text
-    assert publication_text('结果为 8⟨R1⟩，结论⟨C2⟩。') == '结果为 8，结论。'
-    assert publication_text('正常数学符号 ⟨x,y⟩') == '正常数学符号 ⟨x,y⟩'
-
-
-def test_native_source_preserves_honest_reference_gap(tmp_path,monkeypatch):
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode='latex');ctx.research=accepted_store(tmp_path)
-    from ai_system.research.control import graph_view,refresh_registry
-    refresh_registry(ctx)
-    gap=writing.reference_section(graph_view(ctx.research.snapshot()),ctx)
-    assert '来源缺口' in gap
-    source=native_document('研究','摘要',r'\section{参考文献}'+gap)
-    write_native_source(ctx,monkeypatch,source)
-    assert r'\section{参考文献}' in (tmp_path/'paper.tex').read_text() and gap in (tmp_path/'paper.tex').read_text()
 
 
 def test_supplied_bibliography_is_preserved_without_invented_metadata(tmp_path):

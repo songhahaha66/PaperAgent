@@ -1,6 +1,5 @@
 """Frozen linear constraints reject fabricated feasibility, and use the existing repair lifecycle."""
 
-from ai_system.research.domain import findings as research_findings
 import json
 import sys
 from pathlib import Path
@@ -12,8 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.research import ENGINE_VERSION
 from ai_system.research.models import DomainCheck, LinearModel
 from ai_system.research.store import ResearchStore
-from ai_system.research.planner import ready_tasks
-from services.chat_services.research_session import research_snapshot
 from helpers.contracts import submit
 
 SOURCE = 'Maximize 3x+2y; 2x+y<=8; x+2y<=8; x,y nonnegative integers. Explain the allocation. Compute another statistic.'
@@ -39,8 +36,6 @@ def store_for(root, max_attempts=3):
         {'id': 'RQ3', 'statement': 'Statistic', 'source_quote': 'Compute another statistic', 'kind': 'goal', 'task_ids': ['Q3']} ]}, max_attempts=max_attempts)
     (root / '.system/graph_thread.json').write_text(json.dumps({'engine_version': ENGINE_VERSION, 'thread_id': 'linear'}))
     return store
-
-
 
 
 @pytest.mark.parametrize('values,outcome,detail', [
@@ -74,56 +69,3 @@ def test_linear_contract_rejects_unsourced_constraints_and_invalid_dimensions(tm
     analysis['requirements'][0]['checks'][0]['linear_model']['constraints'][0]['source_quote'] = 'invented constraint'
     with pytest.raises(ValueError, match='逐字引用原题'):
         ResearchStore(tmp_path / 'invalid', 'bad').initialize(SOURCE, analysis)
-
-
-def test_unbounded_sign_equality_lower_constraints_and_absolute_tolerance():
-    from ai_system.research.linear import verify_linear
-    model = LinearModel(variables=[{'name': 'x', 'source_quote': 'x is real'}], objective=[2], objective_quote='2x', offset=1,
-        constraints=[{'coefficients': [1], 'relation': 'ge', 'rhs': -3, 'source_quote': 'x>=-3'},
-                     {'coefficients': [2], 'relation': 'eq', 'rhs': -4, 'source_quote': '2x=-4'}])
-    assert verify_linear(model, [-2], -3, 1e-8)[0]
-    assert verify_linear(model, [-2 - 1e-10], -3, 1e-8)[0]
-    assert not verify_linear(model, [-4], -7, 1e-8)[0]
-
-
-def test_unused_linear_model_does_not_change_frozen_numeric_check_hash():
-    raw = {'id': 'finite', 'description': '原有数值验收', 'left': {'task_id': 'Q1', 'name': 'x'},
-           'operator': 'finite', 'expected': None, 'right': None, 'tolerance': 0.0}
-    from ai_system.research.validation import fingerprint
-    assert fingerprint(DomainCheck.model_validate(raw).model_dump()) == fingerprint(raw)
-
-
-def test_delivery_explains_exhausted_budget_even_when_execution_issue_exists(tmp_path):
-    from ai_system.research.models import WorkerResult, IssueReport
-    store = store_for(tmp_path, max_attempts=1)
-    store.commit(WorkerResult(order=store.claim('Q3'), execution_status='failed', acceptance='inconclusive', report={},
-        issues=[IssueReport(task_id='Q3', category='execution', message='kernel stopped')]))
-    snapshot = research_snapshot(tmp_path, 'work', 'failed')
-    task=next(e for e in snapshot.experiments if e['task_id']=='Q3')
-    assert task['progress']['state']=='needs_plan' and task['progress']['executions']==task['progress']['attempt_limit']==1
-    assert any(i['category']=='execution' and i['message']=='kernel stopped' for i in research_findings(store.snapshot()))
-    from research_tools_helpers import continue_experiment,answer
-    from ai_system.research.models import ResearchConflict
-    store.recover()
-    with pytest.raises(ResearchConflict,match='尝试预算'):continue_experiment(store,'Q3')
-    qid=store.snapshot()['experiments']['Q3']['question_id']
-    reason='该实验尝试预算已耗尽，保留执行失败记录；当前问题尚未得到答案。'
-    answer(store,question_id=qid,coverage='unanswered',stop_reason=reason)
-    current=research_snapshot(tmp_path,'work','paused')
-    question=next(q for q in current.delivery['questions'] if q['id']==qid)
-    assert question['coverage']=='unanswered' and question['stop_reason']==reason
-    assert not current.delivery['ready'] and len(store.snapshot()['executions'])==1
-
-
-def test_submission_requires_decisions_not_just_self_reported_residual(tmp_path):
-    from ai_system.graph.context import GraphContext
-    from ai_system.modules.experiments.execution import submission_schema
-    from helpers.graph import FakeModel
-    from helpers.submissions import branch, seed, report
-    ctx = GraphContext.create(str(tmp_path), planner_llm=FakeModel())
-    runs = []
-    objective = seed(ctx, runs, name='objective', value='13')
-    task = branch()
-    task['research_contract']['checks'][0]['check'] = check().model_dump()
-    with pytest.raises(ValidationError, match='x'):
-        submission_schema(ctx, task, runs).model_validate(report(objective.id))

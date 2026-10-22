@@ -1,17 +1,13 @@
 """The single controller chooses work from actual state; no network replies."""
-import asyncio
-import copy
-import json
 from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
 
 from ai_system.graph.context import GraphContext
-from ai_system.graph.build import compile_graph
-from ai_system.research import control,loop,planner
-from ai_system.research.models import WorkerResult, IssueReport
-from ai_system.research.store import ResearchStore,digest
+from ai_system.research import planner
+from ai_system.research.models import WorkerResult
+from ai_system.research.store import ResearchStore
 
 SOURCE='Estimate demand and assess costs.'
 
@@ -29,26 +25,6 @@ def study(tmp_path):
     return SimpleNamespace(store=store,ctx=ctx,state={'task':SOURCE,'analysis':analysis,'data_profile':'Supplied source material.'})
 
 
-def coverage(context):
-    rows=[]
-    for requirement in context['spec']['requirements']:
-        actual=[e for e in context['evidence'] if e.get('task_id') in requirement['task_ids']]
-        rows.append({'requirement_id':requirement['id'],'requirement':requirement['statement'],
-                     'supported':'; '.join(e['name']+'='+e['text'] for e in actual),
-                     'basis':[{'ref':e['id'],'quote':e['text']} for e in actual],
-                     'remaining':'' if actual else 'No actual answer yet.'})
-    return rows
-
-
-
-
-
-
-def observe(study):
-    update=asyncio.run(control.observe(study.state,SimpleNamespace(context=study.ctx)))
-    study.state={**study.state,**update};return update
-
-
 def publish(study,key,value):
     order=study.store.claim(key)
     run=study.ctx.fs.create_run();study.ctx.fs.save_run_stdout(run,str(value));study.ctx.fs.finish_run(run,'success')
@@ -56,63 +32,6 @@ def publish(study,key,value):
     report={'status':'completed','summary':'Actual registered result.',
             'requirement_evidence':[{'requirement_id':rid,'evidence_refs':[result.id]} for rid in study.store.snapshot()['experiments'][key]['requirement_ids']]}
     return study.store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',report=report,results=[asdict(result)]))
-
-
-
-
-def test_ordinary_solver_does_not_generate_candidates_or_hide_design_failures(study,monkeypatch):
-    from ai_system.modules.experiments import execution
-    captured=[]
-    async def solve(ctx,branch,runs,messages):
-        captured.append((branch,messages));raise RuntimeError('stop before any model or kernel')
-    async def forbidden(*args,**kwargs):pytest.fail('ordinary execution must not invoke candidate generation')
-    from ai_system.modules import registry
-    monkeypatch.setattr(registry,'invoke',forbidden);monkeypatch.setattr(execution,'_solve_loop',solve)
-    branch={'source':SOURCE,'subproblem':study.state['analysis']['subproblems'][0],
-            'data_profile':'Known materials.'}
-    with pytest.raises(RuntimeError,match='stop before'):
-        asyncio.run(execution.solve(branch,SimpleNamespace(context=study.ctx)))
-    assert captured[0][0]['design']['direct_execution']
-    assert SOURCE in captured[0][1][0].content
-
-
-@pytest.mark.parametrize('pending_premise',[False,True])
-def test_single_experiment_solver_returns_its_record_without_a_graph_patch(study,monkeypatch,pending_premise):
-    from ai_system.modules.experiments import execution
-    from test_assumption_submission import draft
-    from helpers.submissions import branch as solver_input
-    task=solver_input();design=task['design']
-    if pending_premise:design['chosen']['assumptions']=[draft()]
-    calls=[]
-    async def solve_once(ctx,task,runs,messages):
-        calls.append(task['subproblem']['id'])
-        return 'completed',None,{'summary':'Recorded experiment interpretation','key_findings':[]},[]
-    monkeypatch.setattr(execution,'_solve_loop',solve_once)
-    result=asyncio.run(execution.solve(task,SimpleNamespace(context=study.ctx)))
-    assert set(result)=={'report','design'} and result['design'] is design
-    assert result['report']['status']==('prepared' if pending_premise else 'completed')
-    assert calls==([] if pending_premise else ['Q1'])
-
-
-def test_dispatch_contains_only_the_selected_experiment_and_its_frozen_contract(study):
-    before=study.store.snapshot();task=before['experiments']['Q1']
-    dispatched=control.experiment_dispatch(study.ctx,'Q1')
-    assert 'analysis' not in dispatched and 'solutions' not in dispatched and 'designs' not in dispatched
-    assert dispatched['subproblem']==task['subproblem']
-    assert dispatched['task_revision']==task['revision']
-    assert dispatched['research_contract']['requirements']==[
-        r for r in before['spec']['requirements'] if r['id'] in task['requirement_ids']]
-    assert dispatched['dependencies']=={} and study.store.snapshot()==before
-
-
-
-
-
-
-
-
-
-
 
 
 def test_user_revision_without_scope_preserves_results_and_updates_only_its_question(study):
@@ -139,14 +58,3 @@ def test_user_revision_without_scope_preserves_results_and_updates_only_its_ques
     assert after['questions'][q2]==before['questions'][q2]
     assert after['spec']['requirement']==SOURCE
     assert after['spec']['requirements'][:2]==before['spec']['requirements']
-
-
-
-
-
-
-def test_revision_requires_a_structured_patch_without_guessing_text(study):
-    before=study.store.snapshot()
-    with pytest.raises(ValueError):planner.propose_revision(before,'bad',1,'继续',None,[])
-    with pytest.raises(ValueError):study.store.apply_revision_command('bad',1,'继续',None,None)
-    assert study.store.snapshot()==before

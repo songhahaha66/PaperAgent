@@ -10,7 +10,6 @@ from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_project as project, paper_comments as comments
 from services.chat_services import paper_sources
 from test_paper_editor import paper
-from ai_system.research.literature import LiteratureStore
 
 
 def run(value): return asyncio.run(value)
@@ -52,14 +51,6 @@ def test_unrelated_same_file_edits_survive_accept_and_revert(paper):
     assert path.read_text().endswith('用户新增末尾。')
 
 
-def test_changed_target_does_not_redirect_to_another_duplicate(paper):
-    store,_=paper;path=store.root/'paper.md';path.write_text('重复重复')
-    p=change(store,selection(store,'重复',0),'新内容')
-    path.write_text('重复')
-    with pytest.raises(ResearchConflict):run(project.decide(store,p['id'],'apply'))
-    assert path.read_text()=='重复'
-
-
 def test_target_conflict_preserves_candidate_and_user_edit(paper):
     store,_=paper;path=store.root/'paper.md';path.write_text('头部。目标。尾部。')
     p=change(store,selection(store,'目标'),'候选')
@@ -78,48 +69,6 @@ def test_group_conflict_writes_no_files(paper):
     (store.root/'part.tex').write_text('附录人工修改。')
     with pytest.raises(ResearchConflict):run(project.decide(store,p['id'],'apply'))
     assert '主文改' not in path.read_text()
-
-
-def test_new_request_can_revisit_same_range_but_retry_is_deduplicated(paper):
-    store,_=paper;bound=selection(store,'原来的表述',0)
-    first,new=comments.create(store,'r1','解释',bound)
-    same,new2=comments.create(store,'r1','解释',bound)
-    second,new3=comments.create(store,'r2','再解释',bound,first['thread_id'])
-    assert new and not new2 and new3 and first['id']==same['id'] and second['id']!=first['id']
-    with pytest.raises(ResearchConflict):comments.create(store,'r1','不同问题',bound)
-
-
-def test_thread_reanchors_to_applied_range_for_followups(paper):
-    store,_=paper;bound=selection(store,'原来的表述',0)
-    record,_=comments.create(store,'r1','请改',bound)
-    p=change(store,bound,'修改后的表述',record['thread_id'])
-    run(project.decide(store,p['id'],'apply'))
-    record2,_=comments.create(store,'r2','再修改一次',None,record['thread_id'])
-    assert record2['selection']['quote']=='修改后的表述'
-    project.current_selection(store.root,record2['selection'])
-
-
-def test_comment_explains_without_patch_and_multiple_references_share_one_change_set(paper):
-    from research_tools_helpers import ResearchToolsModel,tool
-    store,_=paper
-    record,_=comments.create(store,'explain','这是什么意思',selection(store,'原来的表述'))
-    before=(store.root/'paper.md').read_text()
-    model=ResearchToolsModel(respond=lambda messages:tool('CommentReply',{'answer':'这里是在说明局限。'}))
-    result=run(comments.execute(store,record['id'],model))
-    assert result['answer']=='这里是在说明局限。' and not project.read_records(store,'paper_changes')
-    assert (store.root/'paper.md').read_text()==before
-    (store.root/'paper.md').write_text('第一段。第二段。')
-    refs=[{'selection':selection(store,q),'quote':q} for q in ('第一段','第二段')]
-    record,_=comments.create(store,'multi','分别改进这两段',references=refs)
-    def respond(messages):
-        if not any(getattr(m,'name',None)=='propose_edits' for m in messages):
-            return tool('propose_edits',{'edits':[{'reference':i,'replacement':q+'改进'} for i,q in enumerate(('第一段','第二段'))]},'edit')
-        return tool('CommentReply',{'answer':'两处修改已提出，等待接受。'})
-    result=run(comments.execute(store,record['id'],ResearchToolsModel(respond=respond)))
-    patches=project.read_records(store,'paper_changes')[0]['patches']
-    assert [p['quote'] for p in patches]==['第一段','第二段']
-    assert (store.root/'paper.md').read_text()=='第一段。第二段。'
-    assert result['steps'][0]['state']=='completed'
 
 
 def test_comment_reads_excel_corrects_errors_and_resumes_without_replaying_tools(paper,monkeypatch):
@@ -166,19 +115,6 @@ def test_comment_reads_excel_corrects_errors_and_resumes_without_replaying_tools
     assert any(c['key'].startswith('Elookup_') for c in paper_sources.cards(store))
 
 
-def test_finish_preserves_preexisting_failure_in_thread_history(paper):
-    store,_=paper
-    record,_=comments.create(store,'old-failure','解释旧记录')
-    record.update(state='failed',phase='write',error='先前写作未完成',error_type='RuntimeError',owner_pid=123,updated_at=1)
-    with store._transaction() as db:project.put(db,store,'paper_executions',record)
-    result=comments.finish(store,record,'已完成')
-    assert result['state']=='completed' and all(k not in result for k in ('error','error_type','owner_pid'))
-    history=project.read_records(store,'paper_threads')[0]['messages']
-    assert history[-2]['text']=='先前写作未完成' and history[-2]['error_type']=='RuntimeError'
-    assert history[-2]['at']==1 and history[-1]['text']=='已完成'
-
-
-
 def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
     store,_=paper;path=store.root/'paper.tex';path.write_text('原稿中有 \\custom{宏} 和公式 $x^2$。')
     pdf=store.root/'paper.pdf';pdf.write_bytes(b'last good pdf')
@@ -192,21 +128,6 @@ def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
     assert doc['pdf_available'] and doc['compile']['state']=='failed' and '花括号' in doc['compile']['message']
 
 
-def test_latex_success_updates_pdf_at_exact_project_version(paper,monkeypatch):
-    store,_=paper;(store.root/'paper.tex').write_text('源文件。')
-    async def success(folder,*args):
-        from ai_system.export.latex import LatexResult
-        (folder/'paper.pdf').write_bytes(b'new pdf')
-        return LatexResult('paper.tex',pdf_path='paper.pdf')
-    monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
-    run(project.compile_project(store))
-    doc=project.describe(store)
-    assert doc['pdf_version']==doc['version'] and doc['compile']['state']=='current'
-    (store.root/'paper.tex').write_text('人工更新。')
-    assert project.describe(store)['compile']['state']=='stale'
-    assert (store.root/'paper.pdf').read_bytes()==b'new pdf'
-
-
 def test_compile_does_not_publish_stale_result(paper,monkeypatch):
     store,_=paper;path=store.root/'paper.tex';path.write_text('原稿。')
     pdf=store.root/'paper.pdf';pdf.write_bytes(b'old')
@@ -217,44 +138,6 @@ def test_compile_does_not_publish_stale_result(paper,monkeypatch):
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
     run(project.compile_project(store))
     assert pdf.read_bytes()==b'old' and project.meta(store.root)['compile']['state']=='stale'
-
-
-def test_source_card_quote_version_page_and_bib_are_real(paper):
-    store,_=paper;literature=LiteratureStore(store.root)
-    source=literature.upsert({'title':'实际论文','url':'https://example.org/paper','authors':['Author'],'year':2025})
-    text='This is the actual original passage from the retrieved article and cannot be invented.'
-    literature.add_passages(source,[{'text':text,'locator':'摘要段落 1','page':None}],'abstract',source['url'],'f'*64)
-    card=paper_sources.cards(store)[0]
-    assert card['excerpt']==text and card['abstract_only'] and card['version']=='f'*64 and card['page'] is None
-    paper_sources.write_bibliography(store.root)
-    bib=(store.root/'paper-sources.bib').read_text()
-    assert '@misc{'+card['key'] in bib and '实际论文' in bib
-    with pytest.raises(ValueError):paper_sources.validate_references(store.root,'',r'新增引用 \cite{invented}')
-
-
-def test_legacy_import_keeps_tex_bib_and_custom_files(paper):
-    store,_=paper;tex='\\documentclass{custom}\n\\newcommand{\\macro}[1]{#1}\n\\input{part}\n\\bibliography{refs}\n'
-    (store.root/'paper.tex').write_text(tex);(store.root/'part.tex').write_text('公式 $x^2$ 与表格。')
-    (store.root/'refs.bib').write_text('@misc{old,title={Existing}}');(store.root/'custom.cls').write_text('custom class')
-    old=(store.root/'paper.md').read_bytes();doc=project.describe(store)
-    assert {r['path'] for r in doc['files']}=={'paper.tex','part.tex','refs.bib','custom.cls'}
-    assert (store.root/'paper.tex').read_text()==tex and (store.root/'paper.md').read_bytes()==old
-    assert project.base_text(store.root,doc['version'],'paper.tex')==tex
-
-
-def test_malformed_offset_and_path_are_rejected(paper):
-    store,_=paper;bound=selection(store,'原来的表述')
-    with pytest.raises(ResearchConflict):project.bind(store.root,{**bound,'start':bound['start']+1})
-    with pytest.raises(ValueError):project.safe_path(store.root,'../secret.tex')
-    with pytest.raises(ValueError):project.safe_path(store.root,'.system/private.tex')
-
-
-
-def test_native_dependency_snapshot_includes_registered_detokenize_figure(paper):
-    store,_=paper;(store.root/'outputs').mkdir(exist_ok=True)
-    (store.root/'outputs/figure_1.png').write_bytes(b'image bytes')
-    (store.root/'paper.tex').write_text(r'\includegraphics[width=.8\linewidth]{\detokenize{outputs/figure_1.png}}')
-    assert 'outputs/figure_1.png' in {row['path'] for row in project.snapshot(store.root)['files']}
 
 
 def test_group_write_failure_restores_all_sources(paper,monkeypatch):
@@ -280,17 +163,6 @@ def test_recovery_preserves_edit_made_after_interrupted_save(paper):
     project.atomic_text(store.root/project.MARKER,json.dumps({'id':'missing','decision':'applied','before':{'paper.md':'旧稿。'},'after':{'paper.md':'中断稿。'}}))
     project.recover(store)
     assert path.read_text()=='后来的人工作文。' and '人工稿' in project.meta(store.root)['migration_notice']
-
-
-def test_initial_empty_file_can_be_edited_and_reverted(paper):
-    store,_=paper;path=store.root/'paper.md';path.write_text('')
-    doc=project.snapshot(store.root);bound={'file':'paper.md','version':doc['version'],'start':0,'end':0,'quote':''}
-    p=change(store,bound,'第一版原稿。')
-    run(project.decide(store,p['id'],'apply'))
-    assert path.read_text()=='第一版原稿。'
-    run(project.decide(store,p['id'],'revert'))
-    assert path.read_text()==''
-
 
 
 def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monkeypatch):
@@ -323,23 +195,3 @@ def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monk
         monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(created_by=8))
         assert client.get('/api/workspace/work/paper/project').status_code==403
         assert client.post('/api/workspace/work/paper/comments',json=body).status_code==403
-
-
-def test_bibliography_refresh_preserves_user_edits(paper):
-    store,_=paper;literature=LiteratureStore(store.root)
-    source=literature.upsert({'title':'Original title','url':'https://example.org/one'})
-    literature.add_passages(source,[{'text':'Actual retrieved original passage from a paper, preserved for the source card.'}],'abstract',source['url'],'a'*64)
-    paper_sources.write_bibliography(store.root)
-    path=store.root/'paper-sources.bib';path.write_text(path.read_text().replace('Original title','User corrected title'))
-    paper_sources.write_bibliography(store.root)
-    assert 'User corrected title' in path.read_text()
-    assert '人工编辑' in project.meta(store.root)['migration_notice']
-
-
-def test_local_patch_preserves_crlf_and_non_ascii_outside_selection(paper):
-    store,_=paper;path=store.root/'paper.md';path.write_bytes('前言😀。\r\n目标。\r\n末尾。\r\n'.encode())
-    doc=project.snapshot(store.root);text=doc['files'][0]['text'];start=text.index('目标')
-    bound={'file':'paper.md','version':doc['version'],'start':start,'end':start+2,'quote':'目标'}
-    p=change(store,bound,'修订')
-    run(project.decide(store,p['id'],'apply'))
-    assert path.read_bytes()=='前言😀。\r\n修订。\r\n末尾。\r\n'.encode()

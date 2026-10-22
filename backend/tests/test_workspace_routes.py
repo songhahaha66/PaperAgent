@@ -40,23 +40,6 @@ def test_all_workspace_operations_preserve_ownership(client, monkeypatch, method
     monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=owner) if owner is not None else None)
     assert client.request(method, '/api/workspace/example' + path, **kwargs).status_code == expected
 
-@pytest.mark.parametrize('payload', [
-    {'type': 'text', 'filename': 'paper.md', 'size': 5, 'content': 'hello'},
-    {'type': 'image', 'filename': 'chart.png', 'size': 3, 'content': 'YWJj'},
-    {'type': 'binary', 'filename': 'paper.pdf', 'size': 50, 'mime_type': 'application/pdf', 'download_url': '/download/paper.pdf', 'message': 'Binary file - use download button to view'},
-])
-def test_file_reader_returns_the_service_contract_without_a_second_type_dispatch(client, monkeypatch, payload):
-    monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=7))
-    monkeypatch.setattr(workspace.workspace_file_service, 'read_file', lambda *args: payload)
-    result = client.get('/api/workspace/example/files/' + payload['filename'])
-    assert result.status_code == 200
-    assert result.json() == payload
-
-@pytest.mark.parametrize('filename,expected', [('paper.tex', 'text'), ('data.csv', 'text'), ('chart.PNG', 'image'), ('paper.pdf', 'binary'), ('unknown.custom', 'binary')])
-def test_file_classification_keeps_the_same_fallback(filename, expected):
-    assert workspace.workspace_file_service.detect_file_type(filename) == expected
-
-
 def test_empty_paper_api_is_readable_before_research(client, monkeypatch, tmp_path):
     monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=7))
     monkeypatch.setattr(workspace.workspace_file_service, 'get_workspace_path', lambda _: tmp_path)

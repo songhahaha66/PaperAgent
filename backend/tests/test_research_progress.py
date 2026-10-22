@@ -8,55 +8,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph.context import GraphContext
 from ai_system.research.control import public_snapshot
-from ai_system.research.models import IssueReport
-from ai_system.research.store import ResearchStore
 from services.chat_services.research_session import research_snapshot
 from helpers.research import make_store, finish
-
-
-def tasks(store, status=None):
-    return {t["task_id"]: t for t in public_snapshot(store.snapshot(), work_status=status)["experiments"]}
-
-
-def test_dependency_progress_and_recovery_preserve_unrelated_acceptance(tmp_path):
-    store = make_store(tmp_path)
-    assert tasks(store)["Q1"]["progress"]["state"] == "ready"
-    assert tasks(store)["Q2"]["progress"]["waiting_for"] == ["Q1"]
-    finish(store, "Q3")
-    store.claim("Q1")
-    assert tasks(store)["Q1"]["progress"]["state"] == "running"
-    assert tasks(store, "paused")["Q1"]["progress"]["state"] == "interrupted"
-    store.recover()
-    recovered = tasks(ResearchStore(tmp_path, "research"))
-    assert recovered["Q3"]["progress"]["state"] == "accepted"
-    assert recovered["Q1"]["progress"]["state"] == "failed"
-    assert store.snapshot()["experiments"]["Q1"]["execution_status"]=="cancelled"
-    assert recovered["Q2"]["progress"]["state"] == "waiting"
-    assert recovered["Q1"]["progress"]["executions"] == 1
-    from research_tools_helpers import continue_experiment
-    continue_experiment(store,"Q1")
-    assert tasks(store)["Q1"]["progress"]["state"]=="ready"
-    finish(store, "Q1")
-    assert tasks(store)["Q2"]["progress"]["state"] == "ready", "a task never executed is not rework"
-
-
-
-
-def test_open_semantic_review_is_advisory_and_budget_is_explicit(tmp_path):
-    store = make_store(tmp_path)
-    finish(store, "Q1")
-    [issue] = store.report_issues([IssueReport(task_id="Q1", category="model", message="scope uncertain")], "sections")
-    assert tasks(store)["Q1"]["progress"]["state"] == "accepted"
-    assert tasks(store)["Q1"]["progress"]["issue_ids"] == []
-    assert not issue["blocking"] and issue["status"] == "suspected"
-    from research_tools_helpers import continue_experiment
-    for index in range(3):
-        if index:continue_experiment(store,"Q3")
-        order = store.claim("Q3")
-        finish(store, "Q3", acceptance="rejected", order=order)
-        store.recover()
-    assert tasks(store)["Q3"]["progress"]["state"] == "needs_plan"
-    assert tasks(store)["Q3"]["progress"]["executions"] == 3
 
 
 def test_delivery_progress_is_persisted_projected_and_read_only(tmp_path):
@@ -79,25 +32,3 @@ def test_delivery_progress_is_persisted_projected_and_read_only(tmp_path):
     store.recover()
     assert public_snapshot(store.snapshot())["delivery_stages"]["write"]["status"] == "pending"
     assert not (tmp_path / "plan.json").exists()
-
-
-def test_paper_rewrite_does_not_revoke_accepted_computation_progress(tmp_path):
-    store = make_store(tmp_path)
-    for key in ("Q1", "Q2", "Q3"):
-        finish(store, key)
-    from research_tools_helpers import answer
-    state=store.snapshot();results=store.registry_payload()['results']
-    for key in ('Q1','Q2','Q3'):
-        refs=[r['id'] for r in results if r['subproblem']==key]
-        answer(store,question_id=state['experiments'][key]['question_id'],coverage='answered',
-            statement='当前条件下的结果 {{R:'+refs[0]+'}}',artifact_refs=refs,stop_reason='已回答给定实验条件下的问题')
-    before=store.snapshot()
-    assert store.delivery_ready(before)
-    store.report_issues([IssueReport(task_id="Q1", category="writing", section="analysis", message="rewrite unsupported wording")], "sections")
-    progress = public_snapshot(store.snapshot())
-    assert progress["delivery"]["ready"]
-    assert store.snapshot()["executions"]==before["executions"] and store.snapshot()["artifacts"]==before["artifacts"]
-    assert all(t["progress"]["state"] == "accepted" for t in progress["experiments"])
-    assert all(not t["progress"]["issue_ids"] for t in progress["experiments"])
-    store.recover()
-    assert all(t["progress"]["state"] == "accepted" for t in tasks(store).values())

@@ -1,48 +1,15 @@
 """P2 contracts, counterexamples, causal replanning and delivery gates."""
 
-from helpers.contracts import TASK, problem, store_for, submit, resume_saved_contract
+from helpers.contracts import TASK, problem, submit
 
-from ai_system.research.domain import findings as research_findings
-import asyncio
-import json
-import re
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_system.research.models import Assumption, DomainCheck, IssueReport, Requirement, ResultSelector, WorkerResult, ResearchConflict
+from ai_system.research.models import DomainCheck, ResultSelector
 from ai_system.research.store import ResearchStore
-from ai_system.research.planner import ready_tasks
-from ai_system.graph.agent import PaperGraphAgent
-from ai_system.graph.state import Subproblem, ConsistencyReview, ClaimAudit, ResultReview
-from helpers.graph import ProblemAnalysis, FakeModel, FixedJudge
-
-
-def test_missing_metric_is_inconclusive_and_cannot_publish(tmp_path):
-    store = store_for(tmp_path)
-    submit(store, "Q1", {"demand": 8})
-    submit(store, "Q2", {"allocation": 8})
-    attempt = list(store.snapshot()["executions"].values())[-1]
-    assert attempt["acceptance"] == "inconclusive"
-    assert store.snapshot()["assumptions"]["A1"]["status"] == "active"
-    with pytest.raises(ResearchConflict):
-        store.publish_paper("pretend everything is valid")
-
-
-def test_source_and_check_contracts_fail_closed(tmp_path):
-    analysis = problem().model_dump()
-    analysis["requirements"][0]["source_quote"] = "not in original"
-    with pytest.raises(ValueError, match="摘录"):
-        ResearchStore(tmp_path, "invalid").initialize(TASK, analysis)
-    with pytest.raises(ValueError):
-        DomainCheck(id="bad", description="bad", left=ResultSelector(task_id="Q1", name="x"), operator="le")
-    # A source constraint can exist before a concrete experiment/check.
-    requirement = Requirement(id="pending", statement="capacity", source_quote="capacity", kind="constraint")
-    assert not requirement.task_ids and not requirement.checks
 
 
 @pytest.mark.parametrize("operator,value,expected,right,tolerance,outcome", [

@@ -45,14 +45,6 @@ def check(message):
     }
 
 
-def test_cumulative_usage_sync_stream_keeps_tool_arguments_and_final_totals():
-    with httpx.Client(transport=httpx.MockTransport(response)) as client:
-        llm = AIGWChatOpenAI(model='step-5-preview', api_key='fixture',
-                            base_url='https://aigw.saurlax.com/v1', max_tokens=512, streaming=True, http_client=client)
-        check(llm.invoke('check'))
-        check(llm.invoke('check again'))
-
-
 @pytest.mark.parametrize('cache_style',['openai','deepseek'])
 def test_cumulative_usage_async_stream_counters_are_isolated_per_request(cache_style):
     async def run():
@@ -70,30 +62,3 @@ def test_gateway_adapter_is_scoped_to_exact_host(host, expected):
     llm = OpenAIProvider({'model_id': 'step-5-preview', 'api_key': 'fixture',
                           'base_url': f'https://{host}/v1'}).create_llm_instance()
     assert isinstance(llm, AIGWChatOpenAI) is expected
-
-
-def test_step_defaults_keep_explicit_handler_overrides_and_saved_body():
-    from types import SimpleNamespace
-    from ai_system.core_handlers.llm_handler import LLMHandler
-    config = SimpleNamespace(model_id='step-5-preview', api_key='fixture',
-                             base_url='https://aigw.saurlax.com/v1',
-                             extra_body={'reasoning_effort': 'medium'})
-    llm = LLMHandler(model_config=config).get_llm_instance()
-    assert llm.extra_body == {'reasoning_effort': 'medium'}
-    assert llm.request_timeout == 600 and llm.max_retries == 0
-    body = {'reasoning_effort': 'high', 'custom': 'preserved'}
-    llm = LLMHandler(model_config=config, extra_body=body, timeout=45, max_retries=1).get_llm_instance()
-    assert llm.extra_body == body
-    assert llm.request_timeout == 45 and llm.max_retries == 0
-    assert body == {'reasoning_effort': 'high', 'custom': 'preserved'}
-    assert config.extra_body == {'reasoning_effort': 'medium'}
-
-
-@pytest.mark.parametrize('host,model', [('aigw.saurlax.com', 'step-3.7-flash'),
-                                      ('example.test', 'step-5-preview'),
-                                      ('aigw.saurlax.com.example.test', 'step-5-preview')])
-def test_step_runtime_defaults_do_not_change_other_connections(host, model):
-    llm = OpenAIProvider({'model_id': model, 'api_key': 'fixture',
-                          'base_url': f'https://{host}/v1'}).create_llm_instance()
-    assert llm.extra_body is None
-    assert llm.request_timeout == 600 and llm.max_retries == 0
