@@ -100,7 +100,7 @@
                 :disabled="!question.trim() || creating"
                 :aria-label="creating ? ui.starting : ui.start"
                 @click="startWork"
-                ><t-icon name="arrow-up" /></t-button
+                ><template #icon><t-icon name="arrow-up" /></template></t-button
             ></t-tooltip>
           </div>
           <div v-if="layoutOpen" id="composer-layout-settings" class="layout-settings">

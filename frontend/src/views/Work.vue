@@ -206,8 +206,8 @@
                       :loading="intentConfigChecking"
                       :disabled="isStreaming || paperSending || loading || !inputValue.trim()"
                       :aria-label="isZh ? '发送消息' : 'Send message'"
-                      ><t-icon name="arrow-up"
-                    /></t-button>
+                      ><template #icon><t-icon name="arrow-up" /></template
+                    ></t-button>
                   </div>
                 </form>
                 <div
