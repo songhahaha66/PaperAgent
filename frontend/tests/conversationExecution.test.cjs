@@ -134,6 +134,46 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   heading().props.onClick()
   await flush()
   assert.match(text(host.root),/original error/)
+  heading().props.onClick()
+  const step = (id, status, label, extra = {}) => ({
+    ...row(status, { id, label, ...extra }),
+    id,
+  })
+  const timeout = step('first', 'failed', '计算基本统计量', {
+    finished_at: 192,
+    message: '执行超时，内核已重启。',
+  })
+  const retry = step('retry', 'completed', '重新计算基本统计量', { finished_at: 202 })
+  state.label = '执行记录'
+  state.segments = [timeout, retry]
+  await flush()
+  const group = () => host.find((n) => n.kind === 'section')
+  assert.match(text(heading()), /重新计算基本统计量完成2 步/, 'group summarizes the latest successful attempt')
+  assert.doesNotMatch(group().props.class, /failed/)
+  assert.doesNotMatch(text(host.root), /未完成|执行超时/, 'an earlier timeout does not pin the compact group to failure')
+  state.segments = [...state.segments, step('save', 'running', '保存计算结果')]
+  await flush()
+  assert.match(text(heading()), /保存计算结果进行中3 步/, 'the heading follows the next live step')
+  assert.match(group().props.class, /running/)
+  state.segments = [timeout, retry, step('save', 'completed', '保存计算结果', { finished_at: 204 })]
+  await flush()
+  assert.match(text(heading()), /保存计算结果完成3 步/)
+  assert.doesNotMatch(group().props.class, /failed|running/)
+  assert.equal(heading().props['aria-expanded'], false, 'progress updates preserve manual collapse')
+  heading().props.onClick()
+  await flush()
+  assert.match(text(host.root), /执行超时，内核已重启。/, 'earlier failures remain in expanded history')
+  assert.match(text(host.root), /计算基本统计量未完成/, 'history preserves each attempt’s own status')
+  heading().props.onClick()
+  state.segments = [...state.segments, step('export', 'failed', '导出结果', {
+    finished_at: 206,
+    message: '导出失败，请重试。',
+  })]
+  await flush()
+  assert.match(text(heading()), /导出结果未完成4 步/, 'a failure of the latest step still appears')
+  assert.match(group().props.class, /failed/)
+  assert.match(text(host.root), /导出失败，请重试。/)
+  assert.doesNotMatch(text(host.root), /执行超时/, 'only the latest failure is promoted out of history')
   app.unmount()
 })().catch((error) => {
   console.error(error)

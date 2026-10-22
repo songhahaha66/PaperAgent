@@ -9,7 +9,7 @@
     >
       <span class="status-dot" :class="{ pulse: running }" aria-hidden="true"></span>
       <span>{{ headline }}</span>
-      <span v-if="grouped && (!failed || running)" class="call-state">{{ groupState }}</span>
+      <span v-if="grouped" class="call-state">{{ groupState }}</span>
       <span v-if="grouped" class="call-state">{{ rows.length }} 步</span>
       <span v-if="current?.subject && !grouped" class="subject">{{ current.subject }}</span>
       <span v-if="!running && !failure && !props.label && rows.length === 1" class="call-state">{{
@@ -124,21 +124,20 @@ const rows = computed(() =>
 )
 const isFailed = (row: ExecutionDetail) =>
   ['failed', 'error', 'interrupted', 'cancelled'].includes(row.status)
-const running = computed(() => rows.value.some(callRunning))
 const grouped = computed(() => !!props.label)
-const groupState = computed(() => {
-  if (current.value) return current.value.label
-  if (failed.value) return '未完成'
-  if (rows.value.every(row => row.status === 'completed' || row.recovered))
-    return '完成'
-  if (props.replyStatus && props.replyStatus !== 'running') return '已结束'
-  return '等待下一步'
-})
+// A compact group shows its latest step, not an aggregate verdict on earlier attempts.
+const latest = computed(() => rows.value.at(-1))
 const current = computed(() => {
+  if (grouped.value) return latest.value && callRunning(latest.value) ? latest.value : undefined
   return [...rows.value].reverse().find(callRunning)
 })
+const running = computed(() => !!current.value)
+const groupState = computed(() =>
+  latest.value ? latest.value.recovered ? '后续已完成' : status(latest.value) : '等待下一步',
+)
 const failure = computed(() => {
-  if (grouped.value) return [...rows.value].reverse().find(row => isFailed(row) && !row.recovered)
+  if (grouped.value)
+    return latest.value && isFailed(latest.value) && !latest.value.recovered ? latest.value : undefined
   if (running.value) return undefined
   const ids = new Set(rows.value.map((r) => r.id))
   const last = rows.value
@@ -152,7 +151,9 @@ const failure = computed(() => {
 })
 const failed = computed(() => !!failure.value && !failure.value.recovered)
 const headline = computed(() =>
-  failure.value
+  grouped.value
+    ? latest.value?.label || props.label
+    : failure.value
     ? failure.value.recovered ? `${failure.value.label} · 后续已完成` : `${failure.value.label}未完成`
     : props.label ||
       current.value?.label ||
