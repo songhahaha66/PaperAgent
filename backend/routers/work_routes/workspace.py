@@ -699,21 +699,6 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
     except ValueError as exc:raise HTTPException(422,str(exc))
 
 
-@router.get('/{work_id}/research-settings')
-async def research_settings(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
-    _require_workspace_access(db,work_id,current_user)
-    from ai_system.research.runtime import ResearchRuntime
-    from ai_system.modules.experiments.store import ExperimentStore
-    from ai_system.research.literature import LiteratureStore
-    from services.research_experience import ExperienceScope
-    root=workspace_file_service.get_workspace_path(work_id)
-    runtime=ResearchRuntime(root)
-    return {'settings':runtime.policy(), 'budget':runtime.status(),
-            'modules':{'experiments':ExperimentStore(runtime.store).policy(),
-                       'literature':{'mode':LiteratureStore(root).policy()},
-                       'skills':runtime.store.skill_preferences()},
-            'experience':{'enabled':ExperienceScope(current_user,work_id).enabled(db)}}
-
 # Unified contextual comments and file-backed draft editing. The research loop
 # still owns formal experiments and acceptance; drafts remain accessible.
 class PaperSelection(BaseModel):

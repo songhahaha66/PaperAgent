@@ -25,24 +25,22 @@ def client(env,monkeypatch):
     with TestClient(app) as c:yield c
 
 
-def test_setup_and_overview_before_run_and_cannot_overwrite_checkpoint(env,client):
+def test_setup_before_run_cannot_overwrite_checkpoint(env,client):
     base='/api/workspace/B'
     result=client.put(base+'/research-setup',json={'request_limit':40,'compact_paper':True,'skill_keys':['regression']})
     assert result.status_code==200,result.text
-    overview=client.get(base+'/research-settings').json()
-    assert overview['budget']['used']==0 and overview['settings']['request_limit']==40
-    assert 'research' not in overview
+    from ai_system.research.runtime import ResearchRuntime
+    runtime=ResearchRuntime(env.root('B'))
+    assert runtime.status()['used']==0 and runtime.policy()['request_limit']==40
     root=env.root('B');(root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':'existing'}))
     assert client.put(base+'/research-setup',json={'request_limit':1}).status_code==409
-    assert client.get(base+'/research-settings').json()['settings']['request_limit']==40
+    assert runtime.policy()['request_limit']==40
 
 
 def test_template_scaffold_is_not_a_published_research_artifact(env,client):
     root=env.root('B');(root/'.system').mkdir(parents=True,exist_ok=True)
     (root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':'preparing','engine_version':'research-v3'}))
     (root/'paper.tex').write_text('template scaffold')
-    overview=client.get('/api/workspace/B/research-settings')
-    assert overview.status_code==200
     from services.chat_services.research_session import research_snapshot
     assert research_snapshot(root,'B','created').artifacts==[]
     # Draft reading uses the project endpoint independently of formal outcomes.
@@ -53,7 +51,7 @@ def test_template_scaffold_is_not_a_published_research_artifact(env,client):
     assert research_snapshot(root,'B','created').artifacts==[]
 
 
-@pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),('GET','research-settings',None),
+@pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),
     ('GET','paper/project',None),
     ('POST','paper/executions/unknown/resume',{'research_id':'unknown'})])
 def test_unified_routes_keep_work_owner_boundary(client,method,path,body):
@@ -93,10 +91,12 @@ def test_readiness_uses_runtime_env_defaults_without_exposing_credentials(env,mo
     assert 'offline-jev-secret' not in result.text
 
 
-def test_new_default_is_metered_without_implicit_cap_and_permissions_unchanged(client):
+def test_new_default_is_metered_without_implicit_cap_and_permissions_unchanged(env,client):
     response=client.put('/api/workspace/B/research-setup',json={'confirm_models':True,'literature_mode':'off'})
     assert response.status_code==200,response.text
-    data=client.get('/api/workspace/B/research-settings').json()
-    assert data['budget']['request_limit'] is None and data['settings']['timeout_seconds'] is None
-    assert data['settings']['confirm_models'] is True and data['modules']['literature']['mode']=='off'
-    assert data['settings']['limit_source']=='default'
+    from ai_system.research.runtime import ResearchRuntime
+    from ai_system.research.literature import LiteratureStore
+    runtime=ResearchRuntime(env.root('B'))
+    assert runtime.status()['request_limit'] is None and runtime.policy()['timeout_seconds'] is None
+    assert runtime.policy()['confirm_models'] is True and LiteratureStore(env.root('B')).policy()=='off'
+    assert runtime.policy()['limit_source']=='default'

@@ -31,7 +31,6 @@ export const researchSetupAPI = {
       `/api/workspace/${work}/research-setup`,
       { method: 'PUT', body: JSON.stringify(body) },
     ),
-  settings: (work: string) => apiClient.request<any>(`/api/workspace/${work}/research-settings`),
 }
 export interface ReviewTaskItem {
   stage: 'reconcile' | 'sections' | 'citations'

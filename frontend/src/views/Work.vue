@@ -356,67 +356,6 @@
           />
         </template>
       </WorkPaneLayout>
-      <t-drawer
-        v-model:visible="settingsOpen"
-        :header="isZh ? '项目设置' : 'Project settings'"
-        :size="isMobile ? '95%' : '620px'"
-        :footer="false"
-      >
-        <p v-if="settingsError" role="alert">{{ settingsError }}</p>
-        <details v-if="settingsState" class="capability-settings">
-          <summary>
-            {{ isZh ? '高级：请求用量与超时' : 'Advanced: request usage and timeout' }}
-          </summary>
-          <h3>{{ isZh ? '请求预算与超时' : 'Request budget and timeout' }}</h3>
-          <p>
-            {{ settingsState.budget.used }} {{ isZh ? '次累计调用' : 'requests'
-            }}<span v-if="settingsState.budget.request_limit != null">
-              / {{ settingsState.budget.request_limit }} {{ isZh ? '明确上限' : 'limit' }}</span
-            >
-          </p>
-          <p>
-            {{ isZh ? '服务返回的 token：' : 'Reported tokens: '
-            }}{{ settingsState.budget.input_tokens || 0 }} {{ isZh ? '输入' : 'input' }} /
-            {{ settingsState.budget.output_tokens || 0 }} {{ isZh ? '输出' : 'output' }}。{{
-              isZh
-                ? '未返回的用量不估算。暂停恢复不清零。'
-                : 'Unreported usage is not estimated. Resume retains usage.'
-            }}
-          </p>
-          <p>
-            {{
-              settingsState.budget.timeout_seconds == null
-                ? isZh
-                  ? '请求超时沿用模型连接设置。'
-                  : 'Request timeout follows the model connection.'
-                : (isZh ? '沿用本项目原有请求超时：' : 'Existing project timeout: ') +
-                  settingsState.budget.timeout_seconds +
-                  ' s'
-            }}
-          </p>
-        </details>
-        <t-button theme="default" @click="router.push('/api-config')">{{
-          isZh ? '模型与 API 设置' : 'Models and API settings'
-        }}</t-button>
-      </t-drawer>
-      <t-drawer
-        v-model:visible="detailsOpen"
-        :header="ui.details"
-        :size="isMobile ? '90%' : '420px'"
-        :footer="false"
-        ><div v-if="currentWork" class="work-details">
-          <h2>{{ currentWork.title }}</h2>
-          <p>{{ currentWork.description }}</p>
-          <dl>
-            <dt>{{ isZh ? '创建时间' : 'Created' }}</dt>
-            <dd>{{ formatDate(currentWork.created_at) }}</dd>
-            <dt>{{ ui.output }}</dt>
-            <dd>{{ getOutputModeText(currentWork.output_mode) }}</dd>
-            <dt>{{ isZh ? '状态' : 'Status' }}</dt>
-            <dd>{{ getStatusText(currentWork.status) }}</dd>
-          </dl>
-        </div></t-drawer
-      >
     </main>
   </div>
 </template>
@@ -438,14 +377,12 @@ import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
 import ResearchStatus from '@/components/ResearchStatus.vue'
 import ResearchResultViewer from '@/components/ResearchResultViewer.vue'
-import { researchSetupAPI } from '@/api/researchSetup'
 import { useWorkSession } from '@/composables/useWorkSession'
 import { useWorkStream } from '@/composables/useWorkStream'
 import { useArtifactPreview } from '@/composables/useArtifactPreview'
 import { useWorkLayout } from '@/composables/useWorkLayout'
 import { useWorkAttachments } from '@/composables/useWorkAttachments'
 import { useStudioCopy } from '@/lang/studio'
-import { formatWorkDate } from '@/utils/dates'
 
 const { ui, isZh } = useStudioCopy()
 const route = useRoute(),
@@ -694,19 +631,6 @@ const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
     stream.appendAttachment(filename, size)
   },
 })
-const detailsOpen = ref(false)
-const settingsOpen = ref(false),
-  settingsState = ref<any>(null),
-  settingsError = ref('')
-watch(settingsOpen, async (open) => {
-  if (!open) return
-  try {
-    settingsState.value = await researchSetupAPI.settings(workId.value)
-    settingsError.value = ''
-  } catch (e) {
-    settingsError.value = e instanceof Error ? e.message : '设置暂不可用'
-  }
-})
 async function replyToResearch() {
   if (isStreaming.value || loading.value || currentWork.value?.status !== 'waiting') return
   layout.activateChat()
@@ -775,13 +699,6 @@ async function handleFileRefresh() {
   await Promise.all([artifacts.loadWorkspaceFiles(true), session.loadResearchSnapshot()])
 }
 const workActionOptions = computed(() => [
-  {
-    content: isZh.value ? '项目设置' : 'Project settings',
-    value: 'settings',
-    onClick: () => {
-      settingsOpen.value = true
-    },
-  },
   ...(primaryArtifact.value && primaryAction.value?.kind !== 'download'
     ? [
         {
@@ -796,13 +713,6 @@ const workActionOptions = computed(() => [
     ? [{ content: ui.value.restartResearch, value: 'restart', onClick: () => prepareNewResearch() }]
     : []),
   { content: ui.value.archive, value: 'export', onClick: () => exportWorkspace() },
-  {
-    content: ui.value.details,
-    value: 'details',
-    onClick: () => {
-      detailsOpen.value = true
-    },
-  },
   {
     content: ui.value.delete,
     value: 'delete',
@@ -846,36 +756,6 @@ const deleteWork = async () => {
     console.error('删除工作失败:', error)
     MessagePlugin.error('删除工作失败')
   }
-}
-
-// 格式化日期
-const formatDate = (dateString: string) => {
-  return formatWorkDate(dateString)
-}
-
-// 获取状态文本
-const getStatusText = (status: string) => {
-  const texts: Record<string, string> = {
-    created: '已创建',
-    in_progress: '进行中',
-    running: '进行中',
-    completed: '已完成',
-    paused: '已暂停',
-    waiting: '待确认',
-    cancelled: '已取消',
-    failed: '失败',
-  }
-  return texts[status] || status
-}
-
-// 获取输出模式文本
-const getOutputModeText = (mode?: string) => {
-  const texts: Record<string, string> = {
-    markdown: 'Markdown',
-    word: 'Word (.docx)',
-    latex: 'LaTeX',
-  }
-  return texts[mode || 'markdown'] || 'Markdown'
 }
 
 onMounted(() => {
@@ -1232,31 +1112,6 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.work-details h2 {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 20px 0;
-}
-.work-details p {
-  white-space: pre-wrap;
-  font-size: 14px;
-  line-height: 1.9;
-  color: var(--td-text-color-secondary);
-}
-.work-details dl {
-  margin-top: 24px;
-  border-top: 1px solid var(--pa-line);
-  padding-top: 16px;
-}
-.work-details dt {
-  font-size: 12px;
-  color: var(--td-text-color-secondary);
-  margin: 16px 0 6px;
-}
-.work-details dd {
-  margin: 0;
-  font-size: 14px;
 }
 @media (max-width: 768px) {
   .workspace-header {
