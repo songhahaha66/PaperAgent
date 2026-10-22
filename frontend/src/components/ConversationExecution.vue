@@ -14,7 +14,9 @@
       <span class="chevron" aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
     </button>
     <p v-if="running && progressNote" class="current-note">{{ progressNote }}</p>
-    <p v-if="failed && failure?.message" class="failure-reason">{{ failure.message.split('；')[0] }}</p>
+    <p v-if="failed && failure?.message" class="failure-reason">
+      {{ failure.message.split('；')[0] }}
+    </p>
     <ol v-if="expanded" :id="`calls-${replyId}-${groupId}`">
       <template v-for="entry in entries" :key="entry.id">
         <li
@@ -55,14 +57,6 @@
         <li v-else class="execution-note">{{ entry.text }}</li>
       </template>
     </ol>
-    <details v-if="expanded && modelRows.length" class="model-detail">
-      <summary>模型通信记录 · {{ modelRows.length }} 次</summary>
-      <p v-for="row in modelRows" :key="row.id">
-        {{ rows.find((parent) => parent.id === row.parent_call_id)?.label || row.label }}
-        <small>{{ status(row) }} · {{ duration(row) }}</small>
-        <span v-if="row.message">{{ row.message }}</span>
-      </p>
-    </details>
     <p v-if="detailError" class="failure-reason">
       执行详情加载失败。<button @click="loadDetails">重试</button>
     </p>
@@ -105,13 +99,11 @@ const rows = computed(() =>
     s.type === 'execution' ? [details.value[s.id] || s.execution] : [],
   ),
 )
-const modelRows = computed(() => rows.value.filter((r) => r.kind === 'model'))
 const isFailed = (row: ExecutionDetail) =>
   ['failed', 'error', 'interrupted', 'cancelled'].includes(row.status)
 const running = computed(() => rows.value.some(callRunning))
 const current = computed(() => {
-  const active = [...rows.value].reverse().filter(callRunning)
-  return active.find((r) => r.kind !== 'model') || active[0]
+  return [...rows.value].reverse().find(callRunning)
 })
 const failure = computed(() => {
   if (running.value) return undefined
@@ -119,7 +111,6 @@ const failure = computed(() => {
   const last = rows.value
     .filter(
       (r) =>
-        r.kind !== 'model' &&
         r.capability !== 'experience.candidates' &&
         (!r.parent_call_id || !ids.has(r.parent_call_id)),
     )
@@ -152,7 +143,6 @@ type Entry =
   | { id: string; type: 'note'; text: string }
 const entries = computed(() =>
   props.segments.flatMap<Entry>((s) => {
-    if (s.type === 'execution' && s.execution.kind === 'model') return []
     if (s.type === 'execution')
       return [{ id: s.id, type: 'execution' as const, row: details.value[s.id] || s.execution }]
     const text = note(s)
@@ -160,7 +150,6 @@ const entries = computed(() =>
   }),
 )
 function status(row: ExecutionDetail) {
-  if (row.kind === 'model') return executionLabel(row.status)
   return callRunning(row) ? '进行中' : executionLabel(row.status)
 }
 function duration(row: ExecutionDetail) {
@@ -282,12 +271,6 @@ li p {
   gap: 12px;
   flex-wrap: wrap;
 }
-.model-detail {
-  font-size: 12px;
-}
-summary {
-  cursor: pointer;
-}
 .execution-note {
   white-space: pre-wrap;
   line-height: 1.7;
@@ -302,8 +285,7 @@ button {
 .step-links button {
   color: var(--pa-accent);
 }
-button:focus-visible,
-summary:focus-visible {
+button:focus-visible {
   outline: 2px solid var(--pa-accent);
   outline-offset: 2px;
 }

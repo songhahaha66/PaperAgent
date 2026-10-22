@@ -135,8 +135,6 @@ class ResearchRuntime:
                                   **execution_links()}
             db.execute('INSERT OR REPLACE INTO request_budgets VALUES (?,?)',(BUDGET_ID,json.dumps(state)))
             db.execute('INSERT INTO model_requests VALUES (?,?,?)',(BUDGET_ID,seq,json.dumps(row)))
-        from services.chat_services.conversation_timeline import execution_boundary
-        execution_boundary(self.store.root, self.active_research_id, 'model', row)
         notify_runtime()
         return seq
 
@@ -146,9 +144,6 @@ class ResearchRuntime:
             if r:
                 row=json.loads(r[0]);row.update(http_status=status,headers_at=time.time(),state='http_response')
                 db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(row),BUDGET_ID,sequence))
-        if r:
-            from services.chat_services.conversation_timeline import execution_boundary
-            execution_boundary(self.store.root, row['research_id'], 'model', row)
         notify_runtime()
 
     def usage(self,sequence,usage=None,*,state="completed"):
@@ -168,8 +163,6 @@ class ResearchRuntime:
             state['usage_reported_calls']=state.get('usage_reported_calls',0)+int(known)
             db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(item),BUDGET_ID,sequence))
             db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?',(json.dumps(state),BUDGET_ID))
-        from services.chat_services.conversation_timeline import execution_boundary
-        execution_boundary(self.store.root, item['research_id'], 'model', item)
         notify_runtime()
 
     def _stop(self,db,reason):

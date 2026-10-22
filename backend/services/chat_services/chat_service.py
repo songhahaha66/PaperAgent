@@ -95,6 +95,8 @@ class ChatService:
         """获取work的聊天记录（原始格式）"""
         try:
             messages = self.history_manager.get_messages(work_id, limit)
+            from .conversation_timeline import public_reply
+            messages = [public_reply(message) for message in messages]
             logger.info(f"获取聊天记录: {work_id}, 数量: {len(messages)}")
             return messages
         except Exception as e:
@@ -106,7 +108,7 @@ class ChatService:
         from datetime import datetime
         from pathlib import Path
         from .paper_comments import chat_history
-        messages=self.history_manager.get_messages(work_id)
+        messages=self.get_work_chat_history(work_id)
         from .task_manager import task_manager
         task = task_manager.get_task(work_id)
         for index, reply in enumerate(messages):
@@ -115,7 +117,9 @@ class ChatService:
                 active = task and task.task_id == metadata.get('chat_task_id') and not task_manager._is_stale(task) and (task.status.value in {'pending', 'running'} or task._async_task is not None)
                 if not active:
                     recovered = self.history_manager.interrupt_reply(work_id, reply['id'], metadata['revision'])
-                    if recovered: messages[index] = recovered
+                    if recovered:
+                        from .conversation_timeline import public_reply
+                        messages[index] = public_reply(recovered)
         messages=messages+chat_history(Path(self.history_manager.workspace_base)/work_id)
         messages.sort(key=lambda m:(datetime.fromisoformat(m['timestamp'].replace('Z','+00:00')).timestamp() if m.get('timestamp') else 0,
                                     m['role']!='user',str(m.get('id',''))))

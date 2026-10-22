@@ -85,6 +85,8 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   assert.equal(legacy[0].text, prose, 'JSON-looking prose survives byte for byte')
   assert.equal(legacy.length, 2, 'invalidation does not become execution')
   assert.equal(legacy[1].block.type, 'future_tool')
+  const oldModel = { ...exec('model:1'), ref:{ id:'model:1',kind:'model',research_id:'old' }, execution:{ id:'model:1',kind:'model',label:'模型请求',status:'completed' } }
+  assert.deepEqual(timeline.messageSegments({id:'old-model',content:'',segments:[before,oldModel,exec('actual')]}).map((s)=>s.id), ['before','actual'])
   const paper = timeline.messageSegments({
     id: 'paper-comment',
     content: 'comment answer',

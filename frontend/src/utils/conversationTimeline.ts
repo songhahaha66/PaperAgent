@@ -42,7 +42,8 @@ const hidden = new Set([
 // Legacy formats never recorded interleaving: text first, then explicit blocks.
 // JSON-looking prose is always Markdown.
 export function messageSegments(message: TimelineMessage): ConversationSegment[] {
-  if (message.segments) return message.segments
+  if (message.segments)
+    return message.segments.filter((s) => s.type !== 'execution' || s.ref.kind !== 'model')
   return [
     ...(message.content
       ? [{ id: 'legacy-text', type: 'text' as const, text: message.content }]

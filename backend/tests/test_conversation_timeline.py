@@ -77,8 +77,8 @@ def test_parallel_nested_and_model_calls_share_one_order_not_experiment_task_id(
                                                'parent_call_id': 'outer', 'experiment_id': 'E1'})
     reply.finish('cancelled')
     segments = reply.reply['segments']
-    assert len(segments) == 5 and len({s['id'] for s in segments}) == 5
-    assert segments[-1]['ref']['id'] == 'model:42'
+    assert len(segments) == 4 and len({s['id'] for s in segments}) == 4
+    assert all(s['ref']['kind'] == 'activity' for s in segments)
     assert segments[-1]['execution']['parent_call_id'] == 'outer'
     assert reply.reply['metadata']['chat_task_id'] == 'chat-task'
 
@@ -198,14 +198,14 @@ def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):
 def test_operation_details_show_selected_inputs_and_concrete_sanitized_failure(tmp_path):
     from services.chat_services.conversation_timeline import execution_projection
     (tmp_path / 'data.csv').write_text('x\n1')
-    read = execution_projection(tmp_path, 'research', 'activity', call(inputs={'path':'data.csv','start':10,'limit':200}))
+    read = execution_projection(tmp_path, 'research', call(inputs={'path':'data.csv','start':10,'limit':200}))
     assert read['label'].endswith('data.csv') and '10' in read['detail'] and '200' in read['detail']
     run = tmp_path / 'runs/run-1'; run.mkdir(parents=True)
     (run / 'input.py').write_text('import missing_package')
     (run / 'stderr.log').write_text("ModuleNotFoundError: No module named 'missing_package'")
     (tmp_path / 'manifest.json').write_text(json.dumps({'runs':{'run-1':{
         'input':'runs/run-1/input.py','stderr':'runs/run-1/stderr.log'}}}))
-    failed = execution_projection(tmp_path, 'research', 'activity', call('python', capability='run_python',
+    failed = execution_projection(tmp_path, 'research', call('python', capability='run_python',
         status='failed', error_type='PythonExecutionError', run_id='run-1',
         message="Traceback (most recent call last):\n  secret = 'hidden-source-literal'\nModuleNotFoundError: No module named 'missing_package'",
         inputs={'code':"secret = 'hidden-source-literal'\nimport missing_package"}))
@@ -238,17 +238,12 @@ def test_source_projection_retains_only_known_semantic_sources_and_safe_files(tm
 
 def test_progress_projection_uses_recorded_steps_and_preserves_stage_notes(tmp_path):
     from services.chat_services.conversation_timeline import execution_projection, public_block
-    experience = execution_projection(tmp_path, 'research', 'activity', call(
+    experience = execution_projection(tmp_path, 'research', call(
         capability='experience.candidates', output={'candidates':3}))
     assert experience['label'] == '更新经验索引' and '3 项' in experience['detail']
-    model = execution_projection(tmp_path, 'research', 'model', {
-        'sequence':1, 'step':'撰写论文', 'state':'sent', 'sent_at':1,
-        'purpose':'inherited old plan'})
-    assert model['label'] == '撰写论文' and model['detail'] == ''
-    assert 'inherited old plan' not in json.dumps(model)
     phase = public_block(tmp_path, {'type':'paper_phase','content':{
         'stage':'export','status':'in_progress','note':'编译 PDF','inputs':'private'}})
     assert phase['content'] == {'stage':'export','status':'in_progress','note':'编译 PDF'}
-    refs = execution_projection(tmp_path, 'research', 'activity', call(
+    refs = execution_projection(tmp_path, 'research', call(
         capability='record_results', output={'artifact_refs':['R1','R2'],'rejected':1}))
     assert refs['result_ids'] == ['R1','R2'] and '2 项结果' in refs['detail'] and '1 项未通过' in refs['detail']

@@ -26,6 +26,13 @@ def execution_boundary(root, research_id, kind, item):
         writer.execution(root, research_id, kind, item)
 
 
+def public_reply(reply):
+    """Omit retired model-call segments when reading existing conversation files."""
+    if 'segments' not in reply:return reply
+    return {**reply,'segments':[s for s in reply['segments']
+        if s.get('type') != 'execution' or s['ref']['kind'] != 'model']}
+
+
 def safe_file(root, value):
     # Only public workspace products; never expose internal DBs, config or secrets.
     if not isinstance(value, str) or '\\' in value: return None
@@ -67,9 +74,8 @@ def safe_diagnostic(root, value, limit=400):
     return text[:limit]
 
 
-def operation_detail(root, item, model):
+def operation_detail(root, item):
     # Describe recorded inputs and receipts, never invent progress from elapsed time.
-    if model:return ''
     capability = item.get('capability')
     inputs, output = item.get('inputs') or {}, item.get('output') or {}
     if capability == 'read_file':
@@ -90,23 +96,18 @@ def operation_detail(root, item, model):
     return ''
 
 
-def execution_projection(root, research_id, kind, item):
+def execution_projection(root, research_id, item):
     from ai_system.research.views import LABELS
-    model = kind == 'model'
-    identity = 'model:' + str(item['sequence']) if model else item['id']
     row = {key: item[key] for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id',
-            'finished_at','run_id','input_tokens','output_tokens','subject') if item.get(key) is not None}
-    row.update(id=identity, research_id=research_id, kind=kind,
+            'finished_at','run_id','subject') if item.get(key) is not None}
+    row.update(id=item['id'], research_id=research_id, kind='activity',
                capability=item.get('capability'),
-               label=(item.get('step') if item.get('step') in LABELS.values() else
-                      {'observe':'判断下一步','title':'整理研究标题','amendment':'更新研究要求','abstract':'撰写摘要','references':'整理参考文献','检查实验报告':'检查实验报告'}.get(item.get('label'), '生成内容'))
-                     if model else LABELS.get(item.get('capability'), '执行步骤'),
-               status=item.get('state' if model else 'status', 'unknown'),
-               started_at=item.get('sent_at' if model else 'started_at'))
-    row['detail'] = operation_detail(root, item, model)
+               label=LABELS.get(item.get('capability'), '执行步骤'),
+               status=item.get('status', 'unknown'), started_at=item.get('started_at'))
+    row['detail'] = operation_detail(root, item)
     if item.get('error_type') or row['status'] in {'failed','error'}:
         reason = safe_diagnostic(root, item.get('message')) if item.get('error_type') else ''
-        row['message'] = reason or ('模型请求未完成，请检查连接或请求用量。' if model else '未记录具体错误；已有产物保留，可查看执行输出。')
+        row['message'] = reason or '未记录具体错误；已有产物保留，可查看执行输出。'
     inputs = item.get('inputs') or {}
     file = safe_file(root, item.get('display_file') or (inputs.get('path') if isinstance(inputs, dict) else None))
     if file:
@@ -188,9 +189,10 @@ class ReplyWriter:
             self.flush()
 
     def execution(self, root, research_id, kind, item):
+        if kind != 'activity':return
         with self.lock:
             if Path(root).resolve() != self.root.resolve() or self.reply['metadata']['status'] != 'running': return
-            detail = execution_projection(root, research_id, kind, item)
+            detail = execution_projection(root, research_id, item)
             ref = {'research_id': research_id, 'kind': kind, 'id': detail['id']}
             rows = self.reply['segments']
             row = next((r for r in rows if r.get('ref') == ref), None)
@@ -231,20 +233,16 @@ def resolve_executions(root, reply, ids):
     root = Path(root)
     path = root / '.system/research.sqlite'
     if not path.is_file() or not path.resolve().is_relative_to(root.resolve()): return []
-    references = {r['id']: r for r in reply.get('segments', []) if r.get('type') == 'execution'}
+    references = {r['id']: r for r in reply.get('segments', []) if r.get('type') == 'execution' and r['ref']['kind'] == 'activity'}
     result = []
     with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
         for segment_id in dict.fromkeys(ids):
             segment = references.get(segment_id)
             if not segment: continue
             ref = segment['ref']
-            if ref['kind'] == 'model':
-                raw = db.execute('SELECT payload FROM model_requests WHERE sequence=? AND json_extract(payload,\'$.research_id\')=?',
-                                 (int(ref['id'].split(':')[1]), ref['research_id'])).fetchone()
-            else:
-                raw = db.execute("SELECT payload FROM journal WHERE research_id=? AND kind IN ('activity_started','activity_finished') AND json_extract(payload,'$.id')=? ORDER BY seq DESC LIMIT 1",
-                                 (ref['research_id'], ref['id'])).fetchone()
-            detail = execution_projection(root, ref['research_id'], ref['kind'], json.loads(raw[0])) if raw else segment.get('execution')
+            raw = db.execute("SELECT payload FROM journal WHERE research_id=? AND kind IN ('activity_started','activity_finished') AND json_extract(payload,'$.id')=? ORDER BY seq DESC LIMIT 1",
+                             (ref['research_id'], ref['id'])).fetchone()
+            detail = execution_projection(root, ref['research_id'], json.loads(raw[0])) if raw else segment.get('execution')
             if detail:
                 if reply.get('metadata', {}).get('status') != 'running' and not detail.get('finished_at'):
                     detail['status'] = 'interrupted'
