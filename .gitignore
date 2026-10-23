@@ -9,4 +9,5 @@ frontend/.env
 backend/eval_runs
 
 # 本地项目文档
-/docs/
+/docs/*
+!/docs/ARCHITECTURE.md

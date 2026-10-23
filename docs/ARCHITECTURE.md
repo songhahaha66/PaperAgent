@@ -27,7 +27,7 @@ Template permission and format checks precede project initialization. A transact
 
 The Vue workspace preserves its existing panes/tabs. Historical project views load metadata only and show the export action. Both client gates and server gates apply.
 
-See [deployment and user acceptance](deploy/sandbox/README.md) for server-local cache configuration and checks that must be run on the actual server. No remote acceptance or deployment is implied by static checks.
+See [deployment and user acceptance](../deploy/sandbox/README.md) for server-local cache configuration and checks that must be run on the actual server. No remote acceptance or deployment is implied by static checks.
 
 Explicit project deletion currently removes its public file tree and database project row; the separately stored private state and evidence remain retained. This change does not automatically clean up those retained trees.
 

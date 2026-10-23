@@ -1,6 +1,6 @@
 # PaperAgent contributor instructions
 
-Use UV for Python dependencies and commands. Read [ARCHITECTURE.md](ARCHITECTURE.md) before changing research behavior.
+Use UV for Python dependencies and commands. Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing research behavior.
 
 - Backend: FastAPI, SQLAlchemy and LangGraph. Run `cd backend && uv sync && uv run main.py`; tests: `uv run pytest tests`.
 - Frontend: Vue 3, TypeScript, TDesign, Pinia and Vite. Run `cd frontend && npm ci && npm run dev`; checks: `npm run test:workspace && npm run build`.
