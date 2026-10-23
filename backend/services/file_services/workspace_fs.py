@@ -122,15 +122,35 @@ class WorkspaceFS:
         created_by: str = "system",
         source_run: Optional[str] = None,
         visibility: str = "user",
+        archive_path: Optional[str] = None,
+        sha256: Optional[str] = None,
     ) -> None:
         """在 manifest 中注册一个文件。"""
-        self._manifest["files"][rel_path] = {
+        existing = self._manifest["files"].get(rel_path, {})
+        formal = rel_path.startswith("outputs/research/")
+        if formal:
+            if existing:
+                if not all(existing.get(key) for key in ("source_run", "archive_path", "sha256")):
+                    raise ValueError("正式成果归档绑定不完整，拒绝覆盖")
+                for key, supplied in (("source_run", source_run), ("archive_path", archive_path), ("sha256", sha256)):
+                    if supplied is not None and supplied != existing[key]:
+                        raise ValueError("正式成果已绑定其他归档版本")
+                source_run, archive_path, sha256 = (existing[key] for key in ("source_run", "archive_path", "sha256"))
+            if not source_run or not archive_path or not archive_path.startswith(f"runs/{source_run}/artifacts/"):
+                raise ValueError("正式成果必须同时登记运行和归档路径")
+            self.abs(archive_path)
+            if not sha256 or len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
+                raise ValueError("正式成果必须登记有效的归档哈希")
+        metadata = {
             "kind": kind,
             "created_by": created_by,
             "source_run": source_run,
             "visibility": visibility,
             "registered_at": datetime.now().isoformat(),
         }
+        if formal:
+            metadata.update(archive_path=archive_path, sha256=sha256)
+        self._manifest["files"][rel_path] = metadata
         self._save_manifest()
 
     def unregister_file(self, rel_path: str) -> None:
@@ -287,3 +307,4 @@ class WorkspaceFS:
 
     def file_size(self, rel_path: str) -> int:
         return self.abs(rel_path).stat().st_size
+

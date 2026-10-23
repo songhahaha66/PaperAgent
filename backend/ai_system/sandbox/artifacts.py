@@ -38,9 +38,8 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
             else:
                 atomic_write(target,lambda f:bounded_copy(source,f,DEFAULT_MAX_FILE_BYTES))
             kind = 'image' if source.suffix.lower() in {'.png','.jpg','.jpeg','.svg'} else 'code' if source.suffix == '.py' else 'data'
-            target_fs.register_file(dest, kind=kind, source_run=run_id, visibility='user')
-            target_fs._manifest['files'][dest].update(archive_path=rel,sha256=expected)
-            target_fs._save_manifest()
+            target_fs.register_file(dest, kind=kind, source_run=run_id, visibility='user',
+                                    archive_path=rel, sha256=expected)
             published.append(dest)
     return published
 
@@ -229,3 +228,4 @@ def capture_local_outputs(fs, run_id, before, *, expected=None, max_file_bytes=D
         fs.register_file(path, source_run=run_id, kind='code' if path.endswith('.py') else 'data')
         saved.append(path)
     return saved
+
