@@ -3,8 +3,7 @@ name: CI
 on:
   pull_request:
     branches: [ dev, master ]
-  push:
-    branches: [ dev ]
+  # PR updates already cover dev -> master; a push trigger runs the same tests twice.
   workflow_dispatch:
 
 permissions:
@@ -16,7 +15,7 @@ concurrency:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -29,11 +28,23 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v7
 
-    - name: Install pandoc and CJK fonts
-      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pandoc fonts-noto-cjk
+    - name: Ensure pandoc is available
+      timeout-minutes: 3
+      # Word export does not render fonts. XeLaTeX integration is tested in the sandbox.
+      run: |
+        if ! command -v pandoc >/dev/null 2>&1; then
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends pandoc
+        fi
+        pandoc --version
 
     - name: Install uv
-      run: pipx install uv
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        working-directory: backend
+        enable-cache: true
+        cache-python: true
+        cache-dependency-glob: uv.lock
 
     - name: Install dependencies
       run: uv sync --locked --extra sandbox
