@@ -132,7 +132,7 @@ def skill_detail(key):
     if key not in SKILL_SOURCES:
         raise ValueError('技能不存在')
     item = next(item for item in skill_catalog() if item['key'] == key)
-    return {**item, 'instructions': (Path(__file__).with_name('skills') / (key + '.md')).read_text(encoding='utf-8')}
+    return {**item, 'instructions': (Path(__file__).with_name('skills') / (item['key'] + '.md')).read_text(encoding='utf-8')}
 
 
 def methods_catalog(policy=None) -> str:

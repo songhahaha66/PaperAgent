@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from .markdown_prep import run_command
 from ai_system.sandbox.commands import sandbox_operation
+from ai_system.text_syntax import has_markdown
 
 TEMPLATE_PATH = Path(__file__).with_name("template.tex")
 BUILD_DIR = ".build/latex"
@@ -48,7 +49,7 @@ def native_document(title: str, abstract: str, body: str) -> str:
 def fragment_issues(text: str) -> List[str]:
     """Deterministic checks fed to the existing section repair loop."""
     issues = []
-    if re.search(r"(?m)^\s*(?:#{1,6}\s|```|\|.*\|\s*$)", text) or re.search(r"!\[[^\]]*\]\(", text):
+    if has_markdown(text):
         issues.append("LaTeX 模式不能使用 Markdown 标题、表格、图片或代码围栏，请改成原生 LaTeX。")
     if re.search(r"\\(?:documentclass|usepackage|input|include|includegraphics|write|openout|read|newcommand|renewcommand)\b|\\(?:begin|end)\{document\}", text):
         issues.append("只输出本节 LaTeX 正文，不要输出导言区、文档环境、文件操作或图片路径；插图使用登记图引用。")

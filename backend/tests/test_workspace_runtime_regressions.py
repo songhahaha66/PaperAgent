@@ -129,7 +129,7 @@ def test_two_candidates_keep_winner_memory_without_locking_each_other(comparison
             record=await asyncio.wait_for(supervised.compare(c.ctx,c.branch),2)
             assert record['chosen_index']==1 and all(r['status']=='valid' for r in record['branches']), [(r['status'], r.get('error')) for r in record['branches']]
             assert c.calls==[0,1] and c.creation==['Q1~comparison0','Q1~comparison1']
-            assert {(k.settings.cpu,k.settings.memory) for k in c.ctx.kernels._kernels.values()}=={('2','2Gi')}
+            assert {(k.settings.cpu,k.settings.memory) for k in c.ctx.kernels._kernels.values()}=={('1','768Mi')}
             assert c.sessions['Q1~comparison0'].closed and not c.sessions['Q1~comparison1'].closed
             before=copy.deepcopy(c.db.reservations)
             repeated=await supervised.compare(c.ctx,c.branch)

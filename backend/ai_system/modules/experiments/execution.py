@@ -107,9 +107,6 @@ TEMPLATE_TOKEN = re.compile(r"</?｜|｜DSML｜|</think>|<think>")
 
 # v2h/v2k 的返工阶段各有 30~40 次 print('x') / print('ok') 这种空执行：每次占一步预算、一次模型往返
 # 前面带几行 import 的也算（v3 的 2022_C Q3："import pandas as pd, numpy as np\nprint('q3')" 执行了十几次）
-PLACEHOLDER_CODE = re.compile(
-    r"""^\s*(?:(?:import [\w., ]+|from [\w.]+ import [\w., ]+)\s*\n\s*)*(?:print\(\s*(['"])[\w\s.!-]{0,12}\1\s*\)\s*;?\s*)+$"""
-)
 PLACEHOLDER_REPLY = (
     "这段代码只包含占位语句或固定字符串，没有执行。不需要用 run_python 占位或确认："
     "登记结果直接调用 record_results（run_id 填之前打印该值的那次执行），全部完成后直接提交 SolveReport。"
@@ -117,13 +114,22 @@ PLACEHOLDER_REPLY = (
 
 
 def is_placeholder(code: str) -> bool:
-    if PLACEHOLDER_CODE.match(code):
-        return True
     try:
         body = ast.parse(code).body
     except SyntaxError:
         return False  # Let execution return the real syntax error.
-    empty = lambda node: isinstance(node, ast.Pass) or (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+    def empty(node):
+        if isinstance(node, ast.Pass):
+            return True
+        if not isinstance(node, ast.Expr):
+            return False
+        value = node.value
+        if isinstance(value, ast.Constant):
+            return True
+        return (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id == 'print' and not value.keywords and len(value.args) == 1
+                and isinstance(value.args[0], ast.Constant) and isinstance(value.args[0].value, str)
+                and re.fullmatch(r'[\w\s.!-]{0,12}', value.args[0].value) is not None)
     return not body or (any(empty(node) for node in body) and all(
         empty(node) or isinstance(node, (ast.Import, ast.ImportFrom)) for node in body))
 

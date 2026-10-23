@@ -68,6 +68,8 @@ def recover_publication(store):
 
 def prepare_publication(store, proposal_id, staging, names):
     """Called under the SQLite writer lock, before replacing any active file."""
+    if not re.fullmatch(r'[a-f0-9]{32}', proposal_id):
+        raise ValueError('论文发布提案编号无效')
     marker = workspace_path(store.root, PUBLICATION_MARKER)
     if marker.exists():
         raise ResearchConflict('尚有待恢复的论文发布，请刷新后重试')
@@ -180,8 +182,8 @@ def guard_wording(before, after, latex):
     if not after.strip() or len(after) > 100000:
         raise ValueError('修改后的章节不能为空或超过 100000 字符')
     # Wording edits cannot silently change evidence, numeric values or equations.
-    from ai_system.graph.registry import MATH_PATTERN
-    signature = lambda s: (Counter(REF_PATTERN.findall(s)), Counter(re.findall(r'\d+(?:\.\d+)?', CITATION.sub('',s))), MATH_PATTERN.findall(s))
+    from ai_system.text_syntax import math_blocks
+    signature = lambda s: (Counter(REF_PATTERN.findall(s)), Counter(re.findall(r'\d+(?:\.\d+)?', CITATION.sub('',s))), math_blocks(s))
     if signature(before) != signature(after):
         raise ValueError('修改改变了数字、公式或证据引用，请使用“研究修改”进行局部重算')
     if latex and fragment_issues(after):

@@ -1,0 +1,7 @@
+name: paperagent/path-models
+version: 0.0.1
+library: true
+extensionTargets:
+  codeql/python-all: '*'
+dataExtensions:
+  - paths.yml

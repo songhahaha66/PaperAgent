@@ -185,6 +185,7 @@ import Sidebar from '@/components/Sidebar.vue'
 import { modelConfigAPI, type ModelConfig } from '@/api/modelConfig'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
+import { isDeepSeekEndpoint } from '@/utils/modelProvider'
 type Role = 'brain' | 'code' | 'writing' | 'jev'
 interface Form {
   id?: number
@@ -220,7 +221,7 @@ const loading = ref(true),
 const feedback = ref(''),
   feedbackError = ref(false)
 const isDeepSeek = computed(
-  () => !customProvider.value && forms.brain.baseUrl.includes('api.deepseek.com'),
+  () => !customProvider.value && isDeepSeekEndpoint(forms.brain.baseUrl),
 )
 const roles = computed(() => [
   { type: 'brain' as Role, label: ui.value.brain, hint: ui.value.brainHint, icon: 'lightbulb' },

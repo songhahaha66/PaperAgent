@@ -18,11 +18,9 @@ from typing import Callable, Dict, List, Optional
 
 from services.file_services.workspace_fs import WorkspaceFS
 from ..research.domain import result_semantic_key
+from ai_system.text_syntax import math_spans as iter_math_spans
 
 REGISTRY_PATH = ".system/results.json"
-MATH_PATTERN = re.compile(
-    r"\$\$.*?\$\$|\$[^$\n]+\$|\\\(.*?\\\)|\\\[.*?\\\]|"
-    r"\\begin\{(?:equation|align|gather|multline|displaymath)\*?\}.*?\\end\{(?:equation|align|gather|multline|displaymath)\*?\}", re.DOTALL)
 
 
 def math_body(text: str) -> str:
@@ -413,7 +411,7 @@ class ResultRegistry:
         text = FIGURE_LINE.sub(figure_block, text)
 
         # 公式里的引用只放数值，单位会破坏 LaTeX
-        math_spans = [m.span() for m in MATH_PATTERN.finditer(text)]
+        math_spans = list(iter_math_spans(text))
         parts: List[str] = []
         cursor = 0
         for match in REF_PATTERN.finditer(text):

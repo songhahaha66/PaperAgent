@@ -221,7 +221,7 @@ async def get_template_preview(
         from services.file_services.file_helper import FileHelper
         file_path = FileHelper(get_templates_path()).resolve(template.file_path)
     else:
-        file_path = get_templates_path() / f"{template_id}_template.md"
+        file_path = get_templates_path() / f"{int(template_id)}_template.md"
     
     if not file_path.exists():
         raise HTTPException(
@@ -295,7 +295,7 @@ async def download_template_file(
         from services.file_services.file_helper import FileHelper
         file_path = FileHelper(get_templates_path()).resolve(template.file_path)
     else:
-        file_path = get_templates_path() / f"{template_id}_template.md"
+        file_path = get_templates_path() / f"{int(template_id)}_template.md"
     
     if not file_path.exists():
         raise HTTPException(

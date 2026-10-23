@@ -36,9 +36,10 @@ class GlobalAudit(BaseModel):
 
 
 def protected(text):
-    from ..graph.registry import MATH_PATTERN,REF_PATTERN
+    from ..graph.registry import REF_PATTERN
+    from ai_system.text_syntax import math_spans
     from .literature import CITATION
-    spans=[m.span() for p in (MATH_PATTERN,REF_PATTERN,CITATION) for m in p.finditer(text)]
+    spans=list(math_spans(text)) + [m.span() for p in (REF_PATTERN,CITATION) for m in p.finditer(text)]
     spans += [m.span() for m in re.finditer(r'```[^\n]*\n[\s\S]*?```',text)]
     spans += [m.span() for m in re.finditer(r'\\(?:cite\w*|eqref|ref)\*?(?:\[[^\]]*\])*\{[^}]*\}|\[[^\]]*\]\([^)]*\)',text)]
     stack=[]

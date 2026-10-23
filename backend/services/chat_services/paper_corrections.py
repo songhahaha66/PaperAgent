@@ -7,7 +7,8 @@ from ai_system.graph.context import GraphContext
 from ai_system.graph.llm_utils import as_messages,call_structured,cap_output
 from ai_system.modules.writing.consistency import audit_sections,section_audit_prompt,AUDIT_SYSTEM
 from ai_system.modules.writing.validation import check_sections
-from ai_system.graph.registry import REF_PATTERN,MATH_PATTERN,publication_text
+from ai_system.graph.registry import REF_PATTERN,publication_text
+from ai_system.text_syntax import math_spans, strip_math
 from ai_system.graph.state import ClaimAudit
 from ai_system.research.store import digest
 from ai_system.research.models import ResearchConflict
@@ -98,9 +99,9 @@ def resolve_scope(key,section,source,request):
         raise ResearchConflict('原文版本或哈希已变化，请刷新并重新选择片段')
     original=section['text']
     start,end=unique_span(original,scope.old)
-    for pattern in (MATH_PATTERN,REF_PATTERN,CITATION):
-        if any(m.start()<start<m.end() or m.start()<end<m.end() for m in pattern.finditer(original)):
-            raise ValueError('片段边界不能截断公式或引用')
+    spans = list(math_spans(original)) + [m.span() for p in (REF_PATTERN, CITATION) for m in p.finditer(original)]
+    if any(left < start < right or left < end < right for left, right in spans):
+        raise ValueError('片段边界不能截断公式或引用')
     result={'section':key,'section_revision':section['revision'],'section_hash':section['content_hash'],'source_hash':digest(source),
         'start':start,'end':end,'old':scope.old,'old_hash':digest(scope.old)}
     result['id']=digest(result)
@@ -169,7 +170,7 @@ def guard_correction(before,after,canonical,latex):
         return guard_wording(before,after,latex)
     if after.count(canonical)!=1:raise ValueError('方法修正须完整保留项目提供的已核验公式说明，且只出现一次')
     signature=lambda s:(Counter(REF_PATTERN.findall(s)),Counter(CITATION.findall(s)),
-        Counter(re.findall(r'\d+(?:\.\d+)?',MATH_PATTERN.sub('',REF_PATTERN.sub('',CITATION.sub('',s))))))
+        Counter(re.findall(r'\d+(?:\.\d+)?',strip_math(REF_PATTERN.sub('',CITATION.sub('',s))))))
     if signature(before)!=signature(after):raise ValueError('依据修正不能改变实验数字、证据或来源引用')
     if not after.strip() or len(after)>100000:raise ValueError('候选正文长度无效')
     from ai_system.export.latex import fragment_issues

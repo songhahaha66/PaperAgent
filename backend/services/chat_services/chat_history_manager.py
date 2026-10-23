@@ -3,12 +3,11 @@
 Legacy JSON is imported once by the workspace migration. Each reply update
 commits one message; concurrent writers never read/replace the whole history.
 """
-from services.file_services.workspace_layout import workspace_path
+from services.file_services.workspace_layout import workspace_path, safe_join
 import json
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from config.paths import get_workspaces_path
 
 
@@ -52,9 +51,7 @@ class ChatHistoryManager:
     @contextmanager
     def _database(self, work_id, *, write=False):
         from ai_system.research.store import ResearchStore
-        root = (Path(self.workspace_base) / work_id).resolve()
-        if not root.is_relative_to(Path(self.workspace_base).resolve()):
-            raise ValueError('聊天工作区路径无效')
+        root = safe_join(self.workspace_base, work_id)
         store = ResearchStore(root, 'workspace-chat')
         db = store._connect()
         try:

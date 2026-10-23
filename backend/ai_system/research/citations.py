@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from .literature import CITATION, LiteratureStore, now
 from .store import ResearchStore,digest
+from ai_system.text_syntax import native_citations
 
 BOUNDARIES = {'abstract':'摘要','fulltext_xml':'开放全文','fulltext_pdf':'公开 PDF','webpage':'公开网页（不保证为论文全文）'}
 
@@ -22,8 +23,13 @@ def citation_text(text):
     """Normalize supported native citation syntax only for source-support review."""
     text = re.sub(r'\\href\{https://paperagent\.local/citations/(C[1-9]\d*)\}\{[^{}]*\}',
                   lambda m:'{{C:'+m[1]+'}}', text)
-    return re.sub(r'\\cite\w*\*?(?:\[[^\]]*\])*\{(C[1-9]\d*)\}',
-                  lambda m:'{{C:'+m[1]+'}}', text)
+    parts, cursor = [], 0
+    for start, end, key in native_citations(text):
+        if re.fullmatch(r'C[1-9]\d*', key):
+            parts.extend((text[cursor:start], '{{C:' + key + '}}'))
+            cursor = end
+    parts.append(text[cursor:])
+    return ''.join(parts)
 
 
 def claims_in(text, store):
@@ -191,7 +197,7 @@ async def audit_citations(workspace, texts, llm,*,active=False):
 def citation_issues(workspace, text):
     store = LiteratureStore(workspace)
     issues = []
-    native_keys = {k.strip() for group in re.findall(r'\\cite\w*\*?(?:\[[^\]]*\])*\{([^{}]+)\}', text) for k in group.split(',')}
+    native_keys = {k.strip() for _, _, group in native_citations(text) for k in group.split(',')}
     if any(not re.fullmatch(r'C[1-9]\d*', key) for key in native_keys):
         issues.append('当前文献引用尚无登记原文支持记录；书目存在不代表引用句已获核实')
     text = citation_text(text)

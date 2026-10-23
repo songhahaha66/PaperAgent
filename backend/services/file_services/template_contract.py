@@ -85,7 +85,7 @@ def read_template_contract(workspace_dir: str | Path) -> str:
 
 
 def get_template_analysis_dir(template_id: int) -> Path:
-    return get_templates_path() / ANALYSIS_DIRNAME / str(template_id)
+    return get_templates_path() / ANALYSIS_DIRNAME / str(int(template_id))
 
 
 def analyze_and_store_template(
