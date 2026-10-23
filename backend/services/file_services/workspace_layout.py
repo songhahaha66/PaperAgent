@@ -1,5 +1,6 @@
 """One persistent public tree; backend state and evidence are never sandbox mounts."""
 import hashlib
+import os
 import re
 from pathlib import Path, PurePosixPath
 from config.paths import get_pa_data_base
@@ -18,18 +19,22 @@ def relative_parts(value):
 def safe_join(root, relative):
     root = Path(root).absolute()
     parts = relative_parts(relative)
-    # Inspect lexical components before resolve: even in-tree links are forbidden.
-    for parent in [root, *root.parents]:
+    # Normalize and check the SAME value we return. Include the separator so
+    # /project-other cannot pass a /project boundary check. stdlib normalization
+    # and startswith are also understood by CodeQL's path-injection analysis.
+    prefix = os.path.realpath(root).rstrip(os.sep) + os.sep
+    lexical = os.path.abspath(os.path.join(root, *parts))
+    if not lexical.startswith(prefix):
+        raise ValueError('Invalid path')
+    resolved = os.path.realpath(lexical)
+    if not resolved.startswith(prefix):
+        raise ValueError('Invalid path')
+    # Inspect lexical components as well: even in-tree links are forbidden.
+    target = Path(lexical)
+    for parent in [root, *root.parents, target, *target.parents]:
         if parent.is_symlink():
             raise ValueError('Symbolic links are not allowed')
-    target = root
-    for part in parts:
-        target = target / part
-        if target.is_symlink():
-            raise ValueError('Symbolic links are not allowed')
-    if not target.resolve().is_relative_to(root.resolve()):
-        raise ValueError('Invalid path')
-    return target
+    return Path(resolved)
 
 
 def private_root(root):

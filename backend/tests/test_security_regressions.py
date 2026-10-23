@@ -66,7 +66,7 @@ def test_unclosed_delimiters_and_imports_finish_promptly():
 
 
 @pytest.mark.parametrize('value', ['', '.', '..', '../x', '/etc/passwd', 'a/../x', 'a//x', 'a/./x', 'a\\x', 'C:/x', 'a\x00x'])
-def test_modeled_path_components_reject_escape(tmp_path, value):
+def test_path_components_reject_escape(tmp_path, value):
     with pytest.raises(ValueError):
         relative_parts(value)
     with pytest.raises(ValueError):
@@ -81,6 +81,17 @@ def test_chat_rejects_symlink_to_another_project(tmp_path):
     with pytest.raises(ValueError, match='Symbolic'):
         ChatHistoryManager(tmp_path).get_work_history('alias')
     assert relative_parts('project-id/data/file.csv') == ['project-id', 'data', 'file.csv']
+
+
+def test_safe_join_rejects_sibling_prefix_and_preserves_nested_paths(tmp_path):
+    root = tmp_path / 'project'
+    sibling = tmp_path / 'project-other'
+    root.mkdir()
+    sibling.mkdir()
+    (root / 'escape').symlink_to(sibling, target_is_directory=True)
+    with pytest.raises(ValueError):
+        safe_join(root, 'escape/file')
+    assert safe_join(root, 'new/data.csv') == root / 'new/data.csv'
 
 
 def test_filesystem_ids_are_validated_before_io(tmp_path):
