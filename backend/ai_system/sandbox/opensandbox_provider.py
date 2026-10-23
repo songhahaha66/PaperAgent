@@ -122,7 +122,7 @@ class OpenSandboxSession:
             network_policy=NetworkPolicy(default_action="deny"),
             volumes=[Volume(name='execution-cache', host=Host(path=self.volume_path), mount_path='/workspace')],
             metadata={"application": "paperagent"},
-            env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2"})
+            env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
         self._save_lease(lease)

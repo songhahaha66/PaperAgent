@@ -47,6 +47,8 @@ client.write_text(f'''PAPERAGENT_SANDBOX_PROVIDER=opensandbox
 PAPERAGENT_SANDBOX_ENDPOINT=http://127.0.0.1:18080
 PAPERAGENT_SANDBOX_API_KEY={key}
 PAPERAGENT_SANDBOX_IMAGE=paperagent-research:workspace-v2
+PAPERAGENT_SANDBOX_CPU=1
+PAPERAGENT_SANDBOX_MEMORY=768Mi
 # This directory exists on the sandbox server only.
 PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT={root / 'volumes' / 'execution-cache'}
 ''')

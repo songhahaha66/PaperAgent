@@ -24,6 +24,8 @@ The pinned [OpenSandbox 1.1.1 Docker volume implementation](https://github.com/o
 
 Build the execution image as `paperagent-research:workspace-v2`; its Dockerfile includes numerical Python, Pandoc, XeLaTeX, BibTeX and CJK fonts. The backend uses Python 3.14 and `uv sync --extra sandbox`. Select configuration through `PAPERAGENT_SANDBOX_CONFIG`, with environment variables overriding that file. Non-loopback endpoints require HTTPS; the API stays private. Do not mount Docker sockets or backend environment files in execution containers.
 
+The lightweight default is **1 vCPU / 768 MiB per sandbox**, with OpenMP/OpenBLAS using one thread. These are creation-time limits, not automatic scaling. Existing env files with explicit CPU/memory values override the defaults; update `PAPERAGENT_SANDBOX_CPU` and `PAPERAGENT_SANDBOX_MEMORY` before creating new sessions. Larger data analysis or compilation may need higher limits. Host swap can absorb memory pressure but does not raise the container's RAM limit; swap availability inside a container depends on the Docker/cgroup configuration. On a 2 GB host, start with one lightweight project and monitor resident sandboxes: a comparison may keep two candidate kernels alive, and there is no host-wide admission controller yet.
+
 ## One-direction transfer and execution
 
 - Task-selected local inputs are hashed and sent through OpenSandbox's file API only when the remote cache lacks that version. Temporary uploads are checksum-verified and atomically installed. Cache metadata contains paths/hashes only. Recreated containers verify actual cached bytes before claiming an input hit; they do not restore Python memory.

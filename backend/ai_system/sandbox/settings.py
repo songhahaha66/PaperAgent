@@ -10,8 +10,8 @@ class SandboxSettings:
     endpoint: str = "http://127.0.0.1:18080"
     api_key: str = field(default="", repr=False)
     image: str = "paperagent-research:workspace-v2"
-    cpu: str = "2"
-    memory: str = "2Gi"
+    cpu: str = "1"
+    memory: str = "768Mi"
     lifetime: int = 1800
     startup_timeout: int = 120
     max_file_bytes: int = 64 * 1024 * 1024
