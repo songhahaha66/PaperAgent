@@ -79,7 +79,11 @@ class WorkspaceFileService:
                     raise ValueError('Unknown run')
                 return workspace_path(root, path)
             public_parts(path)
-            return safe_join(root, path)
+            if path=='outputs/research' or path.startswith('outputs/research/'):
+                if not reading:raise HTTPException(409,'正式成果只读；请复制为新文件后修改')
+                from .workspace_fs import WorkspaceFS
+                return WorkspaceFS(root).canonical_artifact(path)
+            return safe_join(root,path)
         except ValueError as exc:
             raise HTTPException(400, 'Invalid workspace path') from exc
 
@@ -100,7 +104,11 @@ class WorkspaceFileService:
             if first == 'experiments':
                 continue
             category = 'attachments' if first == 'attachment' else first if first in result else 'papers'
-            stat = path.stat()
+            actual=path
+            if relative.startswith('outputs/research/'):
+                from .workspace_fs import WorkspaceFS
+                actual=WorkspaceFS(root).canonical_artifact(relative)
+            stat = actual.stat()
             result[category].append({'name':path.name,'type':'file','size':stat.st_size,'modified':stat.st_mtime,
                 'path':relative,'category_path':relative.split('/',1)[-1],'category':category})
         for rows in result.values():
@@ -173,6 +181,7 @@ class WorkspaceFileService:
         return {'message':'File uploaded successfully','path':file_path,'filename':file.filename,'size':Path(path).stat().st_size}
 
     def delete_file(self, work_id, file_path):
+        if file_path=='outputs':raise HTTPException(409,'请逐项删除工作文件；正式成果只读')
         self.resolve(work_id, file_path, reading=False)
         with self._editable(work_id):
             FileHelper(self.get_workspace_path(work_id)).delete(file_path)
@@ -198,7 +207,7 @@ class WorkspaceFileService:
             with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in safe_files(root):
                     if path.suffix.lower().lstrip('.') in EXPORT_SUFFIXES:
-                        self._zip_file(archive, path, path.relative_to(root).as_posix())
+                        self._zip_file(archive, path if legacy else self.resolve(work_id,path.relative_to(root).as_posix()), path.relative_to(root).as_posix())
                 # Historical attempts may contain the only copy of code/results.
                 if legacy:
                     attempts = safe_join(root, '.system/attempts')

@@ -65,11 +65,15 @@ def _user_source_files(root):
                 yield path
 
 
-def safe_path(root, name):
+def safe_path(root, name, *, writing=False, verified_snapshot=False):
     root = Path(root).resolve()
     _source_name(name)
     from services.file_services.workspace_layout import safe_join
     path = safe_join(root, name)
+    if name.startswith('outputs/research/') and writing:raise ValueError('正式成果只读；请复制为新源码后修改')
+    if name.startswith('outputs/research/') and not verified_snapshot:
+        from services.file_services.workspace_fs import WorkspaceFS
+        path=WorkspaceFS(root).canonical_artifact(name)
     if '.system' in Path(name).parts or path.suffix.lower() not in TEXT_SUFFIXES | ASSET_SUFFIXES:
         raise ValueError('请选择论文项目内的源码或图片文件')
     if (root/name).is_symlink() or path.is_symlink() or any(p.is_symlink() for p in (root / name).parents if p != root and p.is_relative_to(root)):
@@ -77,7 +81,7 @@ def safe_path(root, name):
     return path
 
 
-def files(root, main=None):
+def files(root, main=None, *, verified_snapshot=False):
     """Follow local TeX dependencies, without exposing unrelated workspace files."""
     root = Path(root)
     main = main or meta(root).get('main') or ('paper.tex' if (root/'paper.tex').is_file() else 'paper.md')
@@ -86,7 +90,7 @@ def files(root, main=None):
         name = pending.pop()
         if name in found:
             continue
-        path = safe_path(root, name)
+        path = safe_path(root, name, verified_snapshot=verified_snapshot)
         if not path.is_file():
             continue
         raw = path.read_bytes()
@@ -104,7 +108,7 @@ def files(root, main=None):
                     suffixes = [''] if Path(relative).suffix else (['.bib'] if command in {'bibliography','addbibresource'} else ['.tex'] if command in {'input','include'} else sorted(ASSET_SUFFIXES))
                     for suffix in suffixes:
                         candidate = relative + suffix
-                        if safe_path(root, candidate).is_file():
+                        if safe_path(root, candidate, verified_snapshot=verified_snapshot).is_file():
                             pending.append(candidate)
                             break
         if len(found) > 200:
@@ -113,7 +117,7 @@ def files(root, main=None):
         for path in _user_source_files(root):
             if path.is_file() and path.suffix in {'.sty','.cls','.bst','.def','.cfg','.bbx','.cbx','.ttf','.otf'} and '.system' not in path.parts:
                 name=path.relative_to(root).as_posix()
-                safe_path(root,name)
+                path=safe_path(root,name, verified_snapshot=verified_snapshot)
                 raw=path.read_bytes();text=raw.decode('utf-8') if path.suffix in TEXT_SUFFIXES else None
                 found.setdefault(name,{'path':name,'version':digest(text) if text is not None else hashlib.sha256(raw).hexdigest(),'text':text,'size':len(raw)})
     # Generated bibliography metadata is part of the project even with inline links.
@@ -237,7 +241,7 @@ def recover(store):
         applied = row and json.loads(row[0]).get('status') == record['decision']
         if not applied:
             for name,text in record['before'].items():
-                target=safe_path(store.root,name)
+                target=safe_path(store.root,name,writing=True)
                 active=read_utf8(target) if target.exists() else None
                 if active==record.get('after',{}).get(name):
                     atomic_text(target,text)
@@ -253,6 +257,7 @@ def validate_patches(root, patches):
         raise ValueError('一次修改应包含一至二十四个局部补丁')
     grouped = {}
     for patch in patches:
+        safe_path(root,patch['file'],writing=True)
         current,start,end = current_selection(root,patch)
         row = grouped.setdefault(patch['file'],{'before':current,'edits':[]})
         if any(start < e and end > s for s,e,_ in row['edits']):
@@ -305,7 +310,7 @@ async def decide(store, change_id, decision, *, compile_after=True, expected_ver
                 # Recheck immediately before replace, including outside-editor writes.
                 if read_utf8(safe_path(store.root,name))!=value['before']:
                     raise ResearchConflict('保存期间源码发生变化，未覆盖新的编辑')
-                atomic_text(safe_path(store.root,name),value['after'])
+                atomic_text(safe_path(store.root,name,writing=True),value['after'])
             doc = snapshot(store.root)
             undo=[]
             for name,value in grouped.items():
@@ -332,7 +337,7 @@ async def decide(store, change_id, decision, *, compile_after=True, expected_ver
             for name,value in grouped.items():
                 # Do not roll back a third-party write that raced a failed group.
                 if read_utf8(safe_path(store.root,name))==value['after']:
-                    atomic_text(safe_path(store.root,name),value['before'])
+                    atomic_text(safe_path(store.root,name,writing=True),value['before'])
             (workspace_path(store.root, MARKER)).unlink(missing_ok=True)
             raise
     (workspace_path(store.root, MARKER)).unlink(missing_ok=True)
@@ -352,7 +357,7 @@ async def compile_project(store):
             target=staging/row['path'];target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(workspace_path(store.root, VERSIONS)/version/row['path'],target)
         try:
-            result=await compile_pdf(staging,main)
+            result=await compile_pdf(staging,main,verified_snapshot=True)
         except Exception as exc:
             from ai_system.research.review_cache import error_detail
             result=LatexResult(tex_path=main,error='编译服务未完成：'+error_detail(exc)+'。上次成功 PDF 已保留。')

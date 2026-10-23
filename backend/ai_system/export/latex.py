@@ -96,10 +96,10 @@ def result_reference_issues(text: str) -> List[str]:
             for key in dict.fromkeys(keys) if re.fullmatch(r'(?:R:)?R\d+', key)]
 
 
-def source_diagnostics(workspace: Path, tex_name: str) -> List[dict]:
+def source_diagnostics(workspace: Path, tex_name: str, *, verified_snapshot=False) -> List[dict]:
     # Reuse the project's dependency discovery so split-file documents work too.
     from services.chat_services.paper_project import files
-    sources = {name: row['text'] for name,row in files(workspace, main=tex_name).items() if name.endswith('.tex')}
+    sources = {name: row['text'] for name,row in files(workspace, main=tex_name, verified_snapshot=verified_snapshot).items() if name.endswith('.tex')}
     clean = '\n'.join(re.sub(r'(?m)(?<!\\)%.*$', '', text) for text in sources.values())
     diagnostics = []
     commands = re.findall(r'\\(begin|end)\s*\{document\}', clean)
@@ -116,8 +116,13 @@ def source_diagnostics(workspace: Path, tex_name: str) -> List[dict]:
     return diagnostics
 
 
-@sandbox_operation
-async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResult:
+def latex_inputs(workspace, tex_name='paper.tex', *, verified_snapshot=False):
+    from services.chat_services.paper_project import files
+    return sorted(files(workspace,main=tex_name,verified_snapshot=verified_snapshot))
+
+
+@sandbox_operation(input_selector=latex_inputs)
+async def compile_pdf(workspace: Path, tex_name: str = "paper.tex", *, verified_snapshot=False) -> LatexResult:
     """One delivery gate for native source, compiler status and final references."""
     result = LatexResult(tex_path=tex_name, log_path=f'{BUILD_DIR}/compile.log')
     build = workspace / BUILD_DIR
@@ -138,7 +143,7 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex") -> LatexResu
         if first['line'] is not None: location += f" 第{first['line']}行"
         return (location+'：' if location else '')+first['message']+'\n'+first['context']
 
-    result.diagnostics = source_diagnostics(workspace, tex_name)
+    result.diagnostics = source_diagnostics(workspace, tex_name, verified_snapshot=verified_snapshot)
     if result.diagnostics:
         transcript.append('\n\n'.join(d['message']+'\n'+d['context'] for d in result.diagnostics))
         return finish('LaTeX 源码检查失败：'+summary())

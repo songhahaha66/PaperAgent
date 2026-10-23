@@ -30,24 +30,26 @@ from services.chat_services import paper_project
 @pytest.fixture(autouse=True)
 def storage(tmp_path, monkeypatch):
     monkeypatch.setenv('PA_DATA_PATH', str(tmp_path/'private'))
-    monkeypatch.setenv('PAPERAGENT_WORKSPACE_ROOT', str(tmp_path/'files'))
-    monkeypatch.setenv('PAPERAGENT_EVIDENCE_ROOT', str(tmp_path/'evidence'))
     monkeypatch.delenv('PAPERAGENT_SANDBOX_CONFIG', raising=False)
 
 
-class MemorySession:
+from helpers.remote_files import RemoteFiles
+
+
+class MemorySession(RemoteFiles):
     root='/workspace'
     context_id='mock-context'
     def __init__(self, root, key, state):
-        self.path=root;self.volume_path=str(root);self.id=key;self.state=state
+        super().__init__(root)
+        self.path=self.remote;self.state=state
         self.calls=[];self.fits=0;self.closed=False;self.prediction=None
-    async def start(self):pass
+    async def start(self):await super().start()
     async def execute(self, code, run_id, output):
         assert self.state['active']==0, 'pool must serialize actual computation'
         self.state['active']+=1
         try:
             with pytest.raises(HTTPException):
-                with edit_lock(self.path):pass
+                with edit_lock(self.backend_root):pass
             await asyncio.sleep(0)
             self.calls.append(code)
             directory=self.path/'outputs/intermediate/comparisons/mock-comparison'
@@ -78,7 +80,7 @@ class MemorySession:
 
 @pytest.fixture
 def comparison(tmp_path, monkeypatch):
-    root=tmp_path/'files/project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files/project';root.mkdir(parents=True)
     state={'active':0};sessions={};creation=[]
     def factory(workspace, *, timeout, fs, experiment_id, execution_scope, **kwargs):
         session=MemorySession(Path(workspace),experiment_id,state);sessions[experiment_id]=session;creation.append(experiment_id)
@@ -184,7 +186,7 @@ def test_independent_pool_wait_is_bounded_and_submits_no_code(comparison):
 
 
 def test_build_and_experiment_style_files_never_change_source_version(tmp_path):
-    root=tmp_path/'files/project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files/project';root.mkdir(parents=True)
     (root/'styles').mkdir();(root/'fonts').mkdir()
     (root/'paper.tex').write_text('\\documentclass{article}\n\\input{chapter}\n\\begin{document}text\\end{document}')
     (root/'chapter.tex').write_text('User chapter')
@@ -211,13 +213,13 @@ def test_build_and_experiment_style_files_never_change_source_version(tmp_path):
 
 @pytest.mark.parametrize('path',['.build/main.tex','experiments/attempt/paper.tex','styles/../paper.tex','/etc/paper.tex'])
 def test_explicit_source_dependencies_cannot_enter_internal_trees(tmp_path,path):
-    root=tmp_path/'files/project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files/project';root.mkdir(parents=True)
     (root/'paper.tex').write_text('\\input{'+path+'}')
     with pytest.raises(ValueError):paper_project.files(root)
 
 
 def test_single_file_limit_prevents_hash_and_atomic_archive_copy(tmp_path):
-    fs=WorkspaceFS(tmp_path/'files/project');fs.init_structure();run=fs.create_run()
+    fs=WorkspaceFS(tmp_path/'private/project-files/project');fs.init_structure();run=fs.create_run()
     source=fs.abs('outputs/large.csv');source.write_bytes(b'x'*65)
     with pytest.raises(FileLimitExceeded):output_hashes(fs,max_file_bytes=64)
     with pytest.raises(FileLimitExceeded):capture_local_outputs(fs,run,{},expected={'outputs/large.csv':hashlib.sha256(source.read_bytes()).hexdigest()},max_file_bytes=64)
@@ -232,7 +234,7 @@ def test_closing_one_container_keeps_every_other_durable_lease(tmp_path):
     import time
     from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
     from services.file_services.workspace_layout import private_root
-    root=tmp_path/'files/project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files/project';root.mkdir(parents=True)
     path=private_root(root)/'sandbox-lease.json';path.parent.mkdir(parents=True)
     sessions=[]
     for key in ('first','second'):
@@ -260,15 +262,16 @@ def test_closing_one_container_keeps_every_other_durable_lease(tmp_path):
 @pytest.mark.parametrize('mode',['input','output','error-log'])
 def test_runtime_enforces_single_file_and_total_log_limits(tmp_path,mode):
     async def check():
-        root=tmp_path/'files/project';state={'active':0}
+        root=tmp_path/'private/project-files/project';state={'active':0}
         class ResourceSession(MemorySession):
             async def execute(self,code,run_id,output):
                 self.calls.append(code)
                 await output('stdout','head\n')
-                if mode=='output':(root/'outputs/large.csv').write_bytes(b'x'*65)
+                if mode=='output':(self.remote/'outputs/large.csv').write_bytes(b'x'*65)
                 return ExecutionOutcome(error='x'*200 if mode=='error-log' else None)
         session=ResourceSession(root,'resources',state)
-        kernel=RemoteKernel(root,session,SandboxSettings(provider='mock',max_file_bytes=64,max_log_bytes=32))
+        session.settings=SandboxSettings(provider='mock',max_file_bytes=64,max_log_bytes=32)
+        kernel=RemoteKernel(root,session,session.settings)
         if mode=='input':kernel.fs.write_text('data/large.csv','x'*65)
         try:
             result=await kernel.execute('test')
@@ -293,7 +296,7 @@ def test_pdf_version_check_and_publication_share_edit_lock(tmp_path,monkeypatch)
     from contextlib import contextmanager
     from ai_system.export.latex import LatexResult
     from services.file_services.workspace_files import WorkspaceFileService
-    root=tmp_path/'files/project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files/project';root.mkdir(parents=True)
     (root/'paper.tex').write_text('\\documentclass{article}\\begin{document}text\\end{document}')
     (root/'user.sty').write_text('user style')
     before=paper_project.snapshot(root)['version']
@@ -309,7 +312,8 @@ def test_pdf_version_check_and_publication_share_edit_lock(tmp_path,monkeypatch)
             publication_phase.update(pending=False,checked=True)
         return real_snapshot(workspace)
     monkeypatch.setattr(paper_project,'snapshot',checked_snapshot)
-    async def fake_compile(staging,main):
+    async def fake_compile(staging,main,*,verified_snapshot=False):
+        assert verified_snapshot
         # No outer edit lock while the real compiler would acquire execution_lock.
         with edit_lock(root):pass
         assert paper_project.snapshot(root)['version']==before

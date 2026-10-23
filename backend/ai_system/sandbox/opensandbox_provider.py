@@ -24,7 +24,7 @@ class _WorkSandbox:
 
 
 class OpenSandboxSession:
-    def __init__(self, settings: SandboxSettings, *, work_id=None, experiment_id=None, workspace_dir=None):
+    def __init__(self, settings: SandboxSettings, *, work_id=None, experiment_id=None, workspace_dir=None, cache_key=None):
         self.settings = settings
         self.id = None
         self.sandbox = None
@@ -37,27 +37,15 @@ class OpenSandboxSession:
         if workspace_dir is None:
             raise ValueError('持久沙箱需要服务端工作区路径')
         self.workspace_dir = Path(workspace_dir).absolute()
-        from config.paths import get_workspaces_path, get_pa_data_base
-        from services.file_services.workspace_layout import safe_join, private_root, workspace_path
-        from services.file_services.workspace_layout import evidence_root
-        base = get_workspaces_path().absolute()
-        storage_roots = [base, evidence_root(self.workspace_dir).parent, get_pa_data_base() / 'project-state']
-        for index, first in enumerate(storage_roots):
-            for second in storage_roots[index+1:]:
-                if first.is_relative_to(second) or second.is_relative_to(first):
-                    raise ValueError('项目可写目录、后端状态和只读证据目录必须互不嵌套')
-        host_roots = [Path(settings.host_workspace_root), Path(settings.host_evidence_root)]
-        if any(not value.is_absolute() or '..' in value.parts for value in host_roots):
-            raise ValueError('沙箱主机存储根目录必须是明确的绝对路径')
-        if host_roots[0].is_relative_to(host_roots[1]) or host_roots[1].is_relative_to(host_roots[0]):
-            raise ValueError('沙箱主机文件与证据根目录必须互不嵌套')
-        relative = self.workspace_dir.relative_to(base).as_posix()
-        if not settings.host_workspace_root or not settings.host_evidence_root:
-            raise ValueError('必须配置沙箱服务器持久文件和证据根目录；不会使用临时容器存储')
-        self.volume_path = str(safe_join(settings.host_workspace_root, relative))
-        archive = workspace_path(self.workspace_dir, 'runs')
-        archive.mkdir(parents=True, exist_ok=True)
-        self.evidence_path = str(safe_join(settings.host_evidence_root, private_root(self.workspace_dir).name + '/runs'))
+        from services.file_services.workspace_layout import private_root
+        import hashlib
+        # This path is on the sandbox server only. It is never opened by the backend.
+        self.cache_key = cache_key or hashlib.sha256(str(self.workspace_dir).encode()).hexdigest()
+        if not re.fullmatch(r'[a-f0-9]{64}', self.cache_key):
+            raise ValueError('Invalid server cache identity')
+        if not settings.host_workspace_root or not Path(settings.host_workspace_root).is_absolute() or '..' in Path(settings.host_workspace_root).parts:
+            raise ValueError('必须配置沙箱服务器本地持久缓存根目录')
+        self.volume_path = str(Path(settings.host_workspace_root) / self.cache_key)
         self.host = None
         self.context_restored = False
         from services.file_services.workspace_lock import project_root
@@ -101,25 +89,11 @@ class OpenSandboxSession:
             api_key=self.settings.api_key, use_server_proxy=True,
             retry_policy=RetryPolicy.disabled(),
             request_timeout=timedelta(seconds=max(300, self.settings.startup_timeout)))
-        import uuid
-        from services.file_services.file_helper import atomic_write
-        probe = self.workspace_dir / '.volume-probe'
-        from services.file_services.workspace_layout import workspace_path
-        evidence_probe = workspace_path(self.workspace_dir, 'runs/.volume-probe')
-        expected = uuid.uuid4().hex
-        atomic_write(probe, lambda f: f.write(expected.encode()))
-        atomic_write(evidence_probe, lambda f: f.write(expected.encode()))
         self.host = _WorkSandbox()
         await self._create(config, Sandbox, NetworkPolicy)
         self.id = self.sandbox.id
-        mounted = await self.sandbox.files.read_file('/workspace/.volume-probe')
-        archived = await self.sandbox.files.read_file('/evidence/.volume-probe')
-        if mounted != expected or archived != expected:
-            raise RuntimeError('沙箱持久卷与后端共享目录不一致；拒绝执行，不创建文件镜像')
-        probe.unlink(missing_ok=True)
-        evidence_probe.unlink(missing_ok=True)
         await self.sandbox.files.create_directories([WriteEntry(path=self.root + '/' + p, mode=755)
-            for p in ('data', 'attachment', 'code', 'outputs/intermediate')])
+            for p in ('data', 'attachment', 'code', 'outputs/intermediate', '.build/latex')])
         self.context_restored = False
         self.context = await self.interpreter.codes.create_context('python')
         ready = await self.interpreter.codes.run(
@@ -130,7 +104,6 @@ class OpenSandboxSession:
     async def _create(self, config, Sandbox, NetworkPolicy):
         from code_interpreter import CodeInterpreter
         from opensandbox.models import Volume, Host
-        from services.file_services.file_helper import atomic_write
         self.lease_path.parent.mkdir(parents=True, exist_ok=True)
         lease = {'expires_at': time.time() + self.settings.lifetime + self.settings.startup_timeout, 'sandbox_id': None}
         self._save_lease(lease)
@@ -140,14 +113,14 @@ class OpenSandboxSession:
             entrypoint=["/opt/code-interpreter/code-interpreter.sh"],
             resource={"cpu": self.settings.cpu, "memory": self.settings.memory},
             network_policy=NetworkPolicy(default_action="deny"),
-            volumes=[Volume(name='project', host=Host(path=self.volume_path), mount_path='/workspace'),
-                     Volume(name='evidence', host=Host(path=self.evidence_path), mount_path='/evidence', read_only=True)],
+            volumes=[Volume(name='execution-cache', host=Host(path=self.volume_path), mount_path='/workspace')],
             metadata={"application": "paperagent"},
             env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "2"})
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
         self._save_lease(lease)
         await self.sandbox.files.write_file('/tmp/paperagent_runtime.py', Path(__file__).with_name('runtime_helpers.py').read_bytes())
+        await self.sandbox.files.write_file('/tmp/paperagent_transfer.py', Path(__file__).with_name('transfer_worker.py').read_bytes())
         self.interpreter = await CodeInterpreter.create(sandbox=self.sandbox)
         self.host.interpreter = self.interpreter
 
@@ -155,6 +128,86 @@ class OpenSandboxSession:
     def _error(error):
         text = "\n".join(error.traceback) or f"{error.name}: {error.value}"
         return re.sub(r'\x1b\[[0-9;]*m', '', text)
+
+    @staticmethod
+    def _relative(value, *, snapshot=False):
+        from services.file_services.workspace_layout import relative_parts, PRIVATE_NAMES
+        parts = relative_parts(value)
+        if snapshot:
+            if len(parts)<4 or parts[0]!='.pa-runs' or parts[2]!='files':
+                raise ValueError('Invalid frozen-output path')
+        elif any(part in PRIVATE_NAMES or part.startswith('.pa-') for part in parts):
+            raise ValueError('Private cache path')
+        return '/'.join(parts)
+
+    async def _rpc(self, op, **values):
+        import shlex
+        request = {'op':op,'limit':self.settings.max_file_bytes,**values}
+        code, out, err = await self.command('python3 /tmp/paperagent_transfer.py ' + shlex.quote(json.dumps(request)),60)
+        if code!=0: raise RuntimeError('沙箱文件操作失败：'+err[:1000])
+        return json.loads(out)
+
+    async def inventory(self, paths=None, *, kind='python'):
+        if paths is not None: paths=[self._relative(p) for p in paths]
+        return await self._rpc('inventory',paths=paths,kind=kind)
+
+    async def upload(self, path, source, sha256):
+        from opensandbox.models import WriteEntry
+        import uuid
+        path=self._relative(path); temporary='.pa-upload-'+uuid.uuid4().hex
+        await self.sandbox.files.create_directories([WriteEntry(path=self.root,mode=755)])
+        from services.file_services.file_helper import open_read
+        try:
+            with open_read(source) as stream:
+                await self.sandbox.files.write_file(self.root+'/'+temporary,stream,mode=600)
+            await self._rpc('install',path=path,temporary=temporary,sha256=sha256)
+        finally:
+            await self.sandbox.files.delete_files([self.root+'/'+temporary])
+
+    async def input_versions(self):
+        data=await self._rpc('inputs')
+        return {self._relative(p):h for p,h in data.items()}
+
+    async def save_input_versions(self, versions):
+        import uuid
+        temporary='.pa-ledger-'+uuid.uuid4().hex
+        try:
+            await self.sandbox.files.write_file(self.root+'/'+temporary,json.dumps(versions),mode=600)
+            await self._rpc('commit_inputs',temporary=temporary)
+        finally:
+            await self.sandbox.files.delete_files([self.root+'/'+temporary])
+
+    async def delete_input(self, path):
+        await self._rpc('delete',path=self._relative(path))
+
+    async def capture(self, run_id, baseline, *, kind='python'):
+        return await self._rpc('freeze',run_id=run_id,baseline=baseline,kind=kind)
+
+    async def capture_inputs(self, run_id, baseline, paths):
+        return await self._rpc('freeze',run_id=run_id,baseline=baseline,kind='inputs',paths=[self._relative(p) for p in paths])
+
+    async def frozen(self, run_id):
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',run_id):raise ValueError('Invalid run ID')
+        from contextlib import aclosing
+        chunks=await self.sandbox.files.read_bytes_stream(self.root+'/.pa-runs/'+run_id+'/manifest.json')
+        data=bytearray()
+        async with aclosing(chunks):
+            async for chunk in chunks:
+                if len(data)+len(chunk)>self.settings.max_log_bytes:raise ValueError('Output manifest too large')
+                data.extend(chunk)
+        return json.loads(data)
+
+    async def download(self, snapshot, destination, max_bytes):
+        from contextlib import aclosing
+        snapshot=self._relative(snapshot,snapshot=True)
+        chunks=await self.sandbox.files.read_bytes_stream(self.root+'/'+snapshot)
+        size=0
+        with destination.open('wb') as target:
+            async with aclosing(chunks):
+                async for chunk in chunks:
+                    size+=len(chunk)
+                    if size>max_bytes:raise ValueError('下载超过单文件上限')
+                    target.write(chunk)
 
     async def execute(self, code, run_id, output):
         from opensandbox.models.execd import ExecutionHandlers
@@ -205,8 +258,7 @@ class OpenSandboxSession:
             raise RuntimeError("保存图片未收到完成回执，请重试文件交付")
 
     async def command(self, command, timeout):
-        from opensandbox.models import RunCommandOpts
-        from opensandbox.models.execd import ExecutionHandlers
+        from opensandbox.models.execd import RunCommandOpts, ExecutionHandlers
         logs = {'stdout': [], 'stderr': []}
         size = 0
         failed = asyncio.get_running_loop().create_future()

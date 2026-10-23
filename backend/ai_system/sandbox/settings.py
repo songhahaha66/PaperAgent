@@ -17,7 +17,6 @@ class SandboxSettings:
     startup_timeout: int = 120
     max_file_bytes: int = 64 * 1024 * 1024
     host_workspace_root: str = ""
-    host_evidence_root: str = ""
     max_log_bytes: int = 8 * 1024 * 1024
 
     @classmethod

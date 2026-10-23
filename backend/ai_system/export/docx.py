@@ -72,6 +72,9 @@ async def build_default_reference(workspace: Path) -> Path:
     target = workspace / DEFAULT_REFERENCE
     if target.exists():
         return target
+    from ai_system.sandbox.commands import restore_reference, save_reference
+    if restore_reference(workspace,target):
+        return target
     require_pandoc()
     target.parent.mkdir(parents=True, exist_ok=True)
     code, _out, err = await run_command(
@@ -110,6 +113,7 @@ async def build_default_reference(workspace: Path) -> Path:
         section.top_margin = section.bottom_margin = Cm(2.5)
         section.left_margin = section.right_margin = Cm(2.5)
     doc.save(str(target))
+    save_reference(workspace,target)
     return target
 
 
@@ -126,7 +130,24 @@ def _title(markdown: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-@sandbox_operation
+def word_inputs(workspace, markdown, docx_name='paper.docx', template_docx=None):
+    """Only embedded local assets and the chosen reference cross the API."""
+    from ai_system.sandbox.transfer import relative
+    names=set()
+    # Pandoc raw HTML is disabled. Handle inline and reference-style Markdown images.
+    for first,second in re.findall(r'!\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))[^)]*\)',markdown):
+        names.add(relative(first or second))
+    definitions={key.lower():first or second for key,first,second in
+        re.findall(r'(?m)^\s*\[([^\]]+)\]:\s*(?:<([^>]+)>|(\S+))',markdown)}
+    for label,key in re.findall(r'!\[([^\]]*)\]\[([^\]]*)\]',markdown):
+        name=definitions.get((key or label).lower())
+        if name:names.add(relative(name))
+    if template_docx is not None and Path(template_docx).exists():
+        names.add(relative(Path(template_docx).absolute().relative_to(Path(workspace).absolute()).as_posix()))
+    return sorted(names)
+
+
+@sandbox_operation(input_selector=word_inputs)
 async def export_docx(
     workspace: Path, markdown: str, docx_name: str = "paper.docx", template_docx: Optional[Path] = None
 ) -> DocxResult:

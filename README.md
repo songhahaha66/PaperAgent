@@ -252,4 +252,4 @@ VITE_APP_VERSION=
 双方案监督学习比较的冻结协议、持久预算和验证范围见 [方案比较说明](ARCHITECTURE.md)。
 
 
-工作区 v2：旧项目只读导出；新项目须配置沙箱服务器持久文件树及后端对同一文件系统的显式访问。Python、Pandoc、LaTeX/BibTeX 均在 OpenSandbox 内执行，不回退后端。部署映射、版本边界、恢复语义与用户实测清单见 [持久工作区说明](deploy/sandbox/README.md)。本次代码变更未部署或验证 ASUS 现场环境。
+工作区 v2：旧项目只读导出；后端本地保存正式资料与证据，沙箱服务器持久目录只作为执行缓存，通过文件 API 按版本增量传输，不依赖 NFS 或共享文件系统。Python、Pandoc、LaTeX/BibTeX 均在 OpenSandbox 内执行，不回退后端。部署映射、版本边界、恢复语义与用户实测清单见 [持久工作区说明](deploy/sandbox/README.md)。本次代码变更未部署或验证 ASUS 现场环境。

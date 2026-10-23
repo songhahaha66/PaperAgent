@@ -14,6 +14,7 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     runs = source_fs._manifest.get('runs', {})
     for run_id in runs if run_ids is None else run_ids:
         info = runs[run_id]
+        if not info.get('evidence_archived') or info.get('status')!='success':continue
         for rel in info.get('artifacts', []):
             prefix = f'runs/{run_id}/artifacts/'
             if not rel.startswith(prefix):
@@ -27,12 +28,19 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
                 raise ValueError('运行产物不存在或为符号链接')
             dest = f'outputs/research/{run_id}/{name}'
             target = target_fs.abs(dest)
-            if target_fs.get_file_meta(dest) and target.exists():
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
+            from .evidence import checksum
+            from services.file_services.file_helper import atomic_write
+            expected=checksum(source)
+            existing=target_fs.get_file_meta(dest)
+            if existing:
+                if existing.get('archive_path')!=rel or existing.get('sha256')!=expected:
+                    raise ValueError('正式成果编号已绑定其他归档版本')
+            else:
+                atomic_write(target,lambda f:bounded_copy(source,f,DEFAULT_MAX_FILE_BYTES))
             kind = 'image' if source.suffix.lower() in {'.png','.jpg','.jpeg','.svg'} else 'code' if source.suffix == '.py' else 'data'
             target_fs.register_file(dest, kind=kind, source_run=run_id, visibility='user')
+            target_fs._manifest['files'][dest].update(archive_path=rel,sha256=expected)
+            target_fs._save_manifest()
             published.append(dest)
     return published
 

@@ -119,7 +119,7 @@ def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
     store,_=paper;path=store.root/'paper.tex';path.write_text('原稿中有 \\custom{宏} 和公式 $x^2$。')
     pdf=store.root/'paper.pdf';pdf.write_bytes(b'last good pdf')
     from ai_system.export.latex import LatexResult
-    async def fail(*args):return LatexResult('paper.tex',error='花括号未配对')
+    async def fail(*args,**kwargs):return LatexResult('paper.tex',error='花括号未配对')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',fail)
     p=change(store,selection(store,'原稿',file='paper.tex'),'新稿')
     run(project.decide(store,p['id'],'apply'))
@@ -131,7 +131,7 @@ def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
 def test_compile_does_not_publish_stale_result(paper,monkeypatch):
     store,_=paper;path=store.root/'paper.tex';path.write_text('原稿。')
     pdf=store.root/'paper.pdf';pdf.write_bytes(b'old')
-    async def success(folder,*args):
+    async def success(folder,*args,**kwargs):
         from ai_system.export.latex import LatexResult
         path.write_text('编译期间修改。');(folder/'paper.pdf').write_bytes(b'stale')
         return LatexResult('paper.tex',pdf_path='paper.pdf')

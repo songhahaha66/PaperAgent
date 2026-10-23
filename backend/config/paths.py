@@ -40,18 +40,10 @@ def get_pa_data_base() -> Path:
 
 
 
-def storage_setting(name, default):
-    values = {}
-    if config := os.environ.get('PAPERAGENT_SANDBOX_CONFIG'):
-        from dotenv import dotenv_values
-        values.update(dotenv_values(config))
-    values.update(os.environ)
-    return Path(values.get(name) or default).absolute()
-
 def get_workspaces_path() -> Path:
-    """获取工作空间目录路径"""
-    path = storage_setting("PAPERAGENT_WORKSPACE_ROOT", get_pa_data_base() / "project-files")
-    path.mkdir(parents=True, exist_ok=True)
+    """Backend-local authoritative user files; never a sandbox-host mount."""
+    path = get_pa_data_base() / 'project-files'
+    path.mkdir(parents=True,exist_ok=True)
     return path
 
 

@@ -34,8 +34,6 @@ from schemas.schemas import WorkCreate
 @pytest.fixture(autouse=True)
 def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setenv('PA_DATA_PATH', str(tmp_path/'private'))
-    monkeypatch.setenv('PAPERAGENT_WORKSPACE_ROOT', str(tmp_path/'files'))
-    monkeypatch.setenv('PAPERAGENT_EVIDENCE_ROOT', str(tmp_path/'evidence'))
     monkeypatch.delenv('PAPERAGENT_SANDBOX_CONFIG', raising=False)
 
 
@@ -70,7 +68,7 @@ def test_parent_link_swap_during_write_cannot_escape(tmp_path):
 
 
 def test_state_and_receipts_are_outside_public_tree(tmp_path):
-    root=tmp_path/'files'/'project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files'/'project';root.mkdir(parents=True)
     fs=WorkspaceFS(root);fs.init_structure();run=fs.create_run()
     fs.save_run_input(run,'print(1)')
     assert not fs.run_dir(run).is_relative_to(root)
@@ -83,14 +81,14 @@ def test_state_and_receipts_are_outside_public_tree(tmp_path):
 
 
 def test_corrupt_manifest_is_not_reset(tmp_path):
-    root=tmp_path/'files'/'project';fs=WorkspaceFS(root);fs.init_structure();fs._save_manifest()
+    root=tmp_path/'private/project-files'/'project';fs=WorkspaceFS(root);fs.init_structure();fs._save_manifest()
     manifest=workspace_path(root,'manifest.json');manifest.write_text('{')
     with pytest.raises(ValueError,match='损坏'):WorkspaceFS(root)
     assert manifest.read_text()=='{'
 
 
 def test_receipt_is_required_idempotent_and_tamper_evident(tmp_path):
-    root=tmp_path/'files'/'project';fs=WorkspaceFS(root);fs.init_structure()
+    root=tmp_path/'private/project-files'/'project';fs=WorkspaceFS(root);fs.init_structure()
     fs.write_text('data/input.csv','x\n1\n');run=fs.create_run()
     fs.save_run_input(run,'print(1)');fs.save_run_stdout(run,'1\n');fs.save_run_stderr(run,'')
     freeze_inputs(fs,run);before=output_hashes(fs)
@@ -106,7 +104,7 @@ def test_receipt_is_required_idempotent_and_tamper_evident(tmp_path):
 
 def test_project_lock_covers_edit_and_other_executor(tmp_path):
     async def check():
-        root=tmp_path/'files'/'project'
+        root=tmp_path/'private/project-files'/'project'
         async with execution_lock(root):
             with pytest.raises(HTTPException):
                 with edit_lock(root):pass
@@ -116,7 +114,7 @@ def test_project_lock_covers_edit_and_other_executor(tmp_path):
 
 def test_uncertain_container_lease_blocks_edits(tmp_path):
     import time
-    root=tmp_path/'files'/'project';lease=private_root(root)/'sandbox-lease.json';lease.parent.mkdir(parents=True)
+    root=tmp_path/'private/project-files'/'project';lease=private_root(root)/'sandbox-lease.json';lease.parent.mkdir(parents=True)
     lease.write_text(json.dumps({'expires_at':time.time()+60,'sandbox_id':'uncertain'}))
     with pytest.raises(HTTPException,match='TTL'):
         with edit_lock(root):pass
@@ -178,7 +176,7 @@ def test_template_delete_detaches_projects_without_deleting_them(tmp_path,monkey
 
 def test_result_registration_binds_sealed_run_id(tmp_path):
     from ai_system.graph.registry import ResultRegistry, GroundingError
-    fs=WorkspaceFS(tmp_path/'files'/'project');fs.init_structure();run=fs.create_run()
+    fs=WorkspaceFS(tmp_path/'private/project-files'/'project');fs.init_structure();run=fs.create_run()
     fs.save_run_input(run,'print(3)');fs.save_run_stdout(run,'3');fs.save_run_stderr(run,'');freeze_inputs(fs,run)
     fs.finish_run(run,'success');registry=ResultRegistry(fs)
     with pytest.raises(GroundingError):registry.record_value('Q1','count','3',run)
@@ -187,31 +185,30 @@ def test_result_registration_binds_sealed_run_id(tmp_path):
     assert registry.record_value('Q1','count','3',run).id==item.id
 
 
-def test_sdk_mounts_only_current_files_and_readonly_receipts(tmp_path,monkeypatch):
+def test_sdk_mounts_only_server_local_execution_cache(tmp_path,monkeypatch):
     from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
     from opensandbox import Sandbox
     from code_interpreter import CodeInterpreter
-    root=tmp_path/'files'/'project';root.mkdir(parents=True)
+    root=tmp_path/'private/project-files'/'project';root.mkdir(parents=True)
     calls={}
     async def nothing(*args,**kwargs):pass
     async def create(*args,**kwargs):
         calls.update(kwargs)
-        async def read(path):return (workspace_path(root,'runs/.volume-probe') if path.startswith('/evidence') else root/'.volume-probe').read_text()
+        async def read(path):raise AssertionError('shared-filesystem probe must not exist')
         return SimpleNamespace(id='fake-only',files=SimpleNamespace(write_file=nothing,read_file=read,create_directories=nothing),destroy=nothing)
     async def interpreter(*args,**kwargs):
         async def context(*args):return SimpleNamespace(id='context')
         async def ready(*args,**kwargs):return SimpleNamespace(error=None,complete=True)
         return SimpleNamespace(codes=SimpleNamespace(create_context=context,run=ready),aclose=nothing)
     monkeypatch.setattr(Sandbox,'create',create);monkeypatch.setattr(CodeInterpreter,'create',interpreter)
-    settings=SandboxSettings(api_key='fake-test-key',host_workspace_root=str(tmp_path/'server-files'),host_evidence_root=str(tmp_path/'server-evidence'))
+    settings=SandboxSettings(api_key='fake-test-key',host_workspace_root=str(tmp_path/'server-files'))
     async def check():
         session=OpenSandboxSession(settings,workspace_dir=root)
         await session.start()
         mounts=calls['volumes']
-        assert len(mounts)==2
-        assert mounts[0].host.path==str(tmp_path/'server-files'/'project')
+        assert len(mounts)==1
+        assert mounts[0].host.path==str(tmp_path/'server-files'/session.cache_key)
         assert mounts[0].mount_path=='/workspace' and not mounts[0].read_only
-        assert mounts[1].mount_path=='/evidence' and mounts[1].read_only
         assert not any(str(private_root(root)) in m.host.path for m in mounts)
         assert calls['network_policy'].default_action=='deny'
         assert 'DATABASE_URL' not in calls['env'] and 'fake-test-key' not in calls['env'].values()
@@ -220,33 +217,31 @@ def test_sdk_mounts_only_current_files_and_readonly_receipts(tmp_path,monkeypatc
     asyncio.run(check())
 
 
-class PersistentFake:
-    """No code execution: a controlled shared-file writer and receipt producer."""
-    id='fake-volume-session'
-    root='/workspace'
-    context_id='fake-context'
+from helpers.remote_files import RemoteFiles
+
+
+class PersistentFake(RemoteFiles):
+    """Controlled remote writer; it cannot read the backend filesystem."""
     def __init__(self,path,*,wait=False,finalize_failure=False):
-        self.path=path;self.volume_path=str(path);self.calls=[];self.closed=False;self.interrupted=False
-        self.wait=wait;self.ready=asyncio.Event();self.finalize_failure=finalize_failure
-    async def start(self):pass
+        super().__init__(path)
+        self.wait=wait;self.ready=asyncio.Event();self.finalize_failure=finalize_failure;self.interrupted=False
     async def execute(self,code,run_id,output):
         from ai_system.sandbox.contracts import ExecutionOutcome
         self.calls.append(code)
         await output('stdout',code+'\n')
-        (self.path/'outputs/result.csv').write_text(code)
+        (self.remote/'outputs').mkdir(exist_ok=True)
+        (self.remote/'outputs/result.csv').write_text(code)
         self.ready.set()
         if self.wait:await asyncio.Event().wait()
         return ExecutionOutcome()
     async def finalize(self,run_id):
         if self.finalize_failure:raise RuntimeError('figure save unavailable')
-    async def interrupt(self):self.interrupted=True
-    async def close(self):self.closed=True
 
 
 def test_mock_volume_kernel_streams_seals_and_serializes_session(tmp_path):
     from ai_system.sandbox.remote_kernel import RemoteKernel
     async def check():
-        root=tmp_path/'files'/'project';session=PersistentFake(root)
+        root=tmp_path/'private/project-files'/'project';session=PersistentFake(root)
         kernel=RemoteKernel(root,session,SandboxSettings(provider='fake'))
         events=[]
         async def event(row):events.append(row)
@@ -269,7 +264,7 @@ def test_mock_volume_kernel_streams_seals_and_serializes_session(tmp_path):
 def test_mock_cancel_never_creates_usable_evidence(tmp_path):
     from ai_system.sandbox.remote_kernel import RemoteKernel
     async def check():
-        root=tmp_path/'files'/'project';session=PersistentFake(root,wait=True)
+        root=tmp_path/'private/project-files'/'project';session=PersistentFake(root,wait=True)
         kernel=RemoteKernel(root,session,SandboxSettings(provider='fake'))
         task=asyncio.create_task(kernel.execute('unknown'))
         await session.ready.wait();task.cancel()
@@ -284,7 +279,7 @@ def test_mock_cancel_never_creates_usable_evidence(tmp_path):
 def test_mock_lost_memory_does_not_fake_figure_recovery(tmp_path):
     from ai_system.sandbox.remote_kernel import RemoteKernel
     async def check():
-        root=tmp_path/'files'/'project';session=PersistentFake(root,finalize_failure=True)
+        root=tmp_path/'private/project-files'/'project';session=PersistentFake(root,finalize_failure=True)
         kernel=RemoteKernel(root,session,SandboxSettings(provider='fake'))
         first=await kernel.execute('3')
         assert first.ok and first.delivery_error and not kernel.fs.get_run_info(first.run_id).get('evidence_archived')
@@ -317,7 +312,7 @@ def test_application_wide_version_gate(tmp_path,monkeypatch,version,path,expecte
 
 def test_word_template_export_creates_scratch_before_pandoc(tmp_path,monkeypatch):
     import ai_system.export.docx as module
-    root=tmp_path/'files'/'project';template=root/'template/original.docx';template.parent.mkdir(parents=True);template.write_bytes(b'template')
+    root=tmp_path/'private/project-files'/'project';template=root/'template/original.docx';template.parent.mkdir(parents=True);template.write_bytes(b'template')
     async def fake_pandoc(markdown,cwd,args):
         assert (cwd/'.build').is_dir()
         assert f'--reference-doc={template}' in args

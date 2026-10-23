@@ -15,21 +15,14 @@ def freeze_inputs(fs, run_id, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
     info = fs.get_run_info(run_id)
     frozen = {}
     # Attempt inputs are already the task-selected inputs. Do not copy outputs or project history.
-    for folder in ('data', 'attachment', 'code', 'outputs/intermediate'):
-        source = fs.abs(folder)
-        if not source.exists():
-            continue
-        for path in source.rglob('*'):
-            relative = path.relative_to(fs.root).as_posix()
-            path = safe_join(fs.root, relative)
-            if not path.is_file():
-                continue
-            target = fs.run_dir(run_id) / 'inputs' / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(target, lambda f, p=path: bounded_copy(p, f, max_file_bytes))
-            frozen[relative] = bounded_hash(target, max_file_bytes)
-            if frozen[relative] != bounded_hash(path, max_file_bytes):
-                raise ValueError('冻结输入期间文件发生变化，拒绝执行')
+    from .transfer import input_files
+    for relative,path in input_files(fs).items():
+        target = fs.run_dir(run_id) / 'inputs' / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(target, lambda f, p=path: bounded_copy(p, f, max_file_bytes))
+        frozen[relative] = bounded_hash(target, max_file_bytes)
+        if frozen[relative] != bounded_hash(path, max_file_bytes):
+            raise ValueError('冻结输入期间文件发生变化，拒绝执行')
     info['input_hashes'] = frozen
     fs._save_manifest()
 

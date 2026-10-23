@@ -14,8 +14,7 @@ if not key_file.exists():
     key_file.write_text(secrets.token_urlsafe(40))
 key_file.chmod(0o600)
 key = key_file.read_text().strip()
-(root / "volumes" / "files").mkdir(parents=True, exist_ok=True)
-(root / "volumes" / "evidence").mkdir(parents=True, exist_ok=True)
+(root / "volumes" / "execution-cache").mkdir(parents=True, exist_ok=True)
 registry = "sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox"
 config = root / "server.toml"
 config.write_text(f'''[server]
@@ -34,7 +33,7 @@ port_range_max = 41100
 pids_limit = 256
 no_new_privileges = true
 [storage]
-allowed_host_paths = ["{root / 'volumes' / 'files'}", "{root / 'volumes' / 'evidence'}"]
+allowed_host_paths = ["{root / 'volumes' / 'execution-cache'}"]
 [store]
 type = "sqlite"
 path = "{root / 'state.db'}"
@@ -48,11 +47,8 @@ client.write_text(f'''PAPERAGENT_SANDBOX_PROVIDER=opensandbox
 PAPERAGENT_SANDBOX_ENDPOINT=http://127.0.0.1:18080
 PAPERAGENT_SANDBOX_API_KEY={key}
 PAPERAGENT_SANDBOX_IMAGE=paperagent-research:workspace-v2
-PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT={root / 'volumes' / 'files'}
-PAPERAGENT_SANDBOX_HOST_EVIDENCE_ROOT={root / 'volumes' / 'evidence'}
-# REQUIRED: paths to these same filesystems on the backend machine/container.
-PAPERAGENT_WORKSPACE_ROOT=
-PAPERAGENT_EVIDENCE_ROOT=
+# This directory exists on the sandbox server only.
+PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT={root / 'volumes' / 'execution-cache'}
 ''')
 client.chmod(0o600)
 unit = Path.home() / ".config/systemd/user/paperagent-sandbox.service"

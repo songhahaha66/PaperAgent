@@ -1,62 +1,56 @@
-# Persistent workspace v2
+# API-backed persistent execution cache
 
-This is a code/configuration contract, **not a claim that the ASUS server has been configured or tested**. No deployment or remote smoke test was performed for this cutover. Server/SDK dependencies are pinned to OpenSandbox 1.1.1. Linux file locking and `/proc/self/fd` are required by the backend.
+The backend and sandbox server have **independent filesystems**. No NFS, shared mount, or backend-visible sandbox directory is required. An SSH tunnel can carry the OpenSandbox API alone. This change has not been deployed or accepted on the ASUS server.
 
-## Storage that must be provisioned first
+## Authority and paths
 
-Use one persistent file tree on the sandbox server and make that **same filesystem** visible to the backend. A backend on another machine must have an explicitly provisioned shared filesystem (for example NFS), with compatible ownership, atomic rename, fsync and advisory-lock behavior. An SSH API tunnel does **not** provide filesystem sharing. A host path is resolved on the Docker/OpenSandbox server, never on the API client machine.
+The backend keeps authoritative user data under `PA_DATA_PATH/project-files`, immutable run evidence under `PA_DATA_PATH/evidence`, and ResearchStore/chat/checkpoints/manifests/leases under `PA_DATA_PATH/project-state`. Existing historical files remain under `PA_DATA_PATH/workspaces` and are export-only. Back up the backend data directory and application database. No automatic migration, private-evidence cleanup or disk quota is introduced.
 
-The implementation does not create an NFS service, mount remote folders, connect a user's computer, or substitute uploads/downloads when sharing is absent. If shared storage is unavailable, configure it before using new projects. There is no disk quota in this release.
+The sandbox server separately owns `PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT`, for example `/home/operator/paperagent-sandbox/volumes/execution-cache`. OpenSandbox mounts only `<that server-local root>/<opaque cache key>` into an execution container at `/workspace`. The backend never opens this host path. Containers receive no backend state/evidence directory or model/API credentials. Server-side cache files are untrusted execution copies, not formal evidence.
 
-Two trees are shared, with different mount permissions:
+The pinned [OpenSandbox 1.1.1 Docker volume implementation](https://github.com/opensandbox-group/OpenSandbox/blob/release-1.1.1/server/opensandbox_server/services/docker/volumes.py) creates allowed host-cache subdirectories server-side. The server account still needs permission to create those directories. This is a source-code contract, not a claim about the installed server.
 
-| Setting | Backend-visible path example | Sandbox-host path example | Execution container |
-|---|---|---|---|
-| `PAPERAGENT_WORKSPACE_ROOT` / `PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT` | `/srv/paperagent-shared/files` | `/home/operator/paperagent-sandbox/volumes/files` | only the current execution workspace, read/write at `/workspace` |
-| `PAPERAGENT_EVIDENCE_ROOT` / `PAPERAGENT_SANDBOX_HOST_EVIDENCE_ROOT` | `/srv/paperagent-shared/evidence` | `/home/operator/paperagent-sandbox/volumes/evidence` | only that workspace's `runs` subtree, **read-only** at `/evidence` |
+`setup_remote.py` configures the loopback OpenSandbox 1.1.1 service and allowed host paths on the execution server only. Do not run it without deployment authorization. It does not configure NFS, networking on another machine, or a backend data mount. Copy the field names from `client.env.example`; actual secrets belong in a private env file. Backend `docker-compose.yml` only persists its local `pa_data` and mounts private configuration. It has no mandatory shared-storage bind mounts.
 
-These examples are mappings to configure after mounting the actual shared filesystem, not directories to create independently on both machines. On a single host the two columns may contain the same paths. Each new sandbox reads a random probe written by the backend and refuses execution when the mounted file tree differs. Evidence uses a separate tree; the backend alone stores ResearchStore, chat, owner/metadata, manifest, checkpoints and durable container leases under `PA_DATA_PATH/project-state`. Never share or mount that private tree into execution containers.
+Build the execution image as `paperagent-research:workspace-v2`; its Dockerfile includes numerical Python, Pandoc, XeLaTeX, BibTeX and CJK fonts. The backend uses Python 3.14 and `uv sync --extra sandbox`. Select configuration through `PAPERAGENT_SANDBOX_CONFIG`, with environment variables overriding that file. Non-loopback endpoints require HTTPS; the API stays private. Do not mount Docker sockets or backend environment files in execution containers.
 
-Keep the backend-visible workspace path stable across restarts: its absolute path determines the private state/evidence key. Preserve all three trees and the application database in backups. Container destruction and TTL expiry do not delete project files or evidence.
+## One-direction transfer and execution
 
-## Configuration (run only when authorized on the server)
+- Task-selected local inputs are hashed and sent through OpenSandbox's file API only when the remote cache lacks that version. Temporary uploads are checksum-verified and atomically installed. Cache metadata contains paths/hashes only. Recreated containers verify actual cached bytes before claiming an input hit; they do not restore Python memory.
+- A live kernel preserves its interpreter and remote files across cells. Backend-created or explicitly changed inputs are sent incrementally; unchanged local snapshots do not overwrite live remote computation state. Live input mutations are archived as actual run inputs without overwriting backend user files; unchanged inputs use the local frozen copy. No bidirectional merge occurs. Experiments use scoped cache identities; candidate containers keep separate memory and identical individual resource settings.
+- Changed public outputs are frozen server-side into a run-specific snapshot and manifest. The backend persists the real completion receipt and that inventory before downloading. Downloads are bounded, size/hash-checked and committed atomically into backend evidence before registration. Temporary/cache directories, backend databases and checkpoints are excluded.
+- If delivery fails after computation, `retry_outputs` retrieves the frozen original bytes, including after container replacement; it never executes the submitted cell again. A missing frozen inventory, lost unsaved figures, changed local destination or an unconfirmed completion remains an explicit gap. A pending run blocks new cells in that execution. The adapter does not invent a successful retry from mutable remote scratch files.
+- Successfully delivered outputs remain available from the backend when the sandbox is offline. Formal `outputs/research` presentations are API-read-only; preview/export/compile resolve their verified backend archive bytes rather than trusting an edited presentation copy. Working intermediates remain ordinary workspace files; delivery refuses to overwrite manual changes made while a run was pending.
+- Pool-scoped OS locks serialize a project's computations and compilation while retaining winner memory. Each container has a separate durable lease. Unknown cleanup/crashes conservatively block new modifications until the server TTL expires. Closing a container leaves the execution cache and backend files intact. Lost winner memory never triggers an implicit re-fit; completed predictions can still be published without training again.
 
-Build the image in this directory as `paperagent-research:workspace-v2`; it includes Python, Pandoc, XeLaTeX and BibTeX. Install `opensandbox-server==1.1.1`. `setup_remote.py` configures the loopback service and server-side allowed host paths; it **does not** establish shared storage. Its private `client.env` contains the API key. Fill the two required backend mount paths before using it; never commit that file.
+## Compilation across the same API
 
-Backend: `uv sync --extra sandbox`, then select the private env file with `PAPERAGENT_SANDBOX_CONFIG`. Environment variables override the file, including file-storage path settings. Copy the field names from `client.env.example`. Non-loopback API endpoints require HTTPS; the optional SSH tunnel only carries the authenticated API. Do not expose the API publicly or mount Docker sockets/backend environment variables into execution containers.
+Only the source snapshot and actual dependencies are uploaded to a separate compiler cache identity. Backend code never scans a remote directory via `Path`. Pandoc/XeLaTeX/BibTeX run in the sandbox with network deny, bounded logs/timeouts and true exit-code receipts. Generated files and logs return through the file API. There is no backend compiler fallback.
 
-The backend Docker image uses Python 3.14 and the sandbox SDK. Bind the *already provisioned* backend-visible shared mounts into that container and set their backend-visible paths consistently. `docker-compose.yml` requires those mount sources explicitly; it cannot provision sharing.
+Default Word references make a complete round trip: remote Pandoc creates a reference, the backend downloads and styles it, and that exact styled version is uploaded for conversion. A stable private reference copy prevents timestamps from invalidating a pending conversion delivery. Uploaded template references likewise cross the API.
 
-## Runtime and recovery contract
-
-- Alembic assigns architecture 1 to pre-existing projects, with no file migration/deletion. New ORM-created projects use architecture 2. Historical project pages expose one download action. Backend guards reject their research, uploads, edits and compilation. Old files stay in `PA_DATA_PATH/workspaces`; export traverses allowed user files and renders readable research/chat records without copying databases, credentials, checkpoints or raw model traces. Create a new project and upload exported material to research again.
-- New templates are parsed and copied during project creation after permission validation. Template metadata updates/deletion cannot change an existing project's files, change server paths, or delete referencing projects. Parser failures roll back creation; source hash, format and parser version identify cached analysis. Compressed documents have member-count, expanded-size, ratio, link and traversal checks before parsing.
-- Python cells access persistent files directly. There is no per-cell file mirror/upload/download path. Each attempt has its own task-selected inputs and temporary products in the same project volume. Project locking serializes active kernel sessions and compilation, and blocks API file changes. Healthy sessions retain Python memory only until the solver releases them, then destroy their containers. There is no idle container cache.
-- Code, selected input snapshots, changed outputs, logs, hashes, runtime image and real completion status are retained outside writable mounts. A sealed receipt is required before results become registerable. Repeated sealing is idempotent; altered receipts/files fail verification. The existing scientific/semantic review and research acceptance logic remain separate from file integrity. A result binding records the existing result ID and run ID in the private manifest.
-- Timeout/cancel/transport loss never replay code or invoke a backend Python/Pandoc/TeX fallback. Unknown execution remains a failure. A persistent container lease prevents new writes/execution after a backend crash or unconfirmed destroy until the server TTL plus startup allowance expires. This wait is conservative and visible. A new process reconstructs files, ResearchStore and checkpoints; it does not reconstruct Python memory or unsaved figures. Completed durable run receipts can be reused; unfinished tools are reported as interrupted.
-- Compiler commands also run inside scoped sandboxes, with timeouts, network deny and exit-code receipts. LaTeX uses `-no-shell-escape`; failed builds retain the last published PDF. Logs live in `.build` and are read-only through the public file gateway. The backend does not require local Pandoc/TeX installations.
+Compiler command receipts bind source/input hashes, arguments and pass ordinal. Completed passes with delivery gaps can retrieve their frozen output without recompiling. Missing completion receipts remain unknown and are not silently replayed; revise the source/runtime configuration after checking such a failure. A successful compile cache hit still downloads and verifies original frozen outputs, not mutable cache files. `.build` and execution trees never join the source version. Final source validation and PDF publication share the existing short edit-lock critical section.
 
 ## Checks and user acceptance
 
-Local automated checks must not contact a real model, sandbox or production database. The focused contract suite is:
+Local automated checks must not contact a real model, compiler or sandbox server. The transfer mocks use a physically separate server tree; only fake file-API upload/download methods cross the boundary. They cover cache hits/changes, incremental output, immutable delivery retries, replacement containers, path isolation, compiler input/output, Word references, candidate lifecycle and publication locking.
 
 ```sh
 cd backend
-# Set DATABASE_URL to a temporary local SQLite file and SECRET_KEY to a test-only value.
-uv run --extra sandbox python -m pytest tests/test_workspace_contract.py tests/test_workspace_routes.py tests/test_template_contract.py
+# Use a temporary local SQLite DATABASE_URL and a test-only SECRET_KEY.
+uv run --extra sandbox python -m pytest tests/test_api_workspace_transfer.py tests/test_workspace_runtime_regressions.py tests/test_workspace_contract.py
 cd ../frontend
-npm ci
 npm run test:workspace
 npm run build
 ```
 
-The historical transfer-provider tests describe the removed mirror protocol and are not evidence for v2. Do not run the existing `smoke_remote_sandbox.py` / `smoke_work_sandbox.py` as v2 acceptance; they are blocked with a migration explanation to prevent accidental paid/remote work.
+The older transfer-protocol and local-kernel tests remain in the repository; they are not a claim that v2 has passed remote acceptance. Existing smoke scripts are guarded against accidentally contacting an old server.
 
-User-run acceptance on the actual server (not run by the implementer):
+User-run acceptance on the actual server, not run by the implementer:
 
-1. Verify both shared trees map to the **same bytes** from each machine, the v2 image has Pandoc/XeLaTeX/BibTeX/fonts, server allowed paths cover only the two shared trees, and the backend private tree is absent from container mounts.
-2. Create one project, upload source data and a template, then run research/compile. Inspect actual mounts: current execution directory writable, evidence read-only, other project/backend state inaccessible, network denied and no backend/model keys in env.
-3. While executing, try editing/uploading/compiling from another tab/process; verify serialization/rejection. Check stdout/stderr, timeout, cancel and true compiler failures. Verify `/evidence` cannot be modified, and that an altered mutable result does not change archived hashes.
-4. Stop the backend/container during a step. Check the durable lease/TTL behavior, retained files and real completed receipts. Restart/resume without replaying an uncertain cell or claiming memory restoration. Test an unsaved-figure interruption explicitly.
-5. Export a historical project; inspect material completeness and absence of databases/checkpoints/credentials. Verify all mutation/research routes are denied. Create a new project from exported material without old execution state.
-6. Delete/update a template library entry and verify another user's project files survive. Try path traversal, nested symlinks and oversized compressed documents. Back up before the Alembic cutover; rollback requires restoring the complete backup, not reverse-migrating new projects.
+1. Confirm server/SDK 1.1.1, allowed host paths and a writable server-local cache directory; verify the image's Python/Pandoc/XeLaTeX/BibTeX/fonts. No shared filesystem is needed. Inspect that only the current cache is mounted, network is denied, and backend credentials/state are absent.
+2. Create a new project, upload data/template, run Python cells and compile. Check input-cache hits and changed input versions, live variables, output/log transfer, timeout/cancel and true failures. Verify old projects remain export-only and existing template copies survive library updates/deletion.
+3. Break API connectivity after a computation completes. Retry delivery without another computation; destroy/recreate the container and verify persistent files and frozen output manifests. Lost memory/unsaved figures must remain explicit, not false success.
+4. Repeat compilation with both an uploaded Word template and a default reference. Verify a failed output download is retried from its completed receipt, source edits during compilation preserve the old PDF, and build dependencies do not change the source version.
+5. Stop the sandbox service and verify already delivered backend files still preview/download/export. Alter a formal presentation copy and confirm the archive remains authoritative. Try unsafe paths/symlinks and oversized single files; no project quota is enabled.
+6. Preserve backend evidence and server caches during testing. Explicit project deletion currently retains separately stored private evidence/state; cleanup policy has not been chosen and this change does not remove those retained records.

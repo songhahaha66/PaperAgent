@@ -62,6 +62,25 @@ class WorkspaceFS:
                 private_root(self._root) if path.is_relative_to(private_root(self._root)) else self._root)
         return path.relative_to(base).as_posix()
 
+    def canonical_artifact(self, rel_path):
+        meta=self.get_file_meta(rel_path) or {}
+        if not rel_path.startswith('outputs/research/'):
+            return self.abs(rel_path)
+        if not meta.get('archive_path'):raise ValueError('正式成果缺少归档映射')
+        run_id=meta.get('source_run')
+        if not run_id or not meta['archive_path'].startswith('runs/'+run_id+'/artifacts/'):
+            raise ValueError('正式成果归档映射损坏')
+        from ai_system.sandbox.evidence import checksum
+        info=self.get_run_info(run_id) or {}
+        if not info.get('evidence_archived') or info.get('status')!='success':raise ValueError('正式成果尚未封存')
+        receipt=json.loads((self.run_dir(run_id)/'receipt.json').read_text())
+        name=meta['archive_path'].removeprefix('runs/'+run_id+'/')
+        if receipt.get('run_id')!=run_id or receipt.get('status')!='success' or receipt['files'].get(name)!=meta['sha256']:
+            raise ValueError('正式成果归档回执不匹配')
+        source=self.abs(meta['archive_path'])
+        if checksum(source)!=meta['sha256']:raise ValueError('正式成果归档校验失败')
+        return source
+
     def exists(self, rel_path: str) -> bool:
         return self.abs(rel_path).exists()
 

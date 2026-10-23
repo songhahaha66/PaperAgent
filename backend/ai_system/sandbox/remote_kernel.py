@@ -27,6 +27,8 @@ class RemoteKernel:
         self.session = session
         self.settings = settings
         self._started = False
+        from .transfer import WorkspaceTransfer
+        self.transfer = WorkspaceTransfer(self.fs,session,settings)
         self._lock = asyncio.Lock()
         from .execution_scope import KernelExecutionScope
         self.execution_scope = execution_scope or KernelExecutionScope(self.workspace_dir)
@@ -38,28 +40,23 @@ class RemoteKernel:
             return
         await self.session.start()
         self._started = True
-        self.fs._manifest['storage'] = {'kind': 'persistent-host-volume',
-            'volume_path': self.session.volume_path, 'sandbox_root': self.session.root}
+        self.fs._manifest['storage'] = {'kind': 'api-execution-cache',
+            'cache_key': self.session.cache_key, 'sandbox_root': self.session.root}
         self.fs._save_manifest()
 
     def _freeze_inputs(self, run_id):
         from .evidence import freeze_inputs
         freeze_inputs(self.fs, run_id, max_file_bytes=self.settings.max_file_bytes)
 
-    async def _collect(self, run_id):
-        from .artifacts import capture_local_outputs
-        info = self.fs._manifest['runs'][run_id]
-        from .artifacts import output_hashes
-        current = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
-        if info.get('pending_output_hashes') is None:
-            info['pending_output_hashes'] = {path: checksum for path, checksum in current.items()
-                if info['output_baseline'].get(path) != checksum}
+    async def _collect(self, run_id, *, recover=False):
+        info=self.fs.get_run_info(run_id)
+        if info.get('finalize_pending'):raise RuntimeError('图像尚未保存，不能冻结完整产物清单')
+        manifest=info.get('output_manifest')
+        if manifest is None:
+            manifest=await self.transfer.obtain_manifest(run_id,info['output_baseline'],recover=recover)
+            info['output_manifest']=manifest
             self.fs._save_manifest()
-        expected = info['pending_output_hashes']
-        if any(current.get(path) != checksum for path, checksum in expected.items()):
-            raise RuntimeError('原运行待归档产物版本已改变或丢失，不能登记新版本；不会重算')
-        capture_local_outputs(self.fs, run_id, info['output_baseline'], expected=expected, max_file_bytes=self.settings.max_file_bytes)
-        return list(info['artifacts'])
+        return await self.transfer.deliver(run_id,manifest,info['local_output_baseline'])
 
     async def _finalize(self, run_id):
         info = self.fs._manifest['runs'][run_id]
@@ -120,9 +117,14 @@ class RemoteKernel:
             await event("starting")
             try:
                 from .artifacts import output_hashes
-                info['output_baseline'] = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
+                info['local_output_baseline'] = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
                 self._freeze_inputs(run_id)
                 await asyncio.wait_for(self._start(), self.settings.startup_timeout)
+                await asyncio.wait_for(self.transfer.sync_inputs(), self.settings.startup_timeout)
+                await asyncio.wait_for(self.transfer.freeze_actual_inputs(run_id), self.settings.startup_timeout)
+                inventory=await self.session.inventory()
+                info['output_baseline']={row['path']:row['sha256'] for row in inventory}
+                info['cache_key']=self.session.cache_key
                 info.update(status="running", sandbox_id=self.session.id,
                             sandbox_root=getattr(self.session, 'root', None),
                             context_id=getattr(self.session, 'context_id', None),
@@ -226,14 +228,17 @@ class RemoteKernel:
                 return None
             run_id = self.pending_run
             info = self.fs.get_run_info(run_id)
-            if not self._started and info.get('pending_output_hashes') is None:
-                raise RuntimeError('原执行未保存产物版本清单，重启后不能确认归档完整性；保留真实缺口，不重跑')
             # Persistent files survive containers. In-memory figures do not.
             if info.get('finalize_pending'):
                 if not self._started or info.get('context_id') != getattr(self.session, 'context_id', None):
                     raise RuntimeError('原 Python 内存已失效，无法确认尚未保存的图；保留真实未完成状态，不重跑')
                 await self._finalize(run_id)
-            info['files'] = await self._collect(run_id)
+            recovering = not self._started
+            if recovering:
+                await asyncio.wait_for(self._start(), self.settings.startup_timeout)
+                if info.get('cache_key')!=self.session.cache_key:
+                    raise RuntimeError('原执行缓存不可用；不会重跑计算')
+            info['files'] = await self._collect(run_id, recover=recovering)
             seal_run(self.fs, run_id)
             info['delivery_error'] = None
             self.fs._save_manifest()

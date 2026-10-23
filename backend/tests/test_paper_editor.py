@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_editor as editor
 from helpers.paper import accepted_store
+from services.file_services.workspace_layout import workspace_path
 from ai_system.modules.writing.validation import assemble
 from ai_system.modules.writing.sections import section_plan
 from ai_system.research.control import graph_view
@@ -26,7 +27,7 @@ def paper(tmp_path):
     state['sections'] = sections
     store.save_sections(sections, [])
     store.publish_paper(assemble(state))
-    (tmp_path / '.system/graph_thread.json').write_text(json.dumps({'thread_id': store.research_id, 'engine_version': 'research-v3'}))
+    workspace_path(tmp_path,'.system/graph_thread.json').write_text(json.dumps({'thread_id': store.research_id, 'engine_version': 'research-v3'}))
     return store, state
 
 

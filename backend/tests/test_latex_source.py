@@ -101,7 +101,7 @@ def test_compile_diagnostic_routes_to_existing_repair_and_only_compiler_closes_i
     log='./part.tex:12: Undefined control sequence.\nl.12 结果如\\cref\n {tab:comparison}所示。\n'
     diagnostics=compile_diagnostics(log)
     assert diagnostics[0]['file']=='part.tex' and diagnostics[0]['line']==12
-    async def fail(folder,*args):
+    async def fail(folder,*args,**kwargs):
         build=folder/BUILD_DIR;build.mkdir(parents=True)
         (build/'paper.log').write_text(log)
         return LatexResult('paper.tex',error='part.tex 第12行：Undefined control sequence. \\cref',diagnostics=diagnostics)
@@ -118,7 +118,7 @@ def test_compile_diagnostic_routes_to_existing_repair_and_only_compiler_closes_i
     assert compilation['diagnostics'][0]['line']==12
     (native.store.root/'part.tex').write_text('修正后的源码')
     assert next(i for i in native.store.snapshot()['feedback'] if i['id']==issue['id'])['status']=='confirmed'
-    async def success(folder,*args):
+    async def success(folder,*args,**kwargs):
         (folder/'paper.pdf').write_bytes(b'%PDF-verified-fixture')
         return LatexResult('paper.tex',pdf_path='paper.pdf')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
@@ -134,7 +134,7 @@ def test_compile_repairs_stop_after_two_and_resume_writing_only(native,monkeypat
     store=native.store;ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
     refresh_registry(ctx)
     before=store.snapshot();calls=[]
-    async def broken(folder,*args):
+    async def broken(folder,*args,**kwargs):
         build=folder/BUILD_DIR;build.mkdir(parents=True,exist_ok=True)
         (build/'paper.log').write_text('! Emergency stop.\n<*> paper.tex\n*** no legal \\end found')
         return LatexResult('paper.tex',error='Emergency stop: no legal \\end found')
@@ -169,7 +169,7 @@ def test_compile_repairs_stop_after_two_and_resume_writing_only(native,monkeypat
     asyncio.run(advance())
     assert len(calls)==4 and store.snapshot()['publication']['stage']=='repair'
     assert store.snapshot()['executions']==before['executions']
-    async def success(folder,*args):
+    async def success(folder,*args,**kwargs):
         (folder/'paper.pdf').write_bytes(b'%PDF-repaired')
         return LatexResult('paper.tex',pdf_path='paper.pdf')
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)

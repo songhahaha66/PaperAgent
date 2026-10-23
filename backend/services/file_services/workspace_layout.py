@@ -38,9 +38,7 @@ def private_root(root):
 
 
 def evidence_root(root):
-    from config.paths import storage_setting
-    base = storage_setting('PAPERAGENT_EVIDENCE_ROOT', get_pa_data_base() / 'evidence')
-    return base / private_root(root).name
+    return get_pa_data_base() / 'evidence' / private_root(root).name
 
 
 def workspace_path(root, relative):
