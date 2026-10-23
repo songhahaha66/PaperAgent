@@ -3,24 +3,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from models import models
 from database.database import engine
-from routers import all_routers
+from sqlalchemy.orm import Session
+from routers import all_routers, project_route_access
+from fastapi import Depends
 import uvicorn
 import logging
 
 # 导入日志配置
 from ai_system.config.logging_config import setup_simple_logging
-# 导入异步配置管理器
-from ai_system.config.async_config import initialize_async_config, shutdown_async_config
+from ai_system.config.observability import tracing_status
 from config.paths import get_project_root, get_pa_data_base, get_workspaces_path, get_templates_path
 
 # 设置日志系统（只显示在终端，关闭LiteLLM日志）
 setup_simple_logging("INFO")
 
-# 创建数据库表
-models.Base.metadata.create_all(bind=engine)
+# Alembic is the schema authority. Every entry point runs the same migrations.
+from alembic import command
+from alembic.config import Config
+from pathlib import Path
+_migration_config = Config(str(Path(__file__).parent / 'alembic.ini'))
+_migration_config.set_main_option('script_location', str(Path(__file__).parent / 'alembic'))
+command.upgrade(_migration_config, 'head')
+from services.migrate_data import migrate_all
+migrate_all()
 
-# 初始化异步配置
-initialize_async_config(max_workers=20, max_processes=4)
 
 # 创建logger
 logger = logging.getLogger(__name__)
@@ -30,22 +36,29 @@ async def lifespan(app: FastAPI):
     """应用生命周期事件处理器"""
     # 启动时执行
     logger.info("应用启动中...")
+    status = tracing_status()
+    if status == 'missing_key':
+        logger.warning('LangSmith 追踪未启用：缺少 LANGSMITH_API_KEY')
+    else:
+        logger.info('LangSmith 追踪：%s', status)
     
     # 显示路径配置
     logger.info(f"项目根目录: {get_project_root()}")
     logger.info(f"PA_DATA 目录: {get_pa_data_base()}")
     logger.info(f"工作空间目录: {get_workspaces_path()}")
     logger.info(f"模板目录: {get_templates_path()}")
-    
-    # Word tools are now directly integrated, no MCP initialization needed
-    logger.info("Word tools ready (direct integration)")
-    
+
+    # 上次进程退出时还在生成的工作没有任务在跑了：标成已暂停，用户发"继续"会从断点接着跑
+    with Session(engine) as db:
+        stale = db.query(models.Project).filter(models.Project.status == "in_progress").update({"status": "paused"})
+        db.commit()
+    if stale:
+        logger.info(f"{stale} 个中断的工作已标记为暂停")
+
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")
     
-    shutdown_async_config()
-    logger.info("异步配置已关闭")
 
 app = FastAPI(
     title="PaperAgent API",
@@ -84,15 +97,9 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-@app.get("/async-status")
-async def async_status():
-    """获取异步配置状态"""
-    from ai_system.config.async_config import get_async_config
-    return get_async_config().get_status()
-
 # 注册路由模块（统一）
 for router in all_routers:
-    app.include_router(router)
+    app.include_router(router, dependencies=[Depends(project_route_access)])
 
 # 设置app实例引用，供WebSocket路由使用
 from routers.chat_routes.chat import set_app_instance

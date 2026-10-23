@@ -3,7 +3,6 @@ import Introduction from '@/views/Introduction.vue'
 import Login from '@/views/Login.vue'
 import Home from '@/views/Home.vue'
 import Work from '@/views/Work.vue'
-import Template from '@/views/Template.vue'
 import ApiKeyConfig from '@/views/ApiKeyConfig.vue'
 import PasskeySettings from '@/views/PasskeySettings.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -11,6 +10,18 @@ import { useAuthStore } from '@/stores/auth'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    {
+      path: '/resources',
+      name: 'Resources',
+      component: () => import('@/views/Resources.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/experiences',
+      name: 'Experiences',
+      component: () => import('@/views/Experiences.vue'),
+      meta: { requiresAuth: true },
+    },
     {
       path: '/',
       name: 'Introduction',
@@ -37,7 +48,7 @@ const router = createRouter({
     {
       path: '/template',
       name: 'Template',
-      component: Template,
+      redirect: '/resources?tab=templates',
       meta: { requiresAuth: true }, // 需要登录才能访问
     },
     {

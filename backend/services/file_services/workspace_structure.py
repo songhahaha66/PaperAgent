@@ -33,8 +33,6 @@ class WorkspaceStructureManager:
             fs = WorkspaceFS(str(workspace_path))
             fs.init_structure()
 
-            for legacy in ("code", "outputs", "logs", "temp"):
-                (workspace_path / legacy).mkdir(parents=True, exist_ok=True)
 
             cls._create_workspace_files(workspace_path, work_id, template_id, output_mode)
 
@@ -53,82 +51,25 @@ class WorkspaceStructureManager:
             template_id: 可选的模板ID
             output_mode: 输出模式，可选值：markdown, word, latex
         """
-        # 创建初始元数据文件
-        metadata = {
-            "work_id": work_id,
-            "created_at": str(datetime.now()),
-            "status": "created",
-            "progress": 0
-        }
-
-        metadata_file = workspace_path / "metadata.json"
-        with open(metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
-
-        # 创建初始对话历史文件
-        chat_history = {
-            "work_id": work_id,
-            "session_id": f"{work_id}_session",
-            "messages": [],
-            "context": {
-                "current_topic": "",
-                "generated_files": [],
-                "workflow_state": "created"
-            },
-            "created_at": str(datetime.now()),
-            "version": "2.0"
-        }
-        chat_file = workspace_path / "chat_history.json"
-        with open(chat_file, 'w', encoding='utf-8') as f:
-            json.dump(chat_history, f, ensure_ascii=False, indent=2)
-        
         # 先初始化模板契约，并在可用时把模板骨架复制为初始论文文件。
         initialize_template_contract(workspace_path, template_id, output_mode)
 
         # 根据输出模式创建相应的初始文件
         if output_mode == "markdown":
             cls._create_paper_md(workspace_path, template_id)
-            cls._create_plan_md(workspace_path)
-            logger.info(f"Markdown 模式：已创建 paper.md 和 plan.md")
+            logger.info(f"Markdown 模式：已创建 paper.md")
         elif output_mode == "word":
             cls._create_paper_docx(workspace_path)
-            cls._create_plan_md(workspace_path)
-            logger.info(f"Word 模式：已创建 paper.docx 和 plan.md")
+            logger.info(f"Word 模式：已创建 paper.docx")
         elif output_mode == "latex":
-            # LaTeX 模式：暂时回退到 Markdown
-            cls._create_paper_md(workspace_path, template_id)
-            logger.info(f"LaTeX 模式暂未实现，回退到 Markdown 模式：已创建 paper.md")
+            # 原生 LaTeX：写作、校验和发布均使用 .tex，不创建 Markdown 正文。
+            (workspace_path / "paper.tex").touch(exist_ok=True)
+            logger.info("LaTeX 模式：已创建 paper.tex，完成后编译 paper.pdf")
         else:
             # 未知模式：默认创建 paper.md
             logger.warning(f"未知的输出模式 '{output_mode}'，默认创建 paper.md")
             cls._create_paper_md(workspace_path, template_id)
     
-    @classmethod
-    def _create_plan_md(cls, workspace_path: Path) -> None:
-        """创建初始的 plan.md 写作计划文件"""
-        plan_md_path = workspace_path / "plan.md"
-        
-        if plan_md_path.exists():
-            logger.info(f"plan.md 已存在，跳过创建: {plan_md_path}")
-            return
-        
-        try:
-            from .plan_reconciler import PlanReconciler
-
-            reconciler = PlanReconciler(workspace_path)
-            content = reconciler.append_template_constraints(
-                "# 写作计划\n\n等待AI分析需求并制定写作计划...\n"
-            )
-            with open(plan_md_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            plan_json_path = workspace_path / "plan.json"
-            if not plan_json_path.exists():
-                plan_json = reconciler.build_from_markdown(content, source="initial", revision=0)
-                reconciler.write_plan_json(plan_json)
-            logger.info(f"成功创建 plan.md: {plan_md_path}")
-        except Exception as e:
-            logger.error(f"创建 plan.md 失败: {e}")
-
     @classmethod
     def _create_paper_docx(cls, workspace_path: Path) -> None:
         """创建初始的 paper.docx 文件

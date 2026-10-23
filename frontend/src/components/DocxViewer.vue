@@ -15,7 +15,7 @@
       <div class="file-actions">
         <t-button
           theme="primary"
-          variant="outline"
+          variant="base"
           @click="downloadFile"
           :loading="downloading"
           class="download-btn"
@@ -112,9 +112,9 @@ const loadDocx = async () => {
     console.log('DocxViewer - 开始渲染...')
     await renderAsync(blob, docxContainer.value, undefined, {
       className: 'docx-preview-content',
-      inWrapper: true,  // 使用包装器以支持分页
+      inWrapper: true, // 使用包装器以支持分页
       ignoreWidth: false,
-      ignoreHeight: false,  // 保持页面高度
+      ignoreHeight: false, // 保持页面高度
       ignoreFonts: false,
       breakPages: true,
       ignoreLastRenderedPageBreak: false,
@@ -182,9 +182,9 @@ onMounted(() => {
   flex-direction: column;
   gap: 16px;
   padding: 20px;
-  background: #f5f7fa;
-  border-radius: 8px;
-  border: 1px solid #e0e6ed;
+  background: var(--pa-surface-muted);
+  border-radius: var(--pa-radius-card);
+  border: 1px solid var(--pa-line);
   box-sizing: border-box;
 }
 
@@ -205,7 +205,7 @@ onMounted(() => {
 }
 
 .file-icon {
-  color: #2b579a;
+  color: var(--pa-info);
   flex-shrink: 0;
   margin-top: 2px;
 }
@@ -219,7 +219,7 @@ onMounted(() => {
   margin: 0 0 8px 0;
   font-size: 16px;
   font-weight: 600;
-  color: #2c3e50;
+  color: var(--pa-ink);
   word-break: break-all;
 }
 
@@ -232,7 +232,7 @@ onMounted(() => {
 .file-size,
 .file-type {
   font-size: 14px;
-  color: #7f8c8d;
+  color: var(--pa-muted);
 }
 
 .file-actions {
@@ -257,12 +257,12 @@ onMounted(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--pa-surface);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
-  border-radius: 4px;
+  border-radius: var(--pa-radius-inline);
 }
 
 .error-container {
@@ -270,23 +270,26 @@ onMounted(() => {
 }
 
 .docx-container {
-  background: white;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: var(--pa-surface);
+  border-radius: var(--pa-radius-card);
+  box-shadow: var(--pa-shadow-card);
   min-width: fit-content;
   padding: 20px;
 }
 
 .docx-container :deep(.docx-wrapper) {
-  background: #e8e8e8 !important;
+  background: var(--pa-surface-hover) !important;
   padding: 20px !important;
 }
 
+/* Authored document pages keep their paper/ink colors in both themes. */
 .docx-container :deep(section.docx) {
-  background: white !important;
+  color-scheme: light;
+  color: var(--pa-document-ink);
+  background: var(--pa-document-paper) !important;
   padding: 40px 60px !important;
   margin: 0 auto 20px !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15) !important;
+  box-shadow: var(--pa-shadow-card) !important;
   box-sizing: border-box !important;
   min-height: 800px;
 }

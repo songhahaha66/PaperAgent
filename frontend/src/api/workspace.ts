@@ -11,14 +11,14 @@ export interface WorkCreate {
 export interface WorkUpdate {
   title?: string
   description?: string
-  status?: string
-  progress?: number
   tags?: string
   template_id?: number // 关联的论文模板ID
   output_mode?: 'markdown' | 'word' | 'latex' // 输出模式
 }
 
 export interface Work {
+  architecture_version?: number
+  execution_reason?: { kind: string; message: string } | null
   id: number
   work_id: string
   title: string
@@ -52,6 +52,15 @@ export interface FileInfo {
   category_path?: string // 分类内的相对路径
 }
 
+export interface FileContent {
+  type: 'text' | 'image' | 'binary'
+  content?: string
+  filename: string
+  size: number
+  mime_type?: string
+  download_url?: string
+  message?: string
+}
 
 export interface FileUploadResponse {
   message: string
@@ -74,20 +83,13 @@ export interface FileDeleteResponse {
   message: string
 }
 
-export interface WorkMetadata {
-  work_id: string
-  created_at: string
-  status: string
-  progress: number
-}
-
 export interface AttachmentInfo {
-  filename: string           // 存储的文件名
-  original_filename: string  // 原始文件名
-  file_type: string         // 文件类型
-  file_size: number         // 文件大小
-  mime_type: string         // MIME类型
-  upload_time: string       // 上传时间
+  filename: string // 存储的文件名
+  original_filename: string // 原始文件名
+  file_type: string // 文件类型
+  file_size: number // 文件大小
+  mime_type: string // MIME类型
+  upload_time: string // 上传时间
 }
 
 export interface AttachmentListResponse {
@@ -105,51 +107,6 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
-}
-
-export type PlanItemStatus = 'pending' | 'in_progress' | 'completed' | 'blocked'
-
-export interface PlanPhase {
-  id: string
-  title: string
-  description?: string
-}
-
-export interface PlanItem {
-  id: string
-  order: number
-  title: string
-  status: PlanItemStatus
-  status_label?: string
-  description?: string
-  phase?: string
-  depends_on?: string[]
-  raw_status?: string
-}
-
-export interface PlanStats {
-  total: number
-  completed: number
-  in_progress: number
-  blocked: number
-  pending: number
-  progress_percent: number
-}
-
-export interface PlanData {
-  version: number
-  revision?: number
-  title: string
-  methodology?: string
-  planning_mode?: 'dynamic' | 'static' | string
-  phases?: PlanPhase[]
-  items: PlanItem[]
-  stats: PlanStats
-  current_focus?: PlanItem | null
-  next_actions?: Array<{ id: string; title: string; reason?: string }>
-  source?: string
-  source_markdown?: string
-  updated_at?: string
 }
 
 // 工作管理API
@@ -205,39 +162,10 @@ export const workspaceAPI = {
   },
 
   // 更新工作状态
-  async updateWorkStatus(
-    token: string,
-    workId: string,
-    status: string,
-    progress?: number,
-  ): Promise<Work> {
-    const params = new URLSearchParams()
-    params.append('status', status)
-    if (progress !== undefined) params.append('progress', progress.toString())
-
-    const response = await apiClient.request<Work>(
-      `/api/works/${workId}/status?${params.toString()}`,
-      {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    )
-    return response
-  },
-
   // 删除工作
   async deleteWork(token: string, workId: string): Promise<{ message: string }> {
     const response = await apiClient.request<{ message: string }>(`/api/works/${workId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return response
-  },
-
-  // 获取工作元数据
-  async getWorkMetadata(token: string, workId: string): Promise<WorkMetadata> {
-    const response = await apiClient.request<WorkMetadata>(`/api/works/${workId}/metadata`, {
-      method: 'GET',
       headers: { Authorization: `Bearer ${token}` },
     })
     return response
@@ -276,37 +204,24 @@ export const workspaceFileAPI = {
   },
 
   // 读取文件
-  async readFile(token: string, workId: string, filePath: string): Promise<{
-    type: 'text' | 'image' | 'binary';
-    content?: string;
-    filename: string;
-    size: number;
-    mime_type?: string;
-    download_url?: string;
-    message?: string;
-  }> {
-    const response = await apiClient.request<{
-      type: 'text' | 'image' | 'binary';
-      content?: string;
-      filename: string;
-      size: number;
-      mime_type?: string;
-      download_url?: string;
-      message?: string;
-    }>(
+  async readFile(token: string, workId: string, filePath: string): Promise<FileContent> {
+    return apiClient.request<FileContent>(
       `/api/workspace/${workId}/files/${encodeURIComponent(filePath)}`,
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
       },
     )
-    return response
   },
 
   // 获取图片文件URL
   getImageUrl(token: string, workId: string, filePath: string): string {
     let decoded = filePath
-    try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
+    try {
+      decoded = decodeURIComponent(filePath)
+    } catch {
+      /* keep original */
+    }
     return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId}/images/${encodeURIComponent(decoded)}`
   },
 
@@ -391,8 +306,6 @@ export const workspaceFileAPI = {
     return response
   },
 
-  
-  
   // 导出工作空间
   async exportWorkspace(token: string, workId: string): Promise<Blob> {
     // 获取API基础URL
@@ -419,12 +332,12 @@ export const attachmentAPI = {
   async uploadAttachment(
     token: string,
     workId: string,
-    file: File
+    file: File,
   ): Promise<AttachmentUploadResponse> {
     return await apiClient.uploadFile<AttachmentUploadResponse>(
       `/api/works/${workId}/attachment`,
       file,
-      token
+      token,
     )
   },
 
@@ -435,7 +348,7 @@ export const attachmentAPI = {
       {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     )
     return response
   },
@@ -444,14 +357,14 @@ export const attachmentAPI = {
   async deleteAttachment(
     token: string,
     workId: string,
-    filename: string
+    filename: string,
   ): Promise<{ message: string }> {
     const response = await apiClient.request<{ message: string }>(
       `/api/works/${workId}/attachment/${encodeURIComponent(filename)}`,
       {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
-      }
+      },
     )
     return response
   },

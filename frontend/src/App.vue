@@ -19,7 +19,12 @@ watch(
   <div class="app-container">
     <!-- 路由出口 -->
     <t-config-provider :global-config="componentLocale">
-      <router-view />
+      <router-view v-slot="{ Component, route }">
+        <component
+          :is="Component"
+          :key="route.name === 'Work' ? String(route.params.work_id) : route.name"
+        />
+      </router-view>
     </t-config-provider>
   </div>
 </template>

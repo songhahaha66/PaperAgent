@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -80,10 +80,13 @@ class ModelConfigBase(BaseModel):
     model_id: str
     base_url: str
 
+    timeout_seconds: Optional[float] = Field(default=None,gt=0,le=3600)
+
 class ModelConfigCreate(ModelConfigBase):
     api_key: str  # 创建时必须提供api_key
 
 class ModelConfigUpdate(BaseModel):
+    timeout_seconds: Optional[float] = Field(default=None,gt=0,le=3600)
     model_id: Optional[str] = None
     base_url: Optional[str] = None
     api_key: Optional[str] = None  # 更新时可以选择性提供api_key
@@ -110,11 +113,10 @@ class PaperTemplateCreate(PaperTemplateBase):
     pass
 
 class PaperTemplateUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
-    output_format: Optional[str] = None  # 输出格式：md, word, latex
-    file_path: Optional[str] = None  # 允许更新文件路径
     is_public: Optional[bool] = None
 
 class PaperTemplateResponse(PaperTemplateBase):
@@ -147,19 +149,20 @@ class WorkCreate(WorkBase):
     output_mode: str = "markdown"  # 输出模式：markdown, word, latex
 
 class WorkUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     title: Optional[str] = None
     description: Optional[str] = None
-    status: Optional[str] = None
-    progress: Optional[int] = None
     tags: Optional[str] = None
     template_id: Optional[int] = None  # 关联的论文模板ID
     output_mode: Optional[str] = None  # 输出模式：markdown, word, latex
 
 class WorkResponse(WorkBase):
+    architecture_version: int = 1
+    execution_reason: Optional[dict] = None
     id: int
     work_id: str
     status: str
-    progress: int
+    progress: int = 0
     template_id: Optional[int] = None  # 关联的论文模板ID
     output_mode: str = "markdown"  # 输出模式：markdown, word, latex
     created_at: datetime
@@ -213,27 +216,6 @@ class ChatStreamRequest(BaseModel):
     """流式聊天请求"""
     problem: str
     model: Optional[str] = None
-
-class WorkFlowStateCreateRequest(BaseModel):
-    """创建工作流状态请求"""
-    work_id: str
-    current_state: str
-    previous_state: Optional[str] = None
-    state_data: Optional[dict] = None
-    transition_reason: Optional[str] = None
-
-class WorkFlowStateResponse(BaseModel):
-    """工作流状态响应"""
-    id: int
-    work_id: str
-    current_state: str
-    previous_state: Optional[str]
-    state_data: Optional[dict]
-    transition_reason: Optional[str]
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 # 附件相关schemas
 class AttachmentInfo(BaseModel):

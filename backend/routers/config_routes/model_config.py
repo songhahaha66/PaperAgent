@@ -5,7 +5,10 @@ from schemas import schemas
 from services import crud
 from auth import auth
 from database.database import get_db
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
+from pydantic import BaseModel, Field
+from types import SimpleNamespace
+import asyncio
 from ..utils import route_guard
 
 def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
@@ -15,6 +18,7 @@ def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
     
     return {
         "id": config.id,
+        "timeout_seconds": getattr(config,"timeout_seconds",None),
         "type": config.type,
         "model_id": config.model_id,
         "base_url": config.base_url,
@@ -46,6 +50,113 @@ async def get_all_model_configs(
     """获取当前用户的所有模型配置（不包含api_key）"""
     configs = crud.get_all_model_configs(db=db, skip=skip, limit=limit, user_id=current_user)
     return [_remove_api_key_from_config(config) for config in configs]
+
+class ConnectionTest(BaseModel):
+    type: Literal["brain", "code", "writing", "jev"] = "brain"
+    model_id: str = Field(min_length=1, max_length=200)
+    base_url: str = ""
+    api_key: Optional[str] = None
+    timeout_seconds: Optional[float] = Field(default=None, gt=0, le=3600)
+
+
+@router.get("/readiness")
+async def model_readiness(current_user: int = Depends(auth.get_current_user), db: Session = Depends(get_db)):
+    """Resolve the same user/env configuration as execution, returning booleans only."""
+    from ai_system.config.environment import DatabaseConfigManager
+    manager = DatabaseConfigManager(db)
+    roles = {}
+    jev = {'source': 'missing'}
+    for role in ("brain", "code", "writing", "jev"):
+        try:
+            config = manager.get_model_config(role, current_user)
+            roles[role] = bool(config.api_key and config.model_id)
+            if role == 'jev':
+                jev = {'source': config.source, 'model_id': config.model_id,
+                       'base_url': config.base_url, 'timeout_seconds': config.timeout_seconds}
+        except ValueError:
+            roles[role] = False
+    return {"roles": roles, "ready": all(roles.values()),
+            'research_ready': all(roles[role] for role in ('brain','code','writing')),
+            'jev': jev}
+
+
+@router.post("/apply-default", response_model=list[schemas.ModelConfigResponse])
+@route_guard
+async def apply_default_model(
+    current_user: int = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Copy this user's analysis connection to the other roles without exposing its key."""
+    source = crud.get_model_config_by_type(db, "brain", current_user)
+    if not source or not source.api_key:
+        raise HTTPException(status_code=400, detail="请先保存默认模型连接")
+    try:
+        for role in ("code", "writing"):
+            target = crud.get_model_config_by_type(db, role, current_user)
+            if target is None:
+                target = models.ModelConfig(type=role, created_by=current_user)
+                db.add(target)
+            for attr in ("model_id", "base_url", "api_key", "provider", "is_active", "timeout_seconds"):
+                if hasattr(source, attr):
+                    setattr(target, attr, getattr(source, attr))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="应用模型配置失败，请重试") from None
+    return [_remove_api_key_from_config(c) for c in crud.get_all_model_configs(db, user_id=current_user)]
+
+
+@router.post("/test")
+@route_guard
+async def test_model_connection(
+    config: ConnectionTest,
+    current_user: int = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    """One short real request; use only the current user's stored credential as fallback."""
+    saved = crud.get_model_config_by_type(db, config.type, current_user)
+    if config.type == 'jev':
+        # This path must never probe an OpenAI-compatible endpoint.
+        from ai_system.config.environment import DatabaseConfigManager
+        from ai_system.judge import JevJudge, Choice
+        from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
+        from typesafe_sdk.constants import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT
+        key = (config.api_key or '').strip() or ((saved.api_key or '').strip() if saved else '')
+        if not key:
+            try:key = DatabaseConfigManager(db).get_model_config('jev', current_user).api_key
+            except ValueError:
+                raise HTTPException(status_code=400, detail='请填写 Jev API 密钥或保存个人 Jev 连接') from None
+        try:
+            async with AsyncTypeSafeClient(api_key=key, model=config.model_id.strip() or DEFAULT_MODEL,
+                    base_url=config.base_url.strip() or DEFAULT_BASE_URL,
+                    timeout=config.timeout_seconds or DEFAULT_TIMEOUT, retry=RetryPolicy(max_retries=0)) as client:
+                answer = await asyncio.wait_for(JevJudge(client=client).ask(
+                    {'connection_check': True}, {'connection': Choice(instructions='Select ready.',
+                        criteria={'ready': 'Ready', 'other': 'Other'})}), timeout=config.timeout_seconds or DEFAULT_TIMEOUT)
+                if answer.choices['connection'].choice not in {'ready','other'}:
+                    raise ValueError('invalid Jev response')
+        except (asyncio.TimeoutError, TimeoutError):
+            raise HTTPException(status_code=504, detail='Jev 连接超时，请检查连接后重试') from None
+        except Exception:
+            raise HTTPException(status_code=400, detail='Jev 连接检查失败，请核对密钥、模型和服务地址') from None
+        return {'ok': True}
+    key = (config.api_key or "").strip() or (saved.api_key if saved else "")
+    if not key:
+        raise HTTPException(status_code=400, detail="请填写 API 密钥")
+    from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+    connection = SimpleNamespace(model_id=config.model_id.strip(), base_url=config.base_url.strip(), api_key=key, provider=getattr(saved, "provider", "openai"))
+    try:
+        llm = create_llm_from_model_config(connection, streaming=False, max_tokens=32, timeout=20, max_retries=0)
+        await asyncio.wait_for(llm.ainvoke("Reply with OK."), timeout=25)
+    except (asyncio.TimeoutError, TimeoutError):
+        raise HTTPException(status_code=504, detail="连接超时，请检查服务地址后重试") from None
+    except Exception as exc:
+        # Provider exception strings can contain credentials or request bodies.
+        code = getattr(exc, "status_code", None)
+        detail = {401: "密钥无效或已过期", 403: "此密钥没有模型访问权限", 404: "模型或 API 地址不存在", 429: "服务限流或余额不足"}.get(code, "模型请求失败，请检查配置或稍后重试")
+        raise HTTPException(status_code=400, detail=detail) from None
+    return {"ok": True}
+
 
 @router.get("/{config_id}", response_model=schemas.ModelConfigResponse)
 @route_guard

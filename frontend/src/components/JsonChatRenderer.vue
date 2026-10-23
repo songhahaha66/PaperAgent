@@ -1,81 +1,133 @@
 <template>
   <div class="json-chat-renderer">
     <div class="chat-messages">
-      <div
+      <article
         v-for="(message, index) in messages"
         :key="message.id"
-        :class="[
-          'chat-message-wrapper',
-          { 'message-dimmed': hoveredDivider !== null && index > hoveredDivider },
-        ]"
+        class="chat-message-wrapper"
+        :class="message.role === 'user' ? 'message-user' : 'message-assistant'"
       >
-        <ChatItem
-          :role="message.role"
-          :datetime="formatDateTime(message.datetime)"
-          :avatar="getSystemAvatar(message)"
-        >
-          <template #content>
-            <div class="chat-markdown">
-              <!-- 文本内容（作为 Markdown 渲染，支持 KaTeX） -->
-              <MarkdownRenderer v-if="getTextContent(message)" :content="getTextContent(message)" />
-
-              <!-- JSON 块内容（内部也用 Markdown 渲染） -->
-              <template v-for="(block, bIndex) in getJsonBlocks(message)" :key="bIndex">
-                <div class="json-block" :class="`json-block-${block.type || 'unknown'}`">
-                  <div 
-                    class="json-block-header" 
-                    @click="toggleBlock(message.id, bIndex)"
-                    :class="{ 'collapsed': isBlockCollapsed(message.id, bIndex) }"
+        <time v-if="message.datetime" class="message-time" :datetime="message.datetime">{{
+          formatDateTime(message.datetime)
+        }}</time>
+        <div class="chat-markdown">
+          <template v-for="group in timelineGroups(message)" :key="group.id">
+            <ConversationExecution
+              v-if="group.execution"
+              :reply-id="message.id"
+              :group-id="group.id"
+              :label="group.label"
+              :segments="group.segments"
+              :work-id="workId"
+              :reply-status="message.metadata?.status"
+              @file="$emit('open-file', $event)"
+              @result="$emit('open-result', $event)"
+            />
+            <template v-else v-for="segment in group.segments" :key="segment.id">
+              <MarkdownRenderer
+                v-if="segment.type === 'text'"
+                :content="segment.phase === 'commentary' ? progressText(segment.text) : segment.text"
+                :work-id="workId"
+                :class="{ 'progress-prose': segment.phase === 'commentary' }"
+              />
+              <template v-else-if="segment.type === 'event'">
+                <div v-if="segment.block.type === 'research_context'" class="answer-sources">
+                  <span>参考材料</span>
+                  <button
+                    v-for="path in sourceFiles(segment.block)"
+                    :key="path"
+                    @click="
+                      isResearchSource(path) ? $emit('open-progress') : $emit('open-file', path)
+                    "
                   >
-                    <span class="header-text">Type: {{ block.type || 'unknown' }}</span>
-                    <span class="content-preview" v-if="isBlockCollapsed(message.id, bIndex)">
-                      {{ getContentPreview(block.content) }}
-                    </span>
-                    <t-icon 
-                      :name="isBlockCollapsed(message.id, bIndex) ? 'chevron-down' : 'chevron-up'" 
-                      class="toggle-icon"
+                    {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
+                  </button>
+                  <button
+                    v-for="id in sourceResults(segment.block)"
+                    :key="id"
+                    @click="$emit('open-result', id)"
+                  >
+                    {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
+                  </button>
+                </div>
+                <template v-else-if="segment.block.type === 'main_agent_complete'">
+                  <MarkdownRenderer :content="completionText(segment.block).summary" />
+                  <details
+                    v-if="completionText(segment.block).diagnostic"
+                    class="completion-diagnostic"
+                  >
+                    <summary>编译详情</summary>
+                    <pre>{{ completionText(segment.block).diagnostic }}</pre>
+                  </details>
+                </template>
+                <div v-else class="json-block" :class="`event-${eventKind(segment.block)}`">
+                  <button
+                    type="button"
+                    class="json-block-header"
+                    :aria-expanded="!isBlockCollapsed(message.id, segment.id, segment.block)"
+                    :aria-controls="`event-${message.id}-${segment.id}`"
+                    @click="toggleBlock(message.id, segment.id, segment.block)"
+                  >
+                    <span class="header-text"
+                      >{{ eventTitle(segment.block)
+                      }}<span v-if="eventKind(segment.block) === 'error'"> · 需要处理</span></span
+                    >
+                    <t-icon
+                      :name="
+                        isBlockCollapsed(message.id, segment.id, segment.block)
+                          ? 'chevron-down'
+                          : 'chevron-up'
+                      "
                     />
-                  </div>
-                  <div 
-                    class="json-block-content" 
-                    v-show="!isBlockCollapsed(message.id, bIndex)"
+                  </button>
+                  <div
+                    v-if="!isBlockCollapsed(message.id, segment.id, segment.block)"
+                    :id="`event-${message.id}-${segment.id}`"
+                    class="json-block-content"
                   >
-                    <MarkdownRenderer :content="String(block.content || '')" />
+                    <MarkdownRenderer
+                      v-if="readableEvent(segment.block)"
+                      :content="readableEvent(segment.block)"
+                    />
+                    <p v-else>操作记录已保存。</p>
+                  </div>
+                  <div v-if="eventKind(segment.block) !== 'normal'" class="event-actions">
+                    <button
+                      v-if="
+                        eventKind(segment.block) === 'confirm' &&
+                        index === messages.length - 1 &&
+                        workStatus === 'waiting' &&
+                        !message.isStreaming &&
+                        !confirmBusy
+                      "
+                      type="button"
+                      @click="$emit('confirm-plan')"
+                    >
+                      继续研究
+                    </button>
+                    <button type="button" @click="$emit('open-progress')">查看运行状态</button>
                   </div>
                 </div>
               </template>
-            </div>
+            </template>
           </template>
-        </ChatItem>
-
-        <!-- 对话分割线 -->
-        <div
-          v-if="index < messages.length - 1"
-          class="message-divider"
-          @click="isMobile ? toggleDivider(index) : undefined"
-        >
-          <div class="divider-line"></div>
-          <div
-            class="divider-icon"
-            :class="{ show: hoveredDivider === index }"
-            @mouseenter="!isMobile && showDivider(index)"
-            @mouseleave="!isMobile && hideDivider()"
-            @click.stop="isMobile && toggleDivider(index)"
-          >
-            <t-icon name="arrow-up" />
-          </div>
+          <p v-if="message.metadata?.status === 'interrupted'" class="event-error">
+            本次回复已中断，已保存的内容保留。
+          </p>
         </div>
-      </div>
+      </article>
+      <slot />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { ChatItem } from '@tdesign-vue-next/chat'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { ref } from 'vue'
+import ConversationExecution from './ConversationExecution.vue'
+import { timelineGroups, progressText, type ConversationSegment } from '@/utils/conversationTimeline'
+import type { ResearchSnapshot } from '@/types/research'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
-import { useBreakpoint } from '@/composables/useBreakpoint'
+type PipelineBlock = { type: string; content: unknown }
 
 // 定义消息类型
 interface ChatMessage {
@@ -86,66 +138,115 @@ interface ChatMessage {
   avatar: string
   isStreaming?: boolean
   json_blocks?: any[]
-  message_type?: 'text' | 'json_card'
+  message_type?: string
+  segments?: ConversationSegment[]
+  metadata?: { status?: string }
 }
 
 // Props
 interface Props {
   messages: ChatMessage[]
+  workId?: string
+  confirmBusy?: boolean
+  workStatus?: string
+  tasks?: ResearchSnapshot['experiments']
+  snapshot?: ResearchSnapshot | null
 }
 
-const props = defineProps<Props>()
-const { isMobile } = useBreakpoint()
-
-// 分割线悬停状态
-const hoveredDivider = ref<number | null>(null)
-
-// JSON块折叠状态 (messageId-blockIndex -> collapsed)
-const collapsedBlocks = ref<Map<string, boolean>>(new Map())
-
-// 显示分割线
-const showDivider = (index: number) => {
-  hoveredDivider.value = index
+defineProps<Props>()
+defineEmits<{
+  'open-file': [path: string]
+  'open-progress': []
+  'confirm-plan': []
+  'open-result': [id: string]
+}>()
+const isResearchSource = (path: string) =>
+  ['research:feedback', 'research:consistency'].includes(path)
+const researchSourceLabel = (path: string, files: string[]) => {
+  if (path === 'research:feedback') return '校验问题'
+  if (path === 'research:consistency') return '结论审查'
+  if (path === '.system/validation.json') return '校验问题'
+  if (path === '.system/consistency.json') return '结论审查'
+  if (path.startsWith('runs/'))
+    return '执行输出 ' + (files.filter((p) => p.startsWith('runs/')).indexOf(path) + 1)
+  return path.split('/').pop()
 }
-
-// 隐藏分割线
-const hideDivider = () => {
-  hoveredDivider.value = null
+const sourceFiles = (block: PipelineBlock): string[] =>
+  (block.content as { files?: string[] })?.files || []
+const sourceResults = (block: PipelineBlock): string[] =>
+  (block.content as { result_ids?: string[] })?.result_ids || []
+const eventLabels: Record<string, string> = {
+  paper_confirm: '需要补充信息',
+  paper_analysis: '研究分析',
+  paper_stage: '执行记录',
+  paper_phase: '阶段记录',
+  main: '研究说明',
+  main_agent_complete: '研究结果',
+  main_agent_error: '研究遇到问题',
+  call_code_agent: '准备分析代码',
+  code_agent: '编写分析代码',
+  call_exec_py: '执行分析代码',
+  exec_py: '代码输出',
+  call_writing_agent: '准备撰写论文',
+  writing_agent: '撰写论文',
+  writemd_result: '论文更新',
+  tree_result: '工作文件',
+  word_tool_call: '编辑 Word 文档',
+  word_tool_result: '文档更新',
+  word_tool_error: '文档编辑失败',
+  generate_figure: '生成图表',
+  confirm: '需要补充信息',
 }
-
-const toggleDivider = (index: number) => {
-  hoveredDivider.value = hoveredDivider.value === index ? null : index
+const eventKind = (block: PipelineBlock): 'normal' | 'error' | 'confirm' => {
+  const content =
+    block.content && typeof block.content === 'object'
+      ? (block.content as Record<string, unknown>)
+      : null
+  if (
+    /error|failed/.test(block.type) ||
+    content?.ok === false ||
+    content?.success === false ||
+    ['failed', 'error', 'blocked'].includes(String(content?.status)) ||
+    content?.error
+  )
+    return 'error'
+  if (
+    ['confirm', 'paper_confirm'].includes(block.type) ||
+    ['waiting', 'needs_confirmation'].includes(String(content?.status))
+  )
+    return 'confirm'
+  return 'normal'
 }
-
-// 切换JSON块的折叠状态
-const toggleBlock = (messageId: string, blockIndex: number) => {
-  const key = `${messageId}-${blockIndex}`
-  const currentState = collapsedBlocks.value.get(key) ?? false // 默认展开
-  collapsedBlocks.value.set(key, !currentState)
-}
-
-// 检查JSON块是否折叠
-const isBlockCollapsed = (messageId: string, blockIndex: number) => {
-  const key = `${messageId}-${blockIndex}`
-  return collapsedBlocks.value.get(key) ?? false // 默认展开
-}
-
-// 获取内容预览（前N个字符）
-const getContentPreview = (content: any) => {
-  const str = String(content || '')
-  const maxLength = 100
-  if (str.length <= maxLength) {
-    return str
+const readableEvent = (block: PipelineBlock): string => {
+  if (typeof block.content === 'string') return block.content
+  if (block.content && typeof block.content === 'object') {
+    const c = block.content as Record<string, unknown>
+    return ['message', 'summary', 'reason', 'error', 'note']
+      .map((k) => c[k])
+      .filter((v) => typeof v === 'string')
+      .join('\n\n')
   }
-  return str.substring(0, maxLength) + '...'
+  return ''
 }
-
-// 获取系统头像
-const getSystemAvatar = (message: ChatMessage) => {
-  // 直接使用消息中的头像
-  return message.avatar || 'https://tdesign.gtimg.com/site/avatar.jpg'
+// Older compiler replies include a source excerpt after the error summary.
+// Keep the full diagnostic available without presenting source code as prose.
+const completionText = (block: PipelineBlock) => {
+  const text = readableEvent(block)
+  const split = text.indexOf('\n\n')
+  return text.startsWith('论文源码') && text.includes('PDF 编译未完成') && split !== -1
+    ? { summary: text.slice(0, split), diagnostic: text.slice(split + 2) }
+    : { summary: text, diagnostic: '' }
 }
-
+const eventTitle = (block: PipelineBlock) => eventLabels[block.type] || '执行记录'
+// Keep user choices keyed to message and event position while streaming appends content.
+const collapsedBlocks = ref<Map<string, boolean>>(new Map())
+const isBlockCollapsed = (messageId: string, blockIndex: string, block: PipelineBlock) =>
+  collapsedBlocks.value.get(`${messageId}-${blockIndex}`) ?? eventKind(block) === 'normal'
+const toggleBlock = (messageId: string, blockIndex: string, block: PipelineBlock) =>
+  collapsedBlocks.value.set(
+    `${messageId}-${blockIndex}`,
+    !isBlockCollapsed(messageId, blockIndex, block),
+  )
 // 格式化时间为人类可读格式
 const formatDateTime = (datetime: string) => {
   if (!datetime) return ''
@@ -184,107 +285,13 @@ const formatDateTime = (datetime: string) => {
     return datetime
   }
 }
-
-// 解析JSON块
-const parseJsonBlocks = (content: string) => {
-  const blocks: any[] = []
-  const lines = content.split('\n')
-  let currentBlock = ''
-  let inJsonBlock = false
-
-  for (const line of lines) {
-    if (line.trim().startsWith('{') && line.trim().endsWith('}')) {
-      // 单行JSON
-      try {
-        const block = JSON.parse(line.trim())
-        blocks.push(block)
-      } catch (e) {
-        // 不是有效的JSON，作为普通文本处理
-        if (!inJsonBlock) {
-          currentBlock += line + '\n'
-        }
-      }
-    } else if (line.trim().startsWith('{')) {
-      // 多行JSON开始
-      inJsonBlock = true
-      currentBlock = line + '\n'
-    } else if (line.trim().endsWith('}') && inJsonBlock) {
-      // 多行JSON结束
-      currentBlock += line
-      try {
-        const block = JSON.parse(currentBlock)
-        blocks.push(block)
-      } catch (e) {
-        // 解析失败，作为普通文本处理
-        currentBlock = ''
-      }
-      inJsonBlock = false
-      currentBlock = ''
-    } else if (inJsonBlock) {
-      // 多行JSON中间
-      currentBlock += line + '\n'
-    } else {
-      // 普通文本
-      currentBlock += line + '\n'
-    }
-  }
-
-  return { blocks, remainingText: currentBlock.trim() }
-}
-
-// 提取供渲染的纯文本 Markdown
-const getTextContent = (message: ChatMessage) => {
-  if (!message) return ''
-  // 对 assistant，如果有显式 json_blocks，则文本就是 content；
-  // 否则需要从 content 里解析掉 JSON，返回剩余文本。
-  if (message.role === 'assistant') {
-    if (message.json_blocks && message.json_blocks.length > 0) {
-      return message.content || ''
-    }
-    const { remainingText } = parseJsonBlocks(message.content || '')
-    return remainingText || ''
-  }
-  return message.content || ''
-}
-
-// 提取 JSON 块数组
-const getJsonBlocks = (message: ChatMessage) => {
-  if (!message) return [] as any[]
-
-  // 添加调试日志
-  console.log('getJsonBlocks called for message:', {
-    id: message.id,
-    role: message.role,
-    hasJsonBlocks: !!(message.json_blocks && message.json_blocks.length > 0),
-    jsonBlocksCount: message.json_blocks?.length || 0,
-    messageType: message.message_type,
-    contentLength: message.content?.length || 0
-  })
-
-  if (message.json_blocks && message.json_blocks.length > 0) {
-    console.log('Using explicit json_blocks for message:', message.id, 'blocks:', message.json_blocks)
-    return message.json_blocks
-  }
-
-  const { blocks } = parseJsonBlocks(message.content || '')
-  console.log('Parsed json blocks from content for message:', message.id, 'count:', blocks.length)
-  return blocks
-}
-
-// 复制消息
-const copyMessage = (content: string) => {
-  navigator.clipboard
-    .writeText(content)
-    .then(() => {
-      MessagePlugin.success('消息已复制到剪贴板')
-    })
-    .catch(() => {
-      MessagePlugin.error('复制失败')
-    })
-}
 </script>
 
 <style scoped>
+.progress-prose {
+  margin: 12px 0;
+}
+
 .json-chat-renderer {
   height: 100%;
   display: flex;
@@ -299,105 +306,78 @@ const copyMessage = (content: string) => {
 }
 
 .chat-message-wrapper {
-  margin-bottom: 16px;
-  transition: opacity 0.3s ease;
+  min-width: 0;
+  margin-bottom: 28px;
 }
-
-.message-dimmed {
-  opacity: 0.3;
+.message-time {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--pa-muted);
+  font-size: 11px;
 }
-
-.message-divider {
-  position: relative;
-  height: 20px;
-  margin: 8px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.divider-line {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background-color: #e7e7e7;
-  z-index: 1;
-}
-
-.divider-icon {
-  position: relative;
-  z-index: 2;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background-color: #f5f5f5;
-  border: 1px solid #e7e7e7;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  transition: all 0.3s ease;
-}
-
-.divider-icon.show {
-  opacity: 1;
-  background-color: #0052d9;
-  border-color: #0052d9;
-  color: white;
-}
-
-.divider-icon:hover {
-  background-color: #0052d9;
-  border-color: #0052d9;
-  color: white;
-}
-
-/* Ensure chat-markdown container uses full width */
 .chat-markdown {
   width: 100%;
-  display: block;
+  min-width: 0;
+  line-height: 1.75;
+}
+.message-user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.message-user > .chat-markdown {
+  width: fit-content;
+  max-width: 85%;
+  box-sizing: border-box;
+  padding: 12px 16px;
+  border-radius: var(--pa-radius-message);
+  background: var(--pa-message-user-bg);
+  color: var(--pa-message-user-ink);
+}
+.chat-markdown > :deep(.markdown-content) {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.chat-markdown > :deep(.markdown-content > :first-child) {
+  margin-top: 0;
+}
+.chat-markdown > :deep(.markdown-content > :last-child) {
+  margin-bottom: 0;
+}
+.chat-markdown :deep(.katex-display) {
+  margin: 12px 0;
+  overflow-x: auto;
 }
 
-/* 让 Chat 内部的 Markdown 容器与气泡样式协调，避免内外 padding 叠加导致公式错位 */
-:deep(.t-chat__message-content) .chat-markdown > .markdown-content {
-  padding: 0; /* 由外层气泡控制内边距 */
-  background: transparent; /* 去掉 MarkdownRenderer 的背景，避免视觉偏移 */
-  overflow: visible; /* 避免嵌套滚动影响定位 */
+.completion-diagnostic {
+  margin: 10px 0;
+  color: var(--pa-muted);
+  font-size: 13px;
 }
-
-/* KaTeX 对齐与间距（块级） */
-:deep(.t-chat__message-content) .katex-display {
-  margin: 12px 0; /* 合理上下间距 */
-}
-
-/* 行内公式与文本的基线对齐通常由 KaTeX 默认处理，这里确保 line-height 不被异常覆盖 */
-:deep(.t-chat__message-content) {
-  width: 100%;
-  max-width: none;
-  line-height: 1.7; /* 略增大，给行内公式留足空间，减少上/下溢出导致的视觉错位 */
+.completion-diagnostic summary {
+  cursor: pointer;
 }
 
 /* JSON块样式 */
 :deep(.json-block) {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
   margin: 8px 0;
   overflow: hidden;
-  background-color: #fafafa;
 }
 
 :deep(.json-block-header) {
-  background-color: #f0f0f0;
-  padding: 8px 12px;
+  width: 100%;
+  border: 0;
+  font-family: inherit;
+  text-align: left;
+  background: transparent;
+  padding: 5px 0;
   font-weight: 600;
   font-size: 14px;
-  border-bottom: 1px solid #e0e0e0;
-  color: #333;
+  color: var(--pa-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -407,7 +387,7 @@ const copyMessage = (content: string) => {
 }
 
 :deep(.json-block-header:hover) {
-  background-color: #e8e8e8;
+  background-color: var(--pa-surface-hover);
 }
 
 :deep(.json-block-header.collapsed) {
@@ -418,30 +398,19 @@ const copyMessage = (content: string) => {
   flex-shrink: 0;
 }
 
-:deep(.json-block-header .content-preview) {
-  flex: 1;
-  font-weight: 400;
-  font-size: 13px;
-  color: #666;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin: 0 8px;
-}
-
 :deep(.json-block-header .toggle-icon) {
   flex-shrink: 0;
   transition: transform 0.2s ease;
 }
 
 :deep(.json-block-content) {
-  padding: 12px 12px 12px 16px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  padding: 8px 0 8px 14px;
+  border-left: 1px solid var(--pa-line);
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  background-color: white;
+  background-color: var(--pa-surface);
   overflow: visible;
 }
 
@@ -457,160 +426,68 @@ const copyMessage = (content: string) => {
 }
 
 /* 不同type的JSON块样式 */
-:deep(.json-block-main) {
-  border-left: 4px solid #0052d9;
+.event-error {
+  border-color: var(--pa-danger);
 }
-
-:deep(.json-block-main .json-block-header) {
-  background-color: #e6f3ff;
-  color: #0052d9;
+.event-confirm {
+  border-color: var(--pa-warning);
 }
-
-:deep(.json-block-call_code_agent) {
-  border-left: 4px solid #00a870;
+.event-actions {
+  padding: 8px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-
-:deep(.json-block-call_code_agent .json-block-header) {
-  background-color: #e6fff2;
-  color: #00a870;
+.event-actions button {
+  border: 0;
+  background: transparent;
+  color: var(--pa-accent);
+  font: inherit;
+  cursor: pointer;
 }
-
-:deep(.json-block-code_agent) {
-  border-left: 4px solid #00a870;
+.json-block-header:focus-visible,
+.event-actions button:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: -2px;
 }
-
-:deep(.json-block-code_agent .json-block-header) {
-  background-color: #e6fff2;
-  color: #00a870;
-}
-
-:deep(.json-block-call_exec_py) {
-  border-left: 4px solid #ff6b35;
-}
-
-:deep(.json-block-call_exec_py .json-block-header) {
-  background-color: #fff2e6;
-  color: #ff6b35;
-}
-
-:deep(.json-block-exec_py) {
-  border-left: 4px solid #ff6b35;
-}
-
-:deep(.json-block-exec_py .json-block-header) {
-  background-color: #fff2e6;
-  color: #ff6b35;
-}
-
-:deep(.json-block-call_writing_agent) {
-  border-left: 4px solid #ed7b2f;
-}
-
-:deep(.json-block-call_writing_agent .json-block-header) {
-  background-color: #fff2e6;
-  color: #ed7b2f;
-}
-
-:deep(.json-block-writing_agent) {
-  border-left: 4px solid #ed7b2f;
-}
-
-:deep(.json-block-writing_agent .json-block-header) {
-  background-color: #fff2e6;
-  color: #ed7b2f;
-}
-
-:deep(.json-block-writemd_result) {
-  border-left: 4px solid #8e44ad;
-}
-
-:deep(.json-block-writemd_result .json-block-header) {
-  background-color: #f4e6ff;
-  color: #8e44ad;
-}
-
-:deep(.json-block-tree_result) {
-  border-left: 4px solid #27ae60;
-}
-
-:deep(.json-block-tree_result .json-block-header) {
-  background-color: #e6fff2;
-  color: #27ae60;
-}
-
-:deep(.json-block-word_tool_call) {
-  border-left: 4px solid #2980b9;
-}
-
-:deep(.json-block-word_tool_call .json-block-header) {
-  background-color: #e8f4f8;
-  color: #2980b9;
-}
-
-:deep(.json-block-word_tool_result) {
-  border-left: 4px solid #2980b9;
-}
-
-:deep(.json-block-word_tool_result .json-block-header) {
-  background-color: #e8f4f8;
-  color: #2980b9;
-}
-
-:deep(.json-block-word_tool_error) {
-  border-left: 4px solid #e74c3c;
-}
-
-:deep(.json-block-word_tool_error .json-block-header) {
-  background-color: #fdecea;
-  color: #e74c3c;
-}
-
 /* 代码块样式 */
-:deep(.t-chat__message-content) {
+.chat-markdown {
   line-height: 1.7;
 }
 
 :deep(.t-chat__message-content pre) {
-  background-color: #f8f9fa;
-  border: 1px solid #e9ecef;
-  border-radius: 6px;
+  background-color: var(--pa-surface-muted);
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-inline);
   padding: 12px;
   margin: 8px 0;
   overflow-x: auto;
 }
 
 :deep(.t-chat__message-content code) {
-  background-color: #f1f3f4;
+  background-color: var(--pa-surface-muted);
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--pa-radius-inline);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 0.9em;
 }
 
-/* 流式消息样式 */
-:deep(.t-chat__message--assistant) {
-  animation: fadeIn 0.3s ease-in-out;
+.answer-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--pa-muted);
+  font-size: 12px;
 }
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .chat-messages {
-    padding: 8px;
-  }
-
-  .divider-icon {
-    opacity: 0.45;
-  }
+.answer-sources button {
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-inline);
+  padding: 3px 7px;
+  color: var(--td-brand-color);
+  background: var(--pa-surface);
+  font: inherit;
+  cursor: pointer;
 }
 </style>

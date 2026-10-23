@@ -1,0 +1,26 @@
+const assert=require('node:assert/strict')
+const {environment}=require('./workInteractions.test.cjs')
+;(async()=>{
+  const env=await environment()
+  const quoted = await env.work('quoted')
+  await quoted.state.loadWork()
+  quoted.state.inputValue.value='保留已有输入'
+  const context={work_id:'quoted',research_id:'research-1',selection:{file:'paper.tex',version:'source-version',start:0,end:2,quote:'原文'},read_quote:null,read_version:null,thread_id:null,quote:'原文'}
+  await quoted.state.attachPaperQuote(context)
+  assert.equal(quoted.state.inputValue.value,'保留已有输入')
+  assert.equal(quoted.paperComments.length,0,'Quoting must wait for the primary send button')
+  const second={...context,selection:{...context.selection,start:3,end:6,quote:'第二段'},quote:'第二段'}
+  await quoted.state.attachPaperQuote(second)
+  await quoted.state.attachPaperQuote(context)
+  assert.equal(quoted.state.paperContexts.value.length,2,'New quotes append; identical quotes do not repeat')
+  await quoted.state.sendMessage()
+  assert.equal(quoted.paperComments.length,1)
+  assert.equal(quoted.paperComments[0].message,'保留已有输入')
+  assert.equal(quoted.paperComments[0].references.length,2)
+  assert.equal(quoted.paperComments[0].references[0].selection.version,'source-version')
+  assert.equal(quoted.paperComments[0].references[1].quote,'第二段')
+  assert.equal(quoted.sent.length,0,'A paper comment must never reach research intent classification')
+  assert.equal(quoted.state.paperContexts.value.length,0)
+  quoted.stop()
+  console.log('PASS: quoting preserves input and only primary send executes a structured paper comment')
+})().catch(error=>{console.error(error);process.exitCode=1})

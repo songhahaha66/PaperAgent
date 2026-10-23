@@ -1,11 +1,12 @@
 <template>
-  <div ref="rootEl" class="markdown-content" v-html="renderedContent"></div>
+  <div ref="rootEl" class="markdown-content" v-html="renderedContent" @click="openLiterature"></div>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
 import mila from 'markdown-it-katex'
+import DOMPurify from 'dompurify'
 import 'katex/dist/katex.min.css'
 import { useAuthStore } from '@/stores/auth'
 import { workspaceFileAPI } from '@/api/workspace'
@@ -14,11 +15,40 @@ interface Props {
   content: string
   // 渲染上下文（用于相对路径图片解析&鉴权）
   workId?: string // 工作区ID，可选
+  inlineSources?: boolean
   basePath?: string // 当前 markdown 文件所在目录，用于解析相对图片路径
 }
 
 const props = defineProps<Props>()
 const authStore = useAuthStore()
+const emit = defineEmits<{ source: [id: string, anchor: Element] }>()
+function openLiterature(event: MouseEvent) {
+  const resultLink = (event.target as Element).closest?.(
+    'a[href^="https://paperagent.local/results/"]',
+  )
+  const resultId = resultLink?.getAttribute('href')?.match(/results\/([RF][1-9]\d*)$/)?.[1]
+  if (resultId) {
+    event.preventDefault()
+    window.dispatchEvent(
+      new CustomEvent('paper-result-open', { detail: { workId: props.workId, resultId } }),
+    )
+    return
+  }
+  const link = (event.target as Element).closest?.(
+    'a[href^="#literature-"], a[href^="https://paperagent.local/citations/"]',
+  )
+  const evidenceId = link
+    ?.getAttribute('href')
+    ?.match(/(?:#literature-|paperagent\.local\/citations\/)([A-Za-z0-9_-]+)/)?.[1]
+  if (evidenceId && /^(?:C[1-9]\d*|E[A-Za-z0-9_-]+)$/.test(evidenceId)) {
+    event.preventDefault()
+    if (props.inlineSources) emit('source', evidenceId, link!)
+    else
+      window.dispatchEvent(
+        new CustomEvent('paper-literature-open', { detail: { workId: props.workId, evidenceId } }),
+      )
+  }
+}
 
 // 简单的相对路径规范化
 function normalizePath(base: string, rel: string): string {
@@ -44,7 +74,11 @@ md.use(mila)
 // 渲染后的 HTML
 const renderedContent = computed(() => {
   if (!props.content) return ''
-  return md.render(props.content)
+  // Retrieved source text is untrusted even when a model repeats it in prose.
+  // Preserve KaTeX HTML/MathML/SVG while stripping executable HTML and URLs.
+  return DOMPurify.sanitize(md.render(props.content), {
+    USE_PROFILES: { html: true, mathMl: true, svg: true },
+  })
 })
 
 // 图片 blob 缓存：key -> blobUrl
@@ -65,7 +99,11 @@ async function ensureImageSrc(img: HTMLImageElement) {
   // markdown-it 可能已对 src 做过 percent-encoding，先解码还原为原始路径，
   // 防止后续 encodeURIComponent 产生双重编码（%25）
   let decodedSrc = rawSrc
-  try { decodedSrc = decodeURIComponent(rawSrc) } catch { /* 非法序列则保持原样 */ }
+  try {
+    decodedSrc = decodeURIComponent(rawSrc)
+  } catch {
+    /* 非法序列则保持原样 */
+  }
 
   // 处理相对路径（相对于 basePath）
   const filePath = props.basePath ? normalizePath(props.basePath, decodedSrc) : decodedSrc
@@ -131,7 +169,7 @@ onBeforeUnmount(() => {
 .markdown-content :deep(h5),
 .markdown-content :deep(h6) {
   margin: 16px 0 8px 0;
-  color: #2c3e50;
+  color: var(--pa-ink);
 }
 
 /* 段落样式 */
@@ -142,17 +180,17 @@ onBeforeUnmount(() => {
 
 /* 行内代码样式 */
 .markdown-content :deep(code) {
-  background-color: #f0f0f0;
+  background-color: var(--pa-surface-hover);
   padding: 2px 4px;
-  border-radius: 3px;
+  border-radius: var(--pa-radius-inline);
   font-family: 'Courier New', monospace;
 }
 
 /* 代码块样式：去除横向滚动，改为自动换行 */
 .markdown-content :deep(pre) {
-  background-color: #f5f5f5;
+  background-color: var(--pa-surface-muted);
   padding: 12px;
-  border-radius: 4px;
+  border-radius: var(--pa-radius-inline);
   margin: 8px 0;
   white-space: pre-wrap; /* 换行 */
   word-break: break-word;
@@ -182,12 +220,12 @@ onBeforeUnmount(() => {
 
 /* 链接样式 */
 .markdown-content :deep(a) {
-  color: #1976d2;
+  color: var(--pa-info);
   text-decoration: underline;
 }
 
 .markdown-content :deep(a:hover) {
-  color: #1565c0;
+  color: var(--pa-accent-hover);
 }
 
 /* 强调样式 */

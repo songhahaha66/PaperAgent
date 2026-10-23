@@ -26,10 +26,10 @@ const changeLanguage = (event: Event) => {
 <style scoped>
 .language-switcher {
   padding: 6px 10px;
-  border: 1px solid #dcdfe6;
-  border-radius: 6px;
-  color: #495057;
-  background: white;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-muted);
+  background: var(--pa-surface);
   cursor: pointer;
 }
 </style>

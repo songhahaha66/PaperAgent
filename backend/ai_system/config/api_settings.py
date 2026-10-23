@@ -8,9 +8,10 @@ known OpenAI-compatible gateway without opening the admin page.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
 
@@ -24,6 +25,8 @@ class EnvApiSettings:
     base_url: str
     model_id: str
     provider: str = DEFAULT_PROVIDER
+    # 供应商私有参数（PAPERAGENT_API_EXTRA_BODY，JSON），如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
+    extra_body: Optional[Dict[str, Any]] = None
 
     @property
     def is_configured(self) -> bool:
@@ -68,6 +71,7 @@ def load_env_api_settings() -> Optional[EnvApiSettings]:
         or DEFAULT_MODEL
     ).strip()
     provider = (os.getenv("PAPERAGENT_API_PROVIDER") or DEFAULT_PROVIDER).strip()
+    extra_body_raw = (os.getenv("PAPERAGENT_API_EXTRA_BODY") or "").strip()
 
     if not api_key or not base_url:
         return None
@@ -77,6 +81,7 @@ def load_env_api_settings() -> Optional[EnvApiSettings]:
         base_url=normalize_openai_base_url(base_url),
         model_id=model_id or DEFAULT_MODEL,
         provider=provider or DEFAULT_PROVIDER,
+        extra_body=json.loads(extra_body_raw) if extra_body_raw else None,
     )
 
 
@@ -89,6 +94,7 @@ class EnvModelConfig:
         self.model_id = settings.model_id
         self.base_url = settings.base_url
         self.api_key = settings.api_key
+        self.extra_body = settings.extra_body
         self.is_active = True
         self.id = None
         self.created_by = None

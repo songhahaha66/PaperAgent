@@ -1,0 +1,152 @@
+/* Shared layout, accessibility and component rules. Values live in theme.css. */
+body {
+  margin: 0;
+}
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+:where(button, a, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--td-brand-color);
+  outline-offset: 3px;
+}
+.studio-empty {
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--td-text-color-placeholder);
+}
+.studio-empty h2 {
+  font-family: var(--td-font-family);
+  margin: 4px 0 0;
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+}
+.studio-empty p {
+  max-width: 340px;
+  margin: 0;
+  line-height: 1.8;
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
+}
+.studio-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.t-dialog__body {
+  overscroll-behavior: contain;
+}
+@media (max-width: 768px) {
+  .t-dialog__position {
+    padding: 12px !important;
+  }
+  .t-dialog {
+    max-height: calc(100dvh - 24px);
+    display: flex;
+    flex-direction: column;
+    margin: 0 !important;
+    max-width: 100%;
+  }
+  .t-dialog__header {
+    flex-shrink: 0;
+  }
+  .t-dialog__body {
+    overflow-y: auto;
+    min-height: 0;
+  }
+  .t-dialog__footer {
+    flex-shrink: 0;
+    background: var(--pa-surface);
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Shared geometry consumes the theme; no palette overrides belong here. */
+.t-card {
+  border-radius: var(--pa-radius-card);
+  box-shadow: none;
+  border-color: var(--pa-line);
+}
+.t-button:not(.t-button--shape-circle):not(.t-button--shape-round) {
+  border-radius: var(--pa-radius-control);
+}
+.t-input,
+.t-textarea__inner {
+  border-radius: var(--pa-radius-control);
+}
+.t-dialog {
+  border-radius: var(--pa-radius-overlay);
+}
+.language-switcher {
+  border-radius: var(--pa-radius-control);
+}
+
+@media (max-width: 768px) {
+  .home-page,
+  .models-page,
+  .work-page,
+  .template-page,
+  .passkey-page {
+    flex-direction: column;
+  }
+  .home-main,
+  .models-main,
+  .workspace-container,
+  .template-page > .main-content,
+  .passkey-page > .main-content {
+    min-height: 0;
+  }
+}
+
+/* Positive status badges use the same solid accent as primary actions. */
+.t-tag--success.t-tag--light {
+  background: var(--td-brand-color);
+  color: var(--pa-on-accent);
+}
+
+/* Syntax highlighting follows the active palette instead of importing a light-only theme. */
+.code-highlight code {
+  color: var(--pa-ink);
+}
+.code-highlight :is(.hljs-comment, .hljs-quote) {
+  color: var(--pa-placeholder);
+}
+.code-highlight :is(.hljs-keyword, .hljs-selector-tag, .hljs-type, .hljs-meta) {
+  color: var(--pa-note);
+}
+.code-highlight :is(.hljs-string, .hljs-regexp, .hljs-addition) {
+  color: var(--pa-accent);
+}
+.code-highlight :is(.hljs-number, .hljs-literal, .hljs-variable, .hljs-attr) {
+  color: var(--pa-warning);
+}
+.code-highlight :is(.hljs-title, .hljs-built_in, .hljs-symbol) {
+  color: var(--pa-info);
+}
+.code-highlight .hljs-deletion {
+  color: var(--pa-danger);
+}
+
+/* The monochrome mark must remain legible on either surface palette. */
+img[src='/logo.png'] {
+  filter: var(--pa-logo-filter);
+}

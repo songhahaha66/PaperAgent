@@ -6,14 +6,13 @@
         <h1 class="header-title">PaperAgent</h1>
       </div>
       <div class="header-right">
-        <LanguageSwitcher />
         <t-button
           theme="default"
           variant="outline"
           href="https://github.com/songhahaha66/PaperAgent"
           target="_blank"
           tag="a"
-          style="background: white; color: #24292e; border: 1px solid #24292e"
+          class="repository-button"
         >
           <template #icon>
             <t-icon name="logo-github" />
@@ -97,7 +96,6 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import LanguageSwitcher from '@/components/LanguageSwitcher.vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { onMounted, ref, onUnmounted, computed } from 'vue'
@@ -146,6 +144,12 @@ const goToRegister = () => {
 </script>
 
 <style scoped>
+.repository-button {
+  background: var(--pa-surface);
+  color: var(--pa-ink);
+  border: 1px solid var(--pa-line-strong);
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -158,7 +162,7 @@ const goToRegister = () => {
   -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
-  background: white;
+  background: var(--pa-page);
 }
 
 .custom-header {
@@ -167,7 +171,7 @@ const goToRegister = () => {
   align-items: center;
   justify-content: space-between;
   padding: 0 40px;
-  background: white;
+  background: var(--pa-surface);
   width: 100%;
 }
 
@@ -179,7 +183,7 @@ const goToRegister = () => {
 
 .header-title {
   font-size: 1.5rem;
-  color: #2c3e50;
+  color: var(--pa-ink);
   margin: 0;
 }
 
@@ -212,14 +216,14 @@ const goToRegister = () => {
 .main-title {
   font-size: 3.5rem;
   font-weight: 700;
-  color: #2c3e50;
+  color: var(--pa-ink);
   margin: 0 0 16px 0;
   letter-spacing: -1px;
 }
 
 .main-subtitle {
   font-size: 1.25rem;
-  color: #5a6c7d;
+  color: var(--pa-muted);
   margin: 0 0 40px 0;
   line-height: 1.6;
   display: flex;
@@ -244,7 +248,7 @@ const goToRegister = () => {
   opacity: 0;
   transform: translateY(100%);
   transition: all 0.5s ease-in-out;
-  color: #0052d9;
+  color: var(--pa-info);
   font-weight: 600;
 }
 
@@ -281,7 +285,7 @@ const goToRegister = () => {
 }
 
 .feature-card {
-  border-radius: 12px;
+  border-radius: var(--pa-radius-card);
   padding: 30px 20px;
   text-align: center;
   transition: all 0.3s ease;
@@ -290,39 +294,39 @@ const goToRegister = () => {
 
 .feature-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--pa-shadow-overlay);
 }
 
 /* 四种不同颜色的卡片 - 浅色调 */
 .card-blue {
-  background: #e3f2fd;
-  border: 1px solid #bbdefb;
+  background: var(--pa-info-soft);
+  border: 1px solid var(--pa-info-border);
 }
 
 .card-purple {
-  background: #f3e5f5;
-  border: 1px solid #e1bee7;
+  background: var(--pa-note-soft);
+  border: 1px solid var(--pa-note-border);
 }
 
 .card-green {
-  background: #e8f5e9;
-  border: 1px solid #c8e6c9;
+  background: var(--pa-accent-soft);
+  border: 1px solid var(--pa-accent-border);
 }
 
 .card-orange {
-  background: #fff3e0;
-  border: 1px solid #ffe0b2;
+  background: var(--pa-warning-soft);
+  border: 1px solid var(--pa-warning-border);
 }
 
 .feature-card h3 {
-  color: #2c3e50;
+  color: var(--pa-ink);
   font-size: 1.25rem;
   margin: 0 0 12px 0;
   font-weight: 600;
 }
 
 .feature-card p {
-  color: #5a6c7d;
+  color: var(--pa-muted);
   font-size: 0.95rem;
   line-height: 1.6;
   margin: 0;
@@ -332,8 +336,8 @@ const goToRegister = () => {
 .footer {
   text-align: center;
   padding: 20px;
-  color: #7f8c8d;
-  background: #f5f5f5;
+  color: var(--pa-muted);
+  background: var(--pa-surface-muted);
 }
 
 /* 响应式设计 */

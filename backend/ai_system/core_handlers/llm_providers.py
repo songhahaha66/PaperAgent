@@ -4,14 +4,19 @@ AI提供商抽象层
 """
 
 import logging
+import httpx
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List, Mapping, cast
+from urllib.parse import urlparse
 from langchain_core.language_models import BaseLanguageModel
+from langchain_core.messages import AIMessageChunk
+from langchain_core.outputs import ChatGenerationChunk
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from ..config.api_settings import normalize_openai_base_url
+from .model_runtime import RuntimeModelMixin
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,69 @@ def _patch_reasoning_content():
 _patch_reasoning_content()
 
 
+def _preserve_cache_usage(message, raw_usage):
+    # OpenAI-compatible services can return DeepSeek's top-level cache counter.
+    # langchain-openai only converts prompt_tokens_details.cached_tokens.
+    cached = (raw_usage or {}).get('prompt_cache_hit_tokens')
+    if cached is not None and message.usage_metadata is not None:
+        message.usage_metadata.setdefault('input_token_details', {}).setdefault('cache_read', cached)
+
+
+class MeteredChatOpenAI(RuntimeModelMixin, ChatOpenAI):
+    def _convert_chunk_to_generation_chunk(self, chunk, *args, **kwargs):
+        result = super()._convert_chunk_to_generation_chunk(chunk, *args, **kwargs)
+        if result is not None:
+            _preserve_cache_usage(result.message, chunk.get('usage'))
+        return result
+
+    def _create_chat_result(self, *args, **kwargs):
+        result = super()._create_chat_result(*args, **kwargs)
+        for generation in result.generations:
+            _preserve_cache_usage(generation.message, (result.llm_output or {}).get('token_usage'))
+        return result
+
+class MeteredChatAnthropic(RuntimeModelMixin, ChatAnthropic):pass
+
+class MeteredChatGoogle(RuntimeModelMixin, ChatGoogleGenerativeAI):pass
+
+
+class AIGWChatOpenAI(MeteredChatOpenAI):
+    """Normalize this gateway's cumulative counters per request, including tools."""
+
+    def _get_request_payload(self, *args, **kwargs):
+        payload = super()._get_request_payload(*args, **kwargs)
+        # Use Step's documented budget field rather than the OpenAI-specific
+        # max_completion_tokens alias emitted by langchain-openai.
+        if self.model_name == 'step-5-preview' and 'max_completion_tokens' in payload:
+            payload['max_tokens'] = payload.pop('max_completion_tokens')
+        return payload
+
+    async def _astream(self, *args, **kwargs):
+        async for chunk in self._normalized_astream(*args, **kwargs):yield chunk
+
+    async def _normalized_astream(self,*args,**kwargs):
+        final_usage = None
+        async for chunk in super()._astream(*args, **kwargs):
+            usage = getattr(chunk.message, 'usage_metadata', None)
+            if usage:
+                final_usage = usage
+                chunk.message.usage_metadata = None
+            yield chunk
+        if final_usage is not None:
+            yield ChatGenerationChunk(message=AIMessageChunk(content='', usage_metadata=final_usage))
+
+    def _stream(self, *args, **kwargs):
+        final_usage = None
+        for chunk in super()._stream(*args, **kwargs):
+            usage = getattr(chunk.message, 'usage_metadata', None)
+            if usage:
+                final_usage = usage
+                chunk.message.usage_metadata = None
+            yield chunk
+        if final_usage is not None:
+            yield ChatGenerationChunk(message=AIMessageChunk(content='', usage_metadata=final_usage))
+
+
 class BaseLLMProvider(ABC):
     """AI提供商抽象基类"""
 
@@ -103,13 +171,38 @@ class OpenAIProvider(BaseLLMProvider):
         if not self.validate_config():
             raise ValueError(f"OpenAI提供商配置无效: {self.get_model_info()}")
 
-        return ChatOpenAI(
+        extra_body = kwargs.get('extra_body')
+        gateway_host = urlparse(self.base_url).hostname == 'aigw.saurlax.com'
+        step_gateway = gateway_host and self.model_id == 'step-5-preview'
+        if step_gateway:
+            # Reuse the bounded settings validated by the live research run.
+            # Copy the body so saved settings are untouched; explicit effort wins.
+            extra_body = {'reasoning_effort': 'low', **(extra_body or {})}
+        # 官方 Flash 默认开启思考，但流水线的结构化输出需要强制工具选择。
+        # DeepSeek 不允许在思考模式下强制工具，因此默认关闭；显式参数仍优先。
+        if (extra_body is None and self.model_id == "deepseek-flash"
+                and urlparse(self.base_url).hostname == "api.deepseek.com"):
+            extra_body = {"thinking": {"type": "disabled"}}
+
+        model_class = AIGWChatOpenAI if gateway_host else MeteredChatOpenAI
+        from ..research.runtime import request_hook,response_hook,async_request_hook,async_response_hook
+        return model_class(
             model=self.model_id,
             api_key=self.api_key,
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
-            streaming=kwargs.get('streaming', True)
+            streaming=kwargs.get('streaming', True),
+            # RuntimeModelMixin owns bounded service retries; the SDK never multiplies them.
+            max_retries=kwargs.get('max_retries', 0),
+            # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
+            # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            stream_chunk_timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
+            extra_body=extra_body,
+            http_client=httpx.Client(event_hooks={'request':[request_hook],'response':[response_hook]},follow_redirects=False),
+            http_async_client=httpx.AsyncClient(event_hooks={'request':[async_request_hook],'response':[async_response_hook]},follow_redirects=False),
         )
 
     def validate_config(self) -> bool:
@@ -129,12 +222,14 @@ class AnthropicProvider(BaseLLMProvider):
         if not self.validate_config():
             raise ValueError(f"Anthropic提供商配置无效: {self.get_model_info()}")
 
-        return ChatAnthropic(
+        return MeteredChatAnthropic(
             model=self.model_id,
             api_key=self.api_key,
             base_url=self.base_url if self.base_url else None,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 16000)
+            max_tokens=kwargs.get('max_tokens', 16000),
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            max_retries=kwargs.get('max_retries',0)
         )
 
     def validate_config(self) -> bool:
@@ -154,11 +249,13 @@ class GoogleProvider(BaseLLMProvider):
         if not self.validate_config():
             raise ValueError(f"Google提供商配置无效: {self.get_model_info()}")
 
-        return ChatGoogleGenerativeAI(
+        return MeteredChatGoogle(
             model=self.model_id,
             google_api_key=self.api_key,
             temperature=kwargs.get('temperature', 0.7),
-            max_tokens=kwargs.get('max_tokens', 16000)
+            max_tokens=kwargs.get('max_tokens', 16000),
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            max_retries=kwargs.get('max_retries',0)
         )
 
     def validate_config(self) -> bool:
@@ -179,13 +276,21 @@ class LocalProvider(BaseLLMProvider):
             raise ValueError(f"本地模型提供商配置无效: {self.get_model_info()}")
 
         # 本地模型通常使用OpenAI兼容格式
-        return ChatOpenAI(
+        return MeteredChatOpenAI(
             model=self.model_id,
             api_key=self.api_key or "fake-key",  # 本地模型可能不需要真实API key
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else "http://localhost:11434/v1",
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
-            streaming=kwargs.get('streaming', True)
+            streaming=kwargs.get('streaming', True),
+            # RuntimeModelMixin owns bounded service retries; the SDK never multiplies them.
+            max_retries=kwargs.get('max_retries', 0),
+            # 不要设得比网关自己的排队上限（DLUT 300 秒后回 524）短：网关并发有限、请求在排队，
+            # 客户端先超时重试会丢掉排队位置重新排（v2l 一次调用 180 秒超时后重试，共等了 316 秒）
+            timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            stream_chunk_timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
+            # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
+            extra_body=kwargs.get('extra_body'),
         )
 
     def validate_config(self) -> bool:
@@ -250,71 +355,11 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
         'model_id': model_config.model_id,
         'api_key': model_config.api_key,
         'base_url': model_config.base_url,
-        'is_active': getattr(model_config, 'is_active', True)
+        'is_active': getattr(model_config, 'is_active', True),
+        'timeout_seconds': getattr(model_config,'timeout_seconds',None)
     }
+    extra_body = getattr(model_config, 'extra_body', None)
+    if extra_body:
+        kwargs.setdefault('extra_body', extra_body)
 
     return LLMProviderFactory.create_llm_instance(config, **kwargs)
-
-
-def create_smolagents_model_from_config(model_config, **kwargs):
-    """
-    从数据库ModelConfig对象创建SmolAgents原生模型实例
-
-    Args:
-        model_config: 数据库ModelConfig对象
-        **kwargs: 额外的模型参数
-
-    Returns:
-        SmolAgents原生模型实例
-    """
-    try:
-        from smolagents.models import OpenAIServerModel
-
-        provider = getattr(model_config, 'provider', 'openai').lower()
-        model_id = model_config.model_id
-        api_key = model_config.api_key
-        base_url = model_config.base_url
-
-        logger.info(f"创建SmolAgents模型: {provider}/{model_id}")
-
-        # 根据provider创建对应的SmolAgents模型
-        if provider == 'openai' or provider == 'local':
-            # OpenAI兼容模型，包括本地服务
-            return OpenAIServerModel(
-                model_id=model_id,
-                api_key=api_key,
-                api_base=base_url,
-                **kwargs
-            )
-        elif provider == 'anthropic':
-            # Anthropic通过OpenAI兼容接口使用
-            return OpenAIServerModel(
-                model_id=model_id,
-                api_key=api_key,
-                api_base="https://api.anthropic.com",
-                **kwargs
-            )
-        elif provider == 'azure':
-            # Azure OpenAI
-            return OpenAIServerModel(
-                model_id=model_id,
-                api_key=api_key,
-                api_base=base_url,
-                **kwargs
-            )
-        else:
-            # 默认使用OpenAI兼容格式
-            logger.warning(f"提供商 {provider} 使用OpenAI兼容格式")
-            return OpenAIServerModel(
-                model_id=model_id,
-                api_key=api_key,
-                api_base=base_url,
-                **kwargs
-            )
-
-    except ImportError:
-        logger.error("SmolAgents未安装，无法创建模型实例")
-        raise ImportError("请安装smolagents库: pip install smolagents")
-    except Exception as e:
-        logger.error(f"创建SmolAgents模型失败: {e}")
-        raise ValueError(f"创建SmolAgents模型失败: {str(e)}")
