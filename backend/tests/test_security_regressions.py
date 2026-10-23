@@ -1,15 +1,16 @@
 """Security boundaries and adversarial input regressions; entirely offline."""
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 from ai_system.text_syntax import math_blocks, math_spans, strip_math, native_citations, has_markdown
 from ai_system.modules.experiments.execution import is_placeholder
 from ai_system.research.citations import citation_text
-from services.file_services.workspace_layout import relative_parts, safe_join
+from services.file_services.workspace_layout import relative_parts, safe_join, workspace_path
 from services.chat_services.chat_history_manager import ChatHistoryManager
-from services.chat_services.paper_editor import prepare_publication, guard_wording
+from services.chat_services.paper_editor import prepare_publication, guard_wording, PUBLICATION_MARKER
 from services.file_services.template_contract import get_template_analysis_dir
 
 
@@ -99,3 +100,16 @@ def test_filesystem_ids_are_validated_before_io(tmp_path):
         get_template_analysis_dir('../other')
     with pytest.raises(ValueError, match='编号'):
         prepare_publication(None, '../other', tmp_path, [])
+
+
+def test_publication_backup_rejects_symlink_even_with_valid_id(tmp_path):
+    store = SimpleNamespace(root=tmp_path / 'project', research_id='research')
+    marker = workspace_path(store.root, PUBLICATION_MARKER)
+    backups = marker.parent / 'paper-publication'
+    backups.mkdir(parents=True)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (backups / ('a' * 32)).symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        prepare_publication(store, 'a' * 32, tmp_path, [])
+    assert not marker.exists() and not list(outside.iterdir())

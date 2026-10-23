@@ -3,7 +3,7 @@
 Candidates do not mutate research. Publication is a compare-and-swap against the
 whole research commit and active source, including changes made outside this UI.
 """
-from services.file_services.workspace_layout import workspace_path
+from services.file_services.workspace_layout import workspace_path, safe_join
 from services.file_services.workspace_lock import edit_lock
 import asyncio
 import json
@@ -47,7 +47,7 @@ def recover_publication(store):
         proposal_id = record['proposal_id']
         if not re.fullmatch(r'[a-f0-9]{32}', proposal_id):
             raise ValueError('论文发布恢复记录无效')
-        folder = marker.parent / 'paper-publication' / proposal_id
+        folder = safe_join(marker.parent / 'paper-publication', proposal_id)
         row = db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',
                          (record['research_id'], 'paper-edit:' + proposal_id)).fetchone()
         applied = row and json.loads(row[0])['status'] == 'applied'
@@ -73,7 +73,7 @@ def prepare_publication(store, proposal_id, staging, names):
     marker = workspace_path(store.root, PUBLICATION_MARKER)
     if marker.exists():
         raise ResearchConflict('尚有待恢复的论文发布，请刷新后重试')
-    folder = marker.parent / 'paper-publication' / proposal_id
+    folder = safe_join(marker.parent / 'paper-publication', proposal_id)
     folder.mkdir(parents=True, exist_ok=True)
     files = {}
     for name in names:
