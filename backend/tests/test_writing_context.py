@@ -38,6 +38,8 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     ctx.fs.save_run_stdout(run, 'figure ready')
     ctx.fs.finish_run(run, 'success')
     (ctx.fs.run_dir(run) / 'artifacts/plot.png').write_bytes(b'png')
+    from ai_system.sandbox.evidence import seal_run
+    seal_run(ctx.fs, run)
     figure = ctx.registry.record_figure('Q1', run, 'plot.png', '实际图表')
     from research_tools_helpers import continue_experiment
     from ai_system.research.models import WorkerResult

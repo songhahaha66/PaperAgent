@@ -18,7 +18,7 @@ class FormalArtifactRegistrationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        base = Path(self.temporary.name)
+        base = Path(self.temporary.name).resolve()
         environment = patch.dict(os.environ, {'PA_DATA_PATH': str(base / 'state')})
         environment.start()
         self.addCleanup(environment.stop)

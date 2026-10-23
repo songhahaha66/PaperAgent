@@ -1,4 +1,5 @@
 """Ground complete numerical vectors without weakening scalar acceptance."""
+from ai_system.sandbox.evidence import seal_run
 import asyncio
 import sys
 from pathlib import Path
@@ -14,11 +15,13 @@ from ai_system.research.validation import evaluate
 from helpers.submissions import branch, report
 
 
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 def context(tmp_path, output):
     ctx = GraphContext.create(str(tmp_path), planner_llm=None)
     rid = ctx.fs.create_run()
     ctx.fs.save_run_stdout(rid, output)
-    ctx.fs.finish_run(rid, "success")
+    ctx.fs.finish_run(rid, "success"); seal_run(ctx.fs, rid)
     return ctx, rid
 
 

@@ -1,4 +1,5 @@
 """Exercise real legacy databases and the single registered execution boundary."""
+from services.file_services.workspace_layout import workspace_path
 import json
 import sqlite3
 
@@ -27,7 +28,7 @@ def legacy(root, *, conflicting=False):
     state['issues'] = [Issue(id='science',task_id='Q1',task_revision=1,category='model',message='原文意见',source='original',status='confirmed',action='verify').model_dump(),
                        Issue(id='outage',task_id='Q1',task_revision=1,category='service',message='超时原文',source='original',status='confirmed',action='retry').model_dump(),
                        {'id':'unknown','category':'unclassified','message':'不可推断的原文'}]
-    path = root / '.system/research.sqlite'
+    path = workspace_path(root, '.system/research.sqlite')
     path.unlink()
     with sqlite3.connect(path) as db:
         db.executescript('CREATE TABLE research(id TEXT PRIMARY KEY,payload TEXT NOT NULL);'

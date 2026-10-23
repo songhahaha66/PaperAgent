@@ -1,3 +1,5 @@
+from ai_system.sandbox.evidence import seal_run
+from services.file_services.workspace_layout import workspace_path
 
 import asyncio
 import json
@@ -21,6 +23,8 @@ from helpers.graph import TASK, _analysis, _Structured, CANDIDATE_PROMPTS, FakeM
 # 端到端（全部离线）
 # ----------------------------------------------------------------------
 
+
+pytestmark = pytest.mark.usefixtures("offline_kernel")
 
 def test_graph_end_to_end_offline(tmp_path):
     CANDIDATE_PROMPTS.clear()
@@ -65,7 +69,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert result['repair_round']==0 and result['issues']==[]
     assert not any('全文结论表' in request for request in model.text_calls)
     assert len(business['executions'])==2, 'No extra experiment or recomputation for writing/review'
-    manifest=json.loads((ws/'manifest.json').read_text())['runs']
+    manifest=json.loads((workspace_path(ws, 'manifest.json')).read_text())['runs']
     assert manifest and all(run['status']=='success' for run in manifest.values())
     from ai_system.modules.experiments.execution import solution_code_path
     for experiment_id in (first,second):
@@ -90,7 +94,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert all(r.path in paper for r in registry.results.values() if r.kind=='figure')
     assert '{{' not in paper and '12.345' in paper, 'Literal numbers do not create an automatic semantic gate'
     assert '政策评估' in paper
-    assert '{{R:R1}}' in (ws/'.system/paper_raw.md').read_text(encoding='utf-8')
+    assert '{{R:R1}}' in (workspace_path(ws, '.system/paper_raw.md')).read_text(encoding='utf-8')
     assert _analysis().outline[0]['key']=='recommendations'
     from ai_system.research.control import public_snapshot
     progress=public_snapshot(business)
@@ -124,7 +128,7 @@ def test_registry_rejects_composite_output_lines(tmp_path):
     run_id = fs.create_run()
     fs.save_run_stdout(run_id, "ATTR word_length coef -0.0377 p 0 valAUC 0.500\nlag7 p=0.3261 lag14 p=0.8776\n"
                                "order (0,1,1)(1,0,1)_7 range 2022-01-07..2022-10-20")
-    fs.finish_run(run_id, "success")
+    fs.finish_run(run_id, "success"); seal_run(fs, run_id)
     registry = ResultRegistry.load(fs)
     for value in ("ATTR word_length coef -0.0377 p 0 valAUC 0.500", "lag7 p=0.3261 lag14 p=0.8776"):
         with pytest.raises(GroundingError, match="单独登记"):
@@ -139,7 +143,7 @@ def test_claims_preserve_explicit_refs_and_never_infer_identity_from_equal_numbe
     fs.init_structure()
     run_id = fs.create_run()
     fs.save_run_stdout(run_id, "r2 0.883 coef -0.0079 p 1.04e-164 cost 3.50 dup 0.5 0.5 n 15082")
-    fs.finish_run(run_id, "success")
+    fs.finish_run(run_id, "success"); seal_run(fs, run_id)
     registry = ResultRegistry.load(fs)
     r2 = registry.record_value("Q1", "R2", "0.883", run_id)
     coef = registry.record_value("Q1", "系数", "-0.0079", run_id)
@@ -207,7 +211,7 @@ def test_record_results_requires_explicit_run_even_when_recent_output_has_the_va
     fs.init_structure()
     run_id = fs.create_run()
     fs.save_run_stdout(run_id, "permutation p = 0.0123")
-    fs.finish_run(run_id, "success")
+    fs.finish_run(run_id, "success"); seal_run(fs, run_id)
     registry = ResultRegistry.load(fs)
     ctx = SimpleNamespace(registry=registry, kernels=SimpleNamespace(get=lambda key: None), comparison_proof=None)
     run_log = [{"run_id": run_id, "code": "", "ok": True}]

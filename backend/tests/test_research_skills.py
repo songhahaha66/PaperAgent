@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,7 +20,7 @@ def test_selection_invalidates_existing_evidence_without_relaxing_contract(tmp_p
     assert set(result['affected']) == {'Q1','Q2','Q3'}
     assert all(t['validity'] == 'stale' for t in after['experiments'].values())
     from services.chat_services.research_session import research_snapshot, resolve_action
-    (tmp_path / '.system/graph_thread.json').write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3','status':'done'}))
+    (workspace_path(tmp_path, '.system/graph_thread.json')).write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3','status':'done'}))
     snapshot = research_snapshot(tmp_path, 'demo', 'completed')
     assert snapshot.work_status == 'paused' and asyncio.run(resolve_action('resume', '继续', snapshot)) == 'resume'
     assert after['spec'] == before['spec'] and after['assumptions'] == before['assumptions']

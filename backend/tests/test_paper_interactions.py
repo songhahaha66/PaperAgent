@@ -1,4 +1,5 @@
 """Offline contracts for file-backed comments; no paid model or research reruns."""
+from services.file_services.workspace_layout import workspace_path
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -11,6 +12,8 @@ from services.chat_services import paper_project as project, paper_comments as c
 from services.chat_services import paper_sources
 from test_paper_editor import paper
 
+
+pytestmark = pytest.mark.usefixtures("offline_kernel")
 
 def run(value): return asyncio.run(value)
 
@@ -104,14 +107,14 @@ def test_comment_reads_excel_corrects_errors_and_resumes_without_replaying_tools
     saved=project.read_records(store,'paper_executions')[0]
     assert [s['state'] for s in saved['steps']]==['failed','failed','completed','completed']
     assert 'reply unavailable' in saved['error']
-    assert len(list((store.root/'.system/paper-comment-runs/lookup/runs').iterdir()))==3
+    assert len(list((workspace_path(store.root/'experiments/paper-comments/lookup', 'runs')).iterdir()))==3
     result=run(comments.execute(store,record['id'],model,resume=True))
     assert result['state']=='completed' and '第2、3行' in result['answer']
-    assert len(result['steps'])==4 and len(list((store.root/'.system/paper-comment-runs/lookup/runs').iterdir()))==3
+    assert len(result['steps'])==4 and len(list((workspace_path(store.root/'experiments/paper-comments/lookup', 'runs')).iterdir()))==3
     assert not project.read_records(store,'paper_changes')
     assert store.snapshot()['executions']==before['executions'] and store.snapshot()['artifacts']==before['artifacts']
     for step in result['steps'][2:]:
-        assert (store.root/step['result']['code_path']).is_file() and (store.root/step['result']['stdout_path']).is_file()
+        assert workspace_path(store.root, step['result']['code_path']).is_file() and workspace_path(store.root, step['result']['stdout_path']).is_file()
     assert any(c['key'].startswith('Elookup_') for c in paper_sources.cards(store))
 
 
@@ -160,7 +163,7 @@ def test_group_write_failure_restores_all_sources(paper,monkeypatch):
 def test_recovery_preserves_edit_made_after_interrupted_save(paper):
     store,_=paper;project.initialize(store)
     path=store.root/'paper.md';path.write_text('后来的人工作文。')
-    project.atomic_text(store.root/project.MARKER,json.dumps({'id':'missing','decision':'applied','before':{'paper.md':'旧稿。'},'after':{'paper.md':'中断稿。'}}))
+    project.atomic_text(workspace_path(store.root, project.MARKER),json.dumps({'id':'missing','decision':'applied','before':{'paper.md':'旧稿。'},'after':{'paper.md':'中断稿。'}}))
     project.recover(store)
     assert path.read_text()=='后来的人工作文。' and '人工稿' in project.meta(store.root)['migration_notice']
 
@@ -177,7 +180,7 @@ def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monk
     app=FastAPI();app.include_router(workspace.router)
     app.dependency_overrides[get_current_user]=lambda:7
     app.dependency_overrides[get_db]=lambda:object()
-    monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(created_by=7,output_mode='markdown'))
+    monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(architecture_version=2, created_by=7,output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda *args:store.root)
     from research_tools_helpers import ResearchToolsModel,tool
     model=ResearchToolsModel(respond=lambda messages:tool('CommentReply',{'answer':'已解释选区。'}))
@@ -192,6 +195,6 @@ def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monk
         assert len(doc['executions'])==1 and len(doc['threads'])==1
         assert doc['executions'][0]['state']=='completed'
         assert client.post('/api/workspace/work/paper/locate',json={'quote':'原来的表述'}).json()['confirmation_required']
-        monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(created_by=8))
+        monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(architecture_version=2, created_by=8))
         assert client.get('/api/workspace/work/paper/project').status_code==403
         assert client.post('/api/workspace/work/paper/comments',json=body).status_code==403

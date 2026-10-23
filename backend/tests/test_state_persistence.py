@@ -1,4 +1,5 @@
 """Authority, row-level persistence, migration and scoped execution handoffs."""
+from services.file_services.workspace_layout import workspace_path
 import asyncio
 import json
 from types import SimpleNamespace
@@ -43,7 +44,7 @@ def test_cutover_imports_legacy_activity_and_chat_once(tmp_path):
     item = {'id':'operation', 'started_at':12, 'status':'completed'}
     legacy = {'messages':[{'id':7, 'role':'user', 'content':'original'}], 'context':{'topic':'study'}}
     raw = json.dumps(legacy)
-    (root / 'chat_history.json').write_text(raw)
+    (workspace_path(root, 'chat_history.json')).write_text(raw)
     with store._transaction() as db:
         state = json.loads(db.execute('SELECT payload FROM research WHERE id=?', ('old',)).fetchone()[0])
         state['activity'] = [item]
@@ -55,7 +56,7 @@ def test_cutover_imports_legacy_activity_and_chat_once(tmp_path):
     manager = ChatHistoryManager(tmp_path)
     manager.save_message('work', 'user', 'new')
     assert [m['content'] for m in manager.get_messages('work')] == ['original', 'new']
-    assert (root / 'chat_history.json').read_text() == raw
+    assert (workspace_path(root, 'chat_history.json')).read_text() == raw
     # Reopening never imports the old JSON again or replaces newer messages.
     assert len(ChatHistoryManager(tmp_path).get_messages('work')) == 2
     with migrated._connect() as db:
@@ -77,7 +78,7 @@ def test_resume_never_rebuilds_business_from_checkpoint(tmp_path):
 
 def execution_files(store, key):
     order = store.claim(key)
-    root = store.root / '.system' / 'attempts' / order.attempt_id / 'workspace'
+    root = store.root / 'experiments' / order.attempt_id / 'workspace'
     fs = WorkspaceFS(str(root)); fs.init_structure()
     run = fs.create_run()
     fs.write_text(f'outputs/intermediate/{key}.csv', key)

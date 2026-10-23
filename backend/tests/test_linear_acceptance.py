@@ -1,4 +1,5 @@
 """Frozen linear constraints reject fabricated feasibility, and use the existing repair lifecycle."""
+from services.file_services.workspace_layout import workspace_path
 
 import json
 import sys
@@ -15,6 +16,8 @@ from helpers.contracts import submit
 
 SOURCE = 'Maximize 3x+2y; 2x+y<=8; x+2y<=8; x,y nonnegative integers. Explain the allocation. Compute another statistic.'
 
+
+pytestmark = pytest.mark.usefixtures("offline_kernel")
 
 def check():
     return DomainCheck(id='feasible', description='原题约束与目标值独立复算', left={'task_id': 'Q1', 'name': 'objective'},
@@ -34,7 +37,7 @@ def store_for(root, max_attempts=3):
         {'id': 'RQ1', 'statement': 'Feasible allocation', 'source_quote': '2x+y<=8', 'kind': 'constraint', 'task_ids': ['Q1'], 'checks': [check().model_dump()]},
         {'id': 'RQ2', 'statement': 'Explain', 'source_quote': 'Explain the allocation', 'kind': 'goal', 'task_ids': ['Q2']},
         {'id': 'RQ3', 'statement': 'Statistic', 'source_quote': 'Compute another statistic', 'kind': 'goal', 'task_ids': ['Q3']} ]}, max_attempts=max_attempts)
-    (root / '.system/graph_thread.json').write_text(json.dumps({'engine_version': ENGINE_VERSION, 'thread_id': 'linear'}))
+    (workspace_path(root, '.system/graph_thread.json')).write_text(json.dumps({'engine_version': ENGINE_VERSION, 'thread_id': 'linear'}))
     return store
 
 

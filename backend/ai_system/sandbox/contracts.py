@@ -1,10 +1,11 @@
 """Provider-neutral execution contract. Providers never own research state."""
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol, TYPE_CHECKING
+from typing import Awaitable, Callable, Protocol, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .kernel import CellResult
+    from .settings import SandboxSettings
 
 OutputHandler = Callable[[str, str], Awaitable[None]]
 EventHandler = Callable[[dict], Awaitable[None]]
@@ -23,12 +24,18 @@ class SandboxFile:
 
 
 class SandboxSession(Protocol):
-    """One isolated, stateful Python session; paths are workspace-relative.
+    """One isolated execution session for Python, compilation and file transfer.
 
     Implementations must not retry submitted code after an ambiguous failure.
     close terminates remote computation, not just the client connection.
+    root is the absolute POSIX workspace path inside the sandbox. File API
+    paths are relative to it; backend host paths never cross this boundary.
+    Frozen files must remain retrievable by cache_key after close/recreation.
+    Python memory is retained only during the live session.
     """
     id: str | None
+    root: str
+    context_id: str | None
 
     async def start(self) -> None: ...
     cache_key: str
@@ -42,10 +49,17 @@ class SandboxSession(Protocol):
     async def frozen(self, run_id: str) -> dict: ...
     async def download(self, snapshot: str, destination: Path, max_bytes: int) -> None: ...
     async def execute(self, code: str, run_id: str, output: OutputHandler) -> ExecutionOutcome: ...
-    async def finalize(self, run_id: str) -> None: ...  # optional, repeatable output preparation
+    async def exec(self, argv: Sequence[str], *, stdin: str | None = None, timeout: float = 180) -> tuple[int, str, str]: ...
+    async def finalize(self, run_id: str) -> None: ...  # repeatable preparation; explicit no-op if unnecessary
     async def interrupt(self) -> None: ...
     async def close(self) -> None: ...
-    async def release(self) -> None: ...  # healthy lease; provider may retain it until idle expiry
+
+
+class SessionFactory(Protocol):
+    """Trusted backend registration, never chosen by model tool arguments."""
+    def __call__(self, settings: "SandboxSettings", *, workspace_dir: str | Path,
+                 work_id: str | None = None, experiment_id: str | None = None,
+                 cache_key: str | None = None) -> SandboxSession: ...
 
 
 class ExecutionKernel(Protocol):

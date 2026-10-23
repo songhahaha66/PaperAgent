@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 import asyncio
 import json
 import sys
@@ -13,7 +14,7 @@ def _run(coro):
 
 
 def _manifest(ws: Path) -> dict:
-    return json.loads((ws / "manifest.json").read_text(encoding="utf-8"))
+    return json.loads((workspace_path(ws, 'manifest.json')).read_text(encoding="utf-8"))
 
 
 def test_variables_persist_between_cells(tmp_path):
@@ -28,8 +29,8 @@ def test_variables_persist_between_cells(tmp_path):
     assert second.ok and second.stdout.strip() == "42"
     runs = _manifest(tmp_path)["runs"]
     assert runs[first.run_id]["status"] == "success"
-    assert (tmp_path / "runs" / second.run_id / "input.py").read_text(encoding="utf-8") == "print(x * 2)"
-    assert (tmp_path / "runs" / second.run_id / "stdout.log").read_text(encoding="utf-8").strip() == "42"
+    assert (workspace_path(tmp_path, 'runs') / second.run_id / "input.py").read_text(encoding="utf-8") == "print(x * 2)"
+    assert (workspace_path(tmp_path, 'runs') / second.run_id / "stdout.log").read_text(encoding="utf-8").strip() == "42"
 
 
 def test_error_keeps_user_traceback_and_kernel_alive(tmp_path):

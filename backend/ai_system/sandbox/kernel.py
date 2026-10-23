@@ -102,7 +102,7 @@ class PythonKernel:
         async with self._lock:
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)
-            artifacts_dir = f"runs/{run_id}/artifacts"
+            artifacts_dir = str(self.fs.run_dir(run_id) / "artifacts")
             from .artifacts import output_hashes, capture_local_outputs
             before = output_hashes(self.fs)
             self.fs.save_run_stdout(run_id, '')
@@ -136,7 +136,7 @@ class PythonKernel:
                     stdout=response.get("stdout") or "",
                     error=response.get("error"),
                     run_id=run_id,
-                    figures=response.get("figures") or [],
+                    figures=[self.fs.rel(path) for path in response.get("figures") or []],
                 )
             except asyncio.CancelledError:
                 await self._kill()

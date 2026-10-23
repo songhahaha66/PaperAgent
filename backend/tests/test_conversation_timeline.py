@@ -2,6 +2,7 @@
 
 Authored for parent review; no model, server or browser is required.
 """
+from services.file_services.workspace_layout import workspace_path
 import json
 import multiprocessing
 import sys
@@ -93,7 +94,8 @@ def test_failed_transaction_keeps_previous_messages_and_corrupt_legacy_is_not_ov
     with pytest.raises(OSError): manager.save_message('work', 'user', 'not committed')
     assert manager.get_messages('work') == before
     root = tmp_path / 'legacy'; root.mkdir()
-    path = root / 'chat_history.json'; path.write_text('{corrupt')
+    path = workspace_path(root, 'chat_history.json')
+    path.parent.mkdir(parents=True, exist_ok=True); path.write_text('{corrupt')
     with pytest.raises(ValueError): manager.save_message('legacy', 'user', 'do not erase')
     assert path.read_text() == '{corrupt'
 

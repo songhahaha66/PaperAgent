@@ -1,4 +1,5 @@
 """论文导出（LaTeX / Word）与模板章节结构"""
+from services.file_services.workspace_layout import workspace_path
 
 import asyncio
 import shutil
@@ -45,6 +46,8 @@ PAPER = """# 用电量预测模型
 """
 
 
+pytestmark = pytest.mark.usefixtures("offline_kernel", "offline_compiler")
+
 @needs_xelatex
 def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
     import ai_system.export.markdown_prep as prep
@@ -64,15 +67,15 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
     output = asyncio.run(agent.run(TASK))
 
     assert not (ws / "paper.md").exists() and (ws / "paper.tex").exists()
-    assert not (ws / ".system/paper_raw.tex").exists()
+    assert not (workspace_path(ws, '.system/paper_raw.tex')).exists()
     from services.chat_services import paper_project
     from ai_system.research.store import ResearchStore
     store=ResearchStore(ws,agent._load_thread())
     project=paper_project.describe(store)
     assert project["main"]=="paper.tex" and project["compile"]["state"]=="current"
-    assert (ws/paper_project.VERSIONS/project["version"]/"paper.tex").read_bytes()==(ws/"paper.tex").read_bytes()
+    assert (workspace_path(ws, paper_project.VERSIONS)/project["version"]/"paper.tex").read_bytes()==(ws/"paper.tex").read_bytes()
     assert project["changes"] and all(c["status"]=="applied" for c in project["changes"])
-    assert not (ws / ".system/paper_raw.md").exists()
+    assert not (workspace_path(ws, '.system/paper_raw.md')).exists()
     assert (ws / "paper.pdf").read_bytes().startswith(b"%PDF")
     assert "paper.pdf" in output
     export_phases = [c["status"] for t, c in events if t == "paper_phase" and c["stage"] == "export"]
@@ -89,6 +92,10 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
 @needs_pandoc
 def test_export_docx_with_default_style(tmp_path):
     from docx import Document
+    from PIL import Image
+    image = tmp_path / 'outputs/figures/F1.png'
+    image.parent.mkdir(parents=True)
+    Image.new('RGB', (4, 4), 'white').save(image)
 
     result = asyncio.run(export_docx(tmp_path, PAPER))
     assert result.reference == "default"
@@ -100,7 +107,7 @@ def test_export_docx_with_default_style(tmp_path):
     # 公式转成 Word 原生公式；数在公式外的写法先并回公式
     assert "<m:oMath" in doc.element.xml
     # 默认样式：标题不再是 pandoc 的蓝色主题色
-    reference = Document(str(tmp_path / ".system" / "export" / "reference.docx"))
+    reference = Document(str(tmp_path / '.build/reference.docx'))
     heading = {s.name: s for s in reference.styles}["Heading 1"]
     assert "themeColor" not in heading.element.rPr.xml
 
@@ -124,8 +131,8 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     from docx import Document
 
     ws = _make_workspace(tmp_path)
-    (ws / ".system").mkdir(parents=True, exist_ok=True)
-    (ws / ".system" / "template_contract.md").write_text(MD_CONTRACT, encoding="utf-8")
+    (ws / 'template').mkdir(parents=True, exist_ok=True)
+    (ws / 'template/contract.md').write_text(MD_CONTRACT, encoding="utf-8")
     # This checks template/export behavior; adversarial prose and its repair are
     # covered by test_graph_end_to_end_offline, including the unregistered number.
     agent = PaperGraphAgent(FakeModel(loose_number_once=False), workspace_dir=str(ws), output_mode="word")

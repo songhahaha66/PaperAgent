@@ -1,4 +1,5 @@
 """Canonical ownership, migration and graph recovery without external model calls."""
+from services.file_services.workspace_layout import workspace_path
 import asyncio
 import json
 import shutil
@@ -22,11 +23,11 @@ def experiment(store, *, question_id=None, name='窗口均值'):
 
 def finish(store, eid, *, failed=False):
     order=store.claim(eid)
-    workspace=store.root/'.system/attempts'/order.attempt_id/'workspace'
+    workspace=store.root/'experiments'/order.attempt_id/'workspace'
     fs=WorkspaceFS(str(workspace));run=fs.create_run()
     fs.save_run_input(run,'print(42)')
     fs.save_run_stdout(run,'42\n')
-    shutil.copytree(workspace/'runs',store.root/'runs',dirs_exist_ok=True)
+    shutil.copytree(workspace_path(workspace, 'runs'),workspace_path(store.root, 'runs'),dirs_exist_ok=True)
     rootfs=WorkspaceFS(str(store.root));rootfs._manifest['runs'].update(fs._manifest['runs']);rootfs._save_manifest()
     ref=store.allocate_ref('R')
     report={'status':'failed' if failed else 'completed','summary':'输出为 {{R:'+ref+'}}','approach':'实测方法'}
@@ -59,7 +60,7 @@ def test_multiple_methods_keep_ownership_and_failed_method_does_not_block_questi
     assert len(store.registry_payload()['results'])==2
     store.recover();resume(store)
     assert store.snapshot()['executions']==state['executions']
-    thread=tmp_path/'.system/graph_thread.json'
+    thread=workspace_path(tmp_path, '.system/graph_thread.json')
     thread.write_text(json.dumps({'engine_version':'research-v3','thread_id':'research'}))
     view=research_snapshot(tmp_path,'work','paused').model_dump()
     assert 'tasks' not in view and 'plans' not in view and 'outcomes' not in view

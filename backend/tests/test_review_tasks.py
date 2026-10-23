@@ -1,4 +1,5 @@
 """Versioned recovery with controlled replies. HTTP is forbidden; zero real model calls."""
+from services.file_services.workspace_layout import workspace_path
 
 import asyncio,json,time
 from types import SimpleNamespace
@@ -98,11 +99,11 @@ def test_api_owner_research_and_budget_guards(setup,monkeypatch):
     from auth.auth import get_current_user
     from database.database import get_db
     store=setup.store
-    (store.root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
+    (workspace_path(store.root, '.system/graph_thread.json')).write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
     app=FastAPI();app.include_router(workspace.router)
     app.dependency_overrides[get_current_user]=lambda:7
     app.dependency_overrides[get_db]=lambda:object()
-    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(created_by=7,output_mode='markdown'))
+    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(architecture_version=2, created_by=7,output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda *a:store.root)
     rt=ResearchRuntime(store.root);rt.configure({'request_limit':0,'timeout_seconds':90})
     def forbidden(*a):raise AssertionError('No model construction for unauthorized or exhausted request')
@@ -113,7 +114,7 @@ def test_api_owner_research_and_budget_guards(setup,monkeypatch):
         body={'research_id':store.research_id,'stage':'sections','version':t['version'],'command_id':'retry'}
         assert client.post('/api/workspace/work/review-tasks',json=body).status_code==409
         assert client.post('/api/workspace/work/review-tasks',json={**body,'research_id':'other'}).status_code==409
-        monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(created_by=8))
+        monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(architecture_version=2, created_by=8))
         assert client.get('/api/workspace/work/review-tasks').status_code==403
         assert client.post('/api/workspace/work/review-tasks',json=body).status_code==403
     assert rt.status()['used']==0

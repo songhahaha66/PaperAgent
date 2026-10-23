@@ -2,6 +2,16 @@
 
 The backend and sandbox server have **independent filesystems**. No NFS, shared mount, or backend-visible sandbox directory is required. An SSH tunnel can carry the OpenSandbox API alone. This change has not been deployed or accepted on the ASUS server.
 
+## Shared adapter entry point
+
+Research and document compilation both call `ai_system.sandbox.factory.create_session`. OpenSandbox is the only production adapter today. Its official SDK handles HTTP and streamed execution; business code does not select a wire protocol. SSH/VPN/HTTPS routing remains deployment configuration.
+
+To add a provider, implement `SandboxSession` in `backend/ai_system/sandbox/contracts.py` and call `register_provider(name, constructor)` during trusted backend startup, before requests are served. Constructors receive settings, the backend workspace identity, optional work/experiment IDs and an optional compiler cache key. Select the registered name with `PAPERAGENT_SANDBOX_PROVIDER`. Unknown names fail; there is no automatic fallback or dynamic import from configuration.
+
+The contract includes stateful Python execution, literal argument lists and stdin for compiler execution, checksummed file transfer, frozen-output recovery, repeatable output finalization and remote destruction on `close`. An adapter must preserve these semantics, or reject unsupported operations explicitly. `close` does not mean merely disconnecting a client. The OpenSandbox-only host cache field and existing env names remain compatible; another adapter need not use a host bind mount or HTTP endpoint. Its authentication and endpoint validation belong inside that adapter.
+
+New receipts identify the provider. Pending research delivery and compiler receipt reuse reject a provider mismatch; legacy compiler receipts belong to OpenSandbox. The current guard distinguishes provider types, not multiple deployments of the same provider. Stable deployment handles, a separate runtime manager, attach/pause capabilities and new providers are follow-up work described in [DESIGN.md](DESIGN.md).
+
 ## Authority and paths
 
 The backend keeps authoritative user data under `PA_DATA_PATH/project-files`, immutable run evidence under `PA_DATA_PATH/evidence`, and ResearchStore/chat/checkpoints/manifests/leases under `PA_DATA_PATH/project-state`. Existing historical files remain under `PA_DATA_PATH/workspaces` and are export-only. Back up the backend data directory and application database. No automatic migration, private-evidence cleanup or disk quota is introduced.
@@ -33,18 +43,18 @@ Compiler command receipts bind source/input hashes, arguments and pass ordinal. 
 
 ## Checks and user acceptance
 
-Local automated checks must not contact a real model, compiler or sandbox server. The transfer mocks use a physically separate server tree; only fake file-API upload/download methods cross the boundary. They cover cache hits/changes, incremental output, immutable delivery retries, replacement containers, path isolation, compiler input/output, Word references, candidate lifecycle and publication locking.
+Local automated checks must not contact a real model or sandbox server. The transfer mocks use a physically separate server tree; only fake file-API upload/download methods cross the boundary. They cover cache hits/changes, incremental output, immutable delivery retries, replacement containers, path isolation, compiler input/output, Word references, candidate lifecycle and publication locking. Explicit offline compiler fixtures may execute trusted local compiler inputs on a separate temporary tree; these do not enable an application fallback.
 
 ```sh
 cd backend
 # Use a temporary local SQLite DATABASE_URL and a test-only SECRET_KEY.
-uv run --extra sandbox python -m pytest tests/test_api_workspace_transfer.py tests/test_workspace_runtime_regressions.py tests/test_workspace_contract.py
+uv run --extra sandbox python -m pytest tests/test_sandbox_factory.py tests/test_api_workspace_transfer.py tests/test_workspace_runtime_regressions.py tests/test_workspace_contract.py
 cd ../frontend
 npm run test:workspace
 npm run build
 ```
 
-The older transfer-protocol and local-kernel tests remain in the repository; they are not a claim that v2 has passed remote acceptance. Existing smoke scripts are guarded against accidentally contacting an old server.
+The test suite uses the current transfer and evidence protocols. Passing offline tests is not a claim that v2 has passed remote acceptance. Existing smoke scripts are guarded against accidentally contacting an old server.
 
 User-run acceptance on the actual server, not run by the implementer:
 

@@ -13,6 +13,10 @@ from ai_system.research.store import ResearchStore
 from helpers.graph import FakeModel, TASK, _Structured
 
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 class BrokenWriter(FakeModel):
     broken: bool = True
 

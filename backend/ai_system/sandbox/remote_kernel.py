@@ -138,7 +138,7 @@ class RemoteKernel:
                 execution_finished = True
                 # Commit the execution receipt before any fallible output preparation.
                 info.update(status='success' if result.ok else 'error', error=result.error,
-                            failure_kind=result.failure_kind, finalize_pending=hasattr(self.session, 'finalize'),
+                            failure_kind=result.failure_kind, finalize_pending=True,
                             delivery_error='计算已结束，文件交付尚未完成')
                 self.fs._save_manifest()
                 try:
@@ -228,6 +228,8 @@ class RemoteKernel:
                 return None
             run_id = self.pending_run
             info = self.fs.get_run_info(run_id)
+            if info.get('provider', 'opensandbox') != self.settings.provider:
+                raise RuntimeError('原执行属于另一沙箱平台；请恢复原平台配置取回文件，不会跨平台重跑')
             # Persistent files survive containers. In-memory figures do not.
             if info.get('finalize_pending'):
                 if not self._started or info.get('context_id') != getattr(self.session, 'context_id', None):

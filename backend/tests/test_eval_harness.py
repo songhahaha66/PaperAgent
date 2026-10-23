@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 import asyncio
 import json
 import sys
@@ -62,10 +63,12 @@ def _make_bench(tmp_path: Path) -> Path:
 
 def _make_workspace(root: Path) -> Path:
     ws = root / "workspace"
-    run = ws / "runs" / "run_1"
+    from services.file_services.workspace_fs import WorkspaceFS
+    fs = WorkspaceFS(ws); fs.init_structure(); fs._save_manifest()
+    run = workspace_path(ws, 'runs') / "run_1"
     run.mkdir(parents=True)
     (run / "stdout.log").write_text("accuracy=0.87312\nauc 0.912512\ncoef [1.73205 0.04511]\n", encoding="utf-8")
-    (ws / "manifest.json").write_text(json.dumps({"runs": {
+    (workspace_path(ws, 'manifest.json')).write_text(json.dumps({"files": {}, "runs": {
         "run_1": {"status": "success", "stdout": "runs/run_1/stdout.log"},
         "run_2": {"status": "error"},
         "run_3": {"status": "success"},
@@ -81,7 +84,7 @@ def _make_workspace(root: Path) -> Path:
                for name, value in {"accuracy": "0.87312", "auc": "0.912512", "coef": "1.73205", "residual": "0.04511"}.items()]
     store.commit(WorkerResult(order=store.claim("Q1"), execution_status="succeeded", acceptance="accepted", results=results,
         report={"requirement_evidence": [{"requirement_id": "RQ1", "evidence_refs": [results[0]["id"]]}]}))
-    (ws / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "eval", "engine_version": ENGINE_VERSION}))
+    (workspace_path(ws, '.system/graph_thread.json')).write_text(json.dumps({"thread_id": "eval", "engine_version": ENGINE_VERSION}))
     (ws / "paper.md").write_text(PAPER, encoding="utf-8")
     return ws
 
@@ -121,15 +124,15 @@ def test_load_and_stage_problem(tmp_path):
 @pytest.mark.parametrize("source", ["failed", "changed", "outside"])
 def test_traceability_rechecks_the_exact_registered_successful_source(tmp_path, source):
     ws = _make_workspace(tmp_path)
-    manifest = json.loads((ws / "manifest.json").read_text())
+    manifest = json.loads((workspace_path(ws, 'manifest.json')).read_text())
     if source == "failed":
         manifest["runs"]["run_1"]["status"] = "error"
     elif source == "changed":
-        (ws / "runs/run_1/stdout.log").write_text("0.8123")
+        (workspace_path(ws, 'runs/run_1/stdout.log')).write_text("0.8123")
     else:
         (ws / "elsewhere.log").write_text("0.87312")
         manifest["runs"]["run_1"]["stdout"] = "elsewhere.log"
-    (ws / "manifest.json").write_text(json.dumps(manifest))
+    (workspace_path(ws, 'manifest.json')).write_text(json.dumps(manifest))
     assert number_traceability("0.87312", ws)["rate"] == 0
 
 

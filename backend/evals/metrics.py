@@ -89,7 +89,10 @@ def _verified_values(workspace: Path) -> list[str]:
         run = manifest.get("runs", {}).get(result.run_id, {})
         if run.get("status") != "success" or not run.get("stdout"):
             continue
-        output = (root / run["stdout"]).resolve()
+        try:
+            output = workspace_path(root, run["stdout"])
+        except ValueError:
+            continue
         if not output.is_relative_to(workspace_path(root, "runs") / result.run_id) or not output.is_file():
             continue
         if value_in_output(result.value, output.read_text(encoding="utf-8")):

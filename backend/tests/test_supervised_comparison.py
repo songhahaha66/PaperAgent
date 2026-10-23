@@ -14,6 +14,8 @@ from sklearn.metrics import mean_squared_error
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.context import GraphContext
 from ai_system.modules.experiments import supervised as engine
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 async def observe_comparison(ctx,branch):
     # Historical handoff tests consume a view of the existing CSV record.
     record=await engine.compare(ctx,branch)

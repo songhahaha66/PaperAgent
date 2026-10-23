@@ -1,4 +1,5 @@
 """The single controller chooses work from actual state; no network replies."""
+from ai_system.sandbox.evidence import seal_run
 from dataclasses import asdict
 from types import SimpleNamespace
 
@@ -27,7 +28,7 @@ def study(tmp_path):
 
 def publish(study,key,value):
     order=study.store.claim(key)
-    run=study.ctx.fs.create_run();study.ctx.fs.save_run_stdout(run,str(value));study.ctx.fs.finish_run(run,'success')
+    run=study.ctx.fs.create_run();study.ctx.fs.save_run_stdout(run,str(value));study.ctx.fs.finish_run(run,'success'); seal_run(study.ctx.fs, run)
     result=study.ctx.registry.record_value(key,'answer_'+key,str(value),run)
     report={'status':'completed','summary':'Actual registered result.',
             'requirement_evidence':[{'requirement_id':rid,'evidence_refs':[result.id]} for rid in study.store.snapshot()['experiments'][key]['requirement_ids']]}

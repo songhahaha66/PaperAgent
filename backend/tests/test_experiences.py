@@ -1,4 +1,6 @@
 """Cross-study advice with real SQLite/checks, real kernel evidence, no model calls."""
+from ai_system.sandbox.evidence import seal_run
+from services.file_services.workspace_layout import workspace_path
 
 import json
 import sys
@@ -52,7 +54,7 @@ def submit(store,x=2,z=10,order=None,*,execution='succeeded',error='',ground=Tru
     from services.file_services.workspace_fs import WorkspaceFS
     fs=WorkspaceFS(str(store.root));fs.init_structure();run_id=fs.create_run()
     if ground:
-        fs.save_run_stdout(run_id,f'{x} {z}');fs.finish_run(run_id,'success')
+        fs.save_run_stdout(run_id,f'{x} {z}');fs.finish_run(run_id,'success'); seal_run(fs, run_id)
     rows=[{'id':store.allocate_ref('R'),'name':k,'value':str(v),'subproblem':'Q1','kind':'number','run_id':run_id} for k,v in [('x',x),('z',z)]] if execution=='succeeded' else []
     result=WorkerResult(order=order,execution_status=execution,acceptance='accepted' if rows else 'inconclusive',
         design=DESIGN,results=rows,report={'status':'completed' if rows else 'failed','error':error,
@@ -70,9 +72,9 @@ def adopt_ready(scope):
 def test_missing_or_changed_run_logs_stop_future_injection(env):
     a=env.store();_,r=submit(a);adopt_ready(env.scope());actual=conditions(a.root,TASK)
     assert env.scope('B').search(TASK,['linear_programming'],actual)
-    manifest=json.loads((a.root/'manifest.json').read_text())
+    manifest=json.loads((workspace_path(a.root, 'manifest.json')).read_text())
     run=manifest['runs'][r.results[0]['run_id']]
-    (a.root/run['stdout']).unlink()
+    workspace_path(a.root, run['stdout']).unlink()
     assert not env.scope('B').search(TASK,['linear_programming'],actual)
     env.scope().rebuild()
     assert not env.scope('B').search(TASK,['linear_programming'],actual)
@@ -81,8 +83,8 @@ def test_missing_or_changed_run_logs_stop_future_injection(env):
 def test_changed_stdout_cannot_be_revalidated_by_rebuilding_index(env):
     a=env.store();_,r=submit(a);adopt_ready(env.scope());actual=conditions(a.root,TASK)
     assert env.scope('B').search(TASK,['linear_programming'],actual)
-    manifest=json.loads((a.root/'manifest.json').read_text())
-    (a.root/manifest['runs'][r.results[0]['run_id']]['stdout']).write_text('2 10\nchanged after commit')
+    manifest=json.loads((workspace_path(a.root, 'manifest.json')).read_text())
+    workspace_path(a.root, manifest['runs'][r.results[0]['run_id']]['stdout']).write_text('2 10\nchanged after commit')
     assert not env.scope('B').search(TASK,['linear_programming'],actual)
     env.scope().rebuild()
     assert not env.scope('B').search(TASK,['linear_programming'],actual)

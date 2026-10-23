@@ -1,4 +1,5 @@
 """Research actions must not mutate evidence during ordinary follow-up questions."""
+from services.file_services.workspace_layout import workspace_path
 import asyncio
 import json
 import sys
@@ -27,23 +28,31 @@ class ReadOnlyChoice:
             'intent': ChoiceAnswer('question', {'question': 1}, None)})
 
 
+def workspace_bytes(root):
+    """Compare public files plus the state/evidence moved outside that tree."""
+    from services.file_services.workspace_layout import private_root, evidence_root
+    return {f'{kind}/{path.relative_to(folder).as_posix()}': path.read_bytes()
+            for kind, folder in [('public', root), ('state', private_root(root)), ('evidence', evidence_root(root))]
+            for path in folder.rglob('*') if path.is_file()}
+
+
 def seed(root):
-    (root / ".system").mkdir()
-    run = root / "runs/run_one"
+    workspace_path(root, '.system').mkdir(parents=True)
+    run = workspace_path(root, 'runs/run_one')
     run.mkdir(parents=True)
     (run / "input.py").write_text("print(0.82)")
     (run / "stdout.log").write_text("AUC=0.82")
     (root / "paper.md").write_text("# 研究\n已有报告，不得改写")
-    (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "done"}))
-    (root / ".system/results.json").write_text(json.dumps({
+    (workspace_path(root, '.system/graph_thread.json')).write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "done"}))
+    (workspace_path(root, '.system/results.json')).write_text(json.dumps({
         "results": [
             {"id": "R1", "subproblem": "Q1", "name": "AUC", "value": "0.82", "run_id": "run_one"},
             {"id": "R2", "subproblem": "Q2", "name": "Count", "value": "42", "run_id": "run_one"},
         ],
         "claims": [{"id": "C1", "subproblem": "Q1", "statement": "结果 {{R:R1}}", "strength": "倾向", "evidence": ["R1"]}],
     }))
-    (root / "manifest.json").write_text(json.dumps({
-        "api_key": "must-not-be-exposed", "runs": {
+    (workspace_path(root, 'manifest.json')).write_text(json.dumps({
+        "api_key": "must-not-be-exposed", "files": {}, "runs": {
             "run_one": {"status": "success", "input": "runs/run_one/input.py", "stdout": "runs/run_one/stdout.log"},
         },
     }))
@@ -54,7 +63,7 @@ def seed(root):
     question='检查研究结果与样本数量'
     store.initialize(question,{'subproblems':[{'id':key,'title':key,'question':question,'depends_on':[]} for key in ('Q1','Q2')],
         'requirements':[{'id':'RQ'+str(i),'statement':question,'source_quote':question,'kind':'goal','task_ids':[key],'checks':[]} for i,key in enumerate(('Q1','Q2'),1)],'assumptions':[]})
-    projection=json.loads((root/'.system/results.json').read_text())
+    projection=json.loads((workspace_path(root, '.system/results.json')).read_text())
     for i,key in enumerate(('Q1','Q2')):
         row={'kind':'number','unit':'','description':'','path':None,**projection['results'][i]}
         order=store.claim(key)
@@ -69,7 +78,7 @@ def seed(root):
             artifact_refs=[projection['results'][i]['id']],limitations=['没有外推证据'])
     store.publish_paper('# 研究\n已有报告，不得改写')
     migrate_project(root)
-    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    return workspace_bytes(root)
 
 
 def test_snapshot_scopes_real_results_and_allowlists_manifest_paths(tmp_path):
@@ -83,11 +92,11 @@ def test_snapshot_scopes_real_results_and_allowlists_manifest_paths(tmp_path):
     assert [r.id for r in selected.results] == ["R1"]
     with pytest.raises(ValueError):
         scoped_snapshot(snapshot, "Q99")
-    assert original == {p.relative_to(tmp_path).as_posix(): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
-    data = json.loads((tmp_path / "manifest.json").read_text())
+    assert original == workspace_bytes(tmp_path)
+    data = json.loads((workspace_path(tmp_path, 'manifest.json')).read_text())
     data["runs"]["run_one"]["input"] = ".system/graph_thread.json"
     data["runs"]["run_one"]["stdout"] = "../outside.log"
-    (tmp_path / "manifest.json").write_text(json.dumps(data))
+    (workspace_path(tmp_path, 'manifest.json')).write_text(json.dumps(data))
     assert research_snapshot(tmp_path, "work", "completed").runs[0].input_path is None
     assert research_snapshot(tmp_path, "work", "completed").runs[0].stdout_path is None
 
@@ -113,7 +122,7 @@ def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp
     assert blocks[0][1]["result_ids"] == ["R1"]
     assert "R2" not in requests[-1].content
     assert "只读" in requests[0].content
-    assert original == {p.relative_to(tmp_path).as_posix(): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert original == workspace_bytes(tmp_path)
 
 
 @pytest.fixture
@@ -122,7 +131,7 @@ def web(monkeypatch, tmp_path):
     root = tmp_path / 'work'
     root.mkdir()
     seed(root)
-    work = SimpleNamespace(created_by=7, status="completed", template_id=None, output_mode="markdown")
+    work = SimpleNamespace(architecture_version=2, created_by=7, status="completed", template_id=None, output_mode="markdown")
     calls, saved, statuses = [], [], []
     class ObservedHistory(ChatHistoryManager):
         def upsert_reply(self, work_id, reply):
@@ -201,10 +210,10 @@ def exchange(client, payload):
 def research_files(root):
     import sqlite3
     from contextlib import closing
-    files = {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob('*')
-             if p.is_file() and p.relative_to(root).as_posix() not in {
-                 'chat_history.json', 'chat_history.json.lock', '.system/research.sqlite'}}
-    with closing(sqlite3.connect(root / '.system/research.sqlite')) as db:
+    files = {name: content for name, content in workspace_bytes(root).items()
+             if name not in {'state/chat_history.json', 'state/chat_history.json.lock',
+                             'state/.system/research.sqlite'}}
+    with closing(sqlite3.connect(workspace_path(root, '.system/research.sqlite'))) as db:
         for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
             if name.startswith('chat_') or name == 'sqlite_sequence': continue
             files['db:' + name] = db.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall()
@@ -254,7 +263,7 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     client, work, calls, statuses, saved, root = web
     if action in {"confirm", "revise"}:
         work.status = "waiting"
-        (root / ".system/graph_thread.json").write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "interrupted"}))
+        (workspace_path(root, '.system/graph_thread.json')).write_text(json.dumps({"thread_id": "research-1", "engine_version": "research-v3", "status": "interrupted"}))
     elif action == "resume":
         work.status = "failed"
     events = exchange(client, {"problem": "换一种方法", "action": action})
@@ -276,11 +285,11 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
 def test_corrupt_records_reject_message_without_running_or_resetting(web):
     client, work, calls, statuses, saved, root = web
     import sqlite3
-    with sqlite3.connect(root/'.system/research.sqlite') as db:db.execute("UPDATE research SET payload='{' WHERE id='research-1'")
+    with sqlite3.connect(workspace_path(root, '.system/research.sqlite')) as db:db.execute("UPDATE research SET payload='{' WHERE id='research-1'")
     events = exchange(client, {"problem": "解释结果"})
     assert events[-1]["type"] == "error"
     assert not calls and not statuses and not saved
-    with sqlite3.connect(root/'.system/research.sqlite') as db:assert db.execute('SELECT payload FROM research').fetchone()[0]=='{'
+    with sqlite3.connect(workspace_path(root, '.system/research.sqlite')) as db:assert db.execute('SELECT payload FROM research').fetchone()[0]=='{'
 
 
 @pytest.mark.parametrize("destination", ["https://example.test/v1", "https://api.deepseek.com.evil.test", "http://api.deepseek.com", "https://api.deepseek.com@evil.test", "", "http://aigw.saurlax.com/v1", "https://aigw.saurlax.com.evil.test/v1", "https://aigw.saurlax.com:444/v1", "https://aigw.saurlax.com@evil.test/v1"])

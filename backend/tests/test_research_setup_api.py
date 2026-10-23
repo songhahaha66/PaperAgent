@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 import json
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ def test_setup_before_run_cannot_overwrite_checkpoint(env,client):
     from ai_system.research.runtime import ResearchRuntime
     runtime=ResearchRuntime(env.root('B'))
     assert runtime.status()['used']==0 and runtime.policy()['request_limit']==40
-    root=env.root('B');(root/'.system/graph_thread.json').write_text(json.dumps({'thread_id':'existing'}))
+    root=env.root('B');(workspace_path(root, '.system/graph_thread.json')).write_text(json.dumps({'thread_id':'existing'}))
     assert client.put(base+'/research-setup',json={'request_limit':1}).status_code==409
     assert runtime.policy()['request_limit']==40
 

@@ -27,9 +27,11 @@ def migrate_chat(db, root):
     history = default_history(root.name)
     source = workspace_path(root, 'chat_history.json')
     if source.is_file():
-        if not source.resolve().is_relative_to(root.resolve()):
-            raise ValueError('聊天历史必须位于工作区内')
-        raw = source.read_bytes()
+        # workspace_path validates the backend-private state location. It is
+        # intentionally outside the public project tree after the cutover.
+        from services.file_services.file_helper import open_read
+        with open_read(source) as stream:
+            raw = stream.read()
         imported = json.loads(raw)
         if isinstance(imported, list): imported = {'messages': imported}
         if not isinstance(imported, dict) or not isinstance(imported.get('messages', []), list):

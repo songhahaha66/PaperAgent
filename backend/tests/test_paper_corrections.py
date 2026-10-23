@@ -1,4 +1,5 @@
 """Offline product corrections with real numeric estimator checks; no real HTTP."""
+from services.file_services.workspace_layout import workspace_path
 import asyncio,hashlib,json
 from types import SimpleNamespace
 import pytest
@@ -29,7 +30,7 @@ def verified_paper(paper,monkeypatch):
     for i,(model,family,pre) in enumerate([(LinearRegression(),'ols',[]),(Ridge(alpha=1),'ridge',[])]):
         contract={'family':family,'standardize':False,'alpha':1.0 if family=='ridge' else None};audit=check_estimator(model,contract)
         code=f'# fixture estimator {family}';driver=f'# fixture project driver {family}';stdout='fixture audit complete\n';run_id=f'fixture-{i}'
-        folder=store.root/'runs'/run_id;folder.mkdir(parents=True);(folder/'input.py').write_text(driver);(folder/'stdout.log').write_text(stdout)
+        folder=workspace_path(store.root, 'runs')/run_id;folder.mkdir(parents=True);(folder/'input.py').write_text(driver);(folder/'stdout.log').write_text(stdout)
         runs[run_id]={'status':'success','input':f'runs/{run_id}/input.py','stdout':f'runs/{run_id}/stdout.log'}
         branches.append({'index':i,'status':'valid','code':code,'code_hash':hashlib.sha256(code.encode()).hexdigest(),
             'implementation_audit':audit,'estimator_contract':contract,'run_ids':[run_id],
@@ -38,9 +39,13 @@ def verified_paper(paper,monkeypatch):
         'input_refs':snapshot['executions'][task['execution_id']]['input_refs'],'policy_version':comparison.policy()['version'],
         'candidate_hashes':[digest(c) for c in candidates],'contract_hash':digest(protocol(snapshot,'Q1')),'task_hash':digest(task['subproblem']), 'protocol_hash':'fixture-protocol'})
     for b in record['branches']:
-        target=store.root/'.system/attempts'/task['execution_id']/'workspace/outputs/intermediate/comparisons'/record['id']/f"predictions-{b['index']}.json"
+        target=store.root/'experiments'/task['execution_id']/'workspace/outputs/intermediate/comparisons'/record['id']/f"predictions-{b['index']}.json"
         target.parent.mkdir(parents=True,exist_ok=True);target.write_text(json.dumps({'estimator_audit':b['implementation_audit']}));b['prediction_hash']=hashlib.sha256(target.read_bytes()).hexdigest()
-    comparison.save(record);(store.root/'manifest.json').write_text(json.dumps({'runs':runs}))
+    comparison.save(record)
+    from services.file_services.workspace_fs import WorkspaceFS
+    from ai_system.sandbox.evidence import seal_run
+    fs = WorkspaceFS(store.root); fs._manifest['runs'].update(runs)
+    for run_id in runs: seal_run(fs, run_id)
     for key in state['sections']:
         task_id=key.split(':',1)[1] if key.startswith('solve:') else None
         refs=[r['id'] for r in store.registry_payload()['results'] if r['subproblem']==task_id]

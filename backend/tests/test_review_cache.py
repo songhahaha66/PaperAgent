@@ -1,4 +1,5 @@
 """Offline review-cache tests. Any real HTTP send fails this module immediately."""
+from services.file_services.workspace_layout import workspace_path
 
 import asyncio, json, sys
 from pathlib import Path
@@ -29,9 +30,9 @@ def env(tmp_path):
     analysis={'subproblems':[{'id':'Q1','title':'数值验证','question':source,'depends_on':[]}],
         'requirements':[{'id':'RQ1','kind':'constraint','statement':source,'source_quote':source,'task_ids':['Q1'],
             'checks':[{'id':'finite','description':'有限','left':{'task_id':'Q1','name':'score'},'operator':'finite'}]}],'assumptions':[]}
-    store.initialize(source,analysis);order=store.claim('Q1');run=tmp_path/'runs/one';run.mkdir(parents=True)
+    store.initialize(source,analysis);order=store.claim('Q1');run=workspace_path(tmp_path, 'runs/one');run.mkdir(parents=True)
     (run/'input.py').write_text('print(1.0,2.0)');(run/'stdout.log').write_text('1.0 2.0\n')
-    (tmp_path/'manifest.json').write_text(json.dumps({'runs':{'one':{'status':'success','input':'runs/one/input.py','stdout':'runs/one/stdout.log'}}}))
+    (workspace_path(tmp_path, 'manifest.json')).write_text(json.dumps({'files': {}, 'runs':{'one':{'status':'success','input':'runs/one/input.py','stdout':'runs/one/stdout.log'}}}))
     results=[{'id':'R'+str(i+1),'subproblem':'Q1','kind':'number','name':name,'value':str(value),'run_id':'one','path':'','description':'','unit':''} for i,(name,value) in enumerate([('score',1.0),('baseline',2.0)])]
     claims=[{'id':'C'+str(i+1),'subproblem':'Q1','statement':'结论 {{R:R'+str(i+1)+'}}','strength':'倾向','evidence':['R'+str(i+1)]} for i in range(2)]
     report={'status':'completed','summary':'实测score为 {{R:R1}}，基线为 {{R:R2}}。',
@@ -70,7 +71,7 @@ def test_relevant_context_change_never_reuses_old_review(env,change):
     async def review():calls.append(1);return ConsistencyReview(conflicts=[])
     invoke(env,review)
     if change=='input':(env.store.root/'data/input.csv').write_text('x\n2\n')
-    elif change=='source_file':(env.store.root/'runs/one/stdout.log').write_text('changed execution output')
+    elif change=='source_file':(workspace_path(env.store.root, 'runs/one/stdout.log')).write_text('changed execution output')
     elif change=='evidence':env.ctx.registry.results['R1'].value='1.1'
     else:
         with env.store._transaction() as db:

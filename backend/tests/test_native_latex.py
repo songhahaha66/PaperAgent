@@ -1,4 +1,5 @@
 """Native section writing keeps the evidence and publication protocol intact."""
+from services.file_services.workspace_layout import workspace_path
 
 from helpers.paper import accepted_store
 import asyncio
@@ -19,6 +20,8 @@ from ai_system.modules.writing import sections as writing
 from services.chat_services.research_session import research_snapshot
 from helpers.graph import FakeModel
 
+
+pytestmark = pytest.mark.usefixtures("offline_kernel", "offline_compiler")
 
 def validate_render_current_native(store):
     """Use actual current-source validation/render; never fabricate its version."""
@@ -43,7 +46,7 @@ def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_expo
     with store._transaction() as db:
         state=store._read(db);state['spec']['output_mode']='latex';store._save(db,state,'fixture_native_output',{})
     store.save_sections({'abstract':'已保存但尚未正式交付的正文。'},[])
-    (tmp_path/'.system/graph_thread.json').write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
+    (workspace_path(tmp_path, '.system/graph_thread.json')).write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
     (tmp_path/'paper.tex').write_text('论文草稿。')
     (tmp_path/'paper.pdf').write_bytes(b'previous unregistered PDF')
     doc=project.describe(store)
@@ -54,7 +57,7 @@ def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_expo
     validate_render_current_native(store)
     assert store.snapshot()['delivery_stages']['render']['status']=='completed'
     assert project.is_latex(store)
-    assert json.loads((tmp_path/'.system/validation.json').read_text())['source_version']==project.snapshot(tmp_path)['version']
+    assert json.loads((workspace_path(tmp_path, '.system/validation.json')).read_text())['source_version']==project.snapshot(tmp_path)['version']
     assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
     store.register_exports(['paper.tex','paper.pdf'])
     assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
@@ -83,7 +86,7 @@ def test_native_table_equations_and_registered_figure_compile(tmp_path):
     result = asyncio.run(compile_pdf(tmp_path))
     assert result.pdf_path == 'paper.pdf', result.error
     assert not result.warnings
-    assert 'Overfull' not in (tmp_path / '.system/latex/paper.log').read_text()
+    assert 'Overfull' not in (tmp_path / '.build/latex/paper.log').read_text()
     assert (tmp_path / 'paper.pdf').read_bytes().startswith(b'%PDF')
     assert not (tmp_path / 'paper.md').exists()
 
@@ -95,7 +98,7 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
     monkeypatch.setattr(latex.shutil, 'which', lambda _: '/usr/bin/xelatex')
     async def fail(cmd, cwd, **kwargs):
         assert '-no-shell-escape' in cmd and '-halt-on-error' in cmd
-        (cwd / '.system/latex/paper.pdf').write_bytes(b'%PDF-partial')
+        (cwd / '.build/latex/paper.pdf').write_bytes(b'%PDF-partial')
         return 1, '! Undefined control sequence.', ''
     monkeypatch.setattr(latex, 'run_command', fail)
     result = asyncio.run(compile_pdf(tmp_path))
@@ -111,7 +114,7 @@ def test_supplied_bibliography_is_preserved_without_invented_metadata(tmp_path):
     assert '不要把这行' not in text and '尚未独立核验' in text
     assert '尚未登记' not in text
     attachment = tmp_path / 'attachment'
-    attachment.mkdir()
+    attachment.mkdir(exist_ok=True)
     (attachment / 'sources.bib').write_text('@article{source, title={Provided title}}')
     text = writing.reference_section({'task': '任务'}, ctx)
     assert 'Provided title' in text and '未补造' in text

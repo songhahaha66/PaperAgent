@@ -2,7 +2,6 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -16,7 +15,7 @@ class SandboxSettings:
     lifetime: int = 1800
     startup_timeout: int = 120
     max_file_bytes: int = 64 * 1024 * 1024
-    host_workspace_root: str = ""
+    host_workspace_root: str = ""  # OpenSandbox-only; retained for env-file compatibility.
     max_log_bytes: int = 8 * 1024 * 1024
 
     @classmethod
@@ -38,12 +37,6 @@ class SandboxSettings:
         settings = cls(**fields)
         if any(getattr(settings, n) <= 0 for n in ("lifetime", "startup_timeout", "max_file_bytes", "max_log_bytes")):
             raise ValueError("沙箱限额必须为正数")
-        if settings.provider != "local":
-            url = urlsplit(settings.endpoint)
-            if url.scheme not in {"http", "https"} or not url.hostname or url.username or url.query or url.fragment or url.path not in {"", "/"}:
-                raise ValueError("沙箱 endpoint 必须是 http(s) 服务地址，不含路径或凭据")
-            if url.scheme == "http" and url.hostname not in {"localhost", "127.0.0.1", "::1"}:
-                raise ValueError("远端沙箱使用 HTTPS，或通过 SSH 隧道连接 localhost")
-            if not settings.api_key:
-                raise ValueError("远端沙箱缺少 API key")
+        # Authentication and endpoint syntax belong to the selected adapter;
+        # another provider may use a different protocol or credential mechanism.
         return settings

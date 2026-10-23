@@ -129,11 +129,13 @@ def _read_json(root: Path, path: str) -> dict:
 def _file(root: Path, path: str | None, prefix: str = "") -> str | None:
     if not path or not isinstance(path, str):
         return None
-    target = workspace_path(root, path)
-    if not target.is_file():
+    if prefix and not path.startswith(prefix):
         return None
-    relative = path
-    return relative if not prefix or relative.startswith(prefix) else None
+    try:
+        target = workspace_path(root, path)
+        return path if target.is_file() else None
+    except (ValueError, OSError):
+        return None
 
 
 def research_snapshot(workspace: str | Path, work_id: str, status: str) -> ResearchSnapshot:
@@ -495,7 +497,7 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
         safe = _file(root, path)
         if not safe or not safe.endswith((".md", ".log")):
             continue
-        with (root / safe).open(encoding="utf-8", errors="replace") as source:
+        with workspace_path(root, safe).open(encoding="utf-8", errors="replace") as source:
             text = source.read(min(6000, budget))
         if text:
             snippets.append({"path": safe, "excerpt": text})

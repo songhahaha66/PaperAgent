@@ -11,6 +11,8 @@ from ai_system.modules.experiments.execution import submission_schema
 from helpers.submissions import branch, report
 
 
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 def draft(left="Q1", right=None):
     check = {"id": "trend_detection", "description": "趋势估计有限",
              "left": {"task_id": left, "name": "slope"}, "operator": "finite"}

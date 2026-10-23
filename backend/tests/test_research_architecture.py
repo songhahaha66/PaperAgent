@@ -1,4 +1,5 @@
 """Offline architecture contracts; no external models or historical user data."""
+from ai_system.sandbox.evidence import seal_run
 import asyncio
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -16,12 +17,14 @@ from ai_system.research.views import questions
 from services.file_services.workspace_fs import WorkspaceFS
 
 
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 @pytest.fixture
 def study(tmp_path):
     store=ResearchStore(tmp_path,'architecture');store.initialize('Compare aggregate records and selected subjects.')
     eid=add_experiment(store,'What does the supplied material establish?',method='count source rows',conditions='entire source',evaluation='retain original row identity')
     order=store.claim(eid)
-    fs=WorkspaceFS(str(tmp_path));run=fs.create_run();fs.save_run_input(run,'print(12)');fs.save_run_stdout(run,'12\n');fs.finish_run(run,'success')
+    fs=WorkspaceFS(str(tmp_path));run=fs.create_run();fs.save_run_input(run,'print(12)');fs.save_run_stdout(run,'12\n');fs.finish_run(run,'success'); seal_run(fs, run)
     registry=ResultRegistry(fs,allocate_id=store.allocate_ref)
     value=registry.record_value(eid,'source record count','12',run,meaning={
         'object':'source observations','scope':'entire source','statistic':'number of source records','lineage':[]})

@@ -1,31 +1,18 @@
-"""Shared builders extracted from test_sandbox_providers."""
+"""Controlled execution on the current, separate-filesystem transfer protocol."""
 import asyncio
-import hashlib
-from ai_system.sandbox.contracts import ExecutionOutcome, SandboxFile
+from helpers.remote_files import RemoteFiles
+from ai_system.sandbox.contracts import ExecutionOutcome
 
 
-class FakeSession:
-    id = 'remote-test'
-
-    def __init__(self):
-        self.content = {}
-        self.started = self.closed = self.interrupted = 0
-        self.calls = []
+class FakeSession(RemoteFiles):
+    def __init__(self, workspace):
+        super().__init__(workspace)
         self.ready = asyncio.Event()
-
-    async def start(self):
-        self.started += 1
-
-    async def upload(self, path, source):
-        self.content[path] = source.read_bytes()
-
-    async def delete(self, path):
-        self.content.pop(path, None)
 
     async def execute(self, code, run_id, output):
         self.calls.append(code)
         await output('stdout', 'started\n')
-        self.content['outputs/table.csv'] = code.encode()
+        (self.remote / 'outputs/table.csv').write_text(code)
         self.ready.set()
         if code == 'wait':
             await asyncio.sleep(10)
@@ -35,15 +22,3 @@ class FakeSession:
             raise ConnectionError('connection lost')
         await output('stderr', 'warning\n')
         return ExecutionOutcome('ValueError: test' if code == 'error' else None)
-
-    async def files(self):
-        return [SandboxFile(path, len(data), hashlib.sha256(data).hexdigest()) for path, data in self.content.items()]
-
-    async def download(self, path, destination, max_bytes):
-        destination.write_bytes(self.content[path])
-
-    async def interrupt(self):
-        self.interrupted += 1
-
-    async def close(self):
-        self.closed += 1

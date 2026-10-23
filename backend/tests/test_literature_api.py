@@ -19,7 +19,7 @@ def client(tmp_path,monkeypatch):
     app=FastAPI();app.include_router(workspace.router)
     app.dependency_overrides[get_current_user]=lambda:7
     app.dependency_overrides[get_db]=lambda:object()
-    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(created_by=7))
+    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(architecture_version=2, created_by=7))
     monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda _:tmp_path)
     with TestClient(app) as c:yield c
 
@@ -32,7 +32,7 @@ def client(tmp_path,monkeypatch):
     ('POST','/evidence/C1/check',{'claim':'This claim needs evidence support'}),
 ])
 def test_every_literature_route_checks_work_ownership(client,monkeypatch,method,path,body):
-    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(created_by=8))
+    monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(architecture_version=2, created_by=8))
     assert client.request(method,'/api/workspace/work/literature'+path,json=body).status_code==403
 
 

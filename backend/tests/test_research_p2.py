@@ -12,6 +12,8 @@ from ai_system.research.models import DomainCheck, ResultSelector
 from ai_system.research.store import ResearchStore
 
 
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 @pytest.mark.parametrize("operator,value,expected,right,tolerance,outcome", [
     ("finite", "nan", None, False, 0, "inconclusive"),
     ("finite", "inf", None, False, 0, "inconclusive"),

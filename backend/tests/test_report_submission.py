@@ -1,4 +1,5 @@
 """Submit, receive concrete gaps, fill them using tools, and submit again."""
+from services.file_services.workspace_layout import workspace_path
 
 from helpers.submissions import branch, seed, report
 import asyncio
@@ -17,6 +18,8 @@ from ai_system.graph.context import GraphContext
 from ai_system.modules.experiments.execution import _solve_loop, build_task, submission_schema
 from helpers.graph import FakeModel
 
+
+pytestmark = pytest.mark.usefixtures("offline_kernel")
 
 @pytest.mark.parametrize("failure", ["missing_metric", "unknown_reference", "foreign_reference", "changed_output", "failed_run", "other_attempt"])
 def test_submission_rejects_missing_metrics_out_of_scope_refs_and_invalid_execution_sources(tmp_path, failure):
@@ -129,7 +132,7 @@ def test_real_tool_feedback_fills_registration_or_reference_gaps_without_rerunni
     assert own.run_id==runs[0]['run_id'] and runs[0]['ok']
     ctx.registry.verify(own.value,own.run_id)
     assert len([r for r in ctx.registry.results.values() if r.name=='answer'])==1
-    transcript = json.loads((tmp_path / ".system/transcripts/Q1.json").read_text())
+    transcript = json.loads((workspace_path(tmp_path, '.system/transcripts/Q1.json')).read_text())
     observations=[m['data'] for m in transcript if m['type']=='tool']
     assert any('answer_finite' in str(m.get('content')) for m in observations)
     if mode=='unknown_reference':
@@ -153,4 +156,4 @@ def test_repeated_invalid_submissions_exhaust_budget_without_a_fake_final_report
     assert status == "incomplete" and "步数" in error and "answer" in error
     assert submitted == {} and not ctx.registry.for_subproblem("Q1")
     assert len(runs) == 1 and model.submissions <= 5
-    assert (tmp_path / ".system/transcripts/Q1.json").exists()
+    assert (workspace_path(tmp_path, '.system/transcripts/Q1.json')).exists()

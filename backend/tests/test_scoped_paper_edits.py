@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 """Exact fragment proposals, budgeted failure recovery and publication boundaries."""
 import asyncio
 from types import SimpleNamespace
@@ -88,7 +89,7 @@ def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkey
     project.initialize(v.store)
     p=project.propose_change(v.store,None,None,[{**bound,'replacement':replacement}])
     compiles=[]
-    async def failure(*args):
+    async def failure(*args, **kwargs):
         compiles.append(1)
         from ai_system.export.latex import LatexResult
         return LatexResult('paper.tex',error='compiler failed')
@@ -105,7 +106,7 @@ def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkey
         assert (v.store.root/'paper.tex').read_text()==original.decode('utf-8').replace(v.old,replacement)
         doc=project.describe(v.store)
         assert doc['compile']['state']=='failed' and 'compiler failed' in doc['compile']['message']
-        assert (v.store.root/project.VERSIONS/applied['applied_version']/'paper.tex').read_bytes()==(v.store.root/'paper.tex').read_bytes()
-    assert (v.store.root/project.VERSIONS/bound['version']/'paper.tex').read_bytes()==original
+        assert (workspace_path(v.store.root, project.VERSIONS)/applied['applied_version']/'paper.tex').read_bytes()==(v.store.root/'paper.tex').read_bytes()
+    assert (workspace_path(v.store.root, project.VERSIONS)/bound['version']/'paper.tex').read_bytes()==original
     assert v.store.snapshot()==before and not v.calls
     assert (v.store.root/'paper.pdf').read_bytes()==b'previous PDF'

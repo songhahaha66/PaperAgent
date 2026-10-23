@@ -11,51 +11,48 @@ from ai_system.graph.context import GraphContext
 from services.file_services.workspace_fs import WorkspaceFS
 
 
-@pytest.mark.parametrize('failure,recovery', [
-    ('inventory', 'same'), ('download', 'same'),
-    ('inventory', 'replacement'), ('inventory', 'different_root'),
-    ('download', 'replacement'), ('download', 'changed_file'),
-])
-def test_rebuilt_kernel_recovers_only_original_outputs(tmp_path, failure, recovery):
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
+@pytest.mark.parametrize('recovery', ['replacement', 'changed_file', 'lost_snapshot', 'different_cache'])
+def test_rebuilt_kernel_recovers_only_original_outputs(tmp_path, recovery):
     class InterruptedFiles(FakeSession):
         offline = True
-        async def files(self):
-            if self.calls and self.offline and failure == 'inventory':
-                raise ConnectionError('inventory unavailable')
-            return await super().files()
         async def download(self, path, destination, max_bytes):
-            if self.offline and failure == 'download':
+            if self.offline:
                 raise ConnectionError('download unavailable')
             await super().download(path, destination, max_bytes)
     async def run():
-        session = InterruptedFiles()
+        session = InterruptedFiles(tmp_path)
         settings = SandboxSettings(provider='fake')
         kernel = RemoteKernel(tmp_path, session, settings)
         kernel.fs.write_text('outputs/table.csv', 'old local version')
         first = await kernel.execute('new remote version')
         assert first.ok and first.delivery_error
-        info = kernel.fs.get_run_info(first.run_id)
-        assert (info['pending_files'] is None) == (failure == 'inventory')
+        assert kernel.fs.get_run_info(first.run_id)['output_manifest']
+        await kernel.close()
         session.offline = False
-        if recovery == 'replacement':
-            session.id = 'different-sandbox'
-        elif recovery == 'different_root':
-            session.root = '/workspace/another-experiment'
-        elif recovery == 'changed_file':
-            session.content.clear()
+        if recovery == 'changed_file':
+            (session.remote / 'outputs/table.csv').write_text('later scratch bytes')
+        elif recovery == 'lost_snapshot':
+            import shutil
+            shutil.rmtree(session.remote / '.pa-runs')
+        elif recovery == 'different_cache':
+            session.cache_key = 'f' * 64
         rebuilt = RemoteKernel(tmp_path, session, settings)
-        if recovery != 'same':
-            with pytest.raises(RuntimeError, match='不可用'):
+        try:
+            if recovery in {'lost_snapshot', 'different_cache'}:
+                with pytest.raises((RuntimeError, FileNotFoundError)):
+                    await rebuilt.retry_outputs()
+                assert rebuilt.pending_run == first.run_id
+                assert (tmp_path / 'outputs/table.csv').read_text() == 'old local version'
+            else:
                 await rebuilt.retry_outputs()
-            assert rebuilt.fs.get_run_info(first.run_id)['delivery_error']
-            assert rebuilt.pending_run == first.run_id
-        else:
-            await rebuilt.retry_outputs()
-            assert rebuilt.fs.get_run_info(first.run_id)['delivery_error'] is None
-            assert (tmp_path/'outputs/table.csv').read_text() == 'new remote version'
-            assert rebuilt.fs.read_text(f'runs/{first.run_id}/artifacts/outputs/table.csv') == 'new remote version'
-        assert session.calls == ['new remote version']
-        await rebuilt.close()
+                assert rebuilt.fs.get_run_info(first.run_id)['delivery_error'] is None
+                assert (tmp_path / 'outputs/table.csv').read_text() == 'new remote version'
+                assert rebuilt.fs.read_text(f'runs/{first.run_id}/artifacts/outputs/table.csv') == 'new remote version'
+            assert session.calls == ['new remote version']
+        finally:
+            await rebuilt.close()
     asyncio.run(run())
 
 
@@ -74,7 +71,7 @@ def test_cancelling_delivery_preserves_computation_for_restart(tmp_path, phase):
                     entered.set()
                     await asyncio.Event().wait()
                 await super().download(path, destination, max_bytes)
-        session = Interrupted()
+        session = Interrupted(tmp_path)
         kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
         task = asyncio.create_task(kernel.execute('42'))
         await asyncio.wait_for(entered.wait(), 1)
@@ -83,48 +80,49 @@ def test_cancelling_delivery_preserves_computation_for_restart(tmp_path, phase):
         info = kernel.fs.get_run_info(kernel.pending_run)
         assert info['status'] == 'success' and info['error'] is None and info['delivery_error']
         resume = True
-        rebuilt = RemoteKernel(tmp_path, session, kernel.settings)
+        if phase == 'download':
+            await kernel.close()
+        rebuilt = kernel if phase == 'finalize' else RemoteKernel(tmp_path, session, kernel.settings)
         await rebuilt.retry_outputs()
         assert (tmp_path/'outputs/table.csv').read_text() == '42' and session.calls == ['42']
         await rebuilt.close()
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('recovery', ['same', 'lost_context', 'lost_output'])
+@pytest.mark.parametrize('recovery', ['same', 'lost_context', 'replacement'])
 def test_figure_finalization_retries_without_reexecuting_calculation(tmp_path, recovery):
     class Figures(FakeSession):
-        context_id = 'original-context'
         offline = True
         async def finalize(self, run_id):
             if self.offline:
                 raise RuntimeError('save figures failed')
-            self.content[f'runs/{run_id}/artifacts/figure_1.png'] = b'figure'
-        async def download(self, path, destination, max_bytes):
-            if self.offline and recovery == 'lost_output': raise ConnectionError('offline')
-            await super().download(path, destination, max_bytes)
+            (self.remote / 'outputs/figure_1.png').write_bytes(b'figure')
     async def run():
-        session = Figures()
+        session = Figures(tmp_path)
         kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
         first = await kernel.execute('42')
-        assert first.ok and first.error is None and first.failure_kind is None
-        assert 'save figures failed' in first.delivery_error
-        if recovery != 'lost_output': assert (tmp_path/'outputs/table.csv').read_text() == '42'
-        assert kernel.fs.get_run_info(first.run_id)['status'] == 'success'
+        assert first.ok and first.failure_kind is None and 'save figures failed' in first.delivery_error
+        assert not (tmp_path / 'outputs/table.csv').exists(), 'Incomplete figures prevent freezing the output inventory'
         session.offline = False
-        if recovery == 'lost_context': session.context_id = 'new-context'
-        if recovery == 'lost_output': session.content['outputs/table.csv'] = b'different version'
-        rebuilt = RemoteKernel(tmp_path, session, kernel.settings)
-        if recovery != 'same':
-            with pytest.raises(RuntimeError, match='不可用'):
-                await rebuilt.retry_outputs()
-            assert rebuilt.fs.get_run_info(first.run_id)['delivery_error']
-        else:
-            await rebuilt.retry_outputs()
-            info = rebuilt.fs.get_run_info(first.run_id)
-            assert not info['finalize_pending'] and not info['delivery_error']
-            assert rebuilt.fs.read_text(f'runs/{first.run_id}/artifacts/figure_1.png') == 'figure'
-        assert session.calls == ['42']
-        await rebuilt.close()
+        if recovery == 'lost_context':
+            session.context_id = 'new-context'
+        if recovery == 'replacement':
+            await kernel.close()
+        target = kernel if recovery != 'replacement' else RemoteKernel(tmp_path, session, kernel.settings)
+        try:
+            if recovery != 'same':
+                with pytest.raises(RuntimeError, match='内存已失效'):
+                    await target.retry_outputs()
+                assert target.pending_run == first.run_id
+            else:
+                await target.retry_outputs()
+                assert not target.fs.get_run_info(first.run_id)['delivery_error']
+                assert target.fs.read_text(f'runs/{first.run_id}/artifacts/outputs/figure_1.png') == 'figure'
+            assert session.calls == ['42']
+        finally:
+            await target.close()
+            if target is not kernel:
+                await kernel.close()
     asyncio.run(run())
 
 
@@ -135,7 +133,7 @@ def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
             if self.offline: raise ConnectionError('file channel unavailable')
             await super().download(path, destination, max_bytes)
     async def run():
-        session = OfflineFiles()
+        session = OfflineFiles(tmp_path)
         kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
         first = await kernel.execute('value\n42\n')
         assert first.ok and first.delivery_error
@@ -153,16 +151,15 @@ def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
 
 def test_root_csv_is_collected_and_private_metadata_is_rejected(tmp_path):
     from ai_system.sandbox.remote_kernel import safe_path
-    import pytest
     class RootOutput(FakeSession):
         async def execute(self, code, run_id, output):
             result=await super().execute(code,run_id,output)
-            self.content['waiting_summary.csv']=b'value\n42\n'
+            (self.remote/'waiting_summary.csv').write_bytes(b'value\n42\n')
             return result
     async def run():
-        kernel=RemoteKernel(tmp_path/'attempt',RootOutput(),SandboxSettings(provider='fake'))
+        kernel=RemoteKernel(tmp_path/'attempt',RootOutput(tmp_path/'attempt'),SandboxSettings(provider='fake'))
         result=await kernel.execute('value\n42\n')
-        assert result.ok and 'waiting_summary.csv' in result.files
+        assert result.ok and any(p.endswith('/waiting_summary.csv') for p in result.files)
         public=WorkspaceFS(str(tmp_path/'public'));public.init_structure()
         files=capture_run_files(kernel.fs,public)
         assert any(p.endswith('/waiting_summary.csv') for p in files)

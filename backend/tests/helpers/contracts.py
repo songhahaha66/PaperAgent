@@ -1,4 +1,5 @@
 """Shared builders extracted from test_research_p2."""
+from services.file_services.workspace_layout import workspace_path
 from pathlib import Path
 from ai_system.research.store import ResearchStore
 from ai_system.research.models import Assumption, DomainCheck, Requirement, ResultSelector, WorkerResult
@@ -47,7 +48,7 @@ async def resume_saved_contract(agent):
         thread='saved-contract'
         ResearchStore(agent.workspace_dir,thread).initialize(TASK,problem().model_dump())
         agent._save_thread(thread,'paused')
-        async with AsyncSqliteSaver.from_conn_string(str(Path(agent.workspace_dir)/'.system/graph.sqlite')) as saver:
+        async with AsyncSqliteSaver.from_conn_string(str(workspace_path(Path(agent.workspace_dir), '.system/graph.sqlite'))) as saver:
             graph=compile_graph(saver)
             await graph.aupdate_state({'configurable':{'thread_id':thread}},
                                      {'research_blocked':False},as_node='solve_join')

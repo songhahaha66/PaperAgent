@@ -1,4 +1,5 @@
 """Available evidence is independent of acceptance and model review health."""
+from services.file_services.workspace_layout import workspace_path
 import json
 import sys
 from pathlib import Path
@@ -22,7 +23,7 @@ def submit(store, *, fault=False, reviewed=True):
 
 
 def snapshot(store):
-    (store.root / '.system/graph_thread.json').write_text(json.dumps({'thread_id': store.research_id, 'engine_version': 'research-v3'}))
+    (workspace_path(store.root, '.system/graph_thread.json')).write_text(json.dumps({'thread_id': store.research_id, 'engine_version': 'research-v3'}))
     return research_snapshot(store.root, 'test-outcomes', 'paused')
 
 

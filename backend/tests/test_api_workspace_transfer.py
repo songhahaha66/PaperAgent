@@ -162,12 +162,9 @@ def test_remote_manifest_cannot_escape_backend_archive(root,tmp_path,unsafe):
 class Compiler(RemoteFiles):
     def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs);self.commands=[];self.reference=None;self.fail_export=False
-    async def command(self,text,timeout):
-        self.commands.append(text)
-        if text.startswith('printf '):
-            parts=text.split(' | base64 -d | ',1);encoded=shlex.split(parts[0])[2]
-            markdown=base64.b64decode(encoded).decode();argv=shlex.split(parts[1])
-        else:argv=shlex.split(text);markdown=''
+    async def exec(self,argv,*,stdin=None,timeout=180):
+        self.commands.append((list(argv), stdin))
+        markdown=stdin or ''
         if argv[0]=='xelatex':
             assert (self.remote/'paper.tex').is_file() and (self.remote/'custom.sty').read_text()=='local dependency'
             build=self.remote/'.build/latex';assert build.is_dir(), 'adapter must create remote compiler output directory'
@@ -194,11 +191,12 @@ class Compiler(RemoteFiles):
 @pytest.fixture
 def compiler_factory(tmp_path,monkeypatch):
     sessions=[]
-    settings=SandboxSettings(provider='opensandbox',api_key='fake-key',host_workspace_root='/remote-only/cache')
+    settings=SandboxSettings(provider='compiler-test',api_key='fake-key')
     def create(config,*,workspace_dir,cache_key=None,**kwargs):
         value=Compiler(workspace_dir,tmp_path/'remote-compiler',cache_key=cache_key,settings=config)
         sessions.append(value);return value
-    monkeypatch.setattr('ai_system.sandbox.commands.OpenSandboxSession',create)
+    from ai_system.sandbox import factory
+    monkeypatch.setitem(factory._PROVIDERS,'compiler-test',create)
     monkeypatch.setattr(SandboxSettings,'from_env',classmethod(lambda cls:settings))
     return sessions
 
@@ -227,10 +225,10 @@ def test_default_word_reference_roundtrip_and_failed_output_retry_across_staging
     from ai_system.export.docx import export_docx
     # Install a one-shot output delivery fault; source and reference transfers still work.
     import ai_system.sandbox.commands as adapter
-    factory=adapter.OpenSandboxSession
+    factory=adapter.create_session
     def create(*args,**kwargs):
         session=factory(*args,**kwargs);session.fail_export=len(compiler_factory)==1;return session
-    monkeypatch.setattr(adapter,'OpenSandboxSession',create)
+    monkeypatch.setattr(adapter,'create_session',create)
     async def check():
         first=root/'.build/first';first.mkdir(parents=True);(first/'paper.md').write_text('# Title\nText')
         with pytest.raises(RuntimeError,match='delivery offline'):await export_docx(first,'# Title\nText')
@@ -392,15 +390,15 @@ def test_unknown_compiler_completion_is_not_replayed(root,compiler_factory,monke
     (root/'paper.tex').write_text('\\documentclass{article}\\begin{document}Text\\end{document}')
     (root/'custom.sty').write_text('local dependency')
     import ai_system.sandbox.commands as adapter
-    factory=adapter.OpenSandboxSession
+    factory=adapter.create_session
     def create(*args,**kwargs):
         session=factory(*args,**kwargs)
         async def interrupted(*args,**kwargs):
             session.commands.append('submission with unknown result')
             raise ConnectionError('completion disconnected')
-        session.command=interrupted
+        session.exec=interrupted
         return session
-    monkeypatch.setattr(adapter,'OpenSandboxSession',create)
+    monkeypatch.setattr(adapter,'create_session',create)
     async def check():
         first=await compile_pdf(root);second=await compile_pdf(root)
         assert not first.success and not second.success

@@ -25,6 +25,13 @@ class _WorkSandbox:
 
 class OpenSandboxSession:
     def __init__(self, settings: SandboxSettings, *, work_id=None, experiment_id=None, workspace_dir=None, cache_key=None):
+        url = urlsplit(settings.endpoint)
+        if url.scheme not in {'http', 'https'} or not url.hostname or url.username or url.query or url.fragment or url.path not in {'', '/'}:
+            raise ValueError('OpenSandbox endpoint 必须是 http(s) 服务地址，不含路径或凭据')
+        if url.scheme == 'http' and url.hostname not in {'localhost', '127.0.0.1', '::1'}:
+            raise ValueError('远端 OpenSandbox 使用 HTTPS，或通过 SSH 隧道连接 localhost')
+        if not settings.api_key:
+            raise ValueError('OpenSandbox 缺少 API key')
         self.settings = settings
         self.id = None
         self.sandbox = None
@@ -295,6 +302,18 @@ class OpenSandboxSession:
             await asyncio.gather(task, return_exceptions=True)
             failed.cancel()
             self.execution_id = None
+
+    async def exec(self, argv, *, stdin=None, timeout=180):
+        """Translate literal arguments to the shell API of the pinned SDK."""
+        import base64
+        import shlex
+        if isinstance(argv, (str, bytes)) or not argv or not all(isinstance(arg, str) for arg in argv):
+            raise ValueError('沙箱命令必须是非空字符串参数列表')
+        command = shlex.join(argv)
+        if stdin is not None:
+            encoded = base64.b64encode(stdin.encode('utf-8')).decode('ascii')
+            command = 'printf %s ' + shlex.quote(encoded) + ' | base64 -d | ' + command
+        return await self.command(command, timeout)
 
     async def interrupt(self):
         if self.interpreter and self.execution_id:

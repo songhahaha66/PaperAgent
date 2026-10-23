@@ -13,6 +13,8 @@ from ai_system.research.store import ResearchStore
 from services.chat_services.research_session import research_snapshot
 
 
+pytestmark = pytest.mark.usefixtures("offline_kernel")
+
 class VersionAwareModel(FakeModel):
     fail_title_once: str = ''
     def _solver_step(self, task, messages):

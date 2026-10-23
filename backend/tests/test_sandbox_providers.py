@@ -164,7 +164,7 @@ def test_opensandbox_callback_error_stops_even_when_sdk_swallows_handlers(tmp_pa
         async def output(channel, text):
             raise ValueError('quota')
         session = OpenSandboxSession(
-            SandboxSettings(host_workspace_root='/server-only/cache'), workspace_dir=tmp_path)
+            SandboxSettings(api_key='fake',host_workspace_root='/server-only/cache'), workspace_dir=tmp_path)
         session.interpreter = SimpleNamespace(codes=SimpleNamespace(run=sdk_run))
         with pytest.raises(ValueError, match='quota'):
             await asyncio.wait_for(session.execute('print(1)', 'run-test', output), 1)

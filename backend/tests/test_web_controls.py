@@ -66,7 +66,7 @@ def test_connection_errors_never_return_provider_secrets(config_client,monkeypat
 
 
 def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeypatch,tmp_path):
-    work = SimpleNamespace(created_by=7,status='created',template_id=None,output_mode='markdown')
+    work = SimpleNamespace(architecture_version=2, created_by=7,status='created',template_id=None,output_mode='markdown')
     root = tmp_path / 'pause-test'
     root.mkdir()
     history = ChatHistoryManager(str(tmp_path))

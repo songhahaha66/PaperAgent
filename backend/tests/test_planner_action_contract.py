@@ -1,4 +1,5 @@
 """Real Agent tool loop with controlled replies; no external API validation claim."""
+from services.file_services.workspace_layout import workspace_path
 import asyncio
 import json
 import pytest
@@ -13,6 +14,8 @@ from research_tools_helpers import ResearchToolsModel, tool
 PLAN={'conditions':'entire supplied source','evaluation':'retain original record identity',
       'candidates':[{'name':'source count','instruction':'Count supplied observations'}]}
 
+
+pytestmark = pytest.mark.usefixtures("offline_kernel")
 
 def context(tmp_path,respond):
     model=ResearchToolsModel(respond=respond)
@@ -46,7 +49,7 @@ def test_create_then_schedule_and_correct_extra_fields_in_same_agent(tmp_path,ex
     errors=[a for a in state['activity'] if a['status']=='failed']
     assert len(errors)==1 and errors[0]['inputs']['question_id']==next(iter(state['questions']))
     assert next(iter(extra)) in errors[0]['message']
-    transcript=next((tmp_path/'.system/transcripts').glob('*.json')).read_text()
+    transcript=next((workspace_path(tmp_path, '.system/transcripts')).glob('*.json')).read_text()
     assert 'fixed' in transcript and 'bad' in transcript
 
 

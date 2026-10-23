@@ -37,9 +37,9 @@ def candidate(store):
 
 
 @pytest.mark.skipif(not shutil.which('pandoc'),reason='pandoc unavailable')
-def test_saved_word_document_opens_and_edits_without_a_graph_checkpoint(paper):
+def test_saved_word_document_opens_and_edits_without_a_graph_checkpoint(paper, offline_compiler):
     store,_=paper
-    checkpoint=store.root/'.system/graph.sqlite'
+    checkpoint=workspace_path(store.root, '.system/graph.sqlite')
     assert not checkpoint.exists()
     before=store.snapshot()
     assert asyncio.run(editor.document(store))['sections']
@@ -65,7 +65,7 @@ def test_review_apply_is_section_local_versioned_and_idempotent(paper):
             assert after['sections'][key] == before['sections'][key]
     assert after['sections']['solve:Q1']['revision'] == before['sections']['solve:Q1']['revision'] + 1
     assert '修订后的表述' in (store.root / 'paper.md').read_text()
-    assert list((store.root / '.system/research' / store.research_id / 'papers').glob('*before-edit.md'))
+    assert list((workspace_path(store.root, '.system/research') / store.research_id / 'papers').glob('*before-edit.md'))
     asyncio.run(editor.decide(store, p['id'], True, 'markdown'))
     assert store.snapshot() == after
 
@@ -106,7 +106,7 @@ def test_api_review_flow_and_ownership(paper, monkeypatch):
     app = FastAPI(); app.include_router(workspace.router)
     app.dependency_overrides[get_current_user] = lambda: 7
     app.dependency_overrides[get_db] = lambda: object()
-    monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=7, output_mode='markdown'))
+    monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(architecture_version=2, created_by=7, output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service, 'get_workspace_path', lambda *args: store.root)
     with TestClient(app) as client:
         document = client.get('/api/workspace/work/paper').json()
@@ -118,7 +118,7 @@ def test_api_review_flow_and_ownership(paper, monkeypatch):
         response = client.post('/api/workspace/work/paper/proposals/' + p['id'], json={'research_id': store.research_id, 'decision': 'apply'})
         assert response.status_code == 200 and response.json()['status'] == 'applied'
         assert client.post('/api/workspace/work/paper/proposals', json=request).status_code == 409
-        monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(created_by=8))
+        monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(architecture_version=2, created_by=8))
         assert client.get('/api/workspace/work/paper').status_code == 403
         assert client.post('/api/workspace/work/paper/proposals', json=request).status_code == 403
 

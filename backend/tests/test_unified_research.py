@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 import asyncio,json,sys
 from pathlib import Path
 import httpx,pytest
@@ -34,7 +35,7 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     with pytest.raises(ValueError,match='发布前文献引用未获原文支持'):
         asyncio.run(render(state,SimpleNamespace(context=ctx)))
     assert not (tmp_path/'paper.md').exists()
-    assert (tmp_path/'.system/paper_raw.md').exists()
+    assert (workspace_path(tmp_path, '.system/paper_raw.md')).exists()
 
 
 def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_path):
@@ -47,7 +48,7 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
     agent=PaperGraphAgent(None,workspace_dir=str(tmp_path))
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(agent._invoke(Graph(),None,{},'same-study',SimpleNamespace()))
-    saved=json.loads((tmp_path/'.system/graph_thread.json').read_text())
+    saved=json.loads((workspace_path(tmp_path, '.system/graph_thread.json')).read_text())
     assert saved['status']=='paused' and saved['thread_id']=='same-study'
     assert runtime.status()['used']==1
 

@@ -1,4 +1,5 @@
 """Shared builders extracted from test_report_submission."""
+from ai_system.sandbox.evidence import seal_run
 
 
 def branch(sid="Q1", *, kind="compute", figure=False):
@@ -21,7 +22,7 @@ def seed(ctx, runs, sid="Q1", name="answer", value="6"):
     rid = ctx.fs.create_run()
     ctx.fs.save_run_input(rid, "print(sum([1, 2, 3]))")
     ctx.fs.save_run_stdout(rid, value)
-    ctx.fs.finish_run(rid, "success")
+    ctx.fs.finish_run(rid, "success"); seal_run(ctx.fs, rid)
     runs.append({"run_id": rid, "ok": True, "code": "print(sum([1, 2, 3]))"})
     return ctx.registry.record_value(sid, name, value, rid)
 
