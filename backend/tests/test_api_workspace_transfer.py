@@ -279,6 +279,51 @@ def test_formal_outputs_ignore_modified_presentation_copy_and_are_readonly(root)
     finally:shutil.rmtree(exported.parent)
 
 
+def test_host_report_can_be_listed_read_and_exported_without_execution_receipt(root):
+    from helpers.research import make_store,finish
+    store=make_store(root);finish(store,'Q1')
+    state=store.snapshot();artifact=state['artifacts'][state['experiments']['Q1']['report_ref']]
+    path=artifact['payload']['path'];fs=WorkspaceFS(root)
+    frozen=fs.canonical_artifact(path)
+    assert json.loads(frozen.read_text())==artifact['report']
+    # A pre-fix report has only a committed DB record and a public copy.
+    frozen.unlink();(root/path).write_text('tampered presentation copy')
+    service=WorkspaceFileService()
+    assert path in {row['path'] for row in service.list_files('project')}
+    assert json.loads(service.read_file('project',path)['content'])==artifact['report']
+    exported=Path(service.export_workspace('project'))
+    try:
+        with zipfile.ZipFile(exported) as archive:
+            assert json.loads(archive.read(path))==artifact['report']
+    finally:shutil.rmtree(exported.parent)
+    with pytest.raises(ValueError,match='缺少归档映射'):
+        fs.canonical_artifact('outputs/research/unregistered/report-0000000000000000.json')
+    frozen.write_text('tampered private archive')
+    with pytest.raises(ValueError,match='归档校验失败'):fs.canonical_artifact(path)
+
+
+def test_download_and_range_read_the_opened_descriptor_on_this_platform(root):
+    import httpx
+    from fastapi import FastAPI
+    source=root/'paper.pdf';raw=b'%PDF-1.4\nretained file';source.write_bytes(raw)
+    service=WorkspaceFileService();app=FastAPI()
+    @app.get('/download')
+    async def download():
+        response=service.file_response('project','paper.pdf')
+        # Renaming/replacing the pathname must not change the checked open file.
+        source.rename(root/'saved.pdf');source.write_bytes(b'different file')
+        return response
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+            response=await client.get('/download')
+            assert response.status_code==200 and response.content==raw
+            source.write_bytes(raw)
+            response=await client.get('/download',headers={'Range':'bytes=0-3'})
+            assert response.status_code==206 and response.content==b'%PDF'
+            assert response.headers['content-range']==f'bytes 0-3/{len(raw)}'
+    asyncio.run(run())
+
+
 def test_provider_uses_real_file_api_adapter_with_separate_sdk_filesystem(root,tmp_path,monkeypatch):
     from opensandbox import Sandbox
     from code_interpreter import CodeInterpreter

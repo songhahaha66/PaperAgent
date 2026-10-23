@@ -151,20 +151,46 @@ def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
 
 def test_root_csv_is_collected_and_private_metadata_is_rejected(tmp_path):
     from ai_system.sandbox.remote_kernel import safe_path
+    from ai_system.research.feedback import read_artifact
+    from ai_system.research.planner import decision_context
+    from helpers.research import finish
+    from types import SimpleNamespace
     class RootOutput(FakeSession):
         async def execute(self, code, run_id, output):
             result=await super().execute(code,run_id,output)
             (self.remote/'waiting_summary.csv').write_bytes(b'value\n42\n')
+            (self.remote/'report.pdf').write_bytes(b'%PDF-1.4\n')
             return result
     async def run():
-        kernel=RemoteKernel(tmp_path/'attempt',RootOutput(tmp_path/'attempt'),SandboxSettings(provider='fake'))
+        store=make_store(tmp_path/'public')
+        order=store.claim('Q1')
+        workspace=store.root/'experiments'/order.attempt_id/'workspace'
+        kernel=RemoteKernel(workspace,RootOutput(workspace),SandboxSettings(provider='fake'))
         result=await kernel.execute('value\n42\n')
         assert result.ok and any(p.endswith('/waiting_summary.csv') for p in result.files)
-        public=WorkspaceFS(str(tmp_path/'public'));public.init_structure()
+        public=WorkspaceFS(str(store.root));public.init_structure()
         files=capture_run_files(kernel.fs,public)
         assert any(p.endswith('/waiting_summary.csv') for p in files)
         assert public.abs(next(p for p in files if p.endswith('/waiting_summary.csv'))).read_text()=='value\n42\n'
         await kernel.close()
+        kernel.fs.write_text('unregistered.txt','not an execution output')
+        kernel.fs.write_text('inherited.csv','old evidence')
+        kernel.fs.register_file('inherited.csv',source_run='previous-run')
+        kernel.fs._manifest['inherited_runs']=['previous-run']
+        kernel.fs._manifest['runs']['previous-run']={}
+        kernel.fs._save_manifest()
+        finish(store,'Q1',order=order)
+        _,context=decision_context(store,store.snapshot())
+        experiment=next(e for e in context['experiments'] if e['task_id']=='Q1')
+        paths=[f['path'] for f in experiment['files']]
+        csv=next(p for p in paths if p.endswith('/waiting_summary.csv'))
+        assert any(p.endswith('/report.pdf') for p in paths)
+        assert not any(p.endswith(('unregistered.txt','inherited.csv')) for p in paths)
+        # Research must read the retained execution version, not a later edit.
+        (workspace/'waiting_summary.csv').write_text('value\n999\n')
+        content=await read_artifact(SimpleNamespace(research=store),
+            {'task_id':'Q1','path':csv,'start':0,'limit':12000})
+        assert content.value['excerpt']=='value\n42\n'
     asyncio.run(run())
     for path in ('manifest.json','chat_history.json','.system/state','outputs/../manifest.json'):
         with pytest.raises(ValueError):safe_path(path)

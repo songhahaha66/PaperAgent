@@ -44,7 +44,7 @@ def save_figures(run_id):
 
 
 def emit_result(name, value, unit="", description="", meaning=None):
-    """Optional structured output. Provenance is attached by the host after success."""
+    """Print a structured result; returns None. The host assigns refs after execution."""
     if hasattr(value, 'tolist'):
         value = value.tolist()
     payload = dict(name=name, value=value, unit=unit, description=description, meaning=meaning)

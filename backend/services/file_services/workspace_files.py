@@ -157,7 +157,10 @@ class WorkspaceFileService:
         if image and not mime.startswith('image/'):
             os.close(fd)
             raise HTTPException(400, 'Not an image')
-        return FileResponse('/proc/self/fd/' + str(fd), stat_result=os.fstat(fd),
+        # Keep the already-validated descriptor (including range requests).
+        # macOS exposes descriptors in /dev/fd rather than Linux's /proc.
+        descriptor_root = '/proc/self/fd' if Path('/proc/self/fd').is_dir() else '/dev/fd'
+        return FileResponse(descriptor_root + '/' + str(fd), stat_result=os.fstat(fd),
             media_type=mime, filename=None if image else target.name,
             headers={'X-Content-Type-Options':'nosniff', 'Content-Security-Policy':"sandbox; default-src 'none'; style-src 'unsafe-inline'"},
             background=BackgroundTask(os.close, fd))

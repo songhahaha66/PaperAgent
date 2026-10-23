@@ -147,7 +147,7 @@ class ResearchRuntime:
                 db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(row),BUDGET_ID,sequence))
         notify_runtime()
 
-    def usage(self,sequence,usage=None,*,state="completed"):
+    def usage(self,sequence,usage=None,*,state="completed",diagnostic=None):
         usage=usage or {};known=bool(usage)
         values={key:max(0,int(usage.get(source) or 0)) for key,source in [('input_tokens','input_tokens'),('output_tokens','output_tokens')]}
         details = usage.get('input_token_details') or {}
@@ -158,6 +158,7 @@ class ResearchRuntime:
             if not row:return
             item=json.loads(row[0])
             if item.get('usage_recorded'):return
+            if diagnostic:item['diagnostic']=diagnostic
             item.update(**values,usage_recorded=True,usage_returned=known,state=state,finished_at=time.time())
             state=json.loads(db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()[0])
             for key,value in values.items():state[key]=state.get(key,0)+value

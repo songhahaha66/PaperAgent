@@ -66,7 +66,9 @@ class WorkspaceFS:
         meta=self.get_file_meta(rel_path) or {}
         if not rel_path.startswith('outputs/research/'):
             return self.abs(rel_path)
-        if not meta.get('archive_path'):raise ValueError('正式成果缺少归档映射')
+        if not meta.get('archive_path'):
+            from ai_system.research.domain import retained_report
+            return retained_report(self._root,rel_path)
         run_id=meta.get('source_run')
         if not run_id or not meta['archive_path'].startswith('runs/'+run_id+'/artifacts/'):
             raise ValueError('正式成果归档映射损坏')

@@ -70,7 +70,7 @@ def result_context(snapshot,item):
 
 
 def experiment_context(snapshot, experiment_ids=None):
-    from .domain import experiment_report, experiment_design, current_results
+    from .domain import experiment_report, experiment_design, current_results, execution_lineage
     from .feedback import interpretation_version
     selected=set(experiment_ids) if experiment_ids is not None else {
         eid for eid,e in snapshot['experiments'].items() if not e['retired']}
@@ -79,6 +79,7 @@ def experiment_context(snapshot, experiment_ids=None):
     for eid,e in snapshot['experiments'].items():
         if eid not in selected:continue
         artifact=snapshot['artifacts'].get(e['report_ref']) or {}
+        lineage = set(execution_lineage(snapshot, e['execution_id']))
         rows.append({'task_id':eid,'question_id':e['question_id'],'objective':e['objective'],
             'execution_status':e['execution_status'],'acceptance':e['acceptance'],'validity':e['validity'],
             'method':e.get('method_instruction',''),
@@ -91,6 +92,11 @@ def experiment_context(snapshot, experiment_ids=None):
             'interpretation_version':interpretation_version(snapshot,e),
             'dependencies':list(e['dependencies']),
             'results':[result_context(snapshot,r) for r in results if r['subproblem']==eid],
+            'files':[{'id':ref,'path':a['payload']['path'],'kind':a['type'],
+                      'version':a['content_hash']}
+                for ref,a in snapshot['artifacts'].items()
+                if a['experiment_id']==eid and a['producer_attempt'] in lineage
+                and a['type'] in {'code','stdout','stderr','data'} and a['payload'].get('path')],
             'history':[{'ref':ref,'path':a['payload'].get('path'),'status':a['report'].get('status','superseded')}
                 for ref,a in snapshot['artifacts'].items() if a['type']=='report' and a['experiment_id']==eid and ref!=e['report_ref']]})
     return rows

@@ -74,6 +74,36 @@ def test_partial_stream_is_never_automatically_replayed(tmp_path):
     assert len(sent)==1 and ResearchRuntime(tmp_path).status()['used']==1
 
 
+@pytest.mark.parametrize('streaming',[False,True])
+def test_connection_failure_retains_safe_causes_and_configured_timeout(tmp_path,streaming):
+    import socket
+    sent=[]
+    def handle(req):
+        sent.append(req)
+        # A supplied httpx client defaults to 5s; the SDK must still apply the
+        # configured model timeout to the actual request.
+        assert req.extensions['timeout']==dict.fromkeys(('connect','read','write','pool'),600)
+        try:raise socket.gaierror('sensitive request detail must not be saved')
+        except socket.gaierror as cause:
+            raise httpx.ConnectError('fixture-secret-key',request=req) from cause
+    async def run():
+        client,model=client_model(handle)
+        async with client:
+            with budget_scope(tmp_path):
+                with pytest.raises(ModelServiceError,match='检查网络'):
+                    if streaming:
+                        async for _ in model.astream('connection test'):pass
+                    else:await model.ainvoke('connection test')
+    asyncio.run(run())
+    rows=ResearchRuntime(tmp_path).requests()
+    assert len(sent)==len(rows)==3
+    for row in rows:
+        assert row['diagnostic']=={'error_type':'APIConnectionError',
+            'error_chain':['APIConnectionError','ConnectError','gaierror'],'error_kind':'connection'}
+        assert 'fixture-secret-key' not in json.dumps(row)
+        assert 'sensitive request detail' not in json.dumps(row)
+
+
 def test_repeated_error_cannot_evade_guard_by_alternating_with_another_error(tmp_path):
     runtime=ResearchRuntime(tmp_path)
     runtime.failed('operation','same-error','invalid_response','saved')

@@ -101,10 +101,22 @@ def register_execution_artifacts(state, root, execution):
     for run_id, run in runs.items():
         for kind, path in [('code',run.get('input')),('stdout',run.get('stdout')),('stderr',run.get('stderr'))]:
             if path and workspace_path(workspace, path).is_file():files.append((kind,workspace.relative_to(root).as_posix()+'/'+path,run_id))
-    for path in sorted((workspace/'outputs'/'intermediate').rglob('*')):
-        meta=inventory.get('files', {}).get(path.relative_to(workspace).as_posix(), {})
-        if path.is_file() and meta.get('source_run') not in inherited:
-            files.append(('data',path.relative_to(root).as_posix(),meta.get('source_run') or ''))
+    # Execution outputs can live anywhere in the public workspace. Index the
+    # delivered manifest, not one historical output directory, and retain the
+    # archived version so later edits cannot change the evidence being read.
+    for path, meta in sorted(inventory.get('files', {}).items()):
+        run_id = meta.get('source_run')
+        if run_id not in runs:
+            continue
+        archived = meta.get('archive_path')
+        if archived:
+            if not archived.startswith(f'runs/{run_id}/artifacts/'):
+                raise ValueError('实验产物归档路径与运行不匹配')
+            path = archived
+        target = workspace_path(workspace, path)
+        if target.is_file():
+            kind = 'code' if target.suffix == '.py' else 'data'
+            files.append((kind, workspace.relative_to(root).as_posix()+'/'+path, run_id))
     for kind,path,run_id in files:
         target=workspace_path(root, path)
         ref='artifact:'+aid+':'+hashlib.sha256(path.encode()).hexdigest()[:16]
@@ -129,12 +141,48 @@ def experiment_design(state, experiment):
     return (execution.get('result') or {}).get('design') if execution else None
 
 
+def _retain_report(root, attempt_id, version, report):
+    import json
+    from services.file_services.file_helper import atomic_write
+    target=workspace_path(root,f'.system/reports/{attempt_id}/report-{version[:16]}.json')
+    raw=json.dumps(report,ensure_ascii=False,indent=2).encode('utf-8')
+    if target.exists():
+        if target.read_bytes()!=raw:raise ValueError('实验报告归档校验失败')
+    else:
+        atomic_write(target,lambda stream:stream.write(raw))
+    return target
+
+
+def retained_report(root, path):
+    """Resolve host-authored reports from committed state, never a mutable copy.
+
+    Reports have no execution run. Older reports can reconstruct their archive
+    from the committed JSON without inventing a sandbox receipt or trusting files.
+    """
+    import json,sqlite3
+    from contextlib import closing
+    from .validation import fingerprint
+    database=workspace_path(root,'.system/research.sqlite')
+    if database.is_file():
+        with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='research'").fetchone():
+                for (payload,) in db.execute('SELECT payload FROM research'):
+                    for artifact in json.loads(payload).get('artifacts',{}).values():
+                        if artifact.get('type')!='report' or artifact.get('payload',{}).get('path')!=path:continue
+                        report=artifact['report'];version=fingerprint(report);aid=artifact['producer_attempt']
+                        if artifact['content_hash']!=version or path!=f'outputs/research/{aid}/report-{version[:16]}.json':
+                            raise ValueError('实验报告来源不匹配')
+                        return _retain_report(root,aid,version,report)
+    raise ValueError('正式成果缺少归档映射')
+
+
 def save_report_artifact(state, root, experiment, report):
     import json
     from .validation import fingerprint
     aid=experiment['execution_id'];version=fingerprint(report)
     ref='report:'+aid+':'+version[:16]
     path=f'outputs/research/{aid}/report-{version[:16]}.json'
+    _retain_report(root,aid,version,report)
     target=root/path;target.parent.mkdir(parents=True,exist_ok=True)
     target.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     previous=report_artifact(state,experiment) or {}

@@ -41,9 +41,23 @@ def failure(exc):
         return 'authentication','模型连接认证或权限失败，请检查连接后恢复。',False,True
     if status==402 or quota:
         return 'quota','模型服务余额或额度不足，请处理后恢复。',False,True
+    if isinstance(exc, httpx.NetworkError) or type(exc).__name__ == 'APIConnectionError':
+        return 'connection','连接模型服务失败，请检查网络；已有进度已保存。',True,False
     transient=status in {408,429} or isinstance(status,int) and status>=500 or isinstance(exc,(TimeoutError,ConnectionError,httpx.TransportError)) or type(exc).__name__ in {'APITimeoutError','APIConnectionError','ReadTimeout','ConnectTimeout','RateLimitError'}
     return ('rate_limit' if status==429 else 'timeout' if isinstance(exc,TimeoutError) or 'Timeout' in type(exc).__name__ else 'service_error',
             '模型服务暂时不可用，已保存状态；有限重试后可检查连接和输入。' if transient else '模型请求失败，已保留状态；请检查连接或请求内容。',bool(transient),False)
+
+
+def failure_diagnostic(exc):
+    """Retain transport causes without credentials, request bodies or response text."""
+    chain=[];seen=set();current=exc
+    while current is not None and id(current) not in seen and len(chain)<8:
+        seen.add(id(current));chain.append(type(current).__name__)
+        current=current.__cause__ or current.__context__
+    detail={'error_type':type(exc).__name__,'error_chain':chain,'error_kind':failure(exc)[0]}
+    status=getattr(exc,'status_code',None)
+    if isinstance(status,int):detail['http_status']=status
+    return detail
 
 
 def reply_usage(reply):
@@ -87,7 +101,7 @@ class RuntimeModelMixin:
             except (asyncio.CancelledError, GeneratorExit):
                 runtime.usage(seq,state="interrupted");raise
             except Exception as exc:
-                runtime.usage(seq,state="failed")
+                runtime.usage(seq,state="failed",diagnostic=failure_diagnostic(exc))
                 kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if not retry or attempt==2:raise ModelServiceError(message) from exc
@@ -120,7 +134,7 @@ class RuntimeModelMixin:
             except (asyncio.CancelledError, GeneratorExit):
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
-                runtime.usage(seq,usage,state="failed");kind,message,retry,terminal=failure(exc)
+                runtime.usage(seq,usage,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if emitted or not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -138,7 +152,7 @@ class RuntimeModelMixin:
                 result=super()._generate(*args,**kwargs)
                 runtime.usage(seq,reply_usage(result));runtime.succeeded(key);return result
             except Exception as exc:
-                runtime.usage(seq,state="failed");kind,message,retry,terminal=failure(exc)
+                runtime.usage(seq,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -166,7 +180,7 @@ class RuntimeModelMixin:
             except GeneratorExit:
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
-                runtime.usage(seq,usage,state="failed");kind,message,retry,terminal=failure(exc)
+                runtime.usage(seq,usage,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if emitted or not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
