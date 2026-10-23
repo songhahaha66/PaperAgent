@@ -7,9 +7,14 @@ on:
     branches: [ dev ]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: backend
@@ -28,13 +33,15 @@ jobs:
       run: pipx install uv
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --locked --extra sandbox
 
     - name: Run tests
-      run: uv run pytest -q
+      timeout-minutes: 10
+      run: uv run --locked --extra sandbox pytest -vv --tb=short --durations=10
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
