@@ -1,6 +1,6 @@
 # API-backed persistent execution cache
 
-The backend and sandbox server have **independent filesystems**. No NFS, shared mount, or backend-visible sandbox directory is required. An SSH tunnel can carry the OpenSandbox API alone. This change has not been deployed or accepted on the ASUS server.
+The backend and sandbox server have **independent filesystems**. No NFS, shared mount, or backend-visible sandbox directory is required. An SSH tunnel can carry the OpenSandbox API alone. Production-network acceptance is described below; this is separate from upgrading the running application.
 
 ## Shared adapter entry point
 
@@ -33,6 +33,23 @@ docker buildx build --load -t paperagent-research:workspace-v2 deploy/sandbox
 ```
 
 The lightweight default is **1 vCPU / 768 MiB per sandbox**, with OpenMP/OpenBLAS using one thread. These are creation-time limits, not automatic scaling. Existing env files with explicit CPU/memory values override the defaults; update `PAPERAGENT_SANDBOX_CPU` and `PAPERAGENT_SANDBOX_MEMORY` before creating new sessions. Larger data analysis or compilation may need higher limits. Host swap can absorb memory pressure but does not raise the container's RAM limit; swap availability inside a container depends on the Docker/cgroup configuration. On a 2 GB host, start with one lightweight project and monitor resident sandboxes: a comparison may keep two candidate kernels alive, and there is no host-wide admission controller yet.
+
+## Docker backend connection
+
+`backend_tunnel.py` runs as a host systemd service and starts SSH inside the backend container's **network namespace only** using `nsenter`. SSH keys remain on the host; the app needs no SSH client. The backend connects to `http://127.0.0.1:18080`; the forwarding socket is container-local and the remote API remains on the sandbox host's loopback interface. No public API port is added. A verified SSH host key and a dedicated forwarding-only account protect the connection. Restrict that account with `AllowTcpForwarding local`, `PermitOpen 127.0.0.1:18080`, and no shell, PTY, password, agent or X11 forwarding.
+
+The supervisor tracks the backend container ID and PID, reconnects after SSH failure, and rebinds after container recreation. Install it under a root-owned directory and use a system service with `After=docker.service network-online.target`, `Restart=always`, `RestartSec=5`, `KillMode=control-group`, `UMask=0077`, and `WantedBy=multi-user.target`. Its command is:
+
+```sh
+/usr/bin/python3 /opt/paperagent-sandbox-link/backend_tunnel.py \
+  --container paperagent --destination paperagent-tunnel@SANDBOX_HOST \
+  --identity /opt/paperagent-sandbox-link/id_ed25519 \
+  --known-hosts /opt/paperagent-sandbox-link/known_hosts
+```
+
+Keep the private client env file at `backend/.sandbox.env` on the production host, mode 0600. Production Compose must mount it read-only at `/app/.sandbox.env` and set `PAPERAGENT_SANDBOX_CONFIG=/app/.sandbox.env`, as in the repository Compose file. The deployment workflow pulls images but does not copy Compose or private settings, so prepare those host files before upgrading. Back up the original Compose before editing it. Restarting or deploying the backend is a separate operation; preparing these files does not upgrade application code.
+
+On 2026-10-23, backend revision `779d3c6` passed all seven `smoke_workspace_v2.py` checks from an isolated acceptance container sharing the production backend's network namespace. Inputs and results were isolated from production data. The dedicated SSH account rejected shell commands and forwarding to other ports, and a separate test container verified automatic tunnel rebinding after recreation. The existing production application remained on its old version; application activation follows the normal release. Acceptance reports are retained on the production host under `/opt/paperagent-sandbox-link/acceptance/`.
 
 ## One-direction transfer and execution
 
