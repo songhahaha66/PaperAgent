@@ -22,7 +22,15 @@ The pinned [OpenSandbox 1.1.1 Docker volume implementation](https://github.com/o
 
 `setup_remote.py` configures the loopback OpenSandbox 1.1.1 service and allowed host paths on the execution server only. Do not run it without deployment authorization. It does not configure NFS, networking on another machine, or a backend data mount. Copy the field names from `client.env.example`; actual secrets belong in a private env file. Backend `docker-compose.yml` only persists its local `pa_data` and mounts private configuration. It has no mandatory shared-storage bind mounts.
 
+Put `opensandbox-server==1.1.1` on PATH before running the setup script. It can be installed in a dedicated Python venv or with `uv tool install`. Running as root installs `/etc/systemd/system/paperagent-sandbox.service` and enables it at boot; running as another user installs a user service, whose boot lifecycle requires a persistent user manager. Private server configuration, API key and client configuration are written below `~/paperagent-sandbox/` with restricted permissions.
+
 Build the execution image as `paperagent-research:workspace-v2`; its Dockerfile includes numerical Python, Pandoc, XeLaTeX, BibTeX and CJK fonts. The backend uses Python 3.14 and `uv sync --extra sandbox`. Select configuration through `PAPERAGENT_SANDBOX_CONFIG`, with environment variables overriding that file. Non-loopback endpoints require HTTPS; the API stays private. Do not mount Docker sockets or backend environment files in execution containers.
+
+Use BuildKit for the large execution image. Check `docker buildx version` first; install the buildx CLI plugin if it is absent, then run from the repository root:
+
+```sh
+docker buildx build --load -t paperagent-research:workspace-v2 deploy/sandbox
+```
 
 The lightweight default is **1 vCPU / 768 MiB per sandbox**, with OpenMP/OpenBLAS using one thread. These are creation-time limits, not automatic scaling. Existing env files with explicit CPU/memory values override the defaults; update `PAPERAGENT_SANDBOX_CPU` and `PAPERAGENT_SANDBOX_MEMORY` before creating new sessions. Larger data analysis or compilation may need higher limits. Host swap can absorb memory pressure but does not raise the container's RAM limit; swap availability inside a container depends on the Docker/cgroup configuration. On a 2 GB host, start with one lightweight project and monitor resident sandboxes: a comparison may keep two candidate kernels alive, and there is no host-wide admission controller yet.
 
@@ -56,7 +64,16 @@ npm run test:workspace
 npm run build
 ```
 
-The test suite uses the current transfer and evidence protocols. Passing offline tests is not a claim that v2 has passed remote acceptance. Existing smoke scripts are guarded against accidentally contacting an old server.
+The test suite uses the current transfer and evidence protocols. Passing offline tests is not a claim that v2 has passed remote acceptance. Older smoke scripts are guarded against accidentally contacting an old server. For an explicitly authorized real-server check, use the v2 script with a private configuration file and a new output directory:
+
+```sh
+cd backend
+uv run --extra sandbox python tests/smoke_workspace_v2.py \
+  --config /absolute/path/to/private-client.env \
+  --output /tmp/paperagent-acceptance-new
+```
+
+It creates real remote sandboxes, executes trusted Python fixtures, transfers CSV/figures, checks blocked external TCP access and compiles PDF/Word documents. Backend state is isolated under the output directory; no application database or model is used. Created sandboxes are closed, while test caches and downloaded artifacts remain for inspection. This is a scoped smoke check, not the full application acceptance checklist below.
 
 User-run acceptance on the actual server, not run by the implementer:
 

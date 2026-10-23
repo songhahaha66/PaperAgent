@@ -1,11 +1,18 @@
-"""Run on the execution host after `uv tool install opensandbox-server==1.1.1`.
+"""Run on the execution host with opensandbox-server==1.1.1 on PATH.
 
+Root installs a system service; other users install a user service.
 Creates a dedicated loopback service and a mode-0600 client env file. Prints no secrets.
 """
 import os
 import secrets
+import shutil
 import subprocess
 from pathlib import Path
+
+executable = shutil.which('opensandbox-server')
+if not executable:
+    raise SystemExit('Install opensandbox-server==1.1.1 and put its executable on PATH first')
+system_service = os.geteuid() == 0
 
 root = Path.home() / "paperagent-sandbox"
 root.mkdir(mode=0o700, exist_ok=True)
@@ -53,19 +60,22 @@ PAPERAGENT_SANDBOX_MEMORY=768Mi
 PAPERAGENT_SANDBOX_HOST_WORKSPACE_ROOT={root / 'volumes' / 'execution-cache'}
 ''')
 client.chmod(0o600)
-unit = Path.home() / ".config/systemd/user/paperagent-sandbox.service"
+unit = (Path('/etc/systemd/system/paperagent-sandbox.service') if system_service
+        else Path.home() / '.config/systemd/user/paperagent-sandbox.service')
 unit.parent.mkdir(parents=True, exist_ok=True)
 unit.write_text(f'''[Unit]
 Description=PaperAgent OpenSandbox execution service
-After=network-online.target
+After=network-online.target{' docker.service' if system_service else ''}
+Wants=network-online.target
 [Service]
-ExecStart={Path.home()}/.local/bin/opensandbox-server --config {config}
+ExecStart={executable} --config {config}
 Restart=on-failure
 RestartSec=5
 UMask=0077
 [Install]
-WantedBy=default.target
+WantedBy={'multi-user.target' if system_service else 'default.target'}
 ''')
-subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-subprocess.run(["systemctl", "--user", "enable", "--now", "paperagent-sandbox"], check=True)
+control = ['systemctl'] if system_service else ['systemctl', '--user']
+subprocess.run([*control, 'daemon-reload'], check=True)
+subprocess.run([*control, 'enable', '--now', 'paperagent-sandbox'], check=True)
 print("Service configured on 127.0.0.1:18080. Client settings:", client)
