@@ -5,20 +5,14 @@ WorkspaceFS — 工作空间文件系统抽象层
 1. 路径解析: 所有对外接口只接受/返回 workspace-relative 路径，内部翻译为绝对路径
 2. Manifest 管理: 记录每个文件的来源、可见性、关联 run_id、是否被引用
 3. Run 管理: 为每次代码执行生成 run_id，组织 input/stdout/stderr/artifacts
-4. 产物晋升: 将 run artifacts 晋升到 outputs/
 """
 from services.file_services.workspace_layout import workspace_path
 
 import json
-import logging
-import os
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-logger = logging.getLogger(__name__)
 
 WORKSPACE_DIRECTORIES = [
     "code",
@@ -246,39 +240,6 @@ class WorkspaceFS:
 
     def get_run_info(self, run_id: str) -> Optional[Dict]:
         return self._manifest["runs"].get(run_id)
-
-    # ------------------------------------------------------------------
-    # 产物晋升
-    # ------------------------------------------------------------------
-
-    def promote_artifact(
-        self, run_id: str, artifact_name: str, output_name: Optional[str] = None
-    ) -> str:
-        """将 run artifact 晋升到 outputs/ 目录。
-
-        Returns:
-            晋升后的 outputs/ 相对路径
-        """
-        src_rel = f"runs/{run_id}/artifacts/{artifact_name}"
-        src_abs = self.abs(src_rel)
-        if not src_abs.exists():
-            raise FileNotFoundError(f"Artifact 不存在: {src_rel}")
-
-        dest_name = output_name or artifact_name
-        dest_rel = f"outputs/{dest_name}"
-        dest_abs = self.abs(dest_rel)
-        dest_abs.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(src_abs), str(dest_abs))
-
-        self.register_file(
-            dest_rel,
-            kind="artifact",
-            created_by="ai",
-            source_run=run_id,
-            visibility="user",
-        )
-        logger.info(f"产物晋升: {src_rel} -> {dest_rel}")
-        return dest_rel
 
     # ------------------------------------------------------------------
     # 初始化

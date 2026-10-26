@@ -45,7 +45,7 @@ async def prepare_action(ctx):
     store=ctx.research
     snapshot=store.snapshot()
     current=snapshot['action']
-    if current and current['status']=='planned':return False
+    if current and current['status']=='planned':return current['capability']=='pause'
     if current and current['status']=='failed':return True
     if snapshot['outcome'] in {'completed','needs_attention'}:return False
     if current and current['status']=='waiting':return False
@@ -65,7 +65,7 @@ async def prepare_action(ctx):
     key,context=decision_context(store,snapshot)
     if not store.reserve_planning_call(limit=ctx.max_planning_calls):
         _action(store,'pause',{},'达到配置的研究规划上限')
-        return False
+        return True
     observation_id='observation:'+uuid4().hex
     before=snapshot["revision"]
     try:
@@ -85,7 +85,8 @@ async def prepare_action(ctx):
     except Exception as exc:
         # A successfully scheduled operation is already durable, even if a
         # later call in the same model response failed. Keep its handoff.
-        if (store.snapshot().get('action') or {}).get('status')=='planned':return False
+        pending=store.snapshot().get('action') or {}
+        if pending.get('status')=='planned':return pending['capability']=='pause'
         from ai_system.graph.llm_utils import message_text
         from .review_cache import error_detail
         candidate={'response':message_text(getattr(exc,'candidate',''))}
@@ -216,7 +217,11 @@ async def _act(request, runtime):
 def resume(store, **_):
     with store._transaction() as db:
         state=store._read(db);action=state['action']
-        if action and action['status'] in {'failed','running','interrupted'}:
+        if action and action['capability']=='pause' and action['status']=='planned':
+            # Explicit continuation consumes the pause; the next observation
+            # still enforces the existing planning and request budgets.
+            action.update(status='done',finished_at=time.time())
+        elif action and action['status'] in {'failed','running','interrupted'}:
             if action['capability'].startswith('writing.') and state.get('publication'):
                 publication=state['publication']
                 publication['repair_resume_offset']=len(publication.get('repair_inputs',[]))

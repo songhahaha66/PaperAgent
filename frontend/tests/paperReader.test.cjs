@@ -55,7 +55,7 @@ async function pdfFixture() {
   const storage = new Map()
   const sessionStorage = {getItem:key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value)}
   const scope = vue.effectScope()
-  const mod = await loadModule('src/components/PaperEditor.vue', {vue,'@/api/paper':{paperAPI:{read:async()=>({feedback:[]})},paperProjectAPI:api}}, {sessionStorage, setTimeout, clearTimeout, crypto:require('node:crypto').webcrypto})
+  const mod = await loadModule('src/components/PaperEditor.vue', {vue,'@/api/paper':{paperProjectAPI:api}}, {sessionStorage, setTimeout, clearTimeout, crypto:require('node:crypto').webcrypto})
   const props = vue.reactive({workId:'A',latex:true})
   const emitted=[]
   const editor = scope.run(() => mod.default.setup(props,{emit:(...args)=>emitted.push(args),expose(){}}))

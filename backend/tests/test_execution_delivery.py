@@ -149,8 +149,7 @@ def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
     asyncio.run(run())
 
 
-def test_root_csv_is_collected_and_private_metadata_is_rejected(tmp_path):
-    from ai_system.sandbox.remote_kernel import safe_path
+def test_root_csv_is_collected_and_reads_retained_execution_version(tmp_path):
     from ai_system.research.feedback import read_artifact
     from ai_system.research.planner import decision_context
     from helpers.research import finish
@@ -192,8 +191,6 @@ def test_root_csv_is_collected_and_private_metadata_is_rejected(tmp_path):
             {'task_id':'Q1','path':csv,'start':0,'limit':12000})
         assert content.value['excerpt']=='value\n42\n'
     asyncio.run(run())
-    for path in ('manifest.json','chat_history.json','.system/state','outputs/../manifest.json'):
-        with pytest.raises(ValueError):safe_path(path)
 
 
 def test_completed_execution_event_already_links_published_logs(tmp_path, monkeypatch):

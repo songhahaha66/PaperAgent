@@ -282,6 +282,21 @@ async def execute(branch, runtime):
     await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
     local = None
     receipt = None
+    captured_paths = None
+    next_file_event = 0
+
+    async def publish_outputs():
+        nonlocal captured_paths, next_file_event
+        if captured_paths is None:
+            from ai_system.sandbox.artifacts import capture_run_files
+            captured_paths = capture_run_files(local.fs, ctx.fs, run_ids=[
+                rid for rid in local.fs._manifest['runs']
+                if rid not in local.fs._manifest.get('inherited_runs', [])])
+        # Resume interrupted notifications without capturing the same files again.
+        while next_file_event < len(captured_paths):
+            await ctx.events.file_changed(captured_paths[next_file_event])
+            next_file_event += 1
+
     try:
         prepared=branch.get('design') or {}
         if prepared.get('experience_refs'):
@@ -312,9 +327,7 @@ async def execute(branch, runtime):
         for review in reviews:
             review["evidence"] = [evidence[item["id"]] for item in review["evidence"]]
         # Immutable run IDs preserve existing grounding and evidence links.
-        from ai_system.sandbox.artifacts import capture_run_files
-        for path in capture_run_files(local.fs, ctx.fs, run_ids=[rid for rid in local.fs._manifest['runs'] if rid not in local.fs._manifest.get('inherited_runs', [])]):
-            await ctx.events.file_changed(path)
+        await publish_outputs()
         result = WorkerResult(order=order,
             execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
             acceptance="inconclusive" if report['status']=='comparison_blocked' else "rejected" if checks else "accepted", report=report,
@@ -367,8 +380,6 @@ async def execute(branch, runtime):
             try:
                 # Code output is available even when later interpretation fails.
                 # Publication of a file does not accept the experiment's conclusions.
-                from ai_system.sandbox.artifacts import capture_run_files
-                for path in capture_run_files(local.fs, ctx.fs, run_ids=[rid for rid in local.fs._manifest['runs'] if rid not in local.fs._manifest.get('inherited_runs', [])]):
-                    await ctx.events.file_changed(path)
+                await publish_outputs()
             finally:
                 await local.kernels.close()

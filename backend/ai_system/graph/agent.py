@@ -333,7 +333,7 @@ class PaperGraphAgent:
                 'paper_path': state.get('paper_version') if state.get('paper_conflict') else None,
                 'artifact_conflict': state.get('paper_conflict', False),
                 'delivery_stages': state.get('delivery_stages', {}),
-                'research_blocked': state['outcome'] == 'blocked'}
+                'research_blocked': state['outcome'] not in {'completed', 'needs_attention'}}
 
     @staticmethod
     def _final_message(result: Dict[str, Any], ctx: GraphContext) -> str:

@@ -162,6 +162,7 @@ export function useArtifactPreview(options: {
       const url = workspaceFileAPI.getImageUrl(token, workId.value, filePath)
 
       const response = await fetch(url, {
+        cache: 'no-store',
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -179,26 +180,36 @@ export function useArtifactPreview(options: {
     }
   }
 
-  const pendingFigures = new Set<string>()
+  const figureLoads = new Map<string, { version: string }>()
   watch([figuresVisible, figureFiles], async ([visible]) => {
+    const versions = new Map(figureFiles.value.map((file) => [file.path, `${file.modified}:${file.size}`]))
+    for (const [path, load] of figureLoads) {
+      if (versions.get(path) === load.version) continue
+      figureLoads.delete(path)
+      if (imageUrls.value[path]) URL.revokeObjectURL(imageUrls.value[path])
+      delete imageUrls.value[path]
+    }
     if (!visible) return
     await Promise.allSettled(
       figureFiles.value
-        .filter((file) => !imageUrls.value[file.path] && !pendingFigures.has(file.path))
+        .filter((file) => !figureLoads.has(file.path))
         .map(async (file) => {
-          pendingFigures.add(file.path)
+          // The token owns this version, even if an older request finishes later.
+          const load = { version: versions.get(file.path)! }
+          figureLoads.set(file.path, load)
           try {
             const url = await getImageBlobUrl(file.path)
-            if (disposed) URL.revokeObjectURL(url)
+            if (disposed || figureLoads.get(file.path) !== load) URL.revokeObjectURL(url)
             else imageUrls.value[file.path] = url
-          } finally {
-            pendingFigures.delete(file.path)
+          } catch {
+            if (figureLoads.get(file.path) === load) figureLoads.delete(file.path)
           }
         }),
     )
   })
   onUnmounted(() => {
     disposed = true
+    figureLoads.clear()
     Object.values(imageUrls.value).forEach((url) => URL.revokeObjectURL(url))
     imageUrls.value = {}
   })

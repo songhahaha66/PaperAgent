@@ -5,6 +5,7 @@ The parent session runs kernel/export integration separately.
 """
 import asyncio
 import json
+import pytest
 from types import SimpleNamespace
 from langchain_core.messages import ToolMessage
 from ai_system.graph.context import GraphContext
@@ -13,7 +14,7 @@ from ai_system.research.control import delivery_status,graph_view,refresh_regist
 from ai_system.research.domain import current_results
 from ai_system.research.feedback import ReportEdit,interpretation_version,revise_interpretation
 from ai_system.research.loop import prepare_action,resume
-from ai_system.research.models import WorkerResult
+from ai_system.research.models import WorkerResult, IssueReport
 from ai_system.research.planner import decision_context
 from ai_system.research.store import ResearchStore
 from ai_system.research.views import experiment_context
@@ -117,3 +118,34 @@ def test_same_scope_new_lineage_updates_current_version_and_keeps_old_provenance
     assert {r['id'] for r in current_results(after,{eid})}=={r2}
     assert after['artifacts'][r1]==old and after['artifacts'][r2]['payload']['meaning']['lineage']==lineage
     assert after['executions'][old['producer_attempt']]['result']==before['executions'][old['producer_attempt']]['result']
+
+
+@pytest.mark.parametrize('accepted_parent', [False, True])
+@pytest.mark.parametrize('interruption', ['failed', 'cancelled'])
+def test_interrupted_continuation_preserves_parent_acceptance(tmp_path, accepted_parent, interruption):
+    store=ResearchStore(tmp_path,'retry');store.initialize('Count the supplied observations.')
+    eid=add_experiment(store,'How many observations are available?')
+    parent=store.claim(eid)
+    ref=store.allocate_ref('R')
+    result={'id':ref,'subproblem':eid,'kind':'number','name':'partial count','value':'3','run_id':'run_fixture'}
+    store.commit(WorkerResult(order=parent,
+        execution_status='succeeded' if accepted_parent else 'failed',
+        acceptance='accepted' if accepted_parent else 'inconclusive',
+        results=[result],report={'status':'completed' if accepted_parent else 'failed'},
+        issues=[] if accepted_parent else [IssueReport(task_id=eid,category='execution',message='Initial execution failed')]))
+    before=store.snapshot()
+    continue_experiment(store,eid)
+    retry=store.claim(eid)
+    if interruption=='failed':
+        store.commit(WorkerResult(order=retry,execution_status='failed',acceptance='inconclusive',
+            report={'status':'failed','error':'Retry failed'},
+            issues=[IssueReport(task_id=eid,category='execution',message='Retry failed')]))
+    else:
+        store.recover()
+    after=store.snapshot();original=before['experiments'][eid];current=after['experiments'][eid]
+    for field in ('execution_id','execution_status','acceptance','report_ref'):
+        assert current[field]==original[field]
+    assert after['executions'][parent.attempt_id]==before['executions'][parent.attempt_id]
+    assert after['executions'][retry.attempt_id]['execution_status']==interruption
+    assert {r['id'] for r in current_results(after,{eid})}==({ref} if accepted_parent else set())
+    assert store.registry_payload(after)==store.registry_payload(before)

@@ -104,3 +104,59 @@ def test_application_migration_moves_real_rows_without_promoting_experience(tmp_
         archived = db.execute(sa.text("SELECT payload FROM legacy_domain_records WHERE source='works/original/progress'")).scalar_one()
         assert json.loads(archived) == {'progress': 10}
     engine.dispose()
+
+
+@pytest.fixture
+def unstamped_application(tmp_path, monkeypatch):
+    from alembic import command
+    from alembic.config import Config
+    from pathlib import Path
+    import sqlalchemy as sa
+    backend = Path(__file__).resolve().parents[1]
+    url = 'sqlite:///' + str(tmp_path / 'legacy.sqlite')
+    monkeypatch.setenv('DATABASE_URL', url)
+    config = Config(str(backend / 'alembic.ini'))
+    config.set_main_option('script_location', str(backend / 'alembic'))
+    # This revision has the same schema as master 7792bce's create_all startup.
+    command.upgrade(config, 'c4e8a1b2d9f0')
+    engine = sa.create_engine(url)
+    with engine.begin() as db:
+        db.execute(sa.text('DROP TABLE alembic_version'))
+        db.execute(sa.text("INSERT INTO users (id,username,email,password_hash) VALUES (1,'owner','owner@example.test','preserve-me')"))
+        db.execute(sa.text("INSERT INTO works (work_id,title,status,progress,created_by,output_mode) VALUES ('old','原项目','paused',42,1,'markdown')"))
+    yield config, engine
+    engine.dispose()
+
+
+def test_unstamped_local_database_upgrades_without_losing_records(unstamped_application):
+    from alembic import command
+    import sqlalchemy as sa
+    config, engine = unstamped_application
+    command.upgrade(config, 'head')
+    command.upgrade(config, 'head')
+    with engine.connect() as db:
+        assert tuple(db.execute(sa.text('SELECT work_id,title,architecture_version FROM projects')).one()) == ('old','原项目',1)
+        assert db.execute(sa.text('SELECT password_hash FROM users')).scalar_one() == 'preserve-me'
+        assert db.execute(sa.text('SELECT version_num FROM alembic_version')).scalar_one() == 'b28c4e96ad10'
+        archived = db.execute(sa.text("SELECT payload FROM legacy_domain_records WHERE source='works/old/progress'")).scalar_one()
+        assert json.loads(archived) == {'progress':42}
+
+
+@pytest.mark.parametrize('change', [
+    'ALTER TABLE works DROP COLUMN output_mode',
+    'DROP INDEX ix_users_email',
+    'CREATE TABLE unknown_state (id INTEGER PRIMARY KEY)',
+])
+def test_unknown_unstamped_schema_is_not_adopted(unstamped_application, change):
+    from alembic import command
+    import sqlalchemy as sa
+    config, engine = unstamped_application
+    with engine.begin() as db:
+        db.execute(sa.text(change))
+    before = set(sa.inspect(engine).get_table_names())
+    with pytest.raises(RuntimeError, match='未认领迁移版本'):
+        command.upgrade(config, 'head')
+    assert set(sa.inspect(engine).get_table_names()) == before
+    assert 'alembic_version' not in before
+    with engine.connect() as db:
+        assert db.execute(sa.text('SELECT title FROM works')).scalar_one() == '原项目'

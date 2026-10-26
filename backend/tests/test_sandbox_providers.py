@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.sandbox.factory import create_kernel
-from ai_system.sandbox.remote_kernel import RemoteKernel, safe_path
+from ai_system.sandbox.remote_kernel import RemoteKernel
 from ai_system.sandbox.settings import SandboxSettings
 from ai_system.sandbox.contracts import ExecutionOutcome
 
@@ -120,12 +120,6 @@ def test_cancel_wait_reports_startup_failure_instead_of_hanging(tmp_path):
             await asyncio.gather(task, return_exceptions=True)
             await kernel.close()
     asyncio.run(run())
-
-
-@pytest.mark.parametrize('path', ['/etc/passwd', '../secret', 'outputs/../../secret', '.system/key', 'outputs\\secret'])
-def test_rejects_remote_paths(path):
-    with pytest.raises(ValueError):
-        safe_path(path)
 
 
 def test_remote_never_falls_back_to_local(tmp_path):

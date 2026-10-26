@@ -141,7 +141,12 @@ def test_retry_refuses_to_overwrite_a_locally_edited_working_copy(root,tmp_path)
     asyncio.run(check())
 
 
-@pytest.mark.parametrize('unsafe',['../secret','/etc/passwd','.system/research.sqlite','outputs/../secret','outputs/link/private','data/overwrite.csv','outputs/research/overwrite.png'])
+@pytest.mark.parametrize('unsafe', [
+    '../secret', '/etc/passwd', 'outputs/../secret', 'outputs/../../secret',
+    'outputs\\secret', 'outputs/link/private', 'manifest.json', 'chat_history.json',
+    '.system/research.sqlite', 'outputs/../manifest.json',
+    'data/overwrite.csv', 'outputs/research/overwrite.png',
+])
 def test_remote_manifest_cannot_escape_backend_archive(root,tmp_path,unsafe):
     async def check():
         class Malicious(Cells):

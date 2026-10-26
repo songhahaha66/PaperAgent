@@ -6,6 +6,8 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
+from alembic.script import ScriptDirectory
+from database.legacy_schema import adopt_legacy_schema
 
 # 加载环境变量
 load_dotenv()
@@ -76,12 +78,13 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
-    with connectable.connect() as connection:
+    with connectable.begin() as connection:
         context.configure(
             connection=connection, target_metadata=target_metadata
         )
 
         with context.begin_transaction():
+            adopt_legacy_schema(context.get_context(), ScriptDirectory.from_config(config))
             context.run_migrations()
 
 

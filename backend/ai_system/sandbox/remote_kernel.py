@@ -1,7 +1,7 @@
 """Persistent-volume execution, bounded logs and protected run receipts."""
 import asyncio
 import logging
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from services.file_services.workspace_fs import WorkspaceFS
 from .contracts import SandboxSession
@@ -9,13 +9,6 @@ from .kernel import CellResult
 from .settings import SandboxSettings
 
 logger = logging.getLogger(__name__)
-
-
-def safe_path(path: str) -> str:
-    p = PurePosixPath(path)
-    if p.is_absolute() or not p.parts or ".." in p.parts or "\\" in path or any(part.startswith('.') for part in p.parts) or p.parts[0] in {'manifest.json', 'chat_history.json', 'chat_history.json.lock'}:
-        raise ValueError(f"非法沙箱文件路径: {path}")
-    return p.as_posix()
 
 
 class RemoteKernel:

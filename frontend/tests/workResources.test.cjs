@@ -16,13 +16,13 @@ function deferred() {
     notices = []
   const scope = vue.effectScope()
   const figuresVisible = vue.ref(false)
-  const image = deferred()
+  const images = []
   let fileReads = 0,
     imageReads = 0
-  const files = [
+  let files = [
     { path: 'paper.pdf', name: 'paper.pdf', type: 'file', size: 100 },
     { path: 'paper.md', name: 'paper.md', type: 'file', size: 80 },
-    { path: 'figures/chart.png', name: 'chart.png', type: 'file', size: 50 },
+    { path: 'figures/chart.png', name: 'chart.png', type: 'file', size: 50, modified: 1 },
     {
       path: 'attachments/photo.png',
       name: 'photo.png',
@@ -49,7 +49,7 @@ function deferred() {
       workspaceFileAPI: {
         listFiles: async () => {
           fileReads++
-          return files
+          return [...files]
         },
         getImageUrl: (_token, _work, path) => path,
       },
@@ -59,11 +59,13 @@ function deferred() {
     'src/composables/useArtifactPreview.ts',
     imports,
     {
-      fetch: async () => {
+      fetch: async (_url, options) => {
         imageReads++
+        const image = deferred()
+        images.push({ ...image, options })
         return image.promise
       },
-      URL: { createObjectURL: () => 'blob:test', revokeObjectURL: (url) => revoked.push(url) },
+      URL: { createObjectURL: (blob) => `blob:${blob.version}`, revokeObjectURL: (url) => revoked.push(url) },
     },
   )
   const work = vue.ref({ output_mode: 'latex' })
@@ -98,16 +100,53 @@ function deferred() {
   figuresVisible.value = true
   await flush()
   assert.equal(imageReads, 1, 'pending image loads are shared across tab switches')
+  const finishImage = async (index, version) => {
+    images[index].resolve({ ok: true, blob: async () => ({ version }) })
+    await flush()
+  }
+  await finishImage(0, 1)
+  assert.equal(preview.imageUrls.value['figures/chart.png'], 'blob:1')
+
+  figuresVisible.value = false
+  await flush()
+  files = files.map(file => file.path === 'figures/chart.png' ? { ...file, modified: 2 } : file)
+  await preview.loadWorkspaceFiles()
+  await flush()
+  assert.equal(imageReads, 1, 'hidden panes invalidate replaced figures without loading them')
+  assert.equal(preview.imageUrls.value['figures/chart.png'], undefined)
+  assert.deepEqual(revoked, ['blob:1'])
+  figuresVisible.value = true
+  await flush()
+  assert.equal(imageReads, 2, 'reopening loads the updated version at the same path')
+
+  files = files.map(file => file.path === 'figures/chart.png' ? { ...file, modified: 3 } : file)
+  await preview.loadWorkspaceFiles()
+  await flush()
+  assert.equal(imageReads, 3)
+  await finishImage(2, 3)
+  await finishImage(1, 2)
+  assert.equal(preview.imageUrls.value['figures/chart.png'], 'blob:3', 'late older responses cannot replace the current image')
+  assert.deepEqual(revoked, ['blob:1', 'blob:2'])
+  assert.ok(images.every(image => image.options.cache === 'no-store'), 'same-path refreshes bypass the browser cache')
+
+  files = files.filter(file => file.path !== 'figures/chart.png')
+  await preview.loadWorkspaceFiles()
+  await flush()
+  assert.equal(Object.keys(preview.imageUrls.value).length, 0)
+  assert.deepEqual(revoked, ['blob:1', 'blob:2', 'blob:3'], 'deleted figures release their blobs')
+  files.push({ path: 'figures/chart.png', name: 'chart.png', type: 'file', size: 50, modified: 4 })
+  await preview.loadWorkspaceFiles()
+  await flush()
+  const readsBeforeLeaving = fileReads
   cleanup.forEach((callback) => callback())
   scope.stop()
-  image.resolve({ ok: true, blob: async () => ({}) })
-  await flush()
-  assert.deepEqual(revoked, ['blob:test'], 'late image URLs are immediately released after leaving')
+  await finishImage(3, 4)
+  assert.deepEqual(revoked, ['blob:1', 'blob:2', 'blob:3', 'blob:4'], 'late image URLs are immediately released after leaving')
   assert.equal(Object.keys(preview.imageUrls.value).length, 0)
   await preview.loadWorkspaceFiles()
-  assert.equal(fileReads, 3, 'disposed work never starts another file request')
+  assert.equal(fileReads, readsBeforeLeaving, 'disposed work never starts another file request')
   console.log(
-    'PASS: artifact selection, lazy figures, forced refresh and late blob cleanup remain isolated',
+    'PASS: artifact selection and lazy figures refresh replaced files, reject stale responses and release blobs',
   )
 
   const fileManager = await loadModule('src/components/FileManager.vue', { vue }, {}, true)
@@ -133,6 +172,11 @@ function deferred() {
             category: 'attachments',
             modified: 0,
           },
+          ...[
+            ['data/input.csv', 'data'],
+            ['template/original.docx', 'template'],
+            ['future/result.txt', 'future'],
+          ].map(([path, category]) => ({ path, name: path.split('/').pop(), type: 'file', category, modified: 0 })),
         ],
         onFileSelect: (path) => selected.push(path),
       }),
@@ -152,6 +196,7 @@ function deferred() {
                 {
                   onClick: () => emit('click', { node }),
                   'data-path': node.value,
+                  'data-category': group.value,
                 },
                 node.label,
               ),
@@ -177,9 +222,21 @@ function deferred() {
     await flush()
     assert.equal(selected.at(-1), path, 'display labels must never replace real API paths')
   }
+  for (const [path, category] of [
+    ['data/input.csv', 'data'],
+    ['template/original.docx', 'template'],
+    ['future/result.txt', 'outputs'],
+  ]) {
+    const node = host.find((n) => n.props?.['data-path'] === path)
+    assert.ok(node, `${path} must remain visible`)
+    assert.equal(node.props['data-category'], category)
+    node.props.onClick()
+    await flush()
+    assert.equal(selected.at(-1), path)
+  }
   app.unmount()
   console.log(
-    'PASS: paper labels distinguish exports, preserve attachment names and open exact files',
+    'PASS: file categories retain data, templates and unknown categories with exact selectable paths',
   )
 
   const upload = deferred(),

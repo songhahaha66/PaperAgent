@@ -103,3 +103,39 @@ def test_no_progress_final_reply_cannot_spin_empty_observe(tmp_path):
     assert action['error_type']=='NoResearchProgress' and model.calls==2
     assert '尚未调用工具' in prompts[1][-1].content
     assert 'validation error' not in action['message']
+
+
+def test_user_resume_consumes_pause_and_runs_a_new_decision(tmp_path):
+    from ai_system.graph.agent import PaperGraphAgent
+    from services.chat_services.research_session import research_snapshot, validate_action
+    def respond(messages):
+        if model.calls==1:return tool('research_pause',{'message':'A required source is unavailable'},'pause')
+        return tool('research_ask_user',{'message':'Please provide the source records.'},'ask')
+    model=ResearchToolsModel(respond=respond)
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
+    async def run():
+        assert '研究已暂停' in await agent.run('Count the source observations.')
+        store=ResearchStore(tmp_path,agent._load_thread())
+        assert store.snapshot()['outcome']=='blocked'
+        assert validate_action('resume',research_snapshot(tmp_path,'work','paused'))=='resume'
+        assert await agent.resume_failed()=='Please provide the source records.'
+        assert model.calls==2
+        assert store.snapshot()['action']['status']=='waiting'
+        assert not (tmp_path/'paper.md').exists()
+    asyncio.run(run())
+
+
+def test_planning_limit_after_user_answer_stays_paused_on_resume(tmp_path):
+    from ai_system.graph.agent import PaperGraphAgent
+    model=ResearchToolsModel(respond=lambda messages:tool('research_ask_user',{'message':'Which records?'},'ask'))
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),max_planning_calls=1)
+    async def run():
+        assert await agent.run('Count the source observations.')=='Which records?'
+        for output in (await agent.run('Use the supplied three records.',action='answer'),
+                       await agent.resume_failed()):
+            assert '研究已暂停' in output and '规划上限' in output
+            assert '已写入' not in output
+        state=ResearchStore(tmp_path,agent._load_thread()).snapshot()
+        assert state['outcome']=='blocked' and state['planning_calls']==model.calls==1
+        assert not (tmp_path/'paper.md').exists()
+    asyncio.run(run())

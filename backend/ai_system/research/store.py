@@ -333,6 +333,14 @@ class ResearchStore:
             attempt.update(experience_refs=frozen,input_digest=order.input_digest)
             self._save(db,state,'experiences_bound',{'attempt_id':order.attempt_id,'refs':frozen})
 
+    @staticmethod
+    def _restore_parent_execution(state, task, parent_id):
+        """A failed continuation preserves the parent's verdict, including failure."""
+        parent = state['executions'][parent_id]
+        task.update(execution_id=parent_id, execution_status=parent['execution_status'],
+                    acceptance=parent.get('acceptance', 'inconclusive'))
+        task.pop('continuation', None)
+
     def _commit(self, result: WorkerResult):
         signature = digest(result.model_dump())
         files = self.file_inputs()
@@ -372,12 +380,11 @@ class ResearchStore:
                 historical={**task,'execution_id':order.attempt_id,'report_ref':None}
                 save_report_artifact(state,self.root,historical,result.report)
                 state['artifacts'][historical['report_ref']]['active']=False
-                task.update(execution_id=parent,execution_status='succeeded',acceptance='accepted')
-                task.pop('continuation',None)
+                self._restore_parent_execution(state,task,parent)
                 for report in result.issues:
                     self._record_issue(state,IssueReport(task_id=order.task_id,category='execution',
                         message=report.message,evidence_refs=report.evidence_refs),'confirmed',producer_attempt=order.attempt_id)
-                receipt.update(reason='补充行动失败；原实验结果与解释仍保留为当前依据',continued=False)
+                receipt.update(reason='补充行动失败；已恢复原实验状态，保留本次失败记录',continued=False)
                 from .domain import register_execution_artifacts
                 register_execution_artifacts(state,self.root,attempt)
                 self._save(db,state,'attempt_committed',receipt)
@@ -824,8 +831,7 @@ class ResearchStore:
                     experiment = state['experiments'][execution['task_id']]
                     if experiment['execution_id'] == execution['attempt_id']:
                         if execution.get('parent_attempt'):
-                            experiment.update(execution_id=execution['parent_attempt'],execution_status='succeeded',acceptance='accepted')
-                            experiment.pop('continuation',None)
+                            self._restore_parent_execution(state,experiment,execution['parent_attempt'])
                             continue
                         experiment.update(execution_status='cancelled', acceptance='inconclusive')
                         pending.add(execution['task_id'])

@@ -95,6 +95,14 @@ const emit = defineEmits<Emits>()
 
 const isCollapsed = ref(false)
 const selectedFile = ref<string | null>(null)
+const fileCategories = [
+  ['papers', '论文文档'],
+  ['code', '代码文件'],
+  ['outputs', '输出文件'],
+  ['attachments', '附件'],
+  ['data', '数据文件'],
+  ['template', '模板文件'],
+] as const
 
 // 计算加载状态：优先使用父组件传入的loading状态，否则使用内部状态
 const isLoading = computed(() => {
@@ -113,29 +121,7 @@ const processedFileTreeData = computed(() => {
   }
 
   if (!props.fileTreeData || props.fileTreeData.length === 0) {
-    // 返回默认的空结构，使用后端的五个分类
-    return [
-      {
-        value: 'papers',
-        label: '论文文档 (0)',
-        children: [],
-      },
-      {
-        value: 'code',
-        label: '代码文件 (0)',
-        children: [],
-      },
-      {
-        value: 'outputs',
-        label: '输出文件 (0)',
-        children: [],
-      },
-      {
-        value: 'attachments',
-        label: '附件 (0)',
-        children: [],
-      },
-    ]
+    return fileCategories.map(([value, label]) => ({ value, label: `${label} (0)`, children: [] }))
   }
 
   // 检查是否为FileInfo[]类型（有path和type属性）
@@ -159,13 +145,7 @@ const processedFileTreeData = computed(() => {
       category_path?: string
     }>
 
-    // 按照后端的五个分类组织文件
-    const categorizedFiles = {
-      code: [] as any[],
-      outputs: [] as any[],
-      papers: [] as any[],
-      attachments: [] as any[],
-    }
+    const categorizedFiles = new Map<string, any[]>(fileCategories.map(([value]) => [value, []]))
 
     fileInfos.forEach((file) => {
       if (file.type === 'file') {
@@ -178,41 +158,17 @@ const processedFileTreeData = computed(() => {
           category_path: file.category_path,
         }
 
-        if (categorizedFiles[category as keyof typeof categorizedFiles]) {
-          categorizedFiles[category as keyof typeof categorizedFiles].push(fileItem)
-        }
+        // Keep files visible if the server adds another category.
+        const group = categorizedFiles.get(category) || categorizedFiles.get('outputs')!
+        group.push(fileItem)
       }
     })
 
-    // 对每个分类的文件进行排序
-    Object.keys(categorizedFiles).forEach((category) => {
-      categorizedFiles[category as keyof typeof categorizedFiles].sort((a, b) =>
-        a.label.localeCompare(b.label),
-      )
+    return fileCategories.map(([value, label]) => {
+      const children = categorizedFiles.get(value)!
+      children.sort((a, b) => a.label.localeCompare(b.label))
+      return { value, label: `${label} (${children.length})`, children }
     })
-
-    return [
-      {
-        value: 'papers',
-        label: `论文文档 (${categorizedFiles.papers.length})`,
-        children: categorizedFiles.papers,
-      },
-      {
-        value: 'code',
-        label: `代码文件 (${categorizedFiles.code.length})`,
-        children: categorizedFiles.code,
-      },
-      {
-        value: 'outputs',
-        label: `输出文件 (${categorizedFiles.outputs.length})`,
-        children: categorizedFiles.outputs,
-      },
-      {
-        value: 'attachments',
-        label: `附件 (${categorizedFiles.attachments.length})`,
-        children: categorizedFiles.attachments,
-      },
-    ]
   } else {
     // 处理原有的树形结构数据
     // 过滤掉空目录，只保留有文件的目录

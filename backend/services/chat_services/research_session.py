@@ -184,8 +184,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         for item in raw_claims[:200] if isinstance(item, dict) and "id" in item and "subproblem" in item
     ]
     from ai_system.research.experiment_views import experiments_view
+    current_files = store.file_inputs() if business else {}
     readable_outcomes = experiments_view(business, lambda path, prefix="": _file(root, path, prefix),
-                                 current_files=store.file_inputs() if business else None)
+                                 current_files=current_files)
     used_runs = {r.run_id for r in [*results, *issue_evidence]}
     for outcome in readable_outcomes:
         used_runs.update(r["run_id"] for r in outcome["results"])
@@ -258,7 +259,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
         snapshot_at=time.time(),
         pending_question=(business['action']['inputs'].get('message') if business and business.get('action')
                           and business['action']['capability']=='ask' and business['action']['status']=='waiting' else None),
-        inputs=[p for p in store.file_inputs() if _file(root,p)] if business else [],
+        inputs=[p for p in current_files if _file(root,p)],
         questions=control.get('questions',[]), evidence_uses=control.get('evidence_uses',[]),
         runtime={**runtime, 'models':models,
                  'models_updated_at':max((model['updated_at'] for model in models),default=0),
