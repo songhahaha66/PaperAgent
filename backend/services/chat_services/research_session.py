@@ -59,6 +59,7 @@ class ResearchResult(BaseModel):
 
 
 class ResearchRun(BaseModel):
+    question_id: str | None = None
     id: str
     status: str
     input_path: str | None = None
@@ -188,6 +189,9 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     readable_outcomes = experiments_view(business, lambda path, prefix="": _file(root, path, prefix),
                                  current_files=current_files)
     used_runs = {r.run_id for r in [*results, *issue_evidence]}
+    if business:
+        used_runs.update(rid for rid, info in raw_runs.items()
+                         if info.get('research_id') == business['research_id'] and info.get('scope') in {'research','delegated'})
     for outcome in readable_outcomes:
         used_runs.update(r["run_id"] for r in outcome["results"])
         used_runs.update(a['run_id'] for a in outcome['artifacts'] if a['run_id'])
@@ -211,7 +215,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
             raise ValueError("执行记录结构错误")
         prefix = f"runs/{run_id}/"
         runs.append(ResearchRun(
-            id=run_id, status=str(info.get("status", "unknown")),
+            id=run_id, question_id=info.get("question_id"), status=str(info.get("status", "unknown")),
             input_path=_file(root, info.get("input"), prefix),
             stdout_path=_file(root, info.get("stdout"), prefix),
         ))
@@ -375,7 +379,7 @@ def infer_question_scope(question: str, snapshot: ResearchSnapshot) -> str | Non
     mentioned = {m.upper() for m in re.findall(r"(?<![A-Za-z0-9])Q\d+[a-z]?(?![A-Za-z0-9])", question, re.I)}
     if len(mentioned) != 1:
         return None
-    known = {r.subproblem_id for r in snapshot.results} | {c.subproblem_id for c in snapshot.claims}
+    known = {q['id'] for q in snapshot.questions if not q.get('retired')} | {r.subproblem_id for r in snapshot.results} | {c.subproblem_id for c in snapshot.claims}
     return next((sid for sid in known if sid.upper() in mentioned), None)
 
 
@@ -404,6 +408,7 @@ def scoped_snapshot(snapshot: ResearchSnapshot, subproblem_id: str | None) -> Re
     if question is None and not selected_results and not selected_claims:
         raise ValueError("该子问题尚无可供追问的登记结果")
     run_ids = {r.run_id for r in selected_results}
+    run_ids.update(r.id for r in snapshot.runs if r.question_id == subproblem_id)
     selected_questions=[item for item in snapshot.questions if item['id']==subproblem_id or
                         (question is None and own.intersection(item['experiment_ids']))]
     question_ids={q['id'] for q in selected_questions}
@@ -444,6 +449,7 @@ def revision_experiment_scope(snapshot: ResearchSnapshot, reference: str | None)
     """Convert a selected question only after auto has selected a revision."""
     if reference is None:return None
     question=next((item for item in snapshot.questions if item['id']==reference),None)
+    if question and not question['experiment_ids']:return [question['id']]
     ids=set(question['experiment_ids']) if question else {reference}
     selected=[item['task_id'] for item in snapshot.experiments
               if item['task_id'] in ids and item['kind']!='verify']

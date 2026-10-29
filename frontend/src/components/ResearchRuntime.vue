@@ -65,6 +65,10 @@
               <span>{{ call.label }}</span
               ><span>{{ executionLabel(call.status) }}</span
               ><time>{{ duration(call) }}</time>
+              <small v-if="call.context_usage" class="muted" title="按文本估算，实际计费用量见会话统计">
+                上下文约 {{ (call.context_usage.messages_estimated_tokens + call.context_usage.tools_estimated_tokens).toLocaleString() }} tokens
+                <template v-if="call.context_usage.summarized_messages"> · 已摘要 {{ call.context_usage.summarized_messages }} 条历史</template>
+              </small>
               <button
                 v-if="call.run_id && runFile(call.run_id)"
                 @click="emit('file', runFile(call.run_id)!)"

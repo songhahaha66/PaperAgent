@@ -59,7 +59,7 @@ export interface ComparisonRecord {
     higher_is_better: boolean
   }
   branches: ComparisonBranch[]
-  budget: { limits: Record<string, number>; used: Record<string, number> }
+  budget: { used: Record<string, number> }
 }
 export interface ComparisonState {
   policy: { enabled: boolean; version: number; spec: ComparisonSpec | null }

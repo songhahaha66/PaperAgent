@@ -16,7 +16,7 @@ import uuid
 from contextlib import contextmanager, closing
 from pathlib import Path
 
-from . import ENGINE_VERSION, DEFAULT_PLANNING_CALL_LIMIT
+from . import ENGINE_VERSION
 from .models import Assumption, ResearchRevision, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ContentFeedback, RuntimeFault
 from .validation import bind_requirements, validate_spec, protocol, fingerprint
 
@@ -131,7 +131,7 @@ class ResearchStore:
         db.execute("INSERT INTO journal VALUES (?, ?, ?, ?)",
                    (self.research_id, state["commit_seq"], kind, json.dumps(payload, ensure_ascii=False)))
 
-    def initialize(self, requirement: str, analysis: dict | None = None, max_attempts: int = 3, *, output_mode="markdown"):
+    def initialize(self, requirement: str, analysis: dict | None = None, *, output_mode="markdown"):
         with self._transaction() as db:
             state = self._read(db)
             if state:
@@ -161,9 +161,8 @@ class ResearchStore:
                      "assumption_history": [], "validations": [],
                      "questions": {}, "experiments": tasks, "executions": {}, "artifacts": {}, "claims": {},
                      "action": None, "publication": None, "activity": [], "activity_updated_at": 0,
-                     "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running", "max_attempts": max_attempts,
-                     "materials": {"inputs": self.file_inputs(), "profile": ""},
-                     "planning_calls": 0, "max_total_attempts": len(tasks) * max_attempts + 6}
+                     "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running",
+                     "materials": {"inputs": self.file_inputs(), "profile": ""}}
             for experiment in tasks.values():
                 attach_question(state, experiment, title=experiment["subproblem"].get("title"))
             from .migration import retire_legacy_workflow
@@ -282,9 +281,6 @@ class ResearchStore:
                 raise ResearchConflict("任务依赖的假设已被反证")
             if any(i["blocking"] and i["status"] == "confirmed" and task_id in i["repair_targets"] for i in research_findings(state)):
                 raise ResearchConflict("任务需要先提交修复计划")
-            from .operations import attempt_budget_error
-            if error := attempt_budget_error(state, task):
-                raise ResearchConflict(error)
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
@@ -314,6 +310,20 @@ class ResearchStore:
                 import logging
                 logging.getLogger(__name__).warning('研究已提交；经验索引未完成，可从经验面板补建')
         return receipt
+
+    def sync_execution_files(self, run_ids):
+        """Refresh file indexes after delivery without rewriting committed results."""
+        from .domain import register_execution_artifacts
+        selected=set(run_ids)
+        with self._transaction() as db:
+            state=self._read(db)
+            if not state:return
+            before=dict(state['artifacts'])
+            for attempt in state['executions'].values():
+                if attempt.get('workspace')=='.' and selected.intersection(attempt.get('run_ids',[])):
+                    register_execution_artifacts(state,self.root,attempt)
+            if state['artifacts']!=before:
+                self._save(db,state,'execution_files_synced',{'run_ids':sorted(selected)})
 
     def bind_experiences(self, order, refs):
         if not self.experience_scope or not self.experience_scope.valid_refs(refs):
@@ -626,14 +636,6 @@ class ResearchStore:
                             for a in state["assumptions"].values()]}
         validate_spec(state["spec"]["requirement"] + "\n" + "\n".join(state["spec"]["amendments"]), analysis)
 
-    def reserve_planning_call(self, *, limit=DEFAULT_PLANNING_CALL_LIMIT):
-        with self._transaction() as db:
-            state=self._read(db)
-            if limit is not None and state['planning_calls']>=limit:return False
-            state['planning_calls']+=1
-            self._save(db,state,'observation_started',{'call':state['planning_calls']})
-            return True
-
     def set_outcome(self, outcome):
         with self._transaction() as db:
             state = self._read(db)
@@ -705,6 +707,32 @@ class ResearchStore:
             receipt={'revision':state['revision'],'affected':affected,'command':patch.model_dump()}
             db.execute('INSERT INTO commands VALUES (?,?,?,?)',
                        (self.research_id,key,signature,json.dumps(receipt,ensure_ascii=False)))
+            self._save(db,state,'research_revised',receipt)
+            return receipt
+
+    def amend_questions(self, command_id, base_revision, change, scope=None):
+        """Append human requirements without an experiment-planning model call."""
+        from .questions import QuestionUpdate, apply_questions
+        if not command_id or not change.strip():raise ValueError('修改编号和内容不能为空')
+        signature=digest([base_revision, change, scope]);key='question-revision:'+command_id
+        with self._transaction() as db:
+            old=db.execute('SELECT digest,response FROM commands WHERE research_id=? AND id=?', (self.research_id,key)).fetchone()
+            if old:
+                if old['digest']!=signature:raise ResearchConflict('修改编号已被另一条要求使用')
+                return json.loads(old['response'])
+            state=self._read(db)
+            if state['revision']!=base_revision:raise ResearchConflict('研究版本已改变，请刷新后重试')
+            selected=scope or []
+            if len(set(selected))!=len(selected) or any(q not in state['questions'] or state['questions'][q].get('retired') for q in selected):
+                raise ValueError('修改范围包含未知问题')
+            for qid in selected:
+                q=state['questions'][qid]
+                apply_questions(state,[QuestionUpdate(question_id=qid,base_version=q['version'],title=q['title'],
+                    question=q['question']+'\n补充要求：'+change,reason=change)])
+            state['spec']['amendments'].append(change)
+            state.update(outcome='running', publication=None, action=None, revision=state['revision']+1)
+            receipt={'command_id':command_id,'scope':selected,'change':change}
+            db.execute('INSERT INTO commands VALUES (?,?,?,?)',(self.research_id,key,signature,json.dumps(receipt,ensure_ascii=False)))
             self._save(db,state,'research_revised',receipt)
             return receipt
 

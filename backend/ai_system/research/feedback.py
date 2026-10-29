@@ -4,6 +4,7 @@ The research/experiment owner decides what a semantic suspicion means. A second
 model never silently edits facts, closes findings, or schedules another run.
 """
 from copy import deepcopy
+import re
 from pydantic import Field
 from .models import Contract, ResearchConflict
 from .domain import experiment_report, report_artifact, save_report_artifact, findings, experiment_scope, current_result_refs
@@ -149,14 +150,34 @@ async def read_artifact(ctx, inputs):
     from ai_system.modules.registry import CapabilityProduct
     state=ctx.research.snapshot()
     path=inputs['path']
-    known={a['payload'].get('path') for a in state['artifacts'].values()} | set(ctx.research.file_inputs())
-    if path not in known:raise ValueError('只能读取已登记产物或当前原始资料')
+    known=({a['payload'].get('path') for a in state['artifacts'].values()} | set(ctx.research.file_inputs())
+           if ctx.fs.root==ctx.research.root else set())
+    known.update(path for path,meta in ctx.fs._manifest.get('files',{}).items() if meta.get('visibility')=='user')
+    known.update(info[field] for info in ctx.fs._manifest.get('runs', {}).values()
+                 for field in ('input', 'stdout', 'stderr') if info.get(field))
+    if re.fullmatch(r'\.system/context-outputs/[a-f0-9]+\.json', path):known.add(path)
+    if path not in known:raise ValueError('只能读取当前原始资料或已保存的工作区文件')
     from services.file_services.workspace_layout import workspace_path
-    target=workspace_path(ctx.research.root,path)
+    target=ctx.fs.canonical_artifact(path) if path.startswith('outputs/research/') else ctx.fs.abs(path)
     if not target.is_file():raise ValueError('资料文件不可用')
-    raw=target.read_bytes()
-    try:text=raw.decode('utf-8')
-    except UnicodeError:raise ValueError('该文件不是UTF-8文本，请在实验中按其真实格式读取')
+    def read():
+        raw=target.read_bytes()
+        if target.suffix.lower()=='.pdf':
+            import pdfplumber
+            with pdfplumber.open(target) as pdf:
+                text='\n\n'.join(f'第{i+1}页\n'+(page.extract_text() or '本页无可提取文本') for i,page in enumerate(pdf.pages))
+        elif target.suffix.lower() in {'.xlsx','.xls'}:
+            import pandas as pd
+            book=pd.ExcelFile(target)
+            with book:
+                text='\n\n'.join('工作表：'+sheet+'\n'+book.parse(sheet,nrows=40).to_string(index=False) for sheet in book.sheet_names)
+            text+='\n（每张工作表仅预览前40行；完整计算请直接读取原文件。）'
+        else:
+            try:text=raw.decode('utf-8')
+            except UnicodeError:raise ValueError('此二进制文件无法直接提取文本，请使用其真实格式读取')
+        return raw,text
+    import asyncio
+    raw,text=await asyncio.to_thread(read)
     start=inputs['start'];limit=inputs['limit']
     return CapabilityProduct('research_state',{'path':path,'version':hashlib.sha256(raw).hexdigest(),
         'total_chars':len(text),'excerpt':text[start:start+limit]})
@@ -178,6 +199,6 @@ def register(registry):
     registry.register('research','research.read_artifact','research_state',read_artifact,ReadTarget,
         model_callable=True, purpose='读取已保存的原始资料或实验产物文本，返回真实内容和版本；无需重新计算。')
     registry.register('research','research.revise_interpretation','research_state',repair_report,EditTarget,
-        model_callable=True, purpose='按当前interpretation_version修订summary和key_findings并同步claims，或带依据采纳/驳回/保留核查意见；不重跑计算。')
+        purpose='按当前interpretation_version修订历史实验解释。')
     registry.register('research','research.check_interpretation','research_state',check_report,Target,
-        model_callable=True, purpose='针对明确语义疑点核查实验代码、输出和解释，返回具体意见与依据；无自动改写或阻塞权限。')
+        purpose='针对历史实验核查代码、输出和解释。')

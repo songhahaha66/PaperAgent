@@ -42,6 +42,7 @@ def study(tmp_path):
 
 
 def test_answer_without_scalar_refs_delivers_without_recomputation(tmp_path):
+    (tmp_path/'paper.md').write_text('# 已有答案\n总体3条，子集未完成。')
     store,eid,ref,qid=study(tmp_path);executions=store.snapshot()['executions']
     def respond(messages):
         rows=[m for m in messages if isinstance(m,ToolMessage)]
@@ -50,14 +51,14 @@ def test_answer_without_scalar_refs_delivers_without_recomputation(tmp_path):
         assert json.loads(rows[-1].content)['answer_gaps']==[]
         return tool('research_deliver',{'title':'已有结果与未知','reason':'保留实际结果及未完成部分'},'deliver')
     model=ResearchToolsModel(respond=respond)
-    ctx=GraphContext.create(str(tmp_path),planner_llm=model,max_solver_steps=6);ctx.research=store
+    ctx=GraphContext.create(str(tmp_path),planner_llm=model);ctx.research=store
     assert not asyncio.run(prepare_action(ctx))
-    assert model.calls==2 and store.snapshot()['publication']['stage']=='write'
+    assert model.calls==2 and store.snapshot()['publication']['stage']=='validate'
     assert store.snapshot()['executions']==executions
 
 
 def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_path):
-    from ai_system.modules.writing.sections import section_request
+    from ai_system.research.views import execution_context
     store,first,r1,qid=study(tmp_path)
     result=operations.schedule_experiment(SimpleNamespace(research=store),operations.ExperimentInput(
         question_id=qid,dependency_ids=[first],plan={'conditions':'只取 category=A，保持原始行身份',
@@ -70,7 +71,7 @@ def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_pat
     assert set(values)=={r1,r2} and values[r1]['meaning']['scope']!=values[r2]['meaning']['scope']
     assert values[r2]['input_refs']['task:'+first]==before['experiments'][first]['execution_id']
     ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store;refresh_registry(ctx)
-    prompt=section_request('solve:'+first,'范围与结果',graph_view(before),ctx)
+    prompt=json.dumps(execution_context(store,{first,second}),ensure_ascii=False)
     assert all(v['reference'] in prompt and v['meaning']['scope'] in prompt and v['content_hash'] in prompt for v in values.values())
     assert 'data/rows.csv' in prompt and store.snapshot()==before
     store.record_activity({'id':'old','started_at':1,'capability':'run_python','status':'completed',

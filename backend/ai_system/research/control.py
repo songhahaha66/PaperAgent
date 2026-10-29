@@ -31,6 +31,11 @@ async def observe(state, runtime):
     if store.snapshot() is None:
         raise ValueError("研究状态不存在，不能从 checkpoint 恢复业务数据")
     snapshot = store.refresh_inputs()
+    from ai_system.modules.experiments.execution import recover_outputs
+    try:
+        await recover_outputs(ctx)
+    finally:
+        await ctx.kernels.close()  # Recovery must release the lease before compilation.
     if ctx.experience_scope is not None:
         try:
             from ai_system.modules.registry import invoke
@@ -59,11 +64,11 @@ async def observe(state, runtime):
     return {'research_blocked': blocked}
 
 
-def graph_view(snapshot):
+def graph_view(snapshot, root=None):
     from .views import questions
     publication=snapshot['publication'] or {}
     source=snapshot['spec']['requirement']
-    return {'task':source, 'analysis':{
+    view = {'task':source, 'analysis':{
         'title':publication.get('title') or source.splitlines()[0][:80],
         'restatement':source, 'overall_analysis':'',
         'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify' and not t['retired']],
@@ -79,6 +84,14 @@ def graph_view(snapshot):
         'repair_round':publication.get('repairs',0),
         'issues':[i for i in snapshot['feedback'] if i.get('section') and i['action']=='rewrite'
                   and i['status'] not in {'resolved','dismissed','superseded'}]}
+
+    if snapshot.get('document') and root is not None:
+        import hashlib
+        path = root / snapshot['document']['path']
+        text = path.read_text(encoding='utf-8') if path.is_file() else ''
+        view.update(document=snapshot['document'],sections={'document':text},
+                    source_version=hashlib.sha256(text.encode()).hexdigest())
+    return view
 
 
 def paper_state(store):
@@ -212,8 +225,9 @@ def worker_context(ctx, order):
         for aid in reversed(execution_lineage(snapshot, execution_id)):
             if aid in copied: continue
             copied.add(aid)
-            source = ctx.workspace / 'experiments' / aid / 'workspace'
-            inherited.update(inherit_execution_files(source, target_fs, key))
+            attempt=snapshot['executions'][aid]
+            source = ctx.workspace if attempt.get('workspace')=='.' else ctx.workspace / 'experiments' / aid / 'workspace'
+            inherited.update(inherit_execution_files(source, target_fs, key,run_ids=attempt.get('run_ids')))
     def copy_dependency(key):
         for dependency in snapshot['experiments'][key]['dependencies']:
             copy_dependency(dependency)
@@ -227,7 +241,6 @@ def worker_context(ctx, order):
     target_fs._save_manifest()
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
         writer_llm=ctx.writer_llm, stream_manager=ctx.events.stream_manager,
-        max_solver_steps=ctx.max_solver_steps,
         template_requirements=ctx.template_requirements, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
         source_workspace=ctx.workspace, sandbox_work_id=str(ctx.workspace),

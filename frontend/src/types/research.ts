@@ -60,6 +60,8 @@ export interface ResearchActivity {
   run_id?: string
   input_tokens?: number
   output_tokens?: number
+  cache_read_tokens?: number | null
+  context_usage?: { messages_estimated_tokens: number; tools_estimated_tokens: number; original_messages_estimated_tokens: number; summarized_messages: number } | null
 }
 export interface ResearchHistory {
   id: string
@@ -127,7 +129,7 @@ export interface ResearchExperiment {
     waiting_for: string[]
     issue_ids: string[]
     executions: number
-    attempt_limit: number
+    attempt_limit: number | null
     rework: boolean
     next_step?: string
   }

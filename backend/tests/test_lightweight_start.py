@@ -44,13 +44,14 @@ def test_first_observe_can_inspect_without_tasks_or_extra_model_calls(tmp_path, 
         assert 'artifacts' not in context  # Values are carried once in scoped experiments.
         from ai_system.modules.registry import invoke
         await invoke(ctx,'experiments.inspect')
+        await invoke(ctx,'research.pause',message='Only inspect materials in this test')
     monkeypatch.setattr(planner.Planner, 'run', decide)
     ctx.research.initialize(SOURCE)
     state = asyncio.run(control.observe({}, SimpleNamespace(context=ctx)))
     action = loop.select(state, SimpleNamespace(context=ctx))
     assert any(a['capability']=='experiments.inspect' for a in ctx.research.snapshot()['activity'])
     assert len(calls) == 1 and not ctx.research.snapshot()['experiments']
-    assert state == {'research_blocked': False}
+    assert state == {'research_blocked': True}  # The fixture explicitly paused after inspection.
     view = control.graph_view(ctx.research.snapshot())
     assert view['analysis']['subproblems'] == [] and view['analysis']['restatement'] == SOURCE
     assert view['data_profile'] == ctx.research.snapshot()['materials']['profile']

@@ -8,8 +8,6 @@ from pathlib import Path, PurePosixPath
 
 
 def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
-    if source_fs.root == target_fs.root:
-        return []
     published = []
     runs = source_fs._manifest.get('runs', {})
     for run_id in runs if run_ids is None else run_ids:
@@ -35,7 +33,7 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
             if existing:
                 if existing.get('archive_path')!=rel or existing.get('sha256')!=expected:
                     raise ValueError('正式成果编号已绑定其他归档版本')
-            else:
+            if not existing or not target.is_file():
                 atomic_write(target,lambda f:bounded_copy(source,f,DEFAULT_MAX_FILE_BYTES))
             kind = 'image' if source.suffix.lower() in {'.png','.jpg','.jpeg','.svg'} else 'code' if source.suffix == '.py' else 'data'
             target_fs.register_file(dest, kind=kind, source_run=run_id, visibility='user',
@@ -94,14 +92,15 @@ def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     return publish_run_files(source_fs, target_fs, attempt_id, run_ids=selected)
 
 
-def inherit_execution_files(source, target_fs, experiment_id):
+def inherit_execution_files(source, target_fs, experiment_id, *, run_ids=None):
     """Restore one execution's own runs and handoffs, retaining immutable IDs."""
     from services.file_services.workspace_fs import WorkspaceFS
     manifest = workspace_path(source, 'manifest.json')
     if not manifest.is_file(): return set()
     source_fs = WorkspaceFS(str(source))
     inventory = source_fs._manifest
-    selected = set(inventory.get('runs', {})) - set(inventory.get('inherited_runs', []))
+    selected = (set(inventory.get('runs', {})) - set(inventory.get('inherited_runs', []))
+                if run_ids is None else set(run_ids))
     def copy_file(path):
         parts = PurePosixPath(path).parts
         if not parts or any(p.startswith('.') for p in parts) or parts[0] in {'manifest.json', 'chat_history.json', 'data', 'attachment'}:

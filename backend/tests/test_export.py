@@ -74,7 +74,7 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
     project=paper_project.describe(store)
     assert project["main"]=="paper.tex" and project["compile"]["state"]=="current"
     assert (workspace_path(ws, paper_project.VERSIONS)/project["version"]/"paper.tex").read_bytes()==(ws/"paper.tex").read_bytes()
-    assert project["changes"] and all(c["status"]=="applied" for c in project["changes"])
+    assert all(c["status"]=="applied" for c in project["changes"])  # First creation is already versioned above.
     assert not (workspace_path(ws, '.system/paper_raw.md')).exists()
     assert (ws / "paper.pdf").read_bytes().startswith(b"%PDF")
     assert "paper.pdf" in output

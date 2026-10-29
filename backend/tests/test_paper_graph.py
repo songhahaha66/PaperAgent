@@ -51,47 +51,35 @@ def test_graph_end_to_end_offline(tmp_path):
     assert set(checkpoint) == {"research_blocked"}
     result = PaperGraphAgent._result(ctx)
 
-    # Research tools allocate real IDs; writing remains a research-level delivery.
     business=ctx.research.snapshot()
-    by_title={task['subproblem']['title']:key for key,task in business['experiments'].items()}
-    first=by_title['用电量预测'];second=by_title['政策评估']
-    assert len(by_title)==2 and all(task['kind']=='compute' for task in business['experiments'].values())
-    assert business['experiments'][second]['dependencies']==[first]
-    assert result['data_profile']=='', 'Material inspection remains optional'
-    design=result['designs'][first]
-    assert design['controller_selected'] and not design['scores']
-    assert design['candidates']==[design['chosen']] and design['chosen_index']==0
-    assert 'exploration' not in design and not CANDIDATE_PROMPTS
-    assert {key:report['status'] for key,report in result['solutions'].items()}=={first:'completed',second:'completed'}
-    # Approved change: semantic checks are opt-in, without automatic rewrite/review chains.
-    assert all(report['reviews']==[] for report in result['solutions'].values())
+    assert len(business['questions'])==2 and not business['experiments'] and not business['executions']
+    assert result['data_profile']=='' and result['designs']=={} and not CANDIDATE_PROMPTS
+    assert result['solutions']=={} and not business['artifacts']
     assert result['consistency']==[] and _Structured.audits==0 and not _Structured.reviewed_q1
     assert result['repair_round']==0 and result['issues']==[]
     assert not any('全文结论表' in request for request in model.text_calls)
-    assert len(business['executions'])==2, 'No extra experiment or recomputation for writing/review'
     manifest=json.loads((workspace_path(ws, 'manifest.json')).read_text())['runs']
-    assert manifest and all(run['status']=='success' for run in manifest.values())
-    from ai_system.modules.experiments.execution import solution_code_path
-    for experiment_id in (first,second):
-        exported=(ws/solution_code_path(experiment_id)).read_text(encoding='utf-8')
-        assert 'forecast = 1234.5678' in exported and 'plt.plot' in exported
-
+    assert len(manifest)==4 and all(run['status']=='success' for run in manifest.values())
+    assert all(sum(r['question_id']==qid for r in manifest.values())==2 for qid in business['questions'])
+    exported=(ws/'code/research_solution.py').read_text(encoding='utf-8')
+    assert 'forecast = 1234.5678' in exported and 'plt.plot' in exported
+    assert not any(a['capability']=='experiments.execute' for a in business['activity'])
     registry=ResultRegistry.load(WorkspaceFS(str(ws)))
     assert registry.results=={} and registry.claims=={}
-    for key in (first,second):
-        report=result['solutions'][key]
-        assert report['runs'] and any(p.endswith('.png') for p in report['files'])
-        assert all((ws/p).is_file() for p in report['files'])
-        question=business['questions'][business['experiments'][key]['question_id']]
-        assert question['coverage']=='answered' and question['stop_reason']
+    for qid,q in business['questions'].items():
+        runs=[r for r in result['runs'] if r['question_id']==qid]
+        files=[p for r in runs for p in r['files']]
+        assert len(runs)==2 and any(p.endswith('.png') for p in files)
+        assert all((ws/p).is_file() for p in files)
+        assert q['coverage']=='answered' and q['stop_reason']
     paper=(ws/'paper.md').read_text(encoding='utf-8')
     assert paper.startswith('# '+_analysis().title) and '政策评估' in paper
-    assert '{{' not in paper and '12.345' in paper
+    assert '{{' not in paper and '12.345' not in paper
+    assert not ctx.planner_llm.text_calls
     assert '{{R:' not in workspace_path(ws,'.system/paper_raw.md').read_text()
-    assert _analysis().outline[0]['key']=='recommendations'
     from ai_system.research.control import public_snapshot
     progress=public_snapshot(business)
-    assert all(t['progress']['state']=='accepted' for t in progress['experiments'])
+    assert not progress['experiments'] and all(q['coverage']=='answered' for q in progress['questions'])
     assert progress['delivery_stages']['render']['status']=='completed'
     assert not (ws/'plan.json').exists()
 
@@ -99,41 +87,6 @@ def test_graph_end_to_end_offline(tmp_path):
 # ----------------------------------------------------------------------
 # 单元
 # ----------------------------------------------------------------------
-
-
-def test_step_budget_nudges_near_limit_counting_since_last_human():
-    from langchain.agents.middleware import ModelRequest
-
-    from ai_system.graph.compaction import StepBudgetMiddleware
-
-    def history(old_steps, new_steps):
-        msgs = [HumanMessage(content="任务")]
-        for i in range(old_steps):
-            msgs += [AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "1"}, "id": f"a{i}"}]),
-                     ToolMessage(content="ok", tool_call_id=f"a{i}")]
-        msgs.append(HumanMessage(content="返工"))
-        for i in range(new_steps):
-            msgs += [AIMessage(content="", tool_calls=[{"name": "run_python", "args": {"code": "1"}, "id": f"b{i}"}]),
-                     ToolMessage(content="ok", tool_call_id=f"b{i}")]
-        return msgs
-
-    seen = []
-
-    async def handler(request):
-        seen.append((request.messages, request.tools))
-        return None
-
-    middleware = StepBudgetMiddleware(budget=12, reserve=3, message="请交报告")
-    for msgs in (history(20, 8), history(0, 9), history(0, 11)):
-        asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=msgs, tools=["run_python"]), handler))
-    # 返工前的 20 步不计入；第二次已到 9 步，追加提醒；最后一步只留报告工具
-    assert seen[0][0][-1].content == "ok" and seen[0][1] == ["run_python"]
-    assert "还剩约 3 步。请交报告" in seen[1][0][-1].content and seen[1][1] == ["run_python"]
-    assert "步数已用完" in seen[2][0][-1].content and seen[2][1] == []
-    from langgraph.errors import GraphRecursionError
-    with pytest.raises(GraphRecursionError):
-        asyncio.run(middleware.awrap_model_call(ModelRequest(model=None, messages=history(0, 12), tools=[]), handler))
-    assert len(seen) == 3, "invalid final reports cannot keep calling the model past the step budget"
 
 
 def test_malformed_tool_call_is_retried_and_never_left_in_history():

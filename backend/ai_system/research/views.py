@@ -9,15 +9,15 @@ from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
-    'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
+    'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.create_question':'建立研究问题','research.edit_question':'修改研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用未完成',
-    'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
+    'research.run_python':'运行研究代码','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
-    'writing.write':'撰写论文',
-    'writing.validate':'检查论文','writing.repair':'修订论文',
+    'writing.edit':'编辑研究正文','research.delegate':'执行独立子任务',
+    'writing.validate':'检查正文文件与引用',
     'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码',
-    'read_file':'读取已有文件','check_interpretation':'核查实验解释'}
+    'read_file':'读取已有文件','retry_outputs':'同步结果文件','check_interpretation':'核查实验解释'}
 
 
 def questions(snapshot):
@@ -245,7 +245,8 @@ def model_activity(store, work_status):
             'started_at':item['sent_at'],'finished_at':item.get('finished_at'),
             'updated_at':max(item.get('finished_at') or 0,item.get('headers_at') or 0,item['sent_at']),
             'interrupted_at':item.get('interrupted_at'), 'status':status,
-            'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens')})
+            'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens'),
+            'cache_read_tokens':item.get('cache_read_tokens'),'context_usage':item.get('context_usage')})
     return result
 
 

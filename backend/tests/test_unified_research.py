@@ -53,17 +53,7 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
     assert runtime.status()['used']==1
 
 
-def test_parallel_writing_preserves_finished_sections_when_another_call_fails(tmp_path,monkeypatch):
-    from helpers.paper import accepted_store
-    from ai_system.modules.writing import sections as writing
-    store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
-    async def section(ctx,state,key,title):
-        if key=='analysis':raise ResearchBudgetExhausted('budget reached')
-        return '已完成且尚未发布的章节。'
-    monkeypatch.setattr(writing,'write_section',section)
-    monkeypatch.setattr(writing,'section_request',lambda *args:'stable writing inputs')
-    with pytest.raises(ResearchBudgetExhausted):
-        asyncio.run(writing.write_many(ctx,{},[('restatement','重述'),('analysis','分析')]))
-    state=store.snapshot()
-    assert state['sections']['restatement']['text']=='已完成且尚未发布的章节。'
-    assert state['sections']['restatement']['context_hash'] and not state.get('paper_hash')
+def test_default_delivery_has_no_independent_writing_models():
+    from ai_system.modules.registry import capabilities
+    assert not {'writing.write','writing.repair'} & {c['name'] for c in capabilities().describe()}
+    assert 'writing.edit' in {c['name'] for c in capabilities().describe()}

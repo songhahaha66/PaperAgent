@@ -18,13 +18,12 @@ from ..sandbox.contracts import ExecutionKernel
 from ..sandbox.factory import create_kernel
 from .llm_utils import cap_output
 from .registry import ResultRegistry
-from ..research import DEFAULT_PLANNING_CALL_LIMIT
 
 logger = logging.getLogger(__name__)
 
 
 class KernelPool:
-    """实验内持久内核；远端由 provider 按研究工作管理容器租约，业务状态仍在 Store"""
+    """主研究会话及显式比较分支的持久内核；provider 管理远端租约，业务状态仍在 Store"""
 
     def __init__(self, workspace: Path, fs: WorkspaceFS, timeout: float = 180.0, *, work_id=None, experiment_id=None):
         self.workspace = workspace
@@ -110,11 +109,10 @@ class GraphContext:
     source_workspace: Any = None
     compact_paper: bool = False
     skill_policy: Any = None
-    max_solver_steps: int = 40
-    max_repair_rounds: int = 2
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
-    max_planning_calls: int | None = DEFAULT_PLANNING_CALL_LIMIT
+    agent_messages: list = field(default_factory=list)
+    delegation_slots: Any = field(default_factory=lambda: asyncio.Semaphore(2))
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)
 

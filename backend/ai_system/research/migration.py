@@ -9,7 +9,7 @@ from contextlib import closing
 
 from .domain import FAULT_CATEGORIES, SCHEMA_VERSION
 
-MIGRATION_VERSION = 9
+MIGRATION_VERSION = 11
 
 
 def migrate_runtime(db, root):
@@ -109,6 +109,12 @@ def retire_evidence_acceptance(state):
                 retired.append({'source':'retired-evidence-gate','raw':deepcopy(issue)})
                 issue.update(blocking=False,repair_targets={})
     state.setdefault('legacy_records',[]).extend(retired)
+    action=state.get('action') or {}
+    task=state['experiments'].get(action.get('target')) or {}
+    if action.get('capability')=='experiments.execute' and not (task.get('experiment') or {}).get('csv'):
+        state['legacy_records'].append({'source':'retired-nested-dispatch','raw':deepcopy(action)})
+        state['action']=None
+
 
 
 def migrate_interpretations(state):
@@ -178,6 +184,11 @@ def migrate_workspace(store):
                 if state['schema_version']==4:migrate_interpretations(state)
                 else:retire_legacy_workflow(state)
                 retire_evidence_acceptance(state)
+                if (state.get('publication') or {}).get('stage') in {'write','repair'}:
+                    state.setdefault('legacy_records',[]).append({'source':'retired-publication','raw':state['publication']})
+                    state['publication']=None
+                    if (state.get('action') or {}).get('capability') in {'writing.write','writing.repair'}:
+                        state['action']['status']='done'
                 state['schema_version']=SCHEMA_VERSION
                 db.execute('UPDATE research SET payload=? WHERE id=?',(json.dumps(state,ensure_ascii=False),row[0]))
                 continue

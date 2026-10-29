@@ -92,15 +92,17 @@ def register_execution_artifacts(state, root, execution):
     import hashlib
     import json
     aid=execution['attempt_id'];eid=execution['task_id']
-    workspace=root/'experiments'/aid/'workspace'
+    workspace=root if execution.get('workspace')=='.' else root/'experiments'/aid/'workspace'
     manifest=workspace_path(workspace, 'manifest.json')
     inventory=json.loads(manifest.read_text(encoding='utf-8')) if manifest.is_file() else {}
     inherited=set(inventory.get('inherited_runs', []))
-    runs={rid: run for rid, run in inventory.get('runs', {}).items() if rid not in inherited}
+    runs={rid: run for rid, run in inventory.get('runs', {}).items()
+          if rid not in inherited and ('run_ids' not in execution or rid in execution['run_ids'])}
+    relative=lambda path: (workspace.relative_to(root)/path).as_posix()
     files=[]
     for run_id, run in runs.items():
         for kind, path in [('code',run.get('input')),('stdout',run.get('stdout')),('stderr',run.get('stderr'))]:
-            if path and workspace_path(workspace, path).is_file():files.append((kind,workspace.relative_to(root).as_posix()+'/'+path,run_id))
+            if path and workspace_path(workspace, path).is_file():files.append((kind,relative(path),run_id))
     # Execution outputs can live anywhere in the public workspace. Index the
     # delivered manifest, not one historical output directory, and retain the
     # archived version so later edits cannot change the evidence being read.
@@ -113,10 +115,12 @@ def register_execution_artifacts(state, root, execution):
             if not archived.startswith(f'runs/{run_id}/artifacts/'):
                 raise ValueError('实验产物归档路径与运行不匹配')
             path = archived
+        elif workspace_path(workspace,f'runs/{run_id}/artifacts/{path}').is_file():
+            path = f'runs/{run_id}/artifacts/{path}'
         target = workspace_path(workspace, path)
         if target.is_file():
             kind = 'code' if target.suffix == '.py' else 'data'
-            files.append((kind, workspace.relative_to(root).as_posix()+'/'+path, run_id))
+            files.append((kind, relative(path), run_id))
     for kind,path,run_id in files:
         target=workspace_path(root, path)
         ref='artifact:'+aid+':'+hashlib.sha256(path.encode()).hexdigest()[:16]

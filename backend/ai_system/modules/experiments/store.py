@@ -1,5 +1,5 @@
 from ai_system.research.domain import experiment_design
-"""Frozen supervised comparison protocols and durable, shared exploration budgets."""
+"""Frozen supervised comparison protocols and durable operation usage."""
 import json
 import time
 from contextlib import closing
@@ -8,7 +8,7 @@ from pydantic import BaseModel,Field,model_validator,ConfigDict
 from ai_system.research.store import ResearchStore,digest
 from ai_system.research.models import ResearchConflict
 
-LIMITS={'model_calls':6,'executions':4,'candidates':4,'timeout_seconds':240}
+USAGE_KINDS=('model_calls','executions','candidates','timeout_seconds')
 
 
 class SupervisedSpec(BaseModel):
@@ -67,7 +67,9 @@ class ExperimentStore:
         if db is None:
             with closing(self.store._connect()) as conn:return self.budget(task_id,conn)
         row=db.execute('SELECT payload FROM experiment_budgets WHERE research_id=? AND task_id=?',(self.store.research_id,task_id)).fetchone()
-        return json.loads(row[0]) if row else {'limits':dict(LIMITS),'used':dict.fromkeys(LIMITS,0),'reservations':[]}
+        value=json.loads(row[0]) if row else {'used':dict.fromkeys(USAGE_KINDS,0),'reservations':[]}
+        value.pop('limits',None)  # Historical per-comparison caps no longer gate execution.
+        return value
 
     def reserve(self,task_id,kind,seconds,key,candidate=False):
         with self.store._transaction() as db:
@@ -75,7 +77,6 @@ class ExperimentStore:
             if any(r['key']==key for r in budget['reservations']):return False
             amounts={kind:1,'timeout_seconds':seconds}
             if candidate:amounts['candidates']=1
-            if any(budget['used'][k]+v>budget['limits'][k] for k,v in amounts.items()):return False
             for k,v in amounts.items():budget['used'][k]+=v
             budget['reservations'].append({'key':key,'kind':kind,'seconds':seconds,'at':time.time()})
             db.execute('INSERT OR REPLACE INTO experiment_budgets VALUES (?,?,?)',(self.store.research_id,task_id,json.dumps(budget)))

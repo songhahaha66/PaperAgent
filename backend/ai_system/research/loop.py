@@ -9,7 +9,7 @@ from ai_system.modules.registry import invoke
 from .store import digest
 from .planner import Planner, NoResearchProgress, decision_context, planning_failure_message
 
-PUBLICATION = ('write', 'validate', 'render', 'export')
+PUBLICATION = ('validate', 'render', 'export')
 
 
 def _set_action(state, capability, inputs, reason, *, target=None, key=None, observation_id=None, question_id=None):
@@ -63,18 +63,14 @@ async def prepare_action(ctx):
     snapshot=store.snapshot()
     if _publication_action(ctx,snapshot):return False
     key,context=decision_context(store,snapshot)
-    if not store.reserve_planning_call(limit=ctx.max_planning_calls):
-        _action(store,'pause',{},'达到配置的研究规划上限')
-        return True
     observation_id='observation:'+uuid4().hex
-    before=snapshot["revision"]
     try:
         from .views import activity
         from ai_system.graph.tracing import labelled
         with activity(ctx,'research.observe',observation_id=observation_id,action_id=key), labelled('observe'):
             await Planner(ctx.planner_llm).run(ctx,context,observation_id)
         current=store.snapshot()
-        if current['revision']==before and (current.get('action') or {}).get('status')!='planned':
+        if (current.get('action') or {}).get('status')!='planned':
             raise NoResearchProgress('本次未获得新信息或安排下一行动，记录已保存，请继续处理或补充必要信息。')
         await ctx.events.emit('research_activity',{'observation_id':observation_id})
         action=store.snapshot().get('action') or {}
@@ -151,13 +147,18 @@ async def _act(request, runtime):
             from .control import experiment_dispatch
             inputs={'branch':experiment_dispatch(ctx,action['target'])}
         patch=await invoke(ctx,name,**inputs)
+        if name.startswith('writing.') and patch.get('issues'):
+            from .runtime import ResearchRuntime
+            from services.chat_services.paper_project import snapshot as source_snapshot
+            identity='publication:'+digest([source_snapshot(ctx.workspace)['version'],
+                [i.get('message','') for i in patch['issues']]])
+            meter=ResearchRuntime(ctx.research.root,ctx.research.research_id)
+            meter.failed(identity,identity,'publication','正文与诊断没有变化，停止重复交付；草稿和日志已保存。')
+            meter.check_guard(identity)
         if name=='experiments.inspect':
             with store._transaction() as db:
                 state=store._read(db);state['materials']=patch
                 store._save(db,state,'materials_profiled',patch)
-        if name.startswith('writing.'):
-            if ctx.output_mode != 'latex' and name == 'writing.repair':
-                store.save_sections(patch.get('sections',{}),[],patch.get('section_contexts'),verified=False)
         with store._transaction() as db:
             state=store._read(db)
             if name.startswith('writing.'):
@@ -170,17 +171,14 @@ async def _act(request, runtime):
                     publication['stage']='completed'
                     state['outcome']='needs_attention'
                 elif not patch.get('research_blocked'):
-                    if step=='repair':
-                        publication['repairs']+=1
-                        publication['repair_inputs'].append(patch.pop('repair_input'))
-                        publication['stage']='validate'
-                    elif step in {'validate','export'} and patch.get('issues'):
-                        publication['stage']='repair'
+                    if step in {'validate','export'} and patch.get('issues'):
+                        # Return diagnostics to the same research conversation.
+                        state['publication']=None
                     else:
                         next_index=PUBLICATION.index(step)+1
                         publication['stage']=PUBLICATION[next_index] if next_index<len(PUBLICATION) else 'completed'
                         if publication['stage']=='export' and ctx.output_mode=='markdown':publication['stage']='completed'
-                    if publication['stage']=='completed':state['outcome']='needs_attention' if patch.get('artifact_conflict') else 'completed'
+                    if state['publication'] and publication['stage']=='completed':state['outcome']='needs_attention' if patch.get('artifact_conflict') else 'completed'
             state['action']['status']='failed' if patch.get('research_blocked') else 'done'
             if patch.get('research_blocked'):
                 from .runtime import action_failure_message
@@ -200,6 +198,8 @@ async def _act(request, runtime):
         detail=error_detail(exc)
         with store._transaction() as db:
             state=store._read(db)
+            if name.startswith('writing.'):
+                state['publication']=None
             state['action'].update(status='done',finished_at=time.time(),phase=name,error=detail,
                 error_type=type(exc).__name__,message=detail,result={'error':detail,'phase':name})
             store._save(db,state,'action_failed',{'id':action['id'],'phase':name,'message':detail,'recoverable':True})
@@ -219,12 +219,14 @@ def resume(store, **_):
         state=store._read(db);action=state['action']
         if action and action['capability']=='pause' and action['status']=='planned':
             # Explicit continuation consumes the pause; the next observation
-            # still enforces the existing planning and request budgets.
+            # still enforces the existing shared request budget.
             action.update(status='done',finished_at=time.time())
         elif action and action['status'] in {'failed','running','interrupted'}:
-            if action['capability'].startswith('writing.') and state.get('publication'):
-                publication=state['publication']
-                publication['repair_resume_offset']=len(publication.get('repair_inputs',[]))
+            if action['capability'].startswith('writing.') and action.get('error_type')=='RepeatedOperationBlocked':
+                state['publication']=None
+                action['status']='done'
+                store._save(db,state,'recovery_requested',{'action':action})
+                return
             # Experiment recovery is reconciled from its execution receipt. Other
             # capabilities keep their durable products and retry the failed step.
             if action['capability']=='experiments.execute':action['status']='running'

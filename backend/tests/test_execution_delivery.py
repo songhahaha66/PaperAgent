@@ -187,7 +187,7 @@ def test_root_csv_is_collected_and_reads_retained_execution_version(tmp_path):
         assert not any(p.endswith(('unregistered.txt','inherited.csv')) for p in paths)
         # Research must read the retained execution version, not a later edit.
         (workspace/'waiting_summary.csv').write_text('value\n999\n')
-        content=await read_artifact(SimpleNamespace(research=store),
+        content=await read_artifact(SimpleNamespace(research=store,fs=public),
             {'task_id':'Q1','path':csv,'start':0,'limit':12000})
         assert content.value['excerpt']=='value\n42\n'
     asyncio.run(run())

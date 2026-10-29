@@ -72,14 +72,17 @@ def test_one_dispatcher_recovers_execution_receipt_and_uses_flat_action(tmp_path
     store=ResearchStore(tmp_path,'research');store.initialize('预测下一周需求。')
     calls=[]
     async def stage(*args):pass
-    ctx=SimpleNamespace(research=store,planner_llm=None,max_planning_calls=None,
+    ctx=SimpleNamespace(research=store,planner_llm=None,
                         events=SimpleNamespace(stage=stage,emit=stage))
     async def decide(self,ctx,context,observation_id):
         calls.append(context)
         qid=operations.update_question(ctx,{'question':'怎样预测下一周需求？','question_id':None,'base_version':1,
             'title':'','reason':'','source_question_ids':[],'experiment_ids':[],'retire_source_ids':[]})['question_id']
         operations.schedule_experiment(ctx,operations.ExperimentInput(question_id=qid,title='窗口均值',
-            plan={'conditions':'最后五天固定验证','evaluation':'MAE','candidates':[{'name':'窗口均值','instruction':'最后三天均值'}]}).model_dump())
+            plan={'conditions':'最后五天固定验证','evaluation':'MAE',
+                  'candidates':[{'name':'窗口均值','instruction':'最后三天均值'},
+                                {'name':'线性趋势','instruction':'线性拟合'}],
+                  'csv':{'dataset':'data/source.csv','target':'demand','features':['day']}}).model_dump())
     monkeypatch.setattr('ai_system.research.planner.Planner.run',decide)
     assert not asyncio.run(prepare_action(ctx))
     action=store.snapshot()['action'];eid=action['target'];finish(store,eid)

@@ -69,9 +69,9 @@
           >
             <t-icon name="task" />
             <span>{{ isZh ? '研究进度' : 'Research progress' }}</span>
-            <span v-if="researchSnapshot?.experiments?.length" class="progress-count"
-              >{{ acceptedTaskCount }}/{{ researchSnapshot.questions?.length || 0 }}
-              {{ isZh ? '已有结果' : 'reviewed' }}</span
+            <span v-if="researchSnapshot?.questions?.length" class="progress-count"
+              >{{ answeredTaskCount }}/{{ researchSnapshot.questions?.filter((q) => !q.retired).length || 0 }}
+              {{ isZh ? '已回答' : 'answered' }}</span
             >
           </button>
           <button
@@ -644,13 +644,9 @@ async function replyToResearch() {
   await nextTick()
   document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
 }
-const acceptedTaskCount = computed(
-  () =>
-    researchSnapshot.value?.questions?.filter((q) =>
-      researchSnapshot.value?.experiments?.some(
-        (e) => e.question_id === q.id && e.acceptance === 'accepted' && e.validity === 'current',
-      ),
-    ).length || 0,
+const answeredTaskCount = computed(() =>
+  researchSnapshot.value?.questions?.filter((q) => !q.retired && q.coverage === 'answered'
+    && q.answer_status === 'current' && !q.answer_gaps?.length).length || 0,
 )
 const primaryAction = computed(() => {
   if (!currentWork.value) return null

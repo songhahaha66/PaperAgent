@@ -20,6 +20,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     judgment, artifact_refs: judgment ? ['R2'] : [], limitations: judgment ? ['仅适用于当前样本'] : [],
     next_step: '', issues: [], judgments: judgment ? [{ question_id: id, statement: judgment,
       artifact_refs: ['R2'], limitations: ['仅适用于当前样本'], next_step: '' }] : [],
+    answer_gaps: judgment ? [] : ['尚未说明问题已答、部分回答或未答。'],
   })
   const experiment = (id, questionId, title) => ({
     id, task_id: id, question_id: questionId, title, objective: title, kind: 'compute',
@@ -57,7 +58,14 @@ const { hostRenderer } = require('./vueHost.cjs')
   assert.match(mainText(host.root), /本次执行已结束/)
     assert.match(mainText(host.root), /尚未形成结论，已有计算和输出可在执行记录中查看/)
   assert.doesNotMatch(mainText(host.root), /研究验收通过|Q1|E1|question:/)
+  assert.doesNotMatch(mainText(host.root), /当前结论待更新/)
   assert.equal(researchHeadline(snapshot.value, 'completed', true), '已有实验结果，部分问题尚无判断')
+  // Delegated and literature tasks can deliver without a parent experiment.
+  assert.equal(researchHeadline({ ...snapshot.value, experiments: [], artifacts: ['paper.md'] },
+    'completed', true), '论文产物已保存，可查看')
+  assert.equal(researchHeadline({ ...snapshot.value, experiments: [], results: [],
+    questions: [question('q', '独立子任务', '', judgment)] }, 'completed', true),
+    '已记录问题判断，论文产物尚不可用')
 
   const selectSecond = host.find((node) => node.kind === 'button' && text(node).includes('预测误差是否可接受？'))
   selectSecond.props.onClick()

@@ -26,7 +26,9 @@ def add_experiment(store,question=None,*,question_id=None,method='fixed arithmet
 
 def _manual_worker_handoff(store):
     with store._transaction() as db:
-        state=store._read(db);state['action']['status']='done';store._save(db,state,'test_manual_worker_handoff',{})
+        state=store._read(db)
+        if state.get('action'):
+            state['action']['status']='done';store._save(db,state,'test_manual_worker_handoff',{})
 
 
 def continue_experiment(store,experiment_id,information_need='修复原实验执行，复用已有上游结果'):
@@ -77,7 +79,7 @@ def tool(name,args,call_id='call'):
     return AIMessage(content='',tool_calls=[{'name':name,'args':args,'id':call_id}])
 
 
-def research_step(messages,plan):
+def research_step(messages,plan,transform=lambda text:text):
     """Drive the saved fixture goals using only context and actual tool receipts.
 
     No store access, generated IDs, acceptance overrides or completed-state
@@ -85,57 +87,61 @@ def research_step(messages,plan):
     """
     from copy import deepcopy
     from langchain_core.messages import HumanMessage,ToolMessage
-    context=None
-    for message in messages:
+    context=None;context_index=0
+    for index,message in enumerate(messages):
         if not isinstance(message,HumanMessage):continue
         text=message.content
         if isinstance(text,str) and text.startswith('当前研究记录已更新：'):text=text.split('：',1)[1]
         try:value=json.loads(text)
         except (ValueError,TypeError):continue
-        if isinstance(value,dict) and {'questions','experiments','source'}<=value.keys():context=value
+        if isinstance(value,dict) and {'questions','source'}<=value.keys():context=value;context_index=index
     if context is None:raise AssertionError('Research tools need the actual scoped context')
     questions={q['id']:deepcopy(q) for q in context['questions']}
-    records={e['task_id']:deepcopy(e) for e in context['experiments']}
-    for message in messages:
+    runs={r['run_id']:deepcopy(r) for r in context.get('runs',[])}
+    for message in messages[context_index+1:]:
         if not isinstance(message,ToolMessage):continue
         if message.status=='error':
             raise AssertionError('Unexpected research fixture tool error: '+str(message.content))
         value=json.loads(message.content)
         if isinstance(value.get('question'),dict):questions[value['question_id']]=value['question']
-        for record in value.get('experiments',[]):records[record['task_id']]=record
+        for run in value.get('runs',[]):runs[run['run_id']]=run
+        if value.get('run_id'):runs[value['run_id']]=value
         for judgment in value.get('judgments',[]):
             q=questions[judgment['question_id']]
             q.update(judgment,judgment=judgment['statement'],answer_status='current')
-    def call(name,args):return tool(name,args,'fixture-research-'+str(len(messages)))
-    known={}
+    def call(name,args):
+        from uuid import uuid4
+        return tool(name,args,'fixture-research-'+uuid4().hex)
     for target in plan.subproblems:
         matches=[q for q in questions.values() if not q.get('retired') and
-                 (q['title']==target.title or q['question']==target.question or
-                  any(e['question_id']==q['id'] and e['objective']==target.question for e in records.values()))]
-        assert len(matches)<=1, 'Fixture targets must not guess between multiple questions'
-        if not matches:return call('research_update_question',{'question':target.question,'title':target.title})
-        question=matches[0];known[target.id]=question
-        own=set(question.get('experiment_ids',[]))|set(question.get('related_experiment_ids',[]))
-        own.update(eid for eid,e in records.items() if e['question_id']==question['id'])
-        if own-set(records):return call('research_read_question',{'question_id':question['id']})
-        experiments=[e for eid,e in records.items() if eid in own]
-        if not experiments:
-            dependencies=[known[dep] for dep in target.depends_on]
-            assert all(q.get('coverage') in {'answered','partial'} for q in dependencies)
-            return call('research_schedule_experiment',{'question_id':question['id'],'title':target.title,
-                'plan':{'conditions':'当前提供的输入与上游实际结果','evaluation':'核对实际执行、登记结果和冻结要求',
-                    'candidates':[{'name':target.title,'instruction':'落实当前问题的固定计算示例，保留代码和真实输出'}]},
-                'dependency_ids':list(dict.fromkeys(eid for q in dependencies for eid in q['experiment_ids']))})
-        pending=next((e for e in experiments if e['execution_status'] in {'pending','failed','cancelled'}),None)
-        if pending:return call('research_continue_experiment',{'experiment_id':pending['task_id'],'information_need':'完成尚未成功的原实验，复用已有结果'})
-        if any(e['acceptance']!='accepted' or e['validity']!='current' for e in experiments):
-            return call('research_pause',{'message':'当前实验尚无可用于回答的有效结果，保留执行诊断供核实。'})
+                 (q['title']==target.title or q['question']==target.question)]
+        assert len(matches)<=1
+        if not matches:return call('research_create_question',{'question':target.question,'title':target.title})
+        question=matches[0]
+        own=[r for r in runs.values() if r.get('question_id')==question['id']
+             and (r.get('execution_status') or r.get('status')) in {'success','succeeded'}]
+        if len(own)<2:
+            code=("forecast = 1234.5678\nprint('forecast', forecast)\nprint('saving',0.085)" if not own else
+                  "import matplotlib.pyplot as plt\nplt.plot([1,2,3])")
+            return call('research_run_python',{'question_id':question['id'],'code':code,'title':target.title})
         if not question.get('judgment') or question.get('answer_status')=='needs_update' or not question.get('coverage'):
-            evidence=[r for e in experiments for r in e['results']]
-            refs=list(dict.fromkeys(r['id'] for r in evidence))
-            text='本次条件下的实际结果：'+'；'.join(e['record'].get('summary','') for e in experiments)
+            text='本次条件下的实际结果：'+'；'.join(r.get('observation',r.get('output_tail','')) for r in own)
             partial=question.get('answer_status')=='needs_update'
-            return call('research_update_answer',{'question_id':question['id'],'statement':text,'artifact_refs':refs,
-                'coverage':'partial' if partial else 'answered','stop_reason':'已汇总当前有效实验结果；未执行条件仍未知。',
-                'limitations':['仅覆盖已执行条件，新增条件与外推范围需要另行验证。']})
+            return call('research_update_answer',{'question_id':question['id'],'statement':text,
+                'coverage':'partial' if partial else 'answered','stop_reason':'已汇总实际输出；未执行条件仍未知。',
+                'limitations':['仅覆盖已执行条件。']})
+    body='# '+plan.title+'\n\n'+'\n\n'.join('## '+q['title']+'\n'+q.get('judgment','') for q in questions.values())
+    common=next((json.loads(m.content) for m in messages if isinstance(m,HumanMessage) and str(m.content).startswith('{') and 'template_requirements' in json.loads(m.content)),{})
+    if common.get('template_requirements'):
+        from ai_system.graph.outline import template_outline
+        body='# '+plan.title+'\n\n'+'\n\n'.join('## '+item['title']+'\n'+('\n'.join(q['title']+'：'+q.get('judgment','') for q in questions.values())) for item in template_outline(common['template_requirements']))
+    if context['source'].get('output_mode')=='latex':
+        from ai_system.export.latex import native_document,escape_plain
+        body=native_document(plan.title,escape_plain(body),'')
+    body=transform(body)
+    import hashlib
+    edits=[m for m in messages[context_index+1:] if getattr(m,'name',None)=='writing_edit']
+    if context.get('document',{}).get('version')!=hashlib.sha256(body.encode()).hexdigest() and not edits:
+        return call('writing_edit',{'path':'paper.tex' if context['source'].get('output_mode')=='latex' else 'paper.md',
+            'expected_version':context.get('document',{}).get('version'),'content':body})
     return call('research_deliver',{'title':plan.title,'reason':'各问题已有带实际来源的答案与局限，开始研究级交付。'})

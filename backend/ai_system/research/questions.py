@@ -32,8 +32,10 @@ def apply_questions(state, updates):
         key = update.question_id
         if key:
             q = state['questions'].get(key)
-            if not q or q.get('version', 1) != update.base_version:
-                raise ResearchConflict('问题版本已改变')
+            if not q:
+                raise ValueError('问题编号不存在；新建请使用research_create_question，修改请使用已有编号。')
+            if q.get('version', 1) != update.base_version:
+                raise ResearchConflict(f"问题版本已改变，当前版本为{q.get('version', 1)}；请读取后再修改。")
             linked=list(dict.fromkeys([*q.get('related_experiment_ids',[]),*update.experiment_ids,
                 *(e['task_id'] for e in state['experiments'].values() if e['question_id'] in sources)]))
             if (q['question']==update.question and q['title']==(update.title or update.question)
@@ -45,8 +47,9 @@ def apply_questions(state, updates):
             q.update(version=q.get('version',1)+1, question=update.question, title=update.title or update.question,
                      answer_status='needs_update' if q.get('judgment') else 'unanswered')
         else:
-            from uuid import uuid4
-            key = 'question:' + uuid4().hex[:12]
+            index = len(state['questions']) + 1
+            while 'Q' + str(index) in state['questions'] or 'Q' + str(index) in state['experiments']:index += 1
+            key = 'Q' + str(index)
             q = {'id':key, 'question':update.question, 'title':update.title or update.question,
                  'version':1, 'judgment':'', 'artifact_refs':[], 'limitations':[],
                  'judgments':[], 'next_step':'', 'answer_status':'unanswered', 'history':[]}
@@ -86,7 +89,7 @@ def delivery_status(state):
     rows=[q for q in questions(state) if not q.get('retired')]
     blockers=[{'task_id':q['id'],'message':message,'action':'research','tool':'research_update_answer'}
               for q in rows for message in q['answer_gaps']]
-    if not rows:blockers.append({'task_id':None,'message':'尚未建立用户要回答的问题。','action':'research','tool':'research_update_question'})
+    if not rows:blockers.append({'task_id':None,'message':'尚未建立用户要回答的问题。','action':'research','tool':'research_create_question'})
     blockers.extend({'task_id':i['task_id'],'message':i['message'],'action':i['action']}
         for i in findings(state) if i.get('repair_targets') and i['blocking'] and i['status'] not in {'resolved','dismissed','superseded'})
     return {'ready':not blockers,'blockers':blockers,

@@ -145,11 +145,11 @@ _registry = None
 def capabilities():
     global _registry
     if _registry is None:
-        from . import literature, writing, experience
+        from . import literature, writing, experience, delegation
         from ai_system.research import feedback, operations
         from .experiments import module
         registry = ModuleRegistry()
-        for owner in (literature, module, writing, experience, feedback, operations):
+        for owner in (literature, module, writing, experience, feedback, operations, delegation):
             owner.register(registry)
         _registry = registry
     return _registry

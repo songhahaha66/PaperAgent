@@ -1,5 +1,6 @@
 """Small research operations, each committed independently through ModuleRegistry."""
 import json
+import re
 import time
 from typing import Literal
 from pydantic import Field
@@ -9,6 +10,16 @@ from .models import ExperimentPlan, ResearchConflict
 from .questions import QuestionUpdate, apply_questions
 from .domain import experiment_scope, current_result_refs
 from .store import digest
+
+
+class QuestionCreate(Inputs):
+    question: str = Field(min_length=1, description='用户要回答的一个实质问题；新建不提供编号。')
+    title: str = ''
+
+
+class QuestionEdit(QuestionCreate):
+    question_id: str = Field(description='使用已返回的真实问题编号，如Q2。')
+    base_version: int = Field(ge=1, description='读取到的当前问题version，用于保护并发修改。')
 
 
 class ExperimentInput(Inputs):
@@ -85,21 +96,9 @@ def _dispatchable(state):
         raise ResearchConflict('已有行动等待执行或回应，请先处理该行动，再安排其它实验或交付')
 
 
-def attempt_budget_error(state, task=None):
-    if len(state['executions']) >= state['max_total_attempts']:
-        return '研究已达到总执行预算；请用已有结果更新答案，明确缺口后交付，不再安排计算。'
-    if task is not None:
-        count = sum(a['task_id'] == task['task_id'] and a['revision'] == task['revision']
-                    for a in state['executions'].values())
-        if count >= state['max_attempts']:
-            return f"实验 {task['task_id']} 已达到尝试预算；请复用已有文件和结果，记录未完成部分后交付，不要换编号重复计算。"
-    return None
-
-
 def schedule_experiment(ctx,inputs):
     def edit(state):
         _dispatchable(state)
-        if error := attempt_budget_error(state): raise ResearchConflict(error)
         q=state['questions'].get(inputs['question_id'])
         if not q or q.get('retired'):raise ValueError('question_id必须使用建立问题工具实际返回的当前编号')
         dependencies=list(dict.fromkeys(inputs['dependency_ids']))
@@ -129,8 +128,9 @@ def schedule_experiment(ctx,inputs):
         ctx.research._bind_assumption_inputs(state)
         state['publication']=None
         from .loop import _set_action
-        action=_set_action(state,'experiments.execute',{},inputs['reason'],target=key)
-        return {'experiment_id':key,'question_id':q['id'],'action_id':action['id']}
+        action=(_set_action(state,'experiments.execute',{},inputs['reason'],target=key)
+                if plan.csv else None)
+        return {'experiment_id':key,'question_id':q['id'],'action_id':action['id'] if action else None}
     return _change(ctx,'experiment_created',inputs,edit)
 
 
@@ -139,14 +139,14 @@ def continue_experiment(ctx,inputs):
         _dispatchable(state)
         task=state['experiments'].get(inputs['experiment_id'])
         if not task or task['retired'] or task['validity']!='current':raise ValueError('实验不存在或已失效，请读取当前实验')
-        if error := attempt_budget_error(state, task): raise ResearchConflict(error)
         if task['execution_status']=='running':raise ResearchConflict('实验尚在执行，不能重复启动')
         if task.get('execution_id'):
             task['continuation']={'parent_attempt':task['execution_id'],'information_need':inputs['information_need']}
         task['execution_status']='pending'
         from .loop import _set_action
-        action=_set_action(state,'experiments.execute',{},inputs['information_need'],target=task['task_id'])
-        return {'experiment_id':task['task_id'],'question_id':task['question_id'],'action_id':action['id']}
+        action=(_set_action(state,'experiments.execute',{},inputs['information_need'],target=task['task_id'])
+                if (task.get('experiment') or {}).get('csv') else None)
+        return {'experiment_id':task['task_id'],'question_id':task['question_id'],'action_id':action['id'] if action else None}
     return _change(ctx,'experiment_continued',inputs,edit)
 
 
@@ -184,12 +184,15 @@ def deliver(ctx,inputs):
         if not status['ready']:
             raise ValueError('尚不能交付：'+'；'.join(b['message'] for b in status['blockers'])+
                              ' 请先用对应工具修复；仅修改交付 reason 不会补全答案。')
+        main=ctx.research.root/('paper.tex' if state['spec']['output_mode']=='latex' else 'paper.md')
+        if not main.is_file() or not main.read_text(encoding='utf-8').strip():
+            raise ValueError('请先用writing_edit写入完整正文，再交付；系统不会另起模型重写论文。')
         from .loop import _set_action
         from .runtime import execution_links
         observation_id=execution_links().get('observation_id')
-        state['publication']={'stage':'write','outline':[],'title':inputs['title'],'reason':inputs['reason'],
-            'repair_inputs':[],'repairs':0,'observation_id':observation_id}
-        action=_set_action(state,'writing.write',{},inputs['reason'],observation_id=observation_id)
+        state['publication']={'stage':'validate','outline':[{'key':'section:'+str(i),'title':title} for i,title in enumerate(re.findall(r'^## (.+)$',main.read_text(encoding='utf-8'),re.M))],'title':inputs['title'],'reason':inputs['reason'],
+            'observation_id':observation_id}
+        action=_set_action(state,'writing.validate',{},inputs['reason'],observation_id=observation_id)
         return {'action_id':action['id'],'reason':inputs['reason']}
     return _change(ctx,'delivery_requested',inputs,edit)
 
@@ -211,18 +214,24 @@ def read_question(ctx,inputs):
     q=next((q for q in questions(state) if q['id']==inputs['question_id']),None)
     if not q:raise ValueError('没有该问题，请使用工具实际返回的question_id')
     scope=experiment_scope(state['experiments'],set(q['experiment_ids']))
-    return {'question_id':q['id'],'question':question_context([q])[0],'experiments':experiment_context(state,scope)}
+    from .runs import run_context
+    return {'question_id':q['id'],'question':question_context([q])[0],'experiments':experiment_context(state,scope),
+            'runs':run_context(ctx.research, q['id'])}
 
 
 def register(registry):
     def register_tool(name,handler,inputs,purpose):
         async def run(ctx,values):return CapabilityProduct('research_state',handler(ctx,values))
         registry.register('research','research.'+name,'research_state',run,inputs,model_callable=True,purpose=purpose)
-    register_tool('update_question',update_question,QuestionUpdate,'建立或版本化修改一个用户问题，返回真实question_id。可关联已有实验、拆合来源并保留历史。')
-    register_tool('schedule_experiment',schedule_experiment,ExperimentInput,'为真实question_id安排新方法/条件的实验。plan使用已有ExperimentPlan；普通实验一个候选。返回实验编号后转入执行层。')
-    register_tool('continue_experiment',continue_experiment,ContinueInput,'继续或重试已有实验，保持方法和条件；补充有价值行动，复用已有计算。换方法须新实验。')
+    register_tool('create_question',update_question,QuestionCreate,'新建一个用户问题，返回系统分配的编号；不接收question_id。可在同轮为多问分别调用。')
+    register_tool('edit_question',update_question,QuestionEdit,'修改已有问题，须提供返回的question_id与当前base_version。')
+    async def legacy_question(ctx, values):return CapabilityProduct('research_state', update_question(ctx, values))
+    registry.register('research','research.update_question','research_state',legacy_question,QuestionUpdate)
+    register_tool('schedule_experiment',schedule_experiment,ExperimentInput,'为真实question_id安排新方法/条件的实验。plan使用已有ExperimentPlan；普通实验一个候选。普通方法记录后由当前Agent直接运行Python；CSV比较才启动独立分支。')
+    async def legacy_continue(ctx, values):return CapabilityProduct('research_state', continue_experiment(ctx, values))
+    registry.register('research','research.continue_experiment','research_state',legacy_continue,ContinueInput)
     register_tool('update_answer',update_answer,AnswerUpdate,'保存问题判断、依据、局限及覆盖状态。直接说明实际结果与文件、局限和未完成部分；缺项可原地补全，不重算。')
     register_tool('read_question',read_question,QuestionTarget,'读取一个问题及相关实验的当前记录、有效结果、版本与历史定位；不重算。')
-    register_tool('deliver',deliver,DeliveryInput,'各问题已明确回答/部分/未答及停止原因后开始研究级论文交付；不创建写作实验。')
+    register_tool('deliver',deliver,DeliveryInput,'正文已由当前Agent保存、各问题已明确范围后交付；系统只检查文件、引用、编译与导出，不重新写作。')
     register_tool('ask_user',ask_user,MessageInput,'仅在缺少用户必须提供的信息或决定时提问并等待回应。')
     register_tool('pause',pause,MessageInput,'无可行继续路径时明确停止原因，保存已有成果并暂停。')

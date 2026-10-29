@@ -76,18 +76,21 @@ def test_recovery_uses_commits_and_reclaims_interrupted_attempt(tmp_path):
     assert recovered.snapshot()==completed
 
 
-def test_retry_budget_cannot_be_bypassed_by_recovery(tmp_path):
+def test_attempts_have_no_local_cap_and_recovery_preserves_global_usage(tmp_path):
     store = make_store(tmp_path)
     from research_tools_helpers import continue_experiment
-    for index in range(3):
-        if index:continue_experiment(store,"Q1")
-        finish(store, "Q1", acceptance="rejected")
+    from ai_system.research.runtime import ResearchRuntime
+    runtime=ResearchRuntime(tmp_path,'research')
+    runtime.configure({'request_limit':10})
+    for index in range(5):
+        if index:continue_experiment(store,'Q1')
+        runtime.reserve('controlled-model')
+        finish(store,'Q1')
         store.recover()
-    assert "Q1" not in ready_tasks(store.snapshot())
-    before = store.snapshot()
-    with pytest.raises(ResearchConflict, match="预算"):
-        continue_experiment(store,"Q1")
-    assert store.snapshot() == before
+    continue_experiment(store,'Q1')
+    assert 'Q1' in ready_tasks(store.snapshot())
+    assert len(store.snapshot()['executions'])==5 and runtime.status()['used']==5
+    assert len(runtime.requests())==5
 
 
 def test_single_claim_wins_when_schedulers_race(tmp_path):

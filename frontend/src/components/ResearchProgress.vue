@@ -258,7 +258,8 @@ const selected = computed(
   () => questions.value.find((q) => q.id === selectedId.value) || questions.value[0],
 )
 const needsUpdate = computed(
-  () => selected.value?.answer_status === 'needs_update' || !!selected.value?.answer_gaps?.length,
+  () => selected.value?.answer_status === 'needs_update'
+    || (!!selected.value?.judgment && !!selected.value?.answer_gaps?.length),
 )
 const longJudgment = computed(() => (selected.value?.judgment.length || 0) > 220)
 const previousJudgments = computed(() => {
