@@ -11,7 +11,6 @@
     <div class="main-content">
       <div class="workspace-header">
         <h1>Passkey 管理</h1>
-        <p>使用指纹、面容或安全密钥登录，无需每次输入密码</p>
       </div>
 
       <div class="passkey-content">
@@ -39,7 +38,7 @@
             :columns="columns"
             row-key="id"
             :loading="loading"
-            empty="还没有 Passkey。添加后即可在登录页使用指纹、面容或安全密钥登录。"
+            empty="还没有 Passkey。添加后即可在登录页使用指纹、面容或安全密钥。"
           >
             <template #backed_up="{ row }">
               <t-tag :theme="row.backed_up ? 'success' : 'default'" variant="light">
@@ -269,13 +268,13 @@ onMounted(async () => {
 .workspace-header h1 {
   margin: 0 0 8px 0;
   color: var(--pa-ink);
-  font-size: 1.5em;
+  font-size: 22px;
 }
 
 .workspace-header p {
   margin: 0;
   color: var(--pa-muted);
-  font-size: 0.9em;
+  font-size: 15px;
 }
 
 .passkey-content {
@@ -302,7 +301,7 @@ onMounted(async () => {
 }
 .workspace-header h1 {
   font-family: var(--td-font-family);
-  font-size: 26px;
+  font-size: 22px;
   line-height: 1.4;
   font-weight: 600;
   color: var(--pa-ink);
@@ -324,7 +323,7 @@ onMounted(async () => {
 }
 .passkey-content :deep(.t-card__title) {
   font-family: var(--td-font-family);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--pa-ink);
 }
@@ -333,10 +332,10 @@ onMounted(async () => {
     padding: 26px 20px 22px;
   }
   .workspace-header h1 {
-    font-size: 23px;
+    font-size: 22px;
   }
   .workspace-header p {
-    font-size: 12px;
+    font-size: 13px;
   }
   .passkey-content {
     padding: 0 20px 28px;

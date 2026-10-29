@@ -217,7 +217,7 @@ onMounted(() => {
 
 .file-name {
   margin: 0 0 8px 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--pa-ink);
   word-break: break-all;
@@ -231,7 +231,7 @@ onMounted(() => {
 
 .file-size,
 .file-type {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--pa-muted);
 }
 

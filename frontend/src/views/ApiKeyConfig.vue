@@ -12,9 +12,9 @@
       <div class="models-body">
         <t-card :title="ui.defaultConnection" class="connection-card">
           <template #actions
-            ><t-tag :theme="forms.brain.id ? 'success' : 'default'" variant="light" size="small">{{
+            ><span class="connection-state">{{
               forms.brain.id ? ui.configured : ui.unconfigured
-            }}</t-tag></template
+            }}</span></template
           >
           <div class="provider-row">
             <label>{{ isZh ? '服务商' : 'Provider' }}</label
@@ -61,17 +61,15 @@
           class="connection-card jev-card"
         >
           <template #actions
-            ><t-tag :theme="jevReady ? 'success' : 'default'" variant="light" size="small">
-              {{
-                jevSource === 'deployment'
-                  ? isZh
-                    ? '部署默认'
-                    : 'Deployment default'
-                  : jevReady
-                    ? ui.configured
-                    : ui.unconfigured
-              }}
-            </t-tag></template
+            ><span class="connection-state">{{
+              jevSource === 'deployment'
+                ? isZh
+                  ? '部署默认'
+                  : 'Deployment default'
+                : jevReady
+                  ? ui.configured
+                  : ui.unconfigured
+            }}</span></template
           >
           <p class="jev-note">
             {{
@@ -136,18 +134,14 @@
             @click="advancedOpen = !advancedOpen"
           >
             <h2>{{ ui.advanced }}</h2>
-            <t-icon :name="advancedOpen ? 'chevron-up' : 'chevron-down'" />
           </button>
           <div id="stage-connections" v-show="advancedOpen" class="advanced-content">
             <section v-for="role in roles.slice(1)" :key="role.type" class="role-form">
               <div class="advanced-role-title">
                 <h3>{{ role.label }}</h3>
-                <t-tag
-                  :theme="forms[role.type].id ? 'success' : 'default'"
-                  variant="light"
-                  size="small"
-                  >{{ forms[role.type].id ? ui.configured : ui.unconfigured }}</t-tag
-                >
+                <span class="connection-state">{{
+                  forms[role.type].id ? ui.configured : ui.unconfigured
+                }}</span>
               </div>
               <ConnectionFields
                 :form="forms[role.type]"
@@ -530,7 +524,7 @@ onMounted(async () => {
 }
 .models-header h1 {
   font-family: var(--td-font-family);
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 600;
   margin: 0;
   color: var(--pa-ink);
@@ -560,18 +554,17 @@ onMounted(async () => {
 }
 .connection-card :deep(.t-card__title) {
   font-family: var(--td-font-family);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--pa-ink);
 }
 .connection-card :deep(.t-card__body) {
   padding: 26px;
 }
-.connection-card :deep(.t-tag),
-.advanced-role-title :deep(.t-tag) {
-  border-radius: var(--pa-radius-inline);
-  font-size: 11px;
+.connection-state {
+  font-size: 13px;
   font-weight: 500;
+  color: var(--pa-muted);
 }
 .provider-row {
   display: grid;
@@ -619,7 +612,7 @@ onMounted(async () => {
 }
 :deep(.thinking-option small) {
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 :deep(.connection-field .t-input) {
   height: var(--pa-control-height-lg);
@@ -637,7 +630,7 @@ onMounted(async () => {
   box-shadow: var(--pa-focus-ring);
 }
 :deep(.connection-field .t-input__inner) {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--pa-ink);
 }
 :deep(.connection-field .t-input__inner::placeholder) {
@@ -699,11 +692,6 @@ onMounted(async () => {
   margin: 0;
   line-height: 1.5;
 }
-.advanced-toggle > .t-icon {
-  font-size: 16px;
-  color: var(--pa-muted);
-  flex-shrink: 0;
-}
 .advanced-content {
   padding: 26px;
   border-top: 1px solid var(--pa-line);
@@ -752,7 +740,7 @@ onMounted(async () => {
     margin-bottom: 22px;
   }
   .models-header h1 {
-    font-size: 23px;
+    font-size: 22px;
   }
   .connection-card :deep(.t-card__header) {
     padding: 20px;
@@ -791,7 +779,7 @@ onMounted(async () => {
     margin: 24px 0 0;
   }
   .apply-option :deep(.t-checkbox__label) {
-    font-size: 12px;
+    font-size: 13px;
   }
   .connection-actions {
     margin: 24px -20px -22px;

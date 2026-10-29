@@ -235,7 +235,7 @@ onUnmounted(() => {
   margin-bottom: 28px;
   border-bottom: 1px solid var(--pa-line);
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .document-toolbar > span {
   overflow: hidden;
@@ -259,7 +259,7 @@ onUnmounted(() => {
   color: var(--pa-muted);
 }
 .document-empty > .t-icon {
-  font-size: 32px;
+  font-size: 22px;
 }
 .document-empty h2 {
   color: var(--pa-ink);
@@ -274,7 +274,7 @@ onUnmounted(() => {
   line-height: 1.8;
 }
 .document-text {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.8;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -290,10 +290,10 @@ onUnmounted(() => {
   line-height: 1.9;
 }
 .document-sheet :deep(.markdown-body h1) {
-  font-size: 26px;
+  font-size: 22px;
 }
 .document-sheet :deep(.markdown-body h2) {
-  font-size: 21px;
+  font-size: 22px;
 }
 @media (max-width: 768px) {
   .work-document {
@@ -307,7 +307,7 @@ onUnmounted(() => {
     margin-bottom: 20px;
   }
   .document-sheet :deep(.markdown-body) {
-    font-size: 14px;
+    font-size: 15px;
   }
 }
 </style>

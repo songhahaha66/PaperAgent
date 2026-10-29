@@ -16,7 +16,6 @@
         status(rows[0]!)
       }}</span>
       <time v-if="current">{{ duration(current) }}</time>
-      <span class="chevron" aria-hidden="true">{{ expanded ? '⌄' : '›' }}</span>
     </button>
     <p v-if="running && progressNote" class="current-note">{{ progressNote }}</p>
     <p v-if="failed && failure?.message" class="failure-reason">
@@ -30,10 +29,8 @@
         >
           <div class="step-heading">
             <span>{{ entry.row.label }}</span>
-            <small
-              >{{ status(entry.row)
-              }}<template v-if="duration(entry.row)"> · {{ duration(entry.row) }}</template></small
-            >
+            <small>{{ status(entry.row) }}</small>
+            <small v-if="duration(entry.row)">{{ duration(entry.row) }}</small>
           </div>
           <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
           <p v-if="entry.row.message">{{ entry.row.message }}</p>
@@ -44,7 +41,6 @@
               :aria-controls="`output-${replyId}-${groupId}-${entry.id}`"
               @click="outputExpanded[entry.id] = !outputExpanded[entry.id]"
             >
-              <span aria-hidden="true">{{ outputExpanded[entry.id] ? '⌄' : '›' }}</span>
               {{ outputExpanded[entry.id] ? '收起输出' : '展开输出' }}
             </button>
             <pre
@@ -154,7 +150,7 @@ const headline = computed(() =>
   grouped.value
     ? latest.value?.label || props.label
     : failure.value
-    ? failure.value.recovered ? `${failure.value.label} · 后续已完成` : `${failure.value.label}未完成`
+    ? failure.value.recovered ? `${failure.value.label}，后续已完成` : `${failure.value.label}未完成`
     : props.label ||
       current.value?.label ||
       (rows.value.length === 1 ? rows.value[0]?.label : '') ||
@@ -240,7 +236,7 @@ function toggle() {
   align-items: center;
   gap: 5px;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .output-toggle:hover {
   color: var(--pa-ink);
@@ -254,7 +250,7 @@ function toggle() {
   margin: 8px 0;
   background: var(--pa-surface-muted);
   border-radius: var(--pa-radius-inline);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 .execution-group {
@@ -272,7 +268,7 @@ function toggle() {
   margin-left: -7px;
   border-radius: var(--pa-radius-inline);
   color: var(--pa-ink);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   text-align: left;
   transition: background 150ms ease;
@@ -306,11 +302,10 @@ function toggle() {
   white-space: nowrap;
 }
 .call-state,
-.chevron,
 small,
 time {
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .current-note {
   margin: 4px 0 0 14px;

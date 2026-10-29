@@ -1,12 +1,34 @@
 /* Shared layout, accessibility and component rules. Values live in theme.css. */
 body {
   margin: 0;
+  font-size: var(--pa-font-body);
 }
 button,
 input,
 textarea,
 select {
   font-family: inherit;
+  font-size: var(--pa-font-meta);
+}
+small {
+  font-size: var(--pa-font-meta);
+}
+/* Dropdown and disclosure triggers are the label itself. Tree expanders stay. */
+.t-fake-arrow {
+  display: none !important;
+}
+.t-input__suffix:has(.t-fake-arrow):not(:has(.t-input__suffix-clear)) {
+  display: none;
+}
+select {
+  appearance: none;
+  background-image: none;
+}
+summary {
+  list-style: none;
+}
+summary::-webkit-details-marker {
+  display: none;
 }
 :where(button, a, input, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--td-brand-color);
@@ -26,7 +48,7 @@ select {
 .studio-empty h2 {
   font-family: var(--td-font-family);
   margin: 4px 0 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 500;
   color: var(--td-text-color-primary);
 }

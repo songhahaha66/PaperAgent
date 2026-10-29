@@ -176,7 +176,8 @@
         <details v-if="snapshot?.runs.length">
           <summary>项目代码与运行输出</summary>
           <div v-for="(run, index) in snapshot.runs" :key="run.id" class="run-row">
-            <span>运行 {{ index + 1 }} · {{ executionLabel(run.status) }}</span>
+            <span>运行 {{ index + 1 }}</span>
+            <span class="muted">{{ executionLabel(run.status) }}</span>
             <button
               v-if="run.input_path"
               class="text-action"
@@ -320,7 +321,7 @@ const evidenceText = (text: string) => evidenceMarkdown(text, props.snapshot)
   margin-bottom: 24px;
 }
 h2 {
-  font-size: 20px;
+  font-size: 17px;
   line-height: 1.45;
   letter-spacing: -0.02em;
   margin: 12px 0 16px;
@@ -338,7 +339,7 @@ p {
   flex-wrap: wrap;
   gap: 8px 14px;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .execution-state::before {
   content: '';
@@ -401,7 +402,7 @@ small {
   color: var(--pa-muted);
 }
 .conclusion {
-  font-size: 14px;
+  font-size: 15px;
 }
 .conclusion :deep(p:first-child) {
   margin-top: 0;
@@ -435,17 +436,36 @@ small {
   margin-top: 24px;
 }
 .open-issues article {
-  border-left: 2px solid var(--pa-warning);
-  padding-left: 12px;
+  position: relative;
+  padding-left: 14px;
+}
+.open-issues article::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pa-warning);
 }
 .coverage-note {
   color: var(--pa-muted);
 }
 .execution-note {
-  border-left: 2px solid var(--pa-accent);
-  padding: 8px 14px;
+  position: relative;
+  padding: 0 0 0 14px;
   margin: 0 0 20px;
-  background: var(--pa-surface-muted);
+}
+.execution-note::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pa-accent);
 }
 .execution-note p {
   margin: 4px 0;
@@ -489,8 +509,7 @@ summary {
 .records > summary span {
   display: block;
   color: var(--pa-muted);
-  font-size: 12px;
-  margin-left: 16px;
+  font-size: 13px;
 }
 details details {
   margin: 12px 0;

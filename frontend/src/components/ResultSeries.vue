@@ -1,7 +1,7 @@
 <template>
   <figure class="series-chart">
     <figcaption>{{ label }}</figcaption>
-    <svg viewBox="0 0 640 230" role="img" :aria-label="label + ' · ' + axisLabel">
+    <svg viewBox="0 0 640 230" role="img" :aria-label="label + '，' + axisLabel">
       <path d="M50 15V190H620" fill="none" stroke="currentColor" />
       <polyline :points="points" fill="none" stroke="var(--pa-accent)" stroke-width="2.5" />
       <polyline
@@ -26,7 +26,7 @@
       }}
     </p>
     <small v-if="comparisonLabel"
-      >{{ label }} · {{ comparisonLabel }} ({{ isZh ? '虚线' : 'dashed' }})</small
+      >{{ label }}<br />{{ comparisonLabel }} ({{ isZh ? '虚线' : 'dashed' }})</small
     >
   </figure>
 </template>
@@ -70,7 +70,7 @@ svg {
   color: var(--pa-muted);
 }
 text {
-  font-size: 11px;
+  font-size: 13px;
   fill: currentColor;
 }
 figcaption {

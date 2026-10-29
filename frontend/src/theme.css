@@ -250,27 +250,31 @@
 }
 
 :root {
+  --pa-font-meta: 13px;
+  --pa-font-body: 15px;
+  --pa-font-title: 17px;
+  --pa-font-display: 22px;
   --td-font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial,
     sans-serif;
   --td-font-family-medium: var(--td-font-family);
   --td-font-family-heading: var(--td-font-family);
-  --td-font-size-link-small: 12px;
-  --td-font-size-link-medium: 14px;
-  --td-font-size-link-large: 16px;
-  --td-font-size-mark-small: 12px;
-  --td-font-size-mark-medium: 14px;
-  --td-font-size-body-small: 12px;
-  --td-font-size-body-medium: 14px;
-  --td-font-size-body-large: 16px;
-  --td-font-size-title-small: 14px;
-  --td-font-size-title-medium: 16px;
-  --td-font-size-title-large: 20px;
-  --td-font-size-headline-small: 24px;
-  --td-font-size-headline-medium: 28px;
-  --td-font-size-headline-large: 36px;
-  --td-font-size-display-medium: 48px;
-  --td-font-size-display-large: 64px;
+  --td-font-size-link-small: var(--pa-font-meta);
+  --td-font-size-link-medium: var(--pa-font-body);
+  --td-font-size-link-large: var(--pa-font-body);
+  --td-font-size-mark-small: var(--pa-font-meta);
+  --td-font-size-mark-medium: var(--pa-font-body);
+  --td-font-size-body-small: var(--pa-font-meta);
+  --td-font-size-body-medium: var(--pa-font-body);
+  --td-font-size-body-large: var(--pa-font-body);
+  --td-font-size-title-small: var(--pa-font-body);
+  --td-font-size-title-medium: var(--pa-font-body);
+  --td-font-size-title-large: var(--pa-font-title);
+  --td-font-size-headline-small: var(--pa-font-display);
+  --td-font-size-headline-medium: var(--pa-font-display);
+  --td-font-size-headline-large: var(--pa-font-display);
+  --td-font-size-display-medium: var(--pa-font-display);
+  --td-font-size-display-large: var(--pa-font-display);
   --td-line-height-link-small: 20px;
   --td-line-height-link-medium: 22px;
   --td-line-height-link-large: 24px;

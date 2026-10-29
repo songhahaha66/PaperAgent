@@ -75,9 +75,7 @@
               aria-controls="composer-layout-settings"
               :aria-label="ui.template"
               @click="layoutOpen = !layoutOpen"
-              ><t-icon name="file-copy" /><span>{{ ui.template }}</span
-              ><t-icon :name="layoutOpen ? 'chevron-up' : 'chevron-down'"
-            /></t-button>
+              ><t-icon name="file-copy" /><span>{{ ui.template }}</span></t-button>
             <div class="composer-spacer" />
             <t-select
               v-model="mode"
@@ -120,9 +118,7 @@
                   :label="item.name"
               /></t-select>
             </div>
-            <router-link to="/template"
-              >{{ ui.manageTemplates }}<t-icon name="chevron-right"
-            /></router-link>
+            <router-link to="/template">{{ ui.manageTemplates }}</router-link>
           </div>
         </div>
         <t-alert
@@ -144,7 +140,6 @@
           </p>
           <router-link to="/api-config">
             <t-icon name="setting" />{{ isZh ? '配置模型连接' : 'Set up a model connection' }}
-            <t-icon name="chevron-right" />
           </router-link>
         </div>
         <section v-if="recentWorks.length" class="recent-research" :aria-label="ui.recent">
@@ -474,7 +469,7 @@ onMounted(async () => {
 }
 .recent-research h2 {
   margin: 0 0 8px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--pa-muted);
 }
@@ -505,7 +500,7 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 12px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .recent-research .t-button {
@@ -513,12 +508,12 @@ onMounted(async () => {
 }
 .history-message {
   margin-top: 24px;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--pa-muted);
 }
 .home-content h1 {
   font-family: var(--td-font-family);
-  font-size: 29px;
+  font-size: 22px;
   font-weight: 500;
   line-height: 1.5;
   text-align: center;
@@ -550,7 +545,7 @@ onMounted(async () => {
   background: transparent !important;
   border-radius: 0 !important;
   padding: 12px 10px 8px;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.65;
   resize: none;
 }
@@ -572,7 +567,7 @@ onMounted(async () => {
   width: var(--pa-control-height-md);
   height: var(--pa-control-height-md);
   color: var(--pa-ink);
-  font-size: 20px;
+  font-size: 17px;
   flex-shrink: 0;
 }
 .composer-toolbar .layout-button {
@@ -591,7 +586,7 @@ onMounted(async () => {
   font-size: 15px;
 }
 .layout-button .t-icon:last-child {
-  font-size: 12px;
+  font-size: 13px;
 }
 .composer-spacer {
   flex: 1;
@@ -621,7 +616,7 @@ onMounted(async () => {
   min-width: var(--pa-control-height-md);
   flex-shrink: 0;
   margin: 0 0 0 2px;
-  font-size: 20px;
+  font-size: 17px;
 }
 .composer-toolbar .start-button.t-is-disabled {
   background: var(--pa-surface-hover);
@@ -642,11 +637,11 @@ onMounted(async () => {
   border-radius: var(--pa-radius-control);
   padding: 7px 7px 7px 12px;
   max-width: 250px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .attachment-chip > .t-icon {
-  font-size: 19px;
+  font-size: 17px;
   color: var(--pa-muted);
   flex-shrink: 0;
 }
@@ -659,13 +654,13 @@ onMounted(async () => {
   width: var(--pa-control-height-sm);
   height: var(--pa-control-height-sm);
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 .composer-meta {
   display: flex;
   justify-content: flex-end;
   padding: 12px 4px 0;
-  font-size: 12px;
+  font-size: 13px;
 }
 .composer-meta a {
   display: inline-flex;
@@ -694,7 +689,7 @@ onMounted(async () => {
   padding: 13px 12px;
   text-align: left;
   color: var(--pa-muted);
-  font-size: 14px;
+  font-size: 15px;
   cursor: pointer;
   width: 100%;
   min-width: 0;
@@ -707,12 +702,12 @@ onMounted(async () => {
   color: var(--pa-ink);
 }
 .suggestions > button > .t-icon {
-  font-size: 19px;
+  font-size: 17px;
   color: var(--pa-muted);
   flex-shrink: 0;
 }
 .suggestions > button > .t-icon:last-child {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--pa-placeholder);
   margin-left: auto;
   opacity: 0;
@@ -741,7 +736,7 @@ onMounted(async () => {
   min-width: 0;
 }
 .layout-settings label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   white-space: nowrap;
 }
@@ -758,7 +753,7 @@ onMounted(async () => {
   align-items: center;
   text-decoration: none;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
 }
 .creation-error {
@@ -775,7 +770,7 @@ onMounted(async () => {
     width: calc(100% - 48px);
   }
   .home-content h1 {
-    font-size: 27px;
+    font-size: 22px;
   }
 }
 @media (max-width: 768px) {
@@ -784,14 +779,14 @@ onMounted(async () => {
     padding: 14px 18px;
   }
   .home-header > span {
-    font-size: 16px;
+    font-size: 15px;
   }
   .home-content {
     width: calc(100% - 32px);
     margin: clamp(54px, 13vh, 110px) auto 40px;
   }
   .home-content h1 {
-    font-size: 25px;
+    font-size: 22px;
     font-weight: 500;
     margin-bottom: 26px;
   }
@@ -800,11 +795,11 @@ onMounted(async () => {
     padding: 8px 10px 10px;
   }
   .research-input :deep(.t-textarea__inner) {
-    font-size: 16px;
+    font-size: 15px;
     padding: 10px 8px 8px;
   }
   .research-input :deep(.t-textarea__inner::placeholder) {
-    font-size: 14px;
+    font-size: 15px;
   }
   .composer-toolbar {
     gap: 4px;
@@ -827,7 +822,7 @@ onMounted(async () => {
   }
   .composer-meta {
     padding: 12px 6px 0;
-    font-size: 11px;
+    font-size: 13px;
     gap: 10px;
   }
   .suggestions {
@@ -867,7 +862,7 @@ onMounted(async () => {
     width: 108px;
   }
   .suggestions > button {
-    font-size: 12px;
+    font-size: 13px;
   }
 }
 @media (max-height: 650px) {

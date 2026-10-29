@@ -183,7 +183,7 @@ async function handleKey(event: KeyboardEvent, index: number) {
 }
 .work-tab-select > .t-icon {
   flex-shrink: 0;
-  font-size: 16px;
+  font-size: 15px;
 }
 .work-tab:not(.active):hover {
   background: var(--pa-surface-hover);
@@ -214,7 +214,7 @@ async function handleKey(event: KeyboardEvent, index: number) {
   margin: 0 0 6px;
   width: 32px;
   height: 32px;
-  font-size: 19px;
+  font-size: 17px;
 }
 @media (max-width: 768px) {
   .work-tab-bar {

@@ -128,7 +128,7 @@ h3 {
   margin-top: 28px;
 }
 .result-value {
-  font-size: 24px;
+  font-size: 22px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
