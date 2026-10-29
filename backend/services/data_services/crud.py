@@ -71,8 +71,13 @@ def authenticate_user(db: Session, email: str, password: str):
     return user
 
 def get_system_config(db: Session):
-    """获取系统配置"""
+    """获取系统配置；新数据库里还没有这一行时按默认值（允许注册）创建"""
     config = db.query(models.SystemConfig).first()
+    if config is None:
+        config = models.SystemConfig(is_allow_register=True)
+        db.add(config)
+        db.commit()
+        db.refresh(config)
     return config
 
 def update_system_config(db: Session, is_allow_register: bool):
@@ -87,6 +92,8 @@ def update_system_config(db: Session, is_allow_register: bool):
 def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id: int):
     """创建模型配置"""
     try:
+        if config.type == 'jev' and not config.api_key.strip():
+            raise HTTPException(status_code=400, detail='请填写 Jev API 密钥')
         # 检查是否已存在相同类型的配置（同一用户下）
         existing_config = db.query(models.ModelConfig).filter(
             models.ModelConfig.type == config.type,
@@ -104,6 +111,7 @@ def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id:
             model_id=config.model_id,
             base_url=config.base_url,
             api_key=config.api_key,
+            timeout_seconds=config.timeout_seconds,
             created_by=user_id
         )
 
@@ -117,8 +125,8 @@ def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model config creation failed: {str(e)}"
-        )
+            detail="模型配置保存失败，请重试"
+        ) from None
 
 def get_model_config(db: Session, config_id: int):
     """根据ID获取模型配置（不包含api_key）"""
@@ -157,6 +165,8 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
         update_data = config_update.model_dump(exclude_unset=True) if hasattr(config_update, 'model_dump') else config_update.dict(exclude_unset=True)
+        if 'api_key' in update_data and not (update_data['api_key'] or '').strip():
+            update_data.pop('api_key')
 
         for field, value in update_data.items():
             setattr(db_config, field, value)
@@ -168,8 +178,8 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Model config update failed: {str(e)}"
-        )
+            detail="模型配置保存失败，请重试"
+        ) from None
 
 def delete_model_config(db: Session, config_id: int, user_id: int = None):
     """删除模型配置"""
@@ -225,54 +235,34 @@ def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, us
         file_content: 文件内容（文本或base64编码的二进制）
         is_binary: 是否为二进制文件（如docx）
     """
+    from ..file_services.template_contract import analyze_and_store_template, delete_template_analysis
+    from config.paths import get_templates_path
+    saved = None
+    db_template = None
     try:
-        # 使用model_dump()替代dict()以兼容新版本Pydantic
-        template_data = template.model_dump() if hasattr(template, 'model_dump') else template.dict()
-        
-        # 创建模板记录
-        db_template = models.PaperTemplate(
-            **template_data,
-            created_by=user_id
-        )
+        if not file_content:
+            raise ValueError('模板创建必须上传文件，不能指定服务端路径')
+        data = template.model_dump(exclude={'file_path'})
+        expected = {'markdown': '.md', 'word': '.docx', 'latex': '.tex'}.get(template.output_format)
+        if not expected or Path(template.file_path).suffix.lower() != expected:
+            raise ValueError('模板格式与文件类型不匹配')
+        db_template = models.PaperTemplate(**data, file_path='', created_by=user_id)
         db.add(db_template)
+        db.flush()
+        saved = template_file_service.save_file(db_template.id, template.file_path, file_content, is_binary)
+        db_template.file_path = saved
+        analyze_and_store_template(get_templates_path()/saved, db_template.id, db_template.name, db_template.output_format)
         db.commit()
         db.refresh(db_template)
-        
-        # 创建对应的模板文件
-        if file_content:
-            filename = Path(template.file_path).name if template.file_path else "template.md"
-            saved_filename = template_file_service.save_file(
-                db_template.id,
-                filename,
-                file_content,
-                is_binary
-            )
-            # 保存文件名到数据库
-            db_template.file_path = saved_filename
-            db.commit()
-            db.refresh(db_template)
-            try:
-                from ..file_services.template_contract import analyze_and_store_template
-                from config.paths import get_templates_path
-                analyze_and_store_template(
-                    get_templates_path() / saved_filename,
-                    db_template.id,
-                    db_template.name,
-                    db_template.output_format,
-                )
-            except Exception:
-                logger.warning("模板上传后解析失败: template_id=%s", db_template.id, exc_info=True)
-        
         return db_template
-    except Exception as e:
+    except Exception as exc:
         db.rollback()
-        # 如果创建失败，尝试删除已创建的文件
-        if 'db_template' in locals() and db_template.file_path:
-            template_file_service.delete_file(db_template.file_path)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Template creation failed: {str(e)}"
-        )
+        if saved:
+            template_file_service.delete_file(saved)
+        if db_template is not None and db_template.id:
+            delete_template_analysis(db_template.id)
+        raise HTTPException(400, 'Template creation failed: ' + str(exc)) from exc
+
 
 def get_paper_template(db: Session, template_id: int):
     """根据ID获取论文模板"""
@@ -326,19 +316,9 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
         forbidden_detail="Not authorized to delete this template",
     )
     
-    # 检查是否有works引用该模板
-    from models.models import Work
-    works_using_template = db.query(Work).filter(Work.template_id == template_id).all()
-    if works_using_template:
-        work_titles = [work.title for work in works_using_template[:5]]  # 只显示前5个
-        if len(works_using_template) > 5:
-            work_titles.append(f"... 还有 {len(works_using_template) - 5} 个工作")
-        
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无法删除模板，因为还有 {len(works_using_template)} 个工作正在使用该模板。请先删除或修改这些工作：{', '.join(work_titles)}"
-        )
-    
+    # Existing projects own independent copies. Detach only the library reference.
+    db.query(models.Project).filter(models.Project.template_id == template_id).update({'template_id': None})
+
     # 删除关联的模板文件
     if db_template.file_path:
         template_file_service.delete_file(db_template.file_path)
@@ -351,40 +331,9 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
     return {"message": "Template deleted successfully"}
 
 def force_delete_paper_template(db: Session, template_id: int, user_id: int):
-    """强制删除论文模板（同时删除引用该模板的工作）"""
-    db_template = ensure_owner(
-        get_paper_template(db, template_id),
-        user_id,
-        not_found_detail="Template not found",
-        forbidden_detail="Not authorized to delete this template",
-    )
-    
-    # 查找并删除引用该模板的所有works
-    from models.models import Work
-    works_using_template = db.query(Work).filter(Work.template_id == template_id).all()
-    
-    if works_using_template:
-        # 删除引用该模板的工作
-        for work in works_using_template:
-            # 这里可以添加删除工作相关文件的逻辑
-            # 例如删除工作空间文件夹、聊天记录等
-            db.delete(work)
-    
-    # 删除关联的模板文件
-    if db_template.file_path:
-        template_file_service.delete_file(db_template.file_path)
-    from ..file_services.template_contract import delete_template_analysis
-    delete_template_analysis(template_id)
-    
-    # 删除数据库记录
-    db.delete(db_template)
-    db.commit()
-    
-    deleted_works_count = len(works_using_template)
-    return {
-        "message": f"Template and {deleted_works_count} related works deleted successfully",
-        "deleted_works_count": deleted_works_count
-    }
+    """The historical endpoint is safe: deleting a library template never deletes projects."""
+    return delete_paper_template(db, template_id, user_id)
+
 
 def get_template_file_content(db: Session, template_id: int, user_id: int) -> str:
     """获取模板文件内容"""
@@ -412,32 +361,45 @@ def get_template_file_content(db: Session, template_id: int, user_id: int) -> st
 
 def generate_work_id():
     """生成唯一的工作ID"""
-    return str(uuid.uuid4())[:8]
+    return uuid.uuid4().hex
 
 def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
     """创建工作"""
+    if work.output_mode not in {'markdown', 'latex', 'word'}:
+        raise HTTPException(400, 'Invalid output mode')
+    if work.template_id is not None:
+        template = get_paper_template(db, work.template_id)
+        if template is None:
+            raise HTTPException(404, 'Template not found')
+        if not template.is_public and template.created_by != user_id:
+            raise HTTPException(403, 'Not authorized to use this template')
+        if template.output_format != work.output_mode:
+            raise HTTPException(400, '模板格式与项目输出模式不一致')
+    base_path = None
     try:
         # 生成唯一工作ID
         work_id = generate_work_id()
         
         # 创建工作记录
-        db_work = models.Work(
+        db_work = models.Project(
             work_id=work_id,
             title=work.title,
             description=work.description,
             tags=work.tags,
             template_id=work.template_id,  # 添加模板ID
             output_mode=work.output_mode,  # 添加输出模式
-            created_by=user_id
+            created_by=user_id,
+            architecture_version=2
         )
         
         db.add(db_work)
-        db.commit()
-        db.refresh(db_work)
+        db.flush()
         
         # 创建工作空间目录结构和初始文件
         from ..file_services.workspace_structure import WorkspaceStructureManager
-        base_path = get_workspace_path(work_id)
+        candidate_path = get_workspace_path(work_id)
+        candidate_path.mkdir(parents=True, exist_ok=False)
+        base_path = candidate_path
         WorkspaceStructureManager.create_workspace_structure(
             base_path, 
             work_id, 
@@ -445,47 +407,54 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
             output_mode=db_work.output_mode  # 传递输出模式
         )
         
+        db.commit()
+        db.refresh(db_work)
         return db_work
     except Exception as e:
         db.rollback()
+        if base_path is not None:
+            import shutil
+            from ..file_services.workspace_layout import private_root
+            shutil.rmtree(base_path, ignore_errors=True)
+            shutil.rmtree(private_root(base_path), ignore_errors=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work creation failed: {str(e)}"
+            detail=f"Project creation failed: {str(e)}"
         )
 
 
 def get_work(db: Session, work_id: str):
     """根据工作ID获取工作"""
-    return db.query(models.Work).filter(models.Work.work_id == work_id).first()
+    return db.query(models.Project).filter(models.Project.work_id == work_id).first()
 
 async def get_work_async(db: AsyncSession, work_id: str):
     """异步版本：根据工作ID获取工作"""
     # 使用异步select查询
     from sqlalchemy import select
-    stmt = select(models.Work).where(models.Work.work_id == work_id)
+    stmt = select(models.Project).where(models.Project.work_id == work_id)
     result = await db.execute(stmt)
     return result.scalar_one_or_none()
 
 def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100, 
                    status: str = None, search: str = None):
     """获取用户的工作列表，支持筛选和搜索"""
-    query = db.query(models.Work).filter(models.Work.created_by == user_id)
+    query = db.query(models.Project).filter(models.Project.created_by == user_id)
     
     # 状态筛选
     if status:
-        query = query.filter(models.Work.status == status)
+        query = query.filter(models.Project.status == status)
     
     # 搜索筛选
     if search:
         search_filter = f"%{search}%"
         query = query.filter(
-            (models.Work.title.ilike(search_filter)) |
-            (models.Work.description.ilike(search_filter)) |
-            (models.Work.tags.ilike(search_filter))
+            (models.Project.title.ilike(search_filter)) |
+            (models.Project.description.ilike(search_filter)) |
+            (models.Project.tags.ilike(search_filter))
         )
     
     # 按更新时间倒序排列
-    query = query.order_by(models.Work.updated_at.desc())
+    query = query.order_by(models.Project.updated_at.desc())
     
     total = query.count()
     works = query.offset(skip).limit(limit).all()
@@ -502,14 +471,18 @@ def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user
     db_work = ensure_owner(
         get_work(db, work_id),
         user_id,
-        not_found_detail="Work not found",
+        not_found_detail="Project not found",
         forbidden_detail="Not authorized to modify this work",
     )
     
+    from ..file_services.project_access import require_current
+    require_current(db_work)
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
         update_data = model_to_dict(work_update, exclude_unset=True)
         
+        if 'template_id' in update_data or 'output_mode' in update_data:
+            raise HTTPException(400, '模板和输出模式在项目创建时固定，请新建项目')
         for field, value in update_data.items():
             setattr(db_work, field, value)
         
@@ -520,7 +493,7 @@ def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work update failed: {str(e)}"
+            detail=f"Project update failed: {str(e)}"
         )
 
 def delete_work(db: Session, work_id: str, user_id: int):
@@ -528,45 +501,47 @@ def delete_work(db: Session, work_id: str, user_id: int):
     db_work = ensure_owner(
         get_work(db, work_id),
         user_id,
-        not_found_detail="Work not found",
+        not_found_detail="Project not found",
         forbidden_detail="Not authorized to delete this work",
     )
     
+    from ..file_services.project_access import require_current
+    require_current(db_work)
     try:
-        # 删除工作空间文件夹
-        workspace_path = get_workspace_path(work_id)
-        if workspace_path.exists():
-            import shutil
-            shutil.rmtree(workspace_path)
-        
-        # 删除数据库记录
-        db.delete(db_work)
-        db.commit()
-        return {"message": "Work deleted successfully"}
+        from ..file_services.workspace_files import workspace_file_service
+        with workspace_file_service._editable(work_id):
+            workspace_path = get_workspace_path(work_id)
+            if workspace_path.exists():
+                import shutil
+                shutil.rmtree(workspace_path)
+            db.delete(db_work)
+            db.commit()
+        return {"message": "Project deleted successfully"}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work deletion failed: {str(e)}"
+            detail=f"Project deletion failed: {str(e)}"
         )
 
-def update_work_status(db: Session, work_id: str, status: str, progress: int = None, user_id: int = None):
+def update_work_status(db: Session, work_id: str, status: str, user_id: int = None):
     """更新工作状态和进度"""
     db_work = get_work(db, work_id)
     if not db_work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if user_id:
         ensure_owner(
             db_work,
             user_id,
-            not_found_detail="Work not found",
+            not_found_detail="Project not found",
             forbidden_detail="Not authorized to modify this work",
         )
     
     try:
         db_work.status = status
-        if progress is not None:
-            db_work.progress = max(0, min(100, progress))  # 确保进度在0-100之间
         
         db.commit()
         db.refresh(db_work)
@@ -575,7 +550,7 @@ def update_work_status(db: Session, work_id: str, status: str, progress: int = N
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Work status update failed: {str(e)}"
+            detail=f"Project status update failed: {str(e)}"
         )
 
 

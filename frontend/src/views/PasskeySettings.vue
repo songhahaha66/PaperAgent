@@ -27,7 +27,11 @@
             </t-button>
           </template>
 
-          <t-alert v-if="!passkeySupported" theme="warning" message="当前浏览器不支持 Passkey，请使用最新版 Chrome、Edge、Safari 或 Firefox。" />
+          <t-alert
+            v-if="!passkeySupported"
+            theme="warning"
+            message="当前浏览器不支持 Passkey，请使用最新版 Chrome、Edge、Safari 或 Firefox。"
+          />
           <t-alert v-else-if="originHint" theme="warning" :message="originHint" />
 
           <t-table
@@ -67,7 +71,11 @@
     >
       <t-form>
         <t-form-item label="名称">
-          <t-input v-model="newPasskeyName" placeholder="例如：我的笔记本、iPhone" maxlength="100" />
+          <t-input
+            v-model="newPasskeyName"
+            placeholder="例如：我的笔记本、iPhone"
+            maxlength="100"
+          />
         </t-form-item>
       </t-form>
       <p class="dialog-hint">浏览器将弹出系统提示，请使用指纹、面容、PIN 或安全密钥完成绑定。</p>
@@ -90,7 +98,12 @@ import { useRouter } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
 import { authAPI, type PasskeyCredential } from '@/api/auth'
-import { createPasskey, isPasskeyCanceled, isPasskeySupported, passkeyOriginHint } from '@/utils/passkey'
+import {
+  createPasskey,
+  isPasskeyCanceled,
+  isPasskeySupported,
+  passkeyOriginHint,
+} from '@/utils/passkey'
 
 const router = useRouter()
 const isSidebarCollapsed = ref(window.innerWidth <= 768)
@@ -236,7 +249,7 @@ onMounted(async () => {
   display: flex;
   height: 100vh;
   width: 100vw;
-  background: #f5f7fa;
+  background: var(--pa-surface-muted);
   overflow: hidden;
 }
 
@@ -249,19 +262,19 @@ onMounted(async () => {
 
 .workspace-header {
   padding: 15px 30px;
-  background: white;
-  border-bottom: 1px solid #eee;
+  background: var(--pa-surface);
+  border-bottom: 1px solid var(--pa-line);
 }
 
 .workspace-header h1 {
   margin: 0 0 8px 0;
-  color: #2c3e50;
+  color: var(--pa-ink);
   font-size: 1.5em;
 }
 
 .workspace-header p {
   margin: 0;
-  color: #7f8c8d;
+  color: var(--pa-muted);
   font-size: 0.9em;
 }
 
@@ -273,7 +286,64 @@ onMounted(async () => {
 
 .dialog-hint {
   margin: 8px 0 0;
-  color: #7f8c8d;
+  color: var(--pa-muted);
   font-size: 13px;
+}
+
+.passkey-page {
+  background: var(--pa-page);
+}
+.main-content {
+  min-width: 0;
+}
+.workspace-header {
+  padding: 30px 32px 24px;
+  border-color: var(--pa-line);
+}
+.workspace-header h1 {
+  font-family: var(--td-font-family);
+  font-size: 26px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: var(--pa-ink);
+  margin: 0 0 10px;
+}
+.workspace-header p {
+  font-size: 13px;
+  color: var(--pa-muted);
+  line-height: 1.8;
+}
+.passkey-content {
+  padding: 24px 32px;
+  background: var(--pa-surface);
+}
+.passkey-content :deep(.t-card) {
+  border-color: var(--pa-line);
+  border-radius: var(--pa-radius-card);
+  box-shadow: none;
+}
+.passkey-content :deep(.t-card__title) {
+  font-family: var(--td-font-family);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--pa-ink);
+}
+@media (max-width: 768px) {
+  .workspace-header {
+    padding: 26px 20px 22px;
+  }
+  .workspace-header h1 {
+    font-size: 23px;
+  }
+  .workspace-header p {
+    font-size: 12px;
+  }
+  .passkey-content {
+    padding: 0 20px 28px;
+  }
+  .passkey-content :deep(.t-card__header),
+  .passkey-content :deep(.t-card__body) {
+    padding: 20px;
+  }
 }
 </style>

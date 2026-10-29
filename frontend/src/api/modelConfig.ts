@@ -3,9 +3,10 @@ import { apiClient } from '@/utils/apiClient'
 
 export interface ModelConfig {
   id: number
-  type: string // brain(中枢大脑), code(代码实验), writing(论文写作)
+  type: string // brain, code, writing, jev
   model_id: string
   base_url: string
+  timeout_seconds?: number | null
   is_active: boolean
   created_at: string
 }
@@ -14,17 +15,51 @@ export interface ModelConfigCreate {
   type: string
   model_id: string
   base_url: string
+  timeout_seconds?: number | null
   api_key: string
 }
 
 export interface ModelConfigUpdate {
   model_id?: string
   base_url?: string
+  timeout_seconds?: number | null
   api_key?: string
   is_active?: boolean
 }
 
+export interface ModelReadiness {
+  ready: boolean
+  roles: Record<string, boolean>
+  research_ready: boolean
+  jev: {
+    source: 'user' | 'deployment' | 'missing'
+    model_id?: string
+    base_url?: string
+    timeout_seconds?: number
+  }
+}
+
 class ModelConfigAPI {
+  async readiness(): Promise<ModelReadiness> {
+    return apiClient.request('/model-configs/readiness')
+  }
+  async applyDefault(): Promise<ModelConfig[]> {
+    return apiClient.request<ModelConfig[]>('/model-configs/apply-default', { method: 'POST' })
+  }
+
+  async testConnection(config: {
+    type: string
+    model_id: string
+    base_url: string
+    timeout_seconds?: number | null
+    api_key?: string
+  }): Promise<{ ok: boolean }> {
+    return apiClient.request<{ ok: boolean }>('/model-configs/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    })
+  }
+
   // 获取所有模型配置
   async getAllModelConfigs(skip: number = 0, limit: number = 100): Promise<ModelConfig[]> {
     return apiClient.request<ModelConfig[]>(`/model-configs?skip=${skip}&limit=${limit}`)
@@ -71,13 +106,13 @@ class ModelConfigAPI {
   }
 
   // 便捷接口：获取指定类型的配置
-  async getConfig(type: 'brain' | 'code' | 'writing'): Promise<ModelConfig> {
+  async getConfig(type: 'brain' | 'code' | 'writing' | 'jev'): Promise<ModelConfig> {
     return this.getModelConfigByType(type)
   }
 
   // 便捷接口：创建指定类型的配置
   async createConfig(
-    type: 'brain' | 'code' | 'writing',
+    type: 'brain' | 'code' | 'writing' | 'jev',
     config: Omit<ModelConfigCreate, 'type'>,
   ): Promise<ModelConfig> {
     return this.createModelConfig({

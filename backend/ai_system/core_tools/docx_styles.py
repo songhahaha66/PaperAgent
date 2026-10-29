@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS = {"w": W_NS}
 
-PROFILE_PATH = ".system/template_style_profile.json"
+PROFILE_PATH = "template/style_profile.json"
 PRIORITY_STYLES = (
     "Normal",
     "Title",

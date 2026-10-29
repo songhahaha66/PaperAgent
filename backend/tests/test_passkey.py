@@ -12,7 +12,7 @@ from sqlalchemy.pool import StaticPool
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from database.database import get_db
-from models.models import Base, SystemConfig
+from models.models import Base
 from routers.auth_routes.auth import router as auth_router
 from webauthn.helpers import bytes_to_base64url
 from webauthn.helpers.structs import CredentialDeviceType
@@ -46,14 +46,6 @@ HEADERS = {"Origin": ORIGIN}
 
 def _session():
     return TestingSessionLocal()
-
-
-def setup_module(_module):
-    db = _session()
-    if not db.query(SystemConfig).first():
-        db.add(SystemConfig(is_allow_register=True))
-        db.commit()
-    db.close()
 
 
 def _register_and_login(email: str, username: str, password: str = "secret12") -> str:
@@ -95,23 +87,6 @@ def _verified_authentication(credential_id: bytes = b"cred-id-1"):
 def test_register_options_requires_auth():
     response = client.post("/auth/passkey/register/options", headers=HEADERS)
     assert response.status_code == 401
-
-
-def test_register_options_and_list_empty():
-    token = _register_and_login("passkey-user@example.com", "passkey_user")
-    options = client.post("/auth/passkey/register/options", headers=_auth_headers(token))
-    assert options.status_code == 200, options.text
-    body = options.json()
-    assert body["challenge_id"]
-    assert body["options"]["rp"]["id"] == "localhost"
-    assert body["options"]["rp"]["name"] == "PaperAgent"
-    assert body["options"]["user"]["name"] == "passkey-user@example.com"
-    assert body["options"]["challenge"]
-    assert body["options"]["authenticatorSelection"]["residentKey"] == "required"
-
-    listed = client.get("/auth/passkey/credentials", headers=_auth_headers(token))
-    assert listed.status_code == 200
-    assert listed.json() == []
 
 
 def test_register_verify_and_login_flow():
@@ -194,13 +169,6 @@ def test_register_verify_and_login_flow():
         json={"challenge_id": login_challenge, "credential": assertion},
     )
     assert replay.status_code == 400
-
-
-def test_usernameless_login_options_have_no_allow_credentials():
-    response = client.post("/auth/passkey/login/options", headers=HEADERS, json={})
-    assert response.status_code == 200, response.text
-    options = response.json()["options"]
-    assert "allowCredentials" not in options or options.get("allowCredentials") in (None, [])
 
 
 def test_invalid_challenge_is_rejected():

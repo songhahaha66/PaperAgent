@@ -58,43 +58,20 @@ class ChatService:
             raise
 
     def add_message(self, work_id: str, role: str, content: str, metadata: Optional[Dict] = None):
-        """添加消息到JSON文件（兼容旧格式）"""
+        """添加消息到工作区会话库"""
         try:
             self.history_manager.save_message(work_id, role, content, metadata)
-            logger.info(f"消息已保存到JSON: {work_id}, 角色: {role}")
+            logger.info(f"消息已保存: {work_id}, 角色: {role}")
         except Exception as e:
             logger.error(f"保存消息失败: {e}")
             raise
-
-    def add_json_card_message(self, work_id: str, role: str, content: str,
-                              json_blocks: List[Dict] = None, metadata: Optional[Dict] = None):
-        """添加JSON卡片格式的消息"""
-        try:
-            self.history_manager.save_json_card_message(
-                work_id, role, content, json_blocks, metadata)
-            logger.info(
-                f"JSON卡片消息已保存: {work_id}, 角色: {role}, 块数: {len(json_blocks or [])}")
-        except Exception as e:
-            logger.error(f"保存JSON卡片消息失败: {e}")
-            raise
-
-    def add_json_block_to_message(self, work_id: str, message_id: str, json_block: Dict):
-        """向指定消息添加JSON块"""
-        try:
-            success = self.history_manager.add_json_block_to_message(
-                work_id, message_id, json_block)
-            if success:
-                logger.info(
-                    f"JSON块已添加到消息: {work_id}, 消息ID: {message_id}, 类型: {json_block.get('type')}")
-            return success
-        except Exception as e:
-            logger.error(f"添加JSON块失败: {e}")
-            return False
 
     def get_work_chat_history(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
         """获取work的聊天记录（原始格式）"""
         try:
             messages = self.history_manager.get_messages(work_id, limit)
+            from .conversation_timeline import public_reply
+            messages = [public_reply(message) for message in messages]
             logger.info(f"获取聊天记录: {work_id}, 数量: {len(messages)}")
             return messages
         except Exception as e:
@@ -102,14 +79,26 @@ class ChatService:
             return []
 
     def get_work_chat_history_for_frontend(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
-        """获取work的聊天记录（前端格式）"""
-        try:
-            messages = self.history_manager.get_messages(work_id, limit)
-            logger.info(f"获取聊天记录: {work_id}, 数量: {len(messages)}")
-            return messages
-        except Exception as e:
-            logger.error(f"获取聊天记录失败: {e}")
-            return []
+        """Merge persisted comment views for display only, never research context."""
+        from datetime import datetime
+        from pathlib import Path
+        from .paper_comments import chat_history
+        messages=self.get_work_chat_history(work_id)
+        from .task_manager import task_manager
+        task = task_manager.get_task(work_id)
+        for index, reply in enumerate(messages):
+            metadata = reply.get('metadata', {})
+            if metadata.get('reply_id') and metadata.get('status') == 'running':
+                active = task and task.task_id == metadata.get('chat_task_id') and not task_manager._is_stale(task) and (task.status.value in {'pending', 'running'} or task._async_task is not None)
+                if not active:
+                    recovered = self.history_manager.interrupt_reply(work_id, reply['id'], metadata['revision'])
+                    if recovered:
+                        from .conversation_timeline import public_reply
+                        messages[index] = public_reply(recovered)
+        messages=messages+chat_history(Path(self.history_manager.workspace_base)/work_id)
+        messages.sort(key=lambda m:(datetime.fromisoformat(m['timestamp'].replace('Z','+00:00')).timestamp() if m.get('timestamp') else 0,
+                                    m['role']!='user',str(m.get('id',''))))
+        return messages[-limit:] if limit else messages
 
     def get_work_context(self, work_id: str) -> Dict:
         """获取work的上下文信息"""

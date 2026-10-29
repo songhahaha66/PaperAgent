@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ dev, master ]
+  # PR updates already cover dev -> master; a push trigger runs the same tests twice.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # 测试只用临时 SQLite，不连生产库；密钥只给 JWT 测试用
+      DATABASE_URL: sqlite:///./ci.db
+      SECRET_KEY: ci-only-secret
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Ensure pandoc is available
+      timeout-minutes: 3
+      # Word export does not render fonts. XeLaTeX integration is tested in the sandbox.
+      run: |
+        if ! command -v pandoc >/dev/null 2>&1; then
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends pandoc
+        fi
+        pandoc --version
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      with:
+        working-directory: backend
+        enable-cache: true
+        cache-python: true
+        cache-dependency-glob: uv.lock
+
+    - name: Install dependencies
+      run: uv sync --locked --extra sandbox
+
+    - name: Run tests
+      timeout-minutes: 10
+      run: uv run --locked --extra sandbox pytest -vv --tb=short --durations=10
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Type check and build
+      run: npm run build
+
+    - name: Workspace regressions
+      run: npm run test:workspace

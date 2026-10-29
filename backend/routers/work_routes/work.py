@@ -1,3 +1,4 @@
+from services.file_services.workspace_layout import workspace_path
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -8,7 +9,6 @@ from services import crud
 from typing import Optional
 from ..utils import route_guard
 from config.paths import get_workspace_path
-from services.file_services.plan_reconciler import PlanReconciler
 import os
 import uuid
 from pathlib import Path
@@ -18,22 +18,28 @@ from datetime import datetime
 router = APIRouter(prefix="/api/works", tags=["works"])
 
 
-def _sync_work_from_workspace_metadata(work):
+def _project_progress(work):
     if not work:
         return work
-    try:
-        workspace_path = get_workspace_path(work.work_id)
-        PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
-        metadata_file = workspace_path / "metadata.json"
-        if metadata_file.exists():
-            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-            if metadata.get("status"):
-                work.status = metadata["status"]
-            if metadata.get("progress") is not None:
-                work.progress = max(0, min(100, int(metadata["progress"])))
-    except Exception:
-        pass
-    return work
+    if work.architecture_version != 2:
+        return schemas.WorkResponse.model_validate(work)
+    from ai_system.research.runtime import execution_reason
+    from ai_system.research.store import ResearchStore, DB_PATH
+    root=get_workspace_path(work.work_id)
+    progress=0
+    thread=workspace_path(root, '.system/graph_thread.json')
+    if thread.is_file() and (workspace_path(root, DB_PATH)).is_file():
+        saved=json.loads(thread.read_text())
+        if saved.get('engine_version')=='research-v3':
+            snapshot=ResearchStore(root,saved['thread_id'],read_only=True).snapshot()
+            questions=(snapshot or {}).get('questions',{})
+            answered={t['question_id'] for t in (snapshot or {}).get('experiments',{}).values()
+                      if not t['retired'] and t['acceptance']=='accepted' and t['validity']=='current'}
+            if questions:progress=round(100*len(answered)/len(questions))
+    # A read projection must not dirty the ORM session or infer scientific
+    # completion from a document's size or an old Markdown status label.
+    return schemas.WorkResponse.model_validate(work).model_copy(update={
+        'progress':progress, 'execution_reason':execution_reason(root,work.status)})
 
 @router.post("", response_model=schemas.WorkResponse)
 @route_guard
@@ -58,7 +64,7 @@ async def get_works(
     """获取用户的工作列表"""
     response = crud.get_user_works(db, current_user, skip, limit, status, search)
     if isinstance(response, dict) and isinstance(response.get("works"), list):
-        response["works"] = [_sync_work_from_workspace_metadata(work) for work in response["works"]]
+        response["works"] = [_project_progress(work) for work in response["works"]]
     return response
 
 @router.get("/{work_id}", response_model=schemas.WorkResponse)
@@ -71,10 +77,10 @@ async def get_work(
     """获取工作详情"""
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    return _sync_work_from_workspace_metadata(work)
+    return _project_progress(work)
 
 @router.put("/{work_id}", response_model=schemas.WorkResponse)
 @route_guard
@@ -97,47 +103,6 @@ async def delete_work(
     """删除工作"""
     return crud.delete_work(db, work_id, current_user)
 
-@router.patch("/{work_id}/status")
-@route_guard
-async def update_work_status(
-    work_id: str,
-    status: str = Query(..., description="新的工作状态"),
-    progress: Optional[int] = Query(None, ge=0, le=100, description="工作进度(0-100)"),
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """更新工作状态和进度"""
-    return crud.update_work_status(db, work_id, status, progress, current_user)
-
-@router.get("/{work_id}/metadata")
-@route_guard
-async def get_work_metadata(
-    work_id: str,
-    db: Session = Depends(get_db),
-    current_user: int = Depends(get_current_user)
-):
-    """获取工作元数据文件内容"""
-    # 检查工作是否存在
-    work = crud.get_work(db, work_id)
-    if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
-    if work.created_by != current_user:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    import json
-    from pathlib import Path
-    workspace_path = get_workspace_path(work_id)
-    try:
-        PlanReconciler(workspace_path).ensure_plan_json(sync_markdown=True)
-    except Exception:
-        # Metadata should remain readable even if plan reconciliation fails.
-        pass
-    metadata_file = workspace_path / "metadata.json"
-    if not metadata_file.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work metadata not found")
-    with open(metadata_file, 'r', encoding='utf-8') as f:
-        metadata = json.load(f)
-    return metadata
-
 @router.get("/{work_id}/chat-history")
 @route_guard
 async def get_work_chat_history(
@@ -148,21 +113,12 @@ async def get_work_chat_history(
     """获取工作对话历史"""
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to view this work")
-    import json
-    from pathlib import Path
-    chat_file = get_workspace_path(work_id) / "chat_history.json"
-    if not chat_file.exists():
-        return {}
-    with open(chat_file, 'r', encoding='utf-8') as f:
-        chat_history = json.load(f)
-    if isinstance(chat_history, list):
-        return {"messages": chat_history, "context": {}}
-    if isinstance(chat_history, dict):
-        return chat_history
-    return {"messages": [], "context": {}}
+    from services.chat_services.chat_history_manager import ChatHistoryManager
+    root = get_workspace_path(work_id)
+    return ChatHistoryManager(str(root.parent)).get_work_history(work_id)
 
 # 附件相关路由
 def get_attachment_dir(work_id: str) -> Path:
@@ -203,40 +159,26 @@ async def upload_attachment(
     # 检查工作是否存在且属于当前用户
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
 
-    # 检查文件大小（50MB限制）
-    max_size = 50 * 1024 * 1024  # 50MB
-    file.file.seek(0, 2)  # 移动到文件末尾
-    file_size = file.file.tell()
-    file.file.seek(0)  # 重置到文件开头
-
-    if file_size > max_size:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 50MB)")
-
-    # 使用原始文件名，不允许重名
-    original_filename = file.filename
-    attachment_dir = get_attachment_dir(work_id)
-
-    # 检查文件是否已存在
-    final_filename = original_filename
-    file_path = attachment_dir / final_filename
-
-    if file_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"文件名已存在: {original_filename}"
-        )
-
-    # 保存文件
+    from services.file_services.project_access import require_current
+    from services.file_services.workspace_files import workspace_file_service
+    from services.file_services.workspace_layout import relative_parts
+    require_current(work)
+    original_filename = file.filename or ''
     try:
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to save file: {str(e)}")
+        if len(relative_parts(original_filename)) != 1:
+            raise ValueError('filename')
+    except ValueError:
+        raise HTTPException(400, 'Invalid attachment filename') from None
+    final_filename = original_filename
+    relative = 'attachment/' + final_filename
+    if workspace_file_service.resolve(work_id, relative).exists():
+        raise HTTPException(409, '文件名已存在')
+    saved = workspace_file_service.upload_file(work_id, relative, file)
+    file_size = saved['size']
 
     # 创建附件信息
     attachment_info = schemas.AttachmentInfo(
@@ -264,7 +206,7 @@ async def get_attachments(
     # 检查工作是否存在且属于当前用户
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
 
@@ -305,21 +247,11 @@ async def delete_attachment(
     # 检查工作是否存在且属于当前用户
     work = crud.get_work(db, work_id)
     if not work:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
     if work.created_by != current_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this work")
 
     # 构建文件路径
     attachment_dir = get_attachment_dir(work_id)
-    file_path = attachment_dir / filename
-
-    # 检查文件是否存在
-    if not file_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Attachment not found")
-
-    # 删除文件
-    try:
-        file_path.unlink()
-        return {"message": "Attachment deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete file: {str(e)}")
+    from services.file_services.workspace_files import workspace_file_service
+    return workspace_file_service.delete_file(work_id, "attachment/" + filename)

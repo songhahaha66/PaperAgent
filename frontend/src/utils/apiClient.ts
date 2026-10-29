@@ -59,7 +59,8 @@ export class ApiClient {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        const error = new Error(errorData.detail || `HTTP error! status: ${response.status}`) as any
+        const detail=errorData.detail
+        const error = new Error((typeof detail==='string'?detail:detail?.message) || `HTTP error! status: ${response.status}`) as any
         error.response = {
           status: response.status,
           data: errorData,

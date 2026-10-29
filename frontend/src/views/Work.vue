@@ -1,779 +1,760 @@
 <template>
-  <div class="work-page" :class="{ 'is-mobile': isMobile }">
+  <div class="work-page">
     <Sidebar
       :is-sidebar-collapsed="isSidebarCollapsed"
-      :active-history-id="activeHistoryId"
+      :active-history-id="currentWork?.id || null"
       @toggle-sidebar="toggleSidebar"
-      @create-new-task="createNewTask"
-      @select-history="selectHistory"
     />
-
-    <div class="main-content">
-      <div class="workspace-header" v-if="currentWork">
-        <div class="work-info">
+    <main v-if="loadError" class="workspace-container">
+      <section class="work-load-error" role="alert">
+        <t-icon name="error-circle" />
+        <h1>{{ loadErrorText }}</h1>
+        <p>
+          {{
+            isZh
+              ? '请返回工作列表，选择有权访问的研究。'
+              : 'Return to your work list and choose an accessible research.'
+          }}
+        </p>
+        <div>
+          <t-button theme="primary" @click="router.push('/home')">{{
+            isZh ? '返回工作列表' : 'Back to work list'
+          }}</t-button>
+          <t-button v-if="loadError === 'failed'" theme="default" @click="loadWork">{{
+            isZh ? '重试' : 'Retry'
+          }}</t-button>
+        </div>
+      </section>
+    </main>
+    <main v-else-if="currentWork && currentWork.architecture_version !== 2" class="workspace-container">
+      <section class="work-load-error">
+        <h1>{{ currentWork.title || '历史项目' }}</h1>
+        <p>此项目使用旧版工作区，仅支持导出资料、源码、论文、成果和可读研究记录。</p>
+        <p>如需继续研究，请新建项目并上传旧资料；旧执行状态不会恢复。</p>
+        <t-button theme="primary" @click="exportWorkspace()">下载项目资料</t-button>
+      </section>
+    </main>
+    <main v-else class="workspace-container">
+      <header class="workspace-header">
+        <div class="work-heading">
           <div class="work-title-row">
-            <h1>
-              <span v-if="currentWork.title && currentWork.title.trim()">{{
-                currentWork.title
-              }}</span>
-              <t-loading v-else size="small" text="生成中" />
-            </h1>
-            <t-tag :theme="getStatusTheme(currentWork.status)" variant="light">
-              {{ getStatusText(currentWork.status) }}
-            </t-tag>
-            <p v-if="!isMobile">生成过程中请耐心等待！</p>
+            <h1>{{ currentWork?.title?.trim() || ui.untitled }}</h1>
           </div>
-          <p v-if="!isMobile">创建于 {{ formatDate(currentWork.created_at) }}</p>
+          <div class="work-context" aria-live="polite">
+            <span
+              :class="[
+                'live-dot',
+                {
+                  running: isStreaming,
+                  attention: needsRecovery,
+                  complete: currentWork?.status === 'completed',
+                },
+              ]"
+            />
+            <span class="work-context-text">{{ stageText }}</span>
+            <span v-if="elapsedText" class="elapsed">{{ elapsedText }}</span>
+            <span v-if="connectionState === 'reconnecting'" class="connection-state">{{
+              ui.reconnect
+            }}</span>
+            <button v-if="connectionState === 'lost'" class="text-action" @click="reconnectTask">
+              {{ ui.reconnect }}
+            </button>
+          </div>
         </div>
-        <div v-if="!isMobile" class="work-actions">
-          <t-button
-            theme="primary"
-            variant="outline"
-            size="middle"
-            @click="exportWorkspace"
-            :loading="exportLoading"
+        <div class="work-actions">
+          <button
+            class="progress-trigger"
+            :aria-label="isZh ? '查看研究进度' : 'View research progress'"
+            @click="openProgress"
           >
-            <template #icon>
-              <t-icon name="download" />
-            </template>
-            导出文件
+            <t-icon name="task" />
+            <span>{{ isZh ? '研究进度' : 'Research progress' }}</span>
+            <span v-if="researchSnapshot?.experiments?.length" class="progress-count"
+              >{{ acceptedTaskCount }}/{{ researchSnapshot.questions?.length || 0 }}
+              {{ isZh ? '已有结果' : 'reviewed' }}</span
+            >
+          </button>
+          <button
+            class="progress-trigger"
+            @click="openPanel('files', isMobile ? 'main' : 'secondary')"
+          >
+            <t-icon name="folder-open" />{{ isZh ? '文件' : 'Files' }}
+          </button>
+          <button class="progress-trigger" @click="handleMainPaperClick">
+            {{ isZh ? '论文' : 'Paper' }}
+          </button>
+          <t-button
+            v-if="primaryAction"
+            class="work-primary-action"
+            theme="primary"
+            :title="primaryAction.title"
+            :loading="pausing || downloadLoading"
+            :disabled="loading"
+            @click="handlePrimaryAction"
+          >
+            <template #icon><t-icon :name="primaryAction.icon" /></template>
+            {{ primaryAction.label }}
           </t-button>
-          <t-button theme="danger" variant="outline" size="middle" @click="deleteWork">
-            <template #icon>
-              <t-icon name="delete" />
-            </template>
-            删除
-          </t-button>
+          <t-dropdown :options="workActionOptions" trigger="click"
+            ><t-button theme="default" variant="outline" shape="square" :aria-label="ui.more"
+              ><t-icon name="more" /></t-button
+          ></t-dropdown>
         </div>
-        <t-dropdown v-else :options="mobileWorkActionOptions" trigger="click">
-          <t-button theme="default" variant="text" shape="square">
-            <t-icon name="more" />
-          </t-button>
-        </t-dropdown>
-      </div>
-
-      <div class="workspace-header" v-else>
-        <h1>论文生成工作区</h1>
-        <p>正在加载工作信息...</p>
-      </div>
-
-      <div class="workspace-content" :class="{ 'is-mobile': isMobile }">
-        <div class="chat-section" v-show="!isMobile || activeMobilePanel === 'chat'">
-          <div class="chat-container">
-            <div class="chat-messages-container">
-              <JsonChatRenderer :messages="chatMessages" />
-            </div>
-            <div class="chat-bottom-section">
-              <FileManager
-                v-if="!isMobile"
-                :work-id="workId"
-                :loading="loading"
-                :file-tree-data="workspaceFiles"
-                :plan-data="planData"
-                @file-select="handleWorkspaceFileSelect"
-                @refresh="handleFileRefresh"
-                @main-paper-click="handleMainPaperClick"
-              />
-              <div class="chat-input">
-                <ChatSender
-                  v-model="inputValue"
-                  placeholder="请输入您的问题..."
-                  @send="sendMessage"
-                  @file-select="handleFileSelect"
-                  :disabled="isStreaming"
-                >
-                  <template #suffix="{ renderPresets }">
-                    <component :is="renderPresets([{ name: 'uploadAttachment' }])" />
-                  </template>
-                </ChatSender>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div
-          v-if="isMobile"
-          class="files-section"
-          v-show="activeMobilePanel === 'files'"
-        >
-          <FileManager
-            fill-height
-            :work-id="workId"
-            :loading="loading"
-            :file-tree-data="workspaceFiles"
-            :plan-data="planData"
-            @file-select="handleWorkspaceFileSelect"
-            @refresh="handleFileRefresh"
-            @main-paper-click="handleMainPaperClick"
-          />
-        </div>
-
-        <div class="preview-section" v-show="!isMobile || activeMobilePanel === 'preview'">
-          <!-- 主要论文显示 -->
-          <div v-if="showMainPaper && mainPaperContent">
-            <t-card title="主要论文">
-              <template #actions>
-                <t-button size="small" variant="text" @click="showMainPaper = false">
-                  <template #icon>
-                    <t-icon name="close" />
-                  </template>
-                </t-button>
-              </template>
-              <div class="paper-preview">
-                <MarkdownRenderer
-                  :content="mainPaperContent"
+      </header>
+      <WorkPaneLayout
+        :session="panelSession"
+        :panels="displayPanels"
+        :options="panelOptions"
+        :stacked="stackedPanes"
+        @select="(id) => panelStore.activate(workId, id)"
+        @close="(id) => panelStore.close(workId, id)"
+        @open="openPanel"
+        @move="(id, group, before) => panelStore.move(workId, id, group, before)"
+        @split="(id, edge) => panelStore.split(workId, id, edge)"
+        @ratio="(ratio) => (panelSession.splitRatio = ratio)"
+        @focus="(group) => (panelSession.focusedGroup = group)"
+      >
+        <template #default="{ panel, active }">
+          <section v-if="panel.kind === 'chat'" class="chat-section">
+            <div class="chat-container">
+              <div class="chat-messages-container" @scroll.capture="trackChatScroll">
+                <div v-if="loading && !chatMessages.length" class="chat-loading">
+                  <t-loading :text="ui.loading" />
+                </div>
+                <JsonChatRenderer
                   :work-id="workId"
-                  :base-path="'papers'"
+                  v-else
+                  :messages="chatMessages"
+                  :tasks="researchSnapshot?.experiments"
+                  :snapshot="researchSnapshot"
+                  :work-status="currentWork?.status"
+                  @open-progress="openProgress"
+                  @confirm-plan="replyToResearch"
+                  :confirm-busy="isStreaming || loading"
+                  @open-result="
+                    (id) => openObject({ type: 'result', resultType: 'registered', id })
+                  "
+                  @open-file="handleWorkspaceFileSelect"
                 />
+                <button v-if="!atBottom && isStreaming" class="jump-latest" @click="jumpToLatest">
+                  <t-icon name="arrow-down" />{{ isZh ? '查看最新进展' : 'Latest progress' }}
+                </button>
               </div>
-            </t-card>
-          </div>
-          <!-- 普通文件预览 -->
-          <div v-else-if="selectedFile">
-            <t-card :title="`文件预览: ${selectedFile}`">
-              <div class="file-preview">
-                <!-- 加载状态 -->
-                <div v-if="!currentFileData" class="loading-container">
-                </div>
-                <!-- 文本文件预览 -->
-                <div v-else-if="currentFileData.type === 'text'" class="text-preview">
-                  <CodeHighlight v-if="selectedFile.endsWith('.py')" :code="currentFileContent" language="python" />
-                  <MarkdownRenderer
-                    v-else-if="selectedFile.endsWith('.md')"
-                    :content="currentFileContent"
-                    :work-id="workId"
-                    :base-path="selectedFile.substring(0, selectedFile.lastIndexOf('/'))"
+              <div class="chat-input">
+                <form class="work-composer" @submit.prevent="sendMessage()">
+                  <div v-if="paperContexts.length" class="paper-composer-quotes">
+                    <div
+                      v-for="(context, index) in paperContexts"
+                      :key="index"
+                      class="paper-composer-quote"
+                    >
+                      <span>引用 {{ index + 1 }}</span>
+                      <button
+                        type="button"
+                        :aria-label="`移除引用 ${index + 1}`"
+                        @click="paperContexts.splice(index, 1)"
+                      >
+                        ×
+                      </button>
+                      <blockquote>{{ context.quote }}</blockquote>
+                    </div>
+                  </div>
+                  <p v-if="paperCommentError" role="alert">{{ paperCommentError }}</p>
+                  <p v-if="intentConfigChecking" role="status">
+                    {{ isZh ? '正在读取 Jev 配置' : 'Reading Jev configuration' }}
+                  </p>
+                  <p v-if="intentConfigMessage" role="alert">
+                    {{ intentConfigMessage }}
+                    <router-link to="/api-config">{{
+                      isZh ? '打开模型设置' : 'Open model settings'
+                    }}</router-link>
+                  </p>
+                  <t-textarea
+                    v-model="inputValue"
+                    :placeholder="ui.inputHint"
+                    :aria-label="isZh ? '研究消息' : 'Research message'"
+                    :autosize="{ minRows: 1, maxRows: 6 }"
+                    :disabled="isStreaming || paperSending || loading"
+                    class="work-message-input"
+                    @keydown="handleComposerKeydown"
                   />
-                  <pre v-else>{{ currentFileContent }}</pre>
+                  <div class="composer-controls">
+                    <button
+                      v-if="questionScope"
+                      type="button"
+                      class="question-scope"
+                      @click="questionScope = null"
+                    >
+                      {{
+                        researchSnapshot?.questions?.find((q) => q.id === questionScope)?.title ||
+                        researchSnapshot?.experiments?.find((e) => e.task_id === questionScope)
+                          ?.title ||
+                        '当前引用范围'
+                      }}<t-icon name="close" />
+                    </button>
+                    <input
+                      ref="chatFileInput"
+                      type="file"
+                      hidden
+                      @change="handleAttachmentChange"
+                    />
+                    <t-button
+                      theme="default"
+                      variant="text"
+                      shape="circle"
+                      :disabled="isStreaming || paperSending || loading"
+                      :aria-label="isZh ? '添加附件' : 'Add attachment'"
+                      @click="chatFileInput?.click()"
+                      ><t-icon name="attach"
+                    /></t-button>
+                    <t-button
+                      type="submit"
+                      theme="primary"
+                      shape="circle"
+                      :loading="intentConfigChecking"
+                      :disabled="isStreaming || paperSending || loading || !inputValue.trim()"
+                      :aria-label="isZh ? '发送消息' : 'Send message'"
+                      ><template #icon><t-icon name="arrow-up" /></template
+                    ></t-button>
+                  </div>
+                </form>
+                <div
+                  v-if="researchSnapshot?.has_research"
+                  class="model-usage"
+                  aria-label="会话累计模型用量"
+                >
+                  <span
+                    :title="`会话累计输入 ${modelUsage?.input_tokens?.toLocaleString() ?? '—'} tokens`"
+                    >输入 {{ formatTokens(modelUsage?.input_tokens) }}</span
+                  >
+                  <span
+                    :title="`会话累计输出 ${modelUsage?.output_tokens?.toLocaleString() ?? '—'} tokens`"
+                    >输出 {{ formatTokens(modelUsage?.output_tokens) }}</span
+                  >
+                  <span
+                    title="会话平均 TPS：全部已完成请求的输出 token / 累计请求耗时，包含等待与推理时间"
+                    >TPS {{ modelUsage?.tps?.toFixed(1) ?? '—' }}</span
+                  >
+                  <span
+                    title="缓存输入 token / 输入 token；仅统计网关返回缓存计数的请求，旧记录未保存或网关未提供时无法计算"
+                    >缓存
+                    {{
+                      modelUsage?.cache_hit_rate == null
+                        ? '暂无统计'
+                        : (modelUsage.cache_hit_rate * 100).toFixed(1) + '%'
+                    }}</span
+                  >
                 </div>
-                <!-- 图片文件预览 -->
-                <div v-else-if="currentFileData.type === 'image'" class="image-preview">
+              </div>
+            </div>
+          </section>
+          <section
+            v-else-if="panel.kind === 'progress'"
+            class="progress-panel"
+            @scroll.capture="rememberPanelScroll('progress', $event)"
+          >
+            <ResearchStatus
+              :work-id="workId"
+              :snapshot="researchSnapshot"
+              :work-status="currentWork?.status"
+              :stage="stageText"
+              :running="isStreaming"
+              :action-label="primaryAction?.label"
+              :action-busy="loading || pausing || downloadLoading"
+              @action="handlePrimaryAction"
+              @object="openObject"
+              @issue="openIssueEditor"
+              @resolved="refreshPaper"
+              @revise="preparePlanRevision"
+              @ask="askSubproblem"
+              @pause="pauseTask"
+            />
+          </section>
+          <ResearchResultViewer
+            v-else-if="panel.kind === 'result'"
+            :work-id="workId"
+            :result-type="panel.resultType || 'registered'"
+            :result-id="panel.resultId || ''"
+            :snapshot="researchSnapshot"
+            @issue="openIssueEditor"
+            @paper="openEvidenceUse"
+            @experiment="(id) => openObject({ type: 'result', resultType: 'experiment', id })"
+            @open-file="handleWorkspaceFileSelect"
+          />
+          <section
+            v-else-if="panel.kind === 'files'"
+            class="files-section"
+            @scroll.capture="rememberPanelScroll('files', $event)"
+          >
+            <FileManager
+              fill-height
+              :work-id="workId"
+              :loading="loading || isFileRefreshing"
+              :file-tree-data="workspaceFiles"
+              @file-select="handleWorkspaceFileSelect"
+              @refresh="handleFileRefresh"
+              @main-paper-click="handleMainPaperClick"
+            />
+          </section>
+          <section
+            v-else-if="panel.kind === 'figures'"
+            ref="figureScroller"
+            class="figures-panel"
+            @scroll="rememberPanelScroll('figures', $event)"
+          >
+            <div v-if="!figureFiles.length" class="studio-empty">
+              <t-icon name="chart-line" size="32px" />
+              <h2>{{ ui.noFigures }}</h2>
+              <p>{{ ui.noFiguresHint }}</p>
+            </div>
+            <div v-else class="figure-grid">
+              <div v-for="figure in figureFiles" :key="figure.path" class="figure-card">
+                <button class="figure-open" @click="handleWorkspaceFileSelect(figure.path)">
                   <img
-                    v-if="imageUrls[selectedFile]"
-                    :src="imageUrls[selectedFile]"
-                    :alt="selectedFile"
-                    style="max-width: 100%; height: auto"
+                    v-if="imageUrls[figure.path]"
+                    :src="imageUrls[figure.path]"
+                    :alt="figure.name"
                   />
-                  <div v-else class="loading-image">正在加载图片...</div>
-                </div>
-                <!-- 二进制文件信息 -->
-                <div v-else-if="currentFileData.type === 'binary'" class="binary-preview">
-                  <!-- DOCX文件使用DocxViewer预览 -->
-                  <DocxViewer
-                    v-if="isDocxFile(selectedFile)"
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                  <!-- 其他二进制文件使用BinaryFileViewer -->
-                  <BinaryFileViewer
-                    v-else
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                </div>
-                <!-- 未知文件类型 - 使用 BinaryFileViewer 统一处理 -->
-                <div v-else-if="currentFileData" class="binary-preview">
-                  <!-- DOCX文件使用DocxViewer预览 -->
-                  <DocxViewer
-                    v-if="isDocxFile(selectedFile)"
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                  <!-- 其他文件使用BinaryFileViewer -->
-                  <BinaryFileViewer
-                    v-else
-                    :file-info="currentFileData"
-                    :work-id="workId"
-                    :token="authStore.token || ''"
-                  />
-                </div>
-                <div v-else class="no-preview">
-                  <t-icon name="file" size="48px" />
-                  <p>文件信息加载中...</p>
-                </div>
+                  <div v-else class="figure-placeholder"><t-icon name="image" /></div>
+                  <span>{{ figure.name }}</span>
+                </button>
+                <button
+                  @click.stop="askPaper(`请解释图表 ${figure.path} 的数据、计算依据和局限。`)"
+                >
+                  {{ isZh ? '追问依据' : 'Ask about evidence' }}
+                </button>
               </div>
-            </t-card>
-          </div>
-
-          <div v-else-if="currentWork">
-            <t-card title="工作信息">
-              <div class="work-details">
-                <p><strong>标题：</strong>{{ currentWork.title }}</p>
-                <p><strong>描述：</strong>{{ currentWork.description || '暂无描述' }}</p>
-                <p><strong>标签：</strong>{{ currentWork.tags || '无标签' }}</p>
-                <p><strong>状态：</strong>{{ getStatusText(currentWork.status) }}</p>
-                <p>
-                  <strong>输出格式：</strong>
-                  <t-tag :theme="getOutputModeTheme(currentWork.output_mode)" variant="light" size="small">
-                    <template #icon>
-                      <t-icon :name="getOutputModeIcon(currentWork.output_mode)" />
-                    </template>
-                    {{ getOutputModeText(currentWork.output_mode) }}
-                  </t-tag>
-                </p>
-                <p>
-                  <strong>模板：</strong
-                  >{{
-                    currentWork.template_id ? `模板ID: ${currentWork.template_id}` : '未选择模板'
-                  }}
-                </p>
-              </div>
-            </t-card>
-          </div>
-
-          <div v-else>
-            <t-card title="论文展示区">
-              <div class="pdf-info">
-                <p>与AI对话生成论文内容后，将在此处预览生成的论文。</p>
-                <p>{{ isMobile ? '在文件页中点击文件可查看具体内容。' : '在左侧文件管理器中点击文件可查看具体内容。' }}</p>
-              </div>
-            </t-card>
-          </div>
-        </div>
-      </div>
-
-      <nav v-if="isMobile" class="mobile-tab-bar" aria-label="工作区导航">
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'chat' }"
-          @click="activeMobilePanel = 'chat'"
-        >
-          <t-icon name="chat" />
-          <span>对话</span>
-        </button>
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'files' }"
-          @click="activeMobilePanel = 'files'"
-        >
-          <t-icon name="folder-open" />
-          <span>文件</span>
-        </button>
-        <button
-          type="button"
-          class="mobile-tab"
-          :class="{ active: activeMobilePanel === 'preview' }"
-          @click="activeMobilePanel = 'preview'"
-        >
-          <t-icon name="browse" />
-          <span>预览</span>
-        </button>
-      </nav>
-    </div>
+            </div>
+          </section>
+          <PaperEditor
+            :title="currentWork?.title"
+            :owner-id="authStore.currentUser?.id"
+            v-else-if="panel.kind === 'paper' && researchSnapshot?.has_research"
+            :snapshot="researchSnapshot"
+            :active="active"
+            :work-id="workId"
+            :latex="currentWork?.output_mode === 'latex'"
+            :refresh-key="(researchSnapshot?.commit_seq || 0) + paperRefresh"
+            :disabled="isStreaming"
+            @open-file="handleWorkspaceFileSelect"
+            :citation-request="citationRequest"
+            :evidence-request="evidenceRequest"
+            :issue-request="issueRequest"
+            @updated="refreshPaper"
+            @quote="attachPaperQuote"
+            @ask="askPaper"
+            @research="revisePaper"
+          />
+          <WorkDocument
+            v-if="
+              panel.kind === 'file' || (panel.kind === 'paper' && !researchSnapshot?.has_research)
+            "
+            :key="`${workId}:${panel.id}`"
+            :work-id="workId"
+            :path="panel.path || paperPath"
+            :paper="panel.kind === 'paper'"
+            :available="panel.kind !== 'paper' || paperAvailable"
+            :fallback-path="primaryArtifact?.path"
+            :latex-source="workspaceFiles.some((file) => file.path === 'paper.tex')"
+            :active="active"
+            :scroll-top="panelSession.scroll[panel.id] || 0"
+            :refresh-key="researchSnapshot?.commit_seq"
+            @scroll-position="(top) => (panelSession.scroll[panel.id] = top)"
+            @open-file="handleWorkspaceFileSelect"
+            @open-files="openFiles"
+          />
+        </template>
+      </WorkPaneLayout>
+    </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
-import { MessagePlugin } from 'tdesign-vue-next';
-import { ChatItem, ChatSender } from '@tdesign-vue-next/chat';
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { paperProjectAPI, type PaperComposerContext } from '@/api/paper'
+import { workspaceAPI } from '@/api/workspace'
+import { modelConfigAPI } from '@/api/modelConfig'
+import { useAuthStore } from '@/stores/auth'
+import { useWorkHistoryStore } from '@/stores/workHistory'
+import Sidebar from '@/components/Sidebar.vue'
+import FileManager from '@/components/FileManager.vue'
+import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
+import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
+import WorkDocument from '@/components/WorkDocument.vue'
+import PaperEditor from '@/components/PaperEditor.vue'
+import ResearchStatus from '@/components/ResearchStatus.vue'
+import ResearchResultViewer from '@/components/ResearchResultViewer.vue'
+import { useWorkSession } from '@/composables/useWorkSession'
+import { useWorkStream } from '@/composables/useWorkStream'
+import { useArtifactPreview } from '@/composables/useArtifactPreview'
+import { useWorkLayout } from '@/composables/useWorkLayout'
+import { useWorkAttachments } from '@/composables/useWorkAttachments'
+import { useStudioCopy } from '@/lang/studio'
 
-import { useAuthStore } from '@/stores/auth';
-import { workspaceAPI, workspaceFileAPI, attachmentAPI, type Work, type FileInfo, type PlanData, type PlanItemStatus } from '@/api/workspace';
-import { chatAPI, WebSocketChatHandler, type ChatMessage, type ChatSessionResponse, type ChatSessionCreateRequest } from '@/api/chat';
-import Sidebar from '@/components/Sidebar.vue';
-import FileManager from '@/components/FileManager.vue';
-import { useBreakpoint } from '@/composables/useBreakpoint';
-import JsonChatRenderer from '@/components/JsonChatRenderer.vue';
-import CodeHighlight from '@/components/CodeHighlight.vue';
-import MarkdownRenderer from '@/components/MarkdownRenderer.vue';
-import BinaryFileViewer from '@/components/BinaryFileViewer.vue';
-import DocxViewer from '@/components/DocxViewer.vue';
-
-const route = useRoute();
-const router = useRouter();
-const authStore = useAuthStore();
-const workId = computed(() => route.params.work_id as string);
-
-const { isMobile } = useBreakpoint()
-
-// 侧边栏折叠状态 - 手机端默认收起
-const isSidebarCollapsed = ref(isMobile.value)
-
-type MobilePanel = 'chat' | 'files' | 'preview'
-const activeMobilePanel = ref<MobilePanel>('chat')
-
-watch(isMobile, (mobile) => {
-  if (mobile) {
-    isSidebarCollapsed.value = true
-  }
+const { ui, isZh } = useStudioCopy()
+const route = useRoute(),
+  router = useRouter()
+const authStore = useAuthStore(),
+  historyStore = useWorkHistoryStore()
+// The keyed route gives each work its own lifetime, including in-flight requests.
+const workId = ref(route.params.work_id as string)
+const session = useWorkSession(workId)
+const {
+  currentWork,
+  loading,
+  loadError,
+  loadErrorText,
+  researchSnapshot,
+  applyResearchSnapshot,
+} = session
+const layout = useWorkLayout(workId, researchSnapshot)
+const {
+  panelStore,
+  panelSession,
+  isMobile,
+  stackedPanes,
+  isSidebarCollapsed,
+  toggleSidebar,
+  inputValue,
+  atBottom,
+  figureScroller,
+  displayPanels,
+  panelOptions,
+  openProgress,
+  openObject,
+  openPanel,
+  rememberPanelScroll,
+  openFiles,
+  handleMainPaperClick,
+  handleWorkspaceFileSelect,
+  trackChatScroll,
+  jumpToLatest,
+} = layout
+const artifacts = useArtifactPreview({
+  workId,
+  currentWork,
+  researchSnapshot,
+  figuresVisible: layout.figuresVisible,
 })
-
-const mobileWorkActionOptions = [
-  {
-    content: '导出文件',
-    value: 'export',
-    onClick: () => exportWorkspace(),
-  },
-  {
-    content: '删除',
-    value: 'delete',
-    theme: 'error',
-    onClick: () => deleteWork(),
-  },
-]
-
-// 当前工作信息
-const currentWork = ref<Work | null>(null)
-
-// 加载状态
-const loading = ref(false)
-
-// 定义聊天消息类型（使用API中的类型）
-interface ChatMessageDisplay extends ChatMessage {
+const {
+  workspaceFiles,
+  imageUrls,
+  isFileRefreshing,
+  downloadLoading,
+  primaryArtifact,
+  paperAvailable,
+  paperPath,
+  downloadLabel,
+  figureFiles,
+  downloadArtifact,
+  exportWorkspace,
+} = artifacts
+// Metadata arrives after cached panes mount; restore scroll once their content is rendered.
+watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
+const issueRequest = ref<{ id: string; at: number } | null>(null)
+const modelUsage = computed(() => researchSnapshot.value?.runtime?.usage)
+const formatTokens = (value?: number | null) => {
+  if (value == null) return '—'
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`
+  return String(value)
 }
-
-// 聊天消息数据
-const chatMessages = ref<ChatMessageDisplay[]>([])
-
-// 输入框内容
-const inputValue = ref('')
-
-// 分割线悬停状态
-const hoveredDivider = ref<number | null>(null)
-
-// 文件管理器状态
-const selectedFile = ref<string | null>(null)
-
-// 文件内容映射
-const currentFileContent = ref('')
-const currentFileName = ref('')
-const currentFileData = ref<any>(null) // 存储完整的文件响应数据
-
-// 图片URL缓存
-const imageUrls = ref<Record<string, string>>({})
-
-// 主要论文内容
-const mainPaperContent = ref<string>('')
-const showMainPaper = ref(false)
-
-const planData = ref<PlanData | null>(null)
-
-// 导出状态
-const exportLoading = ref(false)
-
-// 工作空间文件列表
-const workspaceFiles = ref<FileInfo[]>([])
-
-// 当前选中的历史工作ID
-const activeHistoryId = ref<number | null>(null)
-
-// 聊天相关状态
-const currentChatSession = ref<ChatSessionResponse | null>(null)
-const isStreaming = ref(false)
-const webSocketHandler = ref<WebSocketChatHandler | null>(null)
-const isFileRefreshing = ref(false) // 防止重复刷新文件列表
-
-// 加载工作信息
-const loadWork = async () => {
-  if (!workId.value || !authStore.token) return
-
-  loading.value = true
-  try {
-    const work = await workspaceAPI.getWork(authStore.token, workId.value)
-    currentWork.value = work
-
-    // 设置当前选中的历史工作
-    activeHistoryId.value = work.id
-
-    // 加载工作空间文件
-    await loadWorkspaceFiles()
-
-    // 加载写作计划
-    await loadPlanContent()
-    await initializeChatSession()
-
-    // 检查并自动发送第一句话
-    await checkAndAutoSendFirstMessage()
-  } catch (error) {
-    console.error('加载工作信息失败:', error)
-    MessagePlugin.error('加载工作信息失败')
-  } finally {
-    loading.value = false
-  }
+const evidenceRequest = ref<{ section: string; section_version: string; at: number } | null>(null)
+function openEvidenceUse(use: { section: string; section_version: string }) {
+  evidenceRequest.value = { ...use, at: Date.now() }
+  openPanel('paper', isMobile.value ? 'main' : 'secondary')
 }
-
-// 初始化聊天会话（重构后简化）
-const initializeChatSession = async () => {
-  if (!authStore.token || !workId.value) return
-
-  try {
-    // 直接使用新API加载聊天历史
-    await loadChatHistory()
-
-    // 创建虚拟的session对象（兼容旧逻辑）
-    currentChatSession.value = {
-      id: 1,
-      session_id: `${workId.value}_main_session`,
-      work_id: workId.value,
-      system_type: 'brain',
-      title: '主会话',
-      status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      created_by: 0,
-      total_messages: chatMessages.value.length,
-    }
-
-    // 检查是否有正在进行的AI任务（断线重连场景）
-    await checkAndResumeRunningTask()
-  } catch (error) {
-    console.error('初始化聊天会话失败:', error)
-    // 如果加载失败，创建空的session
-    currentChatSession.value = {
-      id: 1,
-      session_id: `${workId.value}_main_session`,
-      work_id: workId.value,
-      system_type: 'brain',
-      title: '主会话',
-      status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      created_by: 0,
-      total_messages: 0,
-    }
-  }
+function openRegisteredEvidence(event: Event) {
+  const detail = (event as CustomEvent).detail
+  if (detail?.workId !== workId.value || !/^[RF][1-9]\d*$/.test(detail?.resultId || '')) return
+  openObject({ type: 'result', resultType: 'registered', id: detail.resultId })
 }
-
-// 当前恢复任务的消息ID
-const reconnectMessageId = ref<string | null>(null)
-
-// 检查并恢复正在进行的AI任务
-const checkAndResumeRunningTask = async () => {
-  if (!authStore.token || !workId.value) return
-
-  try {
-    // 查询任务状态
-    const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
-    
-    if (taskStatus.has_task && taskStatus.status === 'running') {
-      console.log('检测到正在进行的AI任务，准备恢复...', taskStatus)
-      
-      // 设置流式状态
-      isStreaming.value = true
-      
-      // 创建AI回复消息框架
-      const aiMessageId = `reconnect_${Date.now()}`
-      reconnectMessageId.value = aiMessageId
-      
-      const aiMessage: ChatMessageDisplay = {
-        id: aiMessageId,
-        role: 'assistant' as const,
-        content: '',
-        datetime: new Date().toLocaleString(),
-        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-        isStreaming: true,
-        json_blocks: [],
-        message_type: 'json_card' as const,
-      }
-      chatMessages.value.push(aiMessage)
-      
-      // 建立WebSocket连接恢复流式输出
-      await setupWebSocketForReconnect()
-    }
-  } catch (error) {
-    console.error('检查任务状态失败:', error)
-  }
-}
-
-// 为重连建立WebSocket连接
-const setupWebSocketForReconnect = async () => {
-  // 如果已有连接，先断开
-  if (webSocketHandler.value) {
-    webSocketHandler.value.disconnect()
-    webSocketHandler.value = null
-  }
-  
-  try {
-    webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
-    
-    // 设置重连回调
-    webSocketHandler.value.onReconnect((data) => {
-      console.log('重连事件:', data)
-      if (data.type === 'reconnect') {
-        MessagePlugin.info('正在恢复AI任务输出...')
-      } else if (data.type === 'reconnect_complete') {
-        MessagePlugin.success('历史输出恢复完成，继续接收...')
-      }
-    })
-    
-    // 设置消息监听 - 使用统一的消息处理
-    webSocketHandler.value.onMessage((data) => {
-      if (reconnectMessageId.value) {
-        handleStreamMessage(data, reconnectMessageId.value)
-      }
-    })
-    
-    // 设置断开回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接断开')
-      // 不立即重置 isStreaming，可能是临时断开
-    })
-    
-    // 连接WebSocket
-    await webSocketHandler.value.connect()
-    console.log('WebSocket重连成功')
-    
-  } catch (error) {
-    console.error('恢复WebSocket连接失败:', error)
-    isStreaming.value = false
-    reconnectMessageId.value = null
-    MessagePlugin.error('恢复AI任务失败')
-  }
-}
-
-// 统一的流式消息处理函数
-const handleStreamMessage = (data: any, messageId: string) => {
-  const messageIndex = chatMessages.value.findIndex((m) => m.id === messageId)
-  if (messageIndex === -1) return
-  
-  const currentMessage = chatMessages.value[messageIndex]
-  if (!currentMessage) return
-
-  switch (data.type) {
-    case 'content':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content + data.content,
-      }
-      break
-
-    case 'json_block':
-      const block = data.block
-      
-      if (block?.type === 'file_changed') {
-        setTimeout(() => loadWorkspaceFiles(), 500)
-      } else if (block?.type === 'plan_updated') {
-        if (block.content && typeof block.content === 'object') {
-          planData.value = block.content as PlanData
-        } else {
-          planData.value = markdownPlanToData(String(block.content || ''))
-        }
-      } else {
-        chatMessages.value[messageIndex] = {
-          ...currentMessage,
-          json_blocks: [...(currentMessage.json_blocks || []), block],
-          message_type: 'json_card' as const,
-        }
-      }
-      break
-
-    case 'complete':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        isStreaming: false,
-      }
-      isStreaming.value = false
-      reconnectMessageId.value = null
-      // 刷新文件列表
-      loadWorkspaceFiles()
-      break
-
-    case 'error':
-      chatMessages.value[messageIndex] = {
-        ...currentMessage,
-        content: currentMessage.content || `错误: ${data.message}`,
-        isStreaming: false,
-      }
-      isStreaming.value = false
-      reconnectMessageId.value = null
-      break
-  }
-
-  // 自动滚动
-  scrollToBottom()
-}
-
-// 重构后不再需要显式创建聊天会话，MainAgent会自动处理
-
-// 自动滚动到底部
-const scrollToBottom = () => {
-  nextTick(() => {
-    const chatContainer = document.querySelector('.chat-messages')
-    if (chatContainer) {
-      chatContainer.scrollTop = chatContainer.scrollHeight
-    }
-  })
-}
-
-// 加载聊天历史（使用新API）
-const loadChatHistory = async () => {
-  if (!authStore.token || !workId.value) return
-
-  try {
-    // 使用新的work聊天历史API
-    const historyData = await chatAPI.getWorkChatHistory(authStore.token, workId.value)
-
-    // 转换消息格式
-    chatMessages.value = historyData.messages.map((msg, index) => {
-      return {
-        id: msg.id || `msg_${index}`,
-        role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
-        content: msg.content,
-        datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
-        avatar: getAvatarByRole(msg.role),
-        json_blocks: msg.json_blocks || [],
-        message_type: msg.message_type || 'text',
-        isStreaming: false,
-      }
-    })
-
-    // 加载完聊天历史后自动滚动到底部
-    scrollToBottom()
-  } catch (error) {
-    console.error('加载聊天历史失败:', error)
-    // 如果加载失败，初始化为空数组
-    chatMessages.value = []
-  }
-}
-
-// 加载工作空间文件（带防抖）
-let lastFileUpdateTime = 0
-const loadWorkspaceFiles = async () => {
-  if (!workId.value || !authStore.token) return
-  
-  const now = Date.now()
-  if (isFileRefreshing.value || (now - lastFileUpdateTime < 1000)) {
+function openIssueEditor(id: string) {
+  const issue = researchSnapshot.value?.feedback?.find((i) => i.id === id)
+  if (issue && !issue.section) {
+    openObject({ type: 'result', resultType: 'experiment', id: issue.task_id })
     return
   }
-
-  try {
-    isFileRefreshing.value = true
-    loading.value = true
-    lastFileUpdateTime = now
-
-    const files = await workspaceFileAPI.listFiles(authStore.token, workId.value)
-    console.log('Loaded workspace files:', files)
-    workspaceFiles.value = files
-  } catch (error) {
-    console.error('加载工作空间文件失败:', error)
-    MessagePlugin.error('加载工作空间文件失败')
-    workspaceFiles.value = []
-  } finally {
-    loading.value = false
-    isFileRefreshing.value = false
-  }
+  issueRequest.value = { id, at: Date.now() }
+  openPanel('paper', isMobile.value ? 'main' : 'secondary')
 }
-
-// 处理主要论文点击
-const handleMainPaperClick = async () => {
-  if (!workId.value || !authStore.token) return
-
-  try {
-    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'paper.md')
-    mainPaperContent.value = response.content || ''
-    showMainPaper.value = true
-    selectedFile.value = 'paper.md'
-    if (isMobile.value) {
-      activeMobilePanel.value = 'preview'
+const citationRequest = ref<{ id: string; at: number } | null>(null)
+function citeLiterature(id: string) {
+  citationRequest.value = { id, at: Date.now() }
+  openPanel('paper', isMobile.value ? 'main' : 'secondary')
+}
+function openLiteratureEvidence(event: Event) {
+  const detail = (event as CustomEvent).detail
+  if (detail?.workId !== workId.value || !/^C[1-9]\d*$/.test(detail?.evidenceId || '')) return
+  citeLiterature(detail.evidenceId)
+}
+async function refreshPaper() {
+  await stream.refreshResources(['research', 'files'])
+}
+function askPaper(message: string, task?: string) {
+  questionScope.value = task || null
+  layout.activateChat()
+  sendMessage(message, 'ask')
+}
+function revisePaper(
+  message: string,
+  task?: string,
+  sourceIssue?: { id: string; version: string },
+) {
+  questionScope.value = task || null
+  layout.activateChat()
+  sendMessage(message, 'revise_research', sourceIssue)
+}
+function preparePlanRevision(message: string, task: string) {
+  questionScope.value = task
+  layout.activateChat()
+  return sendMessage(message, 'revise_research')
+}
+const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
+const {
+  chatMessages,
+  isStreaming,
+  runningAction,
+  questionScope,
+  askSubproblem,
+  pausing,
+  connectionState,
+  needsRecovery,
+  recoveryUnavailable,
+  canResume,
+  recoveryHint,
+  prepareNewResearch,
+  stageText,
+  elapsedText,
+  pauseTask,
+  reconnectTask,
+  sendMessage: streamSendMessage,
+  handleStreamMessage,
+} = stream
+const paperContexts = ref<PaperComposerContext[]>([])
+const intentConfigMessage = ref(''),
+  intentConfigChecking = ref(false)
+const paperSubmitting = ref(false),
+  paperCommentError = ref(''),
+  paperRefresh = ref(0)
+let paperRequest: { signature: string; id: string } | null = null
+watch(workId, () => {
+  paperContexts.value = []
+  paperRequest = null
+  paperCommentError.value = ''
+})
+const paperSending = computed(
+  () => paperSubmitting.value || chatMessages.value.some((m) => m.paper_execution && m.isStreaming),
+)
+async function attachPaperQuote(context: PaperComposerContext) {
+  if (context.work_id !== workId.value) return
+  if (paperContexts.value.some((item) => JSON.stringify(item) === JSON.stringify(context))) return
+  if (paperContexts.value.length >= 24) {
+    paperCommentError.value = '一次最多添加 24 条引用。'
+    return
+  }
+  paperContexts.value.push(context)
+  paperCommentError.value = ''
+  layout.activateChat()
+  await nextTick()
+  document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
+}
+async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
+  // Explicit research actions keep their existing path. Composer references use
+  // the versioned comment API and never enter research intent classification.
+  if (args.length || !paperContexts.value.length) {
+    if ((args[1] || 'auto') !== 'auto') {
+      intentConfigMessage.value = ''
+      return streamSendMessage(...args)
     }
-  } catch (error) {
-    console.error('获取论文内容失败:', error)
-    MessagePlugin.error('获取论文内容失败')
-  }
-}
-
-const loadPlanContent = async () => {
-  if (!workId.value || !authStore.token) return
-  try {
-    const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.json')
-    planData.value = response.content ? JSON.parse(response.content) : null
-  } catch {
+    if (
+      intentConfigChecking.value ||
+      isStreaming.value ||
+      !authStore.token ||
+      session.isDisposed() ||
+      !(args[0] || inputValue.value.trim())
+    )
+      return
+    intentConfigChecking.value = true
+    intentConfigMessage.value = ''
+    let configured = false
     try {
-      const response = await workspaceFileAPI.readFile(authStore.token, workId.value, 'plan.md')
-      planData.value = markdownPlanToData(response.content || '')
+      configured = !!(await modelConfigAPI.readiness()).roles.jev
+      if (!session.isDisposed() && !configured)
+        intentConfigMessage.value = isZh.value
+          ? '自动聊天需要配置 Jev。明确操作按钮不依赖 Jev。'
+          : 'Automatic chat requires Jev configuration. Explicit action buttons do not require Jev.'
     } catch {
-      planData.value = null
+      if (!session.isDisposed())
+        intentConfigMessage.value = isZh.value
+          ? 'Jev 配置暂时无法读取，请重试。明确操作按钮不受此检查影响。'
+          : 'Jev configuration could not be read. Retry, or use an explicit action.'
+    } finally {
+      intentConfigChecking.value = false
     }
+    if (configured && !session.isDisposed()) return streamSendMessage(...args)
+    return
+  }
+  if (paperSending.value || isStreaming.value || loading.value || !inputValue.value.trim()) return
+  const contexts = [...paperContexts.value],
+    context = contexts[0]!,
+    text = inputValue.value.trim(),
+    work = workId.value
+  const body = {
+    research_id: context.research_id,
+    message: text,
+    references: contexts.map(({ selection, read_quote, read_version, quote }) => ({
+      selection,
+      read_quote,
+      read_version,
+      quote,
+    })),
+    thread_id: contexts.length === 1 ? context.thread_id : null,
+  }
+  const signature = JSON.stringify(body)
+  if (paperRequest?.signature !== signature) paperRequest = { signature, id: crypto.randomUUID() }
+  paperSubmitting.value = true
+  paperCommentError.value = ''
+  try {
+    await paperProjectAPI.comment(work, { ...body, request_id: paperRequest.id })
+    paperRequest = null
+    inputValue.value = ''
+    paperContexts.value = paperContexts.value.filter((item) => !contexts.includes(item))
+    paperRefresh.value++
+    await stream.loadChatHistory(true)
+  } catch (cause) {
+    paperCommentError.value =
+      cause instanceof Error ? cause.message : '评论提交未确认，重试将复用同一请求。'
+  } finally {
+    paperSubmitting.value = false
   }
 }
-
-const normalizePlanStatus = (rawStatus: string): PlanItemStatus => {
-  const text = rawStatus.toLowerCase()
-  if (text.includes('❌') || text.includes('阻塞') || text.includes('blocked') || text.includes('失败')) return 'blocked'
-  if (text.includes('⬜') || text.includes('待写') || text.includes('pending') || text.includes('todo')) return 'pending'
-  if (text.includes('⏳') || text.includes('进行') || text.includes('progress')) return 'in_progress'
-  if (text.includes('✅') || text.includes('完成') || text.includes('complete')) return 'completed'
-  return 'pending'
+const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
+  workId,
+  onUploaded: async (filename, size) => {
+    await stream.refreshResources(['files'])
+    stream.appendAttachment(filename, size)
+  },
+})
+async function replyToResearch() {
+  if (isStreaming.value || loading.value || currentWork.value?.status !== 'waiting') return
+  layout.activateChat()
+  await nextTick()
+  document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
 }
-
-const markdownPlanToData = (content: string): PlanData | null => {
-  if (!content.trim()) return null
-  const title = content.split('\n').find((line) => line.trim().startsWith('#'))?.replace(/^#+/, '').trim() || '写作计划'
-  const rows = content
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('|') && !line.includes('---'))
-    .map((line) => line.replace(/^\|/, '').replace(/\|$/, '').split('|').map((cell) => cell.trim()))
-  const items = rows.slice(1).map((row, index) => {
-    const order = Number.parseInt(row[0] || `${index + 1}`, 10) || index + 1
-    const status = normalizePlanStatus(row[2] || '')
+const acceptedTaskCount = computed(
+  () =>
+    researchSnapshot.value?.questions?.filter((q) =>
+      researchSnapshot.value?.experiments?.some(
+        (e) => e.question_id === q.id && e.acceptance === 'accepted' && e.validity === 'current',
+      ),
+    ).length || 0,
+)
+const primaryAction = computed(() => {
+  if (!currentWork.value) return null
+  if (isStreaming.value) {
+    const label =
+      runningAction.value === 'ask' ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
+    return { kind: 'pause', icon: 'pause', label, title: label } as const
+  }
+  if (currentWork.value.status === 'waiting') {
+    const label = isZh.value ? '补充信息' : 'Provide input'
+    return { kind: 'confirm', icon: 'check', label, title: label } as const
+  }
+  if (canResume.value) {
     return {
-      id: `task-${order}`,
-      order,
-      title: row[1] || `任务 ${order}`,
-      status,
-      status_label: row[2]?.replace(/[✅⏳⬜❌]/g, '').trim() || undefined,
-      description: row[3] || '',
-      phase: 'write',
-      depends_on: order > 1 ? [`task-${order - 1}`] : [],
-      raw_status: row[2] || '',
-    }
+      kind: 'resume',
+      icon: 'play',
+      label: isZh.value ? '继续' : 'Continue',
+      title: recoveryHint.value,
+    } as const
+  }
+  if (primaryArtifact.value) {
+    return {
+      kind: 'download',
+      icon: 'download',
+      label: isZh.value ? '下载' : 'Download',
+      title: downloadLabel.value,
+    } as const
+  }
+  return null
+})
+async function handlePrimaryAction() {
+  if (loading.value || pausing.value || downloadLoading.value) return
+  switch (primaryAction.value?.kind) {
+    case 'pause':
+      return pauseTask()
+    case 'confirm':
+      return replyToResearch()
+    case 'resume':
+      return sendMessage('继续', 'resume')
+    case 'download':
+      return downloadArtifact()
+  }
+}
+async function loadWork() {
+  await session.loadWork({
+    loadFiles: () => stream.refreshResources(['files']),
+    loadHistory: stream.loadChatHistory,
+    resume: stream.checkAndResumeRunningTask,
+    sendMessage,
   })
-  const stats = {
-    total: items.length,
-    completed: items.filter((item) => item.status === 'completed').length,
-    in_progress: items.filter((item) => item.status === 'in_progress').length,
-    blocked: items.filter((item) => item.status === 'blocked').length,
-    pending: items.filter((item) => item.status === 'pending').length,
-    progress_percent: items.length
-      ? Math.round((items.filter((item) => item.status === 'completed').length / items.length) * 100)
-      : 0,
-  }
-  const current_focus = items.find((item) => item.status === 'in_progress') || items.find((item) => item.status === 'pending') || items.find((item) => item.status === 'blocked') || null
-  return {
-    version: 1,
-    revision: 0,
-    title,
-    methodology: 'spec-driven',
-    planning_mode: 'dynamic',
-    phases: [
-      { id: 'requirements', title: '需求澄清' },
-      { id: 'design', title: '方案设计' },
-      { id: 'tasks', title: '任务拆解' },
-      { id: 'implement', title: '执行生成' },
-      { id: 'verify', title: '验收检查' },
-    ],
-    items,
-    stats,
-    current_focus,
-    next_actions: items.filter((item) => item.status === 'pending' || item.status === 'blocked').slice(0, 3).map((item) => ({ id: item.id, title: item.title })),
-    source: 'frontend_markdown_fallback',
-    source_markdown: content,
+}
+async function handleFileRefresh() {
+  await stream.refreshResources(['files', 'research'])
+}
+const workActionOptions = computed(() => [
+  ...(primaryArtifact.value && primaryAction.value?.kind !== 'download'
+    ? [
+        {
+          content: downloadLabel.value,
+          value: 'download',
+          disabled: downloadLoading.value,
+          onClick: () => downloadArtifact(),
+        },
+      ]
+    : []),
+  ...(needsRecovery.value && recoveryUnavailable.value
+    ? [{ content: ui.value.restartResearch, value: 'restart', onClick: () => prepareNewResearch() }]
+    : []),
+  { content: ui.value.archive, value: 'export', onClick: () => exportWorkspace() },
+  {
+    content: ui.value.delete,
+    value: 'delete',
+    theme: 'error' as const,
+    disabled: isStreaming.value,
+    onClick: () => confirmDeleteWork(),
+  },
+])
+function handleComposerKeydown(_value: string | number, { e }: { e: KeyboardEvent }) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault()
+    if (!loading.value) void sendMessage()
   }
 }
-
-
-// 处理文件刷新
-const handleFileRefresh = async () => {
-  console.log('手动刷新文件列表')
-  await loadWorkspaceFiles()
+function confirmDeleteWork() {
+  if (isStreaming.value) return
+  const dialog = DialogPlugin.confirm({
+    header: ui.value.deleteWorkTitle,
+    body: ui.value.deleteWorkHint,
+    confirmBtn: { content: ui.value.confirm, theme: 'danger' },
+    cancelBtn: ui.value.cancel,
+    onConfirm: async () => {
+      await deleteWork()
+      dialog.destroy()
+    },
+  })
 }
-
-  
-  
 // 删除工作
 const deleteWork = async () => {
   if (!workId.value || !authStore.token || !currentWork.value) return
 
   try {
     await workspaceAPI.deleteWork(authStore.token, workId.value)
+    historyStore.remove(workId.value)
+    panelStore.remove(workId.value)
     MessagePlugin.success('工作已删除')
 
     // 跳转回首页
@@ -784,990 +765,453 @@ const deleteWork = async () => {
   }
 }
 
-// 导出工作空间
-const exportWorkspace = async () => {
-  if (!workId.value || !authStore.token || !currentWork.value) return
-
-  try {
-    exportLoading.value = true
-
-    // 调用导出API
-    const blob = await workspaceFileAPI.exportWorkspace(authStore.token, workId.value)
-
-    // 创建下载链接
-    const url = window.URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `workspace_${workId.value}.zip`
-
-    // 触发下载
-    document.body.appendChild(link)
-    link.click()
-
-    // 清理
-    document.body.removeChild(link)
-    window.URL.revokeObjectURL(url)
-
-    MessagePlugin.success('工作空间导出成功')
-  } catch (error) {
-    console.error('导出工作空间失败:', error)
-    MessagePlugin.error('导出工作空间失败')
-  } finally {
-    exportLoading.value = false
-  }
-}
-
-// 处理ChatSender文件上传
-const handleFileSelect = async (fileInfo: {files: FileList, name: string}) => {
-  console.log('ChatSender文件选择:', fileInfo)
-
-  const { files, name } = fileInfo
-  if (!files || files.length === 0) return
-
-  const file = files[0] // 取第一个文件
-  if (!file) return
-  
-  console.log('上传文件:', file.name, file.size, file.type)
-
-  if (!authStore.token || !workId.value) {
-    MessagePlugin.error('请先登录并选择工作空间')
-    return
-  }
-
-  try {
-    MessagePlugin.info(`正在上传文件: ${file.name}`)
-
-    // 使用attachmentAPI上传，保持与Home.vue一致
-    const result = await attachmentAPI.uploadAttachment(
-      authStore.token,
-      workId.value,
-      file
-    )
-
-    console.log('附件上传成功:', result)
-    MessagePlugin.success(`文件上传成功: ${result.attachment.original_filename}`)
-
-    // 刷新文件列表
-    await loadWorkspaceFiles()
-
-    // 添加上传成功的消息到聊天
-    const uploadMessage: ChatMessageDisplay = {
-      id: Date.now().toString(),
-      role: 'user' as const,
-      content: `已上传文件: ${result.attachment.original_filename} (${(result.attachment.file_size / 1024).toFixed(2)} KB)`,
-      datetime: new Date().toLocaleString(),
-      avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    }
-
-    chatMessages.value.push(uploadMessage)
-
-    // 自动滚动到底部
-    scrollToBottom()
-
-  } catch (error) {
-    console.error('文件上传失败:', error)
-    MessagePlugin.error(`文件上传失败: ${error instanceof Error ? error.message : '未知错误'}`)
-  }
-}
-
-// 处理FileManager文件选择
-const handleWorkspaceFileSelect = async (filePath: string) => {
-  console.log('文件被选中:', filePath)
-  currentFileName.value = filePath
-  selectedFile.value = filePath // 设置选中的文件
-  showMainPaper.value = false
-  if (isMobile.value) {
-    activeMobilePanel.value = 'preview'
-  }
-
-  // 每次都从服务器重新获取文件内容，避免缓存问题
-  try {
-    console.log('从服务器获取文件内容:', filePath)
-    const fileData = await workspaceFileAPI.readFile(authStore.token!, workId.value, filePath)
-    console.log('API返回的文件数据:', fileData)
-
-    // 存储完整的文件数据
-    currentFileData.value = fileData
-
-    // 根据文件类型处理响应
-    if (fileData.type === 'image') {
-      console.log('图片文件，处理base64内容')
-      currentFileContent.value = fileData.content || ''
-
-      // 直接使用base64内容创建图片URL，不需要额外的blob URL
-      const fileExtension = filePath.split('.').pop()?.toLowerCase()
-      const mimeType = `image/${fileExtension === 'jpg' ? 'jpeg' : fileExtension}`
-      imageUrls.value[filePath] = `data:${mimeType};base64,${fileData.content || ''}`
-      console.log('图片base64 URL创建成功:', imageUrls.value[filePath])
-    } else if (fileData.type === 'text') {
-      console.log('文本文件，设置内容')
-      currentFileContent.value = fileData.content || ''
-      console.log('文件内容获取成功，长度:', (fileData.content || '').length)
-    } else if (fileData.type === 'binary') {
-      console.log('二进制文件，设置元数据')
-      currentFileContent.value = 'BINARY_FILE'
-      console.log('二进制文件信息:', fileData)
-    }
-
-  } catch (error) {
-    console.error('获取文件内容失败:', error)
-    currentFileContent.value = '文件读取失败'
-    currentFileData.value = null
-    MessagePlugin.error('加载文件失败')
-  }
-}
-
-// 文件下载统一由 BinaryFileViewer 组件处理
-
-// 格式化文件大小
-const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-}
-
-// 判断是否为图片文件
-const isImageFile = (filePath: string): boolean => {
-  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp']
-  const lowerPath = filePath.toLowerCase()
-  return imageExtensions.some((ext) => lowerPath.endsWith(ext))
-}
-
-// 判断是否为DOCX文件
-const isDocxFile = (filePath: string | null): boolean => {
-  if (!filePath) return false
-  return filePath.toLowerCase().endsWith('.docx') || 
-         filePath.toLowerCase().includes('wordprocessingml')
-}
-
-// 获取文件类型
-const getFileType = (filePath: string): 'text' | 'image' | 'binary' => {
-  const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico', '.tiff', '.tif']
-
-  const textExtensions = [
-    '.txt', '.md', '.py', '.js', '.ts', '.vue', '.html', '.css', '.scss', '.less',
-    '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
-    '.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hxx',
-    '.java', '.kt', '.scala', '.rs', '.go', '.php', '.rb', '.swift',
-    '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
-    '.sql', '.r', '.m', '.pl', '.lua', '.vim', '.dockerfile',
-    '.gitignore', '.gitattributes', '.editorconfig', '.eslintrc', '.prettierrc',
-    '.log', '.out', '.err', '.debug', '.trace'
-  ]
-
-  const binaryExtensions = [
-    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
-    '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.apk',
-    '.mp3', '.mp4', '.avi', '.mov', 'wmv', '.flv', '.mkv',
-    '.ttf', '.otf', '.woff', '.woff2', '.eot',
-    '.psd', '.ai', '.eps', '.sketch', '.fig'
-  ]
-
-  const ext = filePath.toLowerCase().substring(filePath.lastIndexOf('.'))
-
-  if (imageExtensions.includes(ext)) {
-    return 'image'
-  } else if (textExtensions.includes(ext)) {
-    return 'text'
-  } else if (binaryExtensions.includes(ext)) {
-    return 'binary'
-  } else {
-    // 未知扩展名，默认为二进制文件
-    return 'binary'
-  }
-}
-
-// 获取图片URL（使用新的图片API）
-const getImageUrl = (filePath: string): string => {
-  let decoded = filePath
-  try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
-  return `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId.value}/images/${encodeURIComponent(decoded)}`
-}
-
-// 获取图片的blob URL（带认证）
-const getImageBlobUrl = async (filePath: string): Promise<string> => {
-  try {
-    const token = authStore.token
-    if (!token) {
-      throw new Error('未登录')
-    }
-
-    let decoded = filePath
-    try { decoded = decodeURIComponent(filePath) } catch { /* keep original */ }
-    const url = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/workspace/${workId.value}/images/${encodeURIComponent(decoded)}`
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-    }
-
-    const blob = await response.blob()
-    return URL.createObjectURL(blob)
-  } catch (error) {
-    console.error('获取图片失败:', error)
-    throw error
-  }
-}
-
-// 显示分割线
-const showDivider = (index: number) => {
-  hoveredDivider.value = index
-}
-
-// 隐藏分割线
-const hideDivider = () => {
-  hoveredDivider.value = null
-}
-
-// 根据角色获取头像
-const getAvatarByRole = (role: string) => {
-  const avatars = {
-    user: 'https://tdesign.gtimg.com/site/avatar.jpg',
-    assistant: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-    system: 'https://api.dicebear.com/7.x/bottts/svg?seed=system&backgroundColor=ed7b2f',
-  }
-  return avatars[role as keyof typeof avatars] || avatars.assistant
-}
-
-// 发送消息
-const sendMessage = async (messageContent?: string) => {
-  const content = messageContent || inputValue.value.trim()
-  if (!content || isStreaming.value) return
-
-  // 添加用户消息
-  const userMessage: ChatMessageDisplay = {
-    id: Date.now().toString(),
-    role: 'user' as const,
-    content: content,
-    datetime: new Date().toLocaleString(),
-    avatar: 'https://tdesign.gtimg.com/site/avatar.jpg',
-  }
-
-  chatMessages.value.push(userMessage)
-  inputValue.value = ''
-
-  // 发送真实消息
-  if (currentChatSession.value && authStore.token) {
-    await sendRealMessage(content)
-  } else {
-    MessagePlugin.error('聊天会话未初始化，请刷新页面重试')
-  }
-}
-
-// 发送真实消息（WebSocket）
-const sendRealMessage = async (message: string) => {
-  if (!currentChatSession.value || !authStore.token) return
-
-  isStreaming.value = true
-
-  // 创建AI回复消息
-  const aiMessageId = (Date.now() + 1).toString()
-  const aiMessage: ChatMessageDisplay = {
-    id: aiMessageId,
-    role: 'assistant' as const,
-    content: '',
-    datetime: new Date().toLocaleString(),
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=assistant&backgroundColor=0052d9',
-    isStreaming: true,
-  }
-
-  chatMessages.value.push(aiMessage)
-
-  // 强制Vue更新视图
-  chatMessages.value = [...chatMessages.value]
-
-  try {
-    // 使用WebSocket发送消息
-    await sendMessageViaWebSocket(message, aiMessageId)
-  } catch (error) {
-    console.error('发送消息失败:', error)
-    const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
-    if (messageIndex > -1) {
-      const msg = chatMessages.value[messageIndex]
-      if (msg) {
-        msg.content = '发送消息失败，请稍后重试'
-        msg.isStreaming = false
-      }
-    }
-    isStreaming.value = false
-    MessagePlugin.error('发送消息失败')
-  }
-}
-
-// WebSocket方式发送消息
-const sendMessageViaWebSocket = async (message: string, aiMessageId: string) => {
-  try {
-    console.log('Starting WebSocket connection for message:', aiMessageId)
-
-    // 如果已有连接，先断开
-    if (webSocketHandler.value) {
-      webSocketHandler.value.disconnect()
-      webSocketHandler.value = null
-    }
-
-    // 创建WebSocket处理器
-    webSocketHandler.value = new WebSocketChatHandler(workId.value!, authStore.token!)
-
-    // 设置断开连接回调
-    webSocketHandler.value.onDisconnect(() => {
-      console.log('WebSocket连接已断开')
-    })
-
-    // 设置消息监听器 - 使用统一的处理函数
-    webSocketHandler.value.onMessage((data) => {
-      // 忽略 start 和 auth_success 消息
-      if (data.type === 'start' || data.type === 'auth_success') {
-        console.log('收到消息:', data.type)
-        return
-      }
-      handleStreamMessage(data, aiMessageId)
-    })
-
-    // 连接WebSocket
-    await webSocketHandler.value.connect()
-    console.log('WebSocket connected successfully')
-
-    // 等待一下确保监听器设置完成
-    await new Promise((resolve) => setTimeout(resolve, 100))
-
-    // 发送消息
-    console.log('Sending message via WebSocket:', message)
-    webSocketHandler.value.sendMessage(message)
-  } catch (err) {
-    console.error('WebSocket处理错误:', err)
-    throw err
-  }
-}
-
-// 复制消息
-const copyMessage = (content: string) => {
-  navigator.clipboard.writeText(content)
-  MessagePlugin.success('消息已复制到剪贴板！')
-}
-
-// 切换侧边栏折叠状态
-const toggleSidebar = () => {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value
-}
-
-// 新建工作
-const createNewTask = () => {
-  router.push('/home')
-}
-
-// 选择历史工作
-const selectHistory = (id: number) => {
-  // 侧边栏会处理跳转逻辑，这里只需要更新选中状态
-  activeHistoryId.value = id
-}
-
-// 格式化日期
-const formatDate = (dateString: string) => {
-  return new Date(dateString).toLocaleString()
-}
-
-// 获取状态主题
-const getStatusTheme = (status: string) => {
-  const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
-    created: 'default',
-    in_progress: 'primary',
-    completed: 'success',
-    paused: 'warning',
-    cancelled: 'danger',
-  }
-  return themes[status] || 'default'
-}
-
-// 获取状态文本
-const getStatusText = (status: string) => {
-  const texts: Record<string, string> = {
-    created: '已创建',
-    in_progress: '进行中',
-    completed: '已完成',
-    paused: '已暂停',
-    cancelled: '已取消',
-  }
-  return texts[status] || status
-}
-
-// 获取输出模式文本
-const getOutputModeText = (mode?: string) => {
-  const texts: Record<string, string> = {
-    markdown: 'Markdown',
-    word: 'Word (.docx)',
-    latex: 'LaTeX'
-  }
-  return texts[mode || 'markdown'] || 'Markdown'
-}
-
-// 获取输出模式图标
-const getOutputModeIcon = (mode?: string) => {
-  const icons: Record<string, string> = {
-    markdown: 'file-1',
-    word: 'file-word',
-    latex: 'file-pdf'
-  }
-  return icons[mode || 'markdown'] || 'file-1'
-}
-
-// 获取输出模式主题
-const getOutputModeTheme = (mode?: string) => {
-  const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
-    markdown: 'primary',
-    word: 'success',
-    latex: 'warning'
-  }
-  return themes[mode || 'markdown'] || 'primary'
-}
-
-// 组件卸载时清理资源
-onUnmounted(() => {
-  if (webSocketHandler.value) {
-    webSocketHandler.value.disconnect()
-    webSocketHandler.value = null
-  }
-
-  // 重置流式状态，确保输入框不被禁用
-  isStreaming.value = false
-
-  // 清理blob URLs以释放内存
-  Object.values(imageUrls.value).forEach((url) => {
-    if (url.startsWith('blob:')) {
-      URL.revokeObjectURL(url)
-    }
-  })
-  imageUrls.value = {}
-
-  // 清理当前文件内容
-  currentFileContent.value = ''
-  selectedFile.value = null
-})
-
-// 监听路由变化
-watch(
-  () => route.params.work_id,
-  (newWorkId) => {
-    if (newWorkId) {
-      // 重置流式状态，确保输入框不被禁用
-      isStreaming.value = false
-
-      // 清理之前的WebSocket连接
-      if (webSocketHandler.value) {
-        webSocketHandler.value.disconnect()
-        webSocketHandler.value = null
-      }
-
-      // 清理文件内容，避免不同work的文件内容混淆
-      currentFileContent.value = ''
-      selectedFile.value = null
-
-      // 清理图片URL缓存，避免不同work的图片混淆
-      Object.values(imageUrls.value).forEach((url) => {
-        if (url.startsWith('blob:')) {
-          URL.revokeObjectURL(url)
-        }
-      })
-      imageUrls.value = {}
-
-      // loadWork 内部已经会调用 initializeChatSession，不需要重复调用
-      loadWork()
-    }
-  },
-)
-
-// 监听聊天消息变化，自动滚动到底部
-watch(
-  chatMessages,
-  (newMessages) => {
-    if (newMessages.length > 0) {
-      scrollToBottom()
-    }
-  },
-  { deep: true },
-)
-
-// 组件挂载时加载工作信息
 onMounted(() => {
-  if (workId.value) {
-    // loadWork 内部已经会调用 initializeChatSession，不需要重复调用
-    loadWork()
-  }
-
-  // 组件挂载完成后，如果有聊天消息，自动滚动到底部
-  nextTick(() => {
-    if (chatMessages.value.length > 0) {
-      scrollToBottom()
-    }
-  })
+  void loadWork()
+  window.addEventListener('paper-literature-open', openLiteratureEvidence)
+  window.addEventListener('paper-result-open', openRegisteredEvidence)
 })
-
-// 检查并自动发送第一句话
-const checkAndAutoSendFirstMessage = async () => {
-  const pendingQuestion = localStorage.getItem('pendingQuestion')
-  if (pendingQuestion && currentWork.value?.title?.trim() === '') {
-    localStorage.removeItem('pendingQuestion')
-    try {
-      generateWorkTitle(pendingQuestion).catch((err: Error) =>
-        console.error('后台生成标题失败:', err),
-      )
-      await sendMessage(pendingQuestion)
-    } catch (error) {
-      console.error('自动发送第一句话失败:', error)
-    }
-  }
-}
-
-const generateWorkTitle = async (question: string) => {
-  try {
-    // 调用标题生成API，会自动更新数据库
-    const response = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
-
-    // 更新本地状态
-    if (currentWork.value) {
-      currentWork.value.title = response.title
-    }
-
-    // 通知侧边栏刷新工作列表
-    // 通过触发一个自定义事件来通知父组件或侧边栏
-    window.dispatchEvent(
-      new CustomEvent('work-title-updated', {
-        detail: {
-          workId: workId.value,
-          newTitle: response.title,
-        },
-      }),
-    )
-
-    console.log('标题已更新:', response.title)
-  } catch (error) {
-    console.error('生成标题失败:', error)
-  }
-}
+onUnmounted(() => {
+  window.removeEventListener('paper-literature-open', openLiteratureEvidence)
+  window.removeEventListener('paper-result-open', openRegisteredEvidence)
+})
 </script>
-
-<style>
-/* 全局样式确保页面占满视口 */
-html,
-body {
-  margin: 0;
-  padding: 0;
-  height: 100%;
+<style scoped>
+.work-page {
+  display: flex;
+  height: 100dvh;
+  width: 100%;
+  background: var(--pa-page);
   overflow: hidden;
 }
-
-#app {
-  height: 100vh;
-  height: 100dvh;
+.workspace-container {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
   overflow: hidden;
+}
+.work-load-error {
+  margin: auto;
+  padding: 32px;
+  max-width: 560px;
+  text-align: center;
+}
+.work-load-error h1 {
+  font-size: 20px;
+}
+.work-load-error p {
+  color: var(--td-text-color-secondary);
+  margin-bottom: 24px;
+}
+.work-load-error > div {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 28px;
+  min-height: 88px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--pa-line);
+}
+.work-heading,
+.work-title-row {
+  min-width: 0;
+}
+.work-title-row h1 {
+  margin: 0;
+  font-family: var(--td-font-family);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.3px;
+}
+.work-context {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--pa-muted);
+}
+.work-context-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--pa-radius-circle);
+  background: var(--pa-surface-active);
+  flex-shrink: 0;
+}
+.live-dot.running,
+.live-dot.complete {
+  background: var(--td-brand-color);
+}
+.live-dot.attention {
+  background: var(--pa-warning);
+}
+.elapsed {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.work-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.work-actions .t-button {
+  height: var(--pa-control-height-md);
+  font-size: 12px;
+  border-radius: var(--pa-radius-control);
+}
+.work-actions .t-button--shape-square {
+  width: 32px;
+  border-color: var(--pa-line);
+}
+.progress-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--pa-control-height-md);
+  padding: 0 10px;
+  border: 1px solid var(--pa-line);
+  background: var(--pa-surface);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.progress-trigger:hover {
+  background: var(--pa-surface-hover);
+  border-color: var(--pa-line-strong);
+}
+.progress-count {
+  color: var(--pa-accent);
+  padding-left: 8px;
+  border-left: 1px solid var(--pa-line);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.progress-panel {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--pa-surface);
+}
+.chat-section,
+.files-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--pa-surface);
+}
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.chat-messages-container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.chat-messages-container :deep(.json-chat-renderer) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.chat-messages-container :deep(.chat-messages) {
+  height: 100%;
+  overflow-y: auto;
+  padding: 28px max(24px, calc((100% - 880px) / 2));
+  box-sizing: border-box;
+  scrollbar-width: thin;
+}
+.chat-messages-container :deep(.chat-markdown) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.chat-messages-container :deep(.markdown-body) {
+  font-size: 15px;
+  line-height: 1.85;
+}
+.chat-messages-container :deep(.markdown-body h1) {
+  font-size: 24px;
+}
+.chat-messages-container :deep(.markdown-body h2) {
+  font-size: 20px;
+}
+.chat-messages-container :deep(.markdown-body h3) {
+  font-size: 17px;
+}
+.chat-loading {
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.chat-input {
+  width: calc(100% - 48px);
+  max-width: 880px;
+  margin: 0 auto;
+  flex-shrink: 0;
+  padding: 10px 0 max(20px, env(safe-area-inset-bottom));
+}
+.work-composer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--pa-line-strong);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
+  box-shadow: var(--pa-shadow-card);
+}
+.model-usage {
+  display: flex;
+  justify-content: center;
+  text-align: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 8px 6px 0;
+  color: var(--pa-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.work-composer:focus-within {
+  border-color: var(--pa-line-strong);
+}
+.work-message-input {
+  flex: 1;
+  min-width: 0;
+}
+.work-message-input :deep(.t-textarea__inner) {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 24px;
+  padding: 6px 8px;
+  resize: none;
+  border-radius: 0;
+}
+.work-message-input :deep(.t-textarea__inner:focus-visible) {
+  outline: none;
+}
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.composer-controls .t-button {
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  min-width: var(--pa-control-height-md);
+}
+.jump-latest {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-pill);
+  background: var(--pa-surface);
+  color: var(--pa-muted);
+  box-shadow: var(--td-shadow-1);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.text-action {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--td-brand-color);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.figures-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 28px;
+}
+.figure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 20px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+.figure-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--pa-line);
+  border-radius: var(--pa-radius-card);
+  background: var(--pa-surface);
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+}
+.figure-open {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.figure-card:hover {
+  border-color: var(--pa-line-strong);
+  background: var(--pa-surface);
+}
+.figure-card img,
+.figure-placeholder {
+  width: 100%;
+  height: 200px;
+  object-fit: contain;
+}
+.figure-placeholder {
+  display: grid;
+  place-items: center;
+  background: var(--pa-surface-muted);
+  color: var(--pa-muted);
+  font-size: 30px;
+}
+.figure-open > span {
+  font-size: 12px;
+  color: var(--pa-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 768px) {
+  .workspace-header {
+    min-height: 74px;
+    padding: 12px 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .work-title-row h1 {
+    font-size: 14px;
+  }
+  .work-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .work-actions .t-button {
+    padding-inline: 8px;
+  }
+  .work-actions .t-button--shape-square {
+    padding: 0;
+  }
+  .chat-messages-container :deep(.chat-messages) {
+    padding: 20px 16px;
+  }
+  .chat-messages-container :deep(.markdown-body) {
+    font-size: 14px;
+  }
+  .chat-input {
+    width: calc(100% - 24px);
+    padding-top: 8px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  .work-composer {
+    flex-wrap: wrap;
+  }
+  .work-message-input {
+    flex-basis: 100%;
+  }
+  .composer-controls {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .work-message-input :deep(.t-textarea__inner) {
+    font-size: 16px;
+  }
+  .figures-panel {
+    padding: 20px 16px;
+  }
+  .figure-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 14px;
+  }
+}
+
+.question-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: var(--pa-radius-inline);
+  padding: 4px 7px;
+  background: var(--pa-accent-soft);
+  color: var(--pa-accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 </style>
 
 <style scoped>
-.work-page {
-  display: flex;
-  height: 100vh;
-  height: 100dvh;
-  width: 100vw;
-  background: #f5f7fa;
-  overflow: hidden;
-}
-
-.main-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.workspace-header {
-  padding: 15px 30px;
-  background: white;
-  border-bottom: 1px solid #eee;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.work-info {
-  flex: 1;
-}
-
-.work-info h1 {
-  margin: 0 0 8px 0;
-  color: #2c3e50;
-  font-size: 1.5em;
-}
-
-.work-info p {
-  margin: 0;
-  color: #7f8c8d;
-  font-size: 0.9em;
-}
-
-.work-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.work-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.workspace-content {
-  flex: 1;
-  display: flex;
-  padding: 0;
-  overflow: hidden;
-  height: calc(100vh - 120px); /* 固定高度，减去header高度 */
-}
-
-.chat-section {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #eee;
-  padding: 20px;
-  min-width: 300px;
-  overflow: hidden;
-  height: 100%; /* 确保占满父容器高度 */
-}
-
-.preview-section {
-  flex: 1;
-  padding: 20px;
+.paper-composer-quotes {
+  flex-basis: 100%;
+  min-width: 0;
+  max-height: 160px;
   overflow-y: auto;
-  background: #f9f9f9;
-  height: 100%; /* 确保占满父容器高度 */
 }
-
-.chat-container {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid #eee;
-  border-radius: 8px;
-  overflow: hidden;
-  background: white;
-  height: 100%; /* 确保占满父容器高度 */
-}
-
-.chat-messages-container {
-  flex: 1;
-  overflow: hidden;
-  min-height: 0; /* 允许flex子项收缩 */
-}
-
-.chat-bottom-section {
-  flex-shrink: 0; /* 防止底部区域被压缩 */
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid #eee;
-  background: white;
-}
-
-.chat-messages {
-  flex: 1;
-  padding: 16px;
-  overflow-y: auto;
-  background: #fafafa;
-  min-height: 0; /* 允许flex子项收缩 */
-}
-
-.chat-input {
-  padding: 16px;
-  border-top: 1px solid #eee;
-  background: white;
-  flex-shrink: 0; /* 防止输入框被压缩 */
-  min-height: 80px; /* 确保输入框有最小高度 */
-}
-
-/* 确保FileManager组件有合适的高度 */
-.chat-bottom-section .file-manager {
-  flex-shrink: 0; /* 防止文件管理器被压缩 */
-  max-height: 300px; /* 限制文件管理器最大高度 */
-  overflow-y: auto; /* 如果内容过多，允许滚动 */
-}
-
-.chat-message-wrapper {
-  position: relative;
-  margin-bottom: 8px;
-}
-
-.system-label {
-  position: absolute;
-  top: 8px;
-  right: 16px;
-  padding: 2px 8px;
-  border-radius: 12px;
+.paper-composer-quote {
+  flex-basis: 100%;
+  min-width: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--pa-line);
   font-size: 12px;
-  font-weight: 500;
-  z-index: 1;
 }
-
-.system-label.brain {
-  background: rgba(0, 82, 217, 0.1);
-  color: #0052d9;
-  border: 1px solid rgba(0, 82, 217, 0.2);
-}
-
-.system-label.code {
-  background: rgba(0, 168, 112, 0.1);
-  color: #00a870;
-  border: 1px solid rgba(0, 168, 112, 0.2);
-}
-
-.system-label.writing {
-  background: rgba(237, 123, 47, 0.1);
-  color: #ed7b2f;
-  border: 1px solid rgba(237, 123, 47, 0.2);
-}
-
-/* 对话分割线样式 */
-.message-divider {
-  position: relative;
-  height: 40px;
-  margin: 12px 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-}
-
-.message-divider:hover {
-  height: 50px;
-  margin: 6px 0;
-}
-
-.divider-line {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: #e0e0e0;
-  transition: all 0.3s ease;
-}
-
-.message-divider:hover .divider-line {
-  background: #c0c0c0;
-  height: 2px;
-}
-
-.divider-icon {
-  position: relative;
-  width: 36px;
-  height: 36px;
-  background: #f5f5f5;
-  border: 1px solid #e0e0e0;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transform: scale(0.8);
-  transition: all 0.3s ease;
-  z-index: 1;
+.paper-composer-quote button {
+  float: right;
+  background: none;
+  border: 0;
   cursor: pointer;
 }
-
-.divider-icon.show {
-  opacity: 1;
-  transform: scale(1);
-  background: #f0f0f0;
-  border-color: #c0c0c0;
-}
-
-.divider-icon .t-icon {
-  font-size: 16px;
-  color: #666;
-}
-
-.message-divider:hover .divider-icon {
-  opacity: 1;
-  transform: scale(1);
-  background: #e8e8e8;
-  border-color: #b0b0b0;
-}
-
-/* 对话变灰效果 */
-.message-dimmed {
-  opacity: 0.4;
-  filter: grayscale(0.6);
-  transition: all 0.3s ease;
-}
-
-.message-dimmed .t-chat__message {
-  opacity: 0.4;
-}
-
-.message-dimmed .system-label {
-  opacity: 0.4;
-}
-
-.work-details {
-  padding: 16px;
-  background: #f0f2f5;
-  border-radius: 8px;
-  border: 1px solid #e0e0e0;
-}
-
-.work-details p {
-  margin: 8px 0;
-  color: #555;
-  font-size: 14px;
-}
-
-.work-details strong {
-  color: #333;
-  font-weight: 600;
-}
-
-/* 文件预览样式 */
-.file-preview {
-  max-height: 600px;
-  overflow-y: auto;
-}
-
-.code-preview {
-  background-color: #f5f5f5;
-  border-radius: 4px;
-  padding: 16px;
-  overflow-x: auto;
-}
-
-.code-preview pre {
-  margin: 0;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.markdown-preview {
-  padding: 16px;
-  line-height: 1.6;
-}
-
-.image-preview {
-  text-align: center;
-  padding: 16px;
-}
-
-.image-preview img {
-  max-width: 100%;
-  height: auto;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.text-preview {
-  background-color: #f5f5f5;
-  border-radius: 4px;
-  padding: 16px;
-  overflow-x: auto;
-}
-
-.text-preview pre {
-  margin: 0;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.files-section {
-  display: none;
-}
-
-.mobile-tab-bar {
-  display: none;
-}
-
-.work-page.is-mobile {
-  height: 100vh;
-  height: 100dvh;
-}
-
-.work-page.is-mobile :deep(.mobile-expand-btn-container) {
-  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
-}
-
-.workspace-content.is-mobile {
-  flex-direction: column;
-  height: auto;
-  flex: 1;
-  min-height: 0;
-}
-
-.workspace-content.is-mobile .chat-section,
-.workspace-content.is-mobile .preview-section,
-.workspace-content.is-mobile .files-section {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  width: 100%;
-  height: auto;
-  padding: 8px;
-  border-right: none;
-}
-
-.workspace-content.is-mobile .files-section {
-  display: flex;
-  flex-direction: column;
-  background: #fff;
+.paper-composer-quote blockquote {
+  margin: 6px 0 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-.workspace-content.is-mobile .file-preview {
-  max-height: none;
-}
-
-.work-page.is-mobile .workspace-header {
-  padding: 10px 12px;
-}
-
-.work-page.is-mobile .work-info h1 {
-  font-size: 1.05em;
-  margin: 0;
-}
-
-.work-page.is-mobile .mobile-tab-bar {
-  display: flex;
-  flex-shrink: 0;
-  border-top: 1px solid #eee;
-  background: #fff;
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-}
-
-.mobile-tab {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  padding: 8px 0;
-  border: none;
-  background: none;
-  color: #666;
-  font-size: 12px;
-}
-
-.mobile-tab.active {
-  color: #0052d9;
-}
-
-.mobile-tab .t-icon {
-  font-size: 20px;
+  white-space: pre-wrap;
 }
 </style>

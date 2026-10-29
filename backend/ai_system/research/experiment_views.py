@@ -1,0 +1,137 @@
+from .domain import experiment_report, experiment_design, report_artifact, execution_lineage, current_results
+"""Read-only, task-oriented views of retained computation evidence.
+
+This deliberately does not widen the publication registry or change the planner.
+An available calculation is not an accepted scientific conclusion.
+"""
+
+from ai_system.research.domain import findings as research_findings
+from ..graph.registry import numeric_series, REF_PATTERN, find_refs
+from .validation import report_fingerprint
+from .progress import issue_next_step
+
+CLOSED = {'resolved', 'dismissed', 'superseded'}
+
+
+def check_state(snapshot, task, attempt, issues):
+    validation = attempt.get('validation') or {}
+    if any(c['outcome'] == 'failed' for c in validation.get('checks', [])):
+        return 'failed'
+    if any(i.get('category') == 'service' for i in issues):
+        return 'service_failed'
+    if issues:
+        return 'findings'
+    if any(c['outcome'] != 'passed' for c in validation.get('checks', [])):
+        return 'pending_check'
+    if attempt and (attempt.get('revision') != task.get('revision') or attempt.get('attempt_id') != task.get('execution_id')):
+        return 'outdated'
+    reviews = (attempt.get('result') or {}).get('reviews') or []
+    report = (attempt.get('result') or {}).get('report') or {}
+    revised = (report_artifact(snapshot,task) or {}).get('review') or {}
+    if (revised.get('report_hash') == report_fingerprint(experiment_report(snapshot,task) or {}) and
+            revised.get('attempt_id') == task.get('execution_id') and not revised.get('issues') and
+            task['acceptance']=='accepted' and task['validity']=='current'):
+        return 'passed'
+    if (reviews and reviews[-1].get('report_hash') == report_fingerprint(report)
+            and not reviews[-1].get('issues') and task.get('acceptance') == 'accepted'
+            and task.get('validity') == 'current'):
+        return 'passed'
+    # Deterministic checks alone do not certify a semantic review.
+    return 'unreviewed'
+
+
+def result_view(item, safe_file):
+    name = str(item.get('name') or '').strip()
+    description = str(item.get('description') or '').strip()
+    return {
+        'meaning': item.get('meaning'), 'grounding':'output_occurrence',
+        'id': str(item['id']), 'name': name or '未命名结果',
+        'description': description, 'unit': str(item.get('unit') or ''),
+        'kind': item.get('kind', 'number'), 'value': str(item.get('value', '')),
+        'run_id': str(item.get('run_id') or ''),
+        'figure_path': safe_file(item.get('path'), 'outputs/'),
+        'series': numeric_series(item.get('value', '')) if item.get('kind') == 'series' else None,
+    }
+
+
+def claim_view(claim, items):
+    by_id = {r['id']: r for r in items}
+    def replace(match):
+        ref = match[2]
+        item = by_id.get(ref)
+        if not item:
+            return '[' + ref + ']'
+        value = (str(item.get('value') or '') + ' ' + str(item.get('unit') or '')).strip()
+        return (value if item.get('kind') != 'figure' else str(item.get('name') or ref)) + ' [' + ref + ']'
+    return {**claim, 'statement': REF_PATTERN.sub(replace, claim.get('statement', ''))}
+
+
+def experiments_view(business, safe_file, current_files=None):
+    """Project persisted reports, never infer labels, units, decisions or sources."""
+    if not business:
+        return []
+    views = []
+    for key, task in business['experiments'].items():
+        if task['retired']:
+            continue
+        attempts = [a for a in business['executions'].values() if a['task_id'] == key]
+        retained = []
+        for attempt in reversed(attempts):
+            aid = attempt['attempt_id']
+            items = [e['payload'] for e in business['artifacts'].values()
+                     if e['producer_attempt'] in execution_lineage(business,aid) and e['type']=='result'
+                     and (e['active'] or aid!=task.get('execution_id'))]
+            if aid==task.get('execution_id') and task['validity']=='current':
+                items=current_results(business,{key},task_id=key)
+            if items:
+                retained.append((attempt, items))
+        active = next((p for p in retained if p[0]['attempt_id'] == task.get('execution_id')), None)
+        selected = active or (retained[0] if retained else (attempts[-1] if attempts else {}, []))
+        attempt, items = selected
+        frozen_files = {p: h for p, h in attempt.get('input_refs', {}).items() if p.startswith(('data/', 'attachment/'))}
+        live_files = current_files if task.get('input_files') is None or current_files is None else {p: current_files.get(p, '<missing>') for p in task['input_files']}
+        inputs_match = live_files is None or frozen_files == {p: h for p, h in live_files.items() if p.startswith(('data/', 'attachment/'))}
+        current = bool(active and attempt['revision'] == task['revision'] and task['validity'] == 'current' and inputs_match)
+        issues = [i for i in research_findings(business) if i['task_id'] == key and i['status'] not in CLOSED]
+        report = (experiment_report(business,task) if attempt.get('attempt_id')==task.get('execution_id') else None) or (attempt.get('result') or {}).get('report') or {}
+        design = (attempt.get('result') or {}).get('design') or experiment_design(business,task) or {}
+        method = design.get('chosen') or {}
+        sources = [{'path': path, 'hash': fingerprint,
+                    'available': bool(safe_file(path))}
+                   for path, fingerprint in attempt.get('input_refs', {}).items() if path.startswith(('data/', 'attachment/'))]
+        current_claims=[c for c in business['claims'].values() if c['producer_attempt'] in execution_lineage(business,attempt.get('attempt_id')) and c.get('active',True)]
+        cited=set(find_refs(' '.join([report.get('summary',''),report.get('sensitivity',''),*report.get('limitations',[]),
+                    *(f.get('statement','') for f in report.get('key_findings',[]))])))
+        from .feedback import interpretation_version
+        from .views import LABELS
+        views.append({
+            'interpretation_version':interpretation_version(business,task),
+            'primary_result_refs':[item['id'] for item in items if item['id'] in cited and item.get('meaning')],
+            'record':report,
+            'current_actions':[{**a,'label':LABELS.get(a['capability'],'研究行动')}
+                               for a in business.get('activity',[]) if a.get('experiment_id')==key][-40:],
+            'interpretation_history':[{'report_ref':ref,'report':a['report'],'status':'superseded'}
+                 for ref,a in business['artifacts'].items() if a['type']=='report' and a['experiment_id']==key and ref!=task['report_ref']],
+            'historical_claims':[{**claim_view(c['payload'],[a['payload'] for a in business['artifacts'].values()]),
+                                 'status':c.get('status','historical'),'reason':c.get('reason','')}
+                  for c in business['claims'].values() if c['experiment_id']==key and not c.get('active',True)],
+            'id': key, 'task_id': key, 'question_id':task['question_id'], 'title': task.get('subproblem', {}).get('title') or task['objective'],
+            'objective': task['objective'], 'revision': attempt.get('revision'),
+            'attempt_id': attempt.get('attempt_id'), 'started_at':attempt.get('started_at'), 'computation': attempt.get('execution_status', task['execution_status']),
+            'availability': ('current' if current else 'historical') if items else 'unavailable',
+            'checking': check_state(business, task, attempt, [i for i in issues if i['category']!='writing']) if inputs_match else 'outdated',
+            'approach': report.get('approach') or '', 'summary': report.get('summary') or '',
+            'method': {k: method[k] for k in ('name', 'idea', 'formulation', 'steps', 'validation') if method.get(k)} or None,
+            'experiment':attempt.get('experiment') or task.get('experiment'),
+            'results': [result_view(item, safe_file) for item in items[:500]],
+            'claims': [claim_view(c['payload'], [e['payload'] for e in business['artifacts'].values()]) for c in current_claims],
+            'issues': issues, 'sources': sources,
+            'next_step': ' '.join(dict.fromkeys(issue_next_step(i,business) for i in issues)) or task.get('reason') or report.get('next_step') or None,
+            'artifacts': [{'id':ref,'kind':e['type'],'path':safe_file(e['payload'].get('path')),'run_id':e['payload']['run_id']}
+                          for ref,e in business['artifacts'].items() if e['experiment_id']==key and e['type']!='result'],
+            'history': [{'attempt_id': a['attempt_id'], 'revision': a['revision'],
+                         'execution_status': a['execution_status'], 'acceptance': a.get('acceptance'),
+                         'results': [result_view(item, safe_file) for item in records[:500]]}
+                        for a, records in retained if a['attempt_id'] != attempt.get('attempt_id')],
+        })
+    return views

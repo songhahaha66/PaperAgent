@@ -1,17 +1,18 @@
 <template>
   <div class="code-highlight">
-    <pre><code :class="languageClass" ref="codeElement" v-html="highlightedCode"></code></pre>
+    <pre><code :class="languageClass" v-html="highlightedCode"></code></pre>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { computed } from 'vue'
 import hljs from 'highlight.js/lib/core'
 import python from 'highlight.js/lib/languages/python'
-import 'highlight.js/styles/github.css'
+import latex from 'highlight.js/lib/languages/latex'
 
 // Register the Python language
 hljs.registerLanguage('python', python)
+hljs.registerLanguage('latex', latex)
 
 interface Props {
   code: string
@@ -19,20 +20,18 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  language: 'python'
+  language: 'python',
 })
-
-const codeElement = ref<HTMLElement>()
 
 const highlightedCode = computed(() => {
   if (!props.code) return ''
-  
+
   try {
     const result = hljs.highlight(props.code, { language: props.language })
     return result.value
   } catch (error) {
     console.warn('Syntax highlighting failed, falling back to plain text:', error)
-    return props.code
+    return props.code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   }
 })
 
@@ -41,8 +40,8 @@ const languageClass = computed(() => `language-${props.language}`)
 
 <style scoped>
 .code-highlight {
-  background-color: #f6f8fa;
-  border-radius: 6px;
+  background-color: var(--pa-surface-muted);
+  border-radius: var(--pa-radius-inline);
   padding: 16px;
   overflow-x: auto;
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;

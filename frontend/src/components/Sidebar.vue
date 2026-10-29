@@ -1,13 +1,20 @@
 <template>
   <div class="sidebar" :class="{ 'sidebar-collapsed': isSidebarCollapsed }">
-    <!-- 收起状态 - logo 单独在最顶部 -->
     <div v-if="isSidebarCollapsed" class="collapsed-logo-section">
-      <img src="/logo.png" alt="PaperAgent Logo" class="header-logo-small" />
+      <button
+        class="logo-toggle"
+        :title="isZh ? '展开侧边栏' : 'Expand sidebar'"
+        :aria-label="isZh ? '展开侧边栏' : 'Expand sidebar'"
+        :aria-expanded="false"
+        @click="toggleSidebar"
+      >
+        <img src="/logo.png" alt="" class="header-logo-small" /><SidebarToggleIcon
+          class="logo-toggle-icon"
+        />
+      </button>
     </div>
-
-    <div class="sidebar-header">
-      <!-- 展开状态 -->
-      <div v-if="!isSidebarCollapsed" class="header-title">
+    <div v-else class="sidebar-header">
+      <div class="header-title">
         <h2>PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
       </div>
@@ -19,18 +26,33 @@
           @click="toggleSidebar"
           class="sidebar-toggle-btn"
           :title="t('sidebar.toggle')"
-        >
-          <t-icon :name="isSidebarCollapsed ? 'chevron-right' : 'chevron-left'" />
-        </t-button>
+          :aria-label="t('sidebar.toggle')"
+          ><SidebarToggleIcon :collapsed="false"
+        /></t-button>
       </div>
     </div>
 
     <!-- 展开状态的内容 -->
     <div class="sidebar-content" v-if="!isSidebarCollapsed">
       <div class="menu-section">
-        <t-button theme="primary" block @click="createNewTask">{{ t('sidebar.newWork') }}</t-button>
+        <t-button theme="primary" block class="new-task-button" @click="createNewTask"
+          ><template #icon><t-icon name="edit" /></template>{{ t('sidebar.newWork') }}</t-button
+        >
       </div>
 
+      <nav class="sidebar-nav" :aria-label="ui.workspace">
+        <t-button
+          v-for="item in navigationItems"
+          :key="item.path"
+          theme="default"
+          variant="text"
+          block
+          :class="{ 'nav-active': route.path === item.path }"
+          :aria-current="route.path === item.path ? 'page' : undefined"
+          @click="navigate(item.path)"
+          ><template #icon><t-icon :name="item.icon" /></template>{{ item.label }}</t-button
+        >
+      </nav>
       <div class="menu-section">
         <div class="menu-title">
           <browse-icon />
@@ -38,39 +60,33 @@
         </div>
         <div class="history-list">
           <!-- 加载状态 -->
-          <div v-if="loadingHistory" class="loading-state">
+          <div
+            v-if="loadingHistory && !historyStore.hasLoaded && !historyItems.length"
+            class="loading-state"
+          >
             <t-loading size="small" />
             <p>{{ t('common.loading') }}</p>
           </div>
 
           <!-- 历史工作列表 -->
           <template v-else-if="historyItems.length > 0">
-            <t-card
+            <button
               v-for="item in historyItems"
               :key="item.id"
               class="history-item"
-              :class="{ active: activeHistoryId === item.id }"
+              :class="{
+                active: activeHistoryId === item.id || route.params.work_id === item.work_id,
+              }"
+              :title="`${item.title || ui.untitled} · ${getStatusText(item.status)} · ${formatWorkDate(item.date, locale)}`"
               @click="selectHistory(item)"
             >
-              <div class="history-item-content">
-                <div class="history-header">
-                  <h4>
-                    <span v-if="item.title && item.title.trim()">{{ item.title }}</span>
-                    <t-loading v-else size="small" :text="t('sidebar.generating')" />
-                  </h4>
-                  <t-tag
-                    v-if="item.status"
-                    :theme="getStatusTheme(item.status)"
-                    variant="light"
-                    size="small"
-                  >
-                    {{ getStatusText(item.status) }}
-                  </t-tag>
-                </div>
-                <p class="history-date">{{ new Date(item.date).toLocaleString(locale) }}</p>
-                <p class="history-content">{{ item.content || t('common.noDescription') }}</p>
-              </div>
-            </t-card>
+              <span class="history-title">{{ item.title?.trim() || t('sidebar.generating') }}</span>
+              <span
+                v-if="item.status === 'in_progress' || item.status === 'running'"
+                class="running-dot"
+                :aria-label="getStatusText(item.status)"
+              />
+            </button>
           </template>
 
           <!-- 无历史记录时显示空状态 -->
@@ -86,18 +102,7 @@
     </div>
 
     <div class="sidebar-footer" v-if="!isSidebarCollapsed">
-      <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-        <div class="user-info">
-          <div class="user-avatar">
-            <span class="user-avatar-text">{{ userName.charAt(0).toUpperCase() }}</span>
-          </div>
-          <div class="user-details">
-            <div class="user-name">{{ userName }}</div>
-            <div class="user-email">{{ userEmail }}</div>
-          </div>
-          <t-icon name="setting" class="settings-icon" />
-        </div>
-      </t-dropdown>
+      <AccountMenu :collapsed="false" @navigate="closeSidebarOnMobile" />
     </div>
 
     <!-- 收起状态下的用户头像 -->
@@ -115,39 +120,42 @@
     </div>
 
     <div class="sidebar-footer-collapsed" v-if="isSidebarCollapsed">
-      <t-dropdown :options="userOptions" placement="top-left" trigger="click">
-        <div class="user-avatar-collapsed">
-          <t-avatar
-            :content="userName.charAt(0).toUpperCase()"
-            size="large"
-            shape="circle"
-            class="collapsed-avatar"
-          />
-        </div>
-      </t-dropdown>
+      <AccountMenu :collapsed="true" @navigate="closeSidebarOnMobile" />
     </div>
   </div>
 
   <!-- 手机端侧边栏遮罩 -->
   <div v-if="isMobile && !isSidebarCollapsed" class="sidebar-backdrop" @click="toggleSidebar" />
 
-  <!-- 手机端侧边栏收起时的浮动展开按钮 -->
-  <div v-if="isSidebarCollapsed" class="mobile-expand-btn-container">
-    <t-button theme="primary" shape="round" @click="toggleSidebar" class="mobile-expand-btn">
-      <t-icon name="chevron-right" />
-    </t-button>
-  </div>
+  <header v-if="isMobile" class="mobile-pagebar">
+    <button
+      class="mobile-navigation-button"
+      :aria-label="isZh ? '打开导航' : 'Open navigation'"
+      :aria-expanded="!isSidebarCollapsed"
+      @click="toggleSidebar"
+    >
+      <SidebarToggleIcon />
+    </button>
+    <router-link to="/home" class="mobile-brand"
+      ><img src="/logo.png" alt="" /><span>PaperAgent</span></router-link
+    >
+    <div class="mobile-account">
+      <AccountMenu :collapsed="true" placement="bottom-right" @navigate="closeSidebarOnMobile" />
+    </div>
+  </header>
 </template>
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, watch, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { BrowseIcon } from 'tdesign-icons-vue-next'
-import { MessagePlugin } from 'tdesign-vue-next'
-import { useAuthStore } from '@/stores/auth'
-import { workspaceAPI } from '@/api/workspace'
+import AccountMenu from '@/components/AccountMenu.vue'
+import { useWorkHistoryStore } from '@/stores/workHistory'
+import SidebarToggleIcon from '@/components/SidebarToggleIcon.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
+import { useStudioCopy } from '@/lang/studio'
+import { formatWorkDate } from '@/utils/dates'
 
 // 定义props
 interface Props {
@@ -167,7 +175,9 @@ const emit = defineEmits<Emits>()
 
 const { t, locale } = useI18n()
 const router = useRouter()
-const authStore = useAuthStore()
+const route = useRoute()
+const { ui, isZh } = useStudioCopy()
+const historyStore = useWorkHistoryStore()
 const { isMobile } = useBreakpoint()
 
 // 历史工作数据类型定义
@@ -180,9 +190,17 @@ interface HistoryItem {
   status?: string
 }
 
-// 历史工作数据状态
-const historyItems = ref<HistoryItem[]>([])
-const loadingHistory = ref(false)
+const historyItems = computed<HistoryItem[]>(() =>
+  historyStore.works.map((work) => ({
+    id: work.id,
+    work_id: work.work_id,
+    title: work.title,
+    date: work.created_at,
+    content: work.description || '',
+    status: work.status,
+  })),
+)
+const loadingHistory = computed(() => historyStore.loading)
 
 // 侧边栏折叠状态
 const isSidebarCollapsed = computed(() => props.isSidebarCollapsed)
@@ -198,8 +216,18 @@ const closeSidebarOnMobile = () => {
   }
 }
 
+const navigationItems = computed(() => [
+  { path: '/experiences', label: isZh.value ? '个人经验' : 'Personal experience', icon: 'books' },
+  { path: '/resources', label: isZh.value ? '资源库' : 'Resources', icon: 'folder-open' },
+  { path: '/api-config', label: ui.value.models, icon: 'setting' },
+])
+function navigate(path: string) {
+  closeSidebarOnMobile()
+  router.push(path)
+}
 // 新建工作
 const createNewTask = () => {
+  emit('create-new-task')
   closeSidebarOnMobile()
   router.push('/home')
 }
@@ -216,52 +244,8 @@ const selectHistory = (item: any) => {
   }
 }
 
-// 用户信息
-const userName = computed(() => authStore.currentUser?.username || t('common.user'))
-const userEmail = computed(() => authStore.currentUser?.email || '')
-const userAvatar = ref('') // 默认头像，如果为空则使用默认头像
-
-// 加载用户工作列表
-const loadUserWorks = async () => {
-  if (!authStore.token) return
-
-  loadingHistory.value = true
-  try {
-    const worksResponse = await workspaceAPI.getWorks(authStore.token, 0, 10)
-
-    // 转换工作数据为历史记录格式
-    historyItems.value = worksResponse.works.map((work) => ({
-      id: work.id,
-      work_id: work.work_id,
-      title: work.title,
-      date: work.created_at,
-      content: work.description || '',
-      status: work.status,
-    }))
-  } catch (error) {
-    console.error('加载工作列表失败:', error)
-    // 清空历史记录，显示空状态
-    historyItems.value = []
-  } finally {
-    loadingHistory.value = false
-  }
-}
-
 // 当前选中的历史工作ID
 const activeHistoryId = computed(() => props.activeHistoryId)
-
-// 获取状态主题
-const getStatusTheme = (status?: string) => {
-  if (!status) return 'default'
-  const themes: Record<string, 'default' | 'primary' | 'success' | 'warning' | 'danger'> = {
-    created: 'default',
-    in_progress: 'primary',
-    completed: 'success',
-    paused: 'warning',
-    cancelled: 'danger',
-  }
-  return themes[status] || 'default'
-}
 
 // 获取状态文本
 const getStatusText = (status?: string) => {
@@ -269,9 +253,12 @@ const getStatusText = (status?: string) => {
   const texts: Record<string, string> = {
     created: t('sidebar.created'),
     in_progress: t('sidebar.inProgress'),
+    running: t('sidebar.inProgress'),
     completed: t('sidebar.completed'),
     paused: t('sidebar.paused'),
+    waiting: t('sidebar.waiting'),
     cancelled: t('sidebar.cancelled'),
+    failed: t('sidebar.failed'),
   }
   return texts[status] || status
 }
@@ -292,425 +279,376 @@ onUnmounted(() => {
   document.body.style.overflow = ''
 })
 
-// 组件挂载时加载历史工作数据
+const onWorkStatusUpdated = (event: Event) => {
+  const { workId, status } = (event as CustomEvent<{ workId: string; status: string }>).detail
+  historyStore.patch(workId, { status })
+}
+const onWorkTitleUpdated = (event: Event) => {
+  const { workId, newTitle } = (event as CustomEvent<{ workId: string; newTitle: string }>).detail
+  historyStore.patch(workId, { title: newTitle })
+}
 onMounted(() => {
-  loadUserWorks()
-
-  // 监听工作标题更新事件，刷新侧边栏工作列表
-  window.addEventListener('work-title-updated', (event: any) => {
-    const { workId, newTitle } = event.detail
-
-    // 找到对应的工作项并更新标题
-    const workItem = historyItems.value.find((item) => item.work_id === workId)
-    if (workItem) {
-      workItem.title = newTitle
-      console.log('侧边栏工作标题已更新:', newTitle)
-    }
-
-    // 也可以选择重新加载整个工作列表
-    // loadUserWorks();
-  })
-
-  // 组件卸载时清理事件监听器
-  onUnmounted(() => {
-    window.removeEventListener('work-title-updated', (event: any) => {
-      const { workId, newTitle } = event.detail
-
-      // 找到对应的工作项并更新标题
-      const workItem = historyItems.value.find((item) => item.work_id === workId)
-      if (workItem) {
-        workItem.title = newTitle
-        console.log('侧边栏工作标题已更新:', newTitle)
-      }
-    })
-  })
+  void historyStore.ensureLoaded()
+  window.addEventListener('work-status-updated', onWorkStatusUpdated)
+  window.addEventListener('work-title-updated', onWorkTitleUpdated)
 })
-
-// 用户菜单选项
-const userOptions = computed(() => [
-  {
-    content: t('sidebar.templates'),
-    value: 'template',
-    onClick: () => {
-      router.push('/template')
-    },
-  },
-  {
-    content: t('sidebar.apiKey'),
-    value: 'api-key',
-    onClick: () => {
-      router.push('/api-config')
-    },
-  },
-  {
-    content: t('sidebar.passkeys'),
-    value: 'passkey',
-    onClick: () => {
-      router.push('/passkey')
-    },
-  },
-  {
-    content: t('sidebar.logout'),
-    value: 'logout',
-    onClick: () => {
-      authStore.logout()
-      MessagePlugin.success(t('sidebar.loggedOut'))
-      router.push('/login')
-    },
-  },
-])
+onUnmounted(() => {
+  window.removeEventListener('work-status-updated', onWorkStatusUpdated)
+  window.removeEventListener('work-title-updated', onWorkTitleUpdated)
+})
 </script>
 
 <style scoped>
 .sidebar {
-  width: 300px;
-  background: white;
-  border-right: 1px solid #eee;
+  width: 248px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.1);
-  transition: width 0.3s ease;
+  background: var(--pa-surface);
+  border-right: 1px solid var(--pa-line);
   overflow: hidden;
+  transition: width 0.2s;
 }
-
 .sidebar-collapsed {
-  width: 60px;
+  width: 64px;
 }
-
 .sidebar-header {
-  padding: 10px;
-  border-bottom: 1px solid #eee;
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 72px;
+  min-height: 72px;
+  padding: 0 17px;
 }
-
 .header-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  min-width: 0;
 }
-
+.header-title h2 {
+  font-family: var(--td-font-family);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  margin: 0;
+  color: var(--pa-ink);
+}
 .header-logo {
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 36px;
   object-fit: contain;
+  order: -1;
 }
-
-/* 收起状态下的 logo 区域 */
+.header-controls {
+  margin-left: auto;
+}
+.sidebar-toggle-btn {
+  width: var(--pa-control-height-sm);
+  height: var(--pa-control-height-sm);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-muted);
+}
 .collapsed-logo-section {
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid #eee;
+  height: 72px;
+  min-height: 72px;
 }
-
 .header-logo-small {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 34px;
   object-fit: contain;
 }
-
+.sidebar-collapsed .sidebar-header {
+  min-height: 47px;
+  height: 47px;
+  padding: 0 16px;
+}
 .sidebar-content {
   flex: 1;
-  padding: 20px 15px;
-  overflow-y: auto;
   min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px;
+  scrollbar-width: thin;
 }
-
 .menu-section {
-  margin-bottom: 25px;
+  margin-bottom: 22px;
 }
-
+.new-task-button {
+  width: 100%;
+  height: var(--pa-control-height-lg);
+  border-radius: var(--pa-radius-control);
+  justify-content: flex-start;
+  font-size: 13px;
+  color: var(--pa-on-accent);
+}
+.new-task-button :deep(.t-button__text) {
+  text-align: left;
+  flex: 1;
+}
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: -6px 0 32px;
+}
+.sidebar-nav .t-button {
+  justify-content: flex-start;
+  height: var(--pa-control-height-md);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-ink);
+  font-size: 13px;
+  padding: 0 12px;
+}
+.sidebar-nav :deep(.t-button__text) {
+  flex: 1;
+  text-align: left;
+}
+.sidebar-nav .t-button:hover {
+  background: var(--pa-surface-hover);
+}
+.sidebar-nav .nav-active {
+  position: relative;
+  background: var(--pa-surface-muted);
+  color: var(--td-brand-color);
+  font-weight: 500;
+}
+.sidebar-nav .nav-active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 2px;
+  border-radius: var(--pa-radius-inline);
+  background: var(--td-brand-color);
+}
 .menu-title {
   display: flex;
   align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  margin: 0 0 12px;
+  font-size: 12px;
   font-weight: 500;
-  color: #2c3e50;
-  margin-bottom: 12px;
-  padding: 5px 10px;
+  color: var(--pa-muted);
+  font-family: var(--td-font-family);
 }
-
-.menu-title .t-icon {
-  margin-right: 8px;
+.menu-title > .t-icon {
+  display: none;
 }
-
-.new-task-button {
-  width: 100%;
-  text-align: center;
-  vertical-align: middle;
-}
-
-.history-list {
-  overflow: hidden;
-}
-
 .history-item {
-  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 13px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--pa-radius-control);
   cursor: pointer;
-  transition: all 0.2s;
-  overflow: hidden;
+  color: var(--pa-ink);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 2px;
 }
-
 .history-item:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  background: var(--pa-surface-hover);
 }
-
 .history-item.active {
-  border-left: 4px solid #3498db;
+  background: var(--pa-surface-muted);
+  color: var(--td-brand-color);
+  font-weight: 500;
 }
-
-.history-item-content h4 {
-  margin: 0 0 5px 0;
-  font-size: 14px;
-  color: #2c3e50;
-}
-
-.history-item-content p {
-  margin: 0;
-  font-size: 12px;
-  color: #7f8c8d;
-}
-
-.history-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 5px;
-}
-
-.history-header h4 {
-  flex: 1;
-  margin-right: 8px;
-  line-height: 1.2;
-}
-
-.history-date {
-  margin: 5px 0;
-  font-size: 11px;
-  color: #999;
-}
-
-.history-content {
-  margin: 8px 0 0 0;
-  font-size: 11px;
-  color: #666;
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+.history-title {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
-
+.running-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--pa-radius-circle);
+  background: var(--td-success-color);
+  flex-shrink: 0;
+}
 .sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid #eee;
-}
-
-.sidebar-footer-collapsed {
-  padding: 15px 10px;
-  border-top: 1px solid #eee;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+  padding: 12px 10px;
   margin-top: auto;
+  border-top: 0;
 }
-
-/* 用户信息样式 */
-.user-info {
-  display: flex;
-  align-items: center;
-  padding: 10px 15px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-  gap: 10px;
-}
-
-.user-info:hover {
-  background-color: #f0f0f0;
-}
-
-.settings-icon {
-  margin-left: auto;
-  color: #7f8c8d;
-  font-size: 18px;
-}
-
-.user-avatar {
-  width: 40px;
-  height: 40px;
-  background-color: #3498db;
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin-right: 15px;
-}
-
-.user-avatar-text {
-  color: white;
-  font-size: 18px;
-  font-weight: bold;
-}
-
-.user-details {
-  display: flex;
-  flex-direction: column;
-}
-
-.user-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #2c3e50;
-}
-
-.user-email {
-  font-size: 12px;
-  color: #7f8c8d;
-}
-
-.user-avatar-collapsed {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.user-avatar-collapsed:hover {
-  transform: scale(1.05);
-}
-
-.collapsed-avatar {
-  background-color: #3498db;
-  color: white;
-  font-weight: bold;
-  font-size: 18px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-/* 侧边栏折叠按钮 */
-.sidebar-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* 侧边栏收起时的新建工作按钮 */
-.sidebar-create-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-/* 收起时中间区域的新建按钮 */
 .collapsed-center {
   display: flex;
   justify-content: center;
-  padding: 12px;
+  padding: 5px 0;
 }
-
+.sidebar-create-btn {
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  border-radius: var(--pa-radius-control);
+  color: var(--pa-on-accent);
+}
+.sidebar-footer-collapsed {
+  padding: 12px 10px;
+  margin-top: auto;
+  display: flex;
+  justify-content: center;
+}
 .sidebar-backdrop {
   display: none;
 }
-
-/* 手机端浮动展开按钮容器 */
-.mobile-expand-btn-container {
-  position: fixed;
-  bottom: 20px;
-  left: 20px;
-  z-index: 1080;
-  display: none; /* 默认隐藏，只在手机端显示 */
+.loading-state {
+  text-align: center;
+  padding: 30px 16px;
+  color: var(--pa-placeholder);
+  font-size: 12px;
 }
-
-.mobile-expand-btn {
-  width: 48px;
-  height: 48px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  border-radius: 50%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
+.empty-history {
+  padding: 22px 12px;
+  color: var(--pa-placeholder);
+  font-size: 12px;
+  line-height: 1.8;
 }
-
-/* 手机端样式 - 当侧边栏收起时完全隐藏内容区域 */
+.empty-icon {
+  font-size: 24px;
+  color: var(--pa-disabled);
+}
+.empty-text {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.empty-hint {
+  font-size: 11px;
+  color: var(--pa-placeholder);
+  margin: 0;
+}
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
-    top: 0;
-    left: 0;
-    height: 100vh;
+    inset: 0 auto 0 0;
+    width: min(280px, 86vw);
     height: 100dvh;
-    width: min(320px, 86vw);
     z-index: 1100;
-    transform: translateX(-100%);
-    transition:
-      transform 0.3s ease,
-      width 0.3s ease;
-  }
-
-  .sidebar:not(.sidebar-collapsed) {
     transform: translateX(0);
-    width: min(320px, 86vw);
+    transition: transform 0.2s;
   }
-
   .sidebar-collapsed {
-    width: 0;
-    min-width: 0;
+    transform: translateX(-100%);
+    width: min(280px, 86vw);
   }
-
   .sidebar-backdrop {
     display: block;
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--pa-mask);
     z-index: 1090;
   }
-
-  /* 在手机端显示浮动展开按钮 */
-  .mobile-expand-btn-container {
-    display: block;
+  .sidebar-header {
+    height: 68px;
+    min-height: 68px;
   }
 }
 
-/* 加载状态样式 */
-.loading-state {
-  text-align: center;
-  padding: 40px 20px;
-  color: #7f8c8d;
+.logo-toggle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--pa-control-height-lg);
+  height: var(--pa-control-height-lg);
+  border: 0;
+  background: transparent;
+  border-radius: var(--pa-radius-control);
+  cursor: pointer;
+}
+.logo-toggle:hover,
+.logo-toggle:focus-visible {
+  background: var(--pa-surface-hover);
+}
+.logo-toggle-icon {
+  position: absolute;
+  font-size: 21px;
+  color: var(--pa-muted);
+  opacity: 0;
+}
+.logo-toggle:hover .header-logo-small,
+.logo-toggle:focus-visible .header-logo-small {
+  opacity: 0;
+}
+.logo-toggle:hover .logo-toggle-icon,
+.logo-toggle:focus-visible .logo-toggle-icon {
+  opacity: 1;
+}
+.sidebar-footer-collapsed {
+  padding: 12px 10px;
 }
 
-.loading-state p {
-  margin-top: 16px;
-  color: #7f8c8d;
+.mobile-pagebar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 58px;
+  min-height: 58px;
+  width: 100%;
+  padding: 0 14px;
+  background: var(--pa-surface);
+  border-bottom: 1px solid var(--pa-line);
+  box-sizing: border-box;
 }
-
-/* 空状态样式 */
-.empty-history {
-  text-align: center;
-  padding: 40px 20px;
-  color: #7f8c8d;
+.mobile-navigation-button {
+  display: grid;
+  place-items: center;
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pa-ink);
+  border-radius: var(--pa-radius-control);
+  cursor: pointer;
+  font-size: 22px;
 }
-
-.empty-icon {
-  font-size: 48px;
-  color: #c0c4cc;
-  margin-bottom: 16px;
+.mobile-navigation-button:hover {
+  background: var(--pa-surface-hover);
 }
-
-.empty-text {
-  font-size: 16px;
+.mobile-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pa-ink);
+  text-decoration: none;
+  font-size: 18px;
   font-weight: 600;
-  color: #2c3e50;
-  margin: 0 0 8px 0;
 }
-
-.empty-hint {
-  font-size: 14px;
-  color: #7f8c8d;
-  margin: 0;
-  line-height: 1.4;
+.mobile-brand img {
+  width: 24px;
+  height: 28px;
+  object-fit: contain;
+}
+.mobile-account {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+.mobile-account :deep(.account-trigger.compact) {
+  width: var(--pa-control-height-md);
+  height: var(--pa-control-height-md);
+  padding: 3px;
+}
+.mobile-account :deep(.account-avatar) {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+.sidebar-nav .nav-active:hover,
+.history-item.active:hover {
+  background: var(--pa-surface-hover);
+  color: var(--td-brand-color-hover);
 }
 </style>
