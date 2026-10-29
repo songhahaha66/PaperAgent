@@ -15,7 +15,7 @@ RETRY_DELAYS=(1.0,2.0)
 
 
 def model_identity(model):
-    fields={key:str(getattr(model,key,None)) for key in ('model_name','model','openai_api_base','anthropic_api_url','request_timeout','default_request_timeout','timeout')}
+    fields={key:str(getattr(model,key,None)) for key in ('model_name','model','openai_api_base','anthropic_api_url','request_timeout','default_request_timeout','timeout','extra_body')}
     # Credentials only enter a one-way local fingerprint; never persist their values.
     for key in ('openai_api_key','anthropic_api_key','google_api_key'):
         value=getattr(model,key,None)

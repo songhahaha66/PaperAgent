@@ -180,7 +180,7 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
-import { Input, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { Input, Switch, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
 import { modelConfigAPI, type ModelConfig } from '@/api/modelConfig'
 import { useBreakpoint } from '@/composables/useBreakpoint'
@@ -193,6 +193,7 @@ interface Form {
   baseUrl: string
   modelId: string
   timeoutSeconds?: number | null
+  thinkingEnabled?: boolean
 }
 const { ui, isZh } = useStudioCopy(),
   { isMobile } = useBreakpoint()
@@ -220,9 +221,7 @@ const loading = ref(true),
   savingRole = ref('')
 const feedback = ref(''),
   feedbackError = ref(false)
-const isDeepSeek = computed(
-  () => !customProvider.value && isDeepSeekEndpoint(forms.brain.baseUrl),
-)
+const isDeepSeek = computed(() => !customProvider.value && isDeepSeekEndpoint(forms.brain.baseUrl))
 const roles = computed(() => [
   { type: 'brain' as Role, label: ui.value.brain, hint: ui.value.brainHint, icon: 'lightbulb' },
   { type: 'code' as Role, label: ui.value.code, hint: ui.value.codeHint, icon: 'code' },
@@ -259,30 +258,65 @@ const ConnectionFields = defineComponent({
           ],
           ['modelId', 'modelId', props.jev ? 'jev-latest' : 'deepseek-flash', 'text'],
           ['timeoutSeconds', 'requestTimeout', props.jev ? '10' : '600', 'number'],
-        ].map(([key, label, placeholder, type]) =>
-          h('label', { class: 'connection-field' }, [
-            h(
-              'span',
-              label === 'requestTimeout'
-                ? isZh.value
-                  ? `模型请求超时（秒，留空为 ${props.jev ? '10' : '600'}）`
-                  : `Request timeout (seconds, blank for ${props.jev ? '10' : '600'})`
-                : props.ui[label as string],
-            ),
-            h(Input, {
-              modelValue: props.form[key as string],
-              'onUpdate:modelValue': (v: string) => {
-                props.form[key as string] =
-                  key === 'timeoutSeconds' ? (v === '' ? null : Number(v)) : v
-              },
-              type: type as 'text' | 'password' | 'number',
-              placeholder,
-              disabled: props.disabled,
-              autocomplete: key === 'apiKey' ? 'new-password' : 'off',
-              'aria-label': props.ui[label as string],
-            }),
-          ]),
-        ),
+        ]
+          .map(([key, label, placeholder, type]) =>
+            h('label', { class: 'connection-field' }, [
+              h(
+                'span',
+                label === 'requestTimeout'
+                  ? isZh.value
+                    ? `模型请求超时（秒，留空为 ${props.jev ? '10' : '600'}）`
+                    : `Request timeout (seconds, blank for ${props.jev ? '10' : '600'})`
+                  : props.ui[label as string],
+              ),
+              h(Input, {
+                modelValue: props.form[key as string],
+                'onUpdate:modelValue': (v: string) => {
+                  props.form[key as string] =
+                    key === 'timeoutSeconds' ? (v === '' ? null : Number(v)) : v
+                },
+                type: type as 'text' | 'password' | 'number',
+                placeholder,
+                disabled: props.disabled,
+                autocomplete: key === 'apiKey' ? 'new-password' : 'off',
+                'aria-label': props.ui[label as string],
+              }),
+            ]),
+          )
+          .concat(
+            !props.jev && isDeepSeekEndpoint(props.form.baseUrl)
+              ? [
+                  h('div', { class: 'connection-field' }, [
+                    h('span', isZh.value ? '思考模式' : 'Thinking mode'),
+                    h('div', { class: 'thinking-option' }, [
+                      h(Switch, {
+                        modelValue: !!props.form.thinkingEnabled,
+                        'onUpdate:modelValue': (value: boolean) => {
+                          props.form.thinkingEnabled = value
+                        },
+                        disabled: props.disabled,
+                        role: 'switch',
+                        tabindex: props.disabled ? -1 : 0,
+                        'aria-checked': !!props.form.thinkingEnabled,
+                        'aria-label': isZh.value ? '思考模式' : 'Thinking mode',
+                        onKeydown: (event: KeyboardEvent) => {
+                          if (!props.disabled && [' ', 'Enter'].includes(event.key)) {
+                            event.preventDefault()
+                            props.form.thinkingEnabled = !props.form.thinkingEnabled
+                          }
+                        },
+                      }),
+                      h(
+                        'small',
+                        isZh.value
+                          ? '适合复杂推理，响应可能更慢'
+                          : 'For complex reasoning; responses may take longer',
+                      ),
+                    ]),
+                  ]),
+                ]
+              : [],
+          ),
       )
   },
 })
@@ -313,6 +347,7 @@ function adopt(config: ModelConfig) {
     baseUrl: config.base_url || '',
     modelId: config.model_id || (config.type === 'jev' ? 'jev-latest' : ''),
     timeoutSeconds: config.timeout_seconds ?? null,
+    thinkingEnabled: config.thinking_enabled ?? false,
   }
 }
 async function persist(role: Role) {
@@ -321,6 +356,7 @@ async function persist(role: Role) {
     model_id: form.modelId.trim(),
     base_url: form.baseUrl.trim(),
     timeout_seconds: form.timeoutSeconds ?? null,
+    thinking_enabled: !!form.thinkingEnabled,
     ...(role === 'jev' ? { is_active: true } : {}),
     ...(form.apiKey.trim() ? { api_key: form.apiKey.trim() } : {}),
   }
@@ -370,6 +406,7 @@ async function testConnection() {
       type: 'brain',
       model_id: forms.brain.modelId.trim(),
       base_url: forms.brain.baseUrl.trim(),
+      thinking_enabled: !!forms.brain.thinkingEnabled,
       ...(forms.brain.apiKey.trim() ? { api_key: forms.brain.apiKey.trim() } : {}),
     })
     feedbackError.value = false
@@ -445,7 +482,7 @@ watch(
   },
 )
 watch(
-  () => [forms.brain.apiKey, forms.brain.baseUrl, forms.brain.modelId],
+  () => [forms.brain.apiKey, forms.brain.baseUrl, forms.brain.modelId, forms.brain.thinkingEnabled],
   () => {
     feedback.value = ''
   },
@@ -459,7 +496,12 @@ onMounted(async () => {
       !b ||
       configs
         .filter((c) => ['brain', 'code', 'writing'].includes(c.type))
-        .every((c) => c.model_id === b.model_id && c.base_url === b.base_url)
+        .every(
+          (c) =>
+            c.model_id === b.model_id &&
+            c.base_url === b.base_url &&
+            !!c.thinking_enabled === !!b.thinking_enabled,
+        )
     await loadJevReadiness()
   } catch {
     MessagePlugin.error(ui.value.saveFailed)
@@ -569,6 +611,15 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 500;
   color: var(--pa-ink);
+}
+:deep(.thinking-option) {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+:deep(.thinking-option small) {
+  color: var(--pa-muted);
+  font-size: 12px;
 }
 :deep(.connection-field .t-input) {
   height: var(--pa-control-height-lg);

@@ -42,7 +42,7 @@ def test_materials_and_six_python_steps_stay_in_one_live_agent(tmp_path):
         if rows[-1].name!='research_update_answer':
             assert 'value 6' in last['observation']
             return tool('research_update_answer',{'question_id':qid,'statement':'当前累计值为6，校验见输出和结果文件',
-                'coverage':'answered','stop_reason':'已执行6步并保存结果'},'answer')
+                'coverage':'answered'},'answer')
         return tool('research_deliver',{'title':'计算结果','reason':'已完成当前问题'},'deliver')
     ctx=make_context(tmp_path,respond)
     runtime=ResearchRuntime(tmp_path,'single-agent');runtime.configure({'request_limit':20,'compact_paper':False})
@@ -54,6 +54,7 @@ def test_materials_and_six_python_steps_stay_in_one_live_agent(tmp_path):
     assert all(r['question_id']==qid for r in ctx.fs._manifest['runs'].values())
     assert (tmp_path/'outputs/intermediate/value.txt').read_text()=='6'
     assert state['publication']['stage']=='validate' and not ctx.kernels._kernels
+    assert state['questions'][qid]['stop_reason']==''
     assert not any(a['capability']=='experiments.execute' for a in state['activity'])
     assert not state['artifacts']
     assert all(ctx.fs.exists(r['stdout']) for r in ctx.fs._manifest['runs'].values())

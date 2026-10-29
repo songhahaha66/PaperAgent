@@ -7,6 +7,7 @@ export interface ModelConfig {
   model_id: string
   base_url: string
   timeout_seconds?: number | null
+  thinking_enabled?: boolean
   is_active: boolean
   created_at: string
 }
@@ -16,6 +17,7 @@ export interface ModelConfigCreate {
   model_id: string
   base_url: string
   timeout_seconds?: number | null
+  thinking_enabled?: boolean
   api_key: string
 }
 
@@ -23,6 +25,7 @@ export interface ModelConfigUpdate {
   model_id?: string
   base_url?: string
   timeout_seconds?: number | null
+  thinking_enabled?: boolean
   api_key?: string
   is_active?: boolean
 }
@@ -52,6 +55,7 @@ class ModelConfigAPI {
     model_id: string
     base_url: string
     timeout_seconds?: number | null
+    thinking_enabled?: boolean
     api_key?: string
   }): Promise<{ ok: boolean }> {
     return apiClient.request<{ ok: boolean }>('/model-configs/test', {

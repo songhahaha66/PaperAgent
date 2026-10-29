@@ -306,7 +306,7 @@ def validate_action(requested: str, snapshot: ResearchSnapshot) -> str:
         raise ValueError("当前等待必要信息，请在对话中回复")
     if requested == "resume" and (not snapshot.research_id or snapshot.work_status == "completed"):
         raise ValueError("当前没有可恢复的研究任务")
-    if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.experiments or waiting):
+    if requested == "revise_research" and (snapshot.engine_version != ENGINE_VERSION or not snapshot.research_id or waiting):
         raise ValueError("当前研究不能修订，请先回复待补充信息")
     return requested
 

@@ -178,11 +178,10 @@ class OpenAIProvider(BaseLLMProvider):
             # Reuse the bounded settings validated by the live research run.
             # Copy the body so saved settings are untouched; explicit effort wins.
             extra_body = {'reasoning_effort': 'low', **(extra_body or {})}
-        # 官方 Flash 默认开启思考，但流水线的结构化输出需要强制工具选择。
-        # DeepSeek 不允许在思考模式下强制工具，因此默认关闭；显式参数仍优先。
-        if (extra_body is None and self.model_id == "deepseek-flash"
+        if (self.model_id.startswith("deepseek-")
                 and urlparse(self.base_url).hostname == "api.deepseek.com"):
-            extra_body = {"thinking": {"type": "disabled"}}
+            extra_body = {"thinking": {"type": "enabled" if self.config.get('thinking_enabled') else "disabled"},
+                          **(extra_body or {})}
 
         model_class = AIGWChatOpenAI if gateway_host else MeteredChatOpenAI
         from ..research.runtime import request_hook,response_hook,async_request_hook,async_response_hook
@@ -356,7 +355,8 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
         'api_key': model_config.api_key,
         'base_url': model_config.base_url,
         'is_active': getattr(model_config, 'is_active', True),
-        'timeout_seconds': getattr(model_config,'timeout_seconds',None)
+        'timeout_seconds': getattr(model_config,'timeout_seconds',None),
+        'thinking_enabled': getattr(model_config,'thinking_enabled',False),
     }
     extra_body = getattr(model_config, 'extra_body', None)
     if extra_body:

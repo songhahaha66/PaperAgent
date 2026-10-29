@@ -72,8 +72,6 @@ def answer_gaps(question):
     gaps=[];coverage=question.get('coverage')
     if coverage not in {'answered','partial','unanswered'}:
         gaps.append('尚未说明问题已答、部分回答或未答。')
-    if not str(question.get('stop_reason') or '').strip():
-        gaps.append('缺少停止理由：说明现有答案的范围，或为何仍有未知。')
     if coverage in {'answered','partial'} and not str(question.get('judgment') or '').strip():
         gaps.append('缺少当前答案；无答案时可明确标为未答并说明原因。')
     if question.get('unavailable_artifact_refs'):

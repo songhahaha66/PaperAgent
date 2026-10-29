@@ -33,6 +33,7 @@ class ModelConfig(Base):
     model_id = Column(String(50), nullable=False)  # 模型ID
     base_url = Column(String(100), nullable=False)  # 模型URL
     timeout_seconds = Column(Float, nullable=True)  # None uses the model client default (600s).
+    thinking_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
     api_key = Column(String(255), nullable=False)  # API密钥
     is_active = Column(Boolean, default=True)  # 是否激活
     created_at = Column(DateTime(timezone=True), server_default=func.now())  # 创建时间

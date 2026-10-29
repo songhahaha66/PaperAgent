@@ -81,11 +81,13 @@ class ModelConfigBase(BaseModel):
     base_url: str
 
     timeout_seconds: Optional[float] = Field(default=None,gt=0,le=3600)
+    thinking_enabled: bool = False
 
 class ModelConfigCreate(ModelConfigBase):
     api_key: str  # 创建时必须提供api_key
 
 class ModelConfigUpdate(BaseModel):
+    thinking_enabled: bool = False
     timeout_seconds: Optional[float] = Field(default=None,gt=0,le=3600)
     model_id: Optional[str] = None
     base_url: Optional[str] = None

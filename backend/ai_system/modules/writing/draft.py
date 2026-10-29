@@ -5,7 +5,7 @@ from ai_system.modules.registry import Inputs, CapabilityProduct
 
 
 class DraftEdit(Inputs):
-    path: str = 'paper.md'
+    path: str = Field(default='paper.md', pattern=r'\.(md|tex|bib)$')
     content: str
     expected_version: str | None = None
     old_text: str | None = Field(default=None,description='局部修改时指定唯一的原文，content为替换内容；省略则写完整文件。')
@@ -16,11 +16,11 @@ async def edit(ctx, inputs):
     from services.file_services.workspace_lock import edit_lock
     from ai_system.research.models import ResearchConflict
     from ai_system.research.store import digest
-    await ctx.kernels.close()
     name=inputs['path']
     if not name.endswith(('.md','.tex','.bib')):raise ValueError('正文仅支持 Markdown、TeX 或 BibTeX 文件')
     path=project.safe_path(ctx.workspace,name,writing=True)
     if name.startswith(('data/','attachment/','outputs/','code/')):raise ValueError('正文不能覆盖资料或计算产物')
+    await ctx.kernels.close()
     project.initialize(ctx.research)
     before=path.read_text(encoding='utf-8') if path.exists() else ''
     version=hashlib.sha256(before.encode()).hexdigest()

@@ -208,6 +208,15 @@
                       ><t-icon name="attach"
                     /></t-button>
                     <t-button
+                      v-if="researchSnapshot?.research_id && currentWork?.status !== 'waiting' && !paperContexts.length"
+                      type="button"
+                      theme="default"
+                      variant="text"
+                      :disabled="isStreaming || loading || !inputValue.trim()"
+                      @click="sendMessage(undefined, 'revise_research')"
+                      >{{ isZh ? '补充要求' : 'Update requirements' }}</t-button
+                    >
+                    <t-button
                       type="submit"
                       theme="primary"
                       shape="circle"

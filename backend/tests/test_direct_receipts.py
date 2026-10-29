@@ -35,7 +35,7 @@ def test_new_questions_and_public_code_need_no_experiment_or_acceptance(tmp_path
     assert not {'research.update_question','research.continue_experiment','research.check_interpretation'}&names
 
 
-def test_old_completed_code_is_referenced_without_losing_saved_source(tmp_path):
+def test_retained_tool_history_keeps_executable_code_and_reasoning(tmp_path):
     from ai_system.graph.compaction import ContextMiddleware
     from research_tools_helpers import ResearchToolsModel,tool
     ctx=context(tmp_path)
@@ -45,6 +45,7 @@ def test_old_completed_code_is_referenced_without_losing_saved_source(tmp_path):
         ctx.fs.write_text(path,code);ctx.fs.register_file(path,kind='code',visibility='user')
         messages += [tool('research_run_python',{'code':code},str(i)),
                      ToolMessage(content=json.dumps({'input_path':path,'run_id':f'run_{i}'}),tool_call_id=str(i),name='research_run_python')]
+        messages[-2].additional_kwargs['reasoning_content']='offline reasoning'
     class Request:
         tools=[]
         def __init__(self,messages):self.messages=messages
@@ -53,8 +54,8 @@ def test_old_completed_code_is_referenced_without_losing_saved_source(tmp_path):
     async def handler(r):sent.extend(r.messages)
     model=ResearchToolsModel(respond=lambda m:AIMessage(content='notes'))
     asyncio.run(ContextMiddleware(ctx,model,'reduce-code').awrap_model_call(Request(messages),handler))
-    assert 'code/cell_0.py' in sent[0].tool_calls[0]['args']['code']
-    assert len(sent[0].tool_calls[0]['args']['code'])<100
+    assert sent[0].tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')
+    assert all(m.additional_kwargs['reasoning_content']=='offline reasoning' for m in sent if isinstance(m,AIMessage))
     assert messages[0].tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')
     assert sent[-2].tool_calls[0]['args']['code']==messages[-2].tool_calls[0]['args']['code']
 

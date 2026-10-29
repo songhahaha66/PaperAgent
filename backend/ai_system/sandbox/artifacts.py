@@ -165,10 +165,21 @@ def publish_reference(source_fs, target_fs, item):
 
 
 def output_hashes(fs, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
+    import os
+    from .transfer import output_path
     result = {}
-    paths = [p for folder in ('outputs', 'code') for p in fs.abs(folder).rglob('*')]
-    paths += [p for p in fs.root.iterdir() if p.is_file() and not p.name.startswith('.') and
-              p.name not in {'manifest.json','chat_history.json','chat_history.json.lock','paper.tex','paper.md','paper.pdf'}]
+    from services.file_services.workspace_layout import PRIVATE_NAMES
+    paths=[]
+    for directory, dirs, files in os.walk(fs.root, followlinks=False):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in PRIVATE_NAMES | {'__pycache__','node_modules'}
+                   and not (Path(directory)==fs.root and d in {'data','attachment'})
+                   and not (Path(directory)==fs.root/'outputs' and d=='research')]
+        for name in files:
+            path=Path(directory)/name
+            if name.startswith('.') or name in PRIVATE_NAMES:continue
+            try:output_path(path.relative_to(fs.root).as_posix())
+            except ValueError:continue
+            paths.append(path)
     for path in sorted(paths):
         from services.file_services.workspace_layout import safe_join
         path = safe_join(fs.root, path.relative_to(fs.root).as_posix())

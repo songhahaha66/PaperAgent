@@ -495,8 +495,10 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         revision_command = ResearchRevisionCommand.model_validate(revision)
                     except ValidationError:
                         raise ValueError("增量修改需要有效的命令标识、研究标识和基础版本")
+                    revision_ids = ({t["task_id"] for t in snapshot.experiments} if snapshot.experiments else
+                                    {q['id'] for q in snapshot.questions if not q.get('retired')})
                     if revision_command.scope is not None and (len(set(revision_command.scope)) != len(revision_command.scope) or
-                            not set(revision_command.scope) <= {t["task_id"] for t in snapshot.experiments}):
+                            not set(revision_command.scope) <= revision_ids):
                         raise ValueError("修改范围包含未知或重复任务")
                     if revision_command.research_id != snapshot.research_id:
                         raise ValueError("研究标识已改变，请刷新后重试")

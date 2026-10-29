@@ -27,6 +27,22 @@ def context(tmp_path,respond):
 def results(messages):return [m for m in messages if isinstance(m,ToolMessage)]
 
 
+def test_local_execution_conflict_keeps_actionable_reason_without_http_secrets():
+    from fastapi import HTTPException
+    import httpx
+    from ai_system.research.planner import planning_failure_message
+    from ai_system.research.review_cache import error_detail
+    reason='上个沙箱尚未确认销毁，请等待其 TTL 到期后重试；不会重跑中断代码'
+    conflict=HTTPException(409,reason)
+    snapshot={'activity':[],'experiments':{},'executions':{}}
+    assert error_detail(conflict)==reason
+    assert reason in planning_failure_message(conflict,snapshot)
+    assert 'private-upstream-body' not in error_detail(HTTPException(500,'private-upstream-body'))
+    request=httpx.Request('GET','https://provider.invalid/?key=private-key')
+    upstream=httpx.HTTPStatusError('private-upstream-body',request=request,response=httpx.Response(409,request=request))
+    assert error_detail(upstream)=='HTTPStatusError'
+
+
 @pytest.mark.parametrize('extra', [{'question_index':0},{'question':'old top level duplicate'},{'question_updates':[]}])
 def test_create_then_schedule_and_correct_extra_fields_in_same_agent(tmp_path,extra):
     def respond(messages):

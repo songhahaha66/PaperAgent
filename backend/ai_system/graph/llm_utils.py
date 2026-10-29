@@ -70,8 +70,16 @@ async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage], erro
     raise InvalidStructuredReply(ValueError("没有完整的 JSON 对象；请输出简洁、闭合的对象，不要重复扩展列表"), reply)
 
 
+def thinking_enabled(llm: Any) -> bool:
+    return (getattr(llm, 'extra_body', None) or {}).get('thinking', {}).get('type') == 'enabled'
+
+
 def cap_output(llm: Any, max_tokens: int) -> Any:
     """限制单次输出长度：模型偶尔重复输出停不下来，16000 token 按网关约 35 token/秒要等七八分钟"""
+    # Reasoning shares the output allowance. Keep the connection's full budget
+    # instead of truncating reasoning before any code or final content appears.
+    if thinking_enabled(llm):
+        return llm
     fields = getattr(type(llm), "model_fields", {})
     if "max_tokens" not in fields:
         return llm
@@ -87,6 +95,9 @@ def as_messages(system: str, user: str) -> List[BaseMessage]:
 
 async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None,retries: int=RETRIES,json_first: bool=False) -> T:
     llm = cap_output(llm, STRUCTURED_MAX_TOKENS)
+    # Thinking-mode Chat Completions rejects forced/named tool choices. The
+    # existing JSON/schema parser provides the same validation without them.
+    json_first = json_first or thinking_enabled(llm)
     model = None if json_first else structured_model(llm, schema, include_raw=True)
     last_error: Exception | None = None
     retry_messages = messages

@@ -85,11 +85,15 @@ def preserved_progress(snapshot):
 def planning_failure_message(error, snapshot):
     from .runtime import ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked
     from langgraph.errors import GraphRecursionError
+    from starlette.exceptions import HTTPException
     if isinstance(error,GraphRecursionError):
         detail='研究工具循环达到图步骤上限，尚未完成下一行动；这不是费用额度耗尽。'
         last=next((a.get('message') for a in reversed(snapshot.get('activity',[]))
                    if a.get('status')=='failed' and a.get('capability')!='research.observe' and a.get('message')),None)
         if last:detail+=' 最近具体反馈：'+last
+    elif isinstance(error,HTTPException) and 400<=error.status_code<500:
+        from .review_cache import error_detail
+        detail=error_detail(error)
     else:
         detail=str(error) if isinstance(error,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked,NoResearchProgress)) else '研究控制器未完成下一行动，具体诊断已保存，可继续处理。'
     return detail+' '+preserved_progress(snapshot)

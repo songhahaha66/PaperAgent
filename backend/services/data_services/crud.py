@@ -112,6 +112,7 @@ def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id:
             base_url=config.base_url,
             api_key=config.api_key,
             timeout_seconds=config.timeout_seconds,
+            thinking_enabled=config.thinking_enabled,
             created_by=user_id
         )
 

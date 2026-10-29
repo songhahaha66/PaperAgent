@@ -4,8 +4,24 @@ import logging
 from typing import List,Any,Callable,Awaitable
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage, messages_to_dict
+from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+class WorkNotes(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    notes: list[str]
+    pending: list[str]
+    files: list[str]
+
+
+def summary_history(messages):
+    """Summarize public observations, never private reasoning or wire metadata."""
+    return [{'role':m.type,'content':m.content,
+             **({'tool_calls':m.tool_calls} if isinstance(m,AIMessage) else {}),
+             **({'tool_call_id':m.tool_call_id} if isinstance(m,ToolMessage) else {})}
+            for m in messages]
 
 
 def token_estimate(value):
@@ -24,7 +40,7 @@ class ContextMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         from ai_system.research.runtime import execution_scope
         from ai_system.research.store import digest
-        from ai_system.graph.llm_utils import as_messages, call_text, cap_output
+        from ai_system.graph.llm_utils import as_messages, call_structured, cap_output
         store = self.ctx.research
         self.messages = list(request.messages)
         from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -33,27 +49,9 @@ class ContextMiddleware(AgentMiddleware):
         limit = int(profile.get('max_input_tokens') or 32000)
         budget = max(2048, limit - 4800 - tool_tokens)
         messages=[]
-        # Old completed code cells already have immutable input.py receipts.
-        # Keep recent cells verbatim for continuous debugging, and retain full
-        # source history in checkpoints rather than resending every cell.
-        completed={m.tool_call_id:m for m in self.messages if isinstance(m,ToolMessage)}
-        code_calls=[c['id'] for m in self.messages if isinstance(m,AIMessage)
-                    for c in m.tool_calls if c['name'] in {'research_run_python','run_python'} and c['id'] in completed]
-        archived=set(code_calls[:-2])
+        # Keep tool arguments truthful. Summarize complete old turns below;
+        # prose substituted into a code argument can be copied as executable code.
         for message in self.messages:
-            if isinstance(message,AIMessage) and any(c['id'] in archived for c in message.tool_calls):
-                calls=[]
-                for call in message.tool_calls:
-                    if call['id'] in archived:
-                        try:
-                            receipt=json.loads(completed[call['id']].content)
-                            path=receipt.get('input_path')
-                            if path:
-                                call={**call,'args':{**call['args'],'code':'已执行代码保存在 '+path+'；需要时读取，不重放。'}}
-                        except (ValueError,TypeError):pass
-                    calls.append(call)
-                message=message.model_copy(update={'tool_calls':calls,'additional_kwargs':{
-                    k:v for k,v in message.additional_kwargs.items() if k!='tool_calls'}})
             if isinstance(message,ToolMessage) and token_estimate(message.content)>4000:
                 raw=str(message.content)
                 path='.system/context-outputs/'+digest(raw)+'.json'
@@ -77,7 +75,7 @@ class ContextMiddleware(AgentMiddleware):
         start = next((i for i,m in enumerate(messages) if isinstance(m,AIMessage)),len(messages))
         cut = saved.get('cut',0)
         def prefix(end): return messages_to_dict(messages[start:end])
-        if cut <= start or cut > len(messages) or saved.get('hash') != digest(prefix(cut)):
+        if saved.get('format')!=2 or cut <= start or cut > len(messages) or saved.get('hash') != digest(prefix(cut)):
             saved = {};cut = start
         def view():
             facts=self.pinned
@@ -95,16 +93,24 @@ class ContextMiddleware(AgentMiddleware):
             eligible = [i for i in boundaries if token_estimate(messages_to_dict(messages[i:])) < budget*.5]
             if boundaries:
                 end = eligible[0] if eligible else boundaries[-1]
-                old = messages_to_dict(messages[cut:end])
+                old = summary_history(messages[cut:end])
                 from ai_system.graph.tracing import labelled
                 with labelled('context_summary'):
-                    summary = await call_text(cap_output(self.llm,1800),as_messages(
-                    '整理历史工作笔记供同一Agent继续。只记录讨论过的方法、遇到的错误、尝试的修正、文件路径和待核实项。'
-                    '原题与当前状态由系统直接提供，不重新定义任务、日期、参数或覆盖范围。模型声称正确只记为“曾声称”，不能改写为校验通过；'
-                    '无独立检查不能写“未知：无”。不解决新问题，不补充事实。',
-                    json.dumps({'original_request':store.snapshot()['spec']['requirement'],
-                                'previous_summary':saved.get('summary',''),'completed_history':old},ensure_ascii=False)))
-                saved={'cut':end,'hash':digest(prefix(end)),'summary':summary}
+                    try:
+                        notes = await call_structured(cap_output(self.llm,1800),WorkNotes,as_messages(
+                            '整理历史工作笔记供同一Agent继续。只记录讨论过的方法、遇到的错误、尝试的修正、文件路径和待核实项。'
+                            '原题与当前状态由系统直接提供，不重新定义任务、日期、参数或覆盖范围。模型声称正确只记为“曾声称”，不能改写为校验通过；'
+                            '无独立检查不能写“未知：无”。不解决新问题，不补充事实。',
+                            json.dumps({'original_request':store.snapshot()['spec']['requirement'],
+                                        'previous_summary':saved.get('summary',''),'completed_history':old},ensure_ascii=False)),
+                            json_first=True,retries=0)
+                        summary=notes.model_dump_json()
+                    except ValueError:
+                        # A malformed note is optional context, never a new plan.
+                        # Keep the verified prior note and current durable facts.
+                        logger.warning('历史工作笔记格式无效，保留原有笔记和实际记录')
+                        summary=saved.get('summary') or '旧轮次已归档；需要时读取已有代码、日志与文件，当前事实见下方状态。'
+                saved={'format':2,'cut':end,'hash':digest(prefix(end)),'summary':summary}
                 with store._transaction() as db:
                     db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
                         (store.research_id,key,saved['hash'],json.dumps(saved,ensure_ascii=False)))
