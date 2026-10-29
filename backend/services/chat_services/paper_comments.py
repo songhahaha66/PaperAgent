@@ -229,7 +229,7 @@ async def comment_agent(store, record, llm, context):
             return response
 
     try:
-        tools=build_tools(ctx,None,runs,record=False)
+        tools=build_tools(ctx,None,runs)
         tools.append(StructuredTool.from_function(coroutine=propose_edits,handle_tool_error=True,handle_validation_error=str))
         async with AsyncSqliteSaver.from_conn_string(str(workspace_path(store.root, '.system/graph.sqlite'))) as saver:
             agent=create_agent(model=cap_output(llm,6000),tools=tools,system_prompt=SYSTEM,

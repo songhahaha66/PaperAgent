@@ -82,12 +82,11 @@ class StepBudgetMiddleware(AgentMiddleware):
     这里在剩余步数不多时，在请求末尾追加一条提醒；只追加在末尾，不影响前缀缓存。最后一步只给报告工具，强制收尾。
     """
 
-    def __init__(self, budget: int, reserve: int, message: str, report_ready: Callable[[], bool] | None = None):
+    def __init__(self, budget: int, reserve: int, message: str):
         super().__init__()
         self.budget = budget
         self.reserve = reserve
         self.message = message
-        self.report_ready = report_ready
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
@@ -99,20 +98,11 @@ class StepBudgetMiddleware(AgentMiddleware):
             # Failed structured submissions return directly to the model without
             # a tools node, so recursion_limit alone is not a tool-step budget.
             raise GraphRecursionError(f"工具调用步数已达到预算 {self.budget}")
-        if self.report_ready and repeated_execution(request.messages[last_human + 1:]):
-            if self.report_ready():
-                note = HumanMessage(content="[系统提醒] 必需登记证据已齐，相同代码和输出已连续重复三次。请现在提交SolveReport，按已有登记引用填写要求证据映射；不得声称未做的分析。")
-                return await handler(request.override(messages=[*request.messages, note], tools=[]))
-            note = HumanMessage(content="[系统提醒] 相同代码和输出已连续重复三次，提交所需的登记证据仍未齐。请按最近工具返回的缺项清单，用已有成功run_id调用record_results或record_figure；确实缺少计算结果时只补算缺项，不要重复整个计算，也不要提前提交报告。")
-            registration = [tool for tool in request.tools if getattr(tool, 'name', tool) != 'run_python']
-            return await handler(request.override(messages=[*request.messages, note], tools=registration))
         if steps >= self.budget - 1:
             # 最后一步只留报告工具（ToolStrategy 下 tool_choice=any，模型只能交报告），不会撞 recursion_limit。
             # 官方 API 的 deepseek-flash 一步只要几秒、步子很碎，v2l 的 Q1 三分钟用完 40 步没交报告，对话和报告全丢
             note = HumanMessage(content=f"[系统提醒] 步数已用完，不能再执行代码。{self.message}")
-            tools = ([tool for tool in request.tools if getattr(tool, 'name', tool) != 'run_python']
-                     if self.report_ready and not self.report_ready() else [])
-            return await handler(request.override(messages=[*request.messages, note], tools=tools))
+            return await handler(request.override(messages=[*request.messages, note], tools=[]))
         if steps >= self.budget - self.reserve:
             left = max(self.budget - steps, 0)
             note = HumanMessage(content=f"[系统提醒] 还剩约 {left} 步。{self.message}")
@@ -219,16 +209,11 @@ class ReportOrderingMiddleware(AgentMiddleware):
     loop return actual execution/registration results before the next submission.
     """
 
-    def __init__(self, report_tool: str, report_ready: Callable[[], bool] | None = None):
+    def __init__(self, report_tool: str):
         super().__init__()
         self.report_tool = report_tool
-        self.report_ready = report_ready
 
     async def awrap_model_call(self, request, handler):
-        # Do not offer a final report while its prerequisite evidence is absent.
-        # Validation remains in place for scope, provenance and report content.
-        if self.report_ready and not self.report_ready():
-            request = request.override(response_format=None)
         response = await handler(request)
         messages = getattr(response, "result", None) or [response]
         reply = next((m for m in messages if isinstance(m, AIMessage)), None)
@@ -239,7 +224,7 @@ class ReportOrderingMiddleware(AgentMiddleware):
         if not operations or len(operations) == len(calls):
             return response
         feedback = "\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage))
-        note = ("本轮报告未提交：先执行本轮计算/登记，阅读工具返回的真实编号，再单独调用"
+        note = ("本轮报告未提交：先执行本轮操作，阅读实际输出，再单独调用"
                 f" {self.report_tool}。报告不能与其他工具同时调用。\n" + feedback)
         reply = reply.model_copy(update={"tool_calls": operations,
             "content": str(reply.content or "") + "\n" + note,

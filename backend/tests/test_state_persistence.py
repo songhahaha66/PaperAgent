@@ -49,7 +49,8 @@ def test_cutover_imports_legacy_activity_and_chat_once(tmp_path):
         state = json.loads(db.execute('SELECT payload FROM research WHERE id=?', ('old',)).fetchone()[0])
         state['activity'] = [item]
         db.execute('UPDATE research SET payload=? WHERE id=?', (json.dumps(state), 'old'))
-        db.execute('DELETE FROM domain_migrations WHERE version=8')
+        from ai_system.research.migration import MIGRATION_VERSION
+        db.execute('DELETE FROM domain_migrations WHERE version=?',(MIGRATION_VERSION,))
         db.execute('DROP TABLE chat_messages'); db.execute('DROP TABLE chat_metadata')
     migrated = ResearchStore(root, 'old')
     assert migrated.snapshot()['activity'] == [item]

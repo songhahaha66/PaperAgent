@@ -206,7 +206,7 @@ def test_completed_execution_event_already_links_published_logs(tmp_path, monkey
         lambda root, rid, kind, item: events.append(timeline.execution_projection(root, rid, item)))
     async def run():
         try:
-            tool = next(t for t in build_tools(ctx, 'Q1', record=False) if t.name == 'run_python')
+            tool = next(t for t in build_tools(ctx, 'Q1') if t.name == 'run_python')
             await tool.ainvoke({'code': 'print(sum([1, 2, 3]))'})
         finally:
             await ctx.kernels.close()

@@ -1,8 +1,9 @@
-"""Research contracts shared by analysis, execution, checking and planning."""
+"""Research inputs and execution records. Legacy check shapes are read-only metadata."""
 from math import isfinite
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 
 class Contract(BaseModel):
@@ -104,22 +105,22 @@ class Requirement(Contract):
     id: str
     statement: str = Field(min_length=1)
     source_quote: str = Field(min_length=1, description="原题逐字摘录，必须能在用户需求中找到")
-    kind: Literal["goal", "constraint", "deliverable"] = Field(description="goal=研究目标；constraint=必须保留的数学/领域约束，相关实验执行前绑定具体检查；deliverable=报告、语言、格式、引用等交付要求。不要为文书要求伪造满足指标")
+    kind: Literal["goal", "constraint", "deliverable"] = Field(description="goal=研究目标；constraint=必须保留的数学/领域约束，在计算代码中实施必要校验；deliverable=报告、语言、格式、引用等交付要求。不要为文书要求伪造满足指标")
     task_ids: list[str] = Field(default_factory=list)
-    checks: list[DomainCheck] = Field(default_factory=list, description="要求可先保留而不绑定实验；实际声明的检查随执行冻结，未操作化的约束保留为待核实，不补造自报指标。文书要求由写作处理")
+    checks: SkipJsonSchema[list[DomainCheck]] = Field(default_factory=list, description="要求可先保留而不绑定实验；实际声明的检查随执行冻结，未操作化的约束保留为待核实，不补造自报指标。文书要求由写作处理")
 
 
 class Assumption(Contract):
     id: str
     statement: str = Field(min_length=1)
     task_ids: list[str] = Field(min_length=1, description="依赖这个假设的任务范围")
-    checks: list[DomainCheck] = Field(default_factory=list, description="可证伪条件，无法操作化时留空并保留为待验证假设")
+    checks: SkipJsonSchema[list[DomainCheck]] = Field(default_factory=list, description="可证伪条件，无法操作化时留空并保留为待验证假设")
 
 
 class AssumptionDraft(Contract):
     key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$", description="本任务内稳定的假设键；同一前提复用同一键")
     statement: str = Field(min_length=1, description="实际计算或结论依赖的关键前提，不记录一般说明或用户给定事实")
-    checks: list[DomainCheck] = Field(default_factory=list, description="check.id使用本假设内稳定的局部键，系统分配全局编号；重复声明时复用原始局部键")
+    checks: SkipJsonSchema[list[DomainCheck]] = Field(default_factory=list, description="check.id使用本假设内稳定的局部键，系统分配全局编号；重复声明时复用原始局部键")
 
 
 class AssumptionProposal(AssumptionDraft):
@@ -132,7 +133,7 @@ class IssueReport(Contract):
     message: str = Field(min_length=1)
     evidence_refs: list[str] = Field(default_factory=list)
     assumption_id: str | None = None
-    check_ids: list[str] = Field(default_factory=list)
+    check_ids: SkipJsonSchema[list[str]] = Field(default_factory=list)
     section: str | None = None
 
 

@@ -3,6 +3,7 @@ import json
 import time
 from typing import Literal
 from pydantic import Field
+from pydantic.json_schema import SkipJsonSchema
 from ai_system.modules.registry import Inputs, CapabilityProduct
 from .models import ExperimentPlan, ResearchConflict
 from .questions import QuestionUpdate, apply_questions
@@ -14,7 +15,7 @@ class ExperimentInput(Inputs):
     question_id: str
     plan: ExperimentPlan
     title: str = ''
-    artifact_refs: list[str] = Field(default_factory=list)
+    dependency_ids: list[str] = Field(default_factory=list, description='需要复用其结果文件或代码的实验编号')
     input_files: list[str] | None = Field(default=None, description='本实验需要的原始文件路径；省略表示全部，空列表表示仅使用题内数据。系统只提供这些原始文件，并按其版本判断失效。')
     reason: str = ''
 
@@ -27,7 +28,7 @@ class ContinueInput(Inputs):
 class AnswerUpdate(Inputs):
     question_id: str
     statement: str = ''
-    artifact_refs: list[str] = Field(default_factory=list)
+    artifact_refs: SkipJsonSchema[list[str]] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     next_step: str = ''
     coverage: Literal['answered','partial','unanswered'] | None = None
@@ -101,15 +102,15 @@ def schedule_experiment(ctx,inputs):
         if error := attempt_budget_error(state): raise ResearchConflict(error)
         q=state['questions'].get(inputs['question_id'])
         if not q or q.get('retired'):raise ValueError('question_id必须使用建立问题工具实际返回的当前编号')
-        refs=inputs['artifact_refs']
-        if not set(refs)<=current_result_refs(state,set(state['experiments'])):
-            raise ValueError('依赖包含未知或已失效的结果，请读取当前问题/实验结果')
+        dependencies=list(dict.fromkeys(inputs['dependency_ids']))
+        if any(key not in state['experiments'] or state['experiments'][key]['retired']
+               or state['experiments'][key]['validity']!='current' for key in dependencies):
+            raise ValueError('依赖包含未知或已失效的实验，请读取当前实验记录')
         selected_files = inputs.get('input_files')
         if selected_files is not None and not set(selected_files) <= set(ctx.research.file_inputs()):
             raise ValueError('input_files 包含未知原始文件，请使用输入目录中的真实路径')
         plan=ExperimentPlan.model_validate(inputs['plan'])
         key='E'+str(max((int(k[1:]) for k in state['experiments'] if k.startswith('E') and k[1:].isdigit()),default=0)+1)
-        dependencies=list(dict.fromkeys(state['artifacts'][ref]['experiment_id'] for ref in refs))
         owners=set(dependencies)|{eid for eid,e in state['experiments'].items() if e['question_id']==q['id']}
         requirement_ids=[r['id'] for r in state['spec']['requirements'] if owners.intersection(r['task_ids'])]
         if not requirement_ids:requirement_ids=[r['id'] for r in state['spec']['requirements']]
@@ -159,7 +160,7 @@ def update_answer(ctx,inputs):
         from ai_system.graph.registry import find_refs
         if not set(find_refs(inputs['statement']))<=set(inputs['artifact_refs']):raise ValueError('答案正文引用须同时列入artifact_refs并属于当前实验范围')
         basis={ref:state['artifacts'][ref]['content_hash'] for ref in inputs['artifact_refs']}
-        interpretations={state['artifacts'][ref]['experiment_id']:state['experiments'][state['artifacts'][ref]['experiment_id']]['report_ref'] for ref in inputs['artifact_refs']}
+        interpretations={eid:state['experiments'][eid]['report_ref'] for eid in own}
         values={k:v for k,v in inputs.items() if k!='question_id'}
         values['judgment']=values.pop('statement')
         from .questions import answer_gaps
@@ -220,7 +221,7 @@ def register(registry):
     register_tool('update_question',update_question,QuestionUpdate,'建立或版本化修改一个用户问题，返回真实question_id。可关联已有实验、拆合来源并保留历史。')
     register_tool('schedule_experiment',schedule_experiment,ExperimentInput,'为真实question_id安排新方法/条件的实验。plan使用已有ExperimentPlan；普通实验一个候选。返回实验编号后转入执行层。')
     register_tool('continue_experiment',continue_experiment,ContinueInput,'继续或重试已有实验，保持方法和条件；补充有价值行动，复用已有计算。换方法须新实验。')
-    register_tool('update_answer',update_answer,AnswerUpdate,'保存问题判断、依据、局限及覆盖状态。完整回答须有实际引用；缺项返回answer_gaps，可原地补全，不重算。')
+    register_tool('update_answer',update_answer,AnswerUpdate,'保存问题判断、依据、局限及覆盖状态。直接说明实际结果与文件、局限和未完成部分；缺项可原地补全，不重算。')
     register_tool('read_question',read_question,QuestionTarget,'读取一个问题及相关实验的当前记录、有效结果、版本与历史定位；不重算。')
     register_tool('deliver',deliver,DeliveryInput,'各问题已明确回答/部分/未答及停止原因后开始研究级论文交付；不创建写作实验。')
     register_tool('ask_user',ask_user,MessageInput,'仅在缺少用户必须提供的信息或决定时提问并等待回应。')

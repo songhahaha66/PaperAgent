@@ -1,4 +1,6 @@
 """Writers receive actual references and adopted premise versions without padding requirements."""
+from helpers.legacy_registry import value as legacy_value, figure as legacy_figure, claims as legacy_claims
+
 import sys
 from pathlib import Path
 
@@ -32,7 +34,7 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     request = section_request('solve:Q1', '求解', state, ctx)
     assert '{{R:' + own.id + '}}' in request
     assert '{{R:' + unrelated.id + '}}' not in request
-    assert '本节没有可用图表' in request
+    assert '不创建R/F' in STYLE
     assert '{{F:F1}}' not in STYLE + request
     run = ctx.fs.create_run()
     ctx.fs.save_run_stdout(run, 'figure ready')
@@ -40,7 +42,7 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     (ctx.fs.run_dir(run) / 'artifacts/plot.png').write_bytes(b'png')
     from ai_system.sandbox.evidence import seal_run
     seal_run(ctx.fs, run)
-    figure = ctx.registry.record_figure('Q1', run, 'plot.png', '实际图表')
+    figure = legacy_figure(ctx.registry,'Q1', run, 'plot.png', '实际图表')
     from research_tools_helpers import continue_experiment
     from ai_system.research.models import WorkerResult
     from dataclasses import asdict
@@ -48,4 +50,4 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     ctx.research.commit(WorkerResult(order=ctx.research.claim('Q1'),execution_status='succeeded',acceptance='accepted',
         report={'status':'completed','summary':'已登记实际图表'},results=[asdict(figure)]))
     request = section_request('solve:Q1', '求解', state, ctx)
-    assert '{{F:' + figure.id + '}}' in request and '本节没有可用图表' not in request
+    assert '{{F:' + figure.id + '}}' in request

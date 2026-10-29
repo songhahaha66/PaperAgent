@@ -9,11 +9,11 @@ from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
-    'record_results':'登记计算结果','record_figure':'保存图表','writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
+    'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用未完成',
     'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
-    'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有证据','literature.collect':'获取文献证据',
+    'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
     'writing.write':'撰写论文',
     'writing.validate':'检查论文','writing.repair':'修订论文',
     'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码',
@@ -99,6 +99,30 @@ def experiment_context(snapshot, experiment_ids=None):
                 and a['type'] in {'code','stdout','stderr','data'} and a['payload'].get('path')],
             'history':[{'ref':ref,'path':a['payload'].get('path'),'status':a['report'].get('status','superseded')}
                 for ref,a in snapshot['artifacts'].items() if a['type']=='report' and a['experiment_id']==eid and ref!=e['report_ref']]})
+    return rows
+
+
+def execution_context(store, experiment_ids=None):
+    """Bounded real output and file inventory for planning, review and writing."""
+    from services.file_services.workspace_layout import workspace_path
+    snapshot=store.snapshot()
+    rows=experiment_context(snapshot,experiment_ids)
+    for row in rows:
+        for file in row['files']:
+            if '/artifacts/' not in file['path']:continue
+            run_id=snapshot['artifacts'][file['id']]['payload']['run_id']
+            public='outputs/research/'+run_id+'/'+file['path'].split('/artifacts/',1)[1]
+            if (store.root/public).is_file():file['path']=public
+        # Scalar registration records are historical only; the current report
+        # and actual files are sufficient for new calculations.
+        outputs=[]
+        for file in [f for f in row['files'] if f['kind']=='stdout'][-6:]:
+            path=workspace_path(store.root,file['path'])
+            if path.is_file():
+                with path.open('r',encoding='utf-8',errors='replace') as stream:
+                    text=stream.read(6001)
+                outputs.append({'path':file['path'],'excerpt':text[:6000],'truncated':len(text)>6000})
+        row['outputs']=outputs
     return rows
 
 

@@ -41,11 +41,3 @@ def save_figures(run_id):
     for index, number in enumerate(plt.get_fignums(), 1):
         plt.figure(number).savefig(directory / f"figure_{index}.png", dpi=200, bbox_inches="tight")
     plt.close("all")
-
-
-def emit_result(name, value, unit="", description="", meaning=None):
-    """Print a structured result; returns None. The host assigns refs after execution."""
-    if hasattr(value, 'tolist'):
-        value = value.tolist()
-    payload = dict(name=name, value=value, unit=unit, description=description, meaning=meaning)
-    print('PAPERAGENT_RESULT ' + json.dumps(payload, ensure_ascii=False, allow_nan=False), flush=True)

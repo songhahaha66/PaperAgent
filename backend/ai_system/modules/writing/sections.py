@@ -1,9 +1,9 @@
 """
-阶段 5：按登记结果写作
+阶段 5：按执行记录与结果文件写作
 
 先并行写每个子问题的"模型建立与求解"，再并行写重述、分析、假设、符号、灵敏度、评价和摘要。
 用户上传了模板时，章节标题和顺序按模板（outline.py），模板里对不上的章节按模板标题单独撰写。
-写作模型只看得到登记表，数字和图只能用 {{R:Rn}} / {{F:Fn}} 引用，杜绝编造数值。
+写作读取实际执行输出、文件清单和报告，直接使用实际数值与图片路径。
 """
 
 import asyncio
@@ -33,16 +33,12 @@ TAIL_SECTIONS: List[Tuple[str, str]] = [
 SOLVE_HEADING = "五、模型的建立与求解"
 
 STYLE = (
-    "你是数学建模竞赛论文的执笔手，文风严谨、简洁，使用中文学术写作规范。\n"
-    "硬性规则：\n"
-    "固定拆分上的数值更低不等于统计显著；缺乏对应检验证据时写实测差异，不写显著优于。"
-    "公式必须匹配实际核验的截距、惩罚与训练集预处理设置；不得把带截距实现写成无截距方程。\n"
-    "1. 正文中的任何计算结果数字必须使用本节可用引用表中的真实引用，不要自己写数字或猜测编号；"
-    "题目给定的常数、年份、编号可以直接写。\n"
-    "2. 只有本节可用引用表中确有图表时才能插图。复制表中的图引用独占一行，正文指代同一图也使用该引用，系统会编号。没有图表时不得写图引用或声称见图。\n"
-    "3. 公式使用 LaTeX 语法，公式中的符号可以写，但不要在公式里代入计算结果数字。\n"
-    "4. 论文是给评委读的：不要出现代码里的变量名、列名和程序输出的原样字符串（如 word_length、valAUC、n_repeat），"
-    "改写成中文名称（如\"单词长度\"）。只引用支撑结论的关键结果，多个同类结果用表格对比，不要在一句话里罗列一串统计量。"
+    "你是数学建模论文的执笔手，使用严谨、简洁的中文。"
+    "依据实际执行记录、结果文件和研究报告写作，直接写数值、单位及适用条件，不创建R/F结果编号。"
+    "计算执行成功不代表模型正确；区分原题事实、建模假设、已验证结果和未知。"
+    "实测差异不能代替统计显著性，公式须匹配实际算法、预处理和边界条件。"
+    "只插入已提供的实际图片文件，使用Markdown图片路径；没有生成的图不得声称存在。"
+    "关键结果用表格组织，保留数据来源、校验与局限；完整精度和序列留在结果文件。"
 )
 
 
@@ -92,48 +88,12 @@ def subproblem_brief(ctx: GraphContext, subproblem: Dict) -> str:
     return json.dumps({k:v for k,v in record.items() if k!='results'},ensure_ascii=False)
 
 
-def _comparison_context(ctx: GraphContext, references, allowed) -> str:
-    """Current comparison facts, with measured quantities bound to real R refs."""
-    import math
+def _comparison_context(ctx: GraphContext, allowed) -> str:
     from ai_system.modules.experiments.store import ExperimentStore
-    summaries=[]
-    for summary in ExperimentStore(ctx.research).accepted_summaries(ctx.research.snapshot()):
-        if allowed is not None and summary['task_id'] not in allowed:continue
-        proof=summary['provenance'];metric=summary['protocol']['metric'].lower()
-        def reference(name,value):
-            for result in references.results.values():
-                if (result.id in proof['formal_evidence_refs'] and result.subproblem==summary['task_id'] and
-                    result.run_id==proof['formal_run_id'] and result.name==name):
-                    try:
-                        if math.isclose(float(result.value),value,rel_tol=1e-9,abs_tol=1e-10):
-                            return '{{R:'+result.id+'}}'
-                    except (ValueError,TypeError):pass
-            return None
-        protocol=dict(summary['protocol'])
-        baseline_name=next((r['baseline_name'] for r in summary['branches'] if r.get('baseline_name')),'comparison_baseline_'+metric)
-        protocol['baseline_value']=reference(baseline_name,protocol['baseline_value'])
-        protocol.pop('negative_baseline_value',None)
-        for field in ('train_count','validation_count'):
-            protocol[field]=reference('comparison_'+field,protocol[field])
-        branches=[]
-        for row in summary['branches']:
-            candidate={k:row[k] for k in ('index','name','method_keys','status','eligible','selection_reason','error',
-                                        'estimator_contract','implementation_audit','candidate_hash','code_hash','prediction_hash','run_ids') if k in row}
-            for field in ('metric','baseline'):
-                name=row.get(field+'_name') or f"comparison_candidate_{row['index']+1}_"+('baseline_' if field=='baseline' else '')+metric
-                ref=reference(name,row[field])
-                if ref is None and row['index']==summary['chosen_index']:
-                    ref=reference('comparison_'+('baseline_' if field=='baseline' else '')+metric,row[field])
-                candidate[field]=ref
-            branches.append(candidate)
-        summaries.append({**summary,'protocol':protocol,'branches':branches})
-    return ('\n\n# 当前共同协议比较（按本节任务范围提供；内部编号仅供追溯）\n'
-        '候选名称和方法是方案声明，implementation_audit说明实际核查边界。metric、baseline及样本数只能使用所给R引用；'
-        'null表示没有可用的正式登记引用，不得补造数值。共同协议参数是冻结设置，不是额外实测结论。'
-        'winner仅表示冻结数据、划分、指标和容差下优胜，不证明统计显著或跨条件更优；'
-        'only_valid仅表示一支满足规则和基线，不能声称优于失败、未完成或不合格的另一支；'
-        'tied表示容差内无实测优胜者，chosen_index只按冻结顺序选择代表。必须如实保留失败、置换对照和适用边界。\n'
-        +json.dumps(summaries,ensure_ascii=False,sort_keys=True)) if summaries else ''
+    rows=[row for row in ExperimentStore(ctx.research).accepted_summaries(ctx.research.snapshot())
+          if allowed is None or row['task_id'] in allowed]
+    return ('\n# 共同数据划分下的实测比较（仅适用于所列条件，不证明统计显著）\n'
+            +json.dumps(rows,ensure_ascii=False)) if rows else ''
 
 
 def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) -> str:
@@ -151,7 +111,6 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
         if citations:request+='\n本节已核对的文献引用：'+citations
     from ai_system.research.method_facts import method_context
     request+=method_context(getattr(ctx,'research',None))
-    from ai_system.graph.registry import ResultRegistry
     allowed = None
     if planned.get('task_ids'):allowed=set(planned['task_ids'])
     if key.startswith("solve:"):
@@ -160,15 +119,9 @@ def section_request(key: str, title: str, state: PaperState, ctx: GraphContext) 
         question=next(q for q in state['analysis']['questions'] if sid in q['experiment_ids'])
         allowed=set(question['experiment_ids']) | {dep for item in state['analysis']['subproblems']
             if item['id'] in question['experiment_ids'] for dep in item.get('depends_on') or []}
-    references = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items()
-                                               if allowed is None or r.subproblem in allowed})
-    request += _comparison_context(ctx,references,allowed)
-    from ai_system.research.views import result_context
-    snapshot=ctx.research.snapshot()
-    evidence=json.dumps([result_context(snapshot,r.__dict__) for r in references.results.values()],ensure_ascii=False)
-    request += '\n\n# 本节可用引用（值、声明的对象范围、来源与版本一起读取；缺失语义不得猜测；仅可复制这里的reference）\n'+evidence
-    if not any(r.kind == "figure" for r in references.results.values()):
-        request += "\n本节没有可用图表，只能用文字、公式或基于已登记结果的表格说明，不得引用图。"
+    request += _comparison_context(ctx, allowed)
+    from ai_system.research.views import execution_context
+    request += '\n\n# 实际执行记录、结果文件与报告\n'+json.dumps(execution_context(ctx.research,allowed),ensure_ascii=False)
     if ctx.template_requirements:
         request += (
             "\n\n# 用户模板的要求（章节标题和顺序已按模板安排，本节只写正文；措辞、格式、篇幅以模板为准）\n"
@@ -240,7 +193,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
         return f"撰写「符号说明」，用{table}，只列下文公式里实际用到的主要符号，不超过 15 行，不列代码变量名。\n\n求解章节：\n{solved_text}"
     if key == "sensitivity":
         return (
-            "撰写「灵敏度分析」，汇总各子问题的检验和灵敏度分析结论，必须引用登记结果。\n\n"
+            "撰写「灵敏度分析」，汇总各子问题的检验和灵敏度分析结论，依据实际结果与文件写作。\n\n"
             + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
         )
     if key == "evaluation":
@@ -252,7 +205,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
     if key == "abstract":
         keyword = "**关键词**："
         return (
-            "撰写「摘要」：一段总述 + 每个子问题一段（2~4 句：用了什么方法、得到什么结论，只引用 1~3 个最关键的登记结果）"
+            "撰写「摘要」：一段总述 + 每个子问题一段（2~4 句：用了什么方法、得到什么结论，只引用 1~3 个最关键的实际结果）"
             "+ 一段总结，全文不超过 1000 字，不写检验统计量的罗列，不用小节标题；"
             f"最后一行写「{keyword}」并列出 4~6 个关键词。\n\n"
             f"论文标题：{analysis['title']}\n\n" + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
@@ -261,7 +214,7 @@ def _section_body(key: str, title: str, state: PaperState, ctx: GraphContext) ->
     # their storage key need not belong to the built-in outline vocabulary.
     guard = "只列出题目和数据来源，不要编造文献。" if any(w in title for w in ("参考文献", "文献", "引用")) else ""
     return (
-        f"撰写「{title}」一节，按本节研究表达目的组织已取得的结果、来源和局限，必须引用登记结果。{guard}\n\n"
+        f"撰写「{title}」一节，按本节研究表达目的组织已取得的结果、来源和局限，依据实际结果与文件写作。{guard}\n\n"
         f"题目：\n{clip(state['task'], 3000)}\n\n"
         + "\n\n".join(subproblem_brief(ctx, sp) for sp in subproblems)
     )
@@ -360,7 +313,7 @@ async def write(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
             sections[key]=previous[key]['text']
     sections.update(await write_many(ctx, state, [(k, t) for k, t in solve_items if k not in sections]))
 
-    # 摘要只依据各问的求解报告和登记结果，不读其他章节，和其余章节一起并行写，少一轮串行等待
+    # 摘要只依据各问的求解报告和结果文件，不读其他章节，和其余章节一起并行写，少一轮串行等待
     await ctx.set_stage("write", "in_progress", "撰写其余章节和摘要")
     with_solved = {**state, "sections": sections}
     rest = [(key, title) for key, title, _ in plan if key != "solve_heading" and not key.startswith("solve:")]

@@ -42,15 +42,10 @@ def test_advisory_review_failure_retains_results_and_unanswered_research_is_not_
         store.publish_paper('unchecked')
 
 
-def test_deterministic_failure_keeps_evidence_and_blocks_affected_dependency(tmp_path):
+def test_historical_metric_rules_do_not_reject_new_execution(tmp_path):
     store = make_store(tmp_path, limit=10)
     submit(store)
     view = snapshot(store).experiments[0]
-    assert view['checking'] == 'failed' and view['results']
-    assert view['availability'] == 'historical'
-    assert view['results'][0]['value']=='42' and view['record']['status']=='completed'
-    assert not store.registry_payload()['results'] and not store.delivery_ready(store.snapshot())
-    with pytest.raises(ResearchConflict):
-        store.claim('Q2')
-    # An unrelated task can still execute through its explicit execution handoff.
-    store.claim('Q3')
+    assert view['availability']=='current' and view['results'][0]['value']=='42'
+    assert store.snapshot()['validations']==[]
+    store.claim('Q2')

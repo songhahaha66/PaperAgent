@@ -1,4 +1,4 @@
-"""Writing consumes current evidence and produces sections and publications."""
+"""Writing consumes execution records and result files and produces sections and publications."""
 from types import SimpleNamespace
 from importlib import import_module
 from ..registry import CapabilityProduct, Inputs

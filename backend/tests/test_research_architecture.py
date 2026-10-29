@@ -1,4 +1,6 @@
 """Offline architecture contracts; no external models or historical user data."""
+from helpers.legacy_registry import value as legacy_value, figure as legacy_figure, claims as legacy_claims
+
 from ai_system.sandbox.evidence import seal_run
 import asyncio
 from dataclasses import asdict
@@ -25,11 +27,11 @@ def study(tmp_path):
     eid=add_experiment(store,'What does the supplied material establish?',method='count source rows',conditions='entire source',evaluation='retain original row identity')
     order=store.claim(eid)
     fs=WorkspaceFS(str(tmp_path));run=fs.create_run();fs.save_run_input(run,'print(12)');fs.save_run_stdout(run,'12\n');fs.finish_run(run,'success'); seal_run(fs, run)
-    registry=ResultRegistry(fs,allocate_id=store.allocate_ref)
-    value=registry.record_value(eid,'source record count','12',run,meaning={
+    registry=ResultRegistry(fs)
+    value=legacy_value(registry,eid,'source record count','12',run,meaning={
         'object':'source observations','scope':'entire source','statistic':'number of source records','lineage':[]})
-    aux=registry.record_value(eid,'auxiliary count','12',run)
-    claim=registry.set_claims(eid,[{'statement':'Unjustified explanation {{R:'+value.id+'}}','strength':'倾向'}])[0]
+    aux=legacy_value(registry,eid,'auxiliary count','12',run)
+    claim=legacy_claims(registry,eid,[{'statement':'Unjustified explanation {{R:'+value.id+'}}','strength':'倾向'}])[0]
     report={'summary':'Observed {{R:'+value.id+'}}','approach':'row count',
             'key_findings':[{'statement':claim.statement,'strength':claim.strength}],
             'requirement_evidence':[{'requirement_id':'RQ0','evidence_refs':[value.id]}]}
@@ -86,9 +88,7 @@ def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,m
                 name,value='base count','12'
             result=await local.kernels.get(eid).execute(code)
             assert result.ok
-            item=local.registry.record_value(eid,name,value,result.run_id)
-            report={'summary':'Observed {{R:'+item.id+'}}','approach':'count and scale','status':'completed','key_findings':[],
-                'requirement_evidence':[{'requirement_id':'RQ0','evidence_refs':[item.id]}]}
+            report={'summary':'Observed '+value,'approach':'count and scale','status':'completed','key_findings':[]}
             return {'report':report,'design':experiment_design(branch['experiment'])}
         monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
         try:
@@ -102,7 +102,9 @@ def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,m
             final=ctx.research.snapshot()
             assert final['experiments'][eid]['acceptance']=='accepted'
             assert len(final['experiments'])==1 and len(final['executions'])==2
-            assert {r['value'] for r in ctx.research.registry_payload()['results']}=={'12','24'}
+            assert not ctx.research.registry_payload()['results']
+            outputs=[ctx.fs.read_text(r['stdout']) for r in ctx.fs._manifest['runs'].values()]
+            assert any('12' in t for t in outputs) and any('24' in t for t in outputs)
             assert len(ctx.fs._manifest['runs'])==2
         finally:await ctx.kernels.close()
     asyncio.run(run())

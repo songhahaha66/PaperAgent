@@ -104,7 +104,7 @@ class OpenSandboxSession:
         self.context_restored = False
         self.context = await self.interpreter.codes.create_context('python')
         ready = await self.interpreter.codes.run(
-            "import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\nfrom paperagent_runtime import emit_result\n_pa_runtime.setup(" + repr(self.root) + ")", context=self.context)
+            "import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\n_pa_runtime.setup(" + repr(self.root) + ")", context=self.context)
         if ready.error or ready.complete is None:
             raise RuntimeError(self._error(ready.error) if ready.error else "Python 初始化缺少完成回执")
 

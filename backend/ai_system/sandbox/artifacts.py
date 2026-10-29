@@ -165,36 +165,6 @@ def publish_reference(source_fs, target_fs, item):
     raise ValueError('引用缺少已归档运行产物，不能登记')
 
 
-def collect_references(ctx, subproblem_id, result):
-    """Consume only explicit structured output and actual figures from a successful run."""
-    if not result.ok:
-        return []
-    import json
-    refs = []
-    info = ctx.fs.get_run_info(result.run_id) or {}
-    output = ctx.fs.read_text(info['stdout']) if info.get('stdout') else result.stdout
-    for line in output.splitlines():
-        if not line.startswith('PAPERAGENT_RESULT '):
-            continue
-        try:
-            item = json.loads(line.removeprefix('PAPERAGENT_RESULT '))
-            value = item['value']
-            value = json.dumps(value, ensure_ascii=False) if isinstance(value, list) else str(value)
-            ref = ctx.registry.record_value(subproblem_id, item['name'], value, result.run_id,
-                item.get('unit', ''), item.get('description', ''), item.get('meaning'))
-            refs.append(ref)
-        except (ValueError, TypeError, KeyError) as exc:
-            # A malformed declaration never changes the computation's outcome.
-            refs.append(str(exc))
-    for figure in result.figures:
-        try:
-            ref = ctx.registry.record_figure(subproblem_id, result.run_id, figure, Path(figure).stem)
-            refs.append(ref)
-        except (ValueError, OSError) as exc:
-            refs.append('图片引用尚未就绪：' + str(exc))
-    return refs
-
-
 def output_hashes(fs, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
     result = {}
     paths = [p for folder in ('outputs', 'code') for p in fs.abs(folder).rglob('*')]

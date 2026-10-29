@@ -148,7 +148,6 @@ async def read_artifact(ctx, inputs):
     import hashlib
     from ai_system.modules.registry import CapabilityProduct
     state=ctx.research.snapshot()
-    if inputs['task_id'] not in state['experiments']:raise ValueError('读取行动必须归属已有实验')
     path=inputs['path']
     known={a['payload'].get('path') for a in state['artifacts'].values()} | set(ctx.research.file_inputs())
     if path not in known:raise ValueError('只能读取已登记产物或当前原始资料')
@@ -172,7 +171,7 @@ def register(registry):
         edit: ReportEdit | None = None
         decisions: list[FeedbackDecision] = Field(default_factory=list)
     class ReadTarget(Inputs):
-        task_id: str
+        task_id: str | None = None
         path: str
         start: int = Field(default=0, ge=0)
         limit: int = Field(default=12000, ge=1, le=24000)

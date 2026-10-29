@@ -2,7 +2,7 @@
 import json
 from pydantic import BaseModel, Field
 from ai_system.graph.llm_utils import as_messages, call_structured
-from ai_system.graph.registry import find_refs, publication_text
+from ai_system.graph.registry import publication_text
 from ai_system.modules.writing.sections import STYLE
 from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_project as project
@@ -11,7 +11,6 @@ from services.chat_services import paper_project as project
 class SourceEdit(BaseModel):
     target: str = Field(description='系统提供的源码片段或文件标记')
     replacement: str
-    result_refs: list[str] = Field(default_factory=list, description='本次修改实际使用的登记结果 ID，仅用于来源追溯，不是 LaTeX 标签')
 
 
 class SourceEdits(BaseModel):
@@ -35,22 +34,20 @@ async def _update(state, runtime, *, repairing=False):
         project.atomic_text(store.root/project.META, json.dumps(data, ensure_ascii=False))
         state = project.source_state(store, state)
     targets = project.source_targets(state)
-    from ai_system.research.views import questions,question_context,experiment_context
+    from ai_system.research.views import questions,question_context
     snapshot=store.snapshot()
     research_questions=question_context(questions(snapshot))
-    records=experiment_context(snapshot)
-    results={r['id']:r for record in records for r in record['results']}
+    from ai_system.research.views import execution_context
+    records=execution_context(store)
     evidence=json.dumps(records,ensure_ascii=False)
-    prompt = ('直接更新当前 LaTeX 项目。返回 edits，每项 target、replacement、result_refs；'
+    prompt = ('直接更新当前 LaTeX 项目。返回 edits，每项 target、replacement；'
               'target 只选下方提供的片段标记，replacement 是该片段修改后的完整内容，无需复制 old 或计算位置。'
               '优先修改片段；需调整整体结构时可选择文件标记。同次修改的范围不能重复或重叠。'
               '只改实际受影响部分，保留人工编辑、宏、环境和与相邻片段的换行分隔。'
               '正文直接使用原生 LaTeX。可按研究成果与用户模板组织、增删或调整结构；旧数据库章节不是约束。'
               '使用当前导言区已定义的命令；交叉引用默认用原生 \\ref、\\eqref，不使用未加载宏包的 \\cref 等命令。'
-              '结果 ID（例如 R25）只标识实验记录，不是章节、图表编号。读取下方结果的 value、unit、meaning 和实验 conditions/evaluation，'
-              '把实际数值、单位和适用条件写入正文；使用的结果 ID 填入 result_refs，由系统保存来源关联。'
-              '禁止用 \\ref{R25} 或 \\ref{R:R25} 取数，也不要发明对应标签。正常图表、章节的 \\ref/\\eqref 要保留。'
-              '插图时把给定的 {{F:Fn}} 独占一行，系统生成图片、图题和标签；行内同一引用只生成图号。不要手工插入图片后再用另一个标签引用它。'
+              '依据实际输出和结果文件直接写数值、单位和适用条件，不创建R/F编号。'
+              '插图用已提供的结果文件路径与原生 \\includegraphics、\\caption、\\label，交叉引用用 \\ref。'
               '文献使用已核实 {{C:Cn}}；系统在写入前解析。'
               '数值按数据精度和用途合理取舍，通常保留2至4位有效数字；完整精度保留在结果文件，不把长浮点数直接堆入正文。'
               '区分用户给定样本与实测数据，未提供采集过程时不得声称已实测。过程日志、等待秒数等验收细节不写入学术正文。'
@@ -98,9 +95,6 @@ async def _update(state, runtime, *, repairing=False):
             raise ValueError('一次修改不能重复选择同一片段')
         patches = []
         for edit in answer.edits:
-            for ref in set(edit.result_refs + find_refs(edit.replacement)):
-                if ref not in results or (results[ref]['kind']!='figure' and results[ref]['value'] in (None,'')):
-                    raise ValueError(f'结果 {ref} 不存在或没有实际取值，请报告 research_gap，不得猜值')
             from ai_system.export.latex import result_reference_issues
             if problems:=result_reference_issues(edit.replacement):
                 raise ValueError('；'.join(problems))
@@ -122,10 +116,7 @@ async def _update(state, runtime, *, repairing=False):
     patches = []
     from ai_system.research.citations import render_citations
     for edit,patch in zip(answer.edits,patches_for(answer)):
-        refs = edit.result_refs + find_refs(patch['replacement'])
         rendered = publication_text(render_citations(store.root, ctx.registry.render(patch['replacement'], latex=True), True))
-        if refs:
-            rendered += '\n% paperagent:evidence '+','.join(sorted(set(refs)))+'\n'
         patches.append({**patch, 'replacement':rendered})
     if project.snapshot(store.root)['version'] != state['source_version']:
         raise ResearchConflict('写作期间项目已更新，未覆盖新源码；请基于当前版本继续')

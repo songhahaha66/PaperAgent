@@ -21,7 +21,7 @@ from services.chat_services.conversation_timeline import ReplyWriter, TIMELINE
 from ai_system.research.runtime import ResearchRuntime
 from ai_system.research.views import completed_work_status
 
-QUESTION = '''请研究食堂排队等待时间样本[3,4,4,5,5,6,7,22]分钟。计算样本量、均值、中位数、样本标准差；比较保留全部数据与去掉22后的结果，说明敏感性和小样本局限，不能把极端值直接认定为错误。保留waiting_summary.csv和中文图表、完整代码，交付简短中文研究报告及PDF，报告包含假设、方法、结果和局限，不必外部检索。在同一次计算中分三阶段print进度（每阶段间隔2秒）以核对实时输出；计算指标使用emit_result输出，使用自动返回的引用，不要为登记或报告重算。'''
+QUESTION = '''请研究食堂排队等待时间样本[3,4,4,5,5,6,7,22]分钟。计算样本量、均值、中位数、样本标准差；比较保留全部数据与去掉22后的结果，说明敏感性和小样本局限，不能把极端值直接认定为错误。保留waiting_summary.csv和中文图表、完整代码，交付简短中文研究报告及PDF，报告包含假设、方法、结果和局限，不必外部检索。在同一次计算中分三阶段print进度（每阶段间隔2秒）以核对实时输出；计算指标直接print，完整结果保存到CSV；报告使用实际数值和文件路径，不要为报告重算。'''
 
 async def main(owner_work=None, resume_work=None):
     with SessionLocal() as db:

@@ -86,8 +86,7 @@ class _Stream(io.StringIO):
 
 def main():
     _setup_matplotlib()
-    from runtime_helpers import emit_result
-    namespace = {"__name__": "__main__", "emit_result": emit_result}
+    namespace = {"__name__": "__main__"}
     figure_count = 0
 
     for line in sys.stdin:

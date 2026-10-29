@@ -11,7 +11,7 @@ PROMPT = """你是研究层Agent，沿研究→用户问题→实验→行动组
 同一实验执行层会连续完成必要行动；新增方法或条件比较才安排新实验，固定方法补充计算或修复执行故障用research_continue_experiment。已有结果直接读取和复用，保留其来源、条件和版本。修过度解释用research_revise_interpretation，不重算正确统计。
 每次新增实验明确它将减少哪项影响答案的不确定性；已满足请求时及时交付。预算耗尽或同类故障重复时保留已有成果，更新为部分回答并说明缺口后交付，不能换实验编号绕过限制。文件保存、报告排版失败不需要重算实验。
 每个工具独立提交。建立问题后尚未安排实验是正常状态。用工具实际返回的ID，禁止猜编号、沿用失败请求的假编号或混用其它工具字段。参数错误会返回具体观察，直接在同一上下文纠正；不能把格式错误当研究阻碍。版本冲突时重新读取当前记录再操作。
-同名或同值不代表同一对象或范围。结果的meaning、实验conditions、输入版本与行关系一并核对；未知口径如实说明。新实验需要沿用或比较已有结果时，用artifact_refs建立实际依赖，勿先独立重算再猜旧结果为何不同。
+同名或同值不代表同一对象或范围。结果文件的单位、范围、实验conditions、输入版本与行关系一并核对；未知口径如实说明。新实验需要沿用或比较已有结果时，用dependency_ids声明实验依赖，勿先独立重算再猜旧结果为何不同。
 按需调用语义核查，意见只供核实、采纳、驳回或保留局限。程序故障不证明方法无效。旧观点、负结果可以讨论，但不可混为当前事实。
 结果与解释更新后，用research_update_answer修订问题答案、实际依据、适用范围、未知与下一步。继续获取信息应有明确需求，不重复无变化的读取或判断。
 原要求的重要问题分别记录已答、部分或未答及停止原因后，research_deliver交付。写作是研究级操作，读取当前答案、实验记录与必要历史，不创建写作实验。不要求所有软意见归零或所有问题有正结果。
@@ -32,7 +32,7 @@ def ready_tasks(snapshot):
 
 def report_context(report, *, full=False):
     if full:return report
-    return {k:report[k] for k in ('summary','key_findings','limitations','status','error') if k in report}
+    return {k:report[k] for k in ('summary','key_findings','validation','files','runs','limitations','status','error') if k in report}
 
 
 def decision_context(store, snapshot):
@@ -48,14 +48,11 @@ def decision_context(store, snapshot):
     own=set(selected['experiment_ids']) if selected else {eid for q in rows for eid in q['experiment_ids']}
     scope=experiment_scope(snapshot['experiments'],own)
     records=experiment_context(snapshot,scope)
-    registry=store.registry_payload(snapshot)
     sources=LiteratureStore(store.root).retrieve(selected['question'] if selected else snapshot['spec']['requirement'],limit=12)
     # Current question summaries stay global for goal coverage. Full records and
     # actual values are restricted to the selected question/dependency scope.
     context={'source':snapshot['spec'],'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
         'experiments':[{**row,'record':report_context(row['record'])} for row in records],
-        'artifact_index':[{**{k:r.get(k) for k in ('id','subproblem','name','kind','unit','meaning')},
-            'conditions':(snapshot['experiments'][r['subproblem']].get('experiment') or {}).get('conditions','')} for r in registry['results']],
         'literature':sources,'issues':[i for i in findings(snapshot) if i['task_id'] in scope and i['status'] not in {'resolved','dismissed','superseded'}],
         'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
         'last_action':{k:last.get(k) for k in ('id','capability','status','question_id','target','reason','message','error_type')},'clarifications':snapshot.get('clarifications',[]),

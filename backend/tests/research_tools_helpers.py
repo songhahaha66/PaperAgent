@@ -121,20 +121,19 @@ def research_step(messages,plan):
         experiments=[e for eid,e in records.items() if eid in own]
         if not experiments:
             dependencies=[known[dep] for dep in target.depends_on]
-            assert all(q.get('artifact_refs') and q.get('coverage') in {'answered','partial'} for q in dependencies)
+            assert all(q.get('coverage') in {'answered','partial'} for q in dependencies)
             return call('research_schedule_experiment',{'question_id':question['id'],'title':target.title,
                 'plan':{'conditions':'当前提供的输入与上游实际结果','evaluation':'核对实际执行、登记结果和冻结要求',
                     'candidates':[{'name':target.title,'instruction':'落实当前问题的固定计算示例，保留代码和真实输出'}]},
-                'artifact_refs':list(dict.fromkeys(ref for q in dependencies for ref in q['artifact_refs']))})
+                'dependency_ids':list(dict.fromkeys(eid for q in dependencies for eid in q['experiment_ids']))})
         pending=next((e for e in experiments if e['execution_status'] in {'pending','failed','cancelled'}),None)
         if pending:return call('research_continue_experiment',{'experiment_id':pending['task_id'],'information_need':'完成尚未成功的原实验，复用已有结果'})
         if any(e['acceptance']!='accepted' or e['validity']!='current' for e in experiments):
             return call('research_pause',{'message':'当前实验尚无可用于回答的有效结果，保留执行诊断供核实。'})
         if not question.get('judgment') or question.get('answer_status')=='needs_update' or not question.get('coverage'):
             evidence=[r for e in experiments for r in e['results']]
-            assert evidence, 'An accepted fixture must expose its actual current results'
             refs=list(dict.fromkeys(r['id'] for r in evidence))
-            text='本次条件下的实际结果：'+'、'.join('{{'+('F' if r['kind']=='figure' else 'R')+':'+r['id']+'}}' for r in evidence)
+            text='本次条件下的实际结果：'+'；'.join(e['record'].get('summary','') for e in experiments)
             partial=question.get('answer_status')=='needs_update'
             return call('research_update_answer',{'question_id':question['id'],'statement':text,'artifact_refs':refs,
                 'coverage':'partial' if partial else 'answered','stop_reason':'已汇总当前有效实验结果；未执行条件仍未知。',

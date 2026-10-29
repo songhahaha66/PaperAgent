@@ -197,12 +197,6 @@ class ExperimentStore:
         proof=next((p for p in reversed(record['measurements']) if p.get('attempt_id')==attempt['attempt_id']),None)
         if not proof or proof['protocol_hash']!=record['protocol_hash']:return None
         if choose(record)[:2]!=(record['status'],record.get('chosen_index')):return None
-        evidence=[snapshot['artifacts'].get(ref,{}) for ref in proof['evidence_refs']]
-        if not all(e.get('active') and e.get('producer_attempt')==attempt['attempt_id'] and
-                   e.get('payload',{}).get('run_id')==proof['run_id'] for e in evidence):return None
-        actual={e['payload']['name']:e['payload']['value'] for e in evidence if e['payload']['kind']!='figure'}
-        if any(name not in actual or not math.isclose(float(actual[name]),value,rel_tol=1e-9,abs_tol=1e-10)
-               for name,value in proof['values'].items()):return None
         folder=self.store.root/'experiments'/record['owner_attempt']/'workspace/outputs/intermediate/comparisons'/record['id']
         for measured in proof['measurements']:
             row=next(r for r in record['branches'] if r['index']==measured['index'])
@@ -221,7 +215,7 @@ class ExperimentStore:
                          'metric_name':r['name']+' · 验证'+record['protocol']['metric'],
                          'baseline_name':'共同基线 · '+record['protocol']['metric']} for r in record['branches']],
             'provenance':{'record_id':record['id'],'protocol_hash':record['protocol_hash'],
-                          'formal_run_id':proof['run_id'],'formal_evidence_refs':proof['evidence_refs']}}
+                          'formal_run_id':proof['run_id'],'formal_evidence_refs':proof.get('evidence_refs',[])}}
 
     def create(self,task_id,revision,record):
         with self.store._transaction() as db:

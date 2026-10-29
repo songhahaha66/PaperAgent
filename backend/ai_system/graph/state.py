@@ -7,9 +7,8 @@ LLM、内核、登记表这类运行时对象放在 GraphContext 里（不进 ch
 
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 
-from ai_system.research.models import ResultMeaning
 from pydantic import BaseModel, Field, model_validator
-from ..research.models import Contract, AssumptionDraft, IssueReport
+from ..research.models import Contract, IssueReport
 
 
 # ----------------------------------------------------------------------
@@ -44,7 +43,7 @@ class ModelCandidate(BaseModel):
     idea: str = Field(min_length=1, description="核心思路，2~4 句")
     formulation: str = Field(description="模型的数学表述要点：变量、目标/方程、约束，可用 LaTeX")
     steps: List[str] = Field(min_length=1, description="求解步骤，每步能用代码实现")
-    assumptions: List[AssumptionDraft] = Field(default_factory=list, description="本方案实际依赖的新增关键前提；已有研究契约中的前提不要重复创建")
+    assumptions: List[str] = Field(default_factory=list, description="方案采用的建模前提；与原题事实区分")
     validation: str = Field(description="如何检验结果和做灵敏度分析")
 
     @model_validator(mode="after")
@@ -63,52 +62,20 @@ class CandidateSet(BaseModel):
 STRENGTHS = ("显著", "倾向", "不显著")
 
 
-class ResultItem(BaseModel):
-    meaning: ResultMeaning | None = Field(default=None, description="登记指标的对象、范围、统计口径与行关系；未知时留空，不能由名称或同值猜测")
-    name: str = Field(description="结果名称")
-    value: str = Field(description="单个数值、一小段文字，或同一变量的完整一维数值序列（JSON数组字符串）；必须来自run_id的输出。不同指标各登记一条，不能拼接整行输出。序列的长度、最小值等数值检查需另登记标量")
-    run_id: str = Field(description="打印该值的那次执行的 run_id")
-    unit: str = Field(default="", description="只填物理或计数单位（如 点、秒、米、万元、%），p 值、AUC、系数、比例这类无量纲量留空")
-    description: str = Field(default="", description="可选补充说明；不用于指标身份、来源关联或有效性判定，无须为登记额外生成描述")
-
-
 class Finding(BaseModel):
-    statement: str = Field(description="一条结论，依据的数值写成 {{R:Rn}} 引用")
-    strength: Literal["显著", "倾向", "不显著"] = Field(
-        description="证据强度：显著须有对应统计检验证据；倾向表示证据有限；不显著仅对应实际检验不显著。未检验时在陈述中明确说明，不能把未知当作阴性结论；数值差异不自动等于统计显著"
-    )
-
-
-class NegativeControl(BaseModel):
-    metric: str = Field(description="预测效果指标名，如 测试集 AUC、LogLoss、RMSE")
-    value: str = Field(description="真实标签下的指标值，必须是 run_id 那次执行 print 出的数")
-    run_id: str = Field(description="打印 value 的那次执行的 run_id")
-    shuffled_value: str = Field(description="把原始结果列在构造任何特征和标签之前随机打乱、其余流程完全不变时同一指标的值（只打乱训练集标签不算）")
-    shuffled_run_id: str = Field(description="打印 shuffled_value 的那次执行的 run_id")
-    chance: float = Field(allow_inf_nan=False, description="同一指标的无信息水平，必须是有限数值，如AUC为0.5或常数预测实际算出的MAE/RMSE；不能填文字说明，百分数使用0到1的比例")
-    higher_is_better: bool = Field(description="指标是否越大越好")
-    baseline_name: str = Field(default="", description="最简单的有信息基线，只用显而易见的结构，如“只用发球方先验胜率”“只用上一期值”")
-    baseline_value: str = Field(default="", description="该基线在同一划分上的同一指标值，必须是 baseline_run_id 那次执行 print 出的数")
-    baseline_run_id: str = Field(default="", description="打印 baseline_value 的那次执行的 run_id")
-
-
-class RequirementEvidence(BaseModel):
-    requirement_id: str
-    evidence_refs: List[str] = Field(min_length=1, description="实际登记的原始编号数组，例如['R3','F2']；这里不能使用正文模板{{R:R3}}或{{F:F2}}")
+    statement: str = Field(min_length=1, description="实际结论，直接写计算值、单位与适用范围；未检验时不声称统计显著")
+    strength: Literal["显著", "倾向", "不显著"] = "倾向"
 
 
 class SolveReport(BaseModel):
-    summary: str = Field(description="求解过程和结论的概要，结论中的数值用 {{R:Rn}} 引用")
-    approach: str = Field(description="实际采用的模型与算法，与计划不同时说明原因")
-    key_findings: List[Finding] = Field(description="主要结论，每条写明依据的登记结果和证据强度")
-    sensitivity: str = Field(default="", description="灵敏度分析或检验的做法与结论")
-    limitations: List[str] = Field(default_factory=list, description="局限与可改进之处")
-    assumptions: List[AssumptionDraft] = Field(default_factory=list, description="仅提交本次新发现、改变方法或结论的关键前提；没有新增必须为[]。不是论文假设汇总：原题给定数据、已经计算验证的数据长度/完整性、契约中的已有前提均不填。不要换key、改写或合并已有前提来重复声明；真正的新前提登记冻结后须重算")
-    requirement_evidence: List[RequirementEvidence] = Field(default_factory=list, description="每项本任务要求的证据引用；必须使用自己或前序任务的实际登记编号")
-    research_issues: List[IssueReport] = Field(default_factory=list, description="发现上游模型、数据或假设可能有错时提交带证据的疑点；不要擅自沿用错误前提")
-    controls: List[NegativeControl] = Field(
-        default_factory=list, description="仅填实际执行且适用于本问题的标签置换对照；普通样本外预测不强制附加此实验，未做时留空，不编造"
-    )
+    summary: str = Field(min_length=1, description="实际完成的计算与结论；直接写数值和单位")
+    approach: str = Field(description="实际使用的方法、数据范围与关键参数")
+    key_findings: List[Finding] = Field(default_factory=list)
+    sensitivity: str = ""
+    limitations: List[str] = Field(default_factory=list)
+    assumptions: List[str] = Field(default_factory=list, description="实际采用的建模前提，与原题事实区分")
+    validation: str = Field(default="", description="实际运行的约束检查、独立复算或测试及其结果；未验证项如实说明")
+    research_issues: List[IssueReport] = Field(default_factory=list)
 
 
 class Conflict(BaseModel):

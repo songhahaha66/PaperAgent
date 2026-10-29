@@ -73,8 +73,6 @@ def answer_gaps(question):
         gaps.append('缺少停止理由：说明现有答案的范围，或为何仍有未知。')
     if coverage in {'answered','partial'} and not str(question.get('judgment') or '').strip():
         gaps.append('缺少当前答案；无答案时可明确标为未答并说明原因。')
-    if coverage=='answered' and not question.get('artifact_refs'):
-        gaps.append('完整回答缺少实际依据引用；请读取已有实验结果，再补全问题答案的依据，无需重算。')
     if question.get('unavailable_artifact_refs'):
         gaps.append('答案引用已失效或不在关联实验范围，请读取当前结果并更新答案引用。')
     elif question.get('answer_status')=='needs_update' and not gaps:

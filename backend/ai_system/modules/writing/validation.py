@@ -45,6 +45,17 @@ def check_sections(state: PaperState, ctx: GraphContext) -> List[Dict[str, str]]
         if unknown:
             issues.append({"section": key, "message": f"引用了不存在的结果：{', '.join(sorted(set(unknown)))}"})
         if message:=registry.series_index_issue(text):issues.append({'section':key,'message':message})
+        # Validate actual local image paths, without registering figures.
+        from urllib.parse import urlsplit, unquote
+        for image in re.findall(r'!\[[^\]]*\]\(([^)]+)\)',text):
+            path=image.strip().split(' "',1)[0].strip('<>')
+            if urlsplit(path).scheme:continue
+            try:
+                if not ctx.fs.abs(unquote(path)).is_file():
+                    raise ValueError('文件不存在')
+            except (ValueError,OSError):
+                issues.append({'section':key,'message':'图片文件不可用：'+path})
+
     return issues
 
 
@@ -221,6 +232,6 @@ async def render(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     ctx.fs.register_file(path, kind="document", created_by="ai", visibility="user")
     remaining = len(state.get("issues") or [])
     await ctx.set_stage("validate", "completed", f"剩余 {remaining} 个问题" if remaining else "全部通过")
-    await ctx.set_stage("render", "completed", f"登记结果 {len(ctx.registry.results)} 项")
+    await ctx.set_stage("render", "completed", f"结果文件与正文已保存")
     await ctx.events.file_changed(path)
     return {"paper_path": path, "artifact_conflict": conflict, "research_restart": False, "log": [f"render: {path}"]}

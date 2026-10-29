@@ -24,7 +24,7 @@ async def main():
         parallel=kernel('parallel','E3')
         other=kernel('other','E1','work-two')
         try:
-            result=await first.execute("value=42\nfrom pathlib import Path\nPath('one.csv').write_text('value\\n42')\nemit_result('answer',value)")
+            result=await first.execute("value=42\nfrom pathlib import Path\nPath('one.csv').write_text('value\\n42')\nprint('answer',value)")
             assert result.ok,result.error
             assert 'one.csv' in result.files, result.files
             identity=first.session.id

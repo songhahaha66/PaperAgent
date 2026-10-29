@@ -109,7 +109,6 @@ class GraphContext:
     experience_order: Any = None
     source_workspace: Any = None
     compact_paper: bool = False
-    comparison_proof: Any = None
     skill_policy: Any = None
     max_solver_steps: int = 40
     max_repair_rounds: int = 2

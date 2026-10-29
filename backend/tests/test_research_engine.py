@@ -104,7 +104,8 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
     assert active not in failed_ids and current['executions'][active]['execution_status']=='succeeded'
     assert current['executions'][active]['acceptance']=='accepted'
     results=store.registry_payload()['results'];q2_results=[r for r in results if r['subproblem']==policy]
-    assert q2_results and all(current['artifacts'][r['id']]['producer_attempt']==active for r in q2_results)
+    assert q2_results==[]
+    assert any(a['producer_attempt']==active and a['type']=='stdout' for a in current['artifacts'].values())
     assert failed_refs.isdisjoint({r['id'] for r in results})
     paper=(Path(agent.workspace_dir)/'paper.md').read_bytes();attempts=current['executions'];written=len(agent.llm.text_calls)
     assert 'paper.md' in asyncio.run(agent.resume_failed())

@@ -73,16 +73,15 @@ def test_dispatch_uses_committed_original_source_for_initial_and_recovered_worke
     ('售价15元',15,True),
     ('备餐量非负',0,True),
 ])
-def test_requirement_thresholds_cannot_be_invented_or_borrowed_from_other_source_numbers(quote,expected,valid):
+def test_imported_metric_metadata_does_not_create_an_execution_gate(quote,expected,valid):
     from ai_system.research.validation import validate_spec
     from ai_system.research.models import Requirement
     plan=_analysis().model_dump()
     plan['requirements'][0]=Requirement(id='R1',kind='constraint',statement='numeric check',source_quote=quote,task_ids=['Q1'],
         checks=[DomainCheck(id='bound',description='fixed bound',left={'task_id':'Q1','name':'metric'},operator='le',expected=expected)]).model_dump()
     source=TASK+' 原题另有 20 个观测。'+quote
-    if valid:validate_spec(source,plan)
-    else:
-        with pytest.raises(ValueError,match='数值依据'):validate_spec(source,plan)
+    requirements,_=validate_spec(source,plan)
+    assert requirements[0].source_quote==quote
 
 
 @pytest.mark.parametrize('raw_tool',[True,False])

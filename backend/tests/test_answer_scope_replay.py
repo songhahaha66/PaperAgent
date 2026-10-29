@@ -41,42 +41,26 @@ def study(tmp_path):
     return store,eid,ref,store.snapshot()['experiments'][eid]['question_id']
 
 
-def test_missing_refs_are_saved_as_incomplete_then_fixed_in_the_same_agent(tmp_path):
+def test_answer_without_scalar_refs_delivers_without_recomputation(tmp_path):
     store,eid,ref,qid=study(tmp_path);executions=store.snapshot()['executions']
     def respond(messages):
         rows=[m for m in messages if isinstance(m,ToolMessage)]
-        if not rows:return tool('research_update_answer',{'question_id':qid,'statement':'已回答总体问题',
-            'coverage':'answered','stop_reason':'现有实验足够'},'missing')
-        if len(rows)==1:
-            saved=json.loads(rows[-1].content)
-            assert saved['answer_status']=='needs_update' and saved['answer_gaps']
-            status=delivery_status(store.snapshot());assert not status['ready'] and status['blockers']
-            return tool('research_deliver',{'reason':'改写交付理由不能补依据'},'premature')
-        if len(rows)==2:
-            assert rows[-1].status=='error' and '完整回答缺少实际依据' in rows[-1].content
-            return tool('research_read_question',{'question_id':qid},'read')
-        if len(rows)==3:
-            result=json.loads(rows[-1].content)['experiments'][0]['results'][0]
-            assert result['id']==ref and result['meaning']['scope']=='全部源记录，不按类别过滤'
-            assert result['input_refs']['data/rows.csv']
-            return tool('research_update_answer',{'question_id':qid,'statement':'总体计数 {{R:'+ref+'}}，子集仍未回答',
-                'artifact_refs':[ref],'coverage':'partial','stop_reason':'本轮只验证总体范围，子集证据仍未知'},'fix')
+        if not rows:return tool('research_update_answer',{'question_id':qid,'statement':'已计算总体3条，结果见执行记录',
+            'coverage':'partial','stop_reason':'子集尚未计算'},'answer')
         assert json.loads(rows[-1].content)['answer_gaps']==[]
-        return tool('research_deliver',{'title':'已有结果与未知','reason':'已明确部分答案及边界'},'deliver')
+        return tool('research_deliver',{'title':'已有结果与未知','reason':'保留实际结果及未完成部分'},'deliver')
     model=ResearchToolsModel(respond=respond)
     ctx=GraphContext.create(str(tmp_path),planner_llm=model,max_solver_steps=6);ctx.research=store
     assert not asyncio.run(prepare_action(ctx))
-    assert model.calls==5 and store.snapshot()['publication']['stage']=='write'
+    assert model.calls==2 and store.snapshot()['publication']['stage']=='write'
     assert store.snapshot()['executions']==executions
-    resume(store)
-    assert store.snapshot()['action']['capability']=='writing.write'
 
 
 def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_path):
     from ai_system.modules.writing.sections import section_request
     store,first,r1,qid=study(tmp_path)
     result=operations.schedule_experiment(SimpleNamespace(research=store),operations.ExperimentInput(
-        question_id=qid,artifact_refs=[r1],plan={'conditions':'只取 category=A，保持原始行身份',
+        question_id=qid,dependency_ids=[first],plan={'conditions':'只取 category=A，保持原始行身份',
             'evaluation':'分别解释总体与子集，不能替代','candidates':[{'name':'类别统计','instruction':'复用总体的源记录与版本，读取既有资料统计子集'}]}).model_dump())
     _manual_worker_handoff(store);second=result['experiment_id']
     r2=commit_count(store,second,2,'仅 category=A 的源记录')

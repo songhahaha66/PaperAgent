@@ -28,6 +28,6 @@ async def inspect_materials(ctx, inputs):
 
 def register(registry):
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
-                      model_callable=True, purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览不是本研究已验收数值成果。')
+                      model_callable=True, purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览保留原始文件路径与结构，不代替后续计算。')
     for name, product, handler in (("compare", "experiment", compare), ("execute", "research_state", execute)):
         registry.register("experiments", f"experiments.{name}", product, handler, BranchInputs)
