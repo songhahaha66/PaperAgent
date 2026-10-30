@@ -24,6 +24,9 @@ const deadline = setTimeout(() => {
     connect() {
       return Promise.resolve()
     }
+    sendMessage(...args) {
+      this.sent = args
+    }
     disconnect() {}
   }
   const saved = {
@@ -62,7 +65,9 @@ const deadline = setTimeout(() => {
       'tdesign-vue-next': { MessagePlugin: { warning() {}, error() {}, info() {} } },
       '@/stores/auth': { useAuthStore: () => ({ token: 'test' }) },
       '@/lang/studio': { useStudioCopy: () => ({ ui: vue.ref({}), isZh: vue.ref(true) }) },
-      '@/api/workspace': { workspaceAPI: { getWork: async () => ({ status: 'completed', architecture_version: 2 }) } },
+      '@/api/workspace': {
+        workspaceAPI: { getWork: async () => ({ status: 'completed', architecture_version: 2 }) },
+      },
       '@/api/chat': {
         WebSocketChatHandler: Socket,
         chatAPI: {
@@ -78,6 +83,7 @@ const deadline = setTimeout(() => {
       setInterval: () => 1,
       clearInterval() {},
       document: { querySelector: () => null },
+      crypto: require('node:crypto').webcrypto,
     },
   )
   const scope = vue.effectScope()
@@ -111,7 +117,7 @@ const deadline = setTimeout(() => {
     1,
     'refresh/reconnect binds persisted reply',
   )
-  const socket = sockets[0]
+  let socket = sockets[0]
   socket.message({ type: 'reconnect', reply_id: 'reply', task_id: 'chat-task' })
   socket.message({
     type: 'reply_update',
@@ -154,6 +160,9 @@ const deadline = setTimeout(() => {
   socket.lost()
   await flush()
   assert.equal(state.isStreaming.value, true, 'browser disconnect does not fail execution')
+  await state.checkAndResumeRunningTask()
+  socket = sockets.at(-1)
+  socket.message({ type: 'reconnect', reply_id: 'reply', task_id: 'chat-task' })
   history = [
     older,
     {
@@ -183,6 +192,79 @@ const deadline = setTimeout(() => {
     'paper comment projection is not duplicated',
   )
   assert.equal(state.chatMessages.value.find((m) => m.id === 'comment').isStreaming, false)
+
+  await state.checkAndResumeRunningTask()
+  assert.equal(sockets.length, 2, 'idle view keeps its existing workspace subscription')
+  socket.message({ type: 'start', task_id: 'remote-task', reply_id: 'remote-reply', action: 'run' })
+  assert.equal(state.isStreaming.value, true, 'another browser starts a task in an idle view')
+  assert.equal(
+    state.chatMessages.value.find((m) => m.id === 'reply').content,
+    'Terminal answer',
+    'a new remote turn never renames the previous durable reply',
+  )
+  socket.message({
+    type: 'reply_update',
+    task_id: 'remote-task',
+    update: {
+      reply_id: 'remote-reply',
+      chat_task_id: 'remote-task',
+      revision: 2,
+      status: 'running',
+      segments: [{ id: 'remote-text', type: 'text', text: 'Remote answer' }],
+    },
+  })
+  socket.message({ type: 'error', scope: 'command', message: 'busy' })
+  assert.equal(state.isStreaming.value, true, 'a command rejection cannot terminate a shared run')
+  const refreshBeforeFinish = state.loadChatHistory()
+  socket.message({
+    type: 'reply_update',
+    task_id: 'remote-task',
+    update: {
+      reply_id: 'remote-reply',
+      chat_task_id: 'remote-task',
+      revision: 3,
+      status: 'completed',
+      segments: [{ id: 'remote-text', type: 'text', text: 'Final remote answer' }],
+    },
+  })
+  await refreshBeforeFinish
+  assert.equal(
+    state.chatMessages.value.find((m) => m.id === 'remote-reply').content,
+    'Final remote answer',
+    'an older history response cannot drop a just-completed reply',
+  )
+  state.chatMessages.value = state.chatMessages.value.filter((m) => m.id !== 'remote-reply')
+  socket.message({ type: 'complete', task_id: 'remote-task', reply_id: 'remote-reply' })
+  assert.equal(state.isStreaming.value, false, 'completion works without a chat placeholder')
+  await flush()
+  await state.sendMessage('local question', 'ask')
+  const requestId = socket.sent[6]
+  socket.message({
+    type: 'start',
+    task_id: 'local-task',
+    reply_id: 'local-reply',
+    action: 'ask',
+    request_id: requestId,
+  })
+  assert.equal(state.chatMessages.value.filter((m) => m.id === 'local-reply').length, 1)
+  assert.equal(sockets.length, 2, 'sending a new turn reuses the long-lived subscription')
+  socket.message({ type: 'complete', task_id: 'local-task', reply_id: 'local-reply' })
+  await flush()
+  await state.sendMessage('finished offline', 'ask')
+  socket.message({
+    type: 'auth_success',
+    task: { status: 'completed', request_id: socket.sent[6] },
+  })
+  assert.equal(
+    state.isStreaming.value,
+    false,
+    'reconnect recovers a turn that finished before its start acknowledgement arrived',
+  )
+  assert.equal(
+    state.chatMessages.value.some((m) => m.content === 'finished offline'),
+    false,
+    'unacknowledged optimistic rows give way to durable history after reconnect',
+  )
   for (const dispose of cleanup) dispose()
   scope.stop()
   console.log(

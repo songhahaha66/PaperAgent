@@ -2,6 +2,8 @@
 
 Use UV for Python dependencies and commands. Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing research behavior.
 
+- Write project documentation in `docs/`. Do not commit or push changes unless the user explicitly requests it.
+
 - Backend: FastAPI, SQLAlchemy and LangGraph. Run `cd backend && uv sync && uv run main.py`; tests: `uv run pytest tests`.
 - Frontend: Vue 3, TypeScript, TDesign, Pinia and Vite. Run `cd frontend && npm ci && npm run dev`; checks: `npm run test:workspace && npm run build`.
 - All startup paths run Alembic and the workspace cutover before serving requests. Do not add `create_all` or runtime legacy fallbacks.

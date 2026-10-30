@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Any
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class AITask:
     error: Optional[str] = None
     cancel_reason: Optional[str] = None
     action: str = "run"
+    request_id: Optional[str] = None
     # 累积的输出（用于断线重连恢复）。不设上限：长任务的早期事件（题目分析、阶段）也要能恢复；
     # 体积最大的 plan_updated 只保留最新一条
     outputs: list = field(default_factory=list)
@@ -80,13 +82,12 @@ class TaskManager:
     
     def create_task(self, work_id: str, user_id: int, message: str, action: str = "run") -> AITask:
         """创建新任务"""
-        # 如果已有进行中的任务，先取消
-        if work_id in self._tasks:
-            old_task = self._tasks[work_id]
-            if old_task.status == TaskStatus.RUNNING:
-                self.cancel_task(work_id)
+        # Atomic reservation on the event loop, before any asynchronous setup.
+        # A cancelled task still owns the workspace while it saves final output.
+        if self.get_active_task(work_id):
+            raise ValueError('当前有任务正在执行，请等待完成')
         
-        task_id = f"{work_id}_{int(time.time() * 1000)}"
+        task_id = f"{work_id}_{uuid4().hex}"
         task = AITask(
             task_id=task_id,
             work_id=work_id,
@@ -109,6 +110,13 @@ class TaskManager:
                 logger.warning(f"任务协程已结束但状态仍是运行中，标记失败: {task.task_id}")
                 self.fail_task(work_id, "任务意外中断")
                 return None
+            return task
+        return None
+
+    def get_active_task(self, work_id: str) -> Optional[AITask]:
+        task = self._tasks.get(work_id)
+        if task and (task.status in (TaskStatus.PENDING, TaskStatus.RUNNING) or
+                     (task._async_task is not None and not task._async_task.done())):
             return task
         return None
 
@@ -154,7 +162,7 @@ class TaskManager:
             task.completed_at = time.time()
             logger.info(f"任务完成: {task.task_id}")
             # 启动清理定时器
-            asyncio.create_task(self._cleanup_completed_task(work_id))
+            asyncio.create_task(self._cleanup_completed_task(work_id, task.task_id))
     
     def fail_task(self, work_id: str, error: str):
         """标记任务失败并取消后台协程"""
@@ -166,7 +174,7 @@ class TaskManager:
             if task._async_task and not task._async_task.done() and task._async_task is not asyncio.current_task():
                 task._async_task.cancel()
             logger.error(f"任务失败: {task.task_id}, 错误: {error}")
-            asyncio.create_task(self._cleanup_completed_task(work_id))
+            asyncio.create_task(self._cleanup_completed_task(work_id, task.task_id))
     
     def cancel_task(self, work_id: str, reason: str = "cancelled"):
         """取消任务"""
@@ -178,6 +186,7 @@ class TaskManager:
             if task._async_task and not task._async_task.done() and task._async_task is not asyncio.current_task():
                 task._async_task.cancel()
             logger.info(f"任务取消: {task.task_id}")
+            asyncio.create_task(self._cleanup_completed_task(work_id, task.task_id))
     
     def set_async_task(self, work_id: str, async_task: asyncio.Task):
         """设置asyncio任务引用"""
@@ -205,6 +214,7 @@ class TaskManager:
             "has_task": True,
             "task_id": task.task_id,
             "action": task.action,
+            "request_id": task.request_id,
             "reply_id": task.reply_id,
             "status": task.status.value,
             "message": task.message,
@@ -218,11 +228,11 @@ class TaskManager:
             "json_blocks_count": len(task.json_blocks)
         }
     
-    async def _cleanup_completed_task(self, work_id: str):
+    async def _cleanup_completed_task(self, work_id: str, task_id: str):
         """清理已完成的任务"""
         await asyncio.sleep(self._completed_retention)
         task = self._tasks.get(work_id)
-        if task and task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+        if task and task.task_id == task_id and not self.get_active_task(work_id) and task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
             del self._tasks[work_id]
             logger.info(f"清理已完成任务: {task.task_id}")
 

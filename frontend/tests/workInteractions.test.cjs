@@ -31,10 +31,18 @@ async function environment() {
         this.disconnected = callback
       }
       connect() {
-        return deferred ? new Promise((resolve) => connected.push(resolve)) : Promise.resolve()
+        if (!this.connection) this.connection = (
+          deferred ? new Promise((resolve) => connected.push(resolve)) : Promise.resolve()
+        ).then(async () => {
+          const task = await taskAPI.getTaskStatus?.() || { has_task: false }
+          this.message?.({ type: 'auth_success', task })
+          if (task.status === 'running') this.message?.({ type: 'reconnect', ...task })
+        })
+        return this.connection
       }
-      sendMessage(message, _model, action, subproblemId, revision) {
+      sendMessage(message, _model, action, subproblemId, revision, _scope, requestId) {
         sent.push({ workId: this.workId, message, action, subproblemId, revision })
+        this.message?.({ type: 'start', task_id: `task-${sent.length}`, reply_id: `reply-${sent.length}`, request_id: requestId, action })
       }
       disconnect() {
         this.closed = true
@@ -586,6 +594,8 @@ if (require.main === module) (async () => {
       has_task: true,
       status: 'running',
       action: 'ask',
+      task_id: 'running-task',
+      reply_id: 'running-reply',
       started_at: 1,
     }),
     pauseWork: async () => ({ work_status: 'paused' }),
@@ -614,11 +624,13 @@ if (require.main === module) (async () => {
     resolveTask = resolve
   })
   const lost = await env.work('lost', false, [], { getTaskStatus: () => delayedTask })
+  lost.state.currentWork.value = { architecture_version: 2 }
   const reconnect = lost.state.reconnectTask()
   lost.stop()
   resolveTask({ has_task: true, status: 'running' })
   await reconnect
-  assert.equal(lost.sockets.length, 0, 'late recovery cannot attach a socket after navigation')
+  assert.equal(lost.sockets.length, 1, 'recovery opens a subscription before receiving task state')
+  assert.equal(lost.sockets[0].closed, true, 'late authentication cannot revive a socket after navigation')
   assert.equal(lost.state.chatMessages.value.length, 0)
   console.log('PASS: late recovery status cannot revive an unmounted work')
 

@@ -21,7 +21,7 @@
     "test:research": "node --experimental-vm-modules tests/researchProgress.test.cjs && node --experimental-vm-modules tests/reviewTasks.test.cjs",
     "test:resources": "node --experimental-vm-modules tests/workResources.test.cjs && node --experimental-vm-modules tests/outcomes.test.cjs && node --experimental-vm-modules tests/modelProvider.test.cjs",
     "test:home": "node --experimental-vm-modules tests/home.test.cjs",
-    "test:messages": "node --experimental-vm-modules tests/jsonChatRenderer.test.cjs && node --experimental-vm-modules tests/conversationTimeline.test.cjs && node --experimental-vm-modules tests/conversationExecution.test.cjs && node --experimental-vm-modules tests/conversationStream.test.cjs"
+    "test:messages": "node --experimental-vm-modules tests/jsonChatRenderer.test.cjs && node --experimental-vm-modules tests/conversationTimeline.test.cjs && node --experimental-vm-modules tests/conversationExecution.test.cjs && node --experimental-vm-modules tests/conversationStream.test.cjs && node --experimental-vm-modules tests/workSocket.test.cjs"
   },
   "dependencies": {
     "@simplewebauthn/browser": "^13.3.0",

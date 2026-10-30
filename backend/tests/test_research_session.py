@@ -299,3 +299,76 @@ def test_approval_does_not_extend_to_other_model_destinations(tmp_path, monkeypa
     with pytest.raises(PermissionError, match="仅授权"):
         asyncio.run(answer_research_question(None, None, research_snapshot(tmp_path, "work", "completed"),
             tmp_path, "解释结果", [], destination_url=destination))
+
+
+def test_multiple_browsers_observe_turns_reconnect_and_continue_after_submitter_leaves(web, monkeypatch):
+    from routers.chat_routes import chat
+    client, work, calls, statuses, saved, root = web
+    gates = []
+
+    async def answer(model, stream, *args, **kwargs):
+        gate = asyncio.Event()
+        gates.append(gate)
+        await stream.send_json_block('paper_stage', 'live step')
+        await gate.wait()
+        await stream._output('shared answer')
+
+    monkeypatch.setattr(chat, 'answer_research_question', answer)
+
+    def receive_until(socket, kind):
+        events = []
+        for _ in range(30):
+            event = socket.receive_json()
+            events.append(event)
+            if event['type'] == kind:
+                return events
+        pytest.fail(f'missing {kind}: {events}')
+
+    with client.websocket_connect('/api/chat/ws/work') as observer:
+        observer.send_json({'token': 'test'})
+        assert observer.receive_json()['type'] == 'auth_success'
+        with client.websocket_connect('/api/chat/ws/work') as author:
+            author.send_json({'token': 'test'})
+            assert author.receive_json()['type'] == 'auth_success'
+            author.send_json({'problem': '解释结果', 'action': 'ask', 'request_id': 'one'})
+            a = receive_until(author, 'start')[-1]
+            b = receive_until(observer, 'start')[-1]
+            assert a == b and a['request_id'] == 'one'
+            for _ in range(10):
+                event = observer.receive_json()
+                if any(s.get('block', {}).get('type') == 'paper_stage' for s in event.get('update', {}).get('segments', [])):
+                    break
+            else: pytest.fail('live step missing')
+            observer.send_json({'problem': 'competing ask', 'action': 'ask', 'request_id': 'two'})
+            rejected = receive_until(observer, 'error')[-1]
+            assert rejected['scope'] == 'command' and rejected['request_id'] == 'two'
+            assert chat.task_manager.get_task('work').task_id == a['task_id']
+            with client.websocket_connect('/api/chat/ws/work') as joining:
+                joining.send_json({'token': 'test', 'task_id': a['task_id'], 'last_seq': event['seq'] - 1})
+                replay = receive_until(joining, 'reconnect_complete')
+                assert replay[0]['type'] == 'auth_success'
+                assert [e['seq'] for e in replay if 'seq' in e] == [event['seq']]
+                assert replay[-1]['reply_id'] == a['reply_id']
+        assert chat.task_manager.get_task('work').status.value == 'running'
+        client.portal.call(gates[0].set)
+        terminal = receive_until(observer, 'complete')
+        assert not any(e['type'] == 'error' for e in terminal)
+        assert terminal[-1]['task_id'] == a['task_id']
+        with client.websocket_connect('/api/chat/ws/work') as later:
+            later.send_json({'token': 'test'})
+            auth = later.receive_json()
+            assert auth['task']['status'] == 'completed' and auth['reload_history']
+            later.send_json({'problem': 'another question', 'action': 'ask', 'request_id': 'three'})
+            start = receive_until(later, 'start')[-1]
+            assert receive_until(observer, 'start')[-1] == start
+            assert start['task_id'] != a['task_id'] and start['reply_id'] != a['reply_id']
+            for _ in range(10):
+                update = later.receive_json()
+                if any(s.get('block', {}).get('type') == 'paper_stage' for s in update.get('update', {}).get('segments', [])):
+                    break
+            client.portal.call(gates[1].set)
+            assert receive_until(later, 'complete')[-1] == receive_until(observer, 'complete')[-1]
+    messages = ChatHistoryManager(str(root.parent)).get_messages(root.name)
+    assert len([m for m in messages if m['role'] == 'assistant']) == 2
+    assert not any(m['content'] == 'competing ask' for m in messages)
+    assert chat.manager.get_connection_count() == 0

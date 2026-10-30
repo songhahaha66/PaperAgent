@@ -104,168 +104,162 @@ export const chatAPI = {
 // WebSocket聊天处理器
 export class WebSocketChatHandler {
   private ws: WebSocket | null = null
-  private workId: string // 改为workId
-  private token: string
-  private baseUrl: string
+  private baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   private reconnectAttempts = 0
   private maxReconnectAttempts = 10
-  private reconnectDelay = 1000
   private messageQueue: any[] = []
-  private isConnecting = false
-  private reconnectTimer: number | null = null
-  private heartbeatTimer: number | null = null
+  private connecting: Promise<void> | null = null
+  private rejectConnect: ((error: Error) => void) | null = null
+  private authenticated = false
+  private disposed = false
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private authTimer: ReturnType<typeof setTimeout> | null = null
+  private lastReceivedAt = 0
   private messageCallback: ((data: any) => void) | null = null
   private disconnectCallback: (() => void) | null = null
   private reconnectCallback: ((data: any) => void) | null = null
-  private isReconnecting = false
-  // 当前任务和已收到的最大序号：断线重连时带给后端，只补发断点之后的输出；重复的序号直接丢弃
+  // Cursor belongs to a task, never to a browser/workspace globally.
   private taskId: string | null = null
   private lastSeq = 0
 
-  constructor(workId: string, token: string) {
-    // 参数改为workId
-    this.workId = workId
-    this.token = token
-    this.baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+  constructor(
+    private workId: string,
+    private token: string,
+  ) {}
+
+  connect(): Promise<void> {
+    if (this.disposed) return Promise.reject(new Error('连接已关闭'))
+    if (this.connecting) return this.connecting
+    if (this.authenticated && this.ws?.readyState === WebSocket.OPEN) return Promise.resolve()
+    this.clearReconnectTimer()
+    const promise = new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`${this.baseUrl.replace(/^http/, 'ws')}/api/chat/ws/${this.workId}`)
+      this.ws = ws
+      this.authenticated = false
+      this.rejectConnect = reject
+      const current = () => !this.disposed && this.ws === ws
+      ws.onopen = () => {
+        if (!current()) return
+        ws.send(JSON.stringify({ token: this.token, task_id: this.taskId, last_seq: this.lastSeq }))
+      }
+      ws.onmessage = (event) => {
+        if (!current()) return
+        try {
+          const data = JSON.parse(event.data)
+          this.lastReceivedAt = Date.now()
+          if (data.type === 'pong') return
+          if (!this.authenticated && data.type === 'error') {
+            reject(new Error(data.message || '认证失败'))
+            ws.close(1008, '认证失败')
+            return
+          }
+          if (data.type === 'auth_success') {
+            this.authenticated = true
+            this.reconnectAttempts = 0
+            this.rejectConnect = null
+            if (this.authTimer) clearTimeout(this.authTimer)
+            this.authTimer = null
+            if (!data.task || !['pending', 'running'].includes(data.task.status)) {
+              this.taskId = null
+              this.lastSeq = 0
+            }
+            this.startHeartbeat(ws)
+            this.messageCallback?.(data)
+            // Commands are sent only after permission checks and subscription setup.
+            for (const message of this.messageQueue.splice(0)) ws.send(JSON.stringify(message))
+            resolve()
+            return
+          }
+          if (
+            (data.type === 'start' || data.type === 'reconnect') &&
+            data.task_id !== this.taskId
+          ) {
+            this.taskId = data.task_id
+            this.lastSeq = 0
+          }
+          if (
+            data.type === 'reconnect' &&
+            Number.isInteger(data.after_seq) &&
+            data.after_seq >= 0
+          ) {
+            this.lastSeq = data.after_seq
+          }
+          if (data.task_id && this.taskId && data.task_id !== this.taskId) return
+          if (typeof data.seq === 'number' && data.seq <= this.lastSeq) return
+          if (data.type === 'reconnect' || data.type === 'reconnect_complete')
+            this.reconnectCallback?.(data)
+          this.messageCallback?.(data)
+          if (typeof data.seq === 'number') this.lastSeq = data.seq
+        } catch (error) {
+          console.error('处理WebSocket消息失败:', error)
+        }
+      }
+      ws.onerror = () => {
+        if (!current()) return
+        reject(new Error('WebSocket连接失败'))
+        ws.close()
+      }
+      ws.onclose = (event) => {
+        if (!current()) return
+        this.authenticated = false
+        this.stopTimers()
+        reject(new Error('WebSocket连接已关闭'))
+        this.rejectConnect = null
+        if (
+          event.code !== 1000 &&
+          event.code !== 1008 &&
+          this.reconnectAttempts < this.maxReconnectAttempts
+        ) {
+          this.scheduleReconnect()
+        } else this.disconnectCallback?.()
+      }
+      this.authTimer = setTimeout(() => {
+        if (!current() || this.authenticated) return
+        reject(new Error('WebSocket认证超时'))
+        ws.close(4000, '认证超时')
+      }, 10000)
+    })
+    this.connecting = promise.finally(() => {
+      this.connecting = null
+    })
+    return this.connecting
   }
 
-  // 连接WebSocket
-  connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (this.isConnecting) {
-        reject(new Error('连接已在进行中'))
+  private startHeartbeat(ws: WebSocket) {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    this.lastReceivedAt = Date.now()
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws !== ws || ws.readyState !== WebSocket.OPEN) return
+      if (Date.now() - this.lastReceivedAt > 45000) {
+        ws.close(4000, '心跳超时')
         return
       }
-
-      this.isConnecting = true
-      this.clearReconnectTimer()
-
-      try {
-        // 构建WebSocket URL（使用workId）
-        const wsUrl = `${this.baseUrl.replace('http', 'ws')}/api/chat/ws/${this.workId}`
-        console.log('连接WebSocket:', wsUrl)
-
-        this.ws = new WebSocket(wsUrl)
-
-        this.ws.onopen = async () => {
-          console.log('WebSocket连接已建立')
-          this.isConnecting = false
-          this.reconnectAttempts = 0
-
-          // 绑定消息处理器（如果已设置回调）
-          this.bindMessageHandler()
-
-          // 发送认证信息
-          try {
-            this.ws!.send(
-              JSON.stringify({ token: this.token, task_id: this.taskId, last_seq: this.lastSeq }),
-            )
-
-            // 发送队列中的消息
-            while (this.messageQueue.length > 0) {
-              const message = this.messageQueue.shift()
-              this.ws!.send(JSON.stringify(message))
-            }
-
-            // 启动心跳检测
-            this.startHeartbeat()
-
-            resolve()
-          } catch (error) {
-            reject(error)
-          }
-        }
-
-        this.ws.onerror = (error) => {
-          console.error('WebSocket连接错误:', error)
-          this.isConnecting = false
-          reject(new Error('WebSocket连接失败'))
-        }
-
-        this.ws.onclose = (event) => {
-          console.log('WebSocket连接已关闭:', event.code, event.reason)
-          this.isConnecting = false
-          this.stopHeartbeat()
-
-          // 如果不是正常关闭，尝试重连
-          if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.scheduleReconnect()
-          } else {
-            // 如果是正常关闭或达到最大重连次数，调用断开回调
-            if (this.disconnectCallback) {
-              this.disconnectCallback()
-            }
-          }
-        }
-
-        // 设置连接超时
-        setTimeout(() => {
-          if (this.isConnecting) {
-            this.isConnecting = false
-            if (this.ws) {
-              this.ws.close()
-            }
-            reject(new Error('WebSocket连接超时'))
-          }
-        }, 10000)
-      } catch (error) {
-        this.isConnecting = false
-        reject(error)
-      }
-    })
+      ws.send(JSON.stringify({ type: 'ping' }))
+    }, 15000)
   }
 
-  // 启动心跳检测
-  private startHeartbeat() {
-    this.heartbeatTimer = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        try {
-          this.ws.send(JSON.stringify({ type: 'ping' }))
-        } catch (error) {
-          console.error('心跳发送失败:', error)
-          this.scheduleReconnect()
-        }
-      }
-    }, 30000) // 30秒发送一次心跳
+  private stopTimers() {
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer)
+    if (this.authTimer) clearTimeout(this.authTimer)
+    this.heartbeatTimer = this.authTimer = null
   }
 
-  // 停止心跳检测
-  private stopHeartbeat() {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer)
-      this.heartbeatTimer = null
-    }
-  }
-
-  // 安排重连
   private scheduleReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('达到最大重连次数，停止重连')
-      return
-    }
-
-    this.reconnectAttempts++
-    const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1), 10000)
-    console.log(
-      `安排重连 (${this.reconnectAttempts}/${this.maxReconnectAttempts})，延迟: ${delay}ms`,
-    )
-
+    if (this.disposed || this.reconnectTimer) return
+    this.reconnectCallback?.({ type: 'connection_reconnecting' })
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempts++, 10000)
     this.reconnectTimer = setTimeout(() => {
-      this.connect().catch((error) => {
-        console.error('重连失败:', error)
-      })
+      this.reconnectTimer = null
+      void this.connect().catch((error) => console.error('重连失败:', error))
     }, delay)
   }
 
-  // 清除重连定时器
   private clearReconnectTimer() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer)
-      this.reconnectTimer = null
-    }
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
   }
 
-  // 发送消息
   sendMessage(
     content: string,
     model?: string,
@@ -273,7 +267,9 @@ export class WebSocketChatHandler {
     subproblemId?: string,
     revision?: ResearchRevisionCommand,
     scopeContext?: { research_id: string; base_revision: number },
+    requestId?: string,
   ) {
+    if (this.disposed) return
     const message = {
       problem: content,
       model,
@@ -281,118 +277,38 @@ export class WebSocketChatHandler {
       subproblem_id: subproblemId,
       revision,
       scope_context: scopeContext,
+      request_id: requestId,
     }
-
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      // 如果连接未建立，将消息加入队列
+    if (!this.authenticated || this.ws?.readyState !== WebSocket.OPEN) {
       this.messageQueue.push(message)
-      console.log('WebSocket未连接，消息已加入队列')
-
-      // 尝试连接
-      if (!this.isConnecting) {
-        this.connect().catch((error) => {
-          console.error('自动连接失败:', error)
-        })
-      }
+      void this.connect().catch((error) => console.error('自动连接失败:', error))
       return
     }
-
-    try {
-      this.ws.send(JSON.stringify(message))
-    } catch (error) {
-      console.error('发送消息失败:', error)
-      // 发送失败，加入队列并尝试重连
-      this.messageQueue.push(message)
-      this.scheduleReconnect()
-    }
+    this.ws.send(JSON.stringify(message))
   }
 
-  // 绑定消息处理器到当前 WebSocket 实例
-  private bindMessageHandler() {
-    if (!this.ws) return
-
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-
-        // 处理心跳响应
-        if (data.type === 'pong') {
-          return
-        }
-
-        // 新任务开始或恢复的是另一个任务时，序号从头算
-        if (
-          (data.type === 'start' || data.type === 'reconnect') &&
-          data.task_id &&
-          data.task_id !== this.taskId
-        ) {
-          this.taskId = data.task_id
-          this.lastSeq = 0
-        }
-        if (typeof data.seq === 'number') {
-          if (data.seq <= this.lastSeq) return
-          this.lastSeq = data.seq
-        }
-
-        // 处理重连相关消息
-        if (data.type === 'reconnect') {
-          console.log('检测到正在进行的AI任务，开始恢复...')
-          this.isReconnecting = true
-          if (this.reconnectCallback) {
-            this.reconnectCallback(data)
-          }
-          // 不 return，继续传递给 messageCallback
-        }
-
-        if (data.type === 'reconnect_complete') {
-          console.log('历史输出恢复完成')
-          this.isReconnecting = false
-          if (this.reconnectCallback) {
-            this.reconnectCallback(data)
-          }
-          // 不 return，继续传递给 messageCallback
-        }
-
-        if (this.messageCallback) {
-          this.messageCallback(data)
-        }
-      } catch (error) {
-        console.error('解析WebSocket消息失败:', error)
-      }
-    }
-  }
-
-  // 监听消息
   onMessage(callback: (data: any) => void) {
     this.messageCallback = callback
-    // 如果 ws 已存在，立即绑定
-    this.bindMessageHandler()
   }
-
-  // 监听断开连接
   onDisconnect(callback: () => void) {
     this.disconnectCallback = callback
   }
-
-  // 监听重连恢复事件
   onReconnect(callback: (data: any) => void) {
     this.reconnectCallback = callback
   }
 
-  // 关闭连接
   disconnect() {
+    this.disposed = true
     this.clearReconnectTimer()
-    this.stopHeartbeat()
-
-    // 主动断开（换新连接、离开页面）不是连接丢失，不触发断开回调，也不再接收旧连接的消息
-    this.disconnectCallback = null
-    this.messageCallback = null
+    this.stopTimers()
+    this.rejectConnect?.(new Error('连接已关闭'))
+    this.rejectConnect = null
+    this.disconnectCallback = this.messageCallback = this.reconnectCallback = null
     if (this.ws) {
-      this.ws.onmessage = null
+      this.ws.onopen = this.ws.onmessage = this.ws.onerror = this.ws.onclose = null
       this.ws.close(1000, '用户主动断开')
       this.ws = null
     }
-    this.isConnecting = false
     this.messageQueue = []
   }
 }
