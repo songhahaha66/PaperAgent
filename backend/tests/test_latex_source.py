@@ -1,5 +1,6 @@
 """Current-source contracts; controlled models only, no API or full application run."""
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -27,6 +28,27 @@ def test_graphicspath_assets_are_included_in_the_immutable_source_snapshot(tmp_p
     assert (archive/'results/figures/curve.pdf').read_bytes()==b'original curve'
     (tmp_path/'results/figures/curve.pdf').write_bytes(b'changed curve')
     assert project.snapshot(tmp_path)['version']!=before['version']
+
+
+def test_graphicspath_handles_whitespace_and_multiple_directories(tmp_path):
+    (tmp_path/'figures').mkdir()
+    (tmp_path/'figures/curve.png').write_bytes(b'figure')
+    (tmp_path/'paper.tex').write_text('\\graphicspath {  {unused/} \n {figures/}  }\\includegraphics{curve}')
+    assert 'figures/curve.png' in project.files(tmp_path)
+
+
+def test_malformed_graphicspath_does_not_block_dependency_parsing(tmp_path):
+    (tmp_path/'figures').mkdir()
+    (tmp_path/'figures/curve.png').write_bytes(b'figure')
+    (tmp_path/'paper.tex').write_text(
+        '\\graphicspath{' + ' {unused/}' * 5000 + '\n'
+        + r'\graphicspath{{figures/}}\includegraphics{curve}'
+    )
+    # A subprocess timeout prevents a regression from hanging the test runner.
+    script = ('from pathlib import Path; import sys; '
+              'from services.chat_services.paper_project import files; '
+              "assert 'figures/curve.png' in files(Path(sys.argv[1]))")
+    subprocess.run([sys.executable, '-c', script, str(tmp_path)], check=True, timeout=10)
 
 
 @pytest.mark.parametrize('directory',['../outside/', '.system/', '/tmp/'])

@@ -101,7 +101,7 @@ def files(root, main=None, *, verified_snapshot=False):
                        'text': text, 'size': len(raw)}
         if text is not None and path.suffix == '.tex':
             dependency_text=re.sub(r'\\detokenize\{([^{}]+)\}',r'\1',re.sub(r'(?m)(?<!\\)%.*$', '', text))
-            for group in re.findall(r'\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}', dependency_text):
+            for group in re.findall(r'\\graphicspath\s*\{((?:\s*\{[^{}]*\})+)\s*\}', dependency_text):
                 for directory in re.findall(r'\{([^{}]*)\}', group):
                     directory=directory.strip().rstrip('/')
                     if directory in {'', '.'}:continue
