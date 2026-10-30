@@ -35,6 +35,11 @@ export const executionLabel = (status: string) =>
     waiting: '等待补充信息',
     recorded: '记录已保存',
   })[status] || '状态未记录'
+export function activityStatus(row: ResearchActivity) {
+  if (callRunning(row) && row.kind !== 'model')
+    return row.phase === 'delivery' ? '同步文件' : row.phase === 'preparing' ? '准备中' : '进行中'
+  return executionLabel(row.status)
+}
 export function executionDuration(row: ResearchActivity, now: number, running: boolean) {
   if (!row.started_at) return '时间未记录'
   const end = row.finished_at || (running && callRunning(row) ? now : null)

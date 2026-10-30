@@ -30,6 +30,14 @@ def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
 
 router = APIRouter(prefix="/model-configs", tags=["模型配置"])
 
+
+@router.get('/capabilities')
+async def get_model_capabilities(model_id: str, current_user: int = Depends(auth.get_current_user)):
+    from ai_system.config.generation import model_capabilities
+    if not 1<=len(model_id.strip())<=200:
+        raise HTTPException(status_code=400,detail='模型名称无效')
+    return model_capabilities(model_id.strip())
+
 @router.post("", response_model=schemas.ModelConfigResponse)
 @route_guard
 async def create_model_config(

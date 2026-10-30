@@ -39,7 +39,7 @@ async def compute(ctx,code='print(1)'):
 
 
 @pytest.mark.parametrize('code,status', [('error','failed'),('disconnect','interrupted')])
-def test_outer_and_inner_tools_report_actual_failure(tmp_path,code,status):
+def test_single_visible_operation_reports_actual_failure(tmp_path,code,status):
     ctx,session=context(tmp_path)
     async def run():
         try:
@@ -47,9 +47,10 @@ def test_outer_and_inner_tools_report_actual_failure(tmp_path,code,status):
             assert result['execution_status']==('interrupted' if code=='disconnect' else 'failed')
             assert ctx.fs.get_run_info(result['run_id'])['status']=='error'
             state=ctx.research.snapshot()
-            for capability in ('research.run_python','run_python'):
-                row=next(a for a in state['activity'] if a['capability']==capability)
-                assert row['status']==status and row['message']
+            rows=[a for a in state['activity'] if a['capability'] in {'research.run_python','run_python'}]
+            assert len(rows)==1
+            assert rows[0]['status']==status and rows[0]['message']
+            assert rows[0]['run_id']==result['run_id']
             assert not state['executions'] and not state['experiments']
             if code=='disconnect':
                 again=await compute(ctx,code)

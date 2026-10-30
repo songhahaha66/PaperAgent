@@ -10,15 +10,13 @@
       <span class="status-dot" :class="{ pulse: running }" aria-hidden="true"></span>
       <span>{{ headline }}</span>
       <span v-if="grouped" class="call-state">{{ groupState }}</span>
-      <span v-if="grouped" class="call-state">{{ rows.length }} 步</span>
+      <span v-if="grouped" class="call-state">{{ rows.length }} 次操作</span>
       <span v-if="current?.subject && !grouped" class="subject">{{ current.subject }}</span>
-      <span v-if="!running && !failure && !props.label && rows.length === 1" class="call-state">{{
-        status(rows[0]!)
-      }}</span>
-      <time v-if="current">{{ duration(current) }}</time>
+      <span v-if="!grouped && rows.length === 1" class="call-state">{{ status(rows[0]!) }}</span>
+      <time v-if="headingRow">{{ duration(headingRow) }}</time>
     </button>
     <p v-if="running && progressNote" class="current-note">{{ progressNote }}</p>
-    <p v-if="failed && failure?.message" class="failure-reason">
+    <p v-if="failed && !expanded && failure?.message" class="failure-reason">
       {{ failure.message.split('；')[0] }}
     </p>
     <ol v-if="expanded" :id="`calls-${replyId}-${groupId}`">
@@ -27,28 +25,20 @@
           v-if="entry.type === 'execution'"
           :class="{ nested: entry.row.parent_call_id, error: isFailed(entry.row) }"
         >
-          <div class="step-heading">
+          <div v-if="grouped" class="step-heading">
             <span>{{ entry.row.label }}</span>
             <small>{{ status(entry.row) }}</small>
             <small v-if="duration(entry.row)">{{ duration(entry.row) }}</small>
           </div>
           <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
           <p v-if="entry.row.message">{{ entry.row.message }}</p>
-          <template v-if="entry.row.output_tail">
-            <button
-              class="output-toggle"
-              :aria-expanded="!!outputExpanded[entry.id]"
-              :aria-controls="`output-${replyId}-${groupId}-${entry.id}`"
-              @click="outputExpanded[entry.id] = !outputExpanded[entry.id]"
-            >
-              {{ outputExpanded[entry.id] ? '收起输出' : '展开输出' }}
-            </button>
-            <pre
-              v-if="outputExpanded[entry.id]"
-              :id="`output-${replyId}-${groupId}-${entry.id}`"
-              class="execution-output"
-            >{{ entry.row.output_tail }}</pre>
-          </template>
+          <pre v-if="entry.row.output_tail" class="execution-output">{{
+            entry.row.output_tail
+          }}</pre>
+          <p
+            v-else-if="entry.row.run_id && !callRunning(entry.row) && !entry.row.output_file && !entry.row.error_file"
+            class="empty-output"
+          >未产生标准输出。</p>
           <div class="step-links">
             <button v-if="entry.row.file" @click="$emit('file', entry.row.file)">
               {{ entry.row.file.split('/').pop() }}
@@ -61,13 +51,16 @@
               {{ (entry.row.result_ids?.length || 0) > 1 ? `查看结果 ${index + 1}` : '查看结果' }}
             </button>
             <button v-if="entry.row.script_file" @click="$emit('file', entry.row.script_file)">
-              查看代码
+              代码
+            </button>
+            <button v-for="path in entry.row.files || []" :key="path" @click="$emit('file', path)">
+              {{ path.split('/').pop() }}
             </button>
             <button v-if="entry.row.error_file" @click="$emit('file', entry.row.error_file)">
-              错误输出
+              诊断日志
             </button>
             <button v-if="entry.row.output_file" @click="$emit('file', entry.row.output_file)">
-              执行输出
+              完整日志
             </button>
           </div>
         </li>
@@ -82,7 +75,7 @@
 <script setup lang="ts">
 import { computed, ref, onUnmounted, watch } from 'vue'
 import { chatAPI } from '@/api/chat'
-import { callRunning, executionDuration, executionLabel } from '@/utils/researchProgress'
+import { callRunning, executionDuration, activityStatus } from '@/utils/researchProgress'
 import type { ConversationSegment, ExecutionDetail } from '@/utils/conversationTimeline'
 const props = defineProps<{
   replyId: string
@@ -94,7 +87,6 @@ const props = defineProps<{
 }>()
 defineEmits<{ file: [path: string]; result: [id: string] }>()
 const expanded = ref(false)
-const outputExpanded = ref<Record<string, boolean>>({})
 const details = ref<Record<string, ExecutionDetail>>({})
 const detailError = ref(false)
 const now = ref(Date.now() / 1000)
@@ -115,47 +107,23 @@ watch(
 )
 const rows = computed(() =>
   props.segments.flatMap((s) =>
-    s.type === 'execution' ? [{ ...s.execution, ...details.value[s.id], recovered: s.execution.recovered }] : [],
+    s.type === 'execution' ? [{ ...s.execution, ...details.value[s.id] }] : [],
   ),
 )
 const isFailed = (row: ExecutionDetail) =>
   ['failed', 'error', 'interrupted', 'cancelled'].includes(row.status)
-const grouped = computed(() => !!props.label)
+const grouped = computed(() => rows.value.length > 1)
 // A compact group shows its latest step, not an aggregate verdict on earlier attempts.
 const latest = computed(() => rows.value.at(-1))
-const current = computed(() => {
-  if (grouped.value) return latest.value && callRunning(latest.value) ? latest.value : undefined
-  return [...rows.value].reverse().find(callRunning)
-})
+const current = computed(() => [...rows.value].reverse().find(callRunning))
+const headingRow = computed(() => current.value || latest.value)
 const running = computed(() => !!current.value)
-const groupState = computed(() =>
-  latest.value ? latest.value.recovered ? '后续已完成' : status(latest.value) : '等待下一步',
+const groupState = computed(() => (headingRow.value ? status(headingRow.value) : '等待下一步'))
+const failure = computed(() =>
+  !running.value && latest.value && isFailed(latest.value) ? latest.value : undefined,
 )
-const failure = computed(() => {
-  if (grouped.value)
-    return latest.value && isFailed(latest.value) && !latest.value.recovered ? latest.value : undefined
-  if (running.value) return undefined
-  const ids = new Set(rows.value.map((r) => r.id))
-  const last = rows.value
-    .filter(
-      (r) =>
-        r.capability !== 'experience.candidates' &&
-        (!r.parent_call_id || !ids.has(r.parent_call_id)),
-    )
-    .at(-1)
-  return last && isFailed(last) ? last : undefined
-})
-const failed = computed(() => !!failure.value && !failure.value.recovered)
-const headline = computed(() =>
-  grouped.value
-    ? latest.value?.label || props.label
-    : failure.value
-    ? failure.value.recovered ? `${failure.value.label}，后续已完成` : `${failure.value.label}未完成`
-    : props.label ||
-      current.value?.label ||
-      (rows.value.length === 1 ? rows.value[0]?.label : '') ||
-      '执行记录',
-)
+const failed = computed(() => !!failure.value)
+const headline = computed(() => headingRow.value?.label || props.label || '执行记录')
 function note(segment: ConversationSegment) {
   if (segment.type !== 'event' || segment.block.type === 'paper_code') return ''
   const content = segment.block.content
@@ -185,7 +153,7 @@ const entries = computed(() =>
   }),
 )
 function status(row: ExecutionDetail) {
-  return callRunning(row) ? '进行中' : executionLabel(row.status)
+  return activityStatus(row)
 }
 function duration(row: ExecutionDetail) {
   if (!row.started_at || (!row.finished_at && !callRunning(row))) return ''
@@ -231,16 +199,6 @@ function toggle() {
 }
 </script>
 <style scoped>
-.output-toggle {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--pa-muted);
-  font-size: 13px;
-}
-.output-toggle:hover {
-  color: var(--pa-ink);
-}
 .execution-output {
   max-height: 180px;
   overflow: auto;

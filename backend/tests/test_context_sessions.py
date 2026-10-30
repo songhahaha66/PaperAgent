@@ -82,6 +82,11 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
     async def run():
         result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt'])
         assert result['status']=='completed' and len(result['run_ids'])==1
+        activities=ctx.research.snapshot()['activity']
+        parent=next(row for row in activities if row['capability']=='research.delegate')
+        child=[row for row in activities if row['capability']=='run_python']
+        assert len(child)==1 and child[0]['id']!=parent['id']
+        assert child[0]['parent_call_id']==parent['id'], 'independent execution keeps its own record'
         assert bool(any('parent-context-marker' in str(m.content) for m in seen[0]))==(mode=='fork')
         actual=[p for p in result['files'] if p.endswith('/outputs/result.txt')]
         assert len(actual)==1 and ctx.fs.canonical_artifact(actual[0]).read_text()=='12'

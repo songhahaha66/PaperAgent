@@ -174,8 +174,9 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
-import { Input, Select, Switch, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { Input, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
+import ModelGenerationControls from '@/components/ModelGenerationControls.vue'
 import { modelConfigAPI, type ModelConfig, type GenerationSettings } from '@/api/modelConfig'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
@@ -278,55 +279,17 @@ const ConnectionFields = defineComponent({
               }),
             ]),
           )
-          .concat(!props.jev ? [h('details', { class: 'connection-field' }, [
-            h('summary', isZh.value ? '生成预算（高级）' : 'Generation settings'),
-            ...[['max_output_tokens', '单次生成上限（含推理）', 16000], ['context_window', '上下文容量（留空跟随模型）', '']].map(([key, label, fallback]) =>
-              h('label', { class: 'connection-field' }, [h('span', String(label)), h(Input, {
-                type: 'number', modelValue: props.form.generationSettings?.[key as string] ?? fallback,
-                disabled: props.disabled,
-                'onUpdate:modelValue': (value: string) => {
-                  props.form.generationSettings = { ...props.form.generationSettings, [key as string]: value === '' ? (key === 'max_output_tokens' ? 16000 : null) : Number(value) }
-                },
-              })])),
-            h('label', { class: 'connection-field' }, [h('span', isZh.value ? '推理强度（需接口支持）' : 'Reasoning effort (requires API support)'), h(Select, {
-              modelValue: props.form.generationSettings?.reasoning_effort ?? '', disabled: props.disabled,
-              options: [{ label: isZh.value ? '跟随服务端' : 'Server default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ label: value, value }))],
-              'onUpdate:modelValue': (value: string) => { props.form.generationSettings = { ...props.form.generationSettings, reasoning_effort: value || null } },
-            })]),
-          ])] : [])
           .concat(
-            !props.jev && isDeepSeekEndpoint(props.form.baseUrl)
-              ? [
-                  h('div', { class: 'connection-field' }, [
-                    h('span', isZh.value ? '思考模式' : 'Thinking mode'),
-                    h('div', { class: 'thinking-option' }, [
-                      h(Switch, {
-                        modelValue: !!props.form.thinkingEnabled,
-                        'onUpdate:modelValue': (value: boolean) => {
-                          props.form.thinkingEnabled = value
-                        },
-                        disabled: props.disabled,
-                        role: 'switch',
-                        tabindex: props.disabled ? -1 : 0,
-                        'aria-checked': !!props.form.thinkingEnabled,
-                        'aria-label': isZh.value ? '思考模式' : 'Thinking mode',
-                        onKeydown: (event: KeyboardEvent) => {
-                          if (!props.disabled && [' ', 'Enter'].includes(event.key)) {
-                            event.preventDefault()
-                            props.form.thinkingEnabled = !props.form.thinkingEnabled
-                          }
-                        },
-                      }),
-                      h(
-                        'small',
-                        isZh.value
-                          ? '适合复杂推理，响应可能更慢'
-                          : 'For complex reasoning; responses may take longer',
-                      ),
-                    ]),
-                  ]),
-                ]
-              : [],
+            !props.jev ? [h(ModelGenerationControls, {
+              modelId: props.form.modelId,
+              baseUrl: props.form.baseUrl,
+              modelValue: props.form.generationSettings,
+              thinkingEnabled: props.form.thinkingEnabled,
+              disabled: props.disabled,
+              isZh: isZh.value,
+              'onUpdate:modelValue': (value: GenerationSettings) => { props.form.generationSettings = value },
+              'onUpdate:thinkingEnabled': (value: boolean) => { props.form.thinkingEnabled = value },
+            })] : [],
           ),
       )
   },
@@ -624,15 +587,6 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 500;
   color: var(--pa-ink);
-}
-:deep(.thinking-option) {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-:deep(.thinking-option small) {
-  color: var(--pa-muted);
-  font-size: 13px;
 }
 :deep(.connection-field .t-input) {
   height: var(--pa-control-height-lg);

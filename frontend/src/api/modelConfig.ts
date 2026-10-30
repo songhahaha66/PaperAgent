@@ -5,6 +5,12 @@ export interface GenerationSettings {
   prices?: { input_per_million: number; output_per_million: number; cached_input_per_million?: number | null } | null
 }
 
+export interface ModelCapabilities {
+  max_context_tokens: number | null
+  reasoning_efforts: string[]
+  source: 'provider' | 'sdk' | 'unknown'
+}
+
 // 模型配置API服务
 import { apiClient } from '@/utils/apiClient'
 
@@ -53,6 +59,9 @@ export interface ModelReadiness {
 }
 
 class ModelConfigAPI {
+  async capabilities(modelId: string): Promise<ModelCapabilities> {
+    return apiClient.request(`/model-configs/capabilities?model_id=${encodeURIComponent(modelId)}`)
+  }
   async readiness(): Promise<ModelReadiness> {
     return apiClient.request('/model-configs/readiness')
   }

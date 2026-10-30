@@ -207,13 +207,15 @@ def build_tools(
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
         publication_note = ''
-        with activity(ctx,'run_python',subproblem_id,inputs={'code':code},display_label=' '.join(title.split())[:60]) as operation:
+        with activity(ctx,'run_python',subproblem_id,reuse_parent='research.run_python',
+                      inputs={'code':code},display_label=' '.join(title.split())[:60],phase='preparing') as operation:
             import time
             from ai_system.research.views import activity_progress
             last_push = 0.0
             async def progress(event):
                 nonlocal last_push
                 operation['run_id'] = event['run_id']
+                operation['phase'] = 'delivery' if event['type']=='finished' else 'compute' if event['type'] in {'running','output'} else 'preparing'
                 if on_run:on_run(event['run_id'])
                 output = operation.setdefault('output', {})
                 if event['type'] == 'output':
@@ -227,6 +229,7 @@ def build_tools(
                 recovered=await kernel.retry_outputs()
                 if recovered:await publish_outputs(ctx,[recovered])
             result = await kernel.execute(code, on_event=progress)
+            operation['phase'] = 'delivery'
             if on_run:on_run(result.run_id)
             if result.delivery_error and hasattr(kernel,'retry_outputs'):
                 for _ in range(2):
@@ -248,7 +251,10 @@ def build_tools(
                 ctx.fs._save_manifest()
             status='interrupted' if result.delivery_error or publication_note or result.failure_kind=='transport_unknown' else 'completed' if result.ok else 'failed'
             operation.update(run_id=result.run_id,status=status,
-                output={**operation.get('output', {}),'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
+                output={**operation.get('output', {}),'output_tail':operation.get('output',{}).get('output_tail',result.stdout[-6000:]),
+                        'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
+            if result.delivery_error or publication_note:
+                operation.update(error_type='DeliveryIncomplete',message='计算已结束，文件交付未完成；已有结果保留，请重试文件同步。')
             if not result.ok:
                 operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
                                  message='执行超时，内核已重启。' if result.timed_out else result.error)

@@ -65,10 +65,11 @@ def test_full_context_budget_includes_system_facts_and_summary_once(tmp_path):
 
 
 def test_unshrinkable_latest_call_is_not_rewritten_or_sent_over_budget(tmp_path):
+    from ai_system.config.generation import ModelContextLimit
     model=ResearchToolsModel(respond=lambda _:pytest.fail('Do not summarize in a loop'),profile={'max_input_tokens':4000})
     ctx=context(tmp_path,model);history=[HumanMessage('original'),tool('run_python',{'code':'数据'*4000},'open')]
     async def handle(_):pytest.fail('Do not send over budget')
-    with pytest.raises(ValueError,match='完整工具轮次'):
+    with pytest.raises(ModelContextLimit,match='完整工具轮次'):
         asyncio.run(ContextMiddleware(ctx,model,'oversize').awrap_model_call(Request(history),handle))
     assert history[1].tool_calls[0]['args']['code']=='数据'*4000
 

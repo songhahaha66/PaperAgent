@@ -63,7 +63,7 @@
               :class="{ nested: call.parent_call_id }"
             >
               <span>{{ call.label }}</span
-              ><span>{{ executionLabel(call.status) }}</span
+              ><span>{{ activityStatus(call) }}</span
               ><time>{{ duration(call) }}</time>
               <small v-if="call.context_usage" class="muted" title="按文本估算，实际计费用量见会话统计">
                 上下文约 {{ (call.context_usage.total_estimated_tokens ?? (call.context_usage.messages_estimated_tokens + call.context_usage.tools_estimated_tokens)).toLocaleString() }} tokens
@@ -92,7 +92,7 @@
       <ol>
         <li v-for="row in unlinked" :key="row.id">
           <span>{{ row.label }}</span
-          ><span>{{ executionLabel(row.status) }}</span
+          ><span>{{ activityStatus(row) }}</span
           ><time>{{ duration(row) }}</time>
         </li>
       </ol>
@@ -110,7 +110,7 @@ import {
   researchRunning,
   callRunning,
   executionDuration,
-  executionLabel,
+  activityStatus,
 } from '@/utils/researchProgress'
 const props = defineProps<{
   snapshot: ResearchSnapshot | null

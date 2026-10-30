@@ -1,6 +1,5 @@
 import type { ResearchActivity } from '@/types/research'
 export interface ExecutionDetail extends ResearchActivity {
-  recovered?: boolean
   detail?: string
   script_file?: string | null
   error_file?: string | null
@@ -8,6 +7,7 @@ export interface ExecutionDetail extends ResearchActivity {
   file?: string
   output_file?: string | null
   output_tail?: string
+  files?: string[]
   result_ids?: string[]
   segment_id?: string
 }
@@ -110,18 +110,22 @@ export function progressText(text: string) {
 }
 export function timelineGroups(message: TimelineMessage) {
   const original = messageSegments(message)
-  const segments = original.map((segment, index) => {
+  const segments = original.map((segment) => {
     if (segment.type !== 'execution') return segment
     const row = segment.execution
-    const recoverable = row.capability === 'experiments.execute' || row.capability?.startsWith('writing.')
-    const recovered = failureStates.has(row.status) && recoverable && original.slice(index + 1).some(later =>
-      later.type === 'execution' && later.execution.capability === row.capability &&
-      later.execution.experiment_id === row.experiment_id && later.ref.research_id === segment.ref.research_id &&
-      later.execution.status === 'completed' && !!later.execution.finished_at)
-    return { ...segment, execution: { ...row, recovered: !!recovered,
-      label: row.capability === 'record_results' ? '保存计算结果'
-        : row.capability === 'research.read_artifact' && /(?:^|\/)report-[\w-]+\.json$/.test(row.file || '')
-          ? '读取实验报告' : row.label } }
+    return {
+      ...segment,
+      execution: {
+        ...row,
+        label:
+          row.capability === 'record_results'
+            ? '保存计算结果'
+            : row.capability === 'research.read_artifact' &&
+                /(?:^|\/)report-[\w-]+\.json$/.test(row.file || '')
+              ? '读取实验报告'
+              : row.label,
+      },
+    }
   })
   const hasCalls = segments.some((s) => s.type === 'execution')
   const groups: {

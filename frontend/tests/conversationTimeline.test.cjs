@@ -100,7 +100,7 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   const recoverySegments = [exec('write-failed','failed',{capability:'writing.write'}),
     after,exec('write-ok','completed',{capability:'writing.write',finished_at:4})]
   const recovered = timeline.timelineGroups({id:'recovery',content:'',segments:recoverySegments})
-  assert.equal(recovered[0].segments[0].execution.recovered,true)
+  assert.equal(recovered[0].segments[0].execution.recovered,undefined,'later calls do not establish a recovery relationship')
   assert.equal(recoverySegments[0].execution.recovered,undefined,'projection never rewrites historical failure')
   assert.equal(recovered[0].segments[0].execution.status,'failed')
   const publication = timeline.timelineGroups({id:'publication',content:'',segments:[before,

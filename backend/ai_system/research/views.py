@@ -157,11 +157,14 @@ def evidence_uses(snapshot, source_root=None):
     return uses
 
 
-def execution(snapshot, work_status=None):
+def execution(snapshot, work_status=None, source_root=None):
+    from services.chat_services.conversation_timeline import execution_projection
+    from services.file_services.workspace_fs import WorkspaceFS
+    fs=WorkspaceFS(source_root) if source_root is not None else None
     active=work_status in {'in_progress','running','processing'} or (work_status is None and snapshot['outcome']=='running')
     actions=[]
     for item in snapshot.get('activity',[])[-120:]:
-        row={**item,'label':item.get('display_label') or LABELS.get(item['capability'],'研究操作')}
+        row=execution_projection(source_root,snapshot['research_id'],item,fs=fs)
         if row['status']=='running' and not active:row['status']='interrupted'
         actions.append(row)
     current=next((row for row in reversed(actions) if row['status']=='running'),None)
@@ -276,6 +279,15 @@ def model_activity(store, work_status):
 
 
 from contextlib import contextmanager
+from contextvars import ContextVar
+
+_ACTIVITY_OWNER = ContextVar('paperagent_activity_owner', default=None)
+
+
+def _activity_error(item, exc):
+    from .review_cache import error_detail
+    item.update(status='interrupted' if type(exc).__name__=='CancelledError' else 'failed',
+                error_type=type(exc).__name__, message=error_detail(exc))
 
 def activity_progress(ctx, item):
     """Persist a bounded execution preview; full logs stay in run files."""
@@ -289,11 +301,28 @@ def activity_progress(ctx, item):
     notify_runtime()
 
 @contextmanager
-def activity(ctx, capability, task_id=None, **links):
-    """Persist one actual call; inherit explicit execution ownership, not UI state."""
+def activity(ctx, capability, task_id=None, *, reuse_parent=None, **links):
+    """One visible owner per operation; reuse is explicit and context-local.
+
+    A Python executor can enrich its registry call, while independent branches
+    and standalone executors retain their own records. Only the owner finishes.
+    """
     import time
     from uuid import uuid4
     from .runtime import execution_scope,execution_links,notify_runtime
+    owner = _ACTIVITY_OWNER.get()
+    if (reuse_parent and owner and owner[0] is ctx and owner[1]['capability']==reuse_parent
+            and owner[1]['id']==execution_links().get('parent_call_id')
+            and owner[1]['status']=='running' and not owner[1].get('finished_at')):
+        item=owner[1]
+        item.update({key:value for key,value in links.items() if key!='inputs' and value is not None})
+        try:
+            activity_progress(ctx,item)
+            yield item
+        except BaseException as exc:
+            _activity_error(item,exc)
+            raise
+        return
     store=getattr(ctx,'experience_store',None) or getattr(ctx,'research',None)
     snapshot=store.snapshot() if store is not None else None
     if snapshot is None:store=None
@@ -313,15 +342,14 @@ def activity(ctx, capability, task_id=None, **links):
             from services.chat_services.conversation_timeline import execution_boundary
             execution_boundary(store.root, store.research_id, 'activity', item)
             notify_runtime()
+        token = _ACTIVITY_OWNER.set((ctx,item))
         try:
             yield item
         except BaseException as exc:
-            item['status']='interrupted' if type(exc).__name__=='CancelledError' else 'failed'
-            from .review_cache import error_detail
-            item['error_type']=type(exc).__name__
-            item['message']=error_detail(exc)
+            _activity_error(item,exc)
             raise
         finally:
+            _ACTIVITY_OWNER.reset(token)
             item['finished_at']=time.time()
             if item['status']=='running':item['status']='completed'
             if store:

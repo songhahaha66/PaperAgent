@@ -95,7 +95,9 @@ class ChatService:
                     if recovered:
                         from .conversation_timeline import public_reply
                         messages[index] = public_reply(recovered)
-        messages=messages+chat_history(Path(self.history_manager.workspace_base)/work_id)
+        from .conversation_timeline import public_reply
+        root=Path(self.history_manager.workspace_base)/work_id
+        messages=[public_reply(message,root=root) for message in messages]+chat_history(root)
         messages.sort(key=lambda m:(datetime.fromisoformat(m['timestamp'].replace('Z','+00:00')).timestamp() if m.get('timestamp') else 0,
                                     m['role']!='user',str(m.get('id',''))))
         return messages[-limit:] if limit else messages
