@@ -48,4 +48,13 @@ def test_prepare_workspace_reuses_word_style_profile(tmp_path: Path, monkeypatch
     assert (tmp_path / ".analysis" / "12" / STYLE_PROFILE_FILENAME).exists()
     assert (workspace / CONTRACT_PATH).exists()
     assert "宋体" in (workspace / CONTRACT_PATH).read_text(encoding="utf-8")
-    assert (workspace / "paper.docx").read_bytes() == source.read_bytes()
+    assert (workspace / "template" / "original.docx").read_bytes() == source.read_bytes()
+    assert not (workspace / "paper.docx").exists()
+
+
+def test_new_word_workspace_does_not_offer_an_empty_export(tmp_path: Path):
+    from services.file_services.workspace_structure import WorkspaceStructureManager
+    workspace = tmp_path / 'workspace'
+    WorkspaceStructureManager.create_workspace_structure(workspace, 'word-test', output_mode='word')
+    assert (workspace / 'paper.md').is_file()
+    assert not (workspace / 'paper.docx').exists()

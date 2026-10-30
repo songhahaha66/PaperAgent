@@ -48,6 +48,9 @@ def inventory(kind, names, limit):
     if names is None:
         roots = {'python':['outputs','code'], 'inputs':['data','attachment','code','outputs/intermediate'],
                  'compiler':['.build/latex','.build/reference.docx','.build/export.docx']}[kind]
+        if kind == 'python':
+            roots = [p.name for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith('.')
+                     and p.name not in PRIVATE | {'data','attachment','__pycache__','node_modules'}]
         names = []
         for name in roots:
             base = path(name)
@@ -57,7 +60,8 @@ def inventory(kind, names, limit):
                 for folder, dirs, files in os.walk(base, followlinks=False):
                     for child in dirs:
                         if (Path(folder)/child).is_symlink(): raise ValueError('Cache symlink')
-                    dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+                    dirs[:] = [d for d in dirs if not d.startswith('.') and d not in PRIVATE | {'__pycache__','node_modules'}
+                               and not (kind=='python' and Path(folder)==ROOT/'outputs' and d=='research')]
                     names.extend((Path(folder)/f).relative_to(ROOT).as_posix() for f in files if not f.startswith('.'))
         if kind == 'python':
             names += [p.name for p in ROOT.iterdir() if p.is_file() and not p.name.startswith('.')

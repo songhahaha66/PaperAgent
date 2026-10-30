@@ -4,6 +4,7 @@ The research/experiment owner decides what a semantic suspicion means. A second
 model never silently edits facts, closes findings, or schedules another run.
 """
 from copy import deepcopy
+import re
 from pydantic import Field
 from .models import Contract, ResearchConflict
 from .domain import experiment_report, report_artifact, save_report_artifact, findings, experiment_scope, current_result_refs
@@ -144,23 +145,7 @@ async def check_report(ctx, inputs):
                        'log':['语义核查仅提供待核实疑点；未修改解释或计算。']})
 
 
-async def read_artifact(ctx, inputs):
-    import hashlib
-    from ai_system.modules.registry import CapabilityProduct
-    state=ctx.research.snapshot()
-    if inputs['task_id'] not in state['experiments']:raise ValueError('读取行动必须归属已有实验')
-    path=inputs['path']
-    known={a['payload'].get('path') for a in state['artifacts'].values()} | set(ctx.research.file_inputs())
-    if path not in known:raise ValueError('只能读取已登记产物或当前原始资料')
-    from services.file_services.workspace_layout import workspace_path
-    target=workspace_path(ctx.research.root,path)
-    if not target.is_file():raise ValueError('资料文件不可用')
-    raw=target.read_bytes()
-    try:text=raw.decode('utf-8')
-    except UnicodeError:raise ValueError('该文件不是UTF-8文本，请在实验中按其真实格式读取')
-    start=inputs['start'];limit=inputs['limit']
-    return CapabilityProduct('research_state',{'path':path,'version':hashlib.sha256(raw).hexdigest(),
-        'total_chars':len(text),'excerpt':text[start:start+limit]})
+from .files import read_artifact
 
 
 def register(registry):
@@ -171,14 +156,9 @@ def register(registry):
     class EditTarget(Target):
         edit: ReportEdit | None = None
         decisions: list[FeedbackDecision] = Field(default_factory=list)
-    class ReadTarget(Inputs):
-        task_id: str
-        path: str
-        start: int = Field(default=0, ge=0)
-        limit: int = Field(default=12000, ge=1, le=24000)
-    registry.register('research','research.read_artifact','research_state',read_artifact,ReadTarget,
-        model_callable=True, purpose='读取已保存的原始资料或实验产物文本，返回真实内容和版本；无需重新计算。')
+    from .files import register as register_files
+    register_files(registry)
     registry.register('research','research.revise_interpretation','research_state',repair_report,EditTarget,
-        model_callable=True, purpose='按当前interpretation_version修订summary和key_findings并同步claims，或带依据采纳/驳回/保留核查意见；不重跑计算。')
+        purpose='按当前interpretation_version修订历史实验解释。')
     registry.register('research','research.check_interpretation','research_state',check_report,Target,
-        model_callable=True, purpose='针对明确语义疑点核查实验代码、输出和解释，返回具体意见与依据；无自动改写或阻塞权限。')
+        purpose='针对历史实验核查代码、输出和解释。')

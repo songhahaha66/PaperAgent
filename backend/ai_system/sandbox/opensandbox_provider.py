@@ -103,10 +103,6 @@ class OpenSandboxSession:
             for p in ('data', 'attachment', 'code', 'outputs/intermediate', '.build/latex')])
         self.context_restored = False
         self.context = await self.interpreter.codes.create_context('python')
-        ready = await self.interpreter.codes.run(
-            "import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\nfrom paperagent_runtime import emit_result\n_pa_runtime.setup(" + repr(self.root) + ")", context=self.context)
-        if ready.error or ready.complete is None:
-            raise RuntimeError(self._error(ready.error) if ready.error else "Python 初始化缺少完成回执")
 
     async def _create(self, config, Sandbox, NetworkPolicy):
         from code_interpreter import CodeInterpreter
@@ -233,7 +229,11 @@ class OpenSandboxSession:
             await emit("stderr", message.text)
         async def initialized(message):
             self.execution_id = message.id
-        task = asyncio.create_task(self.interpreter.codes.run(code, context=self.context,
+        # A second code request for initialization/figure flushing can race the
+        # interpreter's busy state after the previous SSE completion event.
+        cell = ("import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\n"
+                f"_pa_runtime.run_cell({code!r}, {run_id!r}, globals(), {self.root!r})")
+        task = asyncio.create_task(self.interpreter.codes.run(cell, context=self.context,
             handlers=ExecutionHandlers(on_stdout=stdout, on_stderr=stderr, on_init=initialized, skip_accumulation=True)))
         try:
             await asyncio.wait({task, callback_error}, return_when=asyncio.FIRST_COMPLETED)
@@ -258,11 +258,8 @@ class OpenSandboxSession:
         return self.context.id if self.context else None
 
     async def finalize(self, run_id):
-        figures = await self.interpreter.codes.run(f"_pa_runtime.save_figures({run_id!r})", context=self.context)
-        if figures.error:
-            raise RuntimeError("保存图片失败: " + self._error(figures.error))
-        if figures.complete is None:
-            raise RuntimeError("保存图片未收到完成回执，请重试文件交付")
+        # The execution receipt already covers figure flushing in run_cell.
+        return None
 
     async def command(self, command, timeout):
         from opensandbox.models.execd import RunCommandOpts, ExecutionHandlers
@@ -290,7 +287,7 @@ class OpenSandboxSession:
                     await self.sandbox.commands.interrupt(self.execution_id)
                 raise failed.result()
             result = await task
-            if result.exit_code is None or result.error:
+            if result.exit_code is None or (result.error and result.exit_code == 0):
                 raise RuntimeError('编译缺少成功完成回执：' + (self._error(result.error) if result.error else 'unknown exit code'))
             return result.exit_code, ''.join(logs['stdout']), ''.join(logs['stderr'])
         except BaseException as exc:

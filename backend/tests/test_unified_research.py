@@ -18,7 +18,7 @@ def test_actual_send_budget_is_shared_durable_and_stops_before_transport(tmp_pat
         with budget_scope(tmp_path,'resume'):
             with pytest.raises(ResearchBudgetExhausted):client.post('https://aigw.saurlax.com/v1/chat/completions')
     assert len(sent)==2 and ResearchRuntime(tmp_path,'new-id').status()['used']==2
-    assert all(set(r)<={'sequence','sent_at','host','label','research_id','state','http_status','headers_at'} for r in runtime.requests())
+    assert all(set(r)<={'sequence','sent_at','host','label','research_id','state','http_status','headers_at','reservation','generation_limit','prices'} for r in runtime.requests())
 
 
 def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
@@ -53,17 +53,7 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
     assert runtime.status()['used']==1
 
 
-def test_parallel_writing_preserves_finished_sections_when_another_call_fails(tmp_path,monkeypatch):
-    from helpers.paper import accepted_store
-    from ai_system.modules.writing import sections as writing
-    store=accepted_store(tmp_path);ctx=GraphContext.create(str(tmp_path),planner_llm=None);ctx.research=store
-    async def section(ctx,state,key,title):
-        if key=='analysis':raise ResearchBudgetExhausted('budget reached')
-        return '已完成且尚未发布的章节。'
-    monkeypatch.setattr(writing,'write_section',section)
-    monkeypatch.setattr(writing,'section_request',lambda *args:'stable writing inputs')
-    with pytest.raises(ResearchBudgetExhausted):
-        asyncio.run(writing.write_many(ctx,{},[('restatement','重述'),('analysis','分析')]))
-    state=store.snapshot()
-    assert state['sections']['restatement']['text']=='已完成且尚未发布的章节。'
-    assert state['sections']['restatement']['context_hash'] and not state.get('paper_hash')
+def test_default_delivery_has_no_independent_writing_models():
+    from ai_system.modules.registry import capabilities
+    assert not {'writing.write','writing.repair'} & {c['name'] for c in capabilities().describe()}
+    assert 'writing.edit' in {c['name'] for c in capabilities().describe()}

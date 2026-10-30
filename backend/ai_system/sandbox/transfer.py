@@ -22,7 +22,7 @@ def output_path(path, *, compiler=False):
     if compiler:
         if path not in {'.build/reference.docx','.build/export.docx'} and not path.startswith('.build/latex/'):
             raise ValueError('Compiler output is outside its delivery directories')
-    elif path.startswith('outputs/research/') or not (path.startswith(('outputs/','code/')) or '/' not in path and path not in {'paper.md','paper.tex','paper.pdf','paper.docx'}):
+    elif path.split('/')[0] in {'data','attachment','paper.md','paper.tex','paper.pdf','paper.docx'} or path.startswith('outputs/research/'):
         raise ValueError('Execution output cannot replace inputs or formal evidence')
     return path
 

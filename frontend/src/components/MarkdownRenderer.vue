@@ -258,7 +258,7 @@ onBeforeUnmount(() => {
 
 /* KaTeX 渲染区域微调（行内与块级） */
 .markdown-content :deep(.katex) {
-  font-size: 1.2em;
+  font-size: 1em;
 }
 .markdown-content :deep(.katex-display) {
   margin: 12px 0;

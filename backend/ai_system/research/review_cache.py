@@ -113,12 +113,15 @@ def error_code(error):
 def error_detail(error):
     """Keep actionable validation causes without dumping replies or HTTP secrets."""
     from pydantic import ValidationError
+    from starlette.exceptions import HTTPException
     current=error;seen=set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current,ValidationError):
             return '；'.join('.'.join(map(str,item['loc']))+': '+item['msg']
                            for item in current.errors(include_url=False,include_input=False))[:2000]
+        if isinstance(current,HTTPException) and 400<=current.status_code<500 and isinstance(current.detail,str):
+            return current.detail[:2000]
         if isinstance(current,ValueError):return str(current)[:2000]
         current=current.__cause__ or current.__context__
     return (str(error)[:2000] if isinstance(error,RuntimeError) and str(error) else error_code(error))

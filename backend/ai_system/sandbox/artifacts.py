@@ -8,8 +8,6 @@ from pathlib import Path, PurePosixPath
 
 
 def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
-    if source_fs.root == target_fs.root:
-        return []
     published = []
     runs = source_fs._manifest.get('runs', {})
     for run_id in runs if run_ids is None else run_ids:
@@ -35,7 +33,7 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
             if existing:
                 if existing.get('archive_path')!=rel or existing.get('sha256')!=expected:
                     raise ValueError('正式成果编号已绑定其他归档版本')
-            else:
+            if not existing or not target.is_file():
                 atomic_write(target,lambda f:bounded_copy(source,f,DEFAULT_MAX_FILE_BYTES))
             kind = 'image' if source.suffix.lower() in {'.png','.jpg','.jpeg','.svg'} else 'code' if source.suffix == '.py' else 'data'
             target_fs.register_file(dest, kind=kind, source_run=run_id, visibility='user',
@@ -94,14 +92,15 @@ def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     return publish_run_files(source_fs, target_fs, attempt_id, run_ids=selected)
 
 
-def inherit_execution_files(source, target_fs, experiment_id):
+def inherit_execution_files(source, target_fs, experiment_id, *, run_ids=None):
     """Restore one execution's own runs and handoffs, retaining immutable IDs."""
     from services.file_services.workspace_fs import WorkspaceFS
     manifest = workspace_path(source, 'manifest.json')
     if not manifest.is_file(): return set()
     source_fs = WorkspaceFS(str(source))
     inventory = source_fs._manifest
-    selected = set(inventory.get('runs', {})) - set(inventory.get('inherited_runs', []))
+    selected = (set(inventory.get('runs', {})) - set(inventory.get('inherited_runs', []))
+                if run_ids is None else set(run_ids))
     def copy_file(path):
         parts = PurePosixPath(path).parts
         if not parts or any(p.startswith('.') for p in parts) or parts[0] in {'manifest.json', 'chat_history.json', 'data', 'attachment'}:
@@ -165,41 +164,22 @@ def publish_reference(source_fs, target_fs, item):
     raise ValueError('引用缺少已归档运行产物，不能登记')
 
 
-def collect_references(ctx, subproblem_id, result):
-    """Consume only explicit structured output and actual figures from a successful run."""
-    if not result.ok:
-        return []
-    import json
-    refs = []
-    info = ctx.fs.get_run_info(result.run_id) or {}
-    output = ctx.fs.read_text(info['stdout']) if info.get('stdout') else result.stdout
-    for line in output.splitlines():
-        if not line.startswith('PAPERAGENT_RESULT '):
-            continue
-        try:
-            item = json.loads(line.removeprefix('PAPERAGENT_RESULT '))
-            value = item['value']
-            value = json.dumps(value, ensure_ascii=False) if isinstance(value, list) else str(value)
-            ref = ctx.registry.record_value(subproblem_id, item['name'], value, result.run_id,
-                item.get('unit', ''), item.get('description', ''), item.get('meaning'))
-            refs.append(ref)
-        except (ValueError, TypeError, KeyError) as exc:
-            # A malformed declaration never changes the computation's outcome.
-            refs.append(str(exc))
-    for figure in result.figures:
-        try:
-            ref = ctx.registry.record_figure(subproblem_id, result.run_id, figure, Path(figure).stem)
-            refs.append(ref)
-        except (ValueError, OSError) as exc:
-            refs.append('图片引用尚未就绪：' + str(exc))
-    return refs
-
-
 def output_hashes(fs, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
+    import os
+    from .transfer import output_path
     result = {}
-    paths = [p for folder in ('outputs', 'code') for p in fs.abs(folder).rglob('*')]
-    paths += [p for p in fs.root.iterdir() if p.is_file() and not p.name.startswith('.') and
-              p.name not in {'manifest.json','chat_history.json','chat_history.json.lock','paper.tex','paper.md','paper.pdf'}]
+    from services.file_services.workspace_layout import PRIVATE_NAMES
+    paths=[]
+    for directory, dirs, files in os.walk(fs.root, followlinks=False):
+        dirs[:] = [d for d in dirs if not d.startswith('.') and d not in PRIVATE_NAMES | {'__pycache__','node_modules'}
+                   and not (Path(directory)==fs.root and d in {'data','attachment'})
+                   and not (Path(directory)==fs.root/'outputs' and d=='research')]
+        for name in files:
+            path=Path(directory)/name
+            if name.startswith('.') or name in PRIVATE_NAMES:continue
+            try:output_path(path.relative_to(fs.root).as_posix())
+            except ValueError:continue
+            paths.append(path)
     for path in sorted(paths):
         from services.file_services.workspace_layout import safe_join
         path = safe_join(fs.root, path.relative_to(fs.root).as_posix())

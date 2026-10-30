@@ -68,17 +68,10 @@
                     :aria-controls="`event-${message.id}-${segment.id}`"
                     @click="toggleBlock(message.id, segment.id, segment.block)"
                   >
-                    <span class="header-text"
-                      >{{ eventTitle(segment.block)
-                      }}<span v-if="eventKind(segment.block) === 'error'"> · 需要处理</span></span
+                    <span class="header-text">{{ eventTitle(segment.block) }}</span>
+                    <span v-if="eventKind(segment.block) === 'error'" class="header-note"
+                      >需要处理</span
                     >
-                    <t-icon
-                      :name="
-                        isBlockCollapsed(message.id, segment.id, segment.block)
-                          ? 'chevron-down'
-                          : 'chevron-up'
-                      "
-                    />
                   </button>
                   <div
                     v-if="!isBlockCollapsed(message.id, segment.id, segment.block)"
@@ -313,7 +306,7 @@ const formatDateTime = (datetime: string) => {
   display: block;
   margin-bottom: 8px;
   color: var(--pa-muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .chat-markdown {
   width: 100%;
@@ -376,13 +369,13 @@ const formatDateTime = (datetime: string) => {
   background: transparent;
   padding: 5px 0;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--pa-muted);
   cursor: pointer;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   transition: background-color 0.2s ease;
 }
 
@@ -397,10 +390,9 @@ const formatDateTime = (datetime: string) => {
 :deep(.json-block-header .header-text) {
   flex-shrink: 0;
 }
-
-:deep(.json-block-header .toggle-icon) {
-  flex-shrink: 0;
-  transition: transform 0.2s ease;
+.header-note {
+  font-size: 13px;
+  font-weight: 400;
 }
 
 :deep(.json-block-content) {
@@ -469,7 +461,7 @@ const formatDateTime = (datetime: string) => {
   padding: 2px 4px;
   border-radius: var(--pa-radius-inline);
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 0.9em;
+  font-size: 13px;
 }
 
 .answer-sources {
@@ -479,7 +471,7 @@ const formatDateTime = (datetime: string) => {
   gap: 8px;
   margin-top: 12px;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .answer-sources button {
   border: 1px solid var(--pa-line);

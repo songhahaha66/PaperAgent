@@ -1,5 +1,6 @@
 """Current-source contracts; controlled models only, no API or full application run."""
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -12,7 +13,48 @@ from ai_system.graph.state import ClaimAudit, ClaimIssue
 from ai_system.research.models import ResearchConflict
 from ai_system.research.review_cache import ReviewSuperseded, run_review
 from services.chat_services import paper_project as project, review_tasks, issue_edits
-from ai_system.modules.writing import latex
+from ai_system.modules.writing import draft
+
+
+def test_graphicspath_assets_are_included_in_the_immutable_source_snapshot(tmp_path):
+    (tmp_path/'results/figures').mkdir(parents=True)
+    (tmp_path/'results/figures/curve.pdf').write_bytes(b'original curve')
+    (tmp_path/'results/figures/other.png').write_bytes(b'unreferenced')
+    (tmp_path/'paper.tex').write_text(r'\graphicspath{{./}{results/figures/}}\input{part}')
+    (tmp_path/'part.tex').write_text(r'\includegraphics[width=5cm]{curve}')
+    before=project.snapshot(tmp_path)
+    assert {row['path'] for row in before['files']}=={'paper.tex','part.tex','results/figures/curve.pdf'}
+    archive=project.workspace_path(tmp_path,project.VERSIONS)/before['version']
+    assert (archive/'results/figures/curve.pdf').read_bytes()==b'original curve'
+    (tmp_path/'results/figures/curve.pdf').write_bytes(b'changed curve')
+    assert project.snapshot(tmp_path)['version']!=before['version']
+
+
+def test_graphicspath_handles_whitespace_and_multiple_directories(tmp_path):
+    (tmp_path/'figures').mkdir()
+    (tmp_path/'figures/curve.png').write_bytes(b'figure')
+    (tmp_path/'paper.tex').write_text('\\graphicspath {  {unused/} \n {figures/}  }\\includegraphics{curve}')
+    assert 'figures/curve.png' in project.files(tmp_path)
+
+
+def test_malformed_graphicspath_does_not_block_dependency_parsing(tmp_path):
+    (tmp_path/'figures').mkdir()
+    (tmp_path/'figures/curve.png').write_bytes(b'figure')
+    (tmp_path/'paper.tex').write_text(
+        '\\graphicspath{' + ' {unused/}' * 5000 + '\n'
+        + r'\graphicspath{{figures/}}\includegraphics{curve}'
+    )
+    # A subprocess timeout prevents a regression from hanging the test runner.
+    script = ('from pathlib import Path; import sys; '
+              'from services.chat_services.paper_project import files; '
+              "assert 'figures/curve.png' in files(Path(sys.argv[1]))")
+    subprocess.run([sys.executable, '-c', script, str(tmp_path)], check=True, timeout=10)
+
+
+@pytest.mark.parametrize('directory',['../outside/', '.system/', '/tmp/'])
+def test_graphicspath_does_not_expand_the_allowed_source_tree(tmp_path,directory):
+    (tmp_path/'paper.tex').write_text(r'\graphicspath{{'+directory+r'}}\includegraphics{curve}')
+    with pytest.raises(ValueError):project.files(tmp_path)
 
 
 @pytest.fixture
@@ -25,7 +67,10 @@ def native(paper):
     (store.root/'paper.tex').write_text('\\newcommand{\\mine}{kept}\n\\begin{document}\n\\input{part}\n\\bibliography{refs}\n\\end{document}\n')
     (store.root/'part.tex').write_text('当前原文：结果有局限。\n% paperagent:evidence R1\n')
     (store.root/'refs.bib').write_text('@misc{source,title={Current source}}')
-    return SimpleNamespace(store=store,state=review_tasks.paper_state(store),ctx=context_from_store(store,'offline-model'))
+    from ai_system.graph.context import GraphContext
+    ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
+    ctx.registry=context_from_store(store,'offline-model').registry
+    return SimpleNamespace(store=store,state=review_tasks.paper_state(store),ctx=ctx)
 
 
 def test_late_content_review_cannot_pass_a_new_source_version(native):
@@ -41,22 +86,17 @@ def test_late_content_review_cannot_pass_a_new_source_version(native):
 def test_native_writer_uses_source_changes_and_retains_user_edits(native,monkeypatch,race):
     store=native.store;before=store.snapshot()['sections']
     async def noop(*args):pass
-    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',compact_paper=False,
-        set_stage=noop,events=SimpleNamespace(file_changed=noop))
-    async def reply(llm,schema,messages,validate):
-        assert '过期数据库正文' not in messages[-1].content
-        assert '当前原文' in messages[-1].content
-        answer=latex.SourceEdits(edits=[latex.SourceEdit(target='part.tex#1',replacement='新正文：结果 {{R:R1}} 有局限。')])
-        validate(answer)
-        if race:(store.root/'part.tex').write_text('用户在生成期间的新编辑')
-        return answer
-    monkeypatch.setattr(latex,'call_structured',reply)
+    import hashlib
+    old=(store.root/'part.tex').read_text()
+    version=hashlib.sha256(old.encode()).hexdigest()
+    if race:(store.root/'part.tex').write_text('用户在生成期间的新编辑')
+    values={'path':'part.tex','content':'新正文：结果8有局限。','expected_version':version,'old_text':None}
     if race:
-        with pytest.raises(ResearchConflict):asyncio.run(latex.write(native.state,SimpleNamespace(context=ctx)))
+        with pytest.raises(ResearchConflict):asyncio.run(draft.edit(native.ctx,values))
         assert (store.root/'part.tex').read_text()=='用户在生成期间的新编辑'
     else:
-        asyncio.run(latex.write(native.state,SimpleNamespace(context=ctx)))
-        assert '新正文：结果 8' in (store.root/'part.tex').read_text()
+        asyncio.run(draft.edit(native.ctx,values))
+        assert '新正文：结果8' in (store.root/'part.tex').read_text()
         assert '\\newcommand{\\mine}{kept}' in (store.root/'paper.tex').read_text()
         change=project.read_records(store,'paper_changes')[-1]
         asyncio.run(project.decide(store,change['id'],'revert',compile_after=False))
@@ -85,13 +125,10 @@ def test_duplicate_passages_bind_by_range_and_unlocated_findings_stay_file_scope
     assert anchored['quote']=='重复原文。\n\n'
     assert issue_edits.context(native.store,recorded[1]['id'])['selection'] is None
     async def noop(*args):pass
-    ctx=SimpleNamespace(**native.ctx.__dict__,writer_llm=object(),template_requirements='',compact_paper=False,
-                        set_stage=noop,events=SimpleNamespace(file_changed=noop))
-    async def replace(llm,schema,messages,validate):
-        result=latex.SourceEdits(edits=[latex.SourceEdit(target='part.tex#2',replacement='仅修正第二段。\n\n')])
-        validate(result);return result
-    monkeypatch.setattr(latex,'call_structured',replace)
-    asyncio.run(latex.write(state,SimpleNamespace(context=ctx)))
+    import hashlib
+    old=(native.store.root/'part.tex').read_text()
+    asyncio.run(draft.edit(native.ctx,{'path':'part.tex','content':'重复原文。\n\n仅修正第二段。\n\n',
+        'expected_version':hashlib.sha256(old.encode()).hexdigest(),'old_text':None}))
     assert (native.store.root/'part.tex').read_text()=='重复原文。\n\n仅修正第二段。\n\n'
 
 
@@ -126,55 +163,18 @@ def test_compile_diagnostic_routes_to_existing_repair_and_only_compiler_closes_i
     assert next(i for i in native.store.snapshot()['feedback'] if i['id']==issue['id'])['status']=='resolved'
 
 
-def test_compile_repairs_stop_after_two_and_resume_writing_only(native,monkeypatch):
-    from ai_system.export.latex import LatexResult,BUILD_DIR
-    from ai_system.graph.context import GraphContext
+def test_compile_failure_returns_to_research_without_replaying_calculation(native,monkeypatch):
     from ai_system.research import loop
-    from ai_system.research.control import refresh_registry
+    from ai_system.graph.context import GraphContext
     store=native.store;ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
-    refresh_registry(ctx)
-    before=store.snapshot();calls=[]
-    async def broken(folder,*args,**kwargs):
-        build=folder/BUILD_DIR;build.mkdir(parents=True,exist_ok=True)
-        (build/'paper.log').write_text('! Emergency stop.\n<*> paper.tex\n*** no legal \\end found')
-        return LatexResult('paper.tex',error='Emergency stop: no legal \\end found')
-    monkeypatch.setattr('ai_system.export.latex.compile_pdf',broken)
-    async def reply(llm,schema,messages,validate,**kwargs):
-        prompt='\n'.join(m.content for m in messages)
-        assert 'Emergency stop' in prompt and '完整日志' in prompt and '当前项目源码片段' in prompt
-        calls.append(1)
-        result=schema(edits=[{'target':'part.tex','replacement':f'已核对全文，第{len(calls)}次修订。\n'}])
-        validate(result);return result
-    monkeypatch.setattr(latex,'call_structured',reply)
+    before=store.snapshot()['executions']
+    async def failed(ctx):return {'issues':[{'message':'编译错误，读取日志后修正'}],'exports':[]}
+    monkeypatch.setattr('ai_system.modules.writing.export._latex',failed)
     with store._transaction() as db:
-        state=store._read(db)
-        state['publication']={'stage':'export','repair_inputs':[],'repairs':0}
-        state['outcome']=None
-        store._save(db,state,'test_compile_recovery',{})
-    async def advance():
-        for _ in range(20):
-            if store.snapshot()['outcome']=='completed':return
-            if await loop.prepare_action(ctx):return
-            action=store.snapshot()['action']
-            await loop._act({'action_id':action['id']},SimpleNamespace(context=ctx))
-        pytest.fail('publication did not stop')
-    asyncio.run(advance())
-    stopped=store.snapshot()
-    assert len(calls)==2 and stopped['action']['status']=='failed'
-    assert stopped['publication']['stage']=='repair' and '两次' in stopped['action']['message']
-    assert stopped['outcome']!='completed'
-    assert stopped['executions']==before['executions'] and stopped['artifacts']==before['artifacts']
-    loop.resume(store)
-    assert store.snapshot()['action']['capability']=='writing.repair'
-    asyncio.run(advance())
-    assert len(calls)==4 and store.snapshot()['publication']['stage']=='repair'
-    assert store.snapshot()['executions']==before['executions']
-    async def success(folder,*args,**kwargs):
-        (folder/'paper.pdf').write_bytes(b'%PDF-repaired')
-        return LatexResult('paper.tex',pdf_path='paper.pdf')
-    monkeypatch.setattr('ai_system.export.latex.compile_pdf',success)
-    loop.resume(store)
-    asyncio.run(advance())
-    assert store.snapshot()['outcome']=='completed'
-    assert project.meta(store.root)['compile']['success']
-    assert store.snapshot()['executions']==before['executions'] and store.snapshot()['artifacts']==before['artifacts']
+        state=store._read(db);state['publication']={'stage':'export','repair_inputs':[],'repairs':0}
+        action=loop._set_action(state,'writing.export',{},'导出当前源码')
+        store._save(db,state,'test_compile_failure',{})
+    asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))
+    assert store.snapshot()['publication'] is None
+    assert store.snapshot()['action']['result']['issues']
+    assert store.snapshot()['executions']==before

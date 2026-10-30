@@ -1,213 +1,233 @@
-"""
-求解循环的上下文压缩（兼顾前缀缓存）
-
-CodeAct 循环每一步都把完整历史重新发给模型，输入随步数增长。
-2024_C 一题输入 496 万 token，但其中 445 万（90%）命中了网关的前缀缓存，所以成本主要不在这里；
-真正的风险是长循环把上下文撑满、拖慢每一步。
-
-如果每一步都把"最近 N 步之外"的内容截短，压缩边界每步都在移动，前缀每步都变，缓存会全部失效，反而更贵。
-所以这里按块推进边界：边界只在步数跨过 block 的整数倍时前移一次，块内的请求前缀完全相同，缓存照常命中。
-内核是持久的，早期变量和数据都还在，被截短的旧代码和输出不影响后续计算。
-压缩只作用于发给模型的请求，不改动 agent 状态，因此不影响登记和报告。
-"""
-
+"""Bound active context; canonical messages, tool arguments and receipts stay intact."""
+import json
 import logging
-from typing import Any, Awaitable, Callable, List
-
+from typing import Any, Callable, Awaitable, Annotated
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langgraph.errors import GraphRecursionError
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage, messages_to_dict
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
-KEEP_RECENT_STEPS = 6
-BLOCK_STEPS = 10
-OLD_OUTPUT_CHARS = 400
-OLD_CODE_CHARS = 600
-OUTPUT_NOTE = "\n...[早期输出已压缩；内核中的变量仍然存在，需要时重新 print]"
-CODE_NOTE = "\n# ...[早期代码已压缩，定义的变量仍在内核中]"
+
+class WorkNotes(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    notes: list[Annotated[str, Field(max_length=240)]] = Field(max_length=8)
 
 
-def _clip_tool_message(message: ToolMessage) -> ToolMessage:
-    content = message.content if isinstance(message.content, str) else str(message.content)
-    if len(content) <= OLD_OUTPUT_CHARS:
-        return message
-    return message.model_copy(update={"content": content[:OLD_OUTPUT_CHARS] + OUTPUT_NOTE})
+def summary_history(messages):
+    return [{'role':m.type,'content':m.content,
+             **({'tool_calls':m.tool_calls} if isinstance(m,AIMessage) else {}),
+             **({'tool_call_id':m.tool_call_id} if isinstance(m,ToolMessage) else {})}
+            for m in messages]
 
 
-def _clip_ai_message(message: AIMessage) -> AIMessage:
-    changed = False
-    tool_calls = []
-    for call in message.tool_calls:
-        code = call.get("args", {}).get("code")
-        if isinstance(code, str) and len(code) > OLD_CODE_CHARS:
-            call = {**call, "args": {**call["args"], "code": code[:OLD_CODE_CHARS] + CODE_NOTE}}
-            changed = True
-        tool_calls.append(call)
-    if not changed:
-        return message
-    return message.model_copy(update={"tool_calls": tool_calls, "additional_kwargs": {}})
+def state_message(facts):
+    return HumanMessage(content=json.dumps({'snapshot_scope':'此条消息时的工作区状态；之后以工具回执和更新事件为准。',
+                                           **facts},ensure_ascii=False,sort_keys=True),
+                        additional_kwargs={'context_snapshot':True})
 
 
-def compaction_boundary(steps: int, keep_recent: int, block: int) -> int:
-    """前多少步要压缩：按 block 整块推进，块内不变，保证请求前缀稳定"""
-    if steps <= keep_recent + block:
-        return 0
-    return ((steps - keep_recent) // block) * block
+def token_estimate(value):
+    text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,default=str)
+    return sum(1 if ord(c)>127 else .3 for c in text).__ceil__()
 
 
-def compact_messages(
-    messages: List[BaseMessage], keep_recent: int = KEEP_RECENT_STEPS, block: int = BLOCK_STEPS
-) -> List[BaseMessage]:
-    """至少保留最近 keep_recent 次工具调用及其结果的原文，更早的按整块截短"""
-    ai_indexes = [i for i, m in enumerate(messages) if isinstance(m, AIMessage) and m.tool_calls]
-    compact_steps = compaction_boundary(len(ai_indexes), keep_recent, block)
-    if compact_steps == 0:
-        return messages
-    boundary = ai_indexes[compact_steps]
-    compacted = []
-    for i, message in enumerate(messages):
-        if i < boundary and isinstance(message, ToolMessage):
-            message = _clip_tool_message(message)
-        elif i < boundary and isinstance(message, AIMessage) and message.tool_calls:
-            message = _clip_ai_message(message)
-        compacted.append(message)
-    return compacted
+def summary_model(llm):
+    """Auxiliary notes have their own small budget; research thinking stays enabled."""
+    from ..config.generation import request_model
+    return request_model(llm,'summary')
 
 
-class StepBudgetMiddleware(AgentMiddleware):
-    """步数快用完时提醒模型交报告
+def complete_boundaries(messages):
+    pending=set();cuts=[]
+    for index,message in enumerate(messages):
+        if isinstance(message,AIMessage):
+            if not pending:cuts.append(index)
+            pending.update(t['id'] for t in message.tool_calls)
+        elif isinstance(message,ToolMessage):pending.discard(message.tool_call_id)
+    return cuts
 
-    超过 recursion_limit 时 LangGraph 直接抛异常，已经做的工作和对话全部丢失（2024_C 试跑中一个探索分支跑了 10 次代码后因此作废）。
-    这里在剩余步数不多时，在请求末尾追加一条提醒；只追加在末尾，不影响前缀缓存。最后一步只给报告工具，强制收尾。
-    """
 
-    def __init__(self, budget: int, reserve: int, message: str, report_ready: Callable[[], bool] | None = None):
+class ContextMiddleware(AgentMiddleware):
+    def __init__(self,ctx,llm,session,*,pinned=None):
         super().__init__()
-        self.budget = budget
-        self.reserve = reserve
-        self.message = message
-        self.report_ready = report_ready
+        self.ctx,self.llm,self.session=ctx,llm,session
+        self.messages=[];self.pinned=pinned
 
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
-    ) -> Any:
-        # recursion_limit 按单次调用计：只数最后一条用户消息（任务、晋升、返工意见）之后的步数
-        last_human = max((i for i, m in enumerate(request.messages) if isinstance(m, HumanMessage)), default=-1)
-        steps = sum(1 for m in request.messages[last_human + 1:] if isinstance(m, AIMessage) and m.tool_calls)
-        if steps >= self.budget:
-            # Failed structured submissions return directly to the model without
-            # a tools node, so recursion_limit alone is not a tool-step budget.
-            raise GraphRecursionError(f"工具调用步数已达到预算 {self.budget}")
-        if self.report_ready and repeated_execution(request.messages[last_human + 1:]):
-            if self.report_ready():
-                note = HumanMessage(content="[系统提醒] 必需登记证据已齐，相同代码和输出已连续重复三次。请现在提交SolveReport，按已有登记引用填写要求证据映射；不得声称未做的分析。")
-                return await handler(request.override(messages=[*request.messages, note], tools=[]))
-            note = HumanMessage(content="[系统提醒] 相同代码和输出已连续重复三次，提交所需的登记证据仍未齐。请按最近工具返回的缺项清单，用已有成功run_id调用record_results或record_figure；确实缺少计算结果时只补算缺项，不要重复整个计算，也不要提前提交报告。")
-            registration = [tool for tool in request.tools if getattr(tool, 'name', tool) != 'run_python']
-            return await handler(request.override(messages=[*request.messages, note], tools=registration))
-        if steps >= self.budget - 1:
-            # 最后一步只留报告工具（ToolStrategy 下 tool_choice=any，模型只能交报告），不会撞 recursion_limit。
-            # 官方 API 的 deepseek-flash 一步只要几秒、步子很碎，v2l 的 Q1 三分钟用完 40 步没交报告，对话和报告全丢
-            note = HumanMessage(content=f"[系统提醒] 步数已用完，不能再执行代码。{self.message}")
-            tools = ([tool for tool in request.tools if getattr(tool, 'name', tool) != 'run_python']
-                     if self.report_ready and not self.report_ready() else [])
-            return await handler(request.override(messages=[*request.messages, note], tools=tools))
-        if steps >= self.budget - self.reserve:
-            left = max(self.budget - steps, 0)
-            note = HumanMessage(content=f"[系统提醒] 还剩约 {left} 步。{self.message}")
-            request = request.override(messages=[*request.messages, note])
-        return await handler(request)
+    async def abefore_model(self,state,runtime):
+        from ai_system.research.runtime import ACTIVE_BUDGET
+        budget=ACTIVE_BUDGET.get()
+        identity='budget-wrapup:'+self.session
+        if budget is None or any(m.id==identity for m in state['messages']):return None
+        note=budget.wrap_up()
+        if note:return {'messages':[HumanMessage(content=note,id=identity)]}
 
+    def archive(self,value):
+        from ai_system.research.store import digest
+        text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False)
+        path='.system/context-outputs/'+digest(text)+'.json'
+        if not self.ctx.fs.exists(path):self.ctx.fs.write_text(path,text)
+        return path
 
-def repeated_execution(messages: List[BaseMessage]) -> bool:
-    """Detect a stalled tool loop, without caching or skipping any execution."""
-    steps = [m for m in messages if isinstance(m, AIMessage) and m.tool_calls][-3:]
-    if len(steps) != 3 or any(len(m.tool_calls) != 1 or m.tool_calls[0]["name"] != "run_python" for m in steps):
-        return False
-    calls = [m.tool_calls[0] for m in steps]
-    if any(c["args"] != calls[0]["args"] for c in calls[1:]):
-        return False
-    replies = {m.tool_call_id: m.content for m in messages if isinstance(m, ToolMessage)}
-    outputs = []
-    for call in calls:
-        reply = replies.get(call["id"], "")
-        if not isinstance(reply, str) or not reply.startswith("[run_id: ") or "Traceback (most recent call last)" in reply or "执行超时" in reply:
-            return False
-        # Saved-figure paths are execution metadata: their run ID and sequence
-        # number change even when the same plotting code/output is repeated.
-        outputs.append("\n".join(line for line in reply.partition("\n")[2].splitlines()
-                                  if not line.startswith("已保存图片: ")))
-    return outputs[0] == outputs[1] == outputs[2]
+    def offload(self,message,*,old=False):
+        if not isinstance(message,ToolMessage):return message
+        raw=str(message.content)
+        if token_estimate(raw)<=(500 if old else 4000):return message
+        path=self.archive(raw)
+        try:
+            data=json.loads(raw)
+            if not isinstance(data,dict):data={}
+        except (ValueError,TypeError):data={}
+        fields={'path','version','total_chars','question_id','experiment_id','run_id','execution_status',
+                'revision','status','input_path','stdout_path','failure_kind','error','delivery_error'}
+        data={k:v for k,v in data.items() if k in fields and token_estimate(v)<200}
+        data.update(excerpt=raw[:240] if old else raw[:2000]+'\n…\n'+raw[-1000:],_full_output_path=path)
+        return message.model_copy(update={'content':json.dumps(data,ensure_ascii=False)})
 
-
-def drop_refused_steps(messages: List[BaseMessage], refusal: str) -> List[BaseMessage]:
-    """去掉所有工具调用都被拒绝（结果是 refusal）的那几步：AI 消息连同它的工具结果一起去掉
-
-    只有部分调用被拒时整步保留，否则剩下的调用没有对应结果，接口直接 400。
-    """
-    refused = {m.tool_call_id for m in messages if isinstance(m, ToolMessage) and m.content == refusal}
-    if not refused:
-        return messages
-    drop_calls = set()
-    kept = []
-    for message in messages:
-        if isinstance(message, AIMessage) and message.tool_calls:
-            ids = {c.get("id") for c in message.tool_calls}
-            if ids <= refused:
-                drop_calls |= ids
-                continue
-        if isinstance(message, ToolMessage) and message.tool_call_id in drop_calls:
-            continue
-        kept.append(message)
-    return kept
-
-
-class DropRefusedStepsMiddleware(AgentMiddleware):
-    """请求里不带被拒绝的空执行
-
-    v3 的 2022_C Q3 先打了几次 print('ok')，被拒后照着历史里的样子越打越多，57 次空执行把步数用光，
-    报告只剩"..."。历史里不留这些步，模型就没有可模仿的样子。放在 StepBudget 里层：预算照样按全部步数算。
-    去掉是确定性的，同一段历史每次去掉的内容一样，不破坏前缀缓存。
-    """
-
-    def __init__(self, refusal: str):
-        super().__init__()
-        self.refusal = refusal
-
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
-    ) -> Any:
-        return await handler(request.override(messages=drop_refused_steps(request.messages, self.refusal)))
-
-
-class CompactHistoryMiddleware(AgentMiddleware):
-    def __init__(self, keep_recent: int = KEEP_RECENT_STEPS, block: int = BLOCK_STEPS):
-        super().__init__()
-        self.keep_recent = keep_recent
-        self.block = block
-
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
-    ) -> Any:
-        return await handler(request.override(messages=compact_messages(request.messages, self.keep_recent, self.block)))
-
-
-class HistoryRecorder(AgentMiddleware):
-    """记下最近一次发给模型的完整对话（放在中间件最外层，看到的是压缩前的原文）
-
-    超过 recursion_limit 时 LangGraph 直接抛异常、拿不到对话；有了这份记录，可以接着要一份报告，而不是整段作废。
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.messages: List[BaseMessage] = []
-
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
-    ) -> Any:
-        self.messages = list(request.messages)
-        return await handler(request)
+    async def awrap_model_call(self,request,handler):
+        from ai_system.research.runtime import execution_scope
+        from ai_system.research.store import digest
+        from ai_system.graph.llm_utils import as_messages, call_structured
+        from ai_system.config.generation import ensure_complete,ModelGenerationLimit
+        from langchain_core.utils.function_calling import convert_to_openai_tool
+        store=self.ctx.research
+        self.messages=list(request.messages)
+        self.ctx.agent_messages=self.messages
+        schemas=[convert_to_openai_tool(t) for t in request.tools]
+        tools=token_estimate(schemas)
+        system=getattr(request,'system_message',None)
+        static_hash=digest([schemas,messages_to_dict([system]) if system else []])
+        overhead=tools+(token_estimate(messages_to_dict([system])) if system else 0)
+        profile=getattr(self.llm,'profile',None) or {}
+        # max_input_tokens is an input ceiling, not a context+output ceiling.
+        limit=int(profile.get('max_input_tokens') or 32000)
+        if profile.get('max_context_tokens'):
+            limit=min(limit,int(profile['max_context_tokens'])-int(getattr(self.llm,'max_tokens',None) or 4800))
+        high=int(limit*.8);low=int(limit*.5)
+        messages=list(self.messages)
+        boundaries=complete_boundaries(messages)
+        start=boundaries[0] if boundaries else len(messages)
+        key='context:'+self.session
+        with store._connect() as db:
+            row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,key)).fetchone()
+        saved=json.loads(row[0]) if row else {}
+        cut=saved.get('cut',start)
+        def signature(end):return digest(messages_to_dict(self.messages[:end]))
+        if saved.get('format')!=4 or cut<start or cut>len(messages) or saved.get('hash')!=signature(cut):
+            saved={'format':4,'cut':start,'hash':signature(start),'offloads':{}}
+            cut=start
+        previous=json.dumps(saved,ensure_ascii=False,sort_keys=True)
+        def snapshot():
+            if self.pinned is not None:return self.pinned
+            from ai_system.research.planner import working_context
+            return working_context(self.ctx)
+        # A projection also serves delegated sessions, whose task is already a
+        # canonical event. Never move this snapshot to the tail on each call.
+        if 'snapshot' not in saved:
+            has_snapshot=any(m.additional_kwargs.get('context_snapshot') for m in messages[:start])
+            saved['snapshot']=None if has_snapshot else snapshot()
+        prefix=[m for m in messages[:start] if not (cut>start and m.additional_kwargs.get('context_snapshot'))]
+        offloads=saved.setdefault('offloads',{})
+        for i,message in enumerate(messages):
+            entry=offloads.get(str(i))
+            if entry and entry['hash']==digest(messages_to_dict([message])):
+                messages[i]=message.model_copy(update={'content':entry['content']})
+            else:
+                replacement=self.offload(message)
+                if replacement is not message:
+                    offloads[str(i)]={'hash':digest(messages_to_dict([message])),'content':replacement.content}
+                    messages[i]=replacement
+        def view(end=None,notes=None):
+            end=cut if end is None else end
+            note=saved.get('summary','') if notes is None else notes
+            archive=saved.get('archive_path')
+            memory=([HumanMessage(content='历史方法笔记（非待办或当前事实）：'+note+('\n旧轮次原文：'+archive if archive else ''))] if note or archive else [])
+            facts=saved['snapshot']
+            current=[state_message(facts)] if facts is not None else []
+            return prefix+memory+current+messages[end:]
+        def size(rows):return overhead+token_estimate(messages_to_dict(rows))
+        bounded=view()
+        masked=0;summarized_now=False
+        if size(bounded)>high:
+            # Cheap observation offloading precedes any model summarization.
+            recent=boundaries[-2] if len(boundaries)>1 else start
+            for i in range(cut,recent):
+                if str(i) in offloads:continue
+                replacement=self.offload(messages[i],old=True)
+                if replacement is not messages[i]:
+                    offloads[str(i)]={'hash':digest(messages_to_dict([self.messages[i]])),'content':replacement.content}
+                    messages[i]=replacement;masked+=1
+            bounded=view()
+        if size(bounded)>high:
+            summarized_now=True
+            saved['snapshot']=snapshot()
+            prefix=[m for m in prefix if not m.additional_kwargs.get('context_snapshot')]
+            reserve=min(1200,max(100,low//5))
+            candidates=[i for i in boundaries if i>cut]
+            end=next((i for i in candidates if size(view(i,''))+reserve+200<=low),None)
+            if end is None:
+                raise ValueError('近期完整工具轮次或固定要求超过上下文预算；请缩小单次工具参数/状态，原始记录已保留。')
+            history=summary_history(self.messages[start:end])
+            archive=self.archive(history)
+            summary=saved.get('summary','')
+            observations=summary_history(messages[cut:end])
+            # This is summarizer input, not tool-call history. Large code/edit
+            # arguments remain verbatim in the archive and active recent turns.
+            for row in observations:
+                if 'tool_calls' in row:
+                    actions=[]
+                    for call in row.pop('tool_calls'):
+                        args=call['args']
+                        actions.append({'name':call['name'],
+                            'arguments':{k:v for k,v in args.items() if token_estimate(v)<300},
+                            'archived_arguments':[k for k,v in args.items() if token_estimate(v)>=300]})
+                    row['actions']=actions
+            prompt=as_messages(
+                '只摘录无法从当前问题、文件、运行记录恢复的方法选择理由和关键纠错经验。不维护待办、文件清单或覆盖状态。'
+                '历史结论可能错误，不升级为验证通过；不新增任务或事实。最多8条简短笔记。',
+                json.dumps({'previous_summary':summary,'completed_history':observations,'history_archive':archive},ensure_ascii=False))
+            from ai_system.graph.tracing import labelled
+            with labelled('context_summary'):
+                try:
+                    from ai_system.research.runtime import ACTIVE_BUDGET
+                    if ACTIVE_BUDGET.get() and ACTIVE_BUDGET.get().wrap_up():raise ValueError('剩余额度留给主Agent收尾，历史已归档')
+                    if token_estimate(messages_to_dict(prompt))>limit-2000:raise ValueError('摘要输入过长，使用归档检索')
+                    note=await call_structured(summary_model(self.llm),WorkNotes,prompt,json_first=True,retries=0)
+                    summary=note.model_dump_json()
+                    if token_estimate(summary)>reserve:raise ValueError('历史笔记超过预算')
+                except (ValueError,ModelGenerationLimit):
+                    logger.warning('历史方法笔记无效或超限，保留原有笔记与原始归档')
+                    if token_estimate(summary)>reserve:summary=''
+            saved.update(cut=end,hash=signature(end),summary=summary,archive_path=archive,snapshot=snapshot(),
+                         offloads={k:v for k,v in offloads.items() if int(k)>=end})
+            cut=end
+            prefix=[m for m in prefix if not m.additional_kwargs.get('context_snapshot')]
+            bounded=view()
+            if size(bounded)>low:raise ValueError('压缩后上下文未达到目标，原始记录已保留；不重复调用摘要。')
+        wire=[digest(messages_to_dict([m])) for m in bounded]
+        prior=saved.get('wire',[])
+        common=0
+        for left,right in zip(prior,wire):
+            if left!=right:break
+            common+=1
+        if saved.get('static_hash')!=static_hash:common=0
+        changed_history=bool(prior) and common<len(prior)
+        phase='cold' if not prior else ('after_compaction' if masked or summarized_now else 'prefix_reset') if changed_history else 'stable'
+        saved.update(wire=wire,static_hash=static_hash)
+        if json.dumps(saved,ensure_ascii=False,sort_keys=True)!=previous:
+            with store._transaction() as db:
+                db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
+                           (store.research_id,key,saved['hash'],json.dumps(saved,ensure_ascii=False)))
+        stats={'messages_estimated_tokens':token_estimate(messages_to_dict(bounded)),
+               'tools_estimated_tokens':tools,'total_estimated_tokens':size(bounded),
+               'input_limit':limit,'high_watermark':high,'low_watermark':low,
+               'original_messages_estimated_tokens':token_estimate(messages_to_dict(self.messages)),
+               'summarized_messages':max(0,cut-start),'offloaded_observations':len(saved['offloads']),
+               'cache_phase':phase,'reused_prefix_messages':common}
+        with execution_scope(context_usage=stats):
+            response=await handler(request.override(messages=bounded))
+            ensure_complete(response)
+            return response
 
 
 class ReportOrderingMiddleware(AgentMiddleware):
@@ -219,16 +239,11 @@ class ReportOrderingMiddleware(AgentMiddleware):
     loop return actual execution/registration results before the next submission.
     """
 
-    def __init__(self, report_tool: str, report_ready: Callable[[], bool] | None = None):
+    def __init__(self, report_tool: str):
         super().__init__()
         self.report_tool = report_tool
-        self.report_ready = report_ready
 
     async def awrap_model_call(self, request, handler):
-        # Do not offer a final report while its prerequisite evidence is absent.
-        # Validation remains in place for scope, provenance and report content.
-        if self.report_ready and not self.report_ready():
-            request = request.override(response_format=None)
         response = await handler(request)
         messages = getattr(response, "result", None) or [response]
         reply = next((m for m in messages if isinstance(m, AIMessage)), None)
@@ -239,7 +254,7 @@ class ReportOrderingMiddleware(AgentMiddleware):
         if not operations or len(operations) == len(calls):
             return response
         feedback = "\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage))
-        note = ("本轮报告未提交：先执行本轮计算/登记，阅读工具返回的真实编号，再单独调用"
+        note = ("本轮报告未提交：先执行本轮操作，阅读实际输出，再单独调用"
                 f" {self.report_tool}。报告不能与其他工具同时调用。\n" + feedback)
         reply = reply.model_copy(update={"tool_calls": operations,
             "content": str(reply.content or "") + "\n" + note,
@@ -249,7 +264,6 @@ class ReportOrderingMiddleware(AgentMiddleware):
         return reply
 
 
-TRUNCATED_NOTE = "[系统提醒] 你上一次输出太长，在中途被截断，没有执行。请把代码拆成更短的一段，只写这一步需要的部分。"
 MALFORMED_NOTE = "[系统提醒] 你上一次工具调用的参数不是合法 JSON，没有执行。请重新调用，代码里的引号和换行要正确转义。"
 
 
@@ -260,12 +274,8 @@ def drop_invalid_calls(message: AIMessage) -> AIMessage:
     return message.model_copy(update={"invalid_tool_calls": []})
 
 
-class TruncationGuardMiddleware(AgentMiddleware):
-    """工具调用不完整时带提示重试一次：输出撞到长度上限，或参数不是合法 JSON。
-
-    这两种情况下 tool_calls 为空，循环会误以为模型收尾了；坏掉的调用留在历史里，
-    下一次请求还会因为"工具调用没有对应结果"被接口拒绝（官方 DeepSeek API 返回 400，v2l 的 Q1 因此整段失败）。
-    """
+class MalformedToolMiddleware(AgentMiddleware):
+    """Repair malformed JSON once; generation truncation never replays a request."""
 
     async def awrap_model_call(
         self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
@@ -275,16 +285,12 @@ class TruncationGuardMiddleware(AgentMiddleware):
         message = next((m for m in messages if isinstance(m, AIMessage)), None)
         if message is None:
             return response
-        if (message.response_metadata or {}).get("finish_reason") == "length":
-            note = TRUNCATED_NOTE
-            # 截断的调用会被丢掉、transcript 里看不到；记下开头和结尾，能看出是代码太长还是重复输出停不下来
-            partial = " ".join(str(c.get("args") or "") for c in message.invalid_tool_calls) or str(message.content)
-            logger.warning("输出被截断（%d 字）：%r ... %r", len(partial), partial[:150], partial[-300:])
-        elif message.invalid_tool_calls:
-            note = MALFORMED_NOTE
-        else:
-            return response
+        from ai_system.config.generation import ensure_complete
+        ensure_complete(message)
+        if not message.invalid_tool_calls:return response
+        note=MALFORMED_NOTE
         retried = await handler(request.override(messages=[*request.messages, HumanMessage(content=note)]))
+        ensure_complete(retried)
         if hasattr(retried, "result"):
             retried.result = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in retried.result]
             return retried

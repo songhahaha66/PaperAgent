@@ -27,23 +27,40 @@ def context(tmp_path,respond):
 def results(messages):return [m for m in messages if isinstance(m,ToolMessage)]
 
 
+def test_local_execution_conflict_keeps_actionable_reason_without_http_secrets():
+    from fastapi import HTTPException
+    import httpx
+    from ai_system.research.planner import planning_failure_message
+    from ai_system.research.review_cache import error_detail
+    reason='上个沙箱尚未确认销毁，请等待其 TTL 到期后重试；不会重跑中断代码'
+    conflict=HTTPException(409,reason)
+    snapshot={'activity':[],'experiments':{},'executions':{}}
+    assert error_detail(conflict)==reason
+    assert reason in planning_failure_message(conflict,snapshot)
+    assert 'private-upstream-body' not in error_detail(HTTPException(500,'private-upstream-body'))
+    request=httpx.Request('GET','https://provider.invalid/?key=private-key')
+    upstream=httpx.HTTPStatusError('private-upstream-body',request=request,response=httpx.Response(409,request=request))
+    assert error_detail(upstream)=='HTTPStatusError'
+
+
 @pytest.mark.parametrize('extra', [{'question_index':0},{'question':'old top level duplicate'},{'question_updates':[]}])
 def test_create_then_schedule_and_correct_extra_fields_in_same_agent(tmp_path,extra):
     def respond(messages):
         rows=results(messages)
-        if not rows:return tool('research_update_question',{'question':'What do the supplied source records establish?'},'create')
+        if not rows:return tool('research_create_question',{'question':'What do the supplied source records establish?'},'create')
         if len(rows)==1:
             qid=json.loads(rows[-1].content)['question_id']
-            assert qid.startswith('question:') and len(ctx.research.snapshot()['questions'])==1
+            assert qid.startswith('Q') and len(ctx.research.snapshot()['questions'])==1
             return tool('research_schedule_experiment',{'question_id':qid,'plan':PLAN,**extra},'bad')
+        if len(rows)>2:return tool('research_pause',{'message':'Plan recorded; computation can continue in this Agent.'},'pause')
         assert rows[-1].status=='error' and next(iter(extra)) in rows[-1].content
         qid=json.loads(rows[0].content)['question_id']
         assert not ctx.research.snapshot()['experiments']
         return tool('research_schedule_experiment',{'question_id':qid,'plan':PLAN},'fixed')
     ctx,model=context(tmp_path,respond)
-    assert not asyncio.run(prepare_action(ctx))
-    state=ctx.research.snapshot();eid=state['action']['target']
-    assert model.calls==3 and state['action']['capability']=='experiments.execute'
+    assert asyncio.run(prepare_action(ctx))
+    state=ctx.research.snapshot();eid=next(iter(state['experiments']))
+    assert model.calls==4 and state['action']['capability']=='pause'
     assert len(state['questions'])==len(state['experiments'])==1 and not state['executions']
     assert state['experiments'][eid]['question_id']==next(iter(state['questions']))
     errors=[a for a in state['activity'] if a['status']=='failed']
@@ -59,9 +76,11 @@ def test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_
         runtime.reserve('controlled-model')
         rows=results(messages)
         if corrected:
+            rows=[m for m in rows if m.tool_call_id not in {'create','failed-candidate'}]
+            if rows:return tool('research_pause',{'message':'Plan saved in the same Agent'},'pause')
             qid=next(iter(ctx.research.snapshot()['questions']))
             return tool('research_schedule_experiment',{'question_id':qid,'plan':PLAN},'resumed')
-        if not rows:return tool('research_update_question',{'question':'Current goal'},'create')
+        if not rows:return tool('research_create_question',{'question':'Current goal'},'create')
         if len(rows)==1:return tool('research_schedule_experiment',{'question_id':'stale-id','plan':PLAN},'failed-candidate')
         assert rows[-1].status=='error'
         raise ModelServiceError('Controlled service interruption')
@@ -72,11 +91,13 @@ def test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_
     assert runtime.status()['used']==3
     assert any(a.get('inputs',{}).get('question_id')=='stale-id' and a['status']=='failed' for a in before['activity'])
     resume(ctx.research);corrected=True
-    assert not asyncio.run(prepare_action(ctx))
+    assert asyncio.run(prepare_action(ctx))
     after=ctx.research.snapshot()
     assert after['questions']==before['questions'] and len(after['experiments'])==1 and not after['executions']
-    assert runtime.status()['used']==model.calls==4
-    with ctx.research._connect() as db:assert not db.execute('SELECT 1 FROM failure_guards').fetchone()
+    assert runtime.status()['used']==model.calls==5
+    with ctx.research._connect() as db:
+        guards=[json.loads(r[0]) for r in db.execute('SELECT payload FROM failure_guards')]
+        assert all(g['kind']=='tool_input' and not g['blocked'] for g in guards)
 
 
 def test_each_state_tool_is_idempotent_and_invalid_experiment_does_not_rollback_question(tmp_path):
@@ -101,7 +122,7 @@ def test_no_progress_final_reply_cannot_spin_empty_observe(tmp_path):
     assert asyncio.run(prepare_action(ctx))
     action=ctx.research.snapshot()['action']
     assert action['error_type']=='NoResearchProgress' and model.calls==2
-    assert '尚未调用工具' in prompts[1][-1].content
+    assert any('最终回复尚不能交付' in str(m.content) for m in prompts[1])
     assert 'validation error' not in action['message']
 
 
@@ -125,17 +146,24 @@ def test_user_resume_consumes_pause_and_runs_a_new_decision(tmp_path):
     asyncio.run(run())
 
 
-def test_planning_limit_after_user_answer_stays_paused_on_resume(tmp_path):
+def test_shared_request_budget_after_user_answer_is_preserved_on_resume(tmp_path):
     from ai_system.graph.agent import PaperGraphAgent
-    model=ResearchToolsModel(respond=lambda messages:tool('research_ask_user',{'message':'Which records?'},'ask'))
-    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path),max_planning_calls=1)
+    from ai_system.research.runtime import ACTIVE_BUDGET
+    def respond(messages):
+        ACTIVE_BUDGET.get().reserve('controlled-model')
+        return tool('research_ask_user',{'message':'Which records?'},'ask')
+    model=ResearchToolsModel(respond=respond)
+    runtime=ResearchRuntime(tmp_path)
+    runtime.configure({'request_limit':1})
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
     async def run():
         assert await agent.run('Count the source observations.')=='Which records?'
         for output in (await agent.run('Use the supplied three records.',action='answer'),
                        await agent.resume_failed()):
-            assert '研究已暂停' in output and '规划上限' in output
+            assert '研究已暂停' in output and '请求上限' in output
             assert '已写入' not in output
         state=ResearchStore(tmp_path,agent._load_thread()).snapshot()
-        assert state['outcome']=='blocked' and state['planning_calls']==model.calls==1
-        assert not (tmp_path/'paper.md').exists()
+        assert state['outcome']=='blocked' and runtime.status()['used']==1
+        assert len(runtime.requests())==1
+        assert 'planning_calls' not in state and not (tmp_path/'paper.md').exists()
     asyncio.run(run())

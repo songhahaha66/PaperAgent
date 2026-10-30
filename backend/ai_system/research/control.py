@@ -8,10 +8,7 @@ import asyncio
 import json
 import shutil
 import hashlib
-from dataclasses import asdict
-from pathlib import Path
 
-from langgraph.types import Send
 
 from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
@@ -34,6 +31,11 @@ async def observe(state, runtime):
     if store.snapshot() is None:
         raise ValueError("研究状态不存在，不能从 checkpoint 恢复业务数据")
     snapshot = store.refresh_inputs()
+    from ai_system.modules.experiments.execution import recover_outputs
+    try:
+        await recover_outputs(ctx)
+    finally:
+        await ctx.kernels.close()  # Recovery must release the lease before compilation.
     if ctx.experience_scope is not None:
         try:
             from ai_system.modules.registry import invoke
@@ -62,11 +64,11 @@ async def observe(state, runtime):
     return {'research_blocked': blocked}
 
 
-def graph_view(snapshot):
+def graph_view(snapshot, root=None):
     from .views import questions
     publication=snapshot['publication'] or {}
     source=snapshot['spec']['requirement']
-    return {'task':source, 'analysis':{
+    view = {'task':source, 'analysis':{
         'title':publication.get('title') or source.splitlines()[0][:80],
         'restatement':source, 'overall_analysis':'',
         'subproblems':[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify' and not t['retired']],
@@ -83,6 +85,14 @@ def graph_view(snapshot):
         'issues':[i for i in snapshot['feedback'] if i.get('section') and i['action']=='rewrite'
                   and i['status'] not in {'resolved','dismissed','superseded'}]}
 
+    if snapshot.get('document') and root is not None:
+        import hashlib
+        path = root / snapshot['document']['path']
+        text = path.read_text(encoding='utf-8') if path.is_file() else ''
+        view.update(document=snapshot['document'],sections={'document':text},
+                    source_version=hashlib.sha256(text.encode()).hexdigest())
+    return view
+
 
 def paper_state(store):
     """Saved draft/history text; publication validity remains in the Store."""
@@ -98,7 +108,6 @@ def experiment_dispatch(ctx, key):
     """Workers receive system-built context, never a model-supplied branch."""
     snapshot=ctx.research.snapshot()
     task=snapshot['experiments'][key]
-    from .validation import protocol
     from ai_system.modules.experiments.store import ExperimentStore
     comparison=ExperimentStore(ctx.research).read(key,task['revision']) if (task.get('experiment') or {}).get('csv') else None
     return {'resume_comparison':bool(comparison and comparison.get('recovery_requested')),'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
@@ -109,7 +118,7 @@ def experiment_dispatch(ctx, key):
         'previous_report':experiment_report(snapshot,task) if task.get('continuation') else None,
         'research_contract':{'requirements':[r for r in snapshot['spec']['requirements'] if r['id'] in task['requirement_ids']],
             'task_ids':list(snapshot['experiments']), 'assumption_task_ids':assumption_scope(snapshot['experiments'],key),
-            'assumptions':[snapshot['assumptions'][aid] for aid in task['assumption_ids']], 'checks':protocol(snapshot,key)},
+            'assumptions':[snapshot['assumptions'][aid] for aid in task['assumption_ids']], 'checks':[]},
         'design':experiment_design(snapshot, task),
         'review_findings':[i for i in snapshot['feedback'] if i['status'] not in {'resolved','dismissed','superseded'} and i['task_id']==key],
         'dependencies':{dep:experiment_report(snapshot,snapshot['experiments'][dep]) for dep in task['dependencies']}}
@@ -216,8 +225,9 @@ def worker_context(ctx, order):
         for aid in reversed(execution_lineage(snapshot, execution_id)):
             if aid in copied: continue
             copied.add(aid)
-            source = ctx.workspace / 'experiments' / aid / 'workspace'
-            inherited.update(inherit_execution_files(source, target_fs, key))
+            attempt=snapshot['executions'][aid]
+            source = ctx.workspace if attempt.get('workspace')=='.' else ctx.workspace / 'experiments' / aid / 'workspace'
+            inherited.update(inherit_execution_files(source, target_fs, key,run_ids=attempt.get('run_ids')))
     def copy_dependency(key):
         for dependency in snapshot['experiments'][key]['dependencies']:
             copy_dependency(dependency)
@@ -231,7 +241,6 @@ def worker_context(ctx, order):
     target_fs._save_manifest()
     local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
         writer_llm=ctx.writer_llm, stream_manager=ctx.events.stream_manager,
-        max_solver_steps=ctx.max_solver_steps,
         template_requirements=ctx.template_requirements, skill_policy=ctx.skill_policy,
         experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
         source_workspace=ctx.workspace, sandbox_work_id=str(ctx.workspace),
@@ -243,7 +252,6 @@ def worker_context(ctx, order):
     allowed = scope | ({order.task_id} if parent else set())
     local.registry.results = {ref: result for ref, result in ctx.registry.results.items() if result.subproblem in allowed}
     local.registry.claims = {ref: claim for ref, claim in ctx.registry.claims.items() if claim.subproblem in allowed}
-    local.registry.allocate_id = ctx.research.allocate_ref
     # Published figures use root-workspace paths, while a continued attempt's
     # copied files still use their original attempt paths. Materialize the
     # registered paths too, preserving references and execution provenance.
@@ -264,7 +272,6 @@ def worker_context(ctx, order):
 
 async def execute(branch, runtime):
     from ai_system.modules.experiments.execution import solve
-    from ai_system.modules.experiments.review import report_issues, needs_figure
     from types import SimpleNamespace
 
     ctx = runtime.context
@@ -305,39 +312,23 @@ async def execute(branch, runtime):
             ctx.research.bind_experiences(order,prepared['experience_refs'])
         frozen=ctx.research.snapshot()['executions'][order.attempt_id]['experience_basis']
         branch={**branch,'research_contract':{**branch['research_contract'],
-                'requirements':frozen['requirements'],'checks':frozen['protocol']}}
+                'requirements':frozen['requirements'],'checks':[]}}
         local = worker_context(ctx, order)
         solved = await solve(branch, SimpleNamespace(context=local))
         report,design = solved['report'],solved['design']
         if task.get('experiment') and design.get('experiment')!=task['experiment']:
             raise ResearchConflict('执行报告中的候选方法或评价条件与冻结任务不符')
-        checks = [] if report["status"] in {"prepared","comparison_blocked"} or branch["subproblem"].get("kind") == "verify" else report_issues(
-            local, report, key, branch["subproblem"].get("depends_on") or [],
-            figure_required=needs_figure(branch["subproblem"]))
-        if report["status"] not in {"completed", "prepared", "comparison_blocked"}:
-            checks.append(report.get("error") or "求解未完成")
-        results = [asdict(r) for r in local.registry.for_subproblem(key)]
-        reviews = report.get("reviews", [])
-        evidence = {item["id"]: item for review in reviews for item in review["evidence"]}
-        evidence.update({item["id"]: item for item in results})
-        for item in evidence.values():
-            if item["path"] and item["id"] not in ctx.research.snapshot()["artifacts"]:
-                from ai_system.sandbox.artifacts import publish_reference
-                publish_reference(local.fs, ctx.fs, item)
-        for review in reviews:
-            review["evidence"] = [evidence[item["id"]] for item in review["evidence"]]
-        # Immutable run IDs preserve existing grounding and evidence links.
+        # Execution status describes completion, never scientific correctness.
+        # Code, stdout/stderr and output files are archived independently of prose.
         await publish_outputs()
+        report['files'] = list(captured_paths or [])
         result = WorkerResult(order=order,
-            execution_status="succeeded" if report["status"] in {"completed", "prepared"} else "failed",
-            acceptance="inconclusive" if report['status']=='comparison_blocked' else "rejected" if checks else "accepted", report=report,
-            design=design,
-            results=results, claims=[asdict(c) for c in local.registry.claims.values() if c.subproblem == key], issues=[IssueReport(task_id=key, category="evidence", message=message, evidence_refs=[r["id"] for r in results]) for message in checks]
-                + [IssueReport.model_validate(i) for i in report.get("research_issues", [])],
-            reviews=report.get("reviews", []),
-            assumptions=[{**a, "source": source} for source, drafts in (
-                ("design", design['chosen'].get("assumptions", [])),
-                ("solve", report.get("assumptions", []))) for a in drafts])
+            execution_status="succeeded" if report["status"] == "completed" else "failed",
+            acceptance="accepted" if report["status"] == "completed" else "inconclusive",
+            report=report, design=design,
+            issues=([IssueReport(task_id=key, category="execution", message=report.get("error") or "本轮执行未完成")]
+                    if report["status"] != "completed" else [])
+                + [IssueReport.model_validate(i) for i in report.get("research_issues", [])])
         receipt = ctx.research.commit(result)
         refresh_registry(ctx)
         snapshot = ctx.research.snapshot()
@@ -346,19 +337,15 @@ async def execute(branch, runtime):
         accepted = (receipt["published"] and committed["execution_id"] == order.attempt_id and committed["acceptance"] == "accepted"
                     and committed["validity"] == "current")
         if accepted:
-            for item in results:
-                if item["path"]:
-                    ctx.fs.register_file(item["path"], kind="image", source_run=item["run_id"], visibility="user")
-                    await ctx.events.file_changed(item["path"])
             code = local.workspace / "code" / f"{key}_solution.py"
             if code.exists():
                 ctx.fs.write_text(f"code/{key}_solution.py", code.read_text(encoding="utf-8"))
         clear = accepted and not any(i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
                                      for i in research_findings(snapshot))
         if clear:
-            await ctx.events.emit("paper_solved", f"{key} 已完成检查，结果与代码已保存")
+            await ctx.events.emit("paper_solved", f"{key} 执行结束，结果文件与代码已保存")
         else:
-            await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '仍需验收或修复，请查看研究问题'}")
+            await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '本轮未完成，请查看执行记录'}")
         return {"log": [f"commit {key}: {receipt}"], '_execution_outcome': {
             'status': 'completed' if result.execution_status == 'succeeded' else 'failed',
             'message': report.get('error')}}

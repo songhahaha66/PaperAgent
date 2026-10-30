@@ -73,20 +73,19 @@ def test_dispatch_uses_committed_original_source_for_initial_and_recovered_worke
     ('售价15元',15,True),
     ('备餐量非负',0,True),
 ])
-def test_requirement_thresholds_cannot_be_invented_or_borrowed_from_other_source_numbers(quote,expected,valid):
+def test_imported_metric_metadata_does_not_create_an_execution_gate(quote,expected,valid):
     from ai_system.research.validation import validate_spec
     from ai_system.research.models import Requirement
     plan=_analysis().model_dump()
     plan['requirements'][0]=Requirement(id='R1',kind='constraint',statement='numeric check',source_quote=quote,task_ids=['Q1'],
         checks=[DomainCheck(id='bound',description='fixed bound',left={'task_id':'Q1','name':'metric'},operator='le',expected=expected)]).model_dump()
     source=TASK+' 原题另有 20 个观测。'+quote
-    if valid:validate_spec(source,plan)
-    else:
-        with pytest.raises(ValueError,match='数值依据'):validate_spec(source,plan)
+    requirements,_=validate_spec(source,plan)
+    assert requirements[0].source_quote==quote
 
 
 @pytest.mark.parametrize('raw_tool',[True,False])
-def test_truncated_reply_retains_reason_without_replaying_partial_json_and_requests_complete_reply(monkeypatch,raw_tool):
+def test_truncated_reply_stops_without_replaying_partial_json_or_retrying_same_limit(monkeypatch,raw_tool):
     partial='{"title":"unfinished","requirements":[{"id":"R1"}]'
     class Model:
         calls=0
@@ -104,5 +103,7 @@ def test_truncated_reply_retains_reason_without_replaying_partial_json_and_reque
             assert '被截断' in messages[-1].content and '缩短' in messages[-1].content
             return AIMessage(content=_analysis().model_dump_json())
     model=Model()
-    assert asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[]))==_analysis()
-    assert model.calls==(2 if raw_tool else 3)
+    from ai_system.config.generation import ModelGenerationLimit
+    with pytest.raises(ModelGenerationLimit,match='截断'):
+        asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[]))
+    assert model.calls==(1 if raw_tool else 2)

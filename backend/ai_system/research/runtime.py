@@ -4,6 +4,7 @@ import json
 import time
 import asyncio
 import logging
+import math
 from contextlib import closing,contextmanager
 from contextvars import ContextVar
 from .store import ResearchStore
@@ -15,10 +16,11 @@ BUDGET_ID='workspace-model-budget'
 class ResearchBudgetExhausted(RuntimeError):pass
 class RepeatedOperationBlocked(RuntimeError):pass
 class ModelServiceError(RuntimeError):pass
+class BudgetUnavailable(ResearchBudgetExhausted):pass
 
 ACTIVE_MODEL_REQUEST=ContextVar('paperagent_model_request',default=None)
 CURRENT_EXECUTION=ContextVar('paperagent_execution',default={})
-LINK_FIELDS=('action_id','observation_id','question_id','experiment_id','parent_call_id','step','purpose','subject')
+LINK_FIELDS=('action_id','observation_id','question_id','experiment_id','parent_call_id','step','purpose','subject','context_usage')
 
 
 def execution_links():
@@ -94,16 +96,29 @@ class ResearchRuntime:
     def configure(self,settings):
         limit=settings.get('request_limit')
         if limit is not None and (type(limit) is not int or limit<0):raise ValueError('内部请求上限必须为非负整数')
-        policy={'policy_version':2,'preference_source':'explicit','request_limit':limit,'timeout_seconds':settings.get('timeout_seconds'),
+        for key in ('output_token_limit','total_token_limit','cost_limit_usd'):
+            value=settings.get(key)
+            if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<=0):
+                raise ValueError('资源额度必须为正数：'+key)
+            if value is not None and key.endswith('token_limit') and type(value) is not int:raise ValueError('token额度必须为整数')
+        policy={'policy_version':3,'preference_source':'explicit','request_limit':limit,'timeout_seconds':settings.get('timeout_seconds'),
                 'limit_source':'explicit' if limit is not None else 'default',
                 'timeout_source':'explicit' if settings.get('timeout_seconds') is not None else 'model_connection',
-                'compact_paper':settings.get('compact_paper', False)}
-        with self.store._transaction() as db:db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
+                'compact_paper':settings.get('compact_paper', False),
+                **{k:settings.get(k) for k in ('output_token_limit','total_token_limit','cost_limit_usd')}}
+        with self.store._transaction() as db:
+            # Old unmeasured requests have no upper-bound reservation to reuse.
+            rows=[json.loads(r[0]) for r in db.execute('SELECT payload FROM model_requests')]
+            if any(policy.get(k) is not None for k in ('output_token_limit','total_token_limit')) and any(not r.get('usage_returned') and not r.get('reservation') for r in rows):
+                raise BudgetUnavailable('历史请求用量未知且没有预留记录，不能宣称已覆盖其token消耗')
+            if policy.get('cost_limit_usd') is not None and any(r.get('cost_usd') is None and (r.get('reservation') or {}).get('cost_usd') is None for r in rows):
+                raise BudgetUnavailable('历史请求费用未知，不能启用覆盖整个项目的费用上限')
+            db.execute('INSERT OR REPLACE INTO runtime_policy VALUES (1,?)',(json.dumps(policy),))
 
     def status(self,research_id=None):
         policy=self.policy()
         with closing(self.store._connect()) as db:r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
-        state={**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready','metering_version':2})}
+        state={**(json.loads(r[0]) if r else {'used':0,'state':'ready','metering_version':3}),**policy}
         state.setdefault('input_tokens',0);state.setdefault('output_tokens',0);state.setdefault('usage_reported_calls',0)
         state['stop_reason']=self.stop_reason()
         return state
@@ -112,28 +127,52 @@ class ResearchRuntime:
         state=self.status();limit=state.get('request_limit')
         return None if limit is None else max(0,limit-state['used'])
 
-    def reserve(self,host):
-        try:return self._reserve(host)
-        except ResearchBudgetExhausted:
+    def reserve(self,host,**reservation):
+        try:return self._reserve(host,**reservation)
+        except ResearchBudgetExhausted as exc:
+            self.note_stop('resource_limit',str(exc))
             state=self.status()
-            self.note_stop('legacy_limit' if state.get('limit_source')=='legacy' else 'explicit_limit',f"已达到请求上限（{state['used']}/{state['request_limit']}），计数和已完成结果保留")
+            if state.get('request_limit') is not None and state['used']>=state['request_limit']:
+                self.note_stop('legacy_limit' if state.get('limit_source')=='legacy' else 'explicit_limit',f"已达到请求上限（{state['used']}/{state['request_limit']}），计数和已完成结果保留")
             raise
 
-    def _reserve(self,host):
+    def _reserve(self,host,*,input_tokens=0,output_tokens=0,prices=None):
         from ..graph.tracing import CURRENT_LABEL
         policy=self.policy()
         with self.store._transaction() as db:
             r=db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()
-            state={**policy,**(json.loads(r[0]) if r else {'used':0,'state':'ready','metering_version':2})}
+            state={**(json.loads(r[0]) if r else {'used':0,'state':'ready','metering_version':3}),**policy}
             limit=state.get('request_limit')
             if limit is not None and state['used']>=limit:
                 reason={'kind':'explicit_limit' if state.get('limit_source')!='legacy' else 'legacy_limit',
                         'message':f"已达到请求上限（{state['used']}/{limit}），计数和已完成结果保留"}
                 self._stop(db,reason)
                 raise ResearchBudgetExhausted(reason['message'])
+            wanted=max(0,int(output_tokens));input_tokens=max(0,int(input_tokens));allowed=wanted
+            if policy.get('output_token_limit') is not None:
+                allowed=min(allowed,max(0,int(policy['output_token_limit']-state.get('output_tokens',0)-state.get('reserved_output_tokens',0))))
+            if policy.get('total_token_limit') is not None:
+                allowed=min(allowed,max(0,int(policy['total_token_limit']-state.get('input_tokens',0)-state.get('output_tokens',0)-state.get('reserved_input_tokens',0)-state.get('reserved_output_tokens',0)-input_tokens)))
+            if wanted and allowed<=0:raise ResearchBudgetExhausted('项目token额度耗尽，已有成果保留')
+            exposure=None
+            if prices:
+                exposure=(input_tokens*max(prices['input_per_million'],prices.get('cached_input_per_million') or 0)+allowed*prices['output_per_million'])/1000000
+            if policy.get('cost_limit_usd') is not None:
+                if exposure is None:raise BudgetUnavailable('费用额度需要已确认的连接价格；当前价格未知，未发起请求')
+                available=policy['cost_limit_usd']-state.get('cost_usd',0)-state.get('reserved_cost_usd',0)
+                input_cost=input_tokens*max(prices['input_per_million'],prices.get('cached_input_per_million') or 0)/1000000
+                if available<input_cost:raise ResearchBudgetExhausted('项目费用可用额度不足以覆盖输入，已有成果保留')
+                if prices['output_per_million']:
+                    allowed=min(allowed,max(0,int((available-input_cost)*1000000/prices['output_per_million'])))
+                if wanted and allowed<=0:raise ResearchBudgetExhausted('项目费用额度耗尽，已有成果保留')
+                exposure=input_cost+allowed*prices['output_per_million']/1000000
+            state['reserved_input_tokens']=state.get('reserved_input_tokens',0)+input_tokens
+            state['reserved_output_tokens']=state.get('reserved_output_tokens',0)+allowed
+            state['reserved_cost_usd']=state.get('reserved_cost_usd',0)+(exposure or 0)
             state['used']+=1;state['state']='budget_exhausted' if limit is not None and state['used']>=limit else 'active'
             seq=state['used'];row={'sequence':seq,'sent_at':time.time(),'host':host,'label':CURRENT_LABEL.get(),'research_id':self.active_research_id,'state':'sent',
-                                  **execution_links()}
+                                  **execution_links(),'reservation':{'input_tokens':input_tokens,'output_tokens':allowed,'cost_usd':exposure},
+                                  'generation_limit':allowed or None,'prices':prices}
             db.execute('INSERT OR REPLACE INTO request_budgets VALUES (?,?)',(BUDGET_ID,json.dumps(state)))
             db.execute('INSERT INTO model_requests VALUES (?,?,?)',(BUDGET_ID,seq,json.dumps(row)))
         notify_runtime()
@@ -150,6 +189,8 @@ class ResearchRuntime:
     def usage(self,sequence,usage=None,*,state="completed",diagnostic=None):
         usage=usage or {};known=bool(usage)
         values={key:max(0,int(usage.get(source) or 0)) for key,source in [('input_tokens','input_tokens'),('output_tokens','output_tokens')]}
+        reasoning=(usage.get('output_token_details') or {}).get('reasoning')
+        if reasoning is not None:values['reasoning_tokens']=max(0,int(reasoning))
         details = usage.get('input_token_details') or {}
         if details.get('cache_read') is not None:
             values['cache_read_tokens'] = max(0, int(details['cache_read']))
@@ -161,11 +202,50 @@ class ResearchRuntime:
             if diagnostic:item['diagnostic']=diagnostic
             item.update(**values,usage_recorded=True,usage_returned=known,state=state,finished_at=time.time())
             state=json.loads(db.execute('SELECT payload FROM request_budgets WHERE research_id=?',(BUDGET_ID,)).fetchone()[0])
+            reservation=item.get('reservation') or {}
+            cost=usage.get('cost_usd')
+            if cost is not None and (isinstance(cost,bool) or not isinstance(cost,(int,float)) or not math.isfinite(cost) or cost<0):cost=None
+            prices=item.get('prices')
+            if known and cost is None and prices and (prices.get('cached_input_per_million') is None or 'cache_read_tokens' in values):
+                cached=min(values['input_tokens'],values.get('cache_read_tokens',0))
+                cost=((values['input_tokens']-cached)*prices['input_per_million']+cached*(prices.get('cached_input_per_million') if prices.get('cached_input_per_million') is not None else prices['input_per_million'])+values['output_tokens']*prices['output_per_million'])/1000000
+            if known and item['state'] in {'completed','truncated'}:
+                for name in ('input_tokens','output_tokens'):
+                    field='reserved_'+name;state[field]=max(0,state.get(field,0)-reservation.get(name,0))
+            else:
+                # Incomplete/failed streams may report only a lower bound. Keep
+                # the unmeasured remainder reserved rather than treating it as free.
+                for name in ('input_tokens','output_tokens'):
+                    field='reserved_'+name
+                    state[field]=max(0,state.get(field,0)-min(reservation.get(name,0),values[name]))
+                item['usage_unknown']=True
+                state['unmeasured_requests']=state.get('unmeasured_requests',0)+1
+            if cost is not None:
+                item['cost_usd']=float(cost);state['cost_usd']=state.get('cost_usd',0)+float(cost)
+                state['reserved_cost_usd']=max(0,state.get('reserved_cost_usd',0)-((reservation.get('cost_usd') or 0) if item['state'] in {'completed','truncated'} else min(float(cost),reservation.get('cost_usd') or 0)))
+            elif reservation.get('cost_usd') is not None:item['cost_unknown']=True
             for key,value in values.items():state[key]=state.get(key,0)+value
             state['usage_reported_calls']=state.get('usage_reported_calls',0)+int(known)
             db.execute('UPDATE model_requests SET payload=? WHERE research_id=? AND sequence=?',(json.dumps(item),BUDGET_ID,sequence))
             db.execute('UPDATE request_budgets SET payload=? WHERE research_id=?',(json.dumps(state),BUDGET_ID))
         notify_runtime()
+
+    def generation_limit(self,sequence):
+        with closing(self.store._connect()) as db:
+            row=db.execute('SELECT payload FROM model_requests WHERE research_id=? AND sequence=?',(BUDGET_ID,sequence)).fetchone()
+        return json.loads(row[0]).get('generation_limit') if row else None
+
+    def wrap_up(self):
+        state=self.status()
+        resources=[(state.get('used',0),state.get('request_limit')),
+                   (state.get('output_tokens',0)+state.get('reserved_output_tokens',0),state.get('output_token_limit')),
+                   (state.get('input_tokens',0)+state.get('output_tokens',0)+state.get('reserved_input_tokens',0)+state.get('reserved_output_tokens',0),state.get('total_token_limit')),
+                   (state.get('cost_usd',0)+state.get('reserved_cost_usd',0),state.get('cost_limit_usd'))]
+        remaining=state.get('request_limit')
+        near_requests=remaining is not None and remaining-state.get('used',0)<=2
+        if near_requests or any(limit is not None and used>=limit*.8 for used,limit in resources):
+            return '项目资源额度接近上限。优先保存现有代码、结果和正文，说明已完成范围及未完成部分；停止扩大调查或重复复核，完成后直接交付或明确暂停。不要为收尾重跑已完成计算。'
+        return None
 
     def _stop(self,db,reason):
         db.execute('INSERT OR REPLACE INTO runtime_stop VALUES (1,?)',(json.dumps({**reason,'recorded_at':time.time()}),))

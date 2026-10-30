@@ -23,12 +23,11 @@ def task_progress(snapshot, task, ready, work_status=None):
               and (i["action"] != "rewrite")]
     attempts = sum(a["task_id"] == key and a["revision"] == task["revision"] for a in snapshot["executions"].values())
     rework = task["validity"] == "stale" and any(a["task_id"] == key for a in snapshot["executions"].values())
-    exhausted = attempts >= snapshot["max_attempts"] or len(snapshot["executions"]) >= snapshot["max_total_attempts"]
-    if task["acceptance"] == "accepted" and task["validity"] == "current" and not issues:
-        state = "accepted"
-    elif task["execution_status"] == "running":
+    if task["execution_status"] == "running":
         state = "interrupted" if work_status in {"paused", "cancelled", "failed"} else "running"
-    elif exhausted or any(i["status"] == "confirmed" and i["action"] == "recompute" for i in issues):
+    elif task["acceptance"] == "accepted" and task["validity"] == "current" and not issues:
+        state = "accepted"
+    elif any(i["status"] == "confirmed" and i["action"] == "recompute" for i in issues):
         state = "needs_plan"
     elif task["execution_status"] in {"failed", "cancelled"}:
         state = "failed"
@@ -44,4 +43,4 @@ def task_progress(snapshot, task, ready, work_status=None):
         state = "pending"
     return {"state": state, "waiting_for": waiting, "issue_ids": [i["id"] for i in issues],
             "next_step": ' '.join(dict.fromkeys(issue_next_step(i,snapshot) for i in issues)),
-            "executions": attempts, "attempt_limit": snapshot["max_attempts"], "rework": rework}
+            "executions": attempts, "attempt_limit": None, "rework": rework}

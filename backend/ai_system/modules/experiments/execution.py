@@ -1,105 +1,26 @@
-"""
-阶段 4：求解（每个子问题一个分支，按依赖关系分批并行）
+"""Continuous Python execution, saved files and a plain research report.
 
-每个分支是一个小的 CodeAct 循环：模型写代码 → 持久内核执行 → 看输出 → 继续，
-emit_result 和图片输出由宿主自动绑定运行来源；兼容已有 record_results / record_figure。
-最后用结构化输出交一份求解报告，登记引用须有真实执行来源。
-
-候选意图由研究控制器按任务版本冻结；普通实验直接执行，CSV比较是显式执行方式。
+The host records code, output and artifacts. The model never registers evidence
+or satisfies a second result-inventory contract before returning its findings.
 """
 
-from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
-from ai_system.research.domain import findings as research_findings
 
 import ast
 import json
 import logging
 import re
-from dataclasses import asdict
-from typing import Any, Callable, Dict, List, NamedTuple, Optional
-from pydantic import create_model, model_validator
+from typing import Callable, Dict, List, Optional
 
-from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, messages_to_dict
+from langchain_core.messages import messages_to_dict
 from langchain_core.tools import StructuredTool, ToolException
-from langgraph.errors import GraphRecursionError
-from langgraph.runtime import Runtime
 
-from ai_system.graph.compaction import (
-    CompactHistoryMiddleware,
-    DropRefusedStepsMiddleware,
-    HistoryRecorder,
-    ReportOrderingMiddleware,
-    StepBudgetMiddleware,
-    TruncationGuardMiddleware,
-    compact_messages,
-    drop_invalid_calls,
-)
-from ai_system.graph.context import GraphContext, list_data_files
-from ai_system.graph.llm_utils import call_structured, clip
-from ai_system.modules.methods import describe, skill_policy_prompt, allowed_method_keys, SKILL_SOURCES, SKILL_VERSION
-from ai_system.graph.registry import GroundingError
-from ai_system.graph.state import BranchInput, Finding, ResultItem, SolveReport
-from ai_system.graph.tracing import labelled, set_label
-from ai_system.research.assumptions import unbound_assumptions
-from ai_system.research.models import IssueReport
-from ai_system.modules.experiments.review import (
-    needs_figure,
-    report_issues,
-    report_submission_issues,
-    submission_inventory_issues,
-)
+from ai_system.graph.context import GraphContext
+from ai_system.graph.llm_utils import clip
+
 
 logger = logging.getLogger(__name__)
 
-SYSTEM = """你是数学建模竞赛的编程手，负责把一个子问题的建模方案用 Python 实现并求出结果。
-
-工作方式：
-- 有冻结候选实验时，只执行所记录的方法和参数，SolveReport.approach说明实际执行的方法，候选身份由系统记录。无法实现时如实提交失败与原因，不自行改用其他算法或改变评价条件；交回observe，在原问题下记录新实验后再试。
-- 用 run_python 执行代码。内核是持久的：前面定义的变量、读入的数据后面都能直接用，不要每次重新读数据。
-- 每次写一段完整的代码（读数据、计算、打印关键结果可以放在一起），看到输出再决定下一步；出错就读回溯修正。
-- run_python 做读取、计算、绘图和 emit_result 结构化输出。record_results、record_figure、SolveReport 是外部工具，不能在 Python 代码里当函数调用；登记与报告分别通过工具提交，不在计算代码中编写整篇报告。
-- 原要求中的完整研究报告与PDF由后续正式写作、引用解析和编译生成，本实验交付计算结果、数据和图表后提交SolveReport即可。{{R:Rn}}只用于系统会解析的报告字段，不能原样写进CSV、图片或自行制作的PDF；这些文件应使用同次计算的实际值。
-- 只 print 需要看的汇总结果，不要打印整张表或长数组（输出超过约 6000 字会被截断）。
-- 数据文件路径相对于工作目录，例如 data/xxx.csv。
-- 画图用 matplotlib，画完不需要 savefig，系统会自动保存本次执行打开的图并告诉你文件名。
-- 需要传给后续子问题的中间数据，保存到 outputs/intermediate/ 下（csv），并在报告里说明文件名。
-- 默认使用题目给出的全部相关数据（例如全部比赛、全部年份），只用子集时要在报告里说明理由。
-- 建模要防止数据泄漏：特征只能用预测时刻之前的信息；报告验证集指标时同时给出基准率或对照基线。
-- 按原题与冻结契约完成样本外评估和所需方法比较。普通预测不因报告MAE/RMSE就额外强制标签置换；时序数据不应硬套独立同分布的标签置换。
-  只有确需检验额外预测增益或契约明确要求时才做适用的对照。主动提交controls时必须真实重算、登记数值与run_id；未做就留空，不能编造。
-  是否优于基线、各误差指标排序是否一致，应如实报告；效果不足是研究结果，不得为通过验收伪造更好的值。
-- 图中的标题、坐标轴、图例一律用中文，图例不要遮挡标题和数据。
-- 内核已自动配置本机可用的中文字体，不要用未安装的SimHei等字体覆盖配置。
-
-计算输出与来源：
-- 代码里可直接调用 emit_result("名称", 实际计算的值, unit="单位", description="口径") 输出论文关键指标。该Python函数不返回引用；执行完成后，run_python工具响应才给出系统登记的真实R编号。不能把函数返回值或指标名称拼成引用。支持标量和数值列表，不需要再调用 record_results。
-- CSV/图片等文件自动保存和交付，图片自动生成引用；需要调整图题时才调用 record_figure。不要为报告重复计算。
-- 普通 print 是过程日志，不会按相同数字猜指标。已有普通输出需要明确引用时，可用 record_results 兼容登记。
-- 把一批结果放进一次 record_results 调用里登记，不要一个结果调用一次。
-- 执行、登记完成并拿到工具返回的真实编号之后，单独调用 SolveReport；不能与计算或登记工具同时调用报告。
-- 登记的值要和输出一致（可以四舍五入到合理的位数，百分数写成 87.3%）。没出现在输出里的值会被拒绝。
-- 同一变量的拟合值、预测值等完整数值序列可登记为JSON数组字符串（先print完整数组，推荐json.dumps）；顺序和长度必须与输出一致，不能省略或拼接不同指标。数值比较只接受标量，长度、最小值等单独计算登记。
-- 论文使用系统返回的图引用；record_figure 只用于补充图题，已有图不重复生成。
-- 按本子问题要求完成验证并登记结果；数据整理只需核对数据完整性和计算。不要提前完成下游预测，或额外加入题目和本问未要求的假设检验、预测实验。
-
-完成后提交求解报告：概要、实际方法、主要结论、灵敏度分析和局限。报告里的数字一律写成登记返回的引用（如 {{R:R3}}），不要直接写数字。
-RQ0是完整原题，本次只执行subproblem指定的实验，不宣称全题已经完成。
-SolveReport.assumptions不是论文假设汇总，没有新增时必须留空[]。只提交求解中新发现、实际改变方法或结论的关键前提。
-原题给定的观测值等事实、已计算验证的数据长度/完整性、契约中已有的前提都直接使用，不再次声明。
-不要通过换key、改写或合并已有前提制造“新假设”；已有A:任务:key的key就是该任务稳定键，通常无需再次填入。
-确有新增时填入assumptions，使用稳定key、statement和可证伪checks；已有契约前提不能静默改写。
-新前提会先登记版本再按冻结契约重算；它不是原题事实，也不因代码跑通而被验证。
-每条主要结论都要写出依据的登记结果，并如实标注证据强度：检验不显著的就标「不显著」，不要把不显著的结果写成有效应。
-发现有意义结果或实质阻碍后提交报告，交回研究层判断。
-读取已有文件、修正解释不重算正确结果。派生数据须保留来源文件版本、原始行标识及一对多关系；说明统计对象、范围、单位、分母、过滤和去重口径。stdout出现某个数字只证明执行输出过该值，不证明其语义或解释正确。"""
-
-
 OBSERVATION_CHARS = 6000
-
-FINAL_NUDGE = "步数已经用完，不能再执行代码。请根据上面已经得到的输出和登记的结果，现在提交报告；报告里的数字只能写登记返回的引用。"
-REPORT_NUDGE = "求解已结束的话，请现在调用 SolveReport 提交求解报告（数字一律写成登记返回的引用）；还缺关键结果就先补齐再提交。"
 
 
 # 网关的工具调用解析偶尔把模型的对话模板标记（DeepSeek 的 <｜DSML｜…>、</think>）连同后面的文字
@@ -110,7 +31,7 @@ TEMPLATE_TOKEN = re.compile(r"</?｜|｜DSML｜|</think>|<think>")
 # 前面带几行 import 的也算（v3 的 2022_C Q3："import pandas as pd, numpy as np\nprint('q3')" 执行了十几次）
 PLACEHOLDER_REPLY = (
     "这段代码只包含占位语句或固定字符串，没有执行。不需要用 run_python 占位或确认："
-    "登记结果直接调用 record_results（run_id 填之前打印该值的那次执行），全部完成后直接提交 SolveReport。"
+    "已有结果直接用于回答，无需再次执行或登记。"
 )
 
 
@@ -146,10 +67,10 @@ def solution_code_path(subproblem_id: str) -> str:
 
 
 def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Dict]) -> None:
-    """把本问成功执行过的代码按顺序存成一个文件，供依赖它的子问题复用
+    """Export actual executed statements in order, retaining useful failed-cell prefixes.
 
-    每个子问题有自己的内核，后一问看不到前一问的函数和变量。2022_C 的 Q3 要"运行 Q2 选定的策略"，
-    只拿到 Q2 的结论和数值，只好从读数据开始重写回测，日期解析又踩了一遍坑，171 条对话后交了空报告。
+    The main research session shares one kernel. Saved code also lets a resumed
+    session reuse functions without assuming that earlier memory survived.
     """
     runs = []
     for run in run_log:
@@ -164,7 +85,7 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
             if not info or not info.get("stdout"):
                 continue
             trace = ctx.fs.read_text(info["stdout"]).rsplit("Traceback (most recent call last):\n", 1)[-1]
-            frame = re.search(r'File "<cell>", line (\d+), in <module>', trace)
+            frame = re.search(r'(?:File "<cell>", line |Cell In\[\d+\], line )(\d+)', trace)
             if not frame:
                 continue
             try:
@@ -183,10 +104,6 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
         if (info := ctx.fs.get_run_info(run['run_id']) or {}).get('runtime_image')})
     if images:
         header += '# 原执行环境镜像：' + '、'.join(images) + '\n# 在对应依赖环境中运行；不同库版本可能存在 API 差异。\n\n'
-    if any('emit_result(' in r['code'] for r in runs):
-        from inspect import getsource
-        from ai_system.sandbox.runtime_helpers import emit_result
-        header += 'import json\nfrom pathlib import Path\nPath("outputs/intermediate").mkdir(parents=True, exist_ok=True)\n\n' + getsource(emit_result) + '\n'
     if 'matplotlib' in body:
         from inspect import getsource
         from ai_system.sandbox.runtime_helpers import choose_font
@@ -199,33 +116,50 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
         logger.warning("保存 %s 的代码失败: %s", subproblem_id, exc)
 
 
-def _intermediate_files(ctx: GraphContext) -> List[str]:
-    folder = ctx.workspace / "outputs" / "intermediate"
-    if not folder.exists():
-        return []
-    return sorted(str(p.relative_to(ctx.workspace)) for p in folder.rglob("*") if p.is_file())
+async def publish_outputs(ctx, run_ids):
+    """Publish and index the same saved run for initial delivery and recovery."""
+    from ai_system.sandbox.artifacts import capture_run_files
+    paths=capture_run_files(ctx.fs,ctx.delivery_fs or ctx.fs,run_ids=run_ids)
+    store=ctx.experience_store or ctx.research
+    if store and any(set(run_ids).intersection(a.get('run_ids', [])) for a in store.snapshot()['executions'].values()):
+        store.sync_execution_files(run_ids)
+    for rid in run_ids:
+        info=ctx.fs.get_run_info(rid) or {}
+        if info.pop('publication_error', None):ctx.fs._save_manifest()
+    for path in paths:
+        await (ctx.delivery_events or ctx.events).file_changed(path)
+    return paths
 
 
-def _dependency_text(dependencies: Dict[str, Dict], ctx: GraphContext) -> str:
-    if not dependencies:
-        return ""
-    parts = [
-        "# 前序子问题的结论（可直接使用其登记结果、中间数据和代码）\n"
-        "结果值、对象/范围、实验条件、来源与版本须一并沿用。范围不同可并存，缺少语义不能凭名字或同值判为相同口径；先核查筛选与行关系，再比较。前序子问题在各自的内核里运行，它们的变量和函数在你的内核里不存在。需要沿用前序的数据处理或模型时，"
-        "先读它的代码文件、复制需要的部分，或读取它保存的中间数据，不要从头重写。"
-    ]
-    from ai_system.research.views import experiment_context
-    store=getattr(ctx,'research',None)
-    records={e['task_id']:e for e in experiment_context(store.snapshot(),set(dependencies))} if store else {}
-    for dep_id, report in dependencies.items():
-        parts.append(json.dumps(records[dep_id],ensure_ascii=False) if dep_id in records else f"## {dep_id}\n{report.get('summary', '')}")
-        if ctx.fs.exists(solution_code_path(dep_id)):
-            parts.append(f"代码：{solution_code_path(dep_id)}")
-        if dep_id not in records:parts.append(ctx.registry.to_prompt_table(dep_id))
-    files = _intermediate_files(ctx)
-    if files:
-        parts.append("中间数据文件：\n" + "\n".join(f"- {f}" for f in files))
-    return "\n\n".join(parts)
+async def recover_outputs(ctx):
+    """Finish outstanding root-session delivery before research or writing resumes."""
+    snapshot=ctx.research.snapshot()
+    owned={rid for attempt in snapshot['executions'].values() if attempt.get('workspace')=='.'
+           for rid in attempt.get('run_ids',[])}
+    legacy = set(owned)
+    from ai_system.research.runs import direct_runs
+    owned.update(direct_runs(ctx.research, ctx.fs))
+    if not owned:return
+    inventory=ctx.fs._manifest.get('runs',{})
+    pending={rid for rid in owned if (inventory.get(rid) or {}).get('delivery_error')}
+    if pending:
+        from ai_system.research.views import activity
+        with activity(ctx,'retry_outputs'):
+            kernel=ctx.kernels.get('research')
+            for _ in pending:
+                run_id=await kernel.retry_outputs()
+                if run_id:
+                    await publish_outputs(ctx,[run_id])
+                    owned.discard(run_id)
+    indexed={a['payload'].get('path') for a in snapshot['artifacts'].values()}
+    missing=[]
+    for rid in owned:
+        info=inventory.get(rid) or {}
+        if not info.get('evidence_archived') or info.get('status')!='success':continue
+        paths=['outputs/research/'+rid+'/'+path.split('/artifacts/',1)[1] for path in info.get('artifacts',[])]
+        if (any(not ctx.fs.get_file_meta(path) or not ctx.fs.exists(path) for path in paths)
+                or (rid in legacy and any(path not in indexed for path in info.get('artifacts',[])))):missing.append(rid)
+    if missing:await publish_outputs(ctx,missing)
 
 
 def build_tools(
@@ -233,19 +167,11 @@ def build_tools(
     subproblem_id: str,
     run_log: Optional[List[Dict]] = None,
     kernel_key: Optional[str] = None,
-    record: bool = True,
-    submission_gaps: Optional[Callable[[], List[str]]] = None,
+    on_run: Optional[Callable[[str], None]] = None,
 ) -> List[StructuredTool]:
-    """record=False 时只给 run_python（探索阶段不登记结果）"""
+    """Execution and file tools; no evidence-registration side channel."""
     kernel = ctx.kernels.get(kernel_key or subproblem_id)
     run_log = run_log if run_log is not None else []
-
-    def submission_feedback(text):
-        if submission_gaps is None:
-            return text
-        gaps = submission_gaps()
-        return text + ("\n[提交检查] 尚缺：\n" + "\n".join(f"- {gap}" for gap in gaps)
-                       if gaps else "\n[提交检查] 必需登记指标已齐。请单独提交 SolveReport，requirement_evidence 使用已返回的原始编号。")
 
     async def read_file(path: str, start: int = 0, limit: int = 12000) -> str:
         """读取工作区已有文本文件，不重跑计算；使用start/limit分段读取。"""
@@ -277,15 +203,9 @@ def build_tools(
         title: 给用户看的简短操作名称，如“计算线性趋势预测”或“保存预测结果表”。说明代码实际用途，不含内部编号。可省略。
         """
         code = strip_template_tokens(code)
-        if ctx.comparison_proof:
-            try:
-                if any(isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute) and node.func.attr in {'fit','fit_transform','partial_fit','set_params'} for node in ast.walk(ast.parse(code))):
-                    return '本任务方案已冻结；禁止重新 fit/调参。请复用 comparison_estimator、_formal_truth、_formal_pred 和已登记的 comparison 指标。'
-            except SyntaxError:pass
         if is_placeholder(code):
             return PLACEHOLDER_REPLY
         from ai_system.research.views import activity
-        from ai_system.sandbox.artifacts import capture_run_files, collect_references
         publication_note = ''
         with activity(ctx,'run_python',subproblem_id,inputs={'code':code},display_label=' '.join(title.split())[:60]) as operation:
             import time
@@ -294,6 +214,7 @@ def build_tools(
             async def progress(event):
                 nonlocal last_push
                 operation['run_id'] = event['run_id']
+                if on_run:on_run(event['run_id'])
                 output = operation.setdefault('output', {})
                 if event['type'] == 'output':
                     output['output_tail'] = (output.get('output_tail', '') + event['text'])[-6000:]
@@ -301,39 +222,51 @@ def build_tools(
                 if event['type'] != 'output' or now - last_push >= 1:
                     activity_progress(ctx, operation)
                     last_push = now
+            # A pending transfer is retried before accepting another computation.
+            if getattr(kernel,'pending_run',None):
+                recovered=await kernel.retry_outputs()
+                if recovered:await publish_outputs(ctx,[recovered])
             result = await kernel.execute(code, on_event=progress)
+            if on_run:on_run(result.run_id)
+            if result.delivery_error and hasattr(kernel,'retry_outputs'):
+                for _ in range(2):
+                    try:
+                        await kernel.retry_outputs()
+                        result.delivery_error=None
+                        info=ctx.fs.get_run_info(result.run_id) or {}
+                        result.files=info.get('files',result.files)
+                        break
+                    except (OSError,ValueError,RuntimeError,TimeoutError):
+                        pass
+
             # Publish the run before its terminal timeline event resolves file links.
-            if getattr(ctx, 'delivery_fs', None) is not None:
-                try:
-                    for path in capture_run_files(ctx.fs, ctx.delivery_fs, run_ids=[result.run_id]):
-                        await ctx.delivery_events.file_changed(path)
-                except (OSError, ValueError) as exc:
-                    publication_note = f'文件交付未完成：{exc}。计算结果已保留，不要重算，提交时会再次同步。'
-            operation.update(run_id=result.run_id,status='completed' if result.ok else 'failed',
+            try:
+                await publish_outputs(ctx,[result.run_id])
+            except (OSError, ValueError) as exc:
+                publication_note = f'文件交付未完成：{exc}。计算结果已保留，不要重算，系统将重试同步。'
+                ctx.fs.get_run_info(result.run_id)['publication_error'] = publication_note
+                ctx.fs._save_manifest()
+            status='interrupted' if result.delivery_error or publication_note or result.failure_kind=='transport_unknown' else 'completed' if result.ok else 'failed'
+            operation.update(run_id=result.run_id,status=status,
                 output={**operation.get('output', {}),'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
             if not result.ok:
                 operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
                                  message='执行超时，内核已重启。' if result.timed_out else result.error)
-        automatic_refs = collect_references(ctx, subproblem_id, result) if record else []
-        run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok})
+        run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok,
+                        "delivery_error":result.delivery_error or publication_note})
         await ctx.events.emit(
             "paper_code",
             f"{subproblem_id} · {result.run_id} · {'成功' if result.ok else '失败'}",
         )
         observation = clip(result.to_observation(), OBSERVATION_CHARS)
-        for ref in automatic_refs:
-            observation += ('\n输出声明无效：' + ref if isinstance(ref, str) else
-                f'\n{ref.name} = {ref.display()}；引用 {{{{{ref.id[0]}:{ref.id}}}}}')
         if publication_note: observation += '\n' + publication_note
         if result.failure_kind == 'transport_unknown':
             return observation + '\n连接中断，执行是否完成无法确认。保留已收到输出，提交阻碍交回研究层；不要自动重放相同代码。'
         if result.failure_kind == 'delivery':
             return observation
         if not result.ok:
-            return observation + "\n[执行失败] 本次run不能作为登记来源。请先修复错误并成功执行，再使用实际返回的run_id登记。"
-        if submission_gaps is not None:
-            observation += "\n已有执行输出请直接按契约原名登记；不要为登记重复执行相同计算。"
-        return submission_feedback(observation)
+            return observation + "\n[执行失败] 代码未成功完成。请阅读回溯并修复，或在报告中说明未完成部分。"
+        return observation
 
     async def retry_outputs() -> str:
         """仅重试上次计算的文件同步，不重新执行代码。"""
@@ -342,55 +275,8 @@ def build_tools(
         run_id = await kernel.retry_outputs()
         if not run_id:
             return '没有待同步文件，直接使用已有输出。'
-        from ai_system.sandbox.artifacts import capture_run_files, collect_references
-        from ai_system.sandbox.kernel import CellResult
-        info = ctx.fs.get_run_info(run_id)
-        files = info.get('artifacts', [])
-        refs = collect_references(ctx, subproblem_id, CellResult(ok=info['status']=='success', stdout='', error=None,
-            run_id=run_id, files=files, figures=[p for p in files if p.endswith(('.png', '.jpg', '.jpeg'))]))
-        if getattr(ctx, 'delivery_fs', None) is not None:
-            for path in capture_run_files(ctx.fs, ctx.delivery_fs, run_ids=[run_id]):
-                await ctx.delivery_events.file_changed(path)
-        return '文件同步完成：' + str(files) + '\n引用：' + str([r if isinstance(r, str) else r.id for r in refs])
-
-    async def record_results(items: List[ResultItem]) -> str:
-        """一次登记多个论文会用到的结果（同一次或多次执行的结果放在一起登记，减少往返）。
-        每个 value 必须出现在对应 run_id 那次执行的输出里，未通过核对的逐条说明原因，其余照常登记。
-        返回可在报告和论文中使用的引用"""
-        from ai_system.research.views import activity
-        with activity(ctx,'record_results',subproblem_id,inputs={'count':len(items)}) as operation:
-            lines, refs = [], []
-            for item in items:
-                item = item if isinstance(item, ResultItem) else ResultItem.model_validate(item)
-                if ctx.comparison_proof and any(r['name']==item.name for r in ctx.comparison_proof['protected'].values()):
-                    lines.append('- '+item.name+'：这是项目保护的冻结指标，请直接使用已有引用，不重新登记替换。');continue
-                try:
-                    result = ctx.registry.record_value(
-                        subproblem_id, item.name, item.value, item.run_id, item.unit, item.description,
-                        item.meaning.model_dump() if item.meaning else None,
-                    )
-                except GroundingError as exc:
-                    lines.append(f"- {item.name}：登记失败，{exc} 请核对原始执行输出并使用其实际 run_id；不会按相同数值自动改写来源。")
-                    logger.info("%s 登记「%s」被拒：%s", subproblem_id, item.name, exc)
-                    continue
-                refs.append(result.id)
-                lines.append(f"- {result.name} = {result.display()}，引用写作 {{{{R:{result.id}}}}}")
-            operation['output']={'artifact_refs':refs,'rejected':len(items)-len(refs)}
-            return submission_feedback("\n".join(lines) or "没有要登记的结果")
-
-    async def record_figure(run_id: str, figure: str, caption: str) -> str:
-        """登记一张论文要用的图。figure 是执行结果里给出的图片文件名，caption 是图题"""
-        from ai_system.research.views import activity
-        with activity(ctx,'record_figure',subproblem_id) as operation:
-            try:
-                result = ctx.registry.record_figure(subproblem_id, run_id, figure, caption)
-            except (GroundingError, FileNotFoundError, KeyError) as exc:
-                operation.update(status='failed',error_type=type(exc).__name__,message=str(exc))
-                return f"登记失败：{exc}"
-            operation['output']={'artifact_refs':[result.id],'caption':result.name}
-            operation['display_file']=result.path
-            await ctx.events.file_changed(result.path)
-            return submission_feedback(f"已登记，引用写作 {{{{F:{result.id}}}}}（{result.name}）")
+        files=await publish_outputs(ctx,[run_id])
+        return '文件同步完成：' + str(files)
 
     from functools import wraps
     def make_tool(fn):
@@ -402,244 +288,27 @@ def build_tools(
                 raise ToolException(error_detail(exc)) from exc
         return StructuredTool.from_function(coroutine=run,name=fn.__name__,handle_tool_error=True,handle_validation_error=str)
     tools = [make_tool(run_python),make_tool(read_file),make_tool(search_literature),make_tool(retry_outputs)]
-    if record:
-        tools += [
-            make_tool(record_results),
-            make_tool(record_figure),
-        ]
     return tools
 
 
-def build_task(
-    branch: BranchInput,
-    ctx: GraphContext,
-    candidate: Optional[Dict] = None,
-    extra: str = "",
-    ending: str = "开始求解。",
-) -> str:
-    subproblem = branch["subproblem"]
-    chosen = candidate or branch["design"]["chosen"]
-    if not set(chosen.get('method_keys') or []) <= allowed_method_keys(ctx.skill_policy):
-        raise ValueError('已有方案使用了当前禁用的技能，请重新设计')
-    files = "\n".join(f"- {f}" for f in list_data_files(ctx.workspace)) or "（无）"
-    from ai_system.research.experience import prompt_context
-    from ai_system.research.citations import literature_root
-    from ai_system.research.literature import literature_context
-    return "\n\n".join(filter(None, [
-        f"# 原题（含题内数据；不得用模拟数据替代）\n{branch['source']}",
-        f"# 子问题 {subproblem['id']}：{subproblem['title']}\n{subproblem['question']}\n交付物：{'；'.join(subproblem.get('deliverables') or [])}",
-        f"# 数据文件\n{files}\n\n# 数据概览\n{branch['data_profile']}",
-        '# 用户对必要信息的回复（保留来源；不是计算成果，不得借此放宽冻结契约）\n'+json.dumps(branch['clarifications'],ensure_ascii=False) if branch.get('clarifications') else '',
-        f"# 选定的建模方案：{chosen['name']}\n思路：{chosen['idea']}\n数学表述：{chosen['formulation']}\n"
-        f"步骤：\n" + "\n".join(f"{i + 1}. {s}" for i, s in enumerate(chosen["steps"]))
-        + f"\n检验：{chosen['validation']}",
-        literature_context(literature_root(ctx), json.dumps(subproblem, ensure_ascii=False)+'\n'+json.dumps(chosen, ensure_ascii=False)),
-        '# 本次冻结实验（方法、参数、数据范围与评价条件不得静默更换）\n'+json.dumps(branch['experiment'],ensure_ascii=False) if branch.get('experiment') else '',
-        f"# 用户技能配置\n{skill_policy_prompt(ctx.skill_policy)}",
-        f"# 方法参考\n{describe(chosen.get('method_keys') or [], ctx.skill_policy)}",
-        prompt_context(ctx,branch,chosen.get('method_keys') or [],'solve') if chosen.get('method_keys') else '',
-        _dependency_text(branch.get("dependencies") or {}, ctx),
-        "# 研究契约（不得放宽验收；按指定名称登记检查指标，并填写 requirement_evidence）\n" + json.dumps(branch["research_contract"], ensure_ascii=False) if branch.get("research_contract") else "",
-        "# 已有核查疑点（按信息需求核实；错误意见可驳回）\n" + json.dumps(branch["review_findings"], ensure_ascii=False) if branch.get("review_findings") else "",
-        ('# 同一实验继续行动（方法和条件不变）\n'+json.dumps(branch['continuation'],ensure_ascii=False)
-         +'\n此前记录：'+json.dumps(branch.get('previous_report'),ensure_ascii=False)
-         +'\n复用已有结果和中间文件，只处理明确的信息需求，不重放已完成计算。恢复后内核可能是新建的，先读取已保存文件，不假定旧变量一定存在。') if branch.get('continuation') else '',
-        extra,
-        ending,
-    ]))
-
-
-class ReportFallback(NamedTuple):
-    """步数用完时直接要报告：用哪个模型、什么报告格式、什么系统提示，对话从哪份记录取"""
-
-    llm: Any
-    schema: Any
-    system: str
-    recorder: HistoryRecorder
-    preflight: Optional[Callable[[], List[str]]] = None
-
-
-class IncompleteSubmission(ValueError):
-    """No tool budget remains to fill the report's missing evidence."""
-
-
-def submission_schema(ctx: GraphContext, branch: BranchInput, runs: List[Dict]):
-    """Let ToolStrategy return concrete gaps to the same live tool loop."""
-    @model_validator(mode="after")
-    def ready(report):
-        sid = branch["subproblem"]["id"]
-        # A new premise is staged centrally, never accepted as a solved task.
-        if unbound_assumptions(sid, report.assumptions, branch.get("research_contract", {})):
-            return report
-        issues = report_submission_issues(ctx, branch, report.model_dump(), runs)
-        from ai_system.modules.experiments.handoff import proof_issues
-        issues.extend(proof_issues(ctx,report.model_dump()))
-        if issues:
-            available = ctx.registry.to_prompt_table(sid)
-            successful = [r["run_id"] for r in runs if r.get("ok")][-8:]
-            raise ValueError("报告未提交，先补齐以下缺项：\n" + "\n".join(f"- {issue}" for issue in issues)
-                + f"\n本问实际登记结果：\n{available}\n本次成功执行：{successful}"
-                + "\n内核与变量仍在。已有输出就调用 record_results / record_figure；缺指标再调用 run_python。"
-                  "使用工具返回的真实编号补齐 requirement_evidence 和报告，再调用 SolveReport，禁止自造引用。")
-        return report
-
-    return create_model("SolveReport", __base__=SolveReport, __validators__={"submission_ready": ready})
-
-
-async def run_agent(agent, messages: List, recursion_limit: int, nudge: str = REPORT_NUDGE,
-                    fallback: Optional[ReportFallback] = None):
-    """跑一轮循环；模型用文字收尾、没交报告时提醒一次
-
-    步数用完（GraphRecursionError）时，有 fallback 就从记录里取回对话，不给任何执行工具、直接用结构化输出要报告：
-    官方 API 的 deepseek-flash 步子很碎，最后一步只给报告工具它也照样调 run_python，v2l 的 Q3 跑满 40 步后整段作废。
-    """
+async def solve(branch, runtime):
+    """Only an explicit CSV comparison gets an independent execution branch."""
+    from .planning import experiment_design
+    plan=branch.get('experiment') or {}
+    design=experiment_design(plan) if plan else branch.get('design') or {}
+    if not plan.get('csv'):
+        return {'report':{'status':'failed','summary':'普通计算由主研究Agent直接执行，已有运行与文件可复用。',
+                          'error':'请在主循环使用 research_run_python'},'design':design}
+    from .supervised import compare
+    from .handoff import publish_comparison
+    ctx=runtime.context
+    branch={**branch,'design':design}
     try:
-        result = await agent.ainvoke({"messages": messages}, config={"recursion_limit": recursion_limit})
-        if result.get("structured_response") is None:
-            history = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in result["messages"]]
-            result = await agent.ainvoke(
-                {"messages": history + [HumanMessage(content=nudge)]},
-                config={"recursion_limit": 11},
-            )
-        return result
-    except GraphRecursionError:
-        if fallback is None or not fallback.recorder.messages:
-            raise
-        if fallback.preflight:
-            gaps = fallback.preflight()
-            if gaps:
-                raise IncompleteSubmission("步数已用尽，报告仍缺少证据：" + "；".join(gaps))
-        history = list(fallback.recorder.messages)
-        logger.warning("步数用完，用 %d 条对话直接要报告", len(history))
-        prompt = [SystemMessage(content=fallback.system), *compact_messages(history), HumanMessage(content=FINAL_NUDGE)]
-        report = await call_structured(fallback.llm, fallback.schema, prompt)
-        return {"messages": history + [HumanMessage(content=FINAL_NUDGE)], "structured_response": report}
-
-
-async def solve(branch: BranchInput, runtime: Runtime[GraphContext]) -> dict:
-    ctx = runtime.context
-    subproblem_id = branch["subproblem"]["id"]
-    set_label(subproblem_id)
-    await ctx.set_stage("solve", "in_progress")
-    run_log: List[Dict] = []
-    if branch.get('continuation'):
-        for run_id, info in ctx.fs._manifest.get('runs', {}).items():
-            if info.get('status') == 'success' and info.get('evidence_archived'):
-                run_log.append({'run_id': run_id, 'ok': True, 'code': '', 'inherited': True})
-        for result in ctx.registry.for_subproblem(subproblem_id):
-            info=ctx.fs.get_run_info(result.run_id) or {}
-            if not info and ctx.source_workspace:
-                from services.file_services.workspace_fs import WorkspaceFS
-                source_fs=WorkspaceFS(ctx.source_workspace)
-                info=source_fs.get_run_info(result.run_id) or {}
-            if info and info.get('status')=='success' and info.get('evidence_archived') and not any(r['run_id']==result.run_id for r in run_log):
-                run_log.append({'run_id':result.run_id,'ok':True,'code':'','inherited':True})
-    if branch.get('experiment'):
-        from .planning import experiment_design
-        branch={**branch,'design':experiment_design(branch['experiment'])}
-        branch['design']['clarification_refs']=[r['ref'] for r in branch.get('clarifications',[])]
-    if branch.get("design") is None:
-        if branch["subproblem"].get("kind") == "verify":
-            chosen = {"name": "独立复算固定验收", "method_keys": [], "idea": "从冻结输入独立复算争议检查，不引入新的建模前提。",
-                "formulation": "", "steps": ["读取冻结输入", "独立复算并登记指定指标"], "assumptions": [], "validation": "提交固定检查所需证据"}
-            record = {"methods": [], "candidates": [chosen], "scores": [{"total": None}], "chosen": chosen,
-                "chosen_index": 0, "critic": None, "critic_error": None}
-        else:
-            chosen={'name':'执行当前研究问题','method_keys':sorted(allowed_method_keys(ctx.skill_policy)) if ctx.skill_policy and ctx.skill_policy['mode']=='selected' else [],
-                    'idea':branch.get('feedback') or '根据已有材料和当前问题落实方法，如实说明选择、证据和局限。',
-                    'formulation':'','steps':['读取相关材料并选择适用方法','完成本问所需计算与检验，登记实际结果'],
-                    'assumptions':[],'validation':'保留原问题及冻结验收契约，不虚构数据或阈值'}
-            record={'methods':chosen['method_keys'],'candidates':[chosen],'chosen':chosen,'chosen_index':0,'scores':[],
-                    'critic':None,'critic_error':None,'direct_execution':True,
-                    'clarification_refs':[r['ref'] for r in branch.get('clarifications',[])]}
-        branch = {**branch, "design": record}
-    design = branch["design"]
-    try:
-        if (branch.get('experiment') or {}).get('csv') and (not branch.get('continuation') or branch.get('resume_comparison')):
-            from ai_system.modules.registry import invoke
-            from .handoff import publish_comparison
-            record=await invoke(ctx,'experiments.compare',branch=branch)
-            report=await publish_comparison(ctx,branch,record,run_log)
-            return {'report':report,'design':design}
-        if unbound_assumptions(subproblem_id, design["chosen"].get("assumptions", []), branch.get("research_contract", {})):
-            return {'report':{'status':'prepared','reviews':[]},'design':design}
-        await ctx.events.stage(f"{subproblem_id}：开始编码求解「{design['chosen']['name']}」")
-        status, error, report, reviews = await _solve_loop(
-            ctx, branch, run_log, [HumanMessage(content=build_task(branch, ctx))]
-        )
+        record=await compare(ctx,branch)
+        report=await publish_comparison(ctx,branch,record,[])
+        return {'report':report,'design':design}
     finally:
-        await ctx.kernels.release(subproblem_id)
-        export_solution_code(ctx, subproblem_id, run_log)
-
-    if not report:
-        # 保留已登记结果供恢复和回查；未完成状态仍由提交器阻止验收。
-        recorded = ctx.registry.for_subproblem(subproblem_id)
-        report = SolveReport(
-            summary="求解未正常结束，以下为已登记的结果。",
-            approach=design["chosen"]["name"],
-            key_findings=[Finding(statement=f"{r.name}：{{{{{r.id[0]}:{r.id}}}}}", strength="倾向") for r in recorded],
-        ).model_dump()
-    else:
-        # 写作看的报告和结论表用同一份陈述：手写的数换成引用
-        ctx.registry.set_claims(subproblem_id, report.get("key_findings") or [])
-
-    return {'report':{**report,'status':status,'error':error,'reviews':reviews},'design':design}
-
-
-async def _solve_loop(ctx: GraphContext, branch: BranchInput, run_log: List[Dict], messages: List):
-    """实验执行：连续 CodeAct 行动，完成尝试后将发现交回研究层，返回 (status, error, report, reviews)"""
-    subproblem_id = branch["subproblem"]["id"]
-    recorder = HistoryRecorder()
-    schema = submission_schema(ctx, branch, run_log)
-    def inventory():
-        return submission_inventory_issues(ctx, branch, run_log)
-    async def check_interpretation(report: SolveReport, information_need: str = "") -> str:
-        """针对明确疑点核查代码与解释；意见仅供当前实验者核实，不触发计算或自动改稿。"""
-        from .review import review_solution
-        from ai_system.research.views import activity
-        with activity(ctx,'check_interpretation',subproblem_id) as operation:
-            operation['inputs']={'information_need':information_need,'report':report.model_dump()}
-            result=await review_solution(ctx,branch,report.model_dump(),run_log)
-            operation['output']={'findings':[i.model_dump() for i in result.issues]}
-            return json.dumps(operation['output'],ensure_ascii=False)+'\n请据原资料和实际输出采纳、驳回或保留局限，勿因措辞问题重算。'
-    tools=build_tools(ctx, subproblem_id, run_log, submission_gaps=inventory)
-    tools.append(StructuredTool.from_function(coroutine=check_interpretation,name='check_interpretation',handle_tool_error=True,handle_validation_error=str))
-    agent = create_agent(
-        model=ctx.coder_llm,
-        tools=tools,
-        system_prompt=SYSTEM + PROGRESS_PROMPT,
-        response_format=ToolStrategy(schema),
-        middleware=[recorder, ProgressMiddleware(ctx.events, scope='experiment:'+subproblem_id), CompactHistoryMiddleware(), StepBudgetMiddleware(ctx.max_solver_steps, 4, REPORT_NUDGE,
-                        report_ready=lambda: not inventory()),
-                    DropRefusedStepsMiddleware(PLACEHOLDER_REPLY), TruncationGuardMiddleware(),
-                    ReportOrderingMiddleware(schema.__name__, report_ready=lambda: not inventory())],
-    )
-    limit = ctx.max_solver_steps * 2 + 1
-    fallback = ReportFallback(ctx.coder_llm, schema, SYSTEM, recorder, inventory)
-    status, error = "completed", None
-    report: Dict = {}
-    reviews: List[Dict] = []
-    structured = None
-    result = None
-    try:
-        result = await run_agent(agent, messages, limit, fallback=fallback)
-        structured = result.get("structured_response")
-        if structured is not None:
-            report = structured.model_dump()
-        if not report or not ctx.registry.for_subproblem(subproblem_id):
-            status, error = "incomplete", "没有提交完整报告或登记结果"
-    except GraphRecursionError:
-        status, error = "incomplete", f"超过 {ctx.max_solver_steps} 步仍未完成"
-    except IncompleteSubmission as exc:
-        status, error = "incomplete", str(exc)
-    except Exception as exc:
-        logger.exception("求解 %s 失败", subproblem_id)
-        status, error = "failed", str(exc)
-    if result is not None:
-        save_transcript(ctx, subproblem_id, result["messages"])
-    elif recorder.messages:
-        save_transcript(ctx, subproblem_id, recorder.messages)
-    return status, error, report, reviews
+        await ctx.kernels.close()
 
 
 def save_transcript(ctx: GraphContext, name: str, messages: List) -> None:

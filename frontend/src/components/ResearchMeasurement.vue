@@ -88,21 +88,31 @@ const displayValue = (value: string, kind: string) => {
   padding: 12px 0 18px;
 }
 .focused {
-  border-left: 3px solid var(--pa-accent);
+  position: relative;
   padding-left: 16px;
 }
+.focused::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 18px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pa-accent);
+}
 .value {
-  font-size: 21px;
+  font-size: 22px;
 }
 p,
 dd {
   line-height: 1.8;
-  font-size: 14px;
+  font-size: 15px;
 }
 dt,
 summary {
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 dd {
   margin: 0 0 8px;

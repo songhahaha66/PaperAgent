@@ -193,6 +193,24 @@ def test_opensandbox_preserves_literal_arguments_and_stdin(tmp_path):
     asyncio.run(check())
 
 
+@pytest.mark.parametrize('exit_code,error,known',[(1,'exit status 1',True),(0,None,True),(None,'stream lost',False),(0,'runtime failed',False)])
+def test_compiler_nonzero_exit_is_a_completed_command(tmp_path,exit_code,error,known):
+    from types import SimpleNamespace
+    from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
+    async def run(command,*,opts,handlers):
+        await handlers.on_stdout(SimpleNamespace(text='paper.tex:12: Undefined control sequence.'))
+        return SimpleNamespace(exit_code=exit_code,error=SimpleNamespace(name='CommandError',value=error,traceback=[]) if error else None)
+    async def check():
+        session=OpenSandboxSession(SandboxSettings(api_key='test',host_workspace_root='/server/cache'),workspace_dir=tmp_path)
+        session.sandbox=SimpleNamespace(commands=SimpleNamespace(run=run))
+        if known:
+            code,out,err=await session.command('xelatex paper.tex',10)
+            assert code==exit_code and 'paper.tex:12:' in out
+        else:
+            with pytest.raises(RuntimeError,match='回执'):await session.command('xelatex paper.tex',10)
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize('endpoint,key', [
     ('http://remote.example', 'test'), ('https://name:secret@example.com', 'test'),
     ('https://example.com/path', 'test'), ('https://example.com', ''),

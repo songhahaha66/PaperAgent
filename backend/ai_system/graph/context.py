@@ -16,15 +16,14 @@ from services.file_services.workspace_fs import WorkspaceFS
 
 from ..sandbox.contracts import ExecutionKernel
 from ..sandbox.factory import create_kernel
-from .llm_utils import cap_output
+from ..config.generation import request_model
 from .registry import ResultRegistry
-from ..research import DEFAULT_PLANNING_CALL_LIMIT
 
 logger = logging.getLogger(__name__)
 
 
 class KernelPool:
-    """实验内持久内核；远端由 provider 按研究工作管理容器租约，业务状态仍在 Store"""
+    """主研究会话及显式比较分支的持久内核；provider 管理远端租约，业务状态仍在 Store"""
 
     def __init__(self, workspace: Path, fs: WorkspaceFS, timeout: float = 180.0, *, work_id=None, experiment_id=None):
         self.workspace = workspace
@@ -88,7 +87,6 @@ TEMPLATE_CONTRACT = "template/contract.md"
 TEMPLATE_DOCX = "template/original.docx"
 TEMPLATE_REQUIREMENTS_CHARS = 4000
 # 编码循环每步只写一段代码，4096 token 足够；不设上限时一次重复输出能把请求拖到网关 300 秒超时
-CODER_MAX_TOKENS = 4096
 
 
 @dataclass
@@ -109,13 +107,11 @@ class GraphContext:
     experience_order: Any = None
     source_workspace: Any = None
     compact_paper: bool = False
-    comparison_proof: Any = None
     skill_policy: Any = None
-    max_solver_steps: int = 40
-    max_repair_rounds: int = 2
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
-    max_planning_calls: int | None = DEFAULT_PLANNING_CALL_LIMIT
+    agent_messages: list = field(default_factory=list)
+    delegation_slots: Any = field(default_factory=lambda: asyncio.Semaphore(2))
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)
 
@@ -152,7 +148,7 @@ class GraphContext:
                 work_id=options.pop("sandbox_work_id", None), experiment_id=options.pop("sandbox_experiment_id", None)),
             events=EventSink(stream_manager),
             planner_llm=planner_llm,
-            coder_llm=cap_output(coder_llm or planner_llm, CODER_MAX_TOKENS),
+            coder_llm=request_model(coder_llm or planner_llm),
             writer_llm=writer_llm or planner_llm,
             **options,
         )

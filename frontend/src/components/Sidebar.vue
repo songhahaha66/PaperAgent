@@ -77,7 +77,7 @@
               :class="{
                 active: activeHistoryId === item.id || route.params.work_id === item.work_id,
               }"
-              :title="`${item.title || ui.untitled} · ${getStatusText(item.status)} · ${formatWorkDate(item.date, locale)}`"
+              :title="`${item.title || ui.untitled}，${getStatusText(item.status)}，${formatWorkDate(item.date, locale)}`"
               @click="selectHistory(item)"
             >
               <span class="history-title">{{ item.title?.trim() || t('sidebar.generating') }}</span>
@@ -217,7 +217,6 @@ const closeSidebarOnMobile = () => {
 }
 
 const navigationItems = computed(() => [
-  { path: '/experiences', label: isZh.value ? '个人经验' : 'Personal experience', icon: 'books' },
   { path: '/resources', label: isZh.value ? '资源库' : 'Resources', icon: 'folder-open' },
   { path: '/api-config', label: ui.value.models, icon: 'setting' },
 ])
@@ -432,7 +431,7 @@ onUnmounted(() => {
   gap: 8px;
   padding: 0 13px;
   margin: 0 0 12px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--pa-muted);
   font-family: var(--td-font-family);
@@ -506,25 +505,25 @@ onUnmounted(() => {
   text-align: center;
   padding: 30px 16px;
   color: var(--pa-placeholder);
-  font-size: 12px;
+  font-size: 13px;
 }
 .empty-history {
   padding: 22px 12px;
   color: var(--pa-placeholder);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.8;
 }
 .empty-icon {
-  font-size: 24px;
+  font-size: 22px;
   color: var(--pa-disabled);
 }
 .empty-text {
   margin: 12px 0 6px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
 }
 .empty-hint {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--pa-placeholder);
   margin: 0;
 }
@@ -572,7 +571,7 @@ onUnmounted(() => {
 }
 .logo-toggle-icon {
   position: absolute;
-  font-size: 21px;
+  font-size: 22px;
   color: var(--pa-muted);
   opacity: 0;
 }
@@ -623,7 +622,7 @@ onUnmounted(() => {
   gap: 8px;
   color: var(--pa-ink);
   text-decoration: none;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
 }
 .mobile-brand img {
@@ -644,7 +643,7 @@ onUnmounted(() => {
 .mobile-account :deep(.account-avatar) {
   width: 28px;
   height: 28px;
-  font-size: 12px;
+  font-size: 13px;
 }
 .sidebar-nav .nav-active:hover,
 .history-item.active:hover {

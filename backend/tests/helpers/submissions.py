@@ -1,4 +1,6 @@
 """Shared builders extracted from test_report_submission."""
+from helpers.legacy_registry import value as legacy_value, figure as legacy_figure, claims as legacy_claims
+
 from ai_system.sandbox.evidence import seal_run
 
 
@@ -24,7 +26,7 @@ def seed(ctx, runs, sid="Q1", name="answer", value="6"):
     ctx.fs.save_run_stdout(rid, value)
     ctx.fs.finish_run(rid, "success"); seal_run(ctx.fs, rid)
     runs.append({"run_id": rid, "ok": True, "code": "print(sum([1, 2, 3]))"})
-    return ctx.registry.record_value(sid, name, value, rid)
+    return legacy_value(ctx.registry,sid, name, value, rid)
 
 def report(ref, *, requirement="RQ1"):
     return {"summary": f"已完成整数求和，结果为 {{{{R:{ref}}}}}", "approach": "Python直接求和",

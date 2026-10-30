@@ -187,7 +187,8 @@
                 <button @click="selection = null">清除选区</button></template
               >
               <template v-else-if="readQuote"
-                ><strong>阅读选区 · 待确认源码位置</strong>
+                ><strong>阅读选区</strong>
+                <span class="hint">待确认源码位置</span>
                 <blockquote>{{ readQuote }}</blockquote>
                 <p>
                   解释或检索可直接发送。改稿前请选择下方源码候选；无法匹配时，请在源码中重新选择。
@@ -203,7 +204,8 @@
                 class="candidate"
                 @click="confirmCandidate(candidate)"
               >
-                <strong>{{ selectionLabel(candidate) }} · 候选 {{ index + 1 }}</strong>
+                <strong>{{ selectionLabel(candidate) }}</strong>
+                <span>候选 {{ index + 1 }}</span>
                 <pre>{{ candidate.context }}</pre>
                 <span>确认此位置</span>
               </button>
@@ -249,17 +251,17 @@
                 }}<button :disabled="busy" @click="resume(execution.id)">继续未完成的步骤</button>
               </p>
               <details v-if="execution.steps?.length">
-                <summary>核查记录 · {{ execution.steps.length }} 步</summary>
+                <summary>核查记录<span>{{ execution.steps.length }} 步</span></summary>
                 <article v-for="step in execution.steps" :key="step.id">
                   <p>
-                    {{ commentToolLabels[step.tool] || '处理评论' }} ·
-                    {{
+                    {{ commentToolLabels[step.tool] || '处理评论' }}
+                    <span>{{
                       step.state === 'running'
                         ? '进行中'
                         : step.state === 'failed'
                           ? '未完成'
                           : '完成'
-                    }}
+                    }}</span>
                   </p>
                   <pre v-if="step.result?.stdout || step.output">{{
                     step.result?.stdout || step.output
@@ -298,7 +300,7 @@
             <p class="hint">提出补丁后由你接受或拒绝。</p>
             <details class="changes" :open="activeMarkKind === 'change'">
               <summary>
-                修改集 <span v-if="visibleChanges.length">· {{ visibleChanges.length }}</span>
+                修改集<span v-if="visibleChanges.length">{{ visibleChanges.length }}</span>
               </summary>
               <article v-for="change in visibleChanges" :key="change.id" class="change">
                 <p>
@@ -311,7 +313,7 @@
                           ? '已回退'
                           : '已拒绝'
                   }}
-                  · {{ [...new Set(change.patches.map((p) => p.file))].join('、') }}
+                  <span>{{ [...new Set(change.patches.map((p) => p.file))].join('、') }}</span>
                 </p>
                 <pre class="diff">{{ change.diff }}</pre>
                 <template v-if="change.status === 'pending'"
@@ -338,8 +340,9 @@
               <button @click="openSource(source, $event.currentTarget as Element)">
                 <strong>{{ source.title }}</strong
                 ><span
-                  >{{ source.boundary }} ·
-                  {{ source.paths?.length ? '代码与实际输出' : source.locator }}</span
+                  >{{ source.boundary }}<br />{{
+                    source.paths?.length ? '代码与实际输出' : source.locator
+                  }}</span
                 >
               </button>
             </article>
@@ -1024,7 +1027,7 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 12px 0;
   border-top: 1px solid var(--pa-line);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .section-evidence button {
@@ -1057,7 +1060,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   padding: 10px 12px;
   border-bottom: 1px solid var(--pa-line);
-  font-size: 12px;
+  font-size: 13px;
 }
 .toolbar nav {
   display: flex;
@@ -1066,7 +1069,7 @@ onBeforeUnmount(() => {
 button,
 select {
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-ink);
   background: var(--pa-surface);
   border: 1px solid var(--pa-line);
@@ -1117,7 +1120,7 @@ button:disabled {
   flex-shrink: 0;
 }
 .compile-state {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .compile-state > .t-icon {
@@ -1173,8 +1176,7 @@ button:disabled {
   outline: 0;
   padding: 20px;
   box-sizing: border-box;
-  font:
-    13px/1.8 ui-monospace,
+  font: 13px/1.8 ui-monospace,
     SFMono-Regular,
     monospace;
   background: var(--pa-surface);
@@ -1198,8 +1200,7 @@ button:disabled {
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
-  font:
-    13px/1.8 ui-monospace,
+  font: 13px/1.8 ui-monospace,
     SFMono-Regular,
     monospace;
   tab-size: 2;
@@ -1213,7 +1214,7 @@ button:disabled {
   margin: 10px 0;
 }
 .comment-context {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.7;
   background: var(--pa-surface-muted);
   border-radius: var(--pa-radius-card);
@@ -1221,16 +1222,21 @@ button:disabled {
 }
 blockquote {
   margin: 10px 0;
-  border-left: 2px solid var(--pa-accent);
-  padding-left: 10px;
   max-height: 140px;
   overflow: auto;
   white-space: pre-wrap;
 }
+summary span,
+.execution article p span,
+.change > p span {
+  display: block;
+  color: var(--pa-muted);
+  font-weight: 400;
+}
 .hint,
 .notice,
 details {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   line-height: 1.7;
 }
@@ -1283,19 +1289,18 @@ details {
   border-radius: var(--pa-radius-card);
 }
 .thread strong {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .changes h3 {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
 }
 .diff,
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font:
-    12px/1.7 ui-monospace,
+  font: 13px/1.7 ui-monospace,
     monospace;
   max-height: 360px;
   overflow: auto;
@@ -1325,10 +1330,9 @@ pre {
 }
 .section-finding {
   margin: 12px 0;
-  padding: 8px 12px;
-  border-left: 2px solid var(--pa-line);
+  padding: 8px 0;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .section-finding summary {
   cursor: pointer;
@@ -1341,7 +1345,7 @@ pre {
   line-height: 1.9;
 }
 .empty h2 {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 500;
 }
 :deep(.read-text a[href*='#literature-']),

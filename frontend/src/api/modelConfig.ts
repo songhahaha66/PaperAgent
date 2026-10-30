@@ -1,3 +1,10 @@
+export interface GenerationSettings {
+  max_output_tokens?: number
+  context_window?: number | null
+  reasoning_effort?: string | null
+  prices?: { input_per_million: number; output_per_million: number; cached_input_per_million?: number | null } | null
+}
+
 // 模型配置API服务
 import { apiClient } from '@/utils/apiClient'
 
@@ -7,6 +14,8 @@ export interface ModelConfig {
   model_id: string
   base_url: string
   timeout_seconds?: number | null
+  thinking_enabled?: boolean
+  generation_settings?: GenerationSettings
   is_active: boolean
   created_at: string
 }
@@ -16,6 +25,8 @@ export interface ModelConfigCreate {
   model_id: string
   base_url: string
   timeout_seconds?: number | null
+  thinking_enabled?: boolean
+  generation_settings?: GenerationSettings
   api_key: string
 }
 
@@ -23,6 +34,8 @@ export interface ModelConfigUpdate {
   model_id?: string
   base_url?: string
   timeout_seconds?: number | null
+  thinking_enabled?: boolean
+  generation_settings?: GenerationSettings
   api_key?: string
   is_active?: boolean
 }
@@ -52,6 +65,8 @@ class ModelConfigAPI {
     model_id: string
     base_url: string
     timeout_seconds?: number | null
+    thinking_enabled?: boolean
+  generation_settings?: GenerationSettings
     api_key?: string
   }): Promise<{ ok: boolean }> {
     return apiClient.request<{ ok: boolean }>('/model-configs/test', {

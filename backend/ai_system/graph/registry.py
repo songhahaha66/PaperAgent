@@ -1,23 +1,16 @@
-"""
-结果登记表：论文里出现的每个数字和图都必须先在这里登记
+"""Historical R/F references retained for reading and rendering existing documents.
 
-求解阶段，宿主从 emit_result 和实际图片输出建立引用；旧 record_results / record_figure 仍兼容，
-登记时会核对该值确实出现在对应 run 的输出里（不在就拒绝）。
-写作阶段，正文只能写 {{R:R3}} / {{F:F1}} 这样的引用，渲染时替换成真实数值和图片，
-这样论文中的数字天然可以追溯到某次代码执行。
-
-结果权威性来自研究事务库；.system/results.json 仅是可重建的诊断投影。
+New research uses execution records and result files directly. This projection
+is not an acceptance mechanism and is never exposed as a model tool.
 """
 
 import json
 import math
 import re
-from pathlib import PurePosixPath
 from dataclasses import asdict, dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from services.file_services.workspace_fs import WorkspaceFS
-from ..research.domain import result_semantic_key
 from ai_system.text_syntax import math_spans as iter_math_spans
 
 REGISTRY_PATH = ".system/results.json"
@@ -36,23 +29,6 @@ SERIES_BLOCK = re.compile(r"\[[^\[\]]*\]", re.DOTALL)
 SERIES_BODY = re.compile(rf"\s*{SERIES_NUMBER}(?:(?:\s*,\s*|\s+){SERIES_NUMBER})*\s*,?\s*")
 # 结论里手写的小数或科学计数（整数常是个数、年份，不自动换）
 LITERAL_NUMBER = re.compile(r"(?<![A-Za-z0-9_.])-?\d+(?:\.\d+(?:[eE][-+]?\d+)?%?|[eE][-+]?\d+%?|%)(?![A-Za-z0-9_.])")
-
-
-class GroundingError(ValueError):
-    """登记的值在 run 输出中找不到"""
-
-
-# 一条结果是一个数、同一变量的数值序列或一小段文字。整行输出（"ATTR word_length coef -0.0377 p 0 valAUC 0.500"、
-# "lag7 p=0.3261 lag14 p=0.8776"）登记成一条结果后，正文一引用就把原始输出原样贴进论文
-COMPOSITE_MAX_LEN = 24
-
-
-def composite_value(value: str) -> bool:
-    """value 是不是把多个量挤在一起的整行输出"""
-    text = value.strip()
-    if "=" in text or "|" in text or ";" in text or "；" in text:
-        return True
-    return len(text) > COMPOSITE_MAX_LEN and len(NUMBER_PATTERN.findall(text)) >= 2
 
 
 @dataclass
@@ -156,7 +132,6 @@ class ResultRegistry:
     results: Dict[str, Result] = field(default_factory=dict)
     claims: Dict[str, Claim] = field(default_factory=dict)
 
-    allocate_id: Optional[Callable] = field(default=None, repr=False)
     staged_history: List[Result] = field(default_factory=list, repr=False)
 
     @classmethod
@@ -186,140 +161,6 @@ class ResultRegistry:
         self.claims = {}
         self.staged_history = []
         self.save()
-
-    def _next_id(self, prefix: str) -> str:
-        if self.allocate_id:
-            return self.allocate_id(prefix)
-        used = [int(rid[1:]) for rid in [*self.results, *self.claims, *(r.id for r in self.staged_history)] if rid.startswith(prefix)]
-        return f"{prefix}{max(used, default=0) + 1}"
-
-    def _run_output(self, run_id: str) -> str:
-        info = self.fs.get_run_info(run_id)
-        if info is None:
-            raise GroundingError(f"run {run_id} 不存在")
-        if info.get("status") != "success":
-            raise GroundingError(f"run {run_id} 执行失败，不能从中登记结果")
-        from ai_system.sandbox.evidence import verify_run
-        try:
-            verify_run(self.fs, run_id)
-        except (ValueError, OSError) as exc:
-            raise GroundingError(str(exc)) from exc
-        if not info.get("stdout"):
-            return ""
-        return self.fs.read_text(info["stdout"])
-
-    def verify(self, value: str, run_id: str) -> None:
-        """核对 value 出现在 run_id 那次成功执行的输出里，不在就抛 GroundingError（不登记）"""
-        if not value_in_output(str(value).strip(), self._run_output(run_id)):
-            raise GroundingError(
-                f"值 {value} 没有出现在 {run_id} 的输出中。请先 print 出这个结果，再用那次执行的 run_id 登记。"
-            )
-
-    def _bind_result(self, result):
-        from ai_system.sandbox.evidence import checksum, verify_run
-        verify_run(self.fs, result.run_id)
-        binding = {'result_id': result.id, 'run_id': result.run_id,
-                   'receipt_sha256': checksum(self.fs.run_dir(result.run_id) / 'receipt.json')}
-        bindings = self.fs._manifest.setdefault('result_bindings', {})
-        if result.id in bindings and bindings[result.id] != binding:
-            raise GroundingError('结果编号已绑定其他归档版本')
-        bindings[result.id] = binding
-        self.fs._save_manifest()
-
-    def record_value(
-        self,
-        subproblem: str,
-        name: str,
-        value: str,
-        run_id: str,
-        unit: str = "",
-        description: str = "",
-        meaning: dict | None = None,
-    ) -> Result:
-        if meaning is not None:
-            from ai_system.research.models import ResultMeaning
-            meaning = ResultMeaning.model_validate(meaning).model_dump()
-            for link in meaning['lineage']:
-                for path in (link['path'], link['source_path']):
-                    if not self.fs.exists(path):
-                        raise GroundingError('行关系来源文件不存在：'+path)
-        value = str(value).strip()
-        series = numeric_series(value)
-        if value.startswith("[") and series is None:
-            raise GroundingError("序列必须是非空的一维有限数值 JSON 数组；不能含布尔值、文字、NaN 或嵌套数组。")
-        if series is None and composite_value(value):
-            raise GroundingError(
-                f"值「{value}」把多个量写在了一起。每个数单独登记一条（名称写清是什么量），"
-                "例如 lag7 的 p 值、lag14 的 p 值各登记一条；区间写成上下限两条。"
-            )
-        self.verify(value, run_id)
-        kind = "series" if series is not None else "number" if _parse_number(value) is not None else "text"
-        if series is not None:
-            value = json.dumps(series, ensure_ascii=False, separators=(",", ":"))
-        # 完全相同的登记复用编号；值或来源改变时保留历史，并分配新引用。
-        same = next(
-            (r for r in self.results.values() if r.kind != "figure" and r.subproblem == subproblem and r.name == name.strip() and result_semantic_key(r.meaning,r.unit) == result_semantic_key(meaning,unit.strip())),
-            None,
-        )
-        if same and (same.value, same.run_id, same.unit, same.description, same.meaning) != (value, run_id, unit.strip(), description.strip(), meaning):
-            self.staged_history.append(self.results.pop(same.id))
-            same = None
-        result = Result(
-            id=same.id if same else self._next_id("R"), kind=kind, subproblem=subproblem, name=name.strip(),
-            value=value, run_id=run_id, unit=unit.strip(), description=description.strip(), meaning=meaning,
-        )
-        self._bind_result(result)
-        self.results[result.id] = result
-        self.save()
-        return result
-
-    def record_figure(self, subproblem: str, run_id: str, artifact: str, caption: str) -> Result:
-        self._run_output(run_id)
-        prefix = f"runs/{run_id}/artifacts/"
-        artifact_name = artifact.removeprefix(prefix)
-        candidate = PurePosixPath(artifact_name)
-        if candidate.is_absolute() or ".." in candidate.parts or "\\" in artifact_name or artifact_name.startswith("runs/"):
-            raise GroundingError("图片必须来自指定运行的产物目录")
-        suffix = artifact_name.rsplit(".", 1)[-1] if "." in artifact_name else "png"
-        path = prefix + artifact_name
-        if not self.fs.exists(path):
-            raise FileNotFoundError('Artifact 不存在: ' + path)
-        same = next((r for r in self.results.values() if r.kind == 'figure' and
-                     r.subproblem == subproblem and r.run_id == run_id and r.path == path), None)
-        if same:
-            same.name = caption.strip()
-            self.save()
-            return same
-        result = Result(
-            id=self._next_id("F"), kind="figure", subproblem=subproblem, name=caption.strip(),
-            value="", run_id=run_id, path=path,
-        )
-        self._bind_result(result)
-        self.results[result.id] = result
-        self.save()
-        return result
-
-    def set_claims(self, subproblem: str, findings: List[Dict]) -> List[Claim]:
-        """用求解报告的结论替换该子问题的结论（返工后报告会变）；证据只保留存在的登记结果"""
-        self.claims = {cid: c for cid, c in self.claims.items() if c.subproblem != subproblem}
-        added = []
-        for finding in findings:
-            statement = self.ground_statement(subproblem, str(finding.get("statement", "")).strip())
-            if not statement:
-                continue
-            evidence = [ref for ref in dict.fromkeys(find_refs(statement)) if ref in self.results]
-            claim = Claim(
-                id=self._next_id("C"), subproblem=subproblem, statement=statement,
-                strength=finding.get("strength") or "倾向", evidence=evidence,
-            )
-            self.claims[claim.id] = claim
-            added.append(claim)
-        self.save()
-        return added
-
-    def ground_statement(self, subproblem: str, statement: str) -> str:
-        """Preserve explicit references. Equal numbers never establish identity."""
-        return statement
 
     def claims_table(self) -> str:
         """结论表：陈述里的引用替换为"真实数值⟨编号⟩"，供一致性审查和写作使用

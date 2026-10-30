@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 ROOT = Path("/workspace")
+_SETUP = False
 
 
 def choose_font(available):
@@ -17,7 +18,9 @@ def choose_font(available):
 
 
 def setup(root="/workspace"):
-    global ROOT
+    global ROOT, _SETUP
+    if _SETUP and ROOT == Path(root):
+        return
     ROOT = Path(root)
     ROOT.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
@@ -32,6 +35,24 @@ def setup(root="/workspace"):
     matplotlib.rcParams["font.sans-serif"] = [font]
     matplotlib.rcParams["axes.unicode_minus"] = False
     plt.show = lambda *args, **kwargs: None
+    _SETUP = True
+
+
+def run_cell(code, run_id, namespace, root="/workspace"):
+    """Execute and flush figures in one interpreter request, including on errors."""
+    import ast
+    import linecache
+    setup(root)
+    filename = f"<paperagent-{run_id}>"
+    linecache.cache[filename] = (len(code), None, code.splitlines(keepends=True), filename)
+    try:
+        tree = ast.parse(code, filename=filename)
+        last = tree.body.pop() if tree.body and isinstance(tree.body[-1], ast.Expr) else None
+        exec(compile(tree, filename, "exec"), namespace, namespace)
+        if last is not None:
+            return eval(compile(ast.Expression(last.value), filename, "eval"), namespace, namespace)
+    finally:
+        save_figures(run_id)
 
 
 def save_figures(run_id):
@@ -41,11 +62,3 @@ def save_figures(run_id):
     for index, number in enumerate(plt.get_fignums(), 1):
         plt.figure(number).savefig(directory / f"figure_{index}.png", dpi=200, bbox_inches="tight")
     plt.close("all")
-
-
-def emit_result(name, value, unit="", description="", meaning=None):
-    """Print a structured result; returns None. The host assigns refs after execution."""
-    if hasattr(value, 'tolist'):
-        value = value.tolist()
-    payload = dict(name=name, value=value, unit=unit, description=description, meaning=meaning)
-    print('PAPERAGENT_RESULT ' + json.dumps(payload, ensure_ascii=False, allow_nan=False), flush=True)

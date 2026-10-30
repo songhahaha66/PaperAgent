@@ -28,6 +28,7 @@ export const executionLabel = (status: string) =>
     done: '完成',
     failed: '未完成',
     interrupted: '已中断',
+    truncated: '生成截断',
     cancelled: '已取消',
     success: '成功',
     error: '失败',
@@ -69,7 +70,7 @@ export function taskState(task: ResearchTask, workStatus: string) {
 
 export function taskLabel(state: string, zh: boolean) {
   const labels: Record<string, string[]> = {
-    accepted: ['已完成检查', 'Checks passed'],
+    accepted: ['运行已结束', 'Run finished'],
     running: ['执行中', 'Running'],
     interrupted: ['已中断，待恢复', 'Interrupted, resume needed'],
     needs_plan: ['方法待调整', 'Plan change needed'],
@@ -105,7 +106,7 @@ export function researchHeadline(
   if (zh && snapshot?.delivery_summary?.state === 'incomplete') return snapshot.delivery_summary.label
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
-  if (!snapshot?.experiments?.length) {
+  if (!snapshot?.experiments?.length && !snapshot?.questions?.length && !snapshot?.artifacts?.length) {
     if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
     if (workStatus === 'in_progress') return zh ? '正在分析问题' : 'Preparing research tasks'
     if (workStatus === 'failed')
@@ -114,7 +115,7 @@ export function researchHeadline(
       return zh ? '研究已暂停，进度已保留' : 'Research paused, progress saved'
     return zh ? '等待建立研究任务' : 'Waiting for research tasks'
   }
-  const running = snapshot.experiments.filter((t) => taskState(t, workStatus) === 'running')
+  const running = (snapshot.experiments || []).filter((t) => taskState(t, workStatus) === 'running')
   if (running.length && researchRunning(workStatus)) return zh ? '正在处理实验' : 'Working on experiments'
   if (['paused', 'failed', 'cancelled'].includes(workStatus)) {
     for (const [key, label] of Object.entries(deliveryLabels)) {

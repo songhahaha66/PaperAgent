@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.judge import Answers, ScoreAnswer
-from evals.metrics import code_runs, number_traceability
+from evals.metrics import code_runs, artifact_files
 from evals.mmbench import build_task_prompt, load_problem, stage_datasets
 from evals.rubric import DIMENSIONS
 from evals.runner import score_problem, summarize
@@ -121,19 +121,16 @@ def test_load_and_stage_problem(tmp_path):
     assert "point by point data" in prompt
 
 
-@pytest.mark.parametrize("source", ["failed", "changed", "outside"])
-def test_traceability_rechecks_the_exact_registered_successful_source(tmp_path, source):
+def test_file_evaluation_reads_actual_artifacts_not_registered_numbers(tmp_path):
+    from services.file_services.workspace_fs import WorkspaceFS
     ws = _make_workspace(tmp_path)
-    manifest = json.loads((workspace_path(ws, 'manifest.json')).read_text())
-    if source == "failed":
-        manifest["runs"]["run_1"]["status"] = "error"
-    elif source == "changed":
-        (workspace_path(ws, 'runs/run_1/stdout.log')).write_text("0.8123")
-    else:
-        (ws / "elsewhere.log").write_text("0.87312")
-        manifest["runs"]["run_1"]["stdout"] = "elsewhere.log"
-    (workspace_path(ws, 'manifest.json')).write_text(json.dumps(manifest))
-    assert number_traceability("0.87312", ws)["rate"] == 0
+    fs = WorkspaceFS(str(ws))
+    fs.write_text('outputs/actual.csv', 'mean\n4.0\n')
+    fs.register_file('outputs/actual.csv', kind='data', source_run='run_1', visibility='user')
+    assert artifact_files(ws)['rate'] == 1
+    (ws/'outputs/actual.csv').write_text('')
+    checked=artifact_files(ws)
+    assert checked['rate'] == 0 and checked['failures'][0]['path']=='outputs/actual.csv'
 
 
 def test_score_problem_and_summary(tmp_path):

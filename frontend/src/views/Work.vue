@@ -69,9 +69,9 @@
           >
             <t-icon name="task" />
             <span>{{ isZh ? '研究进度' : 'Research progress' }}</span>
-            <span v-if="researchSnapshot?.experiments?.length" class="progress-count"
-              >{{ acceptedTaskCount }}/{{ researchSnapshot.questions?.length || 0 }}
-              {{ isZh ? '已有结果' : 'reviewed' }}</span
+            <span v-if="researchSnapshot?.questions?.length" class="progress-count"
+              >{{ answeredTaskCount }}/{{ researchSnapshot.questions?.filter((q) => !q.retired).length || 0 }}
+              {{ isZh ? '已回答' : 'answered' }}</span
             >
           </button>
           <button
@@ -208,6 +208,15 @@
                       ><t-icon name="attach"
                     /></t-button>
                     <t-button
+                      v-if="researchSnapshot?.research_id && currentWork?.status !== 'waiting' && !paperContexts.length"
+                      type="button"
+                      theme="default"
+                      variant="text"
+                      :disabled="isStreaming || loading || !inputValue.trim()"
+                      @click="sendMessage(undefined, 'revise_research')"
+                      >{{ isZh ? '补充要求' : 'Update requirements' }}</t-button
+                    >
+                    <t-button
                       type="submit"
                       theme="primary"
                       shape="circle"
@@ -236,7 +245,7 @@
                     >TPS {{ modelUsage?.tps?.toFixed(1) ?? '—' }}</span
                   >
                   <span
-                    title="缓存输入 token / 输入 token；仅统计网关返回缓存计数的请求，旧记录未保存或网关未提供时无法计算"
+                    :title="cacheUsageTitle"
                     >缓存
                     {{
                       modelUsage?.cache_hit_rate == null
@@ -455,6 +464,15 @@ const {
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
 const issueRequest = ref<{ id: string; at: number } | null>(null)
 const modelUsage = computed(() => researchSnapshot.value?.runtime?.usage)
+const cacheUsageTitle = computed(() => {
+  const scopes: Record<string, string> = { research: '主研究', summary: '摘要', delegate: '子任务', other: '其他' }
+  const phases: Record<string, string> = { cold: '首次请求', after_compaction: '压缩后首请求', stable: '连续追加', prefix_reset: '前缀变更', unclassified: '未分阶段' }
+  const rows = modelUsage.value?.cache_breakdown ?? []
+  return ['缓存仅统计服务商返回计数的请求；未命中为这部分请求的输入减缓存读取。', ...rows.map(row =>
+    `${scopes[row.scope] ?? row.scope} · ${phases[row.phase] ?? row.phase}：${row.cache_hit_rate == null ? '暂无缓存计数' : (row.cache_hit_rate * 100).toFixed(1) + '%'}，未命中 ${row.cache_miss_tokens?.toLocaleString() ?? '—'} tokens，${row.cache_reported_requests}/${row.requests} 次有缓存计数，累计请求 ${row.request_seconds.toFixed(1)} 秒`
+  )].join('\n')
+})
+
 const formatTokens = (value?: number | null) => {
   if (value == null) return '—'
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
@@ -644,13 +662,9 @@ async function replyToResearch() {
   await nextTick()
   document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
 }
-const acceptedTaskCount = computed(
-  () =>
-    researchSnapshot.value?.questions?.filter((q) =>
-      researchSnapshot.value?.experiments?.some(
-        (e) => e.question_id === q.id && e.acceptance === 'accepted' && e.validity === 'current',
-      ),
-    ).length || 0,
+const answeredTaskCount = computed(() =>
+  researchSnapshot.value?.questions?.filter((q) => !q.retired && q.coverage === 'answered'
+    && q.answer_status === 'current' && !q.answer_gaps?.length).length || 0,
 )
 const primaryAction = computed(() => {
   if (!currentWork.value) return null
@@ -797,7 +811,7 @@ onUnmounted(() => {
   text-align: center;
 }
 .work-load-error h1 {
-  font-size: 20px;
+  font-size: 17px;
 }
 .work-load-error p {
   color: var(--td-text-color-secondary);
@@ -840,7 +854,7 @@ onUnmounted(() => {
   gap: 7px;
   margin-top: 6px;
   min-width: 0;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .work-context-text {
@@ -874,7 +888,7 @@ onUnmounted(() => {
 }
 .work-actions .t-button {
   height: var(--pa-control-height-md);
-  font-size: 12px;
+  font-size: 13px;
   border-radius: var(--pa-radius-control);
 }
 .work-actions .t-button--shape-square {
@@ -891,7 +905,7 @@ onUnmounted(() => {
   background: var(--pa-surface);
   border-radius: var(--pa-radius-control);
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -903,7 +917,7 @@ onUnmounted(() => {
   color: var(--pa-accent);
   padding-left: 8px;
   border-left: 1px solid var(--pa-line);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .progress-panel {
@@ -956,10 +970,10 @@ onUnmounted(() => {
   line-height: 1.85;
 }
 .chat-messages-container :deep(.markdown-body h1) {
-  font-size: 24px;
+  font-size: 22px;
 }
 .chat-messages-container :deep(.markdown-body h2) {
-  font-size: 20px;
+  font-size: 17px;
 }
 .chat-messages-container :deep(.markdown-body h3) {
   font-size: 17px;
@@ -995,7 +1009,7 @@ onUnmounted(() => {
   gap: 6px 14px;
   padding: 8px 6px 0;
   color: var(--pa-muted);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .work-composer:focus-within {
@@ -1043,7 +1057,7 @@ onUnmounted(() => {
   background: var(--pa-surface);
   color: var(--pa-muted);
   box-shadow: var(--td-shadow-1);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1052,7 +1066,7 @@ onUnmounted(() => {
   background: transparent;
   padding: 0;
   color: var(--td-brand-color);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1108,10 +1122,10 @@ onUnmounted(() => {
   place-items: center;
   background: var(--pa-surface-muted);
   color: var(--pa-muted);
-  font-size: 30px;
+  font-size: 22px;
 }
 .figure-open > span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1125,7 +1139,7 @@ onUnmounted(() => {
     flex-wrap: wrap;
   }
   .work-title-row h1 {
-    font-size: 14px;
+    font-size: 15px;
   }
   .work-actions {
     width: 100%;
@@ -1142,7 +1156,7 @@ onUnmounted(() => {
     padding: 20px 16px;
   }
   .chat-messages-container :deep(.markdown-body) {
-    font-size: 14px;
+    font-size: 15px;
   }
   .chat-input {
     width: calc(100% - 24px);
@@ -1160,7 +1174,7 @@ onUnmounted(() => {
     justify-content: flex-end;
   }
   .work-message-input :deep(.t-textarea__inner) {
-    font-size: 16px;
+    font-size: 15px;
   }
   .figures-panel {
     padding: 20px 16px;
@@ -1181,7 +1195,7 @@ onUnmounted(() => {
   background: var(--pa-accent-soft);
   color: var(--pa-accent);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 </style>
@@ -1196,9 +1210,8 @@ onUnmounted(() => {
 .paper-composer-quote {
   flex-basis: 100%;
   min-width: 0;
-  padding: 8px 12px;
-  border-left: 3px solid var(--pa-line);
-  font-size: 12px;
+  padding: 8px 0;
+  font-size: 13px;
 }
 .paper-composer-quote button {
   float: right;

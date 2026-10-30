@@ -16,10 +16,9 @@ import uuid
 from contextlib import contextmanager, closing
 from pathlib import Path
 
-from . import ENGINE_VERSION, DEFAULT_PLANNING_CALL_LIMIT
-from .models import Assumption, DomainCheck, ResearchRevision, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ValidationRecord, ContentFeedback, RuntimeFault
-from .validation import bind_requirements, validate_spec, protocol, evaluate, fingerprint
-from .assumptions import assumption_id, premise_definition, assumption_scope
+from . import ENGINE_VERSION
+from .models import Assumption, ResearchRevision, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ContentFeedback, RuntimeFault
+from .validation import bind_requirements, validate_spec, protocol, fingerprint
 
 DB_PATH = ".system/research.sqlite"
 
@@ -132,7 +131,7 @@ class ResearchStore:
         db.execute("INSERT INTO journal VALUES (?, ?, ?, ?)",
                    (self.research_id, state["commit_seq"], kind, json.dumps(payload, ensure_ascii=False)))
 
-    def initialize(self, requirement: str, analysis: dict | None = None, max_attempts: int = 3, *, output_mode="markdown"):
+    def initialize(self, requirement: str, analysis: dict | None = None, *, output_mode="markdown"):
         with self._transaction() as db:
             state = self._read(db)
             if state:
@@ -162,9 +161,8 @@ class ResearchStore:
                      "assumption_history": [], "validations": [],
                      "questions": {}, "experiments": tasks, "executions": {}, "artifacts": {}, "claims": {},
                      "action": None, "publication": None, "activity": [], "activity_updated_at": 0,
-                     "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running", "max_attempts": max_attempts,
-                     "materials": {"inputs": self.file_inputs(), "profile": ""},
-                     "planning_calls": 0, "max_total_attempts": len(tasks) * max_attempts + 6}
+                     "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running",
+                     "materials": {"inputs": self.file_inputs(), "profile": ""}}
             for experiment in tasks.values():
                 attach_question(state, experiment, title=experiment["subproblem"].get("title"))
             from .migration import retire_legacy_workflow
@@ -278,14 +276,11 @@ class ResearchStore:
                 raise ResearchConflict(f"任务 {task_id} 已领取或需要显式重试")
             if any(state["experiments"][dep]["acceptance"] != "accepted" or
                    state["experiments"][dep]["validity"] != "current" for dep in task["dependencies"]):
-                raise ResearchConflict(f"任务 {task_id} 的依赖尚未验收")
+                raise ResearchConflict(f"任务 {task_id} 的依赖尚未完成执行")
             if any(state["assumptions"][aid]["status"] == "refuted" for aid in task["assumption_ids"]):
                 raise ResearchConflict("任务依赖的假设已被反证")
             if any(i["blocking"] and i["status"] == "confirmed" and task_id in i["repair_targets"] for i in research_findings(state)):
                 raise ResearchConflict("任务需要先提交修复计划")
-            from .operations import attempt_budget_error
-            if error := attempt_budget_error(state, task):
-                raise ResearchConflict(error)
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
@@ -315,6 +310,20 @@ class ResearchStore:
                 import logging
                 logging.getLogger(__name__).warning('研究已提交；经验索引未完成，可从经验面板补建')
         return receipt
+
+    def sync_execution_files(self, run_ids):
+        """Refresh file indexes after delivery without rewriting committed results."""
+        from .domain import register_execution_artifacts
+        selected=set(run_ids)
+        with self._transaction() as db:
+            state=self._read(db)
+            if not state:return
+            before=dict(state['artifacts'])
+            for attempt in state['executions'].values():
+                if attempt.get('workspace')=='.' and selected.intersection(attempt.get('run_ids',[])):
+                    register_execution_artifacts(state,self.root,attempt)
+            if state['artifacts']!=before:
+                self._save(db,state,'execution_files_synced',{'run_ids':sorted(selected)})
 
     def bind_experiences(self, order, refs):
         if not self.experience_scope or not self.experience_scope.valid_refs(refs):
@@ -391,7 +400,7 @@ class ResearchStore:
                 return receipt
             if current:
                 if result.acceptance == "accepted" and result.execution_status != "succeeded":
-                    raise ValueError("执行失败的结果不能通过验收")
+                    raise ValueError("失败的执行不能标为完成")
                 # Audited intermediate values remain historical evidence even
                 # when the worker's registry replaced them during local repair.
                 all_evidence = {}
@@ -420,26 +429,14 @@ class ResearchStore:
                         "experiment_id": order.task_id, "type": "result", "active": item["id"] in ids}
                 # Continuations retain upstream results. current_results selects
                 # newer versions by declared identity, without discarding other scopes.
-                introduced = self._register_assumptions(state, result) if result.execution_status == "succeeded" else []
                 for old in state['claims'].values():
                     if old['experiment_id']==order.task_id and old.get('active',True):
                         old.update(active=False,status='superseded',reason='实验继续行动后更新解释')
                 for item in result.claims:
                     state["claims"][item["id"]] = {"payload": item, "producer_attempt": order.attempt_id, "experiment_id":order.task_id,
                         "active": True, "status": "current", "assumption_refs": {k.removeprefix("assumption:"): int(v) for k, v in order.input_refs.items() if k.startswith("assumption:")}}
-                review_clear = self._commit_reviews(state, result, set(all_evidence) | input_evidence)
-                if introduced:
-                    attempt['introduced_assumptions'] = introduced
-                validation = evaluate(state, order.task_id, result.results) if result.execution_status == "succeeded" else ValidationRecord(
-                    protocol_hash=order.protocol_hash, checks=[], outcome="inconclusive")
-                attempt["validation"] = validation.model_dump()
-                from .experience import grounded
-                attempt['experience_evidence'] = grounded(self.root,state,
-                    sorted({ref for check in validation.checks for ref in check.evidence_refs}))
-                state["validations"].append({"attempt_id": order.attempt_id, **validation.model_dump()})
-                acceptance = result.acceptance
-                if not task.get("verifies_issue") and validation.outcome != "accepted":
-                    acceptance = validation.outcome
+                self._commit_reviews(state, result, set(all_evidence) | input_evidence)
+                acceptance = "accepted" if result.execution_status == "succeeded" else "inconclusive"
                 task.update(execution_status=result.execution_status, acceptance=acceptance,
                             validity="current")
                 save_report_artifact(state,self.root,task,result.report)
@@ -450,38 +447,9 @@ class ResearchStore:
                         report = IssueReport(task_id=order.task_id, category="execution", message=report.message, evidence_refs=report.evidence_refs)
                     self._record_issue(state, report, "suspected" if report.category not in {"execution", "service", "evidence"} else "confirmed",
                                        producer_attempt=order.attempt_id)
-                    if report.category == "evidence":
-                        self._confirm_issue(state, next(i for i in research_findings(state) if i["producer_attempt"] == order.attempt_id and i["message"] == report.message), refute=False)
-                        acceptance = "inconclusive"
                 if task.get("verifies_issue"):
-                    issue = next(i for i in research_findings(state) if i["id"] == task["verifies_issue"])
-                    issue["evidence_refs"] = sorted(set(issue["evidence_refs"]) | {rid for c in validation.checks for rid in c.evidence_refs})
-                    if validation.outcome == "rejected" and review_clear:
-                        self._confirm_issue(state, issue)
-                        # Invalidating the disputed task also invalidates its investigation
-                        # dependency. Preserve this completed counterexample as history.
-                        task.update(acceptance="accepted", validity="current", execution_id=order.attempt_id,
-                                    execution_status="succeeded")
-                    elif validation.outcome == "accepted" and result.execution_status == "succeeded" and review_clear:
-                        issue["status"] = "dismissed"
-                        issue["resolution_attempt"] = order.attempt_id
-                        task["acceptance"] = "accepted"
-                    else:
-                        issue["status"] = "inconclusive"
-                        task["acceptance"] = "inconclusive"
                     task["retired"] = True
-                else:
-                    for check in validation.checks:
-                        if check.outcome == "passed":
-                            continue
-                        owner = state["assumptions"].get(check.owner_id) if check.owner_kind == "assumption" else None
-                        target = owner["task_ids"][0] if owner else order.task_id
-                        report = IssueReport(task_id=target, category="assumption" if owner else "domain",
-                            message=check.message, evidence_refs=check.evidence_refs,
-                            assumption_id=check.owner_id if owner else None, check_ids=[check.check_id])
-                        issue = self._record_issue(state, report, "confirmed", producer_attempt=order.attempt_id)
-                        self._confirm_issue(state, issue, refute=check.outcome == "failed")
-                attempt["acceptance"] = task["acceptance"] if task.get("verifies_issue") else acceptance
+                attempt["acceptance"] = acceptance
                 self._resolve_repairs(state, order.attempt_id)
 
             else:
@@ -515,46 +483,8 @@ class ResearchStore:
             self._confirm_issue(state,issue,refute=False)
             self._save(db,state,'comparison_issue',{'comparison_id':saved['id'],'issue_id':issue['id']})
 
-    def _register_assumptions(self, state, result):
-        """Stage newly adopted premises; no result is accepted under unfrozen inputs."""
-        if not result.assumptions:
-            return []
-        root = result.order.task_id
-        if state["experiments"][root]["kind"] != "compute":
-            raise ValueError("验证任务不能引入新的建模前提")
-        scope = assumption_scope(state["experiments"], root)
-        introduced, seen = [], {}
-        for proposal in result.assumptions:
-            aid = assumption_id(root, proposal.key)
-            definition = premise_definition(root, proposal)
-            if aid in seen:
-                if seen[aid] != definition:
-                    raise ValueError("同次提交的假设键冲突")
-                continue
-            seen[aid] = definition
-            known = state["assumptions"].get(aid)
-            if known:
-                if "assumption:" + aid not in result.order.input_refs:
-                    raise ResearchConflict("已有假设不在本次冻结输入中")
-                if any(known[k] != v for k, v in definition.items()) or known["status"] != "active":
-                    raise ResearchConflict("不能静默覆盖或复活已有假设，必须通过问题与计划修订")
-                continue
-            state["assumptions"][aid] = {"id": aid, **definition, "task_ids": scope,
-                "revision": 1, "status": "active", "source": proposal.source, "producer_attempt": result.order.attempt_id}
-            introduced.append(aid)
-        if not introduced:
-            return []
-        # These premises were declared by this execution, not discovered by a
-        # separate scheduling pass. Preserve that provenance without recomputing
-        # an unchanged experiment solely to attach newly allocated identifiers.
-        for key in scope:
-            task = state['experiments'][key]
-            task['assumption_ids'] += [aid for aid in introduced if aid not in task['assumption_ids']]
-        return introduced
-
     def _commit_reviews(self, state, result, available):
-        # Historical worker reviews are advisory input. Only deterministic
-        # contracts (evaluate) or an explicit owner decision can invalidate work.
+        # Historical reviews remain advisory; execution records stand on their own.
         for review in result.reviews:
             for report in review.issues:
                 if not set(report.evidence_refs) <= available:
@@ -581,7 +511,7 @@ class ResearchStore:
         if previous:
             if (report.category in {"writing", "service"} or report.category=='coverage' and source=='sections' or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
                 previous["status"] = status
-                previous['blocking']=not advisory and (report.category!='writing' or report.section!='paper')
+                previous['blocking']=report.category in {'execution','service'} and not advisory
             if advisory:previous['blocking']=False
             return previous
         record_type = RuntimeFault if report.category in {'execution', 'service'} else ContentFeedback
@@ -589,7 +519,7 @@ class ResearchStore:
             producer_attempt=producer_attempt, status=status, source=source,
             assumption_revision=state["assumptions"][report.assumption_id]["revision"] if report.assumption_id else None,
             action="retry" if report.category in {"execution", "service"} else "rewrite" if report.category == "writing" else "verify",
-            blocking=not advisory and (report.category != "writing" or report.section != "paper")).model_dump()
+            blocking=report.category in {"execution", "service"} and not advisory).model_dump()
         state["faults" if report.category in {"execution", "service"} else "feedback"].append(issue)
         return issue
 
@@ -705,21 +635,6 @@ class ResearchStore:
             "assumptions": [{k: v for k, v in a.items() if k in Assumption.model_fields}
                             for a in state["assumptions"].values()]}
         validate_spec(state["spec"]["requirement"] + "\n" + "\n".join(state["spec"]["amendments"]), analysis)
-        for task in state["experiments"].values():
-            if task["kind"] == "verify":
-                continue
-            for rule in protocol(state, task["task_id"]):
-                right = rule["check"].get("right")
-                if right and not ResearchStore._reaches(state, right["task_id"], task["task_id"]):
-                    raise ValueError("跨任务验收操作数必须声明任务依赖")
-
-    def reserve_planning_call(self, *, limit=DEFAULT_PLANNING_CALL_LIMIT):
-        with self._transaction() as db:
-            state=self._read(db)
-            if limit is not None and state['planning_calls']>=limit:return False
-            state['planning_calls']+=1
-            self._save(db,state,'observation_started',{'call':state['planning_calls']})
-            return True
 
     def set_outcome(self, outcome):
         with self._transaction() as db:
@@ -792,6 +707,32 @@ class ResearchStore:
             receipt={'revision':state['revision'],'affected':affected,'command':patch.model_dump()}
             db.execute('INSERT INTO commands VALUES (?,?,?,?)',
                        (self.research_id,key,signature,json.dumps(receipt,ensure_ascii=False)))
+            self._save(db,state,'research_revised',receipt)
+            return receipt
+
+    def amend_questions(self, command_id, base_revision, change, scope=None):
+        """Append human requirements without an experiment-planning model call."""
+        from .questions import QuestionUpdate, apply_questions
+        if not command_id or not change.strip():raise ValueError('修改编号和内容不能为空')
+        signature=digest([base_revision, change, scope]);key='question-revision:'+command_id
+        with self._transaction() as db:
+            old=db.execute('SELECT digest,response FROM commands WHERE research_id=? AND id=?', (self.research_id,key)).fetchone()
+            if old:
+                if old['digest']!=signature:raise ResearchConflict('修改编号已被另一条要求使用')
+                return json.loads(old['response'])
+            state=self._read(db)
+            if state['revision']!=base_revision:raise ResearchConflict('研究版本已改变，请刷新后重试')
+            selected=scope or []
+            if len(set(selected))!=len(selected) or any(q not in state['questions'] or state['questions'][q].get('retired') for q in selected):
+                raise ValueError('修改范围包含未知问题')
+            for qid in selected:
+                q=state['questions'][qid]
+                apply_questions(state,[QuestionUpdate(question_id=qid,base_version=q['version'],title=q['title'],
+                    question=q['question']+'\n补充要求：'+change,reason=change)])
+            state['spec']['amendments'].append(change)
+            state.update(outcome='running', publication=None, action=None, revision=state['revision']+1)
+            receipt={'command_id':command_id,'scope':selected,'change':change}
+            db.execute('INSERT INTO commands VALUES (?,?,?,?)',(self.research_id,key,signature,json.dumps(receipt,ensure_ascii=False)))
             self._save(db,state,'research_revised',receipt)
             return receipt
 

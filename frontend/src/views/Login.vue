@@ -355,7 +355,7 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 }
 
 .login-header h1 {
-  font-size: 2rem;
+  font-size: 22px;
   color: var(--pa-ink);
   margin: 0;
   line-height: 1;
@@ -416,11 +416,11 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
 
 .passkey-hint {
   margin-top: 12px !important;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-placeholder);
 }
 .passkey-help {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--td-text-color-placeholder);
 }
 .passkey-help summary {

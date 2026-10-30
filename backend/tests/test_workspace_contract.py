@@ -174,15 +174,16 @@ def test_template_delete_detaches_projects_without_deleting_them(tmp_path,monkey
         assert all(p.template_id is None for p in db.query(Project))
 
 
-def test_result_registration_binds_sealed_run_id(tmp_path):
-    from ai_system.graph.registry import ResultRegistry, GroundingError
+def test_run_archive_requires_a_sealed_receipt(tmp_path):
+    from ai_system.sandbox.evidence import verify_run
     fs=WorkspaceFS(tmp_path/'private/project-files'/'project');fs.init_structure();run=fs.create_run()
     fs.save_run_input(run,'print(3)');fs.save_run_stdout(run,'3');fs.save_run_stderr(run,'');freeze_inputs(fs,run)
-    fs.finish_run(run,'success');registry=ResultRegistry(fs)
-    with pytest.raises(GroundingError):registry.record_value('Q1','count','3',run)
-    seal_run(fs,run);item=registry.record_value('Q1','count','3',run)
-    assert fs._manifest['result_bindings'][item.id]['run_id']==run
-    assert registry.record_value('Q1','count','3',run).id==item.id
+    fs.finish_run(run,'success')
+    with pytest.raises((ValueError,OSError)):verify_run(fs,run)
+    seal_run(fs,run)
+    verify_run(fs,run)
+    fs.save_run_stdout(run,'changed')
+    with pytest.raises(ValueError):verify_run(fs,run)
 
 
 def test_sdk_mounts_only_server_local_execution_cache(tmp_path,monkeypatch):

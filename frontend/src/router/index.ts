@@ -19,7 +19,7 @@ const router = createRouter({
     {
       path: '/experiences',
       name: 'Experiences',
-      component: () => import('@/views/Experiences.vue'),
+      redirect: '/home',
       meta: { requiresAuth: true },
     },
     {

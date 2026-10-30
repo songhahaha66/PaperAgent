@@ -59,7 +59,28 @@ def submit(store,x=2,z=10,order=None,*,execution='succeeded',error='',ground=Tru
     result=WorkerResult(order=order,execution_status=execution,acceptance='accepted' if rows else 'inconclusive',
         design=DESIGN,results=rows,report={'status':'completed' if rows else 'failed','error':error,
             'requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':[r['id'] for r in rows]}] if rows else []})
-    return store.commit(result),result
+    # Import a historical contract-verified experience fixture. New research no
+    # longer creates validation records or promotes them automatically.
+    from unittest.mock import patch
+    scope=store.experience_scope
+    with patch.object(scope,'index',return_value=0):
+        receipt=store.commit(result)
+    if execution=='succeeded':
+        from ai_system.research.experience import grounded
+        with store._transaction() as db:
+            state=store._read(db);attempt=state['executions'][order.attempt_id]
+            checks=[]
+            for rule in attempt['experience_basis']['protocol']:
+                check=rule['check'];row=next(r for r in rows if r['name']==check['left']['name'])
+                checks.append({'check_id':check['id'],'owner_kind':rule['owner_kind'],'owner_id':rule['owner_id'],
+                    'owner_revision':rule['owner_revision'],'evidence_refs':[row['id']],
+                    'outcome':'passed' if float(row['value'])==check['expected'] else 'failed','message':'历史独立复核'})
+            attempt['validation']={'protocol_hash':order.protocol_hash,'checks':checks,
+                'outcome':'accepted' if all(c['outcome']=='passed' for c in checks) else 'rejected'}
+            attempt['experience_evidence']=grounded(store.root,state,[ref for c in checks for ref in c['evidence_refs']])
+            store._save(db,state,'import_historical_experience',{})
+    scope.index(store)
+    return receipt,result
 
 
 def adopt_ready(scope):

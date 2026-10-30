@@ -38,7 +38,7 @@ AUDIT_SYSTEM = (
     "方法公式须对照实际核验的估计器设置：截距、是否惩罚截距、训练集中心化和标准化的拟合范围。"
     "明确的中心化方程加截距恢复，或含常数列且正确处理截距惩罚的方程均有效；不要要求固定符号写法。"
     "构造反例前先核对登记序列的对应关系：对象、日期和统计范围必须一致；逐日不等式须逐日比较，不能用某日最小值与全周均值比较来反证。"
-    "若根因是数据、模型或假设错误，填写research_issue并引用登记证据和检查编号，进入研究核验；仅写作错误只填section和problem。"
+    "若根因是数据、模型或假设错误，填写research_issue并说明实际代码、输出和文件依据，进入研究核验；仅写作错误只填section和problem。"
     "补写没有证据支持的数值、夸大结论或遗漏适用条件，应按已有证据重写，不能为此重算原本正确的上游。"
     "正文误解已有正确结果的因果关系也属于writing，例如把有限次模拟的随机误差归因于参数估计误差；"
     "应直接修正文稿解释，不用无关数值检查把措辞问题升级成模型错误。章节编号不是计算结果。"
@@ -46,7 +46,7 @@ AUDIT_SYSTEM = (
     "另一个例外是确实发现原题研究目的尚无实际产物回答：用research_issue.category=coverage说明缺少的原要求及实际依据，"
     "交回同一研究控制器；这不是已证明的上游错误，不虚构检查或阈值。仅文稿漏写已有结果时仍按writing处理，不要求新增实验。"
     "你是论文终审。下面给出主要结论、统一口径、已登记证据，以及保留原始引用的章节正文。"
-    "正文引用对应的数值和含义以登记证据表为准。主要结论表只是关键结论摘录，不是证据全集；"
+    "正文的数值和含义以实际输出与结果文件为准。主要结论表只是关键结论摘录，不是证据全集；"
     "已登记的变量或辅助结果可以用于论证，不得因为它未被主要结论表列出就判为虚构。"
     "引用格式和编号存在性由程序检查，本次只审查语义矛盾，不要要求增加内部编号、照抄数值或逐句标注证据强度。"
     "围绕重要结论和已知矛盾核查这些章节：结论方向、显著与否、强弱程度、适用范围是否被改写或夸大。"
@@ -66,35 +66,12 @@ def section_coverage(sections):
 class ReviewCoverageIncomplete(ValueError):pass
 
 
-def consistency_text(ctx: GraphContext, conflicts: List[Dict]) -> str:
-    """给写作模型的统一口径"""
-    if not ctx.registry.claims:
-        return ""
-    parts = [
-        "# 当前实验主要结论（核对完整实验记录和实际证据，不能夸大证据强度）\n"
-        "陈述里\"数值⟨Rn⟩\"表示这个数值对应引用 {{R:Rn}}；正文写引用，不要照抄数值，也不要把编号和数值错配。",
-        ctx.registry.claims_table(),
-    ]
-    if conflicts:
-        parts.append("# 待核对的审查建议（须对照实际证据；错误建议不能当成事实写入正文）")
-        parts.extend(f"- {'、'.join(c['claims'])}：{c['issue']} → {c['resolution']}" for c in conflicts)
-    return "\n\n".join(parts)
-
-
-def valid_conflicts(conflicts: List[Dict], known: set) -> List[Dict]:
-    """只保留指向已登记结论的冲突，编号写错的丢掉"""
-    kept = []
-    for conflict in conflicts:
-        claims = [cid for cid in conflict.get("claims") or [] if cid in known]
-        if claims and conflict.get("resolution"):
-            kept.append({**conflict, "claims": claims})
-    return kept
-
-
 def reconcile_prompt(state,ctx):
     subproblems = "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in state["analysis"]["subproblems"])
     contract = ctx.research.snapshot()
-    return f"# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
+    from ai_system.research.views import execution_context
+    records=json.dumps(execution_context(ctx.research),ensure_ascii=False)
+    return f"# 实际执行输出、报告与结果文件\n{records}\n\n# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
 
 
 
@@ -139,7 +116,7 @@ def section_audit_prompt(state,ctx,*,force=False):
     from ai_system.research.method_facts import method_context
     methods=method_context(getattr(ctx,'research',None))
     if not keys:return None
-    applicable=bool(ctx.registry.claims or methods or force or state.get('consistency'))
+    applicable=bool(state.get('solutions') or ctx.registry.claims or methods or force or state.get('consistency'))
     if not applicable and getattr(ctx,'research',None) is not None:
         applicable=any(i['category']=='writing' and i.get('section') in keys and
             i['status'] not in {'resolved','dismissed','superseded'} for i in research_findings(ctx.research.snapshot()))
@@ -151,7 +128,10 @@ def section_audit_prompt(state,ctx,*,force=False):
         body = "\n\n".join(f"## 章节 key: {k}\n{sections[k]}" for k in keys)
     refs = (set(ctx.registry.results) if state.get('source_version') else set(find_refs(body))) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
     evidence = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items() if rid in refs})
+    from ai_system.research.views import execution_context
+    records=json.dumps(execution_context(ctx.research),ensure_ascii=False)
     prompt = (
+        f"# 实际执行输出、报告与结果文件\n{records}\n\n"
         f"# 主要结论\n{ctx.registry.claims_table()}\n\n# 已登记证据（包含辅助结果）\n{evidence.to_prompt_table()}\n\n"
         f"# 统一口径\n{json.dumps(state.get('consistency') or [], ensure_ascii=False)}\n\n# 待检查的章节\n{body}\n\n"
         f"section 只能填这些 key：{json.dumps(keys)}\n"
@@ -181,7 +161,7 @@ def section_audit_prompt(state,ctx,*,force=False):
 def validate_findings(issues,state,ctx):
     tasks={s['id'] for s in state['analysis']['subproblems']}
     for issue in issues:
-        if issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.registry.results):raise ValueError('审查问题超出冻结任务/证据范围')
+        if issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.research.snapshot()['artifacts']):raise ValueError('审查问题超出所提供的任务或执行记录范围')
 
 
 async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False,force=False) -> List[IssueReport]:

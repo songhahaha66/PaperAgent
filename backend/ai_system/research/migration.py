@@ -9,7 +9,7 @@ from contextlib import closing
 
 from .domain import FAULT_CATEGORIES, SCHEMA_VERSION
 
-MIGRATION_VERSION = 8
+MIGRATION_VERSION = 11
 
 
 def migrate_runtime(db, root):
@@ -93,6 +93,30 @@ def retire_legacy_workflow(state):
     if (state.get('publication') or {}).get('stage')=='reconcile':state['publication']=None
 
 
+def retire_evidence_acceptance(state):
+    """Archive retired gates verbatim; retain all runs, files and observations."""
+    from copy import deepcopy
+    retired=[]
+    for owner in [*state['spec']['requirements'],*state['assumptions'].values()]:
+        if owner.get('checks'):
+            retired.append({'source':'retired-metric-checks','raw':deepcopy(owner)})
+            owner['checks']=[]
+    for issue in [*state['feedback'],*state['faults']]:
+        metric_gate=(issue.get('category')=='evidence' or issue.get('check_ids')
+                     or '缺少唯一登记指标' in issue.get('message',''))
+        if metric_gate or issue.get('category') not in {'execution','service'}:
+            if issue.get('blocking') or issue.get('repair_targets'):
+                retired.append({'source':'retired-evidence-gate','raw':deepcopy(issue)})
+                issue.update(blocking=False,repair_targets={})
+    state.setdefault('legacy_records',[]).extend(retired)
+    action=state.get('action') or {}
+    task=state['experiments'].get(action.get('target')) or {}
+    if action.get('capability')=='experiments.execute' and not (task.get('experiment') or {}).get('csv'):
+        state['legacy_records'].append({'source':'retired-nested-dispatch','raw':deepcopy(action)})
+        state['action']=None
+
+
+
 def migrate_interpretations(state):
     """Keep original records; current claims derive from the actual report, never a reviewer."""
     from .domain import experiment_report
@@ -159,6 +183,12 @@ def migrate_workspace(store):
                            (f'research/{row[0]}/v{state["schema_version"]}',row[1].encode('utf-8')))
                 if state['schema_version']==4:migrate_interpretations(state)
                 else:retire_legacy_workflow(state)
+                retire_evidence_acceptance(state)
+                if (state.get('publication') or {}).get('stage') in {'write','repair'}:
+                    state.setdefault('legacy_records',[]).append({'source':'retired-publication','raw':state['publication']})
+                    state['publication']=None
+                    if (state.get('action') or {}).get('capability') in {'writing.write','writing.repair'}:
+                        state['action']['status']='done'
                 state['schema_version']=SCHEMA_VERSION
                 db.execute('UPDATE research SET payload=? WHERE id=?',(json.dumps(state,ensure_ascii=False),row[0]))
                 continue

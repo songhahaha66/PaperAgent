@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 
 from langchain_core.callbacks import get_usage_metadata_callback
 
-from .metrics import code_runs, number_traceability, section_coverage
+from .metrics import code_runs, artifact_files, section_coverage
 from .mmbench import Problem, build_task_prompt, load_problem, stage_datasets
 from .rubric import DIMENSIONS, score_paper
 
@@ -85,7 +85,6 @@ def _sum_usage(usage_by_model: Dict[str, Dict]) -> Dict[str, int]:
 # All evaluation variants use the same versioned research engine.
 RESEARCH_VARIANTS = {
     "research": {},
-    "research-no-planner": {"max_planning_calls": 0},
 }
 PIPELINES = tuple(RESEARCH_VARIANTS)
 
@@ -167,7 +166,7 @@ async def score_problem(problem: Problem, out_dir: Path, judge) -> Dict:
         "paper_chars": len(paper),
         "code_runs": code_runs(workspace),
         "sections": section_coverage(paper),
-        "numbers": number_traceability(paper, workspace, problem_text),
+        "files": artifact_files(workspace),
         "judge": None,
     }
     if paper and judge is not None:
@@ -206,8 +205,7 @@ def summarize(out_dir: Path, problem_ids: List[str]) -> Dict:
             "total_tokens": (run.get("usage") or {}).get("total_tokens"),
             "code_success_rate": (score.get("code_runs") or {}).get("success_rate"),
             "section_coverage": (score.get("sections") or {}).get("coverage"),
-            "number_trace_rate": (score.get("numbers") or {}).get("rate"),
-            "number_trace_error": (score.get("numbers") or {}).get("error"),
+            "artifact_file_rate": (score.get("files") or {}).get("rate"),
             "overall": judge.get("overall"),
             **{f"dim_{d.key}": (judge.get("dimensions") or {}).get(d.key) for d in DIMENSIONS},
             "needs_review": judge.get("needs_review") or [],
@@ -216,13 +214,12 @@ def summarize(out_dir: Path, problem_ids: List[str]) -> Dict:
 
     numeric = [
         "seconds", "total_tokens", "code_success_rate", "section_coverage",
-        "number_trace_rate", "overall", *[f"dim_{d.key}" for d in DIMENSIONS],
+        "artifact_file_rate", "overall", *[f"dim_{d.key}" for d in DIMENSIONS],
     ]
     summary = {
         "problems": len(rows),
         "papers_produced": sum(r["paper"] for r in rows),
         "errors": sum(r["error"] for r in rows),
-        "number_trace_errors": sum(bool(r["number_trace_error"]) for r in rows),
         "mean": {key: _mean([r[key] for r in rows]) for key in numeric},
         "rows": rows,
     }
@@ -243,11 +240,11 @@ def _fmt(value) -> str:
 
 def render_markdown(summary: Dict) -> str:
     dims = [f"dim_{d.key}" for d in DIMENSIONS]
-    headers = ["题目", "总分", *[d.name for d in DIMENSIONS], "代码成功率", "章节齐全", "数字可追溯", "耗时(s)", "tokens"]
-    keys = ["overall", *dims, "code_success_rate", "section_coverage", "number_trace_rate", "seconds", "total_tokens"]
+    headers = ["题目", "总分", *[d.name for d in DIMENSIONS], "代码成功率", "章节齐全", "结果文件可读", "耗时(s)", "tokens"]
+    keys = ["overall", *dims, "code_success_rate", "section_coverage", "artifact_file_rate", "seconds", "total_tokens"]
     lines = [
         f"共 {summary['problems']} 题，产出论文 {summary['papers_produced']} 篇，出错 {summary['errors']} 次。"
-        f"数字来源评测不可用 {summary['number_trace_errors']} 题（不计入该项平均）。",
+        "",
         "",
         "| " + " | ".join(headers) + " |",
         "|" + "---|" * len(headers),
@@ -258,9 +255,6 @@ def render_markdown(summary: Dict) -> str:
     review = [f"{r['problem_id']}: {', '.join(r['needs_review'])}" for r in summary["rows"] if r["needs_review"]]
     if review:
         lines += ["", "低置信度、建议人工复核的子项：", *[f"- {item}" for item in review]]
-    unavailable = [f"{r['problem_id']}: {r['number_trace_error']}" for r in summary["rows"] if r["number_trace_error"]]
-    if unavailable:
-        lines += ["", "数字来源评测不可用：", *[f"- {item}" for item in unavailable]]
     return "\n".join(lines) + "\n"
 
 

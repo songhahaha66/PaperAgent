@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 CHECKPOINT_PATH = ".system/graph.sqlite"
 THREAD_PATH = ".system/graph_thread.json"
 CALLS_PATH = ".system/llm_calls.json"
-GRAPH_RECURSION_LIMIT = 200
+GRAPH_RECURSION_LIMIT = 100000  # Infrastructure fuse; ResearchRuntime owns request limits.
 
 
 class PaperGraphAgent:
@@ -69,10 +69,6 @@ class PaperGraphAgent:
         self.codeagent_llm = codeagent_llm
         self.writer_llm = writer_llm
         self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
-        if (workspace_path(Path(self.workspace_dir), '.system/research.sqlite')).exists():
-            from ..research.runtime import ResearchRuntime
-            if ResearchRuntime(Path(self.workspace_dir)).policy()['compact_paper']:
-                self.options.setdefault('max_solver_steps',12)
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
 
@@ -166,41 +162,45 @@ class PaperGraphAgent:
         pending = snapshot.get('action') or {}
         if pending.get('capability') == 'ask' and pending.get('status') == 'waiting':
             raise ValueError('当前等待必要信息，请先回答待补充问题')
-        # Stable command payload even when retrying after the revision committed.
-        issue_options={'source_issue':source_issue} if source_issue else {}
-        patch = store.load_revision_command(command_id, base_revision, change, scope,**issue_options)
-        if patch is None:
+        if not snapshot['experiments']:
+            if source_issue:raise ValueError('历史实验意见请使用对应实验的修订入口')
+            store.amend_questions(command_id, base_revision, change, scope)
+        else:
+            # Stable command payload even when retrying after the revision committed.
+            issue_options={'source_issue':source_issue} if source_issue else {}
+            patch = store.load_revision_command(command_id, base_revision, change, scope,**issue_options)
+            if patch is None:
+                if source_issue:
+                    from services.chat_services.issue_edits import require_binding
+                    linked=require_binding(store,source_issue,writing=False)
+                    if linked['route']!='research' or scope!=[linked['issue']['task_id']]:raise ValueError('源意见必须进入对应任务的定向研究修改')
+                if snapshot["revision"] != base_revision:
+                    raise ValueError("研究版本已改变，请刷新后重试")
+                from ..research.runtime import budget_scope
+                trace=LLMCallTrace()
+                callbacks=getattr(self.llm,'callbacks',None)
+                model=self.llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]}) if hasattr(self.llm,'model_copy') else self.llm
+                try:
+                    with research_tracing(self.work_id or Path(self.workspace_dir).name, research_id, 'revise',
+                                          command_id=command_id, base_revision=base_revision), \
+                            remote_trace('PaperAgent.revise', inputs={'change': change, 'scope': scope}), \
+                            budget_scope(Path(self.workspace_dir), research_id), labelled('amendment'):
+                        requirements = await Planner(model).amendment(snapshot, change, scope)
+                except Exception:
+                    self._save_thread(research_id,'failed')
+                    raise
+                finally:trace.dump(workspace_path(Path(self.workspace_dir), '.system/planner_llm_calls.json'))
+                patch = propose_revision(snapshot, command_id, base_revision, change, scope, requirements)
+                if source_issue:require_binding(store,source_issue,writing=False)
+            store.apply_revision_command(command_id, base_revision, change, scope, patch,**issue_options)
             if source_issue:
-                from services.chat_services.issue_edits import require_binding
-                linked=require_binding(store,source_issue,writing=False)
-                if linked['route']!='research' or scope!=[linked['issue']['task_id']]:raise ValueError('源意见必须进入对应任务的定向研究修改')
-            if snapshot["revision"] != base_revision:
-                raise ValueError("研究版本已改变，请刷新后重试")
-            from ..research.runtime import budget_scope
-            trace=LLMCallTrace()
-            callbacks=getattr(self.llm,'callbacks',None)
-            model=self.llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]}) if hasattr(self.llm,'model_copy') else self.llm
-            try:
-                with research_tracing(self.work_id or Path(self.workspace_dir).name, research_id, 'revise',
-                                      command_id=command_id, base_revision=base_revision), \
-                        remote_trace('PaperAgent.revise', inputs={'change': change, 'scope': scope}), \
-                        budget_scope(Path(self.workspace_dir), research_id), labelled('amendment'):
-                    requirements = await Planner(model).amendment(snapshot, change, scope)
-            except Exception:
-                self._save_thread(research_id,'failed')
-                raise
-            finally:trace.dump(workspace_path(Path(self.workspace_dir), '.system/planner_llm_calls.json'))
-            patch = propose_revision(snapshot, command_id, base_revision, change, scope, requirements)
-            if source_issue:require_binding(store,source_issue,writing=False)
-        store.apply_revision_command(command_id, base_revision, change, scope, patch,**issue_options)
-        if source_issue:
-            with store._transaction() as db:
-                key='issue-research:'+command_id
-                if not db.execute('SELECT 1 FROM commands WHERE research_id=? AND id=?',(research_id,key)).fetchone():
-                    from ..research.store import digest
-                    link={'source_issue':source_issue,'revision_command_id':command_id,'base_revision':base_revision,'scope':scope}
-                    db.execute('INSERT INTO commands VALUES (?,?,?,?)',(research_id,key,digest(link),json.dumps(link,ensure_ascii=False)))
-                    store._save(db,store._read(db),'issue_research_revision_linked',link)
+                with store._transaction() as db:
+                    key='issue-research:'+command_id
+                    if not db.execute('SELECT 1 FROM commands WHERE research_id=? AND id=?',(research_id,key)).fetchone():
+                        from ..research.store import digest
+                        link={'source_issue':source_issue,'revision_command_id':command_id,'base_revision':base_revision,'scope':scope}
+                        db.execute('INSERT INTO commands VALUES (?,?,?,?)',(research_id,key,digest(link),json.dumps(link,ensure_ascii=False)))
+                        store._save(db,store._read(db),'issue_research_revision_linked',link)
         current = store.snapshot()
         if current["commit_seq"] == snapshot["commit_seq"] and current["outcome"] in {"completed", "needs_attention"}:
             # A delivered command retry must not republish the paper or rerun export.
@@ -214,7 +214,7 @@ class PaperGraphAgent:
         return await self.resume_failed()
 
     async def resume_failed(self) -> str:
-        """从当前提交状态恢复；重新领取未验收任务，不回放历史结果。"""
+        """从当前运行记录恢复，不回放历史计算。"""
         self._require_current_thread()
         ctx = self._context()
         checkpoint = workspace_path(Path(self.workspace_dir), CHECKPOINT_PATH)
@@ -241,7 +241,7 @@ class PaperGraphAgent:
         if ctx.research.snapshot() is not None:
             ctx.research.recover()
             from ..research.loop import resume
-            resume(ctx.research,planning_limit=ctx.max_planning_calls)
+            resume(ctx.research)
             refresh_registry(ctx)
             from .checkpoint import discard_business_mirror
             await discard_business_mirror(graph, config)
@@ -328,8 +328,9 @@ class PaperGraphAgent:
     def _result(ctx):
         """Transient compatibility view for callers, never checkpointed."""
         from ..research.control import graph_view
+        from ..research.runs import run_context
         state = ctx.research.snapshot()
-        return {**graph_view(state), 'exports': state.get('exports', []),
+        return {**graph_view(state), 'runs': run_context(ctx.research), 'exports': state.get('exports', []),
                 'paper_path': state.get('paper_version') if state.get('paper_conflict') else None,
                 'artifact_conflict': state.get('paper_conflict', False),
                 'delivery_stages': state.get('delivery_stages', {}),

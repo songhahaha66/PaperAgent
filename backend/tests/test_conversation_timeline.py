@@ -146,12 +146,17 @@ def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):
             client_state = SimpleNamespace(value=1)
             async def send_text(self, raw): delivered.append(json.loads(raw))
         manager = chat.ConnectionManager()
-        await manager.replay('work', Socket(), task, 1)
+        socket = Socket()
+        await manager.replay('work', socket, task, 1)
+        subscription = manager.active_connections['work'][socket]
+        await subscription.queue.join()
         assert [p['seq'] for p in delivered if 'seq' in p] == [2, 3]
         assert all(p.get('reply_id') == 'reply' for p in [delivered[0], delivered[-1]])
         assert delivered[1]['update']['revision'] == 2
         await manager.send('work', {'type':'reply_update','update':updates[-1].data}, 3)
+        await subscription.queue.join()
         assert len(delivered) == 4, 'already-replayed output is not sent again'
+        manager.disconnect('work', socket)
     asyncio.run(scenario())
 
 

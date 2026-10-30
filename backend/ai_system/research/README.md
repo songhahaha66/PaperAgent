@@ -1,5 +1,15 @@
-# Research engine
+# Research sessions
 
-`store.py` owns schema 5 state. `planner.py` chooses research decisions; `loop.py` dispatches through LangGraph and preserves `solve_join`. Experiments execute continuous CodeAct actions and return complete findings. Interpretation edits never run calculation. Read views project the same questions, reports, results, claims and history.
+The main Agent reads materials, computes in one persistent Python kernel, updates answers and edits the manuscript directly through `writing.edit`. Delivery validates current files/references and renders/exports them; there is no separate section-writing Agent or model repair pipeline. Compiler diagnostics return to the same research conversation.
 
-See [ARCHITECTURE.md](../../../docs/ARCHITECTURE.md) for ownership, versioning, migration and advisory checks.
+Direct Python steps use the existing manifest run receipts (`runs.py`), never claim/commit experiments or manufacture an acceptance verdict. A question ID is optional metadata; unknown explicit IDs fail without borrowing another question. `research.create_question` accepts no ID, while `research.edit_question` requires the returned short ID and current version. The old question-splitting and experiment interpretation operations remain internal compatibility interfaces for historical records.
+
+`session.py` retains main and delegated message histories on stable threads in the existing graph SQLite database, independently of the outer scheduler's checkpoints. Recovery reconciles tool receipts and saved runs before continuing a pending call. It never assumes Python memory survived, or silently replays submitted code.
+
+`graph/compaction.py` keeps the original project instructions and recent complete tool rounds, replaces old completed code with immutable source paths, offloads large outputs to readable files and summarizes completed history at the model context boundary. Summaries are fallible working notes cached in existing command records; source messages, current question state and run archives remain authoritative. Each request records estimated message/tool context size separately from actual provider usage.
+
+`research.delegate` creates an isolated work directory and a persistent child conversation. Isolated tasks receive the task and selected files; forked tasks also receive the parent's current messages. Children cannot delegate or edit the main manuscript. Follow-ups reuse task IDs; changed input files require a new task. Generated outputs use the existing immutable run publisher. All requests, including summaries and children, share ResearchRuntime. Up to two child calls may run concurrently; writes to a shared main kernel remain serialized.
+
+ResearchStore owns current questions, requirements and versions; manifests own actual direct run receipts and files; LangGraph checkpoints own conversation position. File transfer retries preserve run identity. User amendments in new direct sessions return to the same Agent without an extra experiment-planning model. Domain checks remain calculation code and semantic review stays advisory. Historical registration references and old document edits remain readable.
+
+Offline evals inspect actual published files instead of registered number strings. `python -m evals.microgrid <source.xlsx> <result1.xlsx>` checks the supplied microgrid Q1 against an independent LP and daily energy balance with explicitly documented efficiency/timing assumptions. It is a task-specific evaluation, not a production acceptance gate or a verifier for Q2–4.

@@ -187,7 +187,7 @@ def test_root_csv_is_collected_and_reads_retained_execution_version(tmp_path):
         assert not any(p.endswith(('unregistered.txt','inherited.csv')) for p in paths)
         # Research must read the retained execution version, not a later edit.
         (workspace/'waiting_summary.csv').write_text('value\n999\n')
-        content=await read_artifact(SimpleNamespace(research=store),
+        content=await read_artifact(SimpleNamespace(research=store,fs=public),
             {'task_id':'Q1','path':csv,'start':0,'limit':12000})
         assert content.value['excerpt']=='value\n42\n'
     asyncio.run(run())
@@ -206,7 +206,7 @@ def test_completed_execution_event_already_links_published_logs(tmp_path, monkey
         lambda root, rid, kind, item: events.append(timeline.execution_projection(root, rid, item)))
     async def run():
         try:
-            tool = next(t for t in build_tools(ctx, 'Q1', record=False) if t.name == 'run_python')
+            tool = next(t for t in build_tools(ctx, 'Q1') if t.name == 'run_python')
             await tool.ainvoke({'code': 'print(sum([1, 2, 3]))'})
         finally:
             await ctx.kernels.close()

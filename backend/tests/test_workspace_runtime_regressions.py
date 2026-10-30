@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.graph.context import GraphContext, KernelPool
 from ai_system.modules.experiments import supervised
-from ai_system.modules.experiments.handoff import handoff, publish_comparison
+from ai_system.modules.experiments.handoff import publish_comparison
 from ai_system.modules.experiments.store import SupervisedSpec, CandidateCode
 from ai_system.sandbox.contracts import ExecutionOutcome
 from ai_system.sandbox.remote_kernel import RemoteKernel
@@ -134,12 +134,7 @@ def test_two_candidates_keep_winner_memory_without_locking_each_other(comparison
             before=copy.deepcopy(c.db.reservations)
             repeated=await supervised.compare(c.ctx,c.branch)
             assert repeated is record and c.db.reservations==before and c.calls==[0,1]
-            winner=c.ctx.kernels._kernels['Q1~comparison1'];run_log=[]
-            await asyncio.wait_for(handoff(c.ctx,c.branch,SimpleNamespace(record=record),run_log),2)
-            assert c.ctx.kernels.get('Q1') is winner and winner.timeout==c.ctx.kernels.timeout
-            assert record['formal_handoffs'][-1]['fresh_fit'] is False
             assert sum(s.fits for s in c.sessions.values())==2
-            assert len(c.sessions['Q1~comparison1'].calls)==2
         finally:await c.ctx.kernels.close()
         with edit_lock(c.ctx.workspace):pass
     asyncio.run(check())
@@ -156,16 +151,6 @@ def test_publication_third_kernel_does_not_refit_or_deadlock(comparison):
             assert all(c.sessions[key].closed for key in ('Q1~comparison0','Q1~comparison1'))
             assert sum(s.fits for s in c.sessions.values())==2 and c.sessions['Q1'].fits==0
         finally:await c.ctx.kernels.close()
-    asyncio.run(check())
-
-
-def test_lost_winner_memory_fails_without_a_replacement_fit(comparison):
-    async def check():
-        c=comparison;record=await supervised.compare(c.ctx,c.branch)
-        await c.ctx.kernels.close();before=list(c.creation)
-        with pytest.raises(ValueError,match='不能静默重新训练'):
-            await handoff(c.ctx,c.branch,SimpleNamespace(record=record),[])
-        assert c.creation==before and sum(s.fits for s in c.sessions.values())==2
     asyncio.run(check())
 
 

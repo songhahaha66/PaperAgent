@@ -83,8 +83,7 @@ def experiments_view(business, safe_file, current_files=None):
                      and (e['active'] or aid!=task.get('execution_id'))]
             if aid==task.get('execution_id') and task['validity']=='current':
                 items=current_results(business,{key},task_id=key)
-            if items:
-                retained.append((attempt, items))
+            retained.append((attempt, items))
         active = next((p for p in retained if p[0]['attempt_id'] == task.get('execution_id')), None)
         selected = active or (retained[0] if retained else (attempts[-1] if attempts else {}, []))
         attempt, items = selected
@@ -118,13 +117,14 @@ def experiments_view(business, safe_file, current_files=None):
             'id': key, 'task_id': key, 'question_id':task['question_id'], 'title': task.get('subproblem', {}).get('title') or task['objective'],
             'objective': task['objective'], 'revision': attempt.get('revision'),
             'attempt_id': attempt.get('attempt_id'), 'started_at':attempt.get('started_at'), 'computation': attempt.get('execution_status', task['execution_status']),
-            'availability': ('current' if current else 'historical') if items else 'unavailable',
+            'availability': ('current' if current else 'historical') if attempt else 'unavailable',
             'checking': check_state(business, task, attempt, [i for i in issues if i['category']!='writing']) if inputs_match else 'outdated',
             'approach': report.get('approach') or '', 'summary': report.get('summary') or '',
             'method': {k: method[k] for k in ('name', 'idea', 'formulation', 'steps', 'validation') if method.get(k)} or None,
             'experiment':attempt.get('experiment') or task.get('experiment'),
             'results': [result_view(item, safe_file) for item in items[:500]],
-            'claims': [claim_view(c['payload'], [e['payload'] for e in business['artifacts'].values()]) for c in current_claims],
+            'claims': [claim_view(c['payload'], [e['payload'] for e in business['artifacts'].values()]) for c in current_claims] or [
+                {'id':f'{key}:finding:{i}',**finding} for i,finding in enumerate(report.get('key_findings',[]))],
             'issues': issues, 'sources': sources,
             'next_step': ' '.join(dict.fromkeys(issue_next_step(i,business) for i in issues)) or task.get('reason') or report.get('next_step') or None,
             'artifacts': [{'id':ref,'kind':e['type'],'path':safe_file(e['payload'].get('path')),'run_id':e['payload']['run_id']}

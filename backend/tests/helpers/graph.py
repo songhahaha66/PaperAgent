@@ -87,48 +87,6 @@ def decision_outline(context,coverage):
         ('symbols','符号说明'),('solve_heading','模型建立与求解'),('sensitivity','灵敏度分析'),('evaluation','模型评价')]]
 
 
-def native_source_reply(messages):
-    """Controlled source edits using the actual writer context and source targets."""
-    from ai_system.modules.writing.latex import SourceEdits,SourceEdit
-    from ai_system.export.latex import escape_plain
-    from ai_system.graph.registry import REF_PATTERN,find_refs
-    prompt=messages[-1].content
-    def payload(marker):
-        return json.JSONDecoder().raw_decode(prompt.split(marker,1)[1].lstrip())[0]
-    questions=payload('# 研究问题、已有判断与未解决部分\n')
-    records=payload('# 实验记录与结果（每份报告只列一次；历史提供定位）\n')
-    sources=payload('# 当前项目源码片段（唯一当前正文）\n')
-    source=next(f for f in sources if f['file']=='paper.tex')
-    current=''.join(block['text'] for block in source['blocks'])
-    assert current.count(r'\begin{document}')==1 and current.count(r'\end{document}')==1
-    results={r['id']:r for record in records for r in record['results']}
-    assert results and questions
-    def prose(text):
-        chunks=[];start=0
-        for match in REF_PATTERN.finditer(text):
-            assert match[2] in results, 'controlled writer must only reference supplied experiment results'
-            chunks.extend([escape_plain(text[start:match.start()]),match[0]])
-            start=match.end()
-        return ''.join(chunks)+escape_plain(text[start:])
-    body=[r'\section{研究问题与当前答案}']
-    for question in questions:
-        assert set(find_refs(question['judgment'])) <= results.keys()
-        body.extend([r'\subsection{'+escape_plain(question['title'])+'}',prose(question['judgment'])])
-        body.extend(escape_plain(item) for item in question['limitations'])
-    body.append(r'\section{实验记录与适用范围}')
-    for record in records:
-        body.extend([escape_plain(record['objective']),prose((record['record'] or {}).get('summary',''))])
-        body.extend(escape_plain(item) for item in (record['record'] or {}).get('limitations',[]))
-        for result in record['results']:
-            if result['kind']=='figure':body.append('{{F:'+result['id']+'}}')
-    body.extend([r'\section{局限}', '结论限于实际执行的输入和条件，未验证的外推仍为未知。'])
-    preamble,tail=current.split(r'\begin{document}',1)
-    original_body,suffix=tail.split(r'\end{document}',1)
-    # Keep the supplied document body/title block; do not assume a title macro.
-    replacement=preamble+r'\begin{document}'+original_body+'\n\n'+'\n\n'.join(body)+'\n'+r'\end{document}'+suffix
-    return SourceEdits(edits=[SourceEdit(target=source['target'],replacement=replacement)])
-
-
 class _Structured:
     reviewed_q1 = False
     audits = 0
@@ -137,9 +95,6 @@ class _Structured:
         self.schema = schema
 
     async def ainvoke(self, messages):
-        from ai_system.modules.writing.latex import SourceEdits
-        if self.schema is SourceEdits:
-            return native_source_reply(messages)
         if self.schema is AmendmentSpec:
             data = json.loads(messages[-1].content)
             number = max(int(r[2:]) for r in data["used_requirement_ids"]) + 1
@@ -207,8 +162,13 @@ class FakeModel(BaseChatModel):
     def _generate(self, messages: List[BaseMessage], stop=None, run_manager=None, **kwargs) -> ChatResult:
         tools=kwargs.get('tools') or []
         names={t.get('function',t).get('name') if isinstance(t,dict) else t.name for t in tools}
-        reply=research_step(messages,_analysis()) if 'research_update_question' in names else self._respond(messages)
+        reply=self._research_step(messages,_analysis()) if 'research_create_question' in names else self._respond(messages)
         return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    def _research_step(self,messages,plan):
+        return research_step(messages,plan,transform=self._draft)
+
+    def _draft(self,text):return text
 
     def _respond(self, messages: List[BaseMessage]) -> AIMessage:
         first = next(m for m in messages if isinstance(m, HumanMessage)).content
@@ -237,29 +197,12 @@ class FakeModel(BaseChatModel):
         value = "1234.57" if sid in {"Q1","E1"} else "8.5%"
         script = [
             ("run_python", {"code": "forecast = 1234.5678\nprint('forecast', forecast)\nprint('saving', 0.085)"}),
-            ("record_results", {"items": [
-                {"name": "预测值" if sid in {"Q1","E1"} else "节电比例", "value": value, "run_id": run_id, "unit": "万千瓦时" if sid in {"Q1","E1"} else ""},
-                {"name": "编造值", "value": "99.99", "run_id": run_id},
-            ]}),
             ("run_python", {"code": "import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])"}),
-            ("record_figure", {"run_id": run_id, "figure": "figure_1.png", "caption": f"{sid} 结果图"}),
-            ("SolveReport", {
-                "summary": "完成，预测为 {{R:R1}}", "approach": "ARIMA", "key_findings": [{"statement": "结论 {{R:R1}}", "strength": "显著"}],
-                "sensitivity": "稳定", "limitations": ["样本少"],
-            }),
+            ("SolveReport", {"summary": "完成，预测为 " + value, "approach": "ARIMA",
+                "key_findings": [{"statement": "当前条件下的结果为 " + value, "strength": "倾向"}],
+                "sensitivity": "稳定", "limitations": ["样本少"], "validation":"已检查输入与输出范围"}),
         ]
         name, args = script[min(step, len(script) - 1)]
-        if name == "SolveReport":
-            refs=[ref for message in tool_results for ref in re.findall(r"\{\{R:(R[0-9]+)\}\}",str(message.content))]
-            if refs:
-                args['summary']='完成，当前结果为 {{R:'+refs[-1]+'}}'
-                args['key_findings']=[{'statement':'当前条件下的结果 {{R:'+refs[-1]+'}}','strength':'倾向'}]
-            source = task.split("# 研究契约", 1)[-1]
-            if "# 研究契约" in task:
-                contract, _ = json.JSONDecoder().raw_decode(source[source.index("{"):])
-                refs = [ref for message in tool_results for ref in re.findall(r"\{\{R:(R[0-9]+)\}\}", str(message.content))]
-                args["requirement_evidence"] = [{"requirement_id": r["id"], "evidence_refs": [refs[-1]]}
-                                                for r in contract["requirements"]] if refs else []
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{sid}_{step}"}])
 
     def _probe_step(self, task: str, messages: List[BaseMessage]) -> AIMessage:

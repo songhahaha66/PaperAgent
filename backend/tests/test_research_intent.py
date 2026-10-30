@@ -39,6 +39,15 @@ def test_explicit_controls_never_call_jev_or_reinterpret_the_message():
         asyncio.run(chat.resolve_action('resume', '继续', snapshot(work_status='waiting'), judge=judge))
 
 
+def test_direct_research_can_receive_explicit_requirements_without_experiments():
+    state = snapshot(experiments=[], questions=[{'id': 'Q1', 'retired': False}])
+    judge = FixedChoice('clarify')
+    assert asyncio.run(chat.resolve_action('revise_research', '交齐已有结果文件', state, judge=judge)) == 'revise_research'
+    assert not judge.calls
+    with pytest.raises(ValueError, match='不能修订'):
+        chat.validate_action('revise_research', state.model_copy(update={'research_id': None}))
+
+
 def test_failures_and_ambiguous_or_inapplicable_choices_leave_state_unchanged(monkeypatch):
     state = snapshot()
     before = state.model_dump()

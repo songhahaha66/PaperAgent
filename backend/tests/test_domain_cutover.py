@@ -137,7 +137,8 @@ def test_unstamped_local_database_upgrades_without_losing_records(unstamped_appl
     with engine.connect() as db:
         assert tuple(db.execute(sa.text('SELECT work_id,title,architecture_version FROM projects')).one()) == ('old','原项目',1)
         assert db.execute(sa.text('SELECT password_hash FROM users')).scalar_one() == 'preserve-me'
-        assert db.execute(sa.text('SELECT version_num FROM alembic_version')).scalar_one() == 'b28c4e96ad10'
+        from alembic.script import ScriptDirectory
+        assert db.execute(sa.text('SELECT version_num FROM alembic_version')).scalar_one() == ScriptDirectory.from_config(config).get_current_head()
         archived = db.execute(sa.text("SELECT payload FROM legacy_domain_records WHERE source='works/old/progress'")).scalar_one()
         assert json.loads(archived) == {'progress':42}
 

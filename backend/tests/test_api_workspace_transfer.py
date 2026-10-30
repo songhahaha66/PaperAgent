@@ -86,6 +86,31 @@ def test_rebuilt_container_reuses_confirmed_files_without_claiming_memory(root,t
     asyncio.run(check())
 
 
+def test_generated_files_in_arbitrary_directories_are_delivered_without_input_changes(root,tmp_path):
+    from ai_system.sandbox.transfer import output_path
+    class Nested(Cells):
+        async def execute(self,code,run_id,output):
+            self.calls.append(code)
+            for name in ('results/dispatch.csv','analysis/tables/check.json'):
+                path=self.remote/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('computed')
+            (self.remote/'attachment/input.csv').write_text('changed remotely')
+            return ExecutionOutcome()
+    async def check():
+        session=Nested(root,tmp_path/'remote-host');kernel=RemoteKernel(root,session,session.settings)
+        kernel.fs.write_text('attachment/input.csv','original input')
+        try:
+            result=await kernel.execute('once')
+            assert result.ok and not result.delivery_error
+            assert (root/'results/dispatch.csv').read_text()=='computed'
+            assert (root/'analysis/tables/check.json').read_text()=='computed'
+            assert (root/'attachment/input.csv').read_text()=='original input'
+            assert session.calls==['once']
+        finally:await kernel.close()
+    asyncio.run(check())
+    for name in ('attachment/input.csv','data/source.csv','outputs/research/run/result.csv','paper.md'):
+        with pytest.raises(ValueError):output_path(name)
+
+
 def test_delivery_retry_uses_frozen_version_after_mutable_cache_changed(root,tmp_path):
     async def check():
         first=Cells(root,tmp_path/'remote-host');first.fail_download=True

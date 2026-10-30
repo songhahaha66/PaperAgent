@@ -24,16 +24,14 @@ def test_repeat_commit_is_idempotent_and_mismatched_retry_rejected(tmp_path):
     assert len(store.registry_payload()["results"]) == 1
 
 
-def test_rejected_execution_never_unblocks_dependents(tmp_path):
+def test_worker_verdict_does_not_create_a_second_acceptance_gate(tmp_path):
     store = make_store(tmp_path)
     finish(store, "Q1", acceptance="rejected")
     snapshot = store.snapshot()
     assert snapshot["experiments"]["Q1"]["execution_status"] == "succeeded"
-    assert snapshot["experiments"]["Q1"]["acceptance"] == "rejected"
-    assert "Q2" not in ready_tasks(snapshot)
-    assert store.registry_payload()["results"] == []
-    with pytest.raises(ResearchConflict):
-        store.claim("Q2")
+    assert snapshot["experiments"]["Q1"]["acceptance"] == "accepted"
+    assert "Q2" in ready_tasks(snapshot)
+    assert store.snapshot()["faults"], "the actual execution issue is still recorded"
 
 
 def test_file_correction_during_execution_rejects_result(tmp_path):
@@ -78,18 +76,21 @@ def test_recovery_uses_commits_and_reclaims_interrupted_attempt(tmp_path):
     assert recovered.snapshot()==completed
 
 
-def test_retry_budget_cannot_be_bypassed_by_recovery(tmp_path):
+def test_attempts_have_no_local_cap_and_recovery_preserves_global_usage(tmp_path):
     store = make_store(tmp_path)
     from research_tools_helpers import continue_experiment
-    for index in range(3):
-        if index:continue_experiment(store,"Q1")
-        finish(store, "Q1", acceptance="rejected")
+    from ai_system.research.runtime import ResearchRuntime
+    runtime=ResearchRuntime(tmp_path,'research')
+    runtime.configure({'request_limit':10})
+    for index in range(5):
+        if index:continue_experiment(store,'Q1')
+        runtime.reserve('controlled-model')
+        finish(store,'Q1')
         store.recover()
-    assert "Q1" not in ready_tasks(store.snapshot())
-    before = store.snapshot()
-    with pytest.raises(ResearchConflict, match="预算"):
-        continue_experiment(store,"Q1")
-    assert store.snapshot() == before
+    continue_experiment(store,'Q1')
+    assert 'Q1' in ready_tasks(store.snapshot())
+    assert len(store.snapshot()['executions'])==5 and runtime.status()['used']==5
+    assert len(runtime.requests())==5
 
 
 def test_single_claim_wins_when_schedulers_race(tmp_path):

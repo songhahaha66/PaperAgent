@@ -603,6 +603,9 @@ async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:in
 class ResearchSetupRequest(BaseModel):
     request_limit:int|None=Field(default=None,ge=1)
     timeout_seconds:float|None=Field(default=None,gt=0)
+    output_token_limit:int|None=Field(default=None,ge=1)
+    total_token_limit:int|None=Field(default=None,ge=1)
+    cost_limit_usd:float|None=Field(default=None,gt=0,allow_inf_nan=False)
     compact_paper:bool=True
     reuse_experience:bool=True
     literature_mode:Literal['off','on_request','auto']='on_request'
@@ -633,7 +636,7 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
         spec=SupervisedSpec.model_validate(request.comparison_spec).model_dump() if request.comparison_spec else None
         skill=validate_skill_policy({'mode':'selected' if request.skill_keys else 'auto','selected':request.skill_keys,'disabled':[]})
         runtime=ResearchRuntime(root)
-        runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper')})
+        runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper','output_token_limit','total_token_limit','cost_limit_usd')})
         skills=ResearchStore(root,'workspace-skills');skills.set_skill_preferences(skill,skills.skill_preferences()['version'])
         ExperimentStore(skills).set_policy(request.compare,spec)
         ExperienceScope(current_user,work_id).set_enabled(request.reuse_experience)

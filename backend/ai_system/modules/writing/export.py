@@ -42,6 +42,8 @@ async def _latex(ctx: GraphContext) -> dict:
     from ai_system.research.models import IssueReport
     source=source_state(ctx.research,{})
     diagnostics=compilation['diagnostics'] or [{'file':None,'line':None,'message':error,'context':''}]
+    if not ctx.research.snapshot()['experiments']:
+        return {'issues':[{'section':'paper.tex','message':error}],'exports':['paper.tex'],'log':[compilation['log_path']]}
     if compilation['source_version']==source['source_version']:
         task=next(iter(ctx.research.snapshot()['experiments']))
         reports=[IssueReport(task_id=task,category='writing',section=d['file'] if d['file'] in source['sections'] else data.get('main','paper.tex'),

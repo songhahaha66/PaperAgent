@@ -9,15 +9,15 @@ from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
-    'record_results':'登记计算结果','record_figure':'保存图表','writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.schedule_experiment':'安排实验',
+    'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.create_question':'建立研究问题','research.edit_question':'修改研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用未完成',
-    'research.observe':'判断下一步','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
-    'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有证据','literature.collect':'获取文献证据',
-    'writing.write':'撰写论文',
-    'writing.validate':'检查论文','writing.repair':'修订论文',
+    'research.run_python':'运行研究代码','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
+    'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
+    'writing.edit':'编辑研究正文','research.delegate':'执行独立子任务',
+    'writing.validate':'检查正文文件与引用',
     'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码',
-    'read_file':'读取已有文件','check_interpretation':'核查实验解释'}
+    'read_file':'读取已有文件','retry_outputs':'同步结果文件','check_interpretation':'核查实验解释'}
 
 
 def questions(snapshot):
@@ -99,6 +99,30 @@ def experiment_context(snapshot, experiment_ids=None):
                 and a['type'] in {'code','stdout','stderr','data'} and a['payload'].get('path')],
             'history':[{'ref':ref,'path':a['payload'].get('path'),'status':a['report'].get('status','superseded')}
                 for ref,a in snapshot['artifacts'].items() if a['type']=='report' and a['experiment_id']==eid and ref!=e['report_ref']]})
+    return rows
+
+
+def execution_context(store, experiment_ids=None):
+    """Bounded real output and file inventory for planning, review and writing."""
+    from services.file_services.workspace_layout import workspace_path
+    snapshot=store.snapshot()
+    rows=experiment_context(snapshot,experiment_ids)
+    for row in rows:
+        for file in row['files']:
+            if '/artifacts/' not in file['path']:continue
+            run_id=snapshot['artifacts'][file['id']]['payload']['run_id']
+            public='outputs/research/'+run_id+'/'+file['path'].split('/artifacts/',1)[1]
+            if (store.root/public).is_file():file['path']=public
+        # Scalar registration records are historical only; the current report
+        # and actual files are sufficient for new calculations.
+        outputs=[]
+        for file in [f for f in row['files'] if f['kind']=='stdout'][-6:]:
+            path=workspace_path(store.root,file['path'])
+            if path.is_file():
+                with path.open('r',encoding='utf-8',errors='replace') as stream:
+                    text=stream.read(6001)
+                outputs.append({'path':file['path'],'excerpt':text[:6000],'truncated':len(text)>6000})
+        row['outputs']=outputs
     return rows
 
 
@@ -190,15 +214,38 @@ def model_usage(store):
     import json
     with store._connect() as db:
         rows=[json.loads(r[0]) for r in db.execute('SELECT payload FROM model_requests ORDER BY sequence DESC')]
-    reported=[r for r in rows if r.get('usage_returned')]
-    completed=[r for r in reported if r['state']=='completed' and r.get('finished_at',0)>r['sent_at']]
-    seconds=sum(r['finished_at']-r['sent_at'] for r in completed)
-    cached=[r for r in reported if 'cache_read_tokens' in r]
-    cache_input=sum(r['input_tokens'] for r in cached)
-    return {'input_tokens':sum(r['input_tokens'] for r in reported) if reported else None,
-            'output_tokens':sum(r['output_tokens'] for r in reported) if reported else None,
-            'tps':sum(r['output_tokens'] for r in completed)/seconds if seconds else None,
-            'cache_hit_rate':sum(r['cache_read_tokens'] for r in cached)/cache_input if cache_input else None}
+    def totals(items):
+        reported=[r for r in items if r.get('usage_returned')]
+        finished=[r for r in items if r.get('finished_at',0)>r['sent_at']]
+        completed=[r for r in finished if r.get('state')=='completed']
+        seconds=sum(r['finished_at']-r['sent_at'] for r in finished)
+        measured=[r for r in completed if r.get('usage_returned')]
+        measured_seconds=sum(r['finished_at']-r['sent_at'] for r in measured)
+        cached=[r for r in reported if 'cache_read_tokens' in r]
+        cache_input=sum(r['input_tokens'] for r in cached)
+        hits=sum(r['cache_read_tokens'] for r in cached)
+        return {'requests':len(items),'cache_reported_requests':len(cached),
+                'unmeasured_requests':sum(bool(r.get('usage_unknown')) or not r.get('usage_returned') for r in finished),
+                'reasoning_tokens':sum(r['reasoning_tokens'] for r in reported if r.get('reasoning_tokens') is not None) if any(r.get('reasoning_tokens') is not None for r in reported) else None,
+                'known_cost_usd':sum(r['cost_usd'] for r in items if r.get('cost_usd') is not None) if any(r.get('cost_usd') is not None for r in items) else None,
+                'input_tokens':sum(r['input_tokens'] for r in reported) if reported else None,
+                'output_tokens':sum(r['output_tokens'] for r in reported) if reported else None,
+                'request_seconds':seconds,
+                'tps':sum(r['output_tokens'] for r in measured)/measured_seconds if measured_seconds else None,
+                'cache_read_tokens':hits if cached else None,
+                'cache_miss_tokens':max(0,cache_input-hits) if cached else None,
+                'cache_hit_rate':hits/cache_input if cache_input else None}
+    groups={}
+    for row in rows:
+        label=row.get('label') or ''
+        scope='summary' if label=='context_summary' else 'delegate' if label.startswith('task:') else 'research' if label=='observe' else 'other'
+        phase=(row.get('context_usage') or {}).get('cache_phase','unclassified')
+        # Summary calls never inherit the parent's stable/cold classification.
+        if scope=='summary':phase='unclassified'
+        groups.setdefault((scope,phase),[]).append(row)
+    return {**totals(rows),'cache_breakdown':[{'scope':scope,'phase':phase,**totals(items)}
+                                            for (scope,phase),items in sorted(groups.items())]}
+
 
 
 def model_activity(store, work_status):
@@ -221,7 +268,10 @@ def model_activity(store, work_status):
             'started_at':item['sent_at'],'finished_at':item.get('finished_at'),
             'updated_at':max(item.get('finished_at') or 0,item.get('headers_at') or 0,item['sent_at']),
             'interrupted_at':item.get('interrupted_at'), 'status':status,
-            'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens')})
+            'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens'),
+            'cache_read_tokens':item.get('cache_read_tokens'),'context_usage':item.get('context_usage'),
+            'reasoning_tokens':item.get('reasoning_tokens'),'generation_limit':item.get('generation_limit'),
+            'finish_reason':(item.get('diagnostic') or {}).get('finish_reason')})
     return result
 
 
