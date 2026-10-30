@@ -27,16 +27,22 @@ def execution_boundary(root, research_id, kind, item):
         writer.execution(root, research_id, kind, item)
 
 
-def public_reply(reply):
+def public_reply(reply, *, root=None):
     """Omit retired model-call segments when reading existing conversation files."""
     if 'segments' not in reply:return reply
-    return {**reply,'segments':[s for s in reply['segments']
-        if s.get('type') != 'execution' or s['ref']['kind'] != 'model']}
+    segments=[s for s in reply['segments'] if s.get('type') != 'execution' or s['ref']['kind'] != 'model']
+    if root is not None:
+        ids=[s['id'] for s in segments if s.get('type')=='execution']
+        details={row['segment_id']:{key:value for key,value in row.items() if key!='segment_id'}
+                 for offset in range(0,len(ids),100)
+                 for row in resolve_executions(root,reply,ids[offset:offset+100])}
+        segments=[{**s,'execution':details[s['id']]} if s['id'] in details else s for s in segments]
+    return {**reply,'segments':segments}
 
 
-def safe_file(root, value):
+def safe_file(root, value, *, nonempty=False):
     # Only public workspace products; never expose internal DBs, config or secrets.
-    if not isinstance(value, str) or '\\' in value: return None
+    if root is None or not isinstance(value, str) or '\\' in value: return None
     path = Path(value)
     public_internal = value in {'.system/validation.json', '.system/consistency.json'}
     if path.is_absolute() or (not public_internal and any(p.startswith('.') or p in {'..', 'node_modules'} for p in path.parts)): return None
@@ -45,6 +51,7 @@ def safe_file(root, value):
     except ValueError:
         return None
     if not target.is_file(): return None
+    if nonempty and target.stat().st_size == 0: return None
     if path.suffix.lower() not in {'.md','.txt','.log','.csv','.json','.png','.jpg','.jpeg','.svg','.pdf','.docx','.tex','.bib','.py','.xlsx'}: return None
     return path.as_posix()
 
@@ -71,7 +78,7 @@ def safe_diagnostic(root, value, limit=400):
     text = re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[已隐藏]', text)
     text = re.sub(r"(?i)((?:api[_-]?key|access[_-]?token|authorization|sa[_-]?token|password|secret|credential)[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)", r'\1[已隐藏]', text)
     text = re.sub(r'\bsk-[A-Za-z0-9_-]{8,}', '[已隐藏]', text)
-    text = text.replace(str(Path(root).resolve()) + '/', '')
+    if root is not None:text = text.replace(str(Path(root).resolve()) + '/', '')
     text = re.sub(r'(?<![\w.])(?:[A-Za-z]:[\\/]|/)[^\s<>\"\']+', '[工作区外路径]', text)
     text = re.sub(r'\.system/[^\s<>\"\']+', '[内部记录]', text)
     text = re.sub(r'(?i)(?:system[_ -]?prompt|prompt|messages)\s*[:=].*', '[内部请求已隐藏]', text)
@@ -87,8 +94,6 @@ def operation_detail(root, item):
         if total is not None:return f"已读取 {len(output.get('excerpt', ''))} 个字符，文件共 {total} 个字符。"
         start, size = inputs.get('start'), inputs.get('limit')
         if type(start) is int and type(size) is int:return f'从第 {start} 个字符起读取，最多 {size} 个字符。'
-    if capability == 'run_python' and isinstance(inputs.get('code'), str):
-        return f"本次代码共 {len(inputs['code'].splitlines())} 行。"
     if capability == 'experience.candidates' and 'candidates' in output:
         return f"已更新经验索引，共 {output['candidates']} 项。"
     if capability == 'record_results' and 'artifact_refs' in output:
@@ -100,10 +105,10 @@ def operation_detail(root, item):
     return ''
 
 
-def execution_projection(root, research_id, item):
+def execution_projection(root, research_id, item, *, fs=None):
     from ai_system.research.views import LABELS
     row = {key: item[key] for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id',
-            'finished_at','run_id','subject') if item.get(key) is not None}
+            'finished_at','run_id','subject','task_id','phase','error_type') if item.get(key) is not None}
     row.update(id=item['id'], research_id=research_id, kind='activity',
                capability=item.get('capability'),
                label=item.get('display_label') or LABELS.get(item.get('capability'), '执行步骤'),
@@ -118,14 +123,18 @@ def execution_projection(root, research_id, item):
         row['file'] = file
         row['label'] += ' · ' + Path(file).name
     run_id = item.get('run_id')
-    if isinstance(run_id, str) and re.fullmatch(r'[A-Za-z0-9_-]+', run_id):
+    if root is not None and isinstance(run_id, str) and re.fullmatch(r'[A-Za-z0-9_-]+', run_id):
         from services.file_services.workspace_fs import WorkspaceFS
-        info = WorkspaceFS(Path(root)).get_run_info(run_id) or {}
-        row['output_file'] = safe_file(root, info.get('stdout'))
+        fs = fs or WorkspaceFS(Path(root))
+        info = fs.get_run_info(run_id) or {}
+        row['output_file'] = safe_file(root, info.get('stdout'), nonempty=True)
         row['script_file'] = safe_file(root, info.get('input'))
-        row['error_file'] = safe_file(root, info.get('stderr'))
+        row['error_file'] = safe_file(root, info.get('stderr'), nonempty=True)
+        row['files'] = [path for value,meta in fs._manifest.get('files',{}).items()
+                        if meta.get('source_run')==run_id and meta.get('visibility')=='user'
+                        and meta.get('archive_path') and (path:=safe_file(root,value))]
     output = item.get('output') or {}
-    if item.get('capability') == 'run_python' and isinstance(output.get('output_tail'), str):
+    if item.get('capability') in {'run_python','research.run_python'} and isinstance(output.get('output_tail'), str):
         row['output_tail'] = output['output_tail'][-6000:]
     refs = output.get('artifact_refs', []) if isinstance(output, dict) else []
     row['result_ids'] = [r for r in refs if isinstance(r, str) and re.fullmatch(r'[RF]\d+', r)]
@@ -261,18 +270,25 @@ def resolve_executions(root, reply, ids):
     path = workspace_path(root, '.system/research.sqlite')
     if not path.is_file(): return []
     references = {r['id']: r for r in reply.get('segments', []) if r.get('type') == 'execution' and r['ref']['kind'] == 'activity'}
+    from services.file_services.workspace_fs import WorkspaceFS
+    fs = WorkspaceFS(root)
+    selected = [references[identity] for identity in dict.fromkeys(ids) if identity in references]
+    if not selected:return []
     result = []
     with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
-        for segment_id in dict.fromkeys(ids):
-            segment = references.get(segment_id)
-            if not segment: continue
+        refs = {(s['ref']['research_id'],s['ref']['id']) for s in selected}
+        records = {(rid,identity):payload for rid,identity,payload in db.execute(
+            'SELECT research_id,id,payload FROM research_activity WHERE (research_id,id) IN ('+
+            ','.join('(?,?)' for _ in refs)+')',tuple(value for ref in refs for value in ref))}
+        for segment in selected:
+            segment_id = segment['id']
             ref = segment['ref']
-            raw = db.execute('SELECT payload FROM research_activity WHERE research_id=? AND id=?',
-                             (ref['research_id'], ref['id'])).fetchone()
-            if raw is None:
+            payload = records.get((ref['research_id'],ref['id']))
+            if payload is None:
                 raw = db.execute("SELECT payload FROM journal WHERE research_id=? AND kind IN ('activity_started','activity_finished') AND json_extract(payload,'$.id')=? ORDER BY seq DESC LIMIT 1",
                                  (ref['research_id'], ref['id'])).fetchone()
-            detail = execution_projection(root, ref['research_id'], json.loads(raw[0])) if raw else segment.get('execution')
+                payload = raw[0] if raw else None
+            detail = execution_projection(root, ref['research_id'], json.loads(payload),fs=fs) if payload else segment.get('execution')
             if detail:
                 if reply.get('metadata', {}).get('status') != 'running' and not detail.get('finished_at'):
                     detail['status'] = 'interrupted'

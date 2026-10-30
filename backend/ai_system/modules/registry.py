@@ -111,9 +111,10 @@ class ModuleRegistry:
                     if result.execution_status:
                         execution['status'] = result.execution_status
                         if result.execution_status != 'completed':
-                            execution.update(error_type='ExecutionIncomplete',message=result.execution_message or '本次操作未完成，已有输出已保留。')
+                            execution.setdefault('error_type','ExecutionIncomplete')
+                            execution.setdefault('message',result.execution_message or '本次操作未完成，已有输出已保留。')
                     if isinstance(result.value,dict) and not request.name.startswith('writing.'):
-                        execution['output'] = result.value
+                        execution['output'] = {**execution.get('output',{}), **result.value}
                         if result.value.get('question_id'):execution['question_id']=result.value['question_id']
                         if result.value.get('experiment_id'):execution['experiment_id']=result.value['experiment_id']
                     if isinstance(result.value,dict) and result.value.get('research_blocked'):

@@ -1,7 +1,8 @@
 const assert = require('node:assert/strict')
 const { loadModule, vue, flush } = require('./moduleHarness.cjs')
 const { hostRenderer } = require('./vueHost.cjs')
-const text = (node) => [node.text || '', ...(node.children || []).map(text)].join('')
+const text = (node) =>
+  node.kind === 'comment' ? '' : [node.text || '', ...(node.children || []).map(text)].join('')
 const test = require('node:test')
 const row = (status, extra = {}) => ({
     id: 'segment',
@@ -72,17 +73,25 @@ test('streaming output preserves manual expansion', async (t) => {
   assert.match(text(host.root), /读取第 0 个字符/, 'expanded detail describes the actual operation')
   state.segments = [row('running', { output_tail: 'first print\nsecond print' })]
   await flush()
-  const outputToggle = () => host.find((n) => n.kind === 'button' && n.props?.class === 'output-toggle')
-  assert.equal(outputToggle().props['aria-expanded'], false, 'stdout starts folded inside an expanded execution')
-  assert.doesNotMatch(text(host.root), /first print/, 'folded stdout does not fill the conversation')
-  outputToggle().props.onClick()
-  await flush()
-  assert.match(text(host.root), /first print\nsecond print/, 'expanded execution updates its received stdout')
+  assert.match(
+    text(host.root),
+    /first print\nsecond print/,
+    'expanded execution updates its received stdout',
+  )
+  assert.equal(
+    host.find((n) => n.kind === 'button' && n.props?.class === 'output-toggle'),
+    undefined,
+    'one expansion directly reveals the output without a second fold',
+  )
   state.segments = [row('running', { output_tail: 'first print\nsecond print\nthird print' })]
   await flush()
-  assert.equal(outputToggle().props['aria-expanded'], true, 'manual output expansion survives streaming updates')
+  assert.equal(
+    heading().props['aria-expanded'],
+    true,
+    'manual expansion survives streaming updates',
+  )
   assert.match(text(host.root), /third print/)
-  outputToggle().props.onClick()
+  heading().props.onClick()
   await flush()
   assert.doesNotMatch(text(host.root), /third print/, 'stdout can be folded again')
 })
@@ -109,10 +118,13 @@ test('live finish rejects stale fetches and keeps file/result links', async (t) 
   )
   assert.equal(heading().props['aria-expanded'], true, 'manual expansion survives live finish')
   assert.ok(button('data.csv'), 'the selected workspace file remains available after finish')
-  assert.ok(button('执行输出'), 'a finished operation exposes its output link')
-  assert.ok(button('查看结果'), 'a finished operation keeps its result link without showing internal IDs')
+  assert.ok(button('完整日志'), 'a finished operation exposes its full log link')
+  assert.ok(
+    button('查看结果'),
+    'a finished operation keeps its result link without showing internal IDs',
+  )
   button('data.csv').props.onClick()
-  button('执行输出').props.onClick()
+  button('完整日志').props.onClick()
   button('查看结果').props.onClick()
   assert.deepEqual(opened, ['inputs/data.csv', 'runs/run-1/stdout.log'])
   assert.deepEqual(results, ['R1'])
@@ -142,23 +154,64 @@ test('manually collapsed errors keep their diagnostic details', async (t) => {
   heading().props.onClick()
 })
 
-test('recovered child failures remain in history', async (t) => {
+test('later success never relabels an earlier failure', async (t) => {
   const { state, host, heading, button, opened, results, response } = await mount(t)
   state.segments = [
-    row('completed', { id: 'parent', kind: 'activity', parent_call_id: null, finished_at: 8 }),
-    { ...row('failed', { id: 'child', parent_call_id: 'parent', finished_at: 3 }), id: 'child' },
+    row('failed', { finished_at: 3, message: 'original error' }),
+    { ...row('completed', { id: 'retry', finished_at: 8 }), id: 'retry' },
   ]
   await flush()
-  assert.doesNotMatch(text(heading()), /未完成/, 'a recovered child failure does not mark a completed parent failed')
+  assert.match(text(heading()), /完成/, 'compact group follows its latest attempt')
   assert.equal(heading().props['aria-expanded'], false, 'finished history stays compact')
-  state.segments = [row('failed', { recovered:true,finished_at:4,message:'original error' })]
-  await flush()
-  assert.match(text(heading()),/后续已完成/)
-  assert.doesNotMatch(text(host.root),/original error/,'resolved error is retained only in expanded detail')
   heading().props.onClick()
   await flush()
-  assert.match(text(host.root),/original error/)
+  assert.match(text(host.root), /original error/)
+  assert.match(text(host.root), /未完成/, 'the earlier attempt retains its own status')
+  assert.doesNotMatch(text(host.root), /后续已完成/)
   heading().props.onClick()
+})
+
+test('single execution has one heading, duration and output entry', async (t) => {
+  const { state, host, heading, button, opened } = await mount(t)
+  state.segments = [
+    row('completed', {
+      label: '检查附件与模板结构',
+      finished_at: 34,
+      output_tail: '10 files checked',
+      output_file: 'runs/check/stdout.log',
+      script_file: 'runs/check/input.py',
+      files: ['outputs/result.xlsx'],
+    }),
+  ]
+  await flush()
+  assert.match(text(heading()), /检查附件与模板结构完成33 秒/)
+  heading().props.onClick()
+  await flush()
+  assert.equal((text(host.root).match(/检查附件与模板结构/g) || []).length, 1)
+  assert.equal((text(host.root).match(/33 秒/g) || []).length, 1)
+  assert.match(text(host.root), /10 files checked/)
+  assert.doesNotMatch(text(host.root), /本次代码|展开输出|错误输出|1 次操作/)
+  assert.ok(button('代码') && button('完整日志'))
+  button('result.xlsx').props.onClick()
+  assert.deepEqual(opened, ['outputs/result.xlsx'])
+  assert.equal(button('诊断日志'), undefined, 'empty diagnostics have no entry')
+})
+
+test('delivery phase stays active until files are delivered', async (t) => {
+  const { state, host, heading } = await mount(t)
+  state.segments = [row('running', { phase: 'delivery', label: '保存结果文件' })]
+  await flush()
+  assert.match(text(heading()), /保存结果文件同步文件/)
+  state.segments = [
+    row('interrupted', {
+      label: '保存结果文件',
+      finished_at: 5,
+      message: '计算已结束，文件交付未完成',
+    }),
+  ]
+  await flush()
+  assert.match(text(host.root), /文件交付未完成/)
+  assert.doesNotMatch(text(heading()), /完成/)
 })
 
 test('retry progress follows the latest step and retains old errors', async (t) => {
@@ -176,30 +229,61 @@ test('retry progress follows the latest step and retains old errors', async (t) 
   state.segments = [timeout, retry]
   await flush()
   const group = () => host.find((n) => n.kind === 'section')
-  assert.match(text(heading()), /重新计算基本统计量完成2 步/, 'group summarizes the latest successful attempt')
+  assert.match(
+    text(heading()),
+    /重新计算基本统计量完成2 次操作/,
+    'group summarizes the latest successful attempt',
+  )
   assert.doesNotMatch(group().props.class, /failed/)
-  assert.doesNotMatch(text(host.root), /未完成|执行超时/, 'an earlier timeout does not pin the compact group to failure')
+  assert.doesNotMatch(
+    text(host.root),
+    /未完成|执行超时/,
+    'an earlier timeout does not pin the compact group to failure',
+  )
   state.segments = [...state.segments, step('save', 'running', '保存计算结果')]
   await flush()
-  assert.match(text(heading()), /保存计算结果进行中3 步/, 'the heading follows the next live step')
+  assert.match(
+    text(heading()),
+    /保存计算结果进行中3 次操作/,
+    'the heading follows the next live step',
+  )
   assert.match(group().props.class, /running/)
   state.segments = [timeout, retry, step('save', 'completed', '保存计算结果', { finished_at: 204 })]
   await flush()
-  assert.match(text(heading()), /保存计算结果完成3 步/)
+  assert.match(text(heading()), /保存计算结果完成3 次操作/)
   assert.doesNotMatch(group().props.class, /failed|running/)
   assert.equal(heading().props['aria-expanded'], false, 'progress updates preserve manual collapse')
   heading().props.onClick()
   await flush()
-  assert.match(text(host.root), /执行超时，内核已重启。/, 'earlier failures remain in expanded history')
-  assert.match(text(host.root), /计算基本统计量未完成/, 'history preserves each attempt’s own status')
+  assert.match(
+    text(host.root),
+    /执行超时，内核已重启。/,
+    'earlier failures remain in expanded history',
+  )
+  assert.match(
+    text(host.root),
+    /计算基本统计量未完成/,
+    'history preserves each attempt’s own status',
+  )
   heading().props.onClick()
-  state.segments = [...state.segments, step('export', 'failed', '导出结果', {
-    finished_at: 206,
-    message: '导出失败，请重试。',
-  })]
+  state.segments = [
+    ...state.segments,
+    step('export', 'failed', '导出结果', {
+      finished_at: 206,
+      message: '导出失败，请重试。',
+    }),
+  ]
   await flush()
-  assert.match(text(heading()), /导出结果未完成4 步/, 'a failure of the latest step still appears')
+  assert.match(
+    text(heading()),
+    /导出结果未完成4 次操作/,
+    'a failure of the latest step still appears',
+  )
   assert.match(group().props.class, /failed/)
   assert.match(text(host.root), /导出失败，请重试。/)
-  assert.doesNotMatch(text(host.root), /执行超时/, 'only the latest failure is promoted out of history')
+  assert.doesNotMatch(
+    text(host.root),
+    /执行超时/,
+    'only the latest failure is promoted out of history',
+  )
 })

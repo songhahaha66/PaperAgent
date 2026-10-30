@@ -180,8 +180,9 @@ class OpenAIProvider(BaseLLMProvider):
             extra_body = {'reasoning_effort': kwargs.get('reasoning_effort') or 'low', **(extra_body or {})}
         if (self.model_id.startswith("deepseek-")
                 and urlparse(self.base_url).hostname == "api.deepseek.com"):
-            extra_body = {"thinking": {"type": "enabled" if self.config.get('thinking_enabled') else "disabled"},
-                          **(extra_body or {})}
+            extra_body = {**(extra_body or {}),
+                          "thinking": {**((extra_body or {}).get('thinking') or {}),
+                                       "type": "enabled" if self.config.get('thinking_enabled') else "disabled"}}
 
         model_class = AIGWChatOpenAI if gateway_host else MeteredChatOpenAI
         from ..research.runtime import request_hook,response_hook,async_request_hook,async_response_hook
@@ -363,15 +364,16 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
     if extra_body:
         kwargs.setdefault('extra_body', extra_body)
 
-    from ..config.generation import GenerationSettings
-    settings=GenerationSettings.model_validate(getattr(model_config,'generation_settings',None) or {})
+    from ..config.generation import validate_context_window,context_window
+    settings=validate_context_window(config['model_id'],getattr(model_config,'generation_settings',None) or {})
     kwargs.setdefault('max_tokens',settings.max_output_tokens)
     if settings.reasoning_effort is not None:
         if config['provider'] not in {'openai','local'}:raise ValueError('该连接尚未适配reasoning_effort，请使用服务商原生思考配置')
         kwargs.setdefault('reasoning_effort',settings.reasoning_effort)
     model=LLMProviderFactory.create_llm_instance(config, **kwargs)
     update={'metadata':{**(getattr(model,'metadata',None) or {}),'generation_settings':settings.model_dump()}}
-    if settings.context_window is not None:
-        update['profile']={**(getattr(model,'profile',None) or {}),'max_context_tokens':settings.context_window,
-                           'max_input_tokens':settings.context_window-int(model.max_tokens or settings.max_output_tokens)}
+    window=context_window(settings,config['model_id'],config['base_url'],getattr(model,'profile',None))
+    if window is not None:
+        update['profile']={**(getattr(model,'profile',None) or {}),'max_context_tokens':window,
+                           'max_input_tokens':window-int(model.max_tokens or settings.max_output_tokens)}
     return model.model_copy(update=update)

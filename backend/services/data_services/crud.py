@@ -92,6 +92,10 @@ def update_system_config(db: Session, is_allow_register: bool):
 def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id: int):
     """创建模型配置"""
     try:
+        if config.type!='jev':
+            from ai_system.config.generation import validate_context_window
+            try:validate_context_window(config.model_id,config.generation_settings)
+            except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from None
         if config.type == 'jev' and not config.api_key.strip():
             raise HTTPException(status_code=400, detail='请填写 Jev API 密钥')
         # 检查是否已存在相同类型的配置（同一用户下）
@@ -170,12 +174,20 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
         if 'api_key' in update_data and not (update_data['api_key'] or '').strip():
             update_data.pop('api_key')
 
+        if db_config.type!='jev':
+            from ai_system.config.generation import validate_context_window
+            try:validate_context_window(update_data.get('model_id',db_config.model_id),
+                                        update_data.get('generation_settings',db_config.generation_settings))
+            except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from None
+
         for field, value in update_data.items():
             setattr(db_config, field, value)
 
         db.commit()
         db.refresh(db_config)
         return db_config
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         raise HTTPException(

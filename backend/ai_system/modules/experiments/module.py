@@ -44,7 +44,8 @@ async def run_code(ctx, inputs):
         raise ValueError('问题编号不存在；先用research_create_question新建问题，或省略question_id做公共计算。不能使用其他问题的编号。')
     code = strip_template_tokens(inputs['code'])
     if is_placeholder(code):
-        return CapabilityProduct('research_state', {'observation': '代码没有实际工作；无需占位执行。'})
+        return CapabilityProduct('research_state', {'observation': '代码没有实际工作；无需占位执行。'},
+                                 'failed', '代码仅包含占位语句，未执行计算。')
     for rid, info in direct_runs(store, ctx.fs).items():
         if (info.get('failure_kind') == 'transport_unknown' or info.get('status') in {'starting','running'}) and ctx.fs.read_text(info['input']) == code:
             result = {**run_result(ctx, rid), 'recovered': True,

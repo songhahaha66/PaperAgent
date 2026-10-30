@@ -1,5 +1,7 @@
 """Connection-owned generation settings; auxiliary calls have one small policy."""
 from typing import Literal
+from functools import lru_cache
+from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -24,6 +26,35 @@ class GenerationSettings(BaseModel):
         return self
 
 
+@lru_cache(maxsize=128)
+def model_capabilities(model_id):
+    """Local model metadata only: no credentials, discovery requests or inference."""
+    if model_id in {'deepseek-flash','deepseek-v4-flash','deepseek-v4-pro'}:
+        return {'max_context_tokens':1000000,'reasoning_efforts':['low','high','max'],'source':'provider'}
+    from langchain_openai import ChatOpenAI
+    profile=ChatOpenAI(model=model_id,api_key='metadata-only',max_retries=0).profile or {}
+    return {'max_context_tokens':profile.get('max_context_tokens') or profile.get('max_input_tokens'),
+            'reasoning_efforts':[] if profile.get('reasoning_output') is False else ['low','medium','high'],
+            'source':'sdk' if profile else 'unknown'}
+
+
+def validate_context_window(model_id, settings):
+    settings=GenerationSettings.model_validate(settings or {})
+    maximum=model_capabilities(model_id)['max_context_tokens']
+    if settings.context_window and maximum and settings.context_window>maximum:
+        raise ValueError(f'上下文容量超过该模型已知上限（{maximum} tokens）')
+    return settings
+
+
+def context_window(settings, model_id, base_url, profile):
+    """Explicit selection wins; official connections can use known large windows."""
+    if settings.context_window is not None:return settings.context_window
+    host=urlparse(base_url or 'https://api.openai.com').hostname
+    if host in {'api.deepseek.com','api.openai.com'}:
+        return model_capabilities(model_id)['max_context_tokens']
+    return (profile or {}).get('max_context_tokens')
+
+
 def request_model(llm, purpose='research'):
     """Research/structured/code use the configured generation ceiling, never a thinking heuristic."""
     if purpose not in {'summary','auxiliary'}:return llm
@@ -42,6 +73,10 @@ class ModelGenerationLimit(RuntimeError):
 
 
 class ModelContextLimit(ModelGenerationLimit):pass
+
+
+class ModelContextOverflow(ModelContextLimit):
+    """Request rejected before response content; safe to rebuild context once."""
 
 def completion_info(reply):
     messages=getattr(reply,'result',None) or getattr(reply,'generations',None) or [reply]

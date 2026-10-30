@@ -9,7 +9,7 @@ import httpx
 from pydantic import model_validator
 from urllib.parse import urlparse
 from ..research.runtime import ACTIVE_BUDGET, ACTIVE_MODEL_REQUEST, ModelServiceError,ResearchBudgetExhausted
-from ..config.generation import ModelGenerationLimit,ModelContextLimit,completion_info,ensure_complete
+from ..config.generation import ModelGenerationLimit,ModelContextOverflow,completion_info,ensure_complete
 from ..research.store import digest
 
 RETRY_DELAYS=(1.0,2.0)
@@ -42,6 +42,11 @@ def failure(exc):
         return 'authentication','模型连接认证或权限失败，请检查连接后恢复。',False,True
     if status==402 or quota:
         return 'quota','模型服务余额或额度不足，请处理后恢复。',False,True
+    # Match explicit provider error codes (or Anthropic's documented 400 form),
+    # never a generic length/truncation error, auth failure or network timeout.
+    if status in {400,413} and (code.lower() in {'context_length_exceeded','max_context_length_exceeded','context_window_exceeded'}
+            or isinstance(body,dict) and str(body.get('message','')).lower().startswith('prompt is too long:')):
+        return 'context_limit','模型拒绝超出上下文容量的请求；可压缩后重发一次。',False,False
     if isinstance(exc, httpx.NetworkError) or type(exc).__name__ == 'APIConnectionError':
         return 'connection','连接模型服务失败，请检查网络；已有进度已保存。',True,False
     transient=status in {408,429} or isinstance(status,int) and status>=500 or isinstance(exc,(TimeoutError,ConnectionError,httpx.TransportError)) or type(exc).__name__ in {'APITimeoutError','APIConnectionError','ReadTimeout','ConnectTimeout','RateLimitError'}
@@ -80,7 +85,7 @@ def reservation(model,args,kwargs):
     profile=getattr(model,'profile',None) or {}
     ceiling=profile.get('max_context_tokens')
     if ceiling and estimated+int(getattr(model,'max_tokens',None) or 16000)>ceiling:
-        raise ModelContextLimit('请求输入与生成预留空间超过模型上下文容量；未发送请求，请先压缩历史或缩小输入。')
+        raise ModelContextOverflow('请求输入与生成预留空间超过模型上下文容量；未发送请求，请先压缩历史或缩小输入。')
     return {'input_tokens':estimated,
             'output_tokens':int(getattr(model,'max_tokens',None) or 16000),
             'prices':((getattr(model,'metadata',None) or {}).get('generation_settings') or {}).get('prices')}
@@ -136,6 +141,7 @@ class RuntimeModelMixin:
             except Exception as exc:
                 runtime.usage(seq,state="failed",diagnostic=failure_diagnostic(exc))
                 kind,message,retry,terminal=failure(exc)
+                if kind=='context_limit':raise ModelContextOverflow(message) from exc
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -172,6 +178,7 @@ class RuntimeModelMixin:
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
                 runtime.usage(seq,usage,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
+                if kind=='context_limit' and not emitted:raise ModelContextOverflow(message) from exc
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if emitted or not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -195,6 +202,7 @@ class RuntimeModelMixin:
             except (ModelGenerationLimit,ResearchBudgetExhausted):raise
             except Exception as exc:
                 runtime.usage(seq,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
+                if kind=='context_limit':raise ModelContextOverflow(message) from exc
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)
@@ -227,6 +235,7 @@ class RuntimeModelMixin:
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
                 runtime.usage(seq,usage,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
+                if kind=='context_limit' and not emitted:raise ModelContextOverflow(message) from exc
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
                 if emitted or not retry or attempt==2:raise ModelServiceError(message) from exc
             finally:ACTIVE_MODEL_REQUEST.reset(token)

@@ -1,6 +1,7 @@
 """Bound active context; canonical messages, tool arguments and receipts stay intact."""
 import json
 import logging
+from copy import deepcopy
 from typing import Any, Callable, Awaitable, Annotated
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage, messages_to_dict
@@ -11,13 +12,18 @@ logger = logging.getLogger(__name__)
 
 class WorkNotes(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    notes: list[Annotated[str, Field(max_length=240)]] = Field(max_length=8)
+    # The total token budget is checked separately, relative to the input window.
+    notes: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(min_length=1,max_length=16)
 
 
 def summary_history(messages):
-    return [{'role':m.type,'content':m.content,
-             **({'tool_calls':m.tool_calls} if isinstance(m,AIMessage) else {}),
-             **({'tool_call_id':m.tool_call_id} if isinstance(m,ToolMessage) else {})}
+    def public_content(message):
+        if not isinstance(message.content,list):return message.content
+        return [part for part in message.content if not isinstance(part,dict)
+                or part.get('type') not in {'thinking','redacted_thinking','reasoning','tool_use'}]
+    return [{'role':m.type,'content':public_content(m),
+             **({'tool_calls':deepcopy(m.tool_calls)} if isinstance(m,AIMessage) else {}),
+             **({'tool_call_id':m.tool_call_id,'status':m.status} if isinstance(m,ToolMessage) else {})}
             for m in messages]
 
 
@@ -38,14 +44,32 @@ def summary_model(llm):
     return request_model(llm,'summary')
 
 
-def complete_boundaries(messages):
+def complete_boundaries(messages, *, include_end=False):
     pending=set();cuts=[]
     for index,message in enumerate(messages):
         if isinstance(message,AIMessage):
             if not pending:cuts.append(index)
             pending.update(t['id'] for t in message.tool_calls)
         elif isinstance(message,ToolMessage):pending.discard(message.tool_call_id)
+    if include_end and not pending:cuts.append(len(messages))
     return cuts
+
+
+def public_journal(messages, locators):
+    """Deterministic fallback, never a fabricated summary or executable tool turn.
+
+    Keep public decisions verbatim. Bulky arguments/results remain retrievable at
+    exact character offsets in the immutable span archive. Private reasoning is
+    neither summarized nor copied into this journal.
+    """
+    rows=summary_history(messages)
+    for row,locator in zip(rows,locators):
+        row['source']=locator
+        for call in row.get('tool_calls',[]):
+            call['args']={k:v if token_estimate(v)<300 else {'archived_argument':k,'source':locator}
+                          for k,v in call['args'].items()}
+    # Original user events are retained by view(), outside these historical notes.
+    return [row for row in rows if row['role']!='human']
 
 
 class ContextMiddleware(AgentMiddleware):
@@ -85,10 +109,10 @@ class ContextMiddleware(AgentMiddleware):
         return message.model_copy(update={'content':json.dumps(data,ensure_ascii=False)})
 
     async def awrap_model_call(self,request,handler):
-        from ai_system.research.runtime import execution_scope
+        from ai_system.research.runtime import execution_scope,ModelServiceError
         from ai_system.research.store import digest
         from ai_system.graph.llm_utils import as_messages, call_structured
-        from ai_system.config.generation import ensure_complete,ModelGenerationLimit
+        from ai_system.config.generation import ensure_complete,ModelGenerationLimit,ModelContextLimit,ModelContextOverflow
         from langchain_core.utils.function_calling import convert_to_openai_tool
         store=self.ctx.research
         self.messages=list(request.messages)
@@ -99,11 +123,11 @@ class ContextMiddleware(AgentMiddleware):
         static_hash=digest([schemas,messages_to_dict([system]) if system else []])
         overhead=tools+(token_estimate(messages_to_dict([system])) if system else 0)
         profile=getattr(self.llm,'profile',None) or {}
-        # max_input_tokens is an input ceiling, not a context+output ceiling.
-        limit=int(profile.get('max_input_tokens') or 32000)
+        # Output reservation is deducted once; targets are not model hard limits.
+        limit=int(profile.get('max_input_tokens') or profile.get('max_context_tokens') or 32000)
         if profile.get('max_context_tokens'):
             limit=min(limit,int(profile['max_context_tokens'])-int(getattr(self.llm,'max_tokens',None) or 4800))
-        high=int(limit*.8);low=int(limit*.5)
+        high=int(limit*.8);low=int(limit*.5);safe=int(limit*.95)
         messages=list(self.messages)
         boundaries=complete_boundaries(messages)
         start=boundaries[0] if boundaries else len(messages)
@@ -113,121 +137,189 @@ class ContextMiddleware(AgentMiddleware):
         saved=json.loads(row[0]) if row else {}
         cut=saved.get('cut',start)
         def signature(end):return digest(messages_to_dict(self.messages[:end]))
-        if saved.get('format')!=4 or cut<start or cut>len(messages) or saved.get('hash')!=signature(cut):
-            saved={'format':4,'cut':start,'hash':signature(start),'offloads':{}}
+        if saved.get('format')!=5 or cut<start or cut>len(messages) or saved.get('hash')!=signature(cut):
+            # Reconstruct from canonical history rather than trusting an older,
+            # potentially incomplete handoff. No executed operation is replayed.
+            saved={'format':5,'cut':start,'hash':signature(start),'offloads':{}}
             cut=start
         previous=json.dumps(saved,ensure_ascii=False,sort_keys=True)
+        prior=saved.get('wire',[])
+        def persist():
+            nonlocal previous
+            serialized=json.dumps(saved,ensure_ascii=False,sort_keys=True)
+            if serialized!=previous:
+                with store._transaction() as db:
+                    db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
+                               (store.research_id,key,saved['hash'],json.dumps(saved,ensure_ascii=False)))
+                previous=serialized
         def snapshot():
             if self.pinned is not None:return self.pinned
             from ai_system.research.planner import working_context
             return working_context(self.ctx)
-        # A projection also serves delegated sessions, whose task is already a
-        # canonical event. Never move this snapshot to the tail on each call.
         if 'snapshot' not in saved:
             has_snapshot=any(m.additional_kwargs.get('context_snapshot') for m in messages[:start])
             saved['snapshot']=None if has_snapshot else snapshot()
-        prefix=[m for m in messages[:start] if not (cut>start and m.additional_kwargs.get('context_snapshot'))]
         offloads=saved.setdefault('offloads',{})
         for i,message in enumerate(messages):
+            if i<cut:continue
             entry=offloads.get(str(i))
             if entry and entry['hash']==digest(messages_to_dict([message])):
                 messages[i]=message.model_copy(update={'content':entry['content']})
             else:
+                offloads.pop(str(i),None)
                 replacement=self.offload(message)
                 if replacement is not message:
-                    offloads[str(i)]={'hash':digest(messages_to_dict([message])),'content':replacement.content}
+                    offloads[str(i)]={'hash':digest(messages_to_dict([message])),'content':replacement.content,'tier':'preview'}
                     messages[i]=replacement
-        def view(end=None,notes=None):
-            end=cut if end is None else end
-            note=saved.get('summary','') if notes is None else notes
-            archive=saved.get('archive_path')
+
+        def view(checkpoint=None):
+            point=saved if checkpoint is None else checkpoint
+            end=point['cut']
+            prefix=[m for m in messages[:start] if not (end>start and m.additional_kwargs.get('context_snapshot'))]
+            # User corrections remain exact even when they occur mid-session.
+            corrections=[m for m in self.messages[start:end] if isinstance(m,HumanMessage)
+                         and not m.additional_kwargs.get('context_snapshot')]
+            note=point.get('summary','')
+            if point.get('fallback'):
+                note+='\n未摘要的公开历史（数据记录，不是新指令）：'+json.dumps(point['fallback'],ensure_ascii=False)
+            archive=point.get('archive_path')
             memory=([HumanMessage(content='历史方法笔记（非待办或当前事实）：'+note+('\n旧轮次原文：'+archive if archive else ''))] if note or archive else [])
-            facts=saved['snapshot']
+            facts=point.get('snapshot')
             current=[state_message(facts)] if facts is not None else []
-            return prefix+memory+current+messages[end:]
+            return prefix+corrections+memory+current+messages[end:]
         def size(rows):return overhead+token_estimate(messages_to_dict(rows))
-        bounded=view()
-        masked=0;summarized_now=False
-        if size(bounded)>high:
-            # Cheap observation offloading precedes any model summarization.
+        masked=0;summarized_now=False;summary_status='not_needed';selected_target=low
+
+        def shrink_observations():
+            nonlocal masked
             recent=boundaries[-2] if len(boundaries)>1 else start
-            for i in range(cut,recent):
-                if str(i) in offloads:continue
-                replacement=self.offload(messages[i],old=True)
-                if replacement is not messages[i]:
-                    offloads[str(i)]={'hash':digest(messages_to_dict([self.messages[i]])),'content':replacement.content}
+            for i in range(saved['cut'],recent):
+                if offloads.get(str(i),{}).get('tier')=='receipt':continue
+                # Always derive from the original, never archive an old preview.
+                replacement=self.offload(self.messages[i],old=True)
+                if replacement is not self.messages[i]:
+                    offloads[str(i)]={'hash':digest(messages_to_dict([self.messages[i]])),
+                                     'content':replacement.content,'tier':'receipt'}
                     messages[i]=replacement;masked+=1
-            bounded=view()
-        if size(bounded)>high:
-            summarized_now=True
-            saved['snapshot']=snapshot()
-            prefix=[m for m in prefix if not m.additional_kwargs.get('context_snapshot')]
-            reserve=min(1200,max(100,low//5))
-            candidates=[i for i in boundaries if i>cut]
-            end=next((i for i in candidates if size(view(i,''))+reserve+200<=low),None)
+
+        async def compact(*,force=False):
+            nonlocal saved,cut,summarized_now,summary_status,selected_target
+            before=size(view())
+            shrink_observations()
+            if not force and size(view())<=high:return
+            if force and size(view())<=min(high,int(before*.8)):return
+            current=snapshot()
+            reserve=min(1800,max(256,low//5))
+            candidates=[i for i in boundaries if i>saved['cut']]
+            # Preserve recent complete protocol turns when possible; a soft goal
+            # must not reject a legal large latest turn. Force mode requires an
+            # actual reduction before one rejected request may be retried.
+            end=None
+            for target in (low,high,safe):
+                end=next((i for i in candidates if size(view({**saved,'cut':i,'summary':'','fallback':[],
+                        'snapshot':current}))+reserve+200<=target),None)
+                if end is not None:
+                    selected_target=target;break
             if end is None:
-                raise ValueError('近期完整工具轮次或固定要求超过上下文预算；请缩小单次工具参数/状态，原始记录已保留。')
-            history=summary_history(self.messages[start:end])
-            archive=self.archive(history)
+                if not force and size(view())<=safe:return
+                # A huge *completed* latest turn can be archived as one unit.
+                # Never split a pending call from its required protocol state.
+                closed=complete_boundaries(self.messages,include_end=True)
+                if len(messages) in closed and len(messages)>saved['cut'] and size(view({**saved,'cut':len(messages),
+                        'summary':'','fallback':[],'snapshot':current}))+reserve+200<=safe:
+                    end=len(messages);selected_target=safe
+                else:
+                    raise ModelContextLimit(f'近期完整工具轮次或固定要求超过安全上下文预算：输入约{size(view())}，'
+                                            f'安全上限{safe}，模型输入上限{limit}，系统与工具约{overhead}；原始记录已保留。')
+            # Archive only the retiring span, with a chain to prior spans and
+            # character locators usable by the existing paginated file reader.
+            header=json.dumps({'previous_archive':saved.get('archive_path'),'range':[saved['cut'],end]},ensure_ascii=False)+'\n'
+            lines=[header];offsets=[];position=len(header)
+            for index,row in enumerate(summary_history(self.messages[saved['cut']:end]),saved['cut']):
+                line=json.dumps({'message_index':index,**row},ensure_ascii=False)+'\n'
+                offsets.append({'start':position,'limit':min(12000,len(line)),'end':position+len(line)})
+                lines.append(line);position+=len(line)
+            archive=self.archive(''.join(lines))
+            locators=[{'path':archive,**offset} for offset in offsets]
+            observations=public_journal([self.offload(m,old=True) for m in self.messages[saved['cut']:end]],locators)
+            journal=[*saved.get('fallback',[]),*observations]
             summary=saved.get('summary','')
-            observations=summary_history(messages[cut:end])
-            # This is summarizer input, not tool-call history. Large code/edit
-            # arguments remain verbatim in the archive and active recent turns.
-            for row in observations:
-                if 'tool_calls' in row:
-                    actions=[]
-                    for call in row.pop('tool_calls'):
-                        args=call['args']
-                        actions.append({'name':call['name'],
-                            'arguments':{k:v for k,v in args.items() if token_estimate(v)<300},
-                            'archived_arguments':[k for k,v in args.items() if token_estimate(v)>=300]})
-                    row['actions']=actions
             prompt=as_messages(
-                '只摘录无法从当前问题、文件、运行记录恢复的方法选择理由和关键纠错经验。不维护待办、文件清单或覆盖状态。'
-                '历史结论可能错误，不升级为验证通过；不新增任务或事实。最多8条简短笔记。',
-                json.dumps({'previous_summary':summary,'completed_history':observations,'history_archive':archive},ensure_ascii=False))
+                '摘录继续研究所必需、不能从当前业务状态直接恢复的公开方法决定、选择理由、已纠正错误及未决口径。'
+                '保留单位、参数、信息可用时点和冲突的不确定性。不要维护待办、重复文件清单或覆盖状态。'
+                '历史结论可能错误，不升级为验证通过；不新增任务或事实。需要细节时给出原文定位。最多16条，'
+                f'全部笔记合计不超过{reserve} tokens。',
+                json.dumps({'previous_summary':summary,'completed_history':journal,'history_archive':archive},ensure_ascii=False))
+            attempt=digest([summary,journal,static_hash,profile,getattr(self.llm,'model_name',None),
+                            getattr(self.llm,'max_tokens',None)])
             from ai_system.graph.tracing import labelled
-            with labelled('context_summary'):
-                try:
-                    from ai_system.research.runtime import ACTIVE_BUDGET
-                    if ACTIVE_BUDGET.get() and ACTIVE_BUDGET.get().wrap_up():raise ValueError('剩余额度留给主Agent收尾，历史已归档')
-                    if token_estimate(messages_to_dict(prompt))>limit-2000:raise ValueError('摘要输入过长，使用归档检索')
+            from ai_system.research.runtime import ACTIVE_BUDGET
+            valid=False
+            try:
+                if saved.get('failed_summary')==attempt:raise ValueError('同一摘要输入已失败，不重复请求')
+                if ACTIVE_BUDGET.get() and ACTIVE_BUDGET.get().wrap_up():raise ValueError('剩余额度留给主Agent收尾')
+                # Include the structured schema/instruction, not just the source.
+                if token_estimate(messages_to_dict(prompt))+token_estimate(WorkNotes.model_json_schema())+2200>limit:
+                    raise ValueError('摘要输入过长，保留公开历史和原文定位')
+                with labelled('context_summary'):
+                    summarized_now=True
                     note=await call_structured(summary_model(self.llm),WorkNotes,prompt,json_first=True,retries=0)
-                    summary=note.model_dump_json()
-                    if token_estimate(summary)>reserve:raise ValueError('历史笔记超过预算')
-                except (ValueError,ModelGenerationLimit):
-                    logger.warning('历史方法笔记无效或超限，保留原有笔记与原始归档')
-                    if token_estimate(summary)>reserve:summary=''
-            saved.update(cut=end,hash=signature(end),summary=summary,archive_path=archive,snapshot=snapshot(),
-                         offloads={k:v for k,v in offloads.items() if int(k)>=end})
-            cut=end
-            prefix=[m for m in prefix if not m.additional_kwargs.get('context_snapshot')]
+                summary=note.model_dump_json()
+                if token_estimate(summary)>reserve:raise ValueError('历史笔记超过预算')
+                valid=True
+            except (ValueError,ModelGenerationLimit,ModelServiceError):
+                logger.warning('摘要不可用，保留逐字公开决定和精确原文定位；不提交空笔记')
+            candidate={**saved,'cut':end,'hash':signature(end),'archive_path':archive,'snapshot':current,
+                       'summary':summary if valid else saved.get('summary',''),
+                       'fallback':[] if valid else journal,'failed_summary':None if valid else attempt,
+                       'offloads':{k:v for k,v in offloads.items() if int(k)>=end}}
+            # Commit only a complete handoff that fits. A failed/oversize summary
+            # cannot silently move the history boundary or discard public text.
+            candidate_size=size(view(candidate))
+            if candidate_size>safe or candidate_size>=size(view()):
+                saved['failed_summary']=attempt
+                summary_status='retained_history'
+                if not force and size(view())<=safe:return
+                persist()
+                raise ModelContextLimit('无法在安全容量内生成完整续接内容；保留原历史边界，不重放计算或反复摘要。')
+            saved=candidate;cut=end
+            summary_status='summarized' if valid else 'public_history_fallback'
+
+        if size(view())>high:await compact()
+
+        async def send():
+            nonlocal previous,prior
             bounded=view()
-            if size(bounded)>low:raise ValueError('压缩后上下文未达到目标，原始记录已保留；不重复调用摘要。')
-        wire=[digest(messages_to_dict([m])) for m in bounded]
-        prior=saved.get('wire',[])
-        common=0
-        for left,right in zip(prior,wire):
-            if left!=right:break
-            common+=1
-        if saved.get('static_hash')!=static_hash:common=0
-        changed_history=bool(prior) and common<len(prior)
-        phase='cold' if not prior else ('after_compaction' if masked or summarized_now else 'prefix_reset') if changed_history else 'stable'
-        saved.update(wire=wire,static_hash=static_hash)
-        if json.dumps(saved,ensure_ascii=False,sort_keys=True)!=previous:
-            with store._transaction() as db:
-                db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
-                           (store.research_id,key,saved['hash'],json.dumps(saved,ensure_ascii=False)))
-        stats={'messages_estimated_tokens':token_estimate(messages_to_dict(bounded)),
-               'tools_estimated_tokens':tools,'total_estimated_tokens':size(bounded),
-               'input_limit':limit,'high_watermark':high,'low_watermark':low,
-               'original_messages_estimated_tokens':token_estimate(messages_to_dict(self.messages)),
-               'summarized_messages':max(0,cut-start),'offloaded_observations':len(saved['offloads']),
-               'cache_phase':phase,'reused_prefix_messages':common}
-        with execution_scope(context_usage=stats):
-            response=await handler(request.override(messages=bounded))
-            ensure_complete(response)
-            return response
+            if size(bounded)>safe:
+                raise ModelContextLimit(f'完整请求约{size(bounded)} tokens超过安全输入上限{safe}；原始记录已保留。')
+            wire=[digest(messages_to_dict([m])) for m in bounded]
+            common=0
+            for left,right in zip(prior,wire):
+                if left!=right:break
+                common+=1
+            if saved.get('static_hash')!=static_hash:common=0
+            changed_history=bool(prior) and common<len(prior)
+            phase='cold' if not prior else ('after_compaction' if masked or summarized_now else 'prefix_reset') if changed_history else 'stable'
+            saved.update(wire=wire,static_hash=static_hash)
+            persist()
+            prior=wire
+            stats={'messages_estimated_tokens':token_estimate(messages_to_dict(bounded)),
+                   'tools_estimated_tokens':tools,'total_estimated_tokens':size(bounded),
+                   'input_limit':limit,'high_watermark':high,'low_watermark':low,'safe_input_limit':safe,
+                   'compaction_target':selected_target,'summary_status':summary_status,
+                   'original_messages_estimated_tokens':token_estimate(messages_to_dict(self.messages)),
+                   'summarized_messages':max(0,cut-start),'offloaded_observations':len(saved['offloads']),
+                   'cache_phase':phase,'reused_prefix_messages':common}
+            with execution_scope(context_usage=stats):
+                response=await handler(request.override(messages=bounded))
+                ensure_complete(response)
+                return response
+        try:return await send()
+        except ModelContextOverflow:
+            # Only a rejected request before any response content is eligible.
+            # No tool or graph node is rerun, and a second overflow propagates.
+            await compact(force=True)
+            return await send()
 
 
 class ReportOrderingMiddleware(AgentMiddleware):
