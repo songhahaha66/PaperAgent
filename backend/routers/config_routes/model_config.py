@@ -20,6 +20,7 @@ def _remove_api_key_from_config(config) -> Optional[Dict[str, Any]]:
         "id": config.id,
         "timeout_seconds": getattr(config,"timeout_seconds",None),
         "thinking_enabled": getattr(config,"thinking_enabled",False),
+        "generation_settings": getattr(config,"generation_settings",None) or {},
         "type": config.type,
         "model_id": config.model_id,
         "base_url": config.base_url,
@@ -59,6 +60,7 @@ class ConnectionTest(BaseModel):
     api_key: Optional[str] = None
     timeout_seconds: Optional[float] = Field(default=None, gt=0, le=3600)
     thinking_enabled: bool = False
+    generation_settings: schemas.GenerationSettings = Field(default_factory=schemas.GenerationSettings)
 
 
 @router.get("/readiness")
@@ -98,7 +100,7 @@ async def apply_default_model(
             if target is None:
                 target = models.ModelConfig(type=role, created_by=current_user)
                 db.add(target)
-            for attr in ("model_id", "base_url", "api_key", "provider", "is_active", "timeout_seconds", "thinking_enabled"):
+            for attr in ("model_id", "base_url", "api_key", "provider", "is_active", "timeout_seconds", "thinking_enabled", "generation_settings"):
                 if hasattr(source, attr):
                     setattr(target, attr, getattr(source, attr))
         db.commit()
@@ -147,10 +149,10 @@ async def test_model_connection(
         raise HTTPException(status_code=400, detail="请填写 API 密钥")
     from ai_system.core_handlers.llm_providers import create_llm_from_model_config
     connection = SimpleNamespace(model_id=config.model_id.strip(), base_url=config.base_url.strip(), api_key=key,
-        provider=getattr(saved, "provider", "openai"), thinking_enabled=config.thinking_enabled)
+        provider=getattr(saved, "provider", "openai"), thinking_enabled=config.thinking_enabled, generation_settings=config.generation_settings.model_dump())
     try:
         llm = create_llm_from_model_config(connection, streaming=False,
-            max_tokens=4096 if config.thinking_enabled else 32, timeout=20, max_retries=0)
+            timeout=20, max_retries=0)
         reply = await asyncio.wait_for(llm.ainvoke("Reply with OK."), timeout=25)
         if not reply.content or reply.response_metadata.get('finish_reason')=='length':
             raise ValueError('连接测试未获得完整回复')

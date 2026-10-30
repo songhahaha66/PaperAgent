@@ -101,12 +101,12 @@ def test_token_compaction_keeps_requirements_recent_tools_and_reuses_summary(tmp
     def summarize(messages):
         prompts.append(messages)
         assert 'private-reasoning-marker' not in str(messages)
-        return AIMessage(content=json.dumps({'notes':['效率0.95；旧代码和输出仍可读取。'],'pending':['修复递推'],'files':[]}))
+        return AIMessage(content=json.dumps({'notes':['效率0.95；修正了递推实现。']}))
     model=ResearchToolsModel(respond=summarize,profile={'max_input_tokens':7000})
     ctx=context(tmp_path,model);middleware=ContextMiddleware(ctx,model,'compression')
     messages=[SystemMessage(content='保持参数和未知。'),HumanMessage(content='hard efficiency=0.95')]
     for i in range(9):
-        messages += [tool('run_python',{'code':'long_code = '+repr('x'*3000)},str(i)),ToolMessage(content='真实输出'+str(i),tool_call_id=str(i),name='run_python')]
+        messages += [tool('run_python',{'code':'long_code = '+repr('校验'*700)},str(i)),ToolMessage(content='真实输出'+str(i),tool_call_id=str(i),name='run_python')]
         messages[-2].additional_kwargs['reasoning_content']='private-reasoning-marker'
     class Request:
         tools=[]
@@ -120,9 +120,9 @@ def test_token_compaction_keeps_requirements_recent_tools_and_reuses_summary(tmp
     asyncio.run(run())
     assert model.calls==1 and len(sent[0])<len(messages)
     assert sent[0][1].content=='hard efficiency=0.95'
-    assert sent[0][-2].tool_call_id=='8' and sent[0][-3].tool_calls[0]['id']=='8'
-    assert json.loads(sent[0][-1].content)['source']['requirement']==ctx.research.snapshot()['spec']['requirement']
-    assert '历史工作笔记' in sent[0][2].content
+    assert sent[0][-1].tool_call_id=='8' and sent[0][-2].tool_calls[0]['id']=='8'
+    assert any(json.loads(m.content).get('source',{}).get('requirement')==ctx.research.snapshot()['spec']['requirement'] for m in sent[0] if isinstance(m,HumanMessage) and str(m.content).startswith('{'))
+    assert '历史方法笔记' in sent[0][2].content
     assert len(messages)==20  # Saved original history is never destructively trimmed.
 
 
@@ -133,7 +133,7 @@ def test_invalid_summary_cannot_inject_continuation_tools(tmp_path):
     ctx=context(tmp_path,model);middleware=ContextMiddleware(ctx,model,'invalid-notes')
     messages=[HumanMessage('original')]
     for i in range(8):
-        messages += [tool('run_python',{'code':'x='+repr('a'*3000)},str(i)),ToolMessage('done',tool_call_id=str(i))]
+        messages += [tool('run_python',{'code':'x='+repr('计算'*700)},str(i)),ToolMessage('done',tool_call_id=str(i))]
     class Request:
         tools=[]
         def __init__(self,rows):self.messages=rows
@@ -142,7 +142,7 @@ def test_invalid_summary_cannot_inject_continuation_tools(tmp_path):
     async def handler(request):sent.extend(request.messages)
     asyncio.run(middleware.awrap_model_call(Request(messages),handler))
     assert model.calls==1 and raw not in str(sent)
-    assert any('旧轮次已归档' in str(m.content)for m in sent)
+    assert any('旧轮次原文' in str(m.content)for m in sent)
 
 
 @pytest.mark.usefixtures('offline_kernel')

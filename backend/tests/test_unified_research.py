@@ -18,7 +18,7 @@ def test_actual_send_budget_is_shared_durable_and_stops_before_transport(tmp_pat
         with budget_scope(tmp_path,'resume'):
             with pytest.raises(ResearchBudgetExhausted):client.post('https://aigw.saurlax.com/v1/chat/completions')
     assert len(sent)==2 and ResearchRuntime(tmp_path,'new-id').status()['used']==2
-    assert all(set(r)<={'sequence','sent_at','host','label','research_id','state','http_status','headers_at'} for r in runtime.requests())
+    assert all(set(r)<={'sequence','sent_at','host','label','research_id','state','http_status','headers_at','reservation','generation_limit','prices'} for r in runtime.requests())
 
 
 def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):

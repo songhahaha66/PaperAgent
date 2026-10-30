@@ -23,7 +23,8 @@ from sklearn.model_selection import train_test_split,GroupShuffleSplit
 from ai_system.modules.experiments.store import ExperimentStore,SupervisedSpec,CandidateCode
 from ...research.store import ResearchStore,digest
 from ...research.validation import protocol as research_protocol
-from ai_system.graph.llm_utils import as_messages,structured_model,cap_output
+from ai_system.graph.llm_utils import as_messages,structured_model
+from ai_system.config.generation import request_model
 from .contracts import candidate_contract,check_estimator,VERSION as CONTRACT_VERSION
 
 RECOVERABLE={'generation_error','code_error','execution_error','timeout','contract_error','interrupted','not_started'}
@@ -194,9 +195,9 @@ print('PROJECT_PREDICTIONS_SAVED')
 '''
 
 
-async def ask(ctx,schema,system,prompt,timeout,tokens=2000):
+async def ask(ctx,schema,system,prompt,timeout):
     from ai_system.graph.llm_utils import call_structured
-    return await asyncio.wait_for(call_structured(cap_output(ctx.coder_llm if schema is CandidateCode else ctx.planner_llm,tokens),
+    return await asyncio.wait_for(call_structured(request_model(ctx.coder_llm if schema is CandidateCode else ctx.planner_llm),
         schema,as_messages(system,prompt)),timeout)
 
 

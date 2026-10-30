@@ -214,15 +214,38 @@ def model_usage(store):
     import json
     with store._connect() as db:
         rows=[json.loads(r[0]) for r in db.execute('SELECT payload FROM model_requests ORDER BY sequence DESC')]
-    reported=[r for r in rows if r.get('usage_returned')]
-    completed=[r for r in reported if r['state']=='completed' and r.get('finished_at',0)>r['sent_at']]
-    seconds=sum(r['finished_at']-r['sent_at'] for r in completed)
-    cached=[r for r in reported if 'cache_read_tokens' in r]
-    cache_input=sum(r['input_tokens'] for r in cached)
-    return {'input_tokens':sum(r['input_tokens'] for r in reported) if reported else None,
-            'output_tokens':sum(r['output_tokens'] for r in reported) if reported else None,
-            'tps':sum(r['output_tokens'] for r in completed)/seconds if seconds else None,
-            'cache_hit_rate':sum(r['cache_read_tokens'] for r in cached)/cache_input if cache_input else None}
+    def totals(items):
+        reported=[r for r in items if r.get('usage_returned')]
+        finished=[r for r in items if r.get('finished_at',0)>r['sent_at']]
+        completed=[r for r in finished if r.get('state')=='completed']
+        seconds=sum(r['finished_at']-r['sent_at'] for r in finished)
+        measured=[r for r in completed if r.get('usage_returned')]
+        measured_seconds=sum(r['finished_at']-r['sent_at'] for r in measured)
+        cached=[r for r in reported if 'cache_read_tokens' in r]
+        cache_input=sum(r['input_tokens'] for r in cached)
+        hits=sum(r['cache_read_tokens'] for r in cached)
+        return {'requests':len(items),'cache_reported_requests':len(cached),
+                'unmeasured_requests':sum(bool(r.get('usage_unknown')) or not r.get('usage_returned') for r in finished),
+                'reasoning_tokens':sum(r['reasoning_tokens'] for r in reported if r.get('reasoning_tokens') is not None) if any(r.get('reasoning_tokens') is not None for r in reported) else None,
+                'known_cost_usd':sum(r['cost_usd'] for r in items if r.get('cost_usd') is not None) if any(r.get('cost_usd') is not None for r in items) else None,
+                'input_tokens':sum(r['input_tokens'] for r in reported) if reported else None,
+                'output_tokens':sum(r['output_tokens'] for r in reported) if reported else None,
+                'request_seconds':seconds,
+                'tps':sum(r['output_tokens'] for r in measured)/measured_seconds if measured_seconds else None,
+                'cache_read_tokens':hits if cached else None,
+                'cache_miss_tokens':max(0,cache_input-hits) if cached else None,
+                'cache_hit_rate':hits/cache_input if cache_input else None}
+    groups={}
+    for row in rows:
+        label=row.get('label') or ''
+        scope='summary' if label=='context_summary' else 'delegate' if label.startswith('task:') else 'research' if label=='observe' else 'other'
+        phase=(row.get('context_usage') or {}).get('cache_phase','unclassified')
+        # Summary calls never inherit the parent's stable/cold classification.
+        if scope=='summary':phase='unclassified'
+        groups.setdefault((scope,phase),[]).append(row)
+    return {**totals(rows),'cache_breakdown':[{'scope':scope,'phase':phase,**totals(items)}
+                                            for (scope,phase),items in sorted(groups.items())]}
+
 
 
 def model_activity(store, work_status):
@@ -246,7 +269,9 @@ def model_activity(store, work_status):
             'updated_at':max(item.get('finished_at') or 0,item.get('headers_at') or 0,item['sent_at']),
             'interrupted_at':item.get('interrupted_at'), 'status':status,
             'input_tokens':item.get('input_tokens'),'output_tokens':item.get('output_tokens'),
-            'cache_read_tokens':item.get('cache_read_tokens'),'context_usage':item.get('context_usage')})
+            'cache_read_tokens':item.get('cache_read_tokens'),'context_usage':item.get('context_usage'),
+            'reasoning_tokens':item.get('reasoning_tokens'),'generation_limit':item.get('generation_limit'),
+            'finish_reason':(item.get('diagnostic') or {}).get('finish_reason')})
     return result
 
 

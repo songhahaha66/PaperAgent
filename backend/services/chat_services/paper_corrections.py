@@ -1,10 +1,11 @@
+from ai_system.config.generation import request_model
 """Evidence-bound document corrections, without changing research or fitting."""
 import json,re,uuid,time
 from typing import Literal
 from collections import Counter
 from pydantic import BaseModel,Field,ConfigDict
 from ai_system.graph.context import GraphContext
-from ai_system.graph.llm_utils import as_messages,call_structured,cap_output
+from ai_system.graph.llm_utils import as_messages,call_structured
 from ai_system.modules.writing.consistency import audit_sections,section_audit_prompt,AUDIT_SYSTEM
 from ai_system.modules.writing.validation import check_sections
 from ai_system.graph.registry import REF_PATTERN,publication_text
@@ -152,7 +153,7 @@ async def generate_fragment(store,key,section,source,instruction,llm,request,rec
         if Counter(CITATION.findall(scope['old']))!=Counter(CITATION.findall(reply.replacement)):raise ValueError('局部改写不得替换文献标记')
     try:
         with labelled('paper-edit:fragment'):
-            answer=await call_structured(cap_output(llm,2000),FragmentReplacement,as_messages(system,json.dumps(payload,ensure_ascii=False)),validate=validate,retries=0)
+            answer=await call_structured(request_model(llm,'auxiliary'),FragmentReplacement,as_messages(system,json.dumps(payload,ensure_ascii=False)),validate=validate,retries=0)
         edits=CorrectionEdits(edits=[AnchoredEdit(section=key,old=scope['old'],replacement=answer.replacement)])
         after=apply_edits({key:section['text']},edits,{},normalize=False)
         assert after[key]==section['text'][:scope['start']]+answer.replacement+section['text'][scope['end']:]
@@ -218,7 +219,7 @@ async def review_candidate(store,state,llm,scope=None,source_issue=None):
     ctx=proposal_context(store,state,llm);issues=[]
     if scope:
         prompt=fragment_prompt(store,state,scope)
-        async def perform():return await call_structured(cap_output(llm,1800),FragmentAudit,as_messages(FRAGMENT_AUDIT_SYSTEM,prompt),retries=0)
+        async def perform():return await call_structured(request_model(llm,'auxiliary'),FragmentAudit,as_messages(FRAGMENT_AUDIT_SYSTEM,prompt),retries=0)
         try:
             with labelled('paper-edit:fragment-audit'):
                 answer=await run_review(ctx,state,'fragment',FragmentAudit,FRAGMENT_AUDIT_SYSTEM,prompt,perform,sections=state['sections'],

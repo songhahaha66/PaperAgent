@@ -245,7 +245,7 @@
                     >TPS {{ modelUsage?.tps?.toFixed(1) ?? '—' }}</span
                   >
                   <span
-                    title="缓存输入 token / 输入 token；仅统计网关返回缓存计数的请求，旧记录未保存或网关未提供时无法计算"
+                    :title="cacheUsageTitle"
                     >缓存
                     {{
                       modelUsage?.cache_hit_rate == null
@@ -464,6 +464,15 @@ const {
 watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
 const issueRequest = ref<{ id: string; at: number } | null>(null)
 const modelUsage = computed(() => researchSnapshot.value?.runtime?.usage)
+const cacheUsageTitle = computed(() => {
+  const scopes: Record<string, string> = { research: '主研究', summary: '摘要', delegate: '子任务', other: '其他' }
+  const phases: Record<string, string> = { cold: '首次请求', after_compaction: '压缩后首请求', stable: '连续追加', prefix_reset: '前缀变更', unclassified: '未分阶段' }
+  const rows = modelUsage.value?.cache_breakdown ?? []
+  return ['缓存仅统计服务商返回计数的请求；未命中为这部分请求的输入减缓存读取。', ...rows.map(row =>
+    `${scopes[row.scope] ?? row.scope} · ${phases[row.phase] ?? row.phase}：${row.cache_hit_rate == null ? '暂无缓存计数' : (row.cache_hit_rate * 100).toFixed(1) + '%'}，未命中 ${row.cache_miss_tokens?.toLocaleString() ?? '—'} tokens，${row.cache_reported_requests}/${row.requests} 次有缓存计数，累计请求 ${row.request_seconds.toFixed(1)} 秒`
+  )].join('\n')
+})
+
 const formatTokens = (value?: number | null) => {
   if (value == null) return '—'
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`

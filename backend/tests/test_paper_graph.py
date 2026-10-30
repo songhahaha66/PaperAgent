@@ -90,7 +90,7 @@ def test_graph_end_to_end_offline(tmp_path):
 
 
 def test_malformed_tool_call_is_retried_and_never_left_in_history():
-    from ai_system.graph.compaction import MALFORMED_NOTE, TruncationGuardMiddleware, drop_invalid_calls
+    from ai_system.graph.compaction import MALFORMED_NOTE, MalformedToolMiddleware, drop_invalid_calls
 
     class Request:
         def __init__(self, messages):
@@ -106,7 +106,7 @@ def test_malformed_tool_call_is_retried_and_never_left_in_history():
         seen.append(request.messages)
         return AIMessage(content="", invalid_tool_calls=[bad], response_metadata={"finish_reason": "tool_calls"})
 
-    result = asyncio.run(TruncationGuardMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
+    result = asyncio.run(MalformedToolMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
     assert len(seen) == 2 and seen[1][-1].content == MALFORMED_NOTE
     # 重试仍然坏掉时，坏调用不留在历史里（否则下一次请求被接口以"工具调用没有结果"拒绝）
     assert result.invalid_tool_calls == []

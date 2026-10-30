@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
 from ai_system.core_handlers.model_runtime import model_identity
-from ai_system.graph.llm_utils import call_structured, cap_output
+from ai_system.graph.llm_utils import call_structured
+from ai_system.config.generation import request_model
 
 
 def connection(**kwargs):
@@ -25,8 +26,8 @@ def test_toggle_changes_request_and_runtime_identity_but_other_services_are_unto
     assert off._get_request_payload([HumanMessage('test')])['extra_body']['thinking']['type']=='disabled'
     assert on._get_request_payload([HumanMessage('test')])['extra_body']['thinking']['type']=='enabled'
     assert model_identity(off)!=model_identity(on)
-    assert cap_output(on,1800).max_tokens==16000
-    assert cap_output(off,1800).max_tokens==1800
+    assert request_model(on).max_tokens==16000
+    assert request_model(off,'summary').max_tokens==1800
     custom=connection(thinking_enabled=True);custom.base_url='https://provider.example/v1'
     assert create_llm_from_model_config(custom).extra_body is None
 
@@ -62,12 +63,15 @@ def test_persist_apply_default_and_edit_keep_thinking_and_never_return_key():
     engine=create_engine('sqlite://');Base.metadata.create_all(engine)
     with Session(engine) as db:
         source=create_model_config(db,ModelConfigCreate(type='brain',model_id='deepseek-flash',
-            base_url='https://api.deepseek.com/v1',api_key='offline-test-key',thinking_enabled=True),1)
+            base_url='https://api.deepseek.com/v1',api_key='offline-test-key',thinking_enabled=True,
+            generation_settings={'max_output_tokens':24000,'context_window':64000,'reasoning_effort':'low'}),1)
         public=asyncio.run(apply_default_model(current_user=1,db=db))
         assert {r['type'] for r in public}=={'brain','code','writing'}
         assert all(r['thinking_enabled'] and 'api_key' not in r for r in public)
+        assert all(r['generation_settings']['max_output_tokens']==24000 and r['generation_settings']['reasoning_effort']=='low' for r in public)
         update_model_config(db,source.id,ModelConfigUpdate(model_id='deepseek-flash'),1)
         assert source.thinking_enabled is True
+        assert source.generation_settings['context_window']==64000
         update_model_config(db,source.id,ModelConfigUpdate(thinking_enabled=False),1)
         assert _remove_api_key_from_config(source)['thinking_enabled'] is False
         assert db.query(ModelConfig).filter_by(type='code').one().thinking_enabled is True

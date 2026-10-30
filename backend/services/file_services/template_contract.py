@@ -298,9 +298,6 @@ def _copy_template_to_workspace(source_path: Path, workspace_path: Path, output_
         if not target.exists():
             shutil.copyfile(source_path, target)
     elif output_mode == "word":
-        target = workspace_path / "paper.docx"
-        if not target.exists():
-            shutil.copyfile(source_path, target)
         backup = workspace_path / "template" / "original.docx"
         backup.parent.mkdir(parents=True, exist_ok=True)
         if not backup.exists():

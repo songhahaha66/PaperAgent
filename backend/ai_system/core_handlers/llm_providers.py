@@ -177,7 +177,7 @@ class OpenAIProvider(BaseLLMProvider):
         if step_gateway:
             # Reuse the bounded settings validated by the live research run.
             # Copy the body so saved settings are untouched; explicit effort wins.
-            extra_body = {'reasoning_effort': 'low', **(extra_body or {})}
+            extra_body = {'reasoning_effort': kwargs.get('reasoning_effort') or 'low', **(extra_body or {})}
         if (self.model_id.startswith("deepseek-")
                 and urlparse(self.base_url).hostname == "api.deepseek.com"):
             extra_body = {"thinking": {"type": "enabled" if self.config.get('thinking_enabled') else "disabled"},
@@ -189,6 +189,7 @@ class OpenAIProvider(BaseLLMProvider):
             model=self.model_id,
             api_key=self.api_key,
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else None,
+            reasoning_effort=kwargs.get('reasoning_effort'),
             temperature=kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
@@ -362,4 +363,15 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
     if extra_body:
         kwargs.setdefault('extra_body', extra_body)
 
-    return LLMProviderFactory.create_llm_instance(config, **kwargs)
+    from ..config.generation import GenerationSettings
+    settings=GenerationSettings.model_validate(getattr(model_config,'generation_settings',None) or {})
+    kwargs.setdefault('max_tokens',settings.max_output_tokens)
+    if settings.reasoning_effort is not None:
+        if config['provider'] not in {'openai','local'}:raise ValueError('该连接尚未适配reasoning_effort，请使用服务商原生思考配置')
+        kwargs.setdefault('reasoning_effort',settings.reasoning_effort)
+    model=LLMProviderFactory.create_llm_instance(config, **kwargs)
+    update={'metadata':{**(getattr(model,'metadata',None) or {}),'generation_settings':settings.model_dump()}}
+    if settings.context_window is not None:
+        update['profile']={**(getattr(model,'profile',None) or {}),'max_context_tokens':settings.context_window,
+                           'max_input_tokens':settings.context_window-int(model.max_tokens or settings.max_output_tokens)}
+    return model.model_copy(update=update)

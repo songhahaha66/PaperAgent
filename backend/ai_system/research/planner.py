@@ -7,6 +7,7 @@ from .store import digest
 from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 
 PROMPT = """你是持续工作的研究Agent，自己读取材料、运行代码、观察结果、修订方法并回答用户。
+工作区文件用research_list_files定位、research_search_files搜索、research_read_artifact分页读取。正文和日志在工作区工具中可读，Python仅负责计算，不能通过搜索沙箱根目录判断正文是否存在。
 先直接用 research_read_artifact 读取原始材料，不需要实验编号。用 research_create_question 列出原要求中的全部实质问题（可同轮分别调用），修改才用research_edit_question。用research_run_python在同一持久Python内核计算；公共数据分析可以省略question_id，不把代码挂到不相关问题下。
 research_run_python 返回真实输出、错误和文件路径。复用变量与已保存文件，必要时在代码中核对单位、数据范围、约束和预测时可用信息。实际数值直接写入 research_update_answer 的答案，不登记指标或R/F引用。
 用普通工具完成读取、计算和解释。只有需要明确比较不同方法/条件时才 research_schedule_experiment；普通方案记录后仍由你直接运行代码，CSV监督学习比较才进入独立分支。
@@ -15,7 +16,7 @@ research_run_python 返回真实输出、错误和文件路径。复用变量与
 文件同步由系统重试；执行结果未知时不得自动重放代码。恢复后先读取已有日志和结果，不假定旧Python内存还存在。
 所有模型请求共用项目运行预算。预算不足时保留已完成成果和未完成部分，不通过换编号或重新开始绕过限制。
 用实际工具返回的ID；参数错误在当前上下文纠正。每个原始问题保留已答、部分或未答、适用范围和停止原因。
-研究、正文均由你负责：用writing_edit直接保存Markdown或原生TeX，长稿按文件分步编辑；已有文件先读取version保护人工修改。不要用Python生成论文。正文完成后research_deliver，系统仅检查引用、文件、编译和导出。
+研究、正文均由你负责：用writing_edit直接保存Markdown或原生TeX，长稿按文件分步编辑；已有文件先读取，系统自动绑定读取回执的版本保护人工修改，不要复制哈希。不要用Python生成论文。正文与答案完成后可直接给出最终回复或research_deliver，两者进入相同的文件、引用、编译和导出流程；明确局限后可以交付部分结果，不必重复复核。
 需要独立调查或复核时research_delegate：isolated提供明确任务与材料；fork继承已有上下文接手工作。不要将连续纠错拆给多个Agent，子任务结果仍由你整合。
 确需用户提供必要信息才 research_ask_user；无可行路径时 research_pause。交付、提问或启动独立比较后等待真实结果。
 """
@@ -84,6 +85,7 @@ def preserved_progress(snapshot):
 
 def planning_failure_message(error, snapshot):
     from .runtime import ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked
+    from ai_system.config.generation import ModelGenerationLimit
     from langgraph.errors import GraphRecursionError
     from starlette.exceptions import HTTPException
     if isinstance(error,GraphRecursionError):
@@ -95,7 +97,7 @@ def planning_failure_message(error, snapshot):
         from .review_cache import error_detail
         detail=error_detail(error)
     else:
-        detail=str(error) if isinstance(error,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked,NoResearchProgress)) else '研究控制器未完成下一行动，具体诊断已保存，可继续处理。'
+        detail=str(error) if isinstance(error,(ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked,NoResearchProgress,ModelGenerationLimit)) else '研究控制器未完成下一行动，具体诊断已保存，可继续处理。'
     return detail+' '+preserved_progress(snapshot)
 
 
@@ -107,6 +109,31 @@ def decision_block_message(store, snapshot):
 class NoResearchProgress(ValueError):pass
 
 
+def working_context(ctx):
+    """Durable state at a conversation boundary; tool receipts carry later changes."""
+    state=ctx.research.snapshot()
+    from .views import questions,question_context
+    from .runs import run_context
+    from .files import known_files
+    rows=question_context([q for q in questions(state) if not q.get('retired')])
+    for q in rows:
+        if len(q.get('judgment',''))>800:q['judgment']=q['judgment'][:800]+'…（research_read_question读取完整答案）'
+    runs=run_context(ctx.research)[-6:]
+    for r in runs:
+        if r.get('error'):r['error']=r['error'][:500]
+        r['files']=r['files'][:8]
+        if r.get('stdout_path') and ctx.fs.exists(r['stdout_path']):
+            r['output_tail']=ctx.fs.read_text(r['stdout_path'])[-600:]
+    main=ctx.workspace/('paper.tex' if ctx.output_mode=='latex' else 'paper.md')
+    import hashlib
+    return {'source':{'requirement':state['spec']['requirement'],'amendments':state['spec']['amendments'],
+                      'output_mode':state['spec'].get('output_mode')},
+            'questions':rows,'runs':runs,'files':known_files(ctx)[:30],
+            'file_tools':'research_list_files / research_search_files / research_read_artifact；Python沙箱不保证有正文副本',
+            'document':{'path':main.name,'version':hashlib.sha256(main.read_bytes()).hexdigest(),'nonempty':bool(main.stat().st_size)} if main.is_file() else {},
+            'document_diagnostics':(state.get('action') or {}).get('result',{}).get('issues',[])}
+
+
 class Planner:
     def __init__(self,llm):self.llm=llm
 
@@ -115,29 +142,39 @@ class Planner:
         from langchain.agents.middleware import before_model,after_model,wrap_tool_call
         from langchain_core.messages import HumanMessage,ToolMessage
         from langchain_core.tools import StructuredTool
-        from ai_system.graph.compaction import ContextMiddleware
-        from ai_system.graph.llm_utils import cap_output
+        from ai_system.graph.compaction import ContextMiddleware,state_message
+        from ai_system.config.generation import request_model
         from ai_system.modules.registry import capabilities,invoke
         from .runtime import execution_scope
         from .views import activity
         from .review_cache import error_detail
         registry=capabilities();tools=[];mapping={}
-        for capability in registry.model_capabilities():
+        for capability in sorted(registry.model_capabilities(),key=lambda c:c.name):
             name=capability.name.replace('.','_');mapping[name]=capability.name
             async def call(_name=capability.name,**kwargs):return await invoke(ctx,_name,**kwargs)
             tools.append(StructuredTool(name=name,description=capability.purpose,args_schema=capability.inputs,coroutine=call))
         lock=asyncio.Lock()
         known_revision=ctx.research.snapshot()["revision"]
+        def input_version():
+            main=ctx.workspace/('paper.tex' if ctx.output_mode=='latex' else 'paper.md')
+            import hashlib
+            return {'inputs':ctx.research.file_inputs(),
+                    'document':hashlib.sha256(main.read_bytes()).hexdigest() if main.is_file() else None}
+        known_inputs=input_version()
         last_tool_feedback=''
         @wrap_tool_call
         async def feedback(request,handler):
-            nonlocal known_revision,last_tool_feedback
+            nonlocal known_revision,known_inputs,last_tool_feedback
             call=request.tool_call;name=call['name'];key='research-tool:'+ctx.research.research_id+':'+call['id']
             async with (ctx.delegation_slots if name=='research_delegate' else lock):
                 from .runtime import ResearchRuntime
                 meter=ResearchRuntime(ctx.research.root,ctx.research.research_id)
                 snapshot=ctx.research.snapshot()
-                operation='tool:'+digest([name,call['args'],ctx.research.file_inputs(),snapshot['spec'],snapshot.get('document')])
+                args=call['args']
+                if name=='writing_edit':
+                    from ai_system.modules.writing.draft import observed_version
+                    args={**args,'expected_version':observed_version(ctx.agent_messages,args.get('path','paper.md'))}
+                operation='tool:'+digest([name,args,ctx.research.file_inputs(),snapshot['spec'],snapshot.get('document')])
                 meter.check_guard(operation)
                 with execution_scope(action_id=key,observation_id=observation_id,tool_call_id=key,expected_revision=known_revision):
                     try:
@@ -145,11 +182,13 @@ class Planner:
                         # ModuleRegistry validates raw args inside its durable activity
                         # boundary, including extra fields and failed references.
                         from .session import invoke_once
-                        result=await invoke_once(ctx,mapping[name],call['args'],key)
+                        result=await invoke_once(ctx,mapping[name],args,key)
                         if isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}:
                             meter.failed(operation,digest(result.get('observation','')),'execution','相同代码和输入重复失败；已有日志保留，请修改实现后继续。')
                         else:meter.succeeded(operation)
                         if isinstance(result,dict) and 'revision' in result:known_revision=result['revision']
+                        if name=='writing_edit' and result.get('path')==('paper.tex' if ctx.output_mode=='latex' else 'paper.md'):
+                            known_inputs={**known_inputs,'document':result['version']}
                         last_tool_feedback='；'.join(result.get('answer_gaps',[])) if isinstance(result,dict) else ''
                         return ToolMessage(content=json.dumps(result,ensure_ascii=False,default=str),tool_call_id=call['id'],name=name)
                     except (ValueError,KeyError,FileNotFoundError) as exc:
@@ -166,29 +205,27 @@ class Planner:
                         return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
         pending_diagnostic=''
         resume_note=False
+        initial_snapshot=True
         @before_model(can_jump_to=['end'])
         async def dispatched(state,runtime):
-            nonlocal known_revision,pending_diagnostic,resume_note
+            nonlocal known_revision,known_inputs,pending_diagnostic,resume_note,initial_snapshot
             from ai_system.modules.experiments.execution import recover_outputs
             await recover_outputs(ctx)
-            ctx.agent_messages=list(state['messages'])
             observations=[]
+            resumed_now=resume_note
             if resume_note:
-                _,now=decision_context(ctx.research,ctx.research.snapshot())
-                now['runtime_note']='继续原会话；Python内存可能已释放，复用保存的文件与代码，不重放已完成运行。'
-                observations.append(HumanMessage(content='当前研究记录已更新：'+json.dumps(now,ensure_ascii=False)))
+                observations.append(HumanMessage(content='继续原会话；Python内存可能已释放。通过工作区文件工具读取已有代码和结果，不重放已完成运行。'))
                 resume_note=False
             if pending_diagnostic:
                 observations.append(HumanMessage(content=pending_diagnostic));pending_diagnostic=''
             snapshot=ctx.research.snapshot();action=snapshot.get('action') or {}
             if action.get('status')=='planned':return {'messages':observations,'jump_to':'end'}
-            if snapshot['revision']!=known_revision:
-                known_revision=snapshot['revision']
-                _,current=decision_context(ctx.research,snapshot)
-                current={**current,'source':{k:v for k,v in current['source'].items() if k!='requirement'}}
-                observations.append(HumanMessage(content='当前研究记录已更新：'+json.dumps(current,ensure_ascii=False)))
+            inputs_now=input_version()
+            if initial_snapshot or resumed_now or snapshot['revision']!=known_revision or inputs_now!=known_inputs:
+                observations.append(state_message(working_context(ctx)))
+                initial_snapshot=False
+                known_revision=snapshot['revision'];known_inputs=inputs_now
             if observations:
-                ctx.agent_messages=[*state['messages'],*observations]
                 return {'messages':observations}
         prompted_for_action=False
         @after_model(can_jump_to=['model'])
@@ -208,16 +245,21 @@ class Planner:
                 patch={'messages':[clean]}
                 if not reply.tool_calls:patch['jump_to']='model'
                 return patch
-            if not getattr(reply,'tool_calls',[]) and not prompted_for_action:
-                prompted_for_action=True
-                return {'messages':[HumanMessage(content='尚未调用工具或安排可执行行动。请现在调用与当前信息需求对应的工具；先建立问题须使用返回的真实ID。若确需用户补充必要信息可提问，无可行路径则明确暂停。保留已有成果，不要重复计算。')],'jump_to':'model'}
+            if not getattr(reply,'tool_calls',[]):
+                from ai_system.graph.llm_utils import message_text
+                try:
+                    if not message_text(reply).strip():raise ValueError('没有最终回复或工具操作，请继续未完成工作或明确暂停原因。')
+                    await invoke(ctx,'research.deliver',title=ctx.research.snapshot()['spec']['requirement'].splitlines()[0][:80],
+                                 reason=message_text(reply)[:2000])
+                except ValueError as exc:
+                    if prompted_for_action:raise NoResearchProgress(str(exc)) from exc
+                    prompted_for_action=True
+                    return {'messages':[HumanMessage(content='最终回复尚不能交付：'+str(exc))],'jump_to':'model'}
         recorder=ContextMiddleware(ctx,self.llm,ctx.research.research_id+'-lead')
         common={'original_request':context['source']['requirement'],'available_method_keys':context['available_method_keys'],
                 'skill_policy':context['skill_policy'],'inputs':context['inputs'],'materials':context['materials'],
                 'template_requirements':ctx.template_requirements,'compact_paper':ctx.compact_paper}
-        dynamic={k:v for k,v in context.items() if k not in {'available_method_keys','skill_policy','inputs','materials'}}
-        dynamic['source']={k:v for k,v in context['source'].items() if k!='requirement'}
-        messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False)),HumanMessage(content=json.dumps(dynamic,ensure_ascii=False))]
+        messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False))]
         result=None
         try:
             from .session import session_saver,run_session
@@ -225,7 +267,7 @@ class Planner:
                 nonlocal resume_note
                 resume_note=True
             async with session_saver(ctx) as saver:
-                agent=create_agent(model=cap_output(self.llm,4800),tools=tools,system_prompt=PROMPT + PROGRESS_PROMPT,
+                agent=create_agent(model=request_model(self.llm),tools=tools,system_prompt=PROMPT + PROGRESS_PROMPT,
                     checkpointer=saver,middleware=[recorder,ProgressMiddleware(ctx.events,scope=observation_id),feedback,dispatched,malformed])
                 result=await run_session(agent,ctx.research.research_id+'-lead',messages,on_resume=resumed)
             return result
@@ -237,7 +279,8 @@ class Planner:
                 save_transcript(ctx,observation_id.replace(':','-'),history)
 
     async def amendment(self, snapshot, change, scope):
-        from ..graph.llm_utils import call_structured, as_messages, cap_output
+        from ..graph.llm_utils import call_structured, as_messages
+        from ..config.generation import request_model
         from .validation import validate_spec
         if not change.strip():raise ValueError('修改内容不能为空')
         selected = scope if scope is not None else [key for key, t in snapshot["experiments"].items() if t["kind"] != "verify" and not t['retired']]
@@ -249,7 +292,7 @@ class Planner:
             if not affected or not affected<=set(selected):raise ValueError('修订只能关联实际受影响的已知任务')
             validate_spec(source,{'subproblems':[{'id':key} for key in affected],
                 'requirements':[r.model_dump() for r in contract.requirements],'assumptions':[]})
-        response = await call_structured(cap_output(self.llm,4800), AmendmentSpec,as_messages(
+        response = await call_structured(request_model(self.llm,'auxiliary'), AmendmentSpec,as_messages(
             "把用户补充要求转成结构化要求，已有要求复用RQ编号形成新版本，新要求才用新编号，source_quote保留原题或补充要求的实际摘录，task_ids只取scope中的任务。"
             "只关联change实际影响的问题，不把缺省scope当作修改所有问题；继续/恢复不是新要求。"
             "合并相同任务的要求，简短输出。方法选择或实现纠错作为goal，不虚构0/1自报检查。"

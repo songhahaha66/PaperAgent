@@ -113,6 +113,7 @@ def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id:
             api_key=config.api_key,
             timeout_seconds=config.timeout_seconds,
             thinking_enabled=config.thinking_enabled,
+            generation_settings=config.generation_settings.model_dump(),
             created_by=user_id
         )
 

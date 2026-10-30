@@ -8,14 +8,15 @@ import time
 import httpx
 from pydantic import model_validator
 from urllib.parse import urlparse
-from ..research.runtime import ACTIVE_BUDGET, ACTIVE_MODEL_REQUEST, ModelServiceError
+from ..research.runtime import ACTIVE_BUDGET, ACTIVE_MODEL_REQUEST, ModelServiceError,ResearchBudgetExhausted
+from ..config.generation import ModelGenerationLimit,ModelContextLimit,completion_info,ensure_complete
 from ..research.store import digest
 
 RETRY_DELAYS=(1.0,2.0)
 
 
 def model_identity(model):
-    fields={key:str(getattr(model,key,None)) for key in ('model_name','model','openai_api_base','anthropic_api_url','request_timeout','default_request_timeout','timeout','extra_body')}
+    fields={key:str(getattr(model,key,None)) for key in ('model_name','model','openai_api_base','anthropic_api_url','request_timeout','default_request_timeout','timeout','extra_body','reasoning_effort')}
     # Credentials only enter a one-way local fingerprint; never persist their values.
     for key in ('openai_api_key','anthropic_api_key','google_api_key'):
         value=getattr(model,key,None)
@@ -69,6 +70,33 @@ def reply_usage(reply):
     return None
 
 
+def reservation(model,args,kwargs):
+    from ..graph.compaction import token_estimate
+    from langchain_core.messages import messages_to_dict
+    messages=args[0] if args else kwargs.get('messages',[])
+    try:body=messages_to_dict(messages)
+    except (TypeError,AttributeError):body=str(messages)
+    estimated=token_estimate([body,kwargs.get('tools',[]),kwargs.get('functions',[])])
+    profile=getattr(model,'profile',None) or {}
+    ceiling=profile.get('max_context_tokens')
+    if ceiling and estimated+int(getattr(model,'max_tokens',None) or 16000)>ceiling:
+        raise ModelContextLimit('请求输入与生成预留空间超过模型上下文容量；未发送请求，请先压缩历史或缩小输入。')
+    return {'input_tokens':estimated,
+            'output_tokens':int(getattr(model,'max_tokens',None) or 16000),
+            'prices':((getattr(model,'metadata',None) or {}).get('generation_settings') or {}).get('prices')}
+
+
+def finish(runtime,seq,reply,usage=None):
+    info=completion_info(reply)
+    runtime.usage(seq,reply_usage(reply) if usage is None else usage,
+                  state='truncated' if info else 'completed',diagnostic=info or None)
+    if info:
+        runtime.note_stop(info['kind'],'模型生成预算耗尽，未执行残缺工具调用；已有结果保留。')
+        ensure_complete(reply)
+
+
+
+
 class RuntimeModelMixin:
     @model_validator(mode='before')
     @classmethod
@@ -84,20 +112,25 @@ class RuntimeModelMixin:
 
     async def _agenerate(self,*args,**kwargs):
         scope=self._scope(args,kwargs)
-        if scope is None:return await super()._agenerate(*args,**kwargs)
+        if scope is None:
+            result=await super()._agenerate(*args,**kwargs)
+            if ACTIVE_MODEL_REQUEST.get() is None:ensure_complete(result)
+            return result
         if getattr(self,'max_retries',0):return await self.model_copy(update={'max_retries':0})._agenerate(*args,**kwargs)
         runtime,key,connection=scope
         for attempt in range(3):
             runtime.check_guard(connection);runtime.check_guard(key)
-            seq=runtime.reserve(urlparse(str(getattr(self,'openai_api_base','') or '')).hostname or type(self).__name__)
+            seq=runtime.reserve(urlparse(str(getattr(self,'openai_api_base','') or '')).hostname or type(self).__name__,**reservation(self,args,kwargs))
             token=ACTIVE_MODEL_REQUEST.set((runtime,seq))
             try:
                 # Legacy/explicit per-project timeouts remain overrides. New projects
                 # use the model client's configured request timeout, not a total 90s timer.
                 async with asyncio.timeout(runtime.policy().get('timeout_seconds')):
-                    result=await super()._agenerate(*args,**kwargs)
-                runtime.usage(seq,reply_usage(result));runtime.succeeded(key)
+                    bounded=self.model_copy(update={'max_tokens':runtime.generation_limit(seq)})
+                    result=await super(RuntimeModelMixin,bounded)._agenerate(*args,**kwargs)
+                finish(runtime,seq,result);runtime.succeeded(key)
                 return result
+            except (ModelGenerationLimit,ResearchBudgetExhausted):raise
             except (asyncio.CancelledError, GeneratorExit):
                 runtime.usage(seq,state="interrupted");raise
             except Exception as exc:
@@ -119,18 +152,22 @@ class RuntimeModelMixin:
         runtime,key,connection=scope
         for attempt in range(3):
             runtime.check_guard(connection);runtime.check_guard(key)
-            seq=runtime.reserve(type(self).__name__);token=ACTIVE_MODEL_REQUEST.set((runtime,seq));emitted=False;usage={}
+            seq=runtime.reserve(type(self).__name__,**reservation(self,args,kwargs));token=ACTIVE_MODEL_REQUEST.set((runtime,seq));emitted=False;usage={};last=None;truncated=None
             try:
                 async with asyncio.timeout(runtime.policy().get('timeout_seconds')):
-                    async for chunk in super()._astream(*args,**kwargs):
-                        message=getattr(chunk,'message',chunk)
+                    bounded=self.model_copy(update={'max_tokens':runtime.generation_limit(seq)})
+                    async for chunk in super(RuntimeModelMixin,bounded)._astream(*args,**kwargs):
+                        message=getattr(chunk,'message',chunk);last=chunk
+                        if completion_info(chunk):truncated=chunk
                         reported=reply_usage(message)
                         if reported:
                             for k in ('input_tokens','output_tokens'):usage[k]=max(usage.get(k,0),int(reported.get(k) or 0))
-                            if 'input_token_details' in reported:usage['input_token_details']=reported['input_token_details']
+                            for detail in ('input_token_details','output_token_details'):
+                                if detail in reported:usage[detail]=reported[detail]
                         emitted=emitted or bool(getattr(message,'content',None) or getattr(message,'tool_call_chunks',None) or getattr(message,'tool_calls',None) or (getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content'))
                         yield chunk
-                runtime.usage(seq,usage);runtime.succeeded(key);return
+                finish(runtime,seq,truncated or last,usage);runtime.succeeded(key);return
+            except (ModelGenerationLimit,ResearchBudgetExhausted):raise
             except (asyncio.CancelledError, GeneratorExit):
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:
@@ -142,15 +179,20 @@ class RuntimeModelMixin:
 
     def _generate(self,*args,**kwargs):
         scope=self._scope(args,kwargs)
-        if scope is None:return super()._generate(*args,**kwargs)
+        if scope is None:
+            result=super()._generate(*args,**kwargs)
+            if ACTIVE_MODEL_REQUEST.get() is None:ensure_complete(result)
+            return result
         if getattr(self,'max_retries',0):return self.model_copy(update={'max_retries':0})._generate(*args,**kwargs)
         runtime,key,connection=scope
         for attempt in range(3):
             runtime.check_guard(connection);runtime.check_guard(key)
-            seq=runtime.reserve(type(self).__name__);token=ACTIVE_MODEL_REQUEST.set((runtime,seq))
+            seq=runtime.reserve(type(self).__name__,**reservation(self,args,kwargs));token=ACTIVE_MODEL_REQUEST.set((runtime,seq))
             try:
-                result=super()._generate(*args,**kwargs)
-                runtime.usage(seq,reply_usage(result));runtime.succeeded(key);return result
+                bounded=self.model_copy(update={'max_tokens':runtime.generation_limit(seq)})
+                result=super(RuntimeModelMixin,bounded)._generate(*args,**kwargs)
+                finish(runtime,seq,result);runtime.succeeded(key);return result
+            except (ModelGenerationLimit,ResearchBudgetExhausted):raise
             except Exception as exc:
                 runtime.usage(seq,state="failed",diagnostic=failure_diagnostic(exc));kind,message,retry,terminal=failure(exc)
                 runtime.failed(connection if terminal else key,digest([type(exc).__name__,kind,getattr(exc,'status_code',None)]),kind,message,terminal=terminal)
@@ -167,16 +209,20 @@ class RuntimeModelMixin:
         runtime,key,connection=scope
         for attempt in range(3):
             runtime.check_guard(connection);runtime.check_guard(key)
-            seq=runtime.reserve(type(self).__name__);token=ACTIVE_MODEL_REQUEST.set((runtime,seq));emitted=False;usage={}
+            seq=runtime.reserve(type(self).__name__,**reservation(self,args,kwargs));token=ACTIVE_MODEL_REQUEST.set((runtime,seq));emitted=False;usage={};last=None;truncated=None
             try:
-                for chunk in super()._stream(*args,**kwargs):
-                    message=getattr(chunk,'message',chunk);reported=reply_usage(message)
+                bounded=self.model_copy(update={'max_tokens':runtime.generation_limit(seq)})
+                for chunk in super(RuntimeModelMixin,bounded)._stream(*args,**kwargs):
+                    message=getattr(chunk,'message',chunk);last=chunk;reported=reply_usage(message)
+                    if completion_info(chunk):truncated=chunk
                     if reported:
                         for k in ('input_tokens','output_tokens'):usage[k]=max(usage.get(k,0),int(reported.get(k) or 0))
-                        if 'input_token_details' in reported:usage['input_token_details']=reported['input_token_details']
+                        for detail in ('input_token_details','output_token_details'):
+                            if detail in reported:usage[detail]=reported[detail]
                     emitted=emitted or bool(getattr(message,'content',None) or getattr(message,'tool_call_chunks',None) or getattr(message,'tool_calls',None) or (getattr(message,'additional_kwargs',{}) or {}).get('reasoning_content'))
                     yield chunk
-                runtime.usage(seq,usage);runtime.succeeded(key);return
+                finish(runtime,seq,truncated or last,usage);runtime.succeeded(key);return
+            except (ModelGenerationLimit,ResearchBudgetExhausted):raise
             except GeneratorExit:
                 runtime.usage(seq,usage,state="interrupted");raise
             except Exception as exc:

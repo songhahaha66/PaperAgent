@@ -85,7 +85,7 @@ def test_imported_metric_metadata_does_not_create_an_execution_gate(quote,expect
 
 
 @pytest.mark.parametrize('raw_tool',[True,False])
-def test_truncated_reply_retains_reason_without_replaying_partial_json_and_requests_complete_reply(monkeypatch,raw_tool):
+def test_truncated_reply_stops_without_replaying_partial_json_or_retrying_same_limit(monkeypatch,raw_tool):
     partial='{"title":"unfinished","requirements":[{"id":"R1"}]'
     class Model:
         calls=0
@@ -103,5 +103,7 @@ def test_truncated_reply_retains_reason_without_replaying_partial_json_and_reque
             assert '被截断' in messages[-1].content and '缩短' in messages[-1].content
             return AIMessage(content=_analysis().model_dump_json())
     model=Model()
-    assert asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[]))==_analysis()
-    assert model.calls==(2 if raw_tool else 3)
+    from ai_system.config.generation import ModelGenerationLimit
+    with pytest.raises(ModelGenerationLimit,match='截断'):
+        asyncio.run(llm_utils.call_structured(model,ProblemAnalysis,[]))
+    assert model.calls==(1 if raw_tool else 2)

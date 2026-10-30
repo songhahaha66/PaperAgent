@@ -145,42 +145,7 @@ async def check_report(ctx, inputs):
                        'log':['语义核查仅提供待核实疑点；未修改解释或计算。']})
 
 
-async def read_artifact(ctx, inputs):
-    import hashlib
-    from ai_system.modules.registry import CapabilityProduct
-    state=ctx.research.snapshot()
-    path=inputs['path']
-    known=({a['payload'].get('path') for a in state['artifacts'].values()} | set(ctx.research.file_inputs())
-           if ctx.fs.root==ctx.research.root else set())
-    known.update(path for path,meta in ctx.fs._manifest.get('files',{}).items() if meta.get('visibility')=='user')
-    known.update(info[field] for info in ctx.fs._manifest.get('runs', {}).values()
-                 for field in ('input', 'stdout', 'stderr') if info.get(field))
-    if re.fullmatch(r'\.system/context-outputs/[a-f0-9]+\.json', path):known.add(path)
-    if path not in known:raise ValueError('只能读取当前原始资料或已保存的工作区文件')
-    from services.file_services.workspace_layout import workspace_path
-    target=ctx.fs.canonical_artifact(path) if path.startswith('outputs/research/') else ctx.fs.abs(path)
-    if not target.is_file():raise ValueError('资料文件不可用')
-    def read():
-        raw=target.read_bytes()
-        if target.suffix.lower()=='.pdf':
-            import pdfplumber
-            with pdfplumber.open(target) as pdf:
-                text='\n\n'.join(f'第{i+1}页\n'+(page.extract_text() or '本页无可提取文本') for i,page in enumerate(pdf.pages))
-        elif target.suffix.lower() in {'.xlsx','.xls'}:
-            import pandas as pd
-            book=pd.ExcelFile(target)
-            with book:
-                text='\n\n'.join('工作表：'+sheet+'\n'+book.parse(sheet,nrows=40).to_string(index=False) for sheet in book.sheet_names)
-            text+='\n（每张工作表仅预览前40行；完整计算请直接读取原文件。）'
-        else:
-            try:text=raw.decode('utf-8')
-            except UnicodeError:raise ValueError('此二进制文件无法直接提取文本，请使用其真实格式读取')
-        return raw,text
-    import asyncio
-    raw,text=await asyncio.to_thread(read)
-    start=inputs['start'];limit=inputs['limit']
-    return CapabilityProduct('research_state',{'path':path,'version':hashlib.sha256(raw).hexdigest(),
-        'total_chars':len(text),'excerpt':text[start:start+limit]})
+from .files import read_artifact
 
 
 def register(registry):
@@ -191,13 +156,8 @@ def register(registry):
     class EditTarget(Target):
         edit: ReportEdit | None = None
         decisions: list[FeedbackDecision] = Field(default_factory=list)
-    class ReadTarget(Inputs):
-        task_id: str | None = None
-        path: str
-        start: int = Field(default=0, ge=0)
-        limit: int = Field(default=12000, ge=1, le=24000)
-    registry.register('research','research.read_artifact','research_state',read_artifact,ReadTarget,
-        model_callable=True, purpose='读取已保存的原始资料或实验产物文本，返回真实内容和版本；无需重新计算。')
+    from .files import register as register_files
+    register_files(registry)
     registry.register('research','research.revise_interpretation','research_state',repair_report,EditTarget,
         purpose='按当前interpretation_version修订历史实验解释。')
     registry.register('research','research.check_interpretation','research_state',check_report,Target,

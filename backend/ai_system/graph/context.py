@@ -16,7 +16,7 @@ from services.file_services.workspace_fs import WorkspaceFS
 
 from ..sandbox.contracts import ExecutionKernel
 from ..sandbox.factory import create_kernel
-from .llm_utils import cap_output
+from ..config.generation import request_model
 from .registry import ResultRegistry
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,6 @@ TEMPLATE_CONTRACT = "template/contract.md"
 TEMPLATE_DOCX = "template/original.docx"
 TEMPLATE_REQUIREMENTS_CHARS = 4000
 # 编码循环每步只写一段代码，4096 token 足够；不设上限时一次重复输出能把请求拖到网关 300 秒超时
-CODER_MAX_TOKENS = 4096
 
 
 @dataclass
@@ -149,7 +148,7 @@ class GraphContext:
                 work_id=options.pop("sandbox_work_id", None), experiment_id=options.pop("sandbox_experiment_id", None)),
             events=EventSink(stream_manager),
             planner_llm=planner_llm,
-            coder_llm=cap_output(coder_llm or planner_llm, CODER_MAX_TOKENS),
+            coder_llm=request_model(coder_llm or planner_llm),
             writer_llm=writer_llm or planner_llm,
             **options,
         )

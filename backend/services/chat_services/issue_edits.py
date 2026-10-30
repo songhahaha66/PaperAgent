@@ -1,3 +1,4 @@
+from ai_system.config.generation import request_model
 """Issue-to-candidate bindings over existing issues, reviews and editor commands."""
 from services.file_services.workspace_layout import workspace_path
 
@@ -11,7 +12,7 @@ from ai_system.research.store import digest,ResearchStore
 from ai_system.graph.state import ClaimIssue
 from ai_system.research.review_cache import ReviewCache,run_review
 from ai_system.modules.writing.consistency import AUDIT_SYSTEM,section_audit_prompt,validate_findings
-from ai_system.graph.llm_utils import call_structured,as_messages,cap_output
+from ai_system.graph.llm_utils import call_structured,as_messages
 
 TERMINAL={'resolved','dismissed','superseded'}
 
@@ -139,7 +140,7 @@ async def review(store,state,llm,binding):
         if any(i.section not in selected['sections'] for i in result.issues):raise ValueError('核查意见超出指定章节')
         validate_findings([i.research_issue for i in result.issues if i.research_issue],selected,ctx)
         if result.verdict=='resolved' and result.issues:raise ValueError('仍有残留意见时不能判为解决')
-    async def perform():return await call_structured(cap_output(llm,2400),IssueAudit,as_messages(system,prompt),validate=validate,retries=0)
+    async def perform():return await call_structured(request_model(llm,'auxiliary'),IssueAudit,as_messages(system,prompt),validate=validate,retries=0)
     problems=[]
     try:
         answer=await run_review(ctx,selected,'sections',IssueAudit,system,prompt,perform,sections=selected['sections'],extra={'non_blocking':True,'scope':{'id':binding['id']},'source_issue':binding,'policy':'issue-section-review-v1'},validate=validate)

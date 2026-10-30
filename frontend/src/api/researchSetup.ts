@@ -2,6 +2,9 @@ import { apiClient } from '@/utils/apiClient'
 import type { ComparisonSpec } from './experiments'
 export interface ResearchSetup {
   request_limit: number | null
+  output_token_limit?: number | null
+  total_token_limit?: number | null
+  cost_limit_usd?: number | null
   timeout_seconds?: number | null
   compact_paper: boolean
   reuse_experience: boolean

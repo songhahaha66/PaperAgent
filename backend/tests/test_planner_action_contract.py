@@ -122,7 +122,7 @@ def test_no_progress_final_reply_cannot_spin_empty_observe(tmp_path):
     assert asyncio.run(prepare_action(ctx))
     action=ctx.research.snapshot()['action']
     assert action['error_type']=='NoResearchProgress' and model.calls==2
-    assert '尚未调用工具' in prompts[1][-1].content
+    assert any('最终回复尚不能交付' in str(m.content) for m in prompts[1])
     assert 'validation error' not in action['message']
 
 

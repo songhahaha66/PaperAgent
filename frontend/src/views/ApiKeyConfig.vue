@@ -174,9 +174,9 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
-import { Input, Switch, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
+import { Input, Select, Switch, DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
 import Sidebar from '@/components/Sidebar.vue'
-import { modelConfigAPI, type ModelConfig } from '@/api/modelConfig'
+import { modelConfigAPI, type ModelConfig, type GenerationSettings } from '@/api/modelConfig'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import { isDeepSeekEndpoint } from '@/utils/modelProvider'
@@ -188,6 +188,7 @@ interface Form {
   modelId: string
   timeoutSeconds?: number | null
   thinkingEnabled?: boolean
+  generationSettings?: GenerationSettings
 }
 const { ui, isZh } = useStudioCopy(),
   { isMobile } = useBreakpoint()
@@ -277,6 +278,22 @@ const ConnectionFields = defineComponent({
               }),
             ]),
           )
+          .concat(!props.jev ? [h('details', { class: 'connection-field' }, [
+            h('summary', isZh.value ? '生成预算（高级）' : 'Generation settings'),
+            ...[['max_output_tokens', '单次生成上限（含推理）', 16000], ['context_window', '上下文容量（留空跟随模型）', '']].map(([key, label, fallback]) =>
+              h('label', { class: 'connection-field' }, [h('span', String(label)), h(Input, {
+                type: 'number', modelValue: props.form.generationSettings?.[key as string] ?? fallback,
+                disabled: props.disabled,
+                'onUpdate:modelValue': (value: string) => {
+                  props.form.generationSettings = { ...props.form.generationSettings, [key as string]: value === '' ? (key === 'max_output_tokens' ? 16000 : null) : Number(value) }
+                },
+              })])),
+            h('label', { class: 'connection-field' }, [h('span', isZh.value ? '推理强度（需接口支持）' : 'Reasoning effort (requires API support)'), h(Select, {
+              modelValue: props.form.generationSettings?.reasoning_effort ?? '', disabled: props.disabled,
+              options: [{ label: isZh.value ? '跟随服务端' : 'Server default', value: '' }, ...['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(value => ({ label: value, value }))],
+              'onUpdate:modelValue': (value: string) => { props.form.generationSettings = { ...props.form.generationSettings, reasoning_effort: value || null } },
+            })]),
+          ])] : [])
           .concat(
             !props.jev && isDeepSeekEndpoint(props.form.baseUrl)
               ? [
@@ -342,6 +359,7 @@ function adopt(config: ModelConfig) {
     modelId: config.model_id || (config.type === 'jev' ? 'jev-latest' : ''),
     timeoutSeconds: config.timeout_seconds ?? null,
     thinkingEnabled: config.thinking_enabled ?? false,
+    generationSettings: { ...config.generation_settings },
   }
 }
 async function persist(role: Role) {
@@ -351,6 +369,7 @@ async function persist(role: Role) {
     base_url: form.baseUrl.trim(),
     timeout_seconds: form.timeoutSeconds ?? null,
     thinking_enabled: !!form.thinkingEnabled,
+    generation_settings: form.generationSettings ?? {},
     ...(role === 'jev' ? { is_active: true } : {}),
     ...(form.apiKey.trim() ? { api_key: form.apiKey.trim() } : {}),
   }
@@ -401,6 +420,7 @@ async function testConnection() {
       model_id: forms.brain.modelId.trim(),
       base_url: forms.brain.baseUrl.trim(),
       thinking_enabled: !!forms.brain.thinkingEnabled,
+      generation_settings: forms.brain.generationSettings ?? {},
       ...(forms.brain.apiKey.trim() ? { api_key: forms.brain.apiKey.trim() } : {}),
     })
     feedbackError.value = false
@@ -476,7 +496,7 @@ watch(
   },
 )
 watch(
-  () => [forms.brain.apiKey, forms.brain.baseUrl, forms.brain.modelId, forms.brain.thinkingEnabled],
+  () => [forms.brain.apiKey, forms.brain.baseUrl, forms.brain.modelId, forms.brain.thinkingEnabled, JSON.stringify(forms.brain.generationSettings)],
   () => {
     feedback.value = ''
   },
@@ -494,7 +514,7 @@ onMounted(async () => {
           (c) =>
             c.model_id === b.model_id &&
             c.base_url === b.base_url &&
-            !!c.thinking_enabled === !!b.thinking_enabled,
+            !!c.thinking_enabled === !!b.thinking_enabled && JSON.stringify(c.generation_settings ?? {}) === JSON.stringify(b.generation_settings ?? {}),
         )
     await loadJevReadiness()
   } catch {

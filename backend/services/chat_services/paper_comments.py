@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from langsmith import trace
 from ai_system.config.observability import research_tracing
-from ai_system.graph.llm_utils import cap_output
+from ai_system.config.generation import request_model
 from ai_system.research.models import ResearchConflict
 from ai_system.research.store import digest
 from . import paper_project as project
@@ -162,7 +162,7 @@ async def comment_agent(store, record, llm, context):
     from langchain_core.tools import StructuredTool
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from ai_system.graph.context import GraphContext
-    from ai_system.graph.compaction import ReportOrderingMiddleware,TruncationGuardMiddleware
+    from ai_system.graph.compaction import ReportOrderingMiddleware,MalformedToolMiddleware
     from ai_system.modules.experiments.execution import build_tools
     from ai_system.research.review_cache import error_detail
     from ai_system.research.runtime import ResearchBudgetExhausted,ModelServiceError,RepeatedOperationBlocked
@@ -231,9 +231,9 @@ async def comment_agent(store, record, llm, context):
         tools=build_tools(ctx,None,runs)
         tools.append(StructuredTool.from_function(coroutine=propose_edits,handle_tool_error=True,handle_validation_error=str))
         async with AsyncSqliteSaver.from_conn_string(str(workspace_path(store.root, '.system/graph.sqlite'))) as saver:
-            agent=create_agent(model=cap_output(llm,6000),tools=tools,system_prompt=SYSTEM,
+            agent=create_agent(model=request_model(llm,'structured'),tools=tools,system_prompt=SYSTEM,
                 response_format=ToolStrategy(CommentReply),checkpointer=saver,
-                middleware=[receipt,TruncationGuardMiddleware(),ReportOrderingMiddleware('CommentReply')])
+                middleware=[receipt,MalformedToolMiddleware(),ReportOrderingMiddleware('CommentReply')])
             config={'configurable':{'thread_id':'paper-comment:'+store.research_id+':'+record['id']},'recursion_limit':100000}
             saved=await agent.aget_state(config)
             if saved.values.get('structured_response') and not saved.next:

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 RETRIES = 2
-STRUCTURED_MAX_TOKENS = 6000
+from ..config.generation import request_model,ensure_complete,ModelGenerationLimit
 
 
 def structured_model(llm: Any, schema: Type[T], *, include_raw: bool = False):
@@ -47,8 +47,7 @@ async def _ask_json(llm: Any, schema: Type[T], messages: List[BaseMessage], erro
     if error is not None:
         instruction += "\n\n上一次输出未通过校验，请针对以下错误修正，保留原题要求：\n" + str(error)[:2000]
     reply = await llm.ainvoke(list(messages) + [HumanMessage(content=instruction)])
-    if (getattr(reply, "response_metadata", {}) or {}).get("finish_reason") == "length":
-        raise InvalidStructuredReply(ValueError("被截断"), reply)
+    ensure_complete(reply)
     text = message_text(reply)
     parsed = parse_verdict(text, schema)
     if parsed is not None:
@@ -74,27 +73,12 @@ def thinking_enabled(llm: Any) -> bool:
     return (getattr(llm, 'extra_body', None) or {}).get('thinking', {}).get('type') == 'enabled'
 
 
-def cap_output(llm: Any, max_tokens: int) -> Any:
-    """限制单次输出长度：模型偶尔重复输出停不下来，16000 token 按网关约 35 token/秒要等七八分钟"""
-    # Reasoning shares the output allowance. Keep the connection's full budget
-    # instead of truncating reasoning before any code or final content appears.
-    if thinking_enabled(llm):
-        return llm
-    fields = getattr(type(llm), "model_fields", {})
-    if "max_tokens" not in fields:
-        return llm
-    current = getattr(llm, "max_tokens", None)
-    if current is not None and current <= max_tokens:
-        return llm
-    return llm.model_copy(update={"max_tokens": max_tokens})
-
-
 def as_messages(system: str, user: str) -> List[BaseMessage]:
     return [SystemMessage(content=system), HumanMessage(content=user)]
 
 
 async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage], *, validate: Callable[[T], None] | None = None,retries: int=RETRIES,json_first: bool=False) -> T:
-    llm = cap_output(llm, STRUCTURED_MAX_TOKENS)
+    llm = request_model(llm, "structured")
     # Thinking-mode Chat Completions rejects forced/named tool choices. The
     # existing JSON/schema parser provides the same validation without them.
     json_first = json_first or thinking_enabled(llm)
@@ -110,7 +94,7 @@ async def call_structured(llm: Any, schema: Type[T], messages: List[BaseMessage]
             result = await model.ainvoke(messages) if attempt == 0 and not json_first else await _ask_json(llm, schema, retry_messages, last_error)
             if isinstance(result, dict) and "raw" in result and "parsed" in result:
                 if (getattr(result["raw"], "response_metadata", {}) or {}).get("finish_reason") == "length":
-                    raise InvalidStructuredReply(ValueError("被截断"), result["raw"])
+                    ensure_complete(result["raw"])
                 raw=result['raw'];parsed_reply=result['parsed']
                 if parsed_reply is None:
                     from ..judge.llm import parse_verdict
@@ -155,7 +139,9 @@ async def call_text(llm: Any, messages: List[BaseMessage]) -> str:
     from ..research.runtime import ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
     for attempt in range(RETRIES + 1):
         try:
-            text = message_text(await llm.ainvoke(messages)).strip()
+            reply=await llm.ainvoke(messages)
+            ensure_complete(reply)
+            text = message_text(reply).strip()
             if text:
                 return text
             raise ValueError("模型返回了空内容")

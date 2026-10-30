@@ -61,7 +61,10 @@ export interface ResearchActivity {
   input_tokens?: number
   output_tokens?: number
   cache_read_tokens?: number | null
-  context_usage?: { messages_estimated_tokens: number; tools_estimated_tokens: number; original_messages_estimated_tokens: number; summarized_messages: number } | null
+  reasoning_tokens?: number | null
+  generation_limit?: number | null
+  finish_reason?: string | null
+  context_usage?: { messages_estimated_tokens: number; tools_estimated_tokens: number; total_estimated_tokens?: number; original_messages_estimated_tokens: number; summarized_messages: number; cache_phase?: string; reused_prefix_messages?: number } | null
 }
 export interface ResearchHistory {
   id: string
@@ -208,6 +211,18 @@ export interface ResearchSnapshot {
       output_tokens: number | null
       tps: number | null
       cache_hit_rate: number | null
+      cache_breakdown?: {
+        scope: string
+        phase: string
+        requests: number
+        cache_reported_requests: number
+        input_tokens: number | null
+        output_tokens: number | null
+        cache_read_tokens: number | null
+        cache_miss_tokens: number | null
+        cache_hit_rate: number | null
+        request_seconds: number
+      }[]
     } | null
     actions: ResearchActivity[]
     models?: ResearchActivity[]

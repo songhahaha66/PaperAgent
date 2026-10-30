@@ -28,6 +28,7 @@ export const executionLabel = (status: string) =>
     done: '完成',
     failed: '未完成',
     interrupted: '已中断',
+    truncated: '生成截断',
     cancelled: '已取消',
     success: '成功',
     error: '失败',

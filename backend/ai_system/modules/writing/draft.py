@@ -1,14 +1,27 @@
 """Versioned manuscript edits by the research Agent; no second writing model."""
 import hashlib
 from pydantic import Field
+from pydantic.json_schema import SkipJsonSchema
 from ai_system.modules.registry import Inputs, CapabilityProduct
 
 
 class DraftEdit(Inputs):
     path: str = Field(default='paper.md', pattern=r'\.(md|tex|bib)$')
     content: str
-    expected_version: str | None = None
+    expected_version: SkipJsonSchema[str | None] = None
     old_text: str | None = Field(default=None,description='局部修改时指定唯一的原文，content为替换内容；省略则写完整文件。')
+
+
+def observed_version(messages,name):
+    """Bind CAS to a receipt already seen by this Agent, never a model-copied hash."""
+    import json
+    from langchain_core.messages import ToolMessage
+    for message in reversed(messages):
+        if not isinstance(message,ToolMessage) or message.name not in {'research_read_artifact','writing_edit'} or message.status=='error':continue
+        try:value=json.loads(message.content)
+        except (ValueError,TypeError):continue
+        if isinstance(value,dict) and value.get('path')==name:return value.get('version')
+    return None
 
 
 async def edit(ctx, inputs):
@@ -22,9 +35,10 @@ async def edit(ctx, inputs):
     if name.startswith(('data/','attachment/','outputs/','code/')):raise ValueError('正文不能覆盖资料或计算产物')
     await ctx.kernels.close()
     project.initialize(ctx.research)
-    before=path.read_text(encoding='utf-8') if path.exists() else ''
-    version=hashlib.sha256(before.encode()).hexdigest()
-    if before and inputs['expected_version']!=version:raise ResearchConflict('正文已存在或发生变化，请先读取文件并使用其version修改')
+    raw=path.read_bytes() if path.exists() else b''
+    before=raw.decode('utf-8')
+    version=hashlib.sha256(raw).hexdigest()
+    if before and inputs['expected_version']!=version:raise ResearchConflict('正文已存在或发生变化，请先读取当前文件再修改')
     text=inputs['content'];old=inputs['old_text']
     if old is not None:
         if not old or before.count(old)!=1:raise ResearchConflict('待替换原文必须唯一，请重新读取当前稿件')
@@ -44,7 +58,7 @@ async def edit(ctx, inputs):
         await project.decide(ctx.research,change['id'],'apply',compile_after=False,expected_version=doc['version'])
     else:
         with edit_lock(ctx.workspace):
-            if path.exists() and path.read_text(encoding='utf-8')!=before:raise ResearchConflict('保存期间正文发生变化')
+            if path.exists() and path.read_bytes()!=raw:raise ResearchConflict('保存期间正文发生变化')
             path.parent.mkdir(parents=True,exist_ok=True)
             project.atomic_text(path,text)
         project.snapshot(ctx.workspace)

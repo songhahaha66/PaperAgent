@@ -54,10 +54,10 @@ def test_retained_tool_history_keeps_executable_code_and_reasoning(tmp_path):
     async def handler(r):sent.extend(r.messages)
     model=ResearchToolsModel(respond=lambda m:AIMessage(content='notes'))
     asyncio.run(ContextMiddleware(ctx,model,'reduce-code').awrap_model_call(Request(messages),handler))
-    assert sent[0].tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')
+    assert next(m for m in sent if isinstance(m,AIMessage)).tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')
     assert all(m.additional_kwargs['reasoning_content']=='offline reasoning' for m in sent if isinstance(m,AIMessage))
     assert messages[0].tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')
-    assert sent[-2].tool_calls[0]['args']['code']==messages[-2].tool_calls[0]['args']['code']
+    assert [m for m in sent if isinstance(m,AIMessage)][-1].tool_calls[0]['args']['code']==messages[-2].tool_calls[0]['args']['code']
 
 
 def test_microgrid_grader_uses_independent_energy_balance_even_at_correct_cost(tmp_path):
