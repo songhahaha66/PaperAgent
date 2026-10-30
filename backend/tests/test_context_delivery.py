@@ -139,3 +139,20 @@ def test_final_reply_cannot_bypass_missing_answers_or_pending_delivery(tmp_path)
     with ctx.research._transaction() as db:
         state=ctx.research._read(db);state['action']=None;ctx.research._save(db,state,'test_recovery',{})
     asyncio.run(pending())
+
+
+def test_historical_unknown_execution_does_not_block_current_delivery(tmp_path):
+    ctx=context(tmp_path,ResearchToolsModel(respond=lambda _:AIMessage(content='完成。')))
+    (tmp_path/'paper.md').write_text('# 当前结果\n结果为6；早期初始化中断未作为结果依据。')
+    async def run():
+        q=await invoke(ctx,'research.create_question',question='结果是多少？')
+        await invoke(ctx,'research.update_answer',question_id=q['question_id'],statement='结果6',coverage='answered')
+        rid=ctx.fs.create_run()
+        old=ctx.fs.get_run_info(rid)
+        old.update(scope='research',research_id=ctx.research.research_id,status='error',
+                   failure_kind='transport_unknown',error='早期初始化未确认，未采用其结果')
+        await invoke(ctx,'research.deliver',reason='当前结果和正文已完成，保留早期失败记录。')
+        assert ctx.research.snapshot()['publication']['stage']=='validate'
+        assert old['status']=='error' and old['failure_kind']=='transport_unknown'
+        assert list(ctx.fs._manifest['runs'])==[rid]
+    asyncio.run(run())

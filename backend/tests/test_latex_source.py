@@ -15,6 +15,26 @@ from services.chat_services import paper_project as project, review_tasks, issue
 from ai_system.modules.writing import draft
 
 
+def test_graphicspath_assets_are_included_in_the_immutable_source_snapshot(tmp_path):
+    (tmp_path/'results/figures').mkdir(parents=True)
+    (tmp_path/'results/figures/curve.pdf').write_bytes(b'original curve')
+    (tmp_path/'results/figures/other.png').write_bytes(b'unreferenced')
+    (tmp_path/'paper.tex').write_text(r'\graphicspath{{./}{results/figures/}}\input{part}')
+    (tmp_path/'part.tex').write_text(r'\includegraphics[width=5cm]{curve}')
+    before=project.snapshot(tmp_path)
+    assert {row['path'] for row in before['files']}=={'paper.tex','part.tex','results/figures/curve.pdf'}
+    archive=project.workspace_path(tmp_path,project.VERSIONS)/before['version']
+    assert (archive/'results/figures/curve.pdf').read_bytes()==b'original curve'
+    (tmp_path/'results/figures/curve.pdf').write_bytes(b'changed curve')
+    assert project.snapshot(tmp_path)['version']!=before['version']
+
+
+@pytest.mark.parametrize('directory',['../outside/', '.system/', '/tmp/'])
+def test_graphicspath_does_not_expand_the_allowed_source_tree(tmp_path,directory):
+    (tmp_path/'paper.tex').write_text(r'\graphicspath{{'+directory+r'}}\includegraphics{curve}')
+    with pytest.raises(ValueError):project.files(tmp_path)
+
+
 @pytest.fixture
 def native(paper):
     store,_=paper

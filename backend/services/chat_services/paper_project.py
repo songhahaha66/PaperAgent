@@ -85,7 +85,7 @@ def files(root, main=None, *, verified_snapshot=False):
     """Follow local TeX dependencies, without exposing unrelated workspace files."""
     root = Path(root)
     main = main or meta(root).get('main') or ('paper.tex' if (root/'paper.tex').is_file() else 'paper.md')
-    pending, found = [main], {}
+    pending, found, graphic_roots = [main], {}, []
     while pending:
         name = pending.pop()
         if name in found:
@@ -101,16 +101,22 @@ def files(root, main=None, *, verified_snapshot=False):
                        'text': text, 'size': len(raw)}
         if text is not None and path.suffix == '.tex':
             dependency_text=re.sub(r'\\detokenize\{([^{}]+)\}',r'\1',re.sub(r'(?m)(?<!\\)%.*$', '', text))
+            for group in re.findall(r'\\graphicspath\s*\{((?:\s*\{[^{}]*\}\s*)+)\}', dependency_text):
+                for directory in re.findall(r'\{([^{}]*)\}', group):
+                    directory=directory.strip().rstrip('/')
+                    if directory in {'', '.'}:continue
+                    _source_name(directory)
+                    if directory not in graphic_roots:graphic_roots.append(directory)
             for command, value in re.findall(r'\\(input|include|bibliography|addbibresource|includegraphics)(?:\[[^\]]*\])?\{([^{}]+)\}', dependency_text):
                 for item in value.split(','):
                     relative = (Path(name).parent / item.strip()).as_posix()
                     _source_name(relative)
                     suffixes = [''] if Path(relative).suffix else (['.bib'] if command in {'bibliography','addbibresource'} else ['.tex'] if command in {'input','include'} else sorted(ASSET_SUFFIXES))
-                    for suffix in suffixes:
-                        candidate = relative + suffix
-                        if safe_path(root, candidate, verified_snapshot=verified_snapshot).is_file():
-                            pending.append(candidate)
-                            break
+                    candidates=[relative]
+                    if command=='includegraphics':candidates.extend((Path(directory)/item.strip()).as_posix() for directory in graphic_roots)
+                    selected=next((candidate+suffix for candidate in candidates for suffix in suffixes
+                                   if safe_path(root,candidate+suffix,verified_snapshot=verified_snapshot).is_file()),None)
+                    if selected:pending.append(selected)
         if len(found) > 200:
             raise ValueError('论文项目超过 200 个文件')
     if main.endswith('.tex'):

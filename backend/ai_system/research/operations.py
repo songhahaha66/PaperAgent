@@ -189,7 +189,7 @@ def deliver(ctx,inputs):
             raise ValueError('请先用writing_edit写入完整正文，再交付；系统不会另起模型重写论文。')
         from .runs import direct_runs
         pending=[rid for rid,r in direct_runs(ctx.research,ctx.fs).items() if
-                 r.get('delivery_error') or r.get('publication_error') or r.get('failure_kind')=='transport_unknown'
+                 r.get('delivery_error') or r.get('publication_error')
                  or r.get('status') in {'starting','running'}]
         if pending:raise ValueError('已有运行尚未确认执行或交付：'+', '.join(pending)+'；读取回执或恢复文件交付，不要重放代码。')
         from .loop import _set_action
