@@ -9,10 +9,9 @@
     @close="$emit('close')"
   >
     <section v-if="source" class="source-card">
-      <p class="boundary">
-        {{ source.abstract_only ? '仅摘要' : source.boundary }} ·
-        {{ source.page ? `第 ${source.page} 页 · ` : '' }}{{ source.locator }}
-      </p>
+      <p class="boundary">{{ source.abstract_only ? '仅摘要' : source.boundary }}</p>
+      <p v-if="source.page" class="boundary">第 {{ source.page }} 页</p>
+      <p class="boundary">{{ source.locator }}</p>
       <blockquote v-if="source.excerpt">{{ source.excerpt }}</blockquote>
       <p v-else>尚未获取可定位的原文摘录，不能补写原文。</p>
       <p class="note">{{ source.note }}</p>
@@ -52,7 +51,7 @@ header {
   justify-content: space-between;
 }
 h2 {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 500;
   margin: 0;
 }
@@ -67,15 +66,14 @@ button {
 blockquote {
   white-space: pre-wrap;
   margin: 18px 0;
-  padding: 12px 18px;
-  border-left: 3px solid var(--pa-accent);
+  padding: 0;
   line-height: 1.8;
-  font-size: 14px;
+  font-size: 15px;
 }
 .boundary,
 .note,
 details {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   line-height: 1.7;
 }

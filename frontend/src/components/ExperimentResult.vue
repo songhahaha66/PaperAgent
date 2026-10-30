@@ -108,10 +108,10 @@ article {
   padding: 16px 0;
 }
 h2 {
-  font-size: 20px;
+  font-size: 17px;
 }
 h3 {
-  font-size: 16px;
+  font-size: 15px;
 }
 small {
   font-weight: normal;

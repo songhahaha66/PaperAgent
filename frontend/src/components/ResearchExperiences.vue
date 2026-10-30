@@ -50,9 +50,9 @@
           <strong>{{
             entry.card.question || entry.summary?.methods.join('、') || '研究经验'
           }}</strong
-          ><span
-            >v{{ entry.version }} · {{ statusLabel(entry.status)
-            }}{{ entry.enabled ? '' : ' · 已停用' }}</span
+          ><span>v{{ entry.version }}</span
+          ><span>{{ statusLabel(entry.status) }}</span
+          ><span v-if="!entry.enabled">已停用</span
           ><small>{{ entry.summary?.methods.join('、') || '方法有待核对' }}</small>
         </button>
       </nav>
@@ -70,10 +70,8 @@
         <section>
           <h3>适用条件</h3>
           <p>{{ selected.summary?.methods.join('、') || '方法尚未明确' }}</p>
-          <p class="muted">
-            {{ selected.summary?.data || '数据来源待核对' }} ·
-            {{ selected.summary?.structure || '结构条件待核对' }}
-          </p>
+          <p class="muted">{{ selected.summary?.data || '数据来源待核对' }}</p>
+          <p class="muted">{{ selected.summary?.structure || '结构条件待核对' }}</p>
           <p v-for="condition in selected.card.applicable" :key="condition">{{ condition }}</p>
           <p v-for="condition in selected.card.unknown_conditions" :key="condition" class="muted">
             {{ condition }}
@@ -153,7 +151,7 @@
           <h3>版本与采用历史</h3>
           <p>新内容需重新进入候选；项目保留自己实际读取的版本。</p>
           <p v-for="(event, i) in selected.history" :key="i" class="muted">
-            v{{ event.version }} · {{ statusLabel(event.event) }}
+            v{{ event.version }} {{ statusLabel(event.event) }}
           </p>
         </section>
         <footer>
@@ -322,7 +320,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 button {
@@ -360,7 +358,7 @@ button:disabled {
   color: var(--pa-accent);
 }
 .experience-filters span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   margin-left: 6px;
 }
@@ -390,13 +388,13 @@ button:disabled {
   display: block;
 }
 .experience-list strong {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.7;
   font-weight: 500;
 }
 .experience-list span,
 .experience-list small {
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 8px;
   color: var(--pa-muted);
 }
@@ -419,7 +417,7 @@ h3 {
 .muted,
 .experience-state {
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 .experience-state {
   display: flex;
@@ -480,10 +478,10 @@ summary {
   color: var(--pa-muted);
 }
 .library-empty .t-icon {
-  font-size: 32px;
+  font-size: 22px;
 }
 .library-empty h2 {
-  font-size: 18px;
+  font-size: 17px;
   color: var(--pa-ink);
   margin: 0;
 }

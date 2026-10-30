@@ -44,14 +44,10 @@
             :loading="loading"
           >
             <template #output_format="{ row }">
-              <t-tag :theme="getOutputFormatTheme(row.output_format)" variant="light">
-                {{ getOutputFormatLabel(row.output_format) }}
-              </t-tag>
+              <span class="plain-meta">{{ getOutputFormatLabel(row.output_format) }}</span>
             </template>
             <template #is_public="{ row }">
-              <t-tag :theme="row.is_public ? 'success' : 'warning'" variant="light">
-                {{ row.is_public ? '是' : '否' }}
-              </t-tag>
+              <span class="plain-meta">{{ row.is_public ? '公开' : '私有' }}</span>
             </template>
             <template #created_at="{ row }">
               {{ formatDate(row.created_at) }}
@@ -77,21 +73,13 @@
             <t-card v-for="row in templateList" :key="row.id" class="template-mobile-card">
               <div class="template-card-title">
                 <h3>{{ row.name }}</h3>
-                <t-tag
-                  :theme="getOutputFormatTheme(row.output_format)"
-                  variant="light"
-                  size="small"
-                >
-                  {{ getOutputFormatLabel(row.output_format) }}
-                </t-tag>
+                <span class="plain-meta">{{ getOutputFormatLabel(row.output_format) }}</span>
               </div>
               <p class="template-card-desc">{{ row.description || '暂无描述' }}</p>
               <div class="template-card-meta">
                 <span>{{ row.category || '未分类' }}</span>
                 <span>{{ formatDate(row.created_at) }}</span>
-                <t-tag :theme="row.is_public ? 'success' : 'warning'" variant="light" size="small">
-                  {{ row.is_public ? '公开' : '私有' }}
-                </t-tag>
+                <span class="plain-meta">{{ row.is_public ? '公开' : '私有' }}</span>
               </div>
               <div class="template-card-actions">
                 <t-button theme="primary" variant="base" size="small" @click="editTemplate(row)">
@@ -495,16 +483,6 @@ const getOutputFormatLabel = (format: string) => {
   return labels[format as keyof typeof labels] || format
 }
 
-// 输出格式主题
-const getOutputFormatTheme = (format: string) => {
-  const themes = {
-    markdown: 'primary',
-    word: 'success',
-    latex: 'warning',
-  }
-  return themes[format as keyof typeof themes] || 'default'
-}
-
 // 编辑模板
 const editTemplate = async (template: PaperTemplate) => {
   editingTemplate.value = template
@@ -850,13 +828,13 @@ onMounted(() => {
 .workspace-header h1 {
   margin: 0 0 8px 0;
   color: var(--pa-ink);
-  font-size: 1.5em;
+  font-size: 22px;
 }
 
 .workspace-header p {
   margin: 0;
   color: var(--pa-muted);
-  font-size: 0.9em;
+  font-size: 15px;
 }
 
 .template-content {
@@ -905,7 +883,7 @@ onMounted(() => {
 .analysis-meta {
   margin-bottom: 12px;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .analysis-error {
@@ -1003,7 +981,7 @@ onMounted(() => {
 
 .template-card-title h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--pa-ink);
 }
 
@@ -1014,12 +992,17 @@ onMounted(() => {
   line-height: 1.4;
 }
 
+.plain-meta {
+  color: var(--pa-muted);
+  font-size: 13px;
+}
+
 .template-card-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   margin-bottom: 12px;
 }
@@ -1053,13 +1036,13 @@ onMounted(() => {
 }
 .workspace-header h1 {
   font-family: var(--td-font-family);
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 600;
   margin: 0 0 10px;
   color: var(--td-text-color-primary);
 }
 .workspace-header p {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--td-text-color-secondary);
   line-height: 1.8;
 }
@@ -1073,7 +1056,7 @@ onMounted(() => {
 }
 .template-content :deep(.t-card__title) {
   font-family: var(--td-font-family);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
 }
 .template-welcome {
@@ -1087,7 +1070,7 @@ onMounted(() => {
 }
 .template-welcome h2 {
   font-family: var(--td-font-family);
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 500;
   margin: 14px 0;
 }
@@ -1117,7 +1100,7 @@ onMounted(() => {
   cursor: pointer;
 }
 .public-hint {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--td-text-color-secondary);
   margin-left: 10px;
 }
@@ -1129,7 +1112,7 @@ onMounted(() => {
     font-size: 22px;
   }
   .workspace-header p {
-    font-size: 12px;
+    font-size: 13px;
   }
   .template-content {
     padding: 16px 12px;
@@ -1155,7 +1138,7 @@ onMounted(() => {
   .public-hint {
     display: block;
     margin: 8px 0 0;
-    font-size: 12px;
+    font-size: 13px;
   }
   .content-tabs {
     min-height: 200px;

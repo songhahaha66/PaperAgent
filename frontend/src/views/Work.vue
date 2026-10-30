@@ -802,7 +802,7 @@ onUnmounted(() => {
   text-align: center;
 }
 .work-load-error h1 {
-  font-size: 20px;
+  font-size: 17px;
 }
 .work-load-error p {
   color: var(--td-text-color-secondary);
@@ -845,7 +845,7 @@ onUnmounted(() => {
   gap: 7px;
   margin-top: 6px;
   min-width: 0;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .work-context-text {
@@ -879,7 +879,7 @@ onUnmounted(() => {
 }
 .work-actions .t-button {
   height: var(--pa-control-height-md);
-  font-size: 12px;
+  font-size: 13px;
   border-radius: var(--pa-radius-control);
 }
 .work-actions .t-button--shape-square {
@@ -896,7 +896,7 @@ onUnmounted(() => {
   background: var(--pa-surface);
   border-radius: var(--pa-radius-control);
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -908,7 +908,7 @@ onUnmounted(() => {
   color: var(--pa-accent);
   padding-left: 8px;
   border-left: 1px solid var(--pa-line);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .progress-panel {
@@ -961,10 +961,10 @@ onUnmounted(() => {
   line-height: 1.85;
 }
 .chat-messages-container :deep(.markdown-body h1) {
-  font-size: 24px;
+  font-size: 22px;
 }
 .chat-messages-container :deep(.markdown-body h2) {
-  font-size: 20px;
+  font-size: 17px;
 }
 .chat-messages-container :deep(.markdown-body h3) {
   font-size: 17px;
@@ -1000,7 +1000,7 @@ onUnmounted(() => {
   gap: 6px 14px;
   padding: 8px 6px 0;
   color: var(--pa-muted);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 .work-composer:focus-within {
@@ -1048,7 +1048,7 @@ onUnmounted(() => {
   background: var(--pa-surface);
   color: var(--pa-muted);
   box-shadow: var(--td-shadow-1);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1057,7 +1057,7 @@ onUnmounted(() => {
   background: transparent;
   padding: 0;
   color: var(--td-brand-color);
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -1113,10 +1113,10 @@ onUnmounted(() => {
   place-items: center;
   background: var(--pa-surface-muted);
   color: var(--pa-muted);
-  font-size: 30px;
+  font-size: 22px;
 }
 .figure-open > span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1130,7 +1130,7 @@ onUnmounted(() => {
     flex-wrap: wrap;
   }
   .work-title-row h1 {
-    font-size: 14px;
+    font-size: 15px;
   }
   .work-actions {
     width: 100%;
@@ -1147,7 +1147,7 @@ onUnmounted(() => {
     padding: 20px 16px;
   }
   .chat-messages-container :deep(.markdown-body) {
-    font-size: 14px;
+    font-size: 15px;
   }
   .chat-input {
     width: calc(100% - 24px);
@@ -1165,7 +1165,7 @@ onUnmounted(() => {
     justify-content: flex-end;
   }
   .work-message-input :deep(.t-textarea__inner) {
-    font-size: 16px;
+    font-size: 15px;
   }
   .figures-panel {
     padding: 20px 16px;
@@ -1186,7 +1186,7 @@ onUnmounted(() => {
   background: var(--pa-accent-soft);
   color: var(--pa-accent);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
 }
 </style>
@@ -1201,9 +1201,8 @@ onUnmounted(() => {
 .paper-composer-quote {
   flex-basis: 100%;
   min-width: 0;
-  padding: 8px 12px;
-  border-left: 3px solid var(--pa-line);
-  font-size: 12px;
+  padding: 8px 0;
+  font-size: 13px;
 }
 .paper-composer-quote button {
   float: right;

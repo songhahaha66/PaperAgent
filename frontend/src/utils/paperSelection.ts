@@ -18,7 +18,7 @@ export function sourceSelection(
   }
 }
 export function selectionLabel(selection: SourceSelection) {
-  return `${selection.file}${selection.line ? ` · 第 ${selection.line} 行` : ''}`
+  return `${selection.file}${selection.line ? `，第 ${selection.line} 行` : ''}`
 }
 export function sourceKey(
   url: string,

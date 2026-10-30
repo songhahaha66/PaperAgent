@@ -155,7 +155,7 @@ onUnmounted(() => {
   font-weight: 500;
 }
 .check-item header > span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .coverage-row {
@@ -180,7 +180,7 @@ header,
 small {
   display: block;
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 button {
@@ -190,7 +190,7 @@ button {
 }
 p,
 details {
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 [data-state='failed'],

@@ -38,8 +38,7 @@
         <div class="account-divider" />
         <nav :aria-label="isZh ? '账户设置' : 'Account settings'">
           <button class="account-action" @click="navigate('/passkey')">
-            <t-icon name="secured" /><span>{{ t('sidebar.passkeys') }}</span
-            ><t-icon name="chevron-right" class="action-chevron" />
+            <t-icon name="secured" /><span>{{ t('sidebar.passkeys') }}</span>
           </button>
         </nav>
         <div class="account-language">
@@ -122,7 +121,7 @@ function logout() {
   border-radius: var(--pa-radius-circle);
   background: var(--pa-accent-soft);
   color: var(--pa-accent);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 .account-trigger-details {
@@ -166,11 +165,11 @@ function logout() {
   white-space: nowrap;
 }
 .account-summary strong {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
 }
 .account-summary > div > span {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .account-divider {
@@ -205,16 +204,12 @@ function logout() {
 }
 .account-action > .t-icon,
 .language-label > .t-icon {
-  font-size: 16px;
+  font-size: 15px;
   color: var(--pa-muted);
   flex-shrink: 0;
 }
 .account-action > span {
   flex: 1;
-}
-.account-action > .action-chevron {
-  font-size: 12px;
-  color: var(--pa-placeholder);
 }
 .account-language {
   justify-content: space-between;
@@ -233,7 +228,7 @@ function logout() {
   background: transparent;
   color: var(--pa-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
 }
 .account-language :deep(.language-switcher:hover) {
   background: var(--pa-surface-hover);

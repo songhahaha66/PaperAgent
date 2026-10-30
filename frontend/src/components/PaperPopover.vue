@@ -138,8 +138,7 @@ onBeforeUnmount(() => {
   background: var(--pa-surface);
   color: var(--pa-ink);
   box-shadow: var(--pa-shadow-overlay);
-  font:
-    13px/1.6 -apple-system,
+  font: 13px/1.6 -apple-system,
     BlinkMacSystemFont,
     'PingFang SC',
     sans-serif;
@@ -184,7 +183,7 @@ header button {
   background: var(--pa-surface-muted);
   color: var(--pa-muted);
   cursor: pointer;
-  font-size: 18px;
+  font-size: 17px;
 }
 button:focus-visible {
   outline: 2px solid var(--pa-accent);

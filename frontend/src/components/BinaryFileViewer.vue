@@ -185,7 +185,7 @@ const downloadFile = async () => {
 
 .file-name {
   margin: 0 0 8px 0;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--pa-ink);
   word-break: break-all;
@@ -199,7 +199,7 @@ const downloadFile = async () => {
 
 .file-size,
 .file-type {
-  font-size: 14px;
+  font-size: 15px;
   color: var(--pa-muted);
 }
 
@@ -244,7 +244,7 @@ const downloadFile = async () => {
   }
 }
 .pdf-help {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--td-text-color-secondary);
   line-height: 1.8;
   margin: 0;

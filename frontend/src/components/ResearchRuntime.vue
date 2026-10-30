@@ -67,7 +67,9 @@
               ><time>{{ duration(call) }}</time>
               <small v-if="call.context_usage" class="muted" title="按文本估算，实际计费用量见会话统计">
                 上下文约 {{ (call.context_usage.messages_estimated_tokens + call.context_usage.tools_estimated_tokens).toLocaleString() }} tokens
-                <template v-if="call.context_usage.summarized_messages"> · 已摘要 {{ call.context_usage.summarized_messages }} 条历史</template>
+                <span v-if="call.context_usage.summarized_messages" class="context-note"
+                  >已摘要 {{ call.context_usage.summarized_messages }} 条历史</span
+                >
               </small>
               <button
                 v-if="call.run_id && runFile(call.run_id)"
@@ -230,7 +232,10 @@ p {
   font-weight: 600;
 }
 .updated {
-  font-size: 12px;
+  font-size: 13px;
+}
+.context-note {
+  display: block;
 }
 .history {
   margin-top: 18px;
@@ -254,7 +259,6 @@ li {
 }
 li.nested {
   margin-left: 14px;
-  border-left: 2px solid var(--pa-line);
   padding-left: 12px;
 }
 button {

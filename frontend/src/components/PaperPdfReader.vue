@@ -216,7 +216,7 @@ header {
   gap: 8px;
   padding: 10px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 13px;
 }
 button {
   border: 1px solid var(--pa-line);

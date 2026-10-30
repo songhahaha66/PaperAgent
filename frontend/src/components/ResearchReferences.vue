@@ -47,12 +47,12 @@ watch(() => [props.workId, props.snapshot?.commit_seq], load, { immediate: true 
   border-top: 1px solid var(--pa-line);
 }
 h3 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
   margin: 0 0 10px;
 }
 h4 {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   margin: 0 0 12px;
 }
@@ -65,7 +65,7 @@ p {
   font-size: 13px;
 }
 .references-note {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .method-ref {
@@ -85,7 +85,7 @@ a {
 }
 button {
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   border: 1px solid var(--pa-line);
   border-radius: var(--pa-radius-control);
   background: var(--pa-surface);

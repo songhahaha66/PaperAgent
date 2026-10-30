@@ -30,15 +30,17 @@
             :aria-current="selected === item.key ? 'true' : undefined"
             @click="select(item.key)"
           >
-            <strong>{{ item.name }}</strong
-            ><span>{{ item.category }} · {{ item.needs }}</span>
+            <strong>{{ item.name }}</strong>
+            <span>{{ item.category }}</span>
+            <span>{{ item.needs }}</span>
           </button>
           <p v-if="!filtered.length" class="muted">未找到匹配的方法。</p>
         </nav>
         <article v-if="method" class="method-detail">
           <header>
             <div>
-              <p class="eyebrow">{{ method.category }} · 版本 {{ method.version }}</p>
+              <p class="muted">{{ method.category }}</p>
+              <p class="muted">版本 {{ method.version }}</p>
               <h2>{{ method.name }}</h2>
             </div>
           </header>
@@ -202,7 +204,7 @@ button {
 }
 .method-list span {
   color: var(--pa-muted);
-  font-size: 12px;
+  font-size: 13px;
   margin-top: 6px;
 }
 .method-search {
@@ -228,7 +230,7 @@ button {
   min-width: 0;
 }
 h2 {
-  font-size: 23px;
+  font-size: 22px;
   margin: 0;
   font-weight: 500;
 }
@@ -246,13 +248,12 @@ li {
   line-height: 1.85;
 }
 .muted,
-.eyebrow,
 .method-note {
   color: var(--pa-muted);
   font-size: 13px;
 }
-.eyebrow {
-  margin-top: 0;
+.method-detail header .muted {
+  margin: 0;
 }
 .method-note {
   margin-top: 24px;

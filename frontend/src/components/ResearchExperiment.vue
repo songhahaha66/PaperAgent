@@ -332,14 +332,24 @@ header > small:first-child {
 }
 
 .focused {
-  border-left: 3px solid var(--pa-accent);
-  padding-left: 16px !important;
+  position: relative;
+  padding-left: 16px;
+}
+.focused::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 18px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pa-accent);
 }
 .paper-uses {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
   gap: 8px;
 }
@@ -355,7 +365,7 @@ h2 {
 }
 h3 {
   margin-top: 28px;
-  font-size: 16px;
+  font-size: 15px;
 }
 h4 {
   margin: 10px 0;
@@ -363,12 +373,12 @@ h4 {
 p,
 li {
   line-height: 1.8;
-  font-size: 14px;
+  font-size: 15px;
 }
 dt,
 small,
 .note {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--pa-muted);
 }
 .measurement {
@@ -376,7 +386,7 @@ small,
   padding: 12px 0 18px;
 }
 .value {
-  font-size: 21px;
+  font-size: 22px;
 }
 .value > span {
   margin-left: 6px;
@@ -388,7 +398,7 @@ code {
 }
 details {
   margin-top: 12px;
-  font-size: 12px;
+  font-size: 13px;
 }
 summary {
   cursor: pointer;

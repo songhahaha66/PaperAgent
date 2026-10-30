@@ -4,14 +4,11 @@
       <t-button
         v-if="!fillHeight"
         variant="text"
-        shape="square"
         :aria-label="isCollapsed ? '展开文件管理器' : '收起文件管理器'"
         @click="isCollapsed = !isCollapsed"
         class="fm-btn"
       >
-        <template #icon>
-          <t-icon :name="isCollapsed ? 'chevron-up' : 'chevron-down'" size="16px" />
-        </template>
+        {{ isCollapsed ? '展开' : '收起' }}
       </t-button>
       <span class="fm-title"><t-icon name="folder-open" />文件</span>
       <t-button
@@ -461,7 +458,7 @@ defineExpose({
 .fm-btn :deep(.t-loading__gradient) {
   width: 16px !important;
   height: 16px !important;
-  font-size: 16px;
+  font-size: 15px;
 }
 
 .fm-title {
@@ -531,7 +528,7 @@ defineExpose({
   margin-top: 8px;
   padding: 6px 0;
   border-top: 1px solid var(--pa-line);
-  font-size: 12px;
+  font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -543,7 +540,7 @@ defineExpose({
   padding: 2px 6px;
   background-color: var(--td-brand-color-light);
   border-radius: var(--pa-radius-inline);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .no-file-selected {
