@@ -1,14 +1,16 @@
 const assert = require('node:assert/strict')
 const { loadModule, vue, flush } = require('./moduleHarness.cjs')
+const { mountSetup } = require('./vueHost.cjs')
 function deferred() {
   let resolve
   const promise = new Promise(done => { resolve = done })
   return {promise, resolve}
 }
 async function pdfFixture() {
-  const requests=[], jobs=[], rendered=[], cleanup=[]
+  const requests=[], jobs=[], rendered=[]
+  let disconnected = false
   const mod=await loadModule('src/components/PaperPdfReader.vue', {
-    vue:{...vue,onBeforeUnmount:callback=>cleanup.push(callback)},
+    vue,
     '@/stores/auth':{useAuthStore:()=>({token:'test-token'})},
     'pdfjs-dist/build/pdf.worker.min.mjs?url':{default:'worker.js'},
     'pdfjs-dist':{
@@ -22,6 +24,10 @@ async function pdfFixture() {
       },
     },
   }, {
+    ResizeObserver: class {
+      observe() {}
+      disconnect() { disconnected = true }
+    },
     fetch:(url,options)=>{
       const result=deferred()
       requests.push({...result,url,options})
@@ -29,13 +35,14 @@ async function pdfFixture() {
     },
   })
   const props=vue.reactive({workId:'work/id',version:'pdf-v1'})
-  const scope=vue.effectScope()
-  const reader=scope.run(()=>mod.default.setup(props,{emit(){},expose(){}}))
+  const mounted=mountSetup(mod.default,props,{emit(){},expose(){}})
+  const reader=mounted.state
   await flush()
   return {props,reader,requests,jobs,rendered,
+    get disconnected(){return disconnected},
     respond(index,byte){requests[index].resolve({ok:true,arrayBuffer:async()=>Uint8Array.of(byte).buffer})},
     decode(index,pages){jobs[index].resolve({numPages:pages,getPage:async page=>{rendered.push({index,page});return {}}})},
-    stop(){cleanup.forEach(callback=>callback());scope.stop()},
+    stop(){mounted.unmount()},
   }
 }
 ;(async () => {
@@ -54,11 +61,11 @@ async function pdfFixture() {
   }
   const storage = new Map()
   const sessionStorage = {getItem:key => storage.get(key) || null, setItem:(key,value)=>storage.set(key,value)}
-  const scope = vue.effectScope()
   const mod = await loadModule('src/components/PaperEditor.vue', {vue,'@/api/paper':{paperProjectAPI:api}}, {sessionStorage, setTimeout, clearTimeout, crypto:require('node:crypto').webcrypto})
   const props = vue.reactive({workId:'A',latex:true})
   const emitted=[]
-  const editor = scope.run(() => mod.default.setup(props,{emit:(...args)=>emitted.push(args),expose(){}}))
+  const mounted = mountSetup(mod.default,props,{emit:(...args)=>emitted.push(args),expose(){}})
+  const editor = mounted.state
   const doc = {research_id:'study',main:'paper.tex',version:'v',files:[{path:'paper.tex',text:'unique target',version:'f'}],threads:[],executions:[],changes:[],sources:[],compile:{state:'stale',message:'旧 PDF 已保留'}}
   reads[0].resolve(doc);await flush()
   assert.equal(editor.draft.value,'unique target')
@@ -79,7 +86,7 @@ async function pdfFixture() {
   reads[3].resolve({...doc,version:'C'});await flush();reads[2].resolve({...doc,version:'B'});await flush()
   assert.equal(editor.project.value.version,'C','Cross-project stale responses are discarded')
   assert.equal(editor.draft.value,'unique target','Cross-project local drafts do not leak')
-  scope.stop()
+  mounted.unmount()
   console.log('PASS: versioned offsets, source ambiguity, confirmed read selections, draft preservation and project guards')
 
   let pdf=await pdfFixture()
@@ -135,5 +142,12 @@ async function pdfFixture() {
   assert.equal(pdf.reader.count.value,7)
   assert.equal(pdf.rendered.at(-1).index,1)
   pdf.stop()
+
+  // A response arriving after the component is unmounted must not start a decoder.
+  pdf=await pdfFixture()
+  pdf.stop()
+  assert.equal(pdf.disconnected,true)
+  pdf.respond(0,1);await flush()
+  assert.equal(pdf.jobs.length,0)
   console.log('PASS: PDF versions bypass response caches and stale loads cannot replace the current document')
 })().catch(error => {console.error(error);process.exitCode=1})

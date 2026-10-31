@@ -4,8 +4,7 @@ from ai_system.research.domain import findings as research_findings
 import asyncio,json
 from types import SimpleNamespace
 import pytest
-from test_paper_editor import paper
-from test_review_cache import no_network
+from helpers.review import no_network
 from ai_system.modules.writing import consistency as consistency
 from ai_system.modules.writing.validation import assemble
 from ai_system.graph.state import ClaimIssue,ClaimAudit

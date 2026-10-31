@@ -2,7 +2,6 @@
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from test_paper_editor import paper
 from services.chat_services import paper_comments as comments, paper_project as project
 from services.chat_services.chat_history_manager import ChatHistoryManager
 from services.chat_services.chat_service import ChatService

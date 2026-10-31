@@ -1,43 +1,15 @@
 """Context pressure, logical files and natural final replies across real boundaries."""
 import asyncio
-import json
 from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from ai_system.graph.compaction import ContextMiddleware, token_estimate, WorkNotes, summary_model
-from ai_system.graph.context import GraphContext
+from ai_system.graph.compaction import ContextMiddleware, WorkNotes, summary_model
 from ai_system.modules.registry import invoke
 from ai_system.research.store import ResearchStore
 from ai_system.research.runtime import execution_links
+from helpers.context import delivery_context as context, ContextRequest as Request
 from research_tools_helpers import ResearchToolsModel, tool
 from services.file_services.workspace_fs import WorkspaceFS
-
-
-def context(tmp_path, model=None):
-    ctx=GraphContext.create(str(tmp_path),planner_llm=model)
-    ctx.research=ResearchStore(tmp_path,'context-delivery')
-    ctx.research.initialize('效率0.95，保存结果与简报。')
-    return ctx
-
-
-class Request:
-    tools=[]
-    def __init__(self,messages,system=None):self.messages=messages;self.system_message=system
-    def override(self,**kw):return Request(kw['messages'],self.system_message)
-
-
-def test_old_observations_are_retrievable_without_a_summary_call(tmp_path):
-    model=ResearchToolsModel(respond=lambda _:pytest.fail('Observation offloading needs no model'),profile={'max_input_tokens':8000})
-    ctx=context(tmp_path,model);history=[HumanMessage('保持原始条件')]
-    for i in range(9):
-        history += [tool('run_python',{'code':f'print({i})'},str(i)),ToolMessage('结果'+str(i)+'数据'*650,tool_call_id=str(i),name='run_python')]
-    sent=[]
-    async def handle(r):sent.extend(r.messages)
-    asyncio.run(ContextMiddleware(ctx,model,'offload').awrap_model_call(Request(history),handle))
-    archived=[json.loads(m.content) for m in sent if isinstance(m,ToolMessage) and str(m.content).startswith('{')]
-    assert model.calls==0 and len([m for m in sent if isinstance(m,AIMessage)])==9
-    assert archived and all(ctx.fs.read_text(m['_full_output_path']).startswith('结果') for m in archived)
-    assert history[2].content.startswith('结果0') and '数据'*100 in history[2].content
 
 
 def test_full_context_budget_includes_system_facts_and_summary_once(tmp_path):

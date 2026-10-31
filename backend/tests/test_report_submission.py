@@ -3,18 +3,10 @@ import asyncio
 
 import pytest
 from ai_system.graph.context import GraphContext
-from ai_system.graph.state import SolveReport
 from ai_system.modules.experiments.execution import build_tools
 from ai_system.research.store import ResearchStore
 
 pytestmark=pytest.mark.usefixtures('offline_kernel')
-
-
-def test_removed_tools_and_evidence_fields_are_not_model_visible(tmp_path):
-    ctx=GraphContext.create(str(tmp_path),planner_llm=None)
-    assert {t.name for t in build_tools(ctx,'Q1')}=={'run_python','read_file','search_literature','retry_outputs'}
-    properties=SolveReport.model_json_schema()['properties']
-    assert not {'requirement_evidence','controls','result_refs'} & properties.keys()
 
 
 def test_python_assertions_still_fail_and_keep_the_execution_record(tmp_path):

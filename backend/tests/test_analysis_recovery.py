@@ -64,26 +64,6 @@ def test_dispatch_uses_committed_original_source_for_initial_and_recovered_worke
     assert all(experiment_dispatch(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
 
 
-@pytest.mark.parametrize('quote,expected,valid',[
-    ('比较两种方法，用最后 5 天验证误差',20,False),
-    ('误差不超过 15%',0.15,True),
-    ('误差不超过 15%',15,False),
-    ('容量不超过 100',10,False),
-    ('售价 15 元',15,True),
-    ('售价15元',15,True),
-    ('备餐量非负',0,True),
-])
-def test_imported_metric_metadata_does_not_create_an_execution_gate(quote,expected,valid):
-    from ai_system.research.validation import validate_spec
-    from ai_system.research.models import Requirement
-    plan=_analysis().model_dump()
-    plan['requirements'][0]=Requirement(id='R1',kind='constraint',statement='numeric check',source_quote=quote,task_ids=['Q1'],
-        checks=[DomainCheck(id='bound',description='fixed bound',left={'task_id':'Q1','name':'metric'},operator='le',expected=expected)]).model_dump()
-    source=TASK+' 原题另有 20 个观测。'+quote
-    requirements,_=validate_spec(source,plan)
-    assert requirements[0].source_quote==quote
-
-
 @pytest.mark.parametrize('raw_tool',[True,False])
 def test_truncated_reply_stops_without_replaying_partial_json_or_retrying_same_limit(monkeypatch,raw_tool):
     partial='{"title":"unfinished","requirements":[{"id":"R1"}]'

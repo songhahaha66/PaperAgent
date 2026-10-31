@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict')
 const {loadModule,vue,pinia,flush}=require('./moduleHarness.cjs')
+const {mountSetup}=require('./vueHost.cjs')
 const data=new Map()
 const sessionStorage={getItem:key=>data.get(key)||null,setItem:(key,value)=>data.set(key,value)}
 ;(async()=>{
@@ -33,11 +34,11 @@ const sessionStorage={getItem:key=>data.get(key)||null,setItem:(key,value)=>data
   ],sources:[{key:'C2',title:'已登记文献来源'}],threads:[],executions:[],changes:[],feedback:[],compile:{state:'untracked'},pdf_available:false}
   const proposals=[]
   const module=await loadModule('src/components/PaperEditor.vue',{vue,'@/api/paper':{paperProjectAPI:{read:async()=>project,propose:async(...args)=>proposals.push(args)}}},{sessionStorage})
-  const mount=()=>{const scope=vue.effectScope();const props=vue.reactive({workId:'study',ownerId:7,latex:true,citationRequest:null});return {scope,props,editor:scope.run(()=>module.default.setup(props,{expose(){},emit(){}}))}}
+  const mount=()=>{const props=vue.reactive({workId:'study',ownerId:7,latex:true,citationRequest:null});const mounted=mountSetup(module.default,props,{expose(){},emit(){}});return {mounted,props,editor:mounted.state}}
   const one=mount();await flush()
   one.editor.setView('source');one.editor.draft.value='未保存的摘要编辑';await flush()
   one.editor.file.value='chapters/evaluation.tex';await flush()
-  one.editor.draft.value='未保存的局限编辑';await flush();one.scope.stop()
+  one.editor.draft.value='未保存的局限编辑';await flush();one.mounted.unmount()
   const two=mount();await flush()
   assert.equal(two.editor.view.value,'source')
   assert.equal(two.editor.draft.value,'未保存的摘要编辑')
@@ -52,6 +53,6 @@ const sessionStorage={getItem:key=>data.get(key)||null,setItem:(key,value)=>data
   assert.equal(two.editor.side.value,'sources')
   assert.equal(two.editor.sourceCard.value.key,'C2','Citation requests resolve registered sources in the current file project')
   assert.equal(proposals.length,0,'Reading a source or restoring drafts does not submit an edit')
-  two.scope.stop()
+  two.mounted.unmount()
   console.log('PASS: file drafts retain original versions through switches, refresh and remount; citations open current project sources')
 })().catch(e=>{console.error(e);process.exitCode=1})

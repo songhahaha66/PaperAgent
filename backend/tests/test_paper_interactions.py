@@ -10,20 +10,12 @@ import pytest
 from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_project as project, paper_comments as comments
 from services.chat_services import paper_sources
-from test_paper_editor import paper
+from helpers.paper import selection
 
 
 pytestmark = pytest.mark.usefixtures("offline_kernel")
 
 def run(value): return asyncio.run(value)
-
-
-def selection(store, quote, occurrence=0, file='paper.md'):
-    doc=project.snapshot(store.root)
-    text=next(r['text'] for r in doc['files'] if r['path']==file)
-    start=-1
-    for _ in range(occurrence+1): start=text.index(quote,start+1)
-    return {'file':file,'version':doc['version'],'start':start,'end':start+len(quote),'quote':quote}
 
 
 def change(store, bound, text, thread=None):

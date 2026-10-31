@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_system.graph.commentary import ProgressMiddleware
-from test_conversation_timeline import writer, call
+from helpers.conversation import writer, call
 
 
 def test_model_progress_commits_before_tool_and_survives_refresh(tmp_path):

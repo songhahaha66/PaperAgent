@@ -1,8 +1,8 @@
 import asyncio,json
 from langchain_core.messages import AIMessage
 import pytest
-from test_review_cache import no_network
-from test_literature import seed
+from helpers.review import no_network
+from helpers.literature import seed
 from ai_system.research.citations import audit_citations, citation_issues
 from ai_system.research.store import ResearchStore
 

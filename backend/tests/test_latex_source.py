@@ -6,8 +6,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from types import SimpleNamespace
 import pytest
-from test_review_cache import no_network
-from test_paper_editor import paper
+from helpers.review import no_network
 from ai_system.research.review_migration import context_from_store
 from ai_system.graph.state import ClaimAudit, ClaimIssue
 from ai_system.research.models import ResearchConflict

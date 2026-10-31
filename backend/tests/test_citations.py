@@ -8,8 +8,7 @@ import pytest
 from ai_system.research.citations import (SupportBatch,SupportVerdict,audit_citations,citation_issues,
     claims_in,render_citations,bibliography,citation_usage)
 from ai_system.research.literature import literature_context
-from test_literature import seed
-from test_paper_editor import paper
+from helpers.literature import seed
 from services.chat_services import paper_editor as editor
 
 

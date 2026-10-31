@@ -28,6 +28,15 @@ def accepted_store(root):
     assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
     return store
 
+
+def selection(store, quote, occurrence=0, file='paper.md'):
+    from services.chat_services import paper_project
+    doc=paper_project.snapshot(store.root)
+    text=next(r['text'] for r in doc['files'] if r['path']==file)
+    start=-1
+    for _ in range(occurrence+1): start=text.index(quote,start+1)
+    return {'file':file,'version':doc['version'],'start':start,'end':start+len(quote),'quote':quote}
+
 def render_native_paper(store, state):
     """Build file-project fixtures through the same registry/citation renderers."""
     from ai_system.research.control import refresh_registry

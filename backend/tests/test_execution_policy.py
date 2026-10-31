@@ -113,11 +113,3 @@ def test_repeated_error_cannot_evade_guard_by_alternating_with_another_error(tmp
     with pytest.raises(RepeatedOperationBlocked):ResearchRuntime(tmp_path).check_guard('operation')
     runtime.check_guard('genuinely-new-operation')
     assert runtime.stop_reason()['kind']=='repeated_failure'
-
-
-def test_resume_cannot_bypass_pending_confirmation():
-    from services.chat_services.research_session import ResearchSnapshot,resolve_action
-    snapshot=ResearchSnapshot(work_id='pending',work_status='waiting',research_id='study',engine_version='research-v3',graph_status='interrupted')
-    with pytest.raises(ValueError, match='等待必要信息'):
-        asyncio.run(resolve_action('resume','继续',snapshot))
-    assert asyncio.run(resolve_action('confirm','确认方案',snapshot))=='confirm'

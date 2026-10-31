@@ -13,6 +13,27 @@ for name, prefix in [('MPLCONFIGDIR', 'paperagent-mpl-'), ('XDG_CACHE_HOME', 'pa
 import pytest
 
 
+@pytest.fixture
+def paper(tmp_path):
+    """A published manuscript with accepted research results."""
+    import json
+    from helpers.paper import accepted_store
+    from ai_system.modules.writing.validation import assemble
+    from ai_system.modules.writing.sections import section_plan
+    from ai_system.research.control import graph_view
+    from services.file_services.workspace_layout import workspace_path
+
+    store = accepted_store(tmp_path)
+    state = graph_view(store.snapshot())
+    sections = {key: '原来的表述说明研究范围与局限。' * 8 for key, _, _ in section_plan(state) if key != 'solve_heading'}
+    state['sections'] = sections
+    store.save_sections(sections, [])
+    store.publish_paper(assemble(state))
+    workspace_path(tmp_path, '.system/graph_thread.json').write_text(json.dumps({
+        'thread_id': store.research_id, 'engine_version': 'research-v3'}))
+    return store, state
+
+
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path_factory, monkeypatch):
     monkeypatch.setenv('PA_DATA_PATH', str(tmp_path_factory.mktemp('backend-data')))

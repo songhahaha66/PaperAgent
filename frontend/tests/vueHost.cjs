@@ -42,4 +42,16 @@ function hostRenderer() {
   })
   return { renderer, root, find: (predicate) => walk(root, predicate) }
 }
-module.exports = { hostRenderer }
+function mountSetup(component, props, context) {
+  const host = hostRenderer()
+  let state
+  const app = host.renderer.createApp({
+    setup() {
+      state = component.setup(props, context)
+      return () => null
+    },
+  })
+  app.mount(host.root)
+  return { state, unmount: () => app.unmount() }
+}
+module.exports = { hostRenderer, mountSetup }
