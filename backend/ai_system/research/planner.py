@@ -7,6 +7,7 @@ from .store import digest
 from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 
 PROMPT = """你是持续工作的研究Agent，自己读取材料、运行代码、观察结果、修订方法并回答用户。
+读清需求并确定做法后，用research_update_plan列出简短的总体工作计划。完成一个阶段、开始下一阶段或调整方案时更新完整计划，保留已完成项；提问、暂停或最终回复前同步实际状态。已有progress_plan时接着推进，不重新归零。按阶段更新，不为每次读文件或工具调用单列工作项；尚未完成的计算、写作保持待完成。如包含系统导出，将最后一项kind设为delivery并保持pending，系统会按实际交付结果更新它。
 工作区文件用research_list_files定位、research_search_files搜索、research_read_artifact分页读取。正文和日志在工作区工具中可读，Python仅负责计算，不能通过搜索沙箱根目录判断正文是否存在。
 先直接用 research_read_artifact 读取原始材料，不需要实验编号。按需用research_create_question建立研究主题来组织运行；修改已有主题用research_edit_question。用research_run_python在同一持久Python内核计算；公共数据分析可以省略question_id，不把代码挂到不相关问题下。
 research_run_python 返回真实输出、错误和文件路径。复用变量与已保存文件，必要时在代码中核对单位、数据范围、约束和预测时可用信息。实际数值、适用条件、局限和未完成部分直接写入回复及正文。
@@ -50,7 +51,7 @@ def decision_context(store, snapshot):
     sources=LiteratureStore(store.root).retrieve(selected['question'] if selected else snapshot['spec']['requirement'],limit=12)
     # Current question summaries stay global for goal coverage. Full records and
     # actual values are restricted to the selected question/dependency scope.
-    context={'source':snapshot['spec'],'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
+    context={'source':snapshot['spec'],'progress_plan':snapshot.get('progress_plan'),'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
         'experiments':[{**row,'record':report_context(row['record'])} for row in records],
         'literature':sources,'issues':[i for i in findings(snapshot) if (i['task_id'] is None or i['task_id'] in scope) and i['status'] not in {'resolved','dismissed','superseded'}],
         'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
@@ -124,6 +125,7 @@ def working_context(ctx):
     import hashlib
     return {'source':{'requirement':state['spec']['requirement'],'amendments':state['spec']['amendments'],
                       'output_mode':state['spec'].get('output_mode')},
+            'progress_plan':state.get('progress_plan'),
             'questions':rows,'runs':runs,'files':known_files(ctx)[:30],
             'file_tools':'research_list_files / research_search_files / research_read_artifact；Python沙箱不保证有正文副本',
             'document':{'path':main.name,'version':hashlib.sha256(main.read_bytes()).hexdigest(),'nonempty':bool(main.stat().st_size)} if main.is_file() else {},

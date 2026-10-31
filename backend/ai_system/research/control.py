@@ -138,6 +138,7 @@ def public_snapshot(snapshot, *, work_status=None, source_root=None):
         for key, stage in stages.items()}
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
         "questions": questions(snapshot), "evidence_uses":evidence_uses(snapshot,source_root),
+        "progress_plan": snapshot.get('progress_plan'),
         "runtime":execution(snapshot,work_status,source_root),
         "delivery": delivery_status(snapshot),
         "delivery_summary": delivery_summary(snapshot, stages),

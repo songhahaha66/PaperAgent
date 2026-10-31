@@ -509,6 +509,7 @@ if (require.main === module) (async () => {
     commit_seq: 10,
     snapshot_at: 102,
     work_status: 'in_progress',
+    progress_plan: { steps: [{ title: '计算与分析', status: 'in_progress', note: '', kind: 'work' }], updated_at: 102 },
     questions: [{ id: 'question:E2', title: '验证预测误差', question: '固定区间的预测误差是多少？',
       experiment_ids: ['E2'], sources: [], judgment: '', next_step: '', issues: [],
       artifact_refs: [], limitations: [], judgments: [] }],
@@ -547,6 +548,7 @@ if (require.main === module) (async () => {
   )
   const olderSnapshot = {
     ...snapshot, commit_seq: 9, snapshot_at: 99, work_status: 'completed',
+    progress_plan: null,
     questions: [], experiments: [],
     runtime: { actions: [], models: [], decisions: [], history: [], updated_at: 90, models_updated_at: 90 },
   }
@@ -554,6 +556,7 @@ if (require.main === module) (async () => {
     type: 'json_block', block: { type: 'research_snapshot', content: olderSnapshot },
   }, 'progress-message')
   assert.equal(progress.state.researchSnapshot.value.commit_seq, 10, 'an older streamed snapshot cannot rewind progress')
+  assert.equal(progress.state.researchSnapshot.value.progress_plan.steps[0].title, '计算与分析', 'stale snapshots cannot erase the current plan')
   assert.equal(progress.state.currentWork.value.status, 'in_progress', 'a stale snapshot cannot end active research')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.id, 'model:2')
   await progress.state.stream.refreshResources(['research'])

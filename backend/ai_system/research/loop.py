@@ -7,6 +7,7 @@ from langgraph.graph import END
 from langgraph.types import Send, interrupt
 from ai_system.modules.registry import capabilities, CapabilityRequest
 from .store import digest
+from .plan import sync_delivery_plan
 from .planner import Planner, NoResearchProgress, decision_context, planning_failure_message
 
 
@@ -154,6 +155,7 @@ async def _act(request, runtime):
         return {}
     with store._transaction() as db:
         state=store._read(db);state['action'].update(status='running',started_at=time.time())
+        if name == 'writing.export':sync_delivery_plan(state, 'in_progress')
         store._save(db,state,'action_started',{'id':action['id']})
     from .runtime import ResearchRuntime
     meter=ResearchRuntime(store.root,store.research_id)
@@ -203,6 +205,11 @@ async def _act(request, runtime):
                 state['action']['message']=patch.get('message') or action_failure_message(action)
             state['action']['result']=patch
             state['action']['finished_at']=time.time()
+            if name == 'writing.export':
+                if (state.get('publication') or {}).get('stage') == 'completed' and state['outcome'] == 'completed' and state['action']['status'] == 'done':
+                    sync_delivery_plan(state, 'completed')
+                else:
+                    sync_delivery_plan(state, 'blocked', state['action'].get('message') or '导出尚未完成，需处理交付诊断。')
             store._save(db,state,'action_finished',{'id':action['id'],'status':state['action']['status'],
                                                    'message':state['action'].get('message')})
         if failed:meter.failed(operation,digest(product.execution_message),'execution',state['action']['message'])
@@ -211,6 +218,7 @@ async def _act(request, runtime):
     except asyncio.CancelledError:
         with store._transaction() as db:
             state=store._read(db);state['action'].update(status='interrupted',finished_at=time.time())
+            if name == 'writing.export':sync_delivery_plan(state, 'blocked', '导出已中断，等待继续。')
             store._save(db,state,'action_interrupted',state['action'])
         raise
     except (ValueError,KeyError,FileNotFoundError) as exc:
@@ -223,6 +231,7 @@ async def _act(request, runtime):
                 state['publication']=None
             state['action'].update(status='failed',recoverable=True,finished_at=time.time(),phase=name,error=detail,
                 error_type=type(exc).__name__,message=detail,result={'error':detail,'phase':name})
+            if name == 'writing.export':sync_delivery_plan(state, 'blocked', detail)
             store._save(db,state,'action_failed',{'id':action['id'],'phase':name,'message':detail,'recoverable':True})
         return {'log':[name+': '+detail]}
     except Exception as exc:
@@ -231,6 +240,7 @@ async def _act(request, runtime):
         message = action_failure_message(action)+' 原因：'+error_detail(exc)
         with store._transaction() as db:
             state=store._read(db);state['action'].update(status='failed',recoverable=False,finished_at=time.time(),error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
+            if name == 'writing.export':sync_delivery_plan(state, 'blocked', message)
             store._save(db,state,'action_failed',state['action'])
         raise RuntimeError(message) from exc
 

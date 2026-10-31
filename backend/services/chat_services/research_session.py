@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai_system.research import ENGINE_VERSION
+from ai_system.research.plan import ResearchPlan
 
 ResearchAction = Literal["auto", "ask", "run", "resume", "confirm", "revise", "revise_research", "message"]
 ACTIONS = {"auto", "ask", "run", "resume", "confirm", "revise", "revise_research", "message"}
@@ -74,6 +75,7 @@ class ResearchClaim(BaseModel):
 
 
 class ResearchSnapshot(BaseModel):
+    progress_plan: ResearchPlan | None = None
     snapshot_at: float | None = None
     pending_question: str | None = None
     inputs: list[str] = Field(default_factory=list)
@@ -273,6 +275,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
                           and business['action']['capability']=='ask' and business['action']['status']=='waiting' else None),
         inputs=[p for p in current_files if _file(root,p)],
         questions=control.get('questions',[]), evidence_uses=control.get('evidence_uses',[]),
+        progress_plan=control.get('progress_plan'),
         runtime={**runtime, 'models':models,
                  'models_updated_at':max((model['updated_at'] for model in models),default=0),
                  'history':research_history(store,business) if business else [],

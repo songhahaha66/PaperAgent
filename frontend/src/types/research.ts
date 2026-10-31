@@ -1,3 +1,13 @@
+export interface ResearchPlan {
+  steps: {
+    title: string
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked'
+    note: string
+    kind: 'work' | 'delivery'
+  }[]
+  updated_at: number
+}
+
 export interface ResearchQuestion {
   id: string
   title: string
@@ -179,6 +189,7 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  progress_plan?: ResearchPlan | null
   snapshot_at?: number | null
   inputs?: string[]
   questions?: ResearchQuestion[]

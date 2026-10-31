@@ -61,6 +61,11 @@
             </button>
           </div>
         </div>
+        <ResearchPlanProgress
+          :plan="researchSnapshot?.progress_plan"
+          :work-status="currentWork?.status"
+          :is-zh="isZh"
+        />
         <div class="work-actions">
           <button
             class="workspace-trigger"
@@ -348,6 +353,7 @@ import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
 import ResearchResultViewer from '@/components/ResearchResultViewer.vue'
+import ResearchPlanProgress from '@/components/ResearchPlanProgress.vue'
 import { useWorkSession } from '@/composables/useWorkSession'
 import { useWorkStream } from '@/composables/useWorkStream'
 import { useArtifactPreview } from '@/composables/useArtifactPreview'
@@ -751,6 +757,9 @@ onUnmounted(() => {
 .work-title-row {
   min-width: 0;
 }
+.work-heading {
+  flex: 1;
+}
 .work-title-row h1 {
   margin: 0;
   font-family: var(--td-font-family);
@@ -1031,6 +1040,17 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+@media (max-width: 1024px) {
+  .workspace-header {
+    flex-wrap: wrap;
+  }
+  .research-plan-progress {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+    min-width: 0;
+  }
 }
 @media (max-width: 768px) {
   .workspace-header {
