@@ -197,6 +197,73 @@ test('single execution has one heading, duration and output entry', async (t) =>
   assert.equal(button('诊断日志'), undefined, 'empty diagnostics have no entry')
 })
 
+test('each grouped operation folds its own logs and retains code links', async (t) => {
+  const { state, host, heading, button, opened } = await mount(t)
+  state.segments = [
+    row('completed', { label: '生成24小时汇总', finished_at: 7, output_tail: 'hour 00:00, buy 7615',
+      script_file: 'code/summary.py', output_file: 'runs/summary/stdout.log' }),
+    { ...row('completed', { id: 'check', label: '检查约束', finished_at: 9,
+      output_tail: 'constraints checked' }), id: 'check' },
+  ]
+  await flush()
+  heading().props.onClick()
+  await flush()
+  const step = (id) => host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === `call-reply-${id}`)
+  assert.equal(step('segment').props['aria-expanded'], false)
+  assert.doesNotMatch(text(host.root), /hour 00:00|constraints checked/)
+  step('segment').props.onClick()
+  await flush()
+  assert.match(text(host.root), /hour 00:00/)
+  assert.doesNotMatch(text(host.root), /constraints checked/)
+  button('代码').props.onClick()
+  button('完整日志').props.onClick()
+  assert.deepEqual(opened, ['code/summary.py', 'runs/summary/stdout.log'])
+  step('segment').props.onClick()
+  await flush()
+  assert.doesNotMatch(text(host.root), /hour 00:00/)
+  assert.match(text(host.root), /生成24小时汇总完成6 秒/)
+})
+
+test('individual expansion survives streaming, new steps and folding the group', async (t) => {
+  const { state, host, heading } = await mount(t)
+  const next = { ...row('running', { id: 'next', label: '继续计算', output_tail: 'next output' }), id: 'next' }
+  state.segments = [row('completed', { finished_at: 5, output_tail: 'first output' }), next]
+  await flush()
+  heading().props.onClick()
+  await flush()
+  const step = (id) => host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === `call-reply-${id}`)
+  step('next').props.onClick()
+  await flush()
+  state.segments = [state.segments[0], { ...next, execution: { ...next.execution, output_tail: 'new output' } },
+    { ...row('running', { id: 'last', label: '保存表格', output_tail: 'last output' }), id: 'last' }]
+  await flush()
+  assert.equal(step('next').props['aria-expanded'], true)
+  assert.equal(step('last').props['aria-expanded'], false)
+  assert.match(text(host.root), /new output/)
+  assert.doesNotMatch(text(host.root), /first output|last output/)
+  heading().props.onClick()
+  await flush()
+  heading().props.onClick()
+  await flush()
+  assert.equal(step('next').props['aria-expanded'], true)
+  assert.match(text(host.root), /new output/)
+})
+
+test('an opened single operation stays open when a second operation arrives', async (t) => {
+  const { state, host, heading } = await mount(t)
+  state.segments = [row('running', { output_tail: 'keep this output visible' })]
+  await flush()
+  heading().props.onClick()
+  await flush()
+  state.segments = [state.segments[0],
+    { ...row('running', { id: 'new', label: '新操作', output_tail: 'new output stays folded' }), id: 'new' }]
+  await flush()
+  const first = host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === 'call-reply-segment')
+  assert.equal(first.props['aria-expanded'], true)
+  assert.match(text(host.root), /keep this output visible/)
+  assert.doesNotMatch(text(host.root), /new output stays folded/)
+})
+
 test('delivery phase stays active until files are delivered', async (t) => {
   const { state, host, heading } = await mount(t)
   state.segments = [row('running', { phase: 'delivery', label: '保存结果文件' })]
