@@ -1,4 +1,4 @@
-"""Version questions independently of experiments; reuse evidence across scope changes."""
+"""Version research topics independently of their runs and manuscript."""
 from copy import deepcopy
 from .models import Contract, ResearchConflict
 from pydantic import Field
@@ -44,15 +44,13 @@ def apply_questions(state, updates):
                 resolved.append(key);continue
             previous = {k:deepcopy(v) for k,v in q.items() if k != 'history'}
             q.setdefault('history', []).append(previous)
-            q.update(version=q.get('version',1)+1, question=update.question, title=update.title or update.question,
-                     answer_status='needs_update' if q.get('judgment') else 'unanswered')
+            q.update(version=q.get('version',1)+1, question=update.question, title=update.title or update.question)
         else:
             index = len(state['questions']) + 1
             while 'Q' + str(index) in state['questions'] or 'Q' + str(index) in state['experiments']:index += 1
             key = 'Q' + str(index)
             q = {'id':key, 'question':update.question, 'title':update.title or update.question,
-                 'version':1, 'judgment':'', 'artifact_refs':[], 'limitations':[],
-                 'judgments':[], 'next_step':'', 'answer_status':'unanswered', 'history':[]}
+                 'version':1, 'history':[]}
             state['questions'][key] = q
         q.update(reason=update.reason, retired=False)
         q['source_question_ids'] = list(dict.fromkeys([*q.get('source_question_ids', []), *update.source_question_ids]))
@@ -67,26 +65,6 @@ def apply_questions(state, updates):
     return resolved
 
 
-def answer_gaps(question):
-    """One completeness rule for saved judgments, delivery and read views."""
-    gaps=[];coverage=question.get('coverage')
-    if coverage not in {'answered','partial','unanswered'}:
-        gaps.append('尚未说明问题已答、部分回答或未答。')
-    if coverage in {'answered','partial'} and not str(question.get('judgment') or '').strip():
-        gaps.append('缺少当前答案；无答案时可明确标为未答并说明原因。')
-    if question.get('unavailable_artifact_refs'):
-        gaps.append('答案引用已失效或不在关联实验范围，请读取当前结果并更新答案引用。')
-    elif question.get('answer_status')=='needs_update' and not gaps:
-        gaps.append('问题范围、依据或解释已改变，请重新评估并更新问题答案。')
-    return gaps
-
-
 def delivery_status(state):
-    from .views import questions
-    rows=[q for q in questions(state) if not q.get('retired')]
-    # Answer completeness is visible in the question records, not a file-export gate.
-    # Legacy findings are advisory; execution and file readiness are checked
-    # when delivering the current source, not inferred from old verdicts.
-    blockers=[]
-    return {'ready':not blockers,'blockers':blockers,
-        'questions':[{k:q.get(k) for k in ('id','title','coverage','stop_reason','answer_status','answer_gaps')} for q in rows]}
+    """File readiness is checked by delivery, never by topic bookkeeping."""
+    return {'ready':True,'blockers':[]}

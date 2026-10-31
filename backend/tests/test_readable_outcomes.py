@@ -37,7 +37,7 @@ def test_advisory_review_failure_and_missing_answer_metadata_do_not_gate_export(
     assert task['availability'] == 'current' and task['results']
     assert task['checking'] == 'service_failed'
     assert task['issues'] and view.delivery['ready']
-    assert any(q.get('answer_gaps') for q in view.questions)
+    assert all(not {'judgment','coverage','answer_gaps'} & q.keys() for q in view.questions)
     assert store.snapshot() == before, 'projection must not change evidence or issue gates'
     path,conflict=store.publish_paper('# 已有结果与局限\n答案登记尚未完成。')
     assert path=='paper.md' and not conflict

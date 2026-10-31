@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 
-export type PanelKind = 'chat' | 'paper' | 'figures' | 'files' | 'file' | 'progress' | 'result'
+export type PanelKind = 'chat' | 'paper' | 'figures' | 'files' | 'file' | 'result'
 export type PanelGroup = 'main' | 'secondary'
 export type SplitEdge = 'left' | 'right' | 'top' | 'bottom'
 export interface WorkPanel {
@@ -96,35 +96,23 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
         followChat: true,
       }
     const state = sessions.value[workId]!
-    const retired: Record<string, PanelKind> = {
-      overview: 'progress',
-      experiences: 'progress',
-      skills: 'progress',
-    }
-    const removed = new Set(['materials', 'comparisons', 'literature'])
-    if (
-      state.panels.some((p) => removed.has(p.kind) || retired[p.kind as string]) ||
-      new Set(state.panels.map((p) => p.id)).size !== state.panels.length
-    ) {
-      const seen = new Set<string>()
-      state.panels = state.panels
-        .filter((p) => !removed.has(p.kind))
-        .map((p) => {
-          const kind = retired[p.kind as string]
-          if (!kind) return p
-          if (state.activeId === p.id) state.activeId = kind
-          if (state.secondaryActiveId === p.id) state.secondaryActiveId = kind
-          return { ...p, id: kind, kind }
-        })
-        .filter((p) => {
-          if (seen.has(p.id)) return false
-          seen.add(p.id)
-          return true
-        })
-      if (!state.panels.some((p) => p.id === state.activeId && p.group === 'main'))
-        state.activeId = state.panels.find((p) => p.group === 'main')?.id || 'chat'
-      if (!state.panels.some((p) => p.id === state.secondaryActiveId && p.group === 'secondary'))
-        state.secondaryActiveId = state.panels.find((p) => p.group === 'secondary')?.id || null
+    const allowed = new Set(['chat', 'paper', 'figures', 'files', 'file', 'result'])
+    const seen = new Set<string>()
+    const panels = state.panels.filter((panel) => {
+      if (!allowed.has(panel.kind) || seen.has(panel.id)) return false
+      seen.add(panel.id)
+      return true
+    })
+    if (panels.length !== state.panels.length) {
+      state.panels = panels
+      for (const id of Object.keys(state.scroll)) {
+        if (!panels.some((p) => p.id === id)) delete state.scroll[id]
+      }
+      if (!panels.some((p) => p.id === state.activeId && p.group === 'main'))
+        state.activeId = panels.find((p) => p.group === 'main')?.id || 'chat'
+      if (!panels.some((p) => p.id === state.secondaryActiveId && p.group === 'secondary'))
+        state.secondaryActiveId = panels.find((p) => p.group === 'secondary')?.id || null
+      if (!state.secondaryActiveId) state.focusedGroup = 'main'
     }
     return state
   }
@@ -137,6 +125,7 @@ export const useWorkPanelsStore = defineStore('work-panels', () => {
     state.focusedGroup = panel.group
   }
   function open(workId: string, kind: PanelKind, path?: string, group?: PanelGroup) {
+    if (!['chat', 'paper', 'figures', 'files', 'file', 'result'].includes(kind)) return
     if (kind === 'file') {
       path = path?.replace(/^\.\//, '').replace(/\\/g, '/')
       if (path === 'paper.md') {

@@ -29,6 +29,8 @@ class Method:
 
 
 METHODS: List[Method] = [
+    Method("model_comparison", "监督学习方法比较", "预测", "比较同一预测任务的基线与候选模型", "带标签的表格数据，CSV或Excel均可",
+           ("明确预测目标", "选择符合时间或分组结构的共同拆分", "仅在训练集拟合预处理和模型", "保存逐样本预测并计算共同指标", "解释差异与局限"), "测试集不参与调参；保存拆分和真实输出，实测差异不等于统计显著"),
     # 评价与决策
     Method("ahp", "层次分析法 AHP", "评价决策", "多指标综合评价且指标权重需要专家判断", "判断矩阵（可由文献或数据构造）",
            ("建立层次结构", "构造判断矩阵", "求特征向量得权重", "一致性检验 CR<0.1"), "判断矩阵主观性强，最好与客观赋权结合"),
@@ -90,6 +92,7 @@ METHOD_INDEX: Dict[str, Method] = {m.key: m for m in METHODS}
 
 
 SKILL_SOURCES = {
+    'model_comparison': ('scikit-learn 模型评估文档', 'https://scikit-learn.org/stable/modules/model_evaluation.html'),
     'regression': ('statsmodels 线性回归文档', 'https://www.statsmodels.org/stable/regression.html'),
     'arima': ('statsmodels ARIMA 文档', 'https://www.statsmodels.org/stable/generated/statsmodels.tsa.arima.model.ARIMA.html'),
     'linear_programming': ('SciPy linprog 文档', 'https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linprog.html'),
@@ -97,7 +100,7 @@ SKILL_SOURCES = {
     'pca': ('scikit-learn PCA 文档', 'https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html'),
     'clustering': ('scikit-learn 聚类文档', 'https://scikit-learn.org/stable/modules/clustering.html#k-means'),
 }
-SKILL_VERSION = 1
+SKILL_VERSION = 2
 DEFAULT_SKILL_POLICY = {'mode': 'auto', 'selected': [], 'disabled': []}
 
 

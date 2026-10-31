@@ -62,12 +62,6 @@ def seed(root):
         store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',
             report={'status':'completed','requirement_evidence':[{'requirement_id':'RQ'+str(i+1),'evidence_refs':[row['id']]}]},
             results=[row],claims=projection['claims'] if key=='Q1' else []))
-    from research_tools_helpers import answer
-    current=store.snapshot()
-    for i,key in enumerate(('Q1','Q2')):
-        answer(store,coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
-            statement='本次记录显示 {{R:'+projection['results'][i]['id']+'}}，仅限所提供样本',
-            artifact_refs=[projection['results'][i]['id']],limitations=['没有外推证据'])
     store.publish_paper('# 研究\n已有报告，不得改写')
     migrate_project(root)
     return workspace_bytes(root)

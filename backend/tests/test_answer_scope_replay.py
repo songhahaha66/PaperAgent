@@ -45,25 +45,20 @@ def test_answer_without_scalar_refs_delivers_without_recomputation(tmp_path):
     (tmp_path/'paper.md').write_text('# 已有答案\n总体3条，子集未完成。')
     store,eid,ref,qid=study(tmp_path);executions=store.snapshot()['executions']
     def respond(messages):
-        rows=[m for m in messages if isinstance(m,ToolMessage)]
-        if not rows:return tool('research_update_answer',{'question_id':qid,'statement':'已计算总体3条，结果见执行记录',
-            'coverage':'partial','stop_reason':'子集尚未计算'},'answer')
-        assert json.loads(rows[-1].content)['answer_gaps']==[]
         return tool('research_deliver',{'title':'已有结果与未知','reason':'保留实际结果及未完成部分'},'deliver')
     model=ResearchToolsModel(respond=respond)
     ctx=GraphContext.create(str(tmp_path),planner_llm=model);ctx.research=store
     assert not asyncio.run(prepare_action(ctx))
-    assert model.calls==2 and store.snapshot()['publication']['stage']=='export'
+    assert model.calls==1 and store.snapshot()['publication']['stage']=='export'
     assert store.snapshot()['executions']==executions
 
 
 def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_path):
     from ai_system.research.views import execution_context
     store,first,r1,qid=study(tmp_path)
-    result=operations.schedule_experiment(SimpleNamespace(research=store),operations.ExperimentInput(
-        question_id=qid,dependency_ids=[first],plan={'conditions':'只取 category=A，保持原始行身份',
-            'evaluation':'分别解释总体与子集，不能替代','candidates':[{'name':'类别统计','instruction':'复用总体的源记录与版本，读取既有资料统计子集'}]}).model_dump())
-    _manual_worker_handoff(store);second=result['experiment_id']
+    second=add_experiment(store,question_id=qid,dependency_ids=[first],plan={
+        'conditions':'只取 category=A，保持原始行身份','evaluation':'分别解释总体与子集，不能替代',
+        'candidates':[{'name':'类别统计','instruction':'复用总体的源记录与版本，读取既有资料统计子集'}]})
     r2=commit_count(store,second,2,'仅 category=A 的源记录')
     before=store.snapshot();records=experiment_context(before)
     assert before['experiments'][second]['dependencies']==[first]

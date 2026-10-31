@@ -53,18 +53,7 @@ async def prepare_action(ctx):
     if snapshot['outcome'] in {'completed','needs_attention'} and not snapshot.get('conversation_input'):return False
     if current and current['status']=='waiting':return False
     if current and current['status']=='running':
-        # An experiment commit is the durable receipt, including a failed experiment.
-        if current['capability']=='experiments.execute':
-            experiment=snapshot['experiments'][current['target']]
-            if experiment['execution_status'] not in {'running','pending'}:
-                with store._transaction() as db:
-                    state=store._read(db)
-                    failed=experiment['execution_status']!='succeeded'
-                    state['action'].update(status='failed' if failed else 'done',recoverable=failed)
-                    store._save(db,state,'action_reconciled',{'id':current['id']})
-            else:return True
-        else:
-            return True  # An interrupted external operation needs explicit recovery.
+        return True  # An interrupted external operation needs explicit recovery.
     snapshot=store.snapshot()
     if _publication_action(ctx,snapshot):return False
     key,context=decision_context(store,snapshot)
@@ -175,9 +164,6 @@ async def _act(request, runtime):
             operation=digest([operation,source_snapshot(ctx.workspace)['version']])
         meter.check_guard(operation)
         inputs=action['inputs']
-        if name=='experiments.execute':
-            from .control import experiment_dispatch
-            inputs={'branch':experiment_dispatch(ctx,action['target'])}
         product=await capabilities().invoke(CapabilityRequest(name=name,inputs=inputs),ctx)
         patch=product.value
         if name.startswith('writing.') and patch.get('issues'):
@@ -221,7 +207,7 @@ async def _act(request, runtime):
                                                    'message':state['action'].get('message')})
         if failed:meter.failed(operation,digest(product.execution_message),'execution',state['action']['message'])
         else:meter.succeeded(operation)
-        return patch if name=='experiments.execute' or name.startswith('writing.') else {'log':['completed '+name]}
+        return patch if name.startswith('writing.') else {'log':['completed '+name]}
     except asyncio.CancelledError:
         with store._transaction() as db:
             state=store._read(db);state['action'].update(status='interrupted',finished_at=time.time())
@@ -262,16 +248,7 @@ def resume(store, **_):
                 action['status']='done'
                 store._save(db,state,'recovery_requested',{'action':action})
                 return
-            # Experiment recovery is reconciled from its execution receipt. Other
-            # capabilities keep their durable products and retry the failed step.
-            if action['capability']=='experiments.execute':action['status']='running'
-            elif action['capability'] in {'research.observe','research.revise_interpretation','research.check_interpretation'}:action['status']='done'
+            # Durable products are retained when resuming an interrupted step.
+            if action['capability'] in {'research.observe','research.revise_interpretation','research.check_interpretation'}:action['status']='done'
             else:action['status']='planned'
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name='experiment_comparisons'").fetchone():
-            from ai_system.modules.experiments.supervised import RECOVERABLE
-            for row in db.execute('SELECT id,payload FROM experiment_comparisons WHERE research_id=?',(store.research_id,)).fetchall():
-                record=json.loads(row['payload'])
-                if not record.get('provider_unavailable') and any(r['status'] in RECOVERABLE for r in record['branches']):
-                    record['recovery_requested']=True
-                    db.execute('UPDATE experiment_comparisons SET payload=? WHERE id=?',(json.dumps(record,ensure_ascii=False),row['id']))
         store._save(db,state,'recovery_requested',{'action':state['action']})

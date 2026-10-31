@@ -17,7 +17,7 @@ const sessionStorage={getItem:key=>data.get(key)||null,setItem:(key,value)=>data
   const state=first.session('study')
   state.draft='尚未发送的研究问题';state.scroll['result:registered:R3']=270
   assert.equal(state.panels.filter(p=>p.kind==='paper').length,1)
-  assert.equal(state.panels.filter(p=>p.kind==='progress').length,1)
+  assert.equal(state.panels.filter(p=>p.kind==='progress').length,0)
   assert.equal(state.panels.filter(p=>p.kind==='result').length,1)
   const restored=panels.useWorkPanelsStore(pinia.createPinia()).session('study')
   assert.equal(restored.draft,'尚未发送的研究问题')

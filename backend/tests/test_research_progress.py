@@ -26,10 +26,6 @@ def test_delivery_progress_is_persisted_projected_and_read_only(tmp_path):
     assert 'Q2' in ready_tasks(store.snapshot())
     for key in ("Q2", "Q3"):
         finish(store, key)
-    from research_tools_helpers import answer
-    for question in store.snapshot()['questions'].values():
-        answer(store,question_id=question['id'],statement='已保留实际输出，旧核查意见仍供参考。',
-               coverage='partial',stop_reason='本轮仅交付已完成部分')
     assert store.delivery_ready(store.snapshot())
     assert len(store.registry_payload()['results'])==3
     assert store.publish_paper('# 已完成部分\n实际结果：42')[0]=='paper.md'

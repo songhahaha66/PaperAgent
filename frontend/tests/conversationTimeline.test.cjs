@@ -223,16 +223,16 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
   const action = (label) => host.find((n) => n.kind === 'button' && text(n).trim() === label)
   assert.ok(action('data.csv'), 'file sources remain visible')
   assert.ok(action('查看实测结果'), 'result references remain visible')
-  assert.ok(action('校验问题'), 'semantic research sources remain visible')
+  assert.ok(rendered.includes('校验问题'), 'historical context labels remain readable')
+  assert.equal(action('校验问题'),undefined, 'retired research panel has no entry')
   action('data.csv').props.onClick()
   action('查看实测结果').props.onClick()
-  action('校验问题').props.onClick()
   assert.deepEqual(openedFiles, ['inputs/data.csv'])
   assert.deepEqual(openedResults, ['R1'])
   assert.equal(
     progressOpened,
-    1,
-    'semantic research refs open research details, never a fake file path',
+    0,
+    'historical context never opens the removed research panel',
   )
   const confirm = () => host.find((n) => n.kind === 'button' && text(n).trim() === '继续研究')
   assert.ok(confirm(), 'the latest paper_confirm in waiting state exposes Continue research')

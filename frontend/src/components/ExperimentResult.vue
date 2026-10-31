@@ -2,7 +2,7 @@
   <section class="experiment-result">
     <p v-if="error" role="alert">{{ error }}</p>
     <template v-if="record"
-      ><h2>方案比较实验</h2>
+      ><h2>历史方案比较</h2>
       <p>{{ record.reason }}</p>
       <p v-if="record.conditions">实验条件：{{ record.conditions }}</p>
       <p v-if="record.evaluation">评价依据：{{ record.evaluation }}</p>
@@ -72,8 +72,8 @@ const statusLabel = (s: string) =>
   ({
     valid: '完成计算',
     failed: '计算失败',
-    pending: '等待执行',
-    running: '正在执行',
+    pending: '历史记录：未执行',
+    running: '历史记录：执行未结束',
     interrupted: '执行中断',
     contract_error: '方案不符合实验契约',
     timeout: '执行超时',

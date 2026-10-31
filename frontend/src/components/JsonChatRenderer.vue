@@ -33,12 +33,13 @@
               <template v-else-if="segment.type === 'event'">
                 <div v-if="segment.block.type === 'research_context'" class="answer-sources">
                   <span>参考材料</span>
+                  <span v-for="path in sourceFiles(segment.block).filter(isResearchSource)" :key="path">
+                    {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
+                  </span>
                   <button
-                    v-for="path in sourceFiles(segment.block)"
+                    v-for="path in sourceFiles(segment.block).filter((path) => !isResearchSource(path))"
                     :key="path"
-                    @click="
-                      isResearchSource(path) ? $emit('open-progress') : $emit('open-file', path)
-                    "
+                    @click="$emit('open-file', path)"
                   >
                     {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
                   </button>
@@ -98,7 +99,6 @@
                     >
                       继续研究
                     </button>
-                    <button type="button" @click="$emit('open-progress')">查看运行状态</button>
                   </div>
                 </div>
               </template>
@@ -149,7 +149,6 @@ interface Props {
 defineProps<Props>()
 defineEmits<{
   'open-file': [path: string]
-  'open-progress': []
   'confirm-plan': []
   'open-result': [id: string]
 }>()

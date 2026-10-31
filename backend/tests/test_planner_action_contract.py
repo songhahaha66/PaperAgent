@@ -43,29 +43,25 @@ def test_local_execution_conflict_keeps_actionable_reason_without_http_secrets()
     assert error_detail(upstream)=='HTTPStatusError'
 
 
-@pytest.mark.parametrize('extra', [{'question_index':0},{'question':'old top level duplicate'},{'question_updates':[]}])
-def test_create_then_schedule_and_correct_extra_fields_in_same_agent(tmp_path,extra):
+@pytest.mark.parametrize('extra', [{'question_index':0},{'plan':PLAN},{'question_updates':[]}])
+def test_create_then_edit_and_correct_extra_fields_in_same_agent(tmp_path,extra):
     def respond(messages):
         rows=results(messages)
-        if not rows:return tool('research_create_question',{'question':'What do the supplied source records establish?'},'create')
-        if len(rows)==1:
-            qid=json.loads(rows[-1].content)['question_id']
-            assert qid.startswith('Q') and len(ctx.research.snapshot()['questions'])==1
-            return tool('research_schedule_experiment',{'question_id':qid,'plan':PLAN,**extra},'bad')
-        if len(rows)>2:return tool('research_pause',{'message':'Plan recorded; computation can continue in this Agent.'},'pause')
-        assert rows[-1].status=='error' and next(iter(extra)) in rows[-1].content
+        if not rows:return tool('research_create_question',{'question':'Current goal'},'create')
+        if len(rows)>2:return tool('research_pause',{'message':'Topic saved; continue in this Agent.'},'pause')
         qid=json.loads(rows[0].content)['question_id']
-        assert not ctx.research.snapshot()['experiments']
-        return tool('research_schedule_experiment',{'question_id':qid,'plan':PLAN},'fixed')
+        args={'question_id':qid,'base_version':1,'question':'Clarified goal'}
+        if len(rows)==1:return tool('research_edit_question',{**args,**extra},'bad')
+        assert rows[-1].status=='error' and next(iter(extra)) in rows[-1].content
+        return tool('research_edit_question',args,'fixed')
     ctx,model=context(tmp_path,respond)
     assert asyncio.run(prepare_action(ctx))
-    state=ctx.research.snapshot();eid=next(iter(state['experiments']))
+    state=ctx.research.snapshot()
     assert model.calls==4 and state['action']['capability']=='pause'
-    assert len(state['questions'])==len(state['experiments'])==1 and not state['executions']
-    assert state['experiments'][eid]['question_id']==next(iter(state['questions']))
+    assert len(state['questions'])==1 and not state['experiments'] and not state['executions']
+    assert next(iter(state['questions'].values()))['question']=='Clarified goal'
     errors=[a for a in state['activity'] if a['status']=='failed']
-    assert len(errors)==1 and errors[0]['inputs']['question_id']==next(iter(state['questions']))
-    assert next(iter(extra)) in errors[0]['message']
+    assert len(errors)==1 and next(iter(extra)) in errors[0]['message']
     transcript=next((workspace_path(tmp_path, '.system/transcripts')).glob('*.json')).read_text()
     assert 'fixed' in transcript and 'bad' in transcript
 
@@ -76,12 +72,12 @@ def test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_
         runtime.reserve('controlled-model')
         rows=results(messages)
         if corrected:
-            rows=[m for m in rows if m.tool_call_id not in {'create','failed-candidate'}]
-            if rows:return tool('research_pause',{'message':'Plan saved in the same Agent'},'pause')
+            rows=[m for m in rows if m.tool_call_id not in {'create','failed-read'}]
+            if rows:return tool('research_pause',{'message':'Continued in the same Agent'},'pause')
             qid=next(iter(ctx.research.snapshot()['questions']))
-            return tool('research_schedule_experiment',{'question_id':qid,'plan':PLAN},'resumed')
+            return tool('research_read_question',{'question_id':qid},'resumed')
         if not rows:return tool('research_create_question',{'question':'Current goal'},'create')
-        if len(rows)==1:return tool('research_schedule_experiment',{'question_id':'stale-id','plan':PLAN},'failed-candidate')
+        if len(rows)==1:return tool('research_read_question',{'question_id':'stale-id'},'failed-read')
         assert rows[-1].status=='error'
         raise ModelServiceError('Controlled service interruption')
     ctx,model=context(tmp_path,respond);runtime=ResearchRuntime(tmp_path,'tools')
@@ -93,7 +89,7 @@ def test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_
     resume(ctx.research);corrected=True
     assert asyncio.run(prepare_action(ctx))
     after=ctx.research.snapshot()
-    assert after['questions']==before['questions'] and len(after['experiments'])==1 and not after['executions']
+    assert after['questions']==before['questions'] and not after['experiments'] and not after['executions']
     assert runtime.status()['used']==model.calls==5
     with ctx.research._connect() as db:
         guards=[json.loads(r[0]) for r in db.execute('SELECT payload FROM failure_guards')]

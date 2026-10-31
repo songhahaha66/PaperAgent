@@ -63,24 +63,12 @@
         </div>
         <div class="work-actions">
           <button
-            class="progress-trigger"
-            :aria-label="isZh ? '查看研究进度' : 'View research progress'"
-            @click="openProgress"
-          >
-            <t-icon name="task" />
-            <span>{{ isZh ? '研究进度' : 'Research progress' }}</span>
-            <span v-if="researchSnapshot?.questions?.length" class="progress-count"
-              >{{ answeredTaskCount }}/{{ researchSnapshot.questions?.filter((q) => !q.retired).length || 0 }}
-              {{ isZh ? '已回答' : 'answered' }}</span
-            >
-          </button>
-          <button
-            class="progress-trigger"
+            class="workspace-trigger"
             @click="openPanel('files', isMobile ? 'main' : 'secondary')"
           >
             <t-icon name="folder-open" />{{ isZh ? '文件' : 'Files' }}
           </button>
-          <button class="progress-trigger" @click="handleMainPaperClick">
+          <button class="workspace-trigger" @click="handleMainPaperClick">
             {{ isZh ? '论文' : 'Paper' }}
           </button>
           <t-button
@@ -128,7 +116,6 @@
                   :tasks="researchSnapshot?.experiments"
                   :snapshot="researchSnapshot"
                   :work-status="currentWork?.status"
-                  @open-progress="openProgress"
                   @confirm-plan="replyToResearch"
                   :confirm-busy="isStreaming || loading"
                   @open-result="
@@ -247,28 +234,6 @@
               </div>
             </div>
           </section>
-          <section
-            v-else-if="panel.kind === 'progress'"
-            class="progress-panel"
-            @scroll.capture="rememberPanelScroll('progress', $event)"
-          >
-            <ResearchStatus
-              :work-id="workId"
-              :snapshot="researchSnapshot"
-              :work-status="currentWork?.status"
-              :stage="stageText"
-              :running="isStreaming"
-              :action-label="primaryAction?.label"
-              :action-busy="loading || pausing || downloadLoading"
-              @action="handlePrimaryAction"
-              @object="openObject"
-              @issue="openIssueEditor"
-              @resolved="refreshPaper"
-              @revise="preparePlanRevision"
-              @ask="askSubproblem"
-              @pause="pauseTask"
-            />
-          </section>
           <ResearchResultViewer
             v-else-if="panel.kind === 'result'"
             :work-id="workId"
@@ -382,7 +347,6 @@ import JsonChatRenderer from '@/components/JsonChatRenderer.vue'
 import WorkPaneLayout from '@/components/WorkPaneLayout.vue'
 import WorkDocument from '@/components/WorkDocument.vue'
 import PaperEditor from '@/components/PaperEditor.vue'
-import ResearchStatus from '@/components/ResearchStatus.vue'
 import ResearchResultViewer from '@/components/ResearchResultViewer.vue'
 import { useWorkSession } from '@/composables/useWorkSession'
 import { useWorkStream } from '@/composables/useWorkStream'
@@ -420,7 +384,6 @@ const {
   figureScroller,
   displayPanels,
   panelOptions,
-  openProgress,
   openObject,
   openPanel,
   rememberPanelScroll,
@@ -617,10 +580,6 @@ async function replyToResearch() {
   await nextTick()
   document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
 }
-const answeredTaskCount = computed(() =>
-  researchSnapshot.value?.questions?.filter((q) => !q.retired && q.coverage === 'answered'
-    && q.answer_status === 'current' && !q.answer_gaps?.length).length || 0,
-)
 const primaryAction = computed(() => {
   if (!currentWork.value) return null
   if (isStreaming.value) {
@@ -850,7 +809,7 @@ onUnmounted(() => {
   width: 32px;
   border-color: var(--pa-line);
 }
-.progress-trigger {
+.workspace-trigger {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -864,22 +823,9 @@ onUnmounted(() => {
   cursor: pointer;
   white-space: nowrap;
 }
-.progress-trigger:hover {
+.workspace-trigger:hover {
   background: var(--pa-surface-hover);
   border-color: var(--pa-line-strong);
-}
-.progress-count {
-  color: var(--pa-accent);
-  padding-left: 8px;
-  border-left: 1px solid var(--pa-line);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-.progress-panel {
-  width: 100%;
-  height: 100%;
-  overflow: auto;
-  background: var(--pa-surface);
 }
 .chat-section,
 .files-section {

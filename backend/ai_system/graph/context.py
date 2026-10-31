@@ -39,14 +39,6 @@ class KernelPool:
             self._kernels[key] = create_kernel(str(self.workspace), timeout=self.timeout, fs=self.fs, work_id=self.work_id, experiment_id=self.experiment_id or key, execution_scope=self.execution_scope)
         return self._kernels[key]
 
-    def promote(self, source: str, target: str) -> None:
-        """把探索分支的内核（变量都在）改挂到正式求解的 key 下"""
-        kernel = self._kernels[source]
-        if target in self._kernels and self._kernels[target] is not kernel:
-            raise ValueError('正式求解已有不同内核，不能覆盖其内存或重新计算候选')
-        self._kernels[target] = self._kernels.pop(source)
-        kernel.timeout = self.timeout
-
     async def release(self, key: str) -> None:
         kernel = self._kernels.pop(key, None)
         if kernel is not None:

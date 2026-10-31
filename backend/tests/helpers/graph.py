@@ -51,7 +51,7 @@ class ProblemAnalysis(BaseModel):
     def model_dump(self, **kwargs):
         value=super().model_dump(**kwargs)
         value['questions']=[{'id':'question:'+sp.id,'title':sp.title,'question':sp.question,
-            'experiment_ids':[sp.id],'judgment':'','limitations':[]} for sp in self.subproblems]
+            'experiment_ids':[sp.id]} for sp in self.subproblems]
         return value
 
 

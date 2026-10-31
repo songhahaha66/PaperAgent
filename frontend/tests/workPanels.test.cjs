@@ -14,9 +14,13 @@ const { loadModule, vue, pinia } = require('./moduleHarness.cjs')
   const old=store.session('legacy')
   old.panels.push({id:'overview',kind:'overview',group:'main'})
   old.activeId='overview'
+  old.panels.push({id:'progress',kind:'progress',group:'secondary'})
+  old.secondaryActiveId='progress';old.scroll.progress=100
   const converted=store.session('legacy')
-  assert.equal(converted.activeId,'progress')
-  assert.equal(converted.panels.filter(p=>p.kind==='progress').length,1)
+  assert.equal(converted.activeId,'chat')
+  assert.equal(converted.panels.filter(p=>p.kind==='progress').length,0)
+  assert.equal(converted.secondaryActiveId,null)
+  assert.equal(converted.scroll.progress,undefined)
   const convertedPanels=converted.panels
   assert.equal(store.session('legacy').panels,convertedPanels,'legacy conversion runs once')
   store.remove('legacy')
@@ -24,8 +28,8 @@ const { loadModule, vue, pinia } = require('./moduleHarness.cjs')
   retired.panels.push({id:'experiences',kind:'experiences',group:'secondary'},{id:'skills',kind:'skills',group:'secondary'})
   retired.secondaryActiveId='experiences'
   const migrated = store.session('retired-personal-panels')
-  assert.equal(migrated.secondaryActiveId,'progress')
-  assert.equal(migrated.panels.filter(panel=>panel.kind==='progress').length,1)
+  assert.equal(migrated.secondaryActiveId,null)
+  assert.equal(migrated.panels.filter(panel=>panel.kind==='progress').length,0)
   assert(!migrated.panels.some(panel=>['experiences','skills'].includes(panel.kind)))
   const migratedPanels=migrated.panels
   assert.equal(store.session('retired-personal-panels').panels,migratedPanels)

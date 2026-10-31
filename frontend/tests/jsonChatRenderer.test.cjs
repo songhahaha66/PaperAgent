@@ -86,8 +86,8 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     'replacing streaming payloads preserves manual collapse',
   )
   const action = (label) => host.find((n) => n.kind === 'button' && text(n).trim() === label)
-  action('查看运行状态').props.onClick()
-  assert.deepEqual(events, ['progress'])
+  assert.equal(action('查看运行状态'),undefined)
+  assert.deepEqual(events, [])
   state.messages[0].isStreaming = false
   state.messages[0].json_blocks.push({ type: 'confirm', content: '请确认计划' })
   await flush()

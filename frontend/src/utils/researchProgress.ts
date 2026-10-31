@@ -195,25 +195,9 @@ export function researchHeadline(
   }
   if (snapshot.artifacts.length)
     return zh ? '论文产物已保存，可查看' : 'Paper artifacts saved and available'
-  const questions = snapshot.questions || []
-  const missingJudgments = questions.filter((question) => !question.judgment).length
-  if (snapshot.results.length && missingJudgments)
-    return missingJudgments === questions.length
-      ? zh
-        ? '已有实验结果，问题尚未形成判断'
-        : 'Experiment results available; question judgments not yet recorded'
-      : zh
-        ? '已有实验结果，部分问题尚无判断'
-        : 'Experiment results available; some question judgments are missing'
-  if (questions.length && !missingJudgments)
-    return zh
-      ? '已记录问题判断，论文产物尚不可用'
-      : 'Question judgments recorded; paper artifacts unavailable'
-  if (snapshot.results.length)
-    return zh
-      ? '已有实验结果，论文产物尚不可用'
-      : 'Experiment results available; paper artifacts unavailable'
-  return zh ? '等待实验结果与问题判断' : 'Awaiting experiment results and question judgments'
+  if (snapshot.runs?.length || snapshot.results.length)
+    return zh ? '已有运行记录与输出，论文产物尚不可用' : 'Runs and outputs saved; paper artifacts unavailable'
+  return zh ? '等待研究执行与产出' : 'Awaiting research activity and outputs'
 }
 
 export function taskName(task: Pick<ResearchTask, 'task_id' | 'objective'>) {

@@ -48,9 +48,10 @@ def test_transactional_migration_removes_old_sources_and_preserves_unmapped_hist
     migrated = migrate_project(tmp_path)
     state = ResearchStore(tmp_path, 'study', read_only=True).snapshot()
     assert state['schema_version'] == 5 and 'issues' not in state
-    assert state['feedback'] == [old['issues'][0]]
+    assert state['feedback'] == [{**old['issues'][0], 'blocking':False,'repair_targets':{}}]
     assert state['faults'] == [old['issues'][1]]
-    assert state['legacy_records'] == [{'source':'research/study/issues','raw':old['issues'][2]}]
+    assert {'source':'research/study/issues','raw':old['issues'][2]} in state['legacy_records']
+    assert any(r['source']=='retired-evidence-gate' and r['raw']==old['issues'][0] for r in state['legacy_records'])
     with migrated._connect() as db:
         assert db.execute('SELECT payload FROM experiment_comparisons').fetchone()[0] == '{"original":"unchanged"}'
         assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='comparisons'").fetchone()

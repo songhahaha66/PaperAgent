@@ -116,7 +116,7 @@ def source_info(store, snapshot):
 def empty_document(research_id=None, commit_seq=0):
     return {'research_id': research_id, 'commit_seq': commit_seq, 'source_hash': None,
             'sections': [], 'outline': [], 'feedback': [], 'history': [], 'experiments': [], 'patch_attempts': [],
-            'verified_methods': [], 'verified_formula_blocks': {}, 'artifacts': []}
+            'artifacts': []}
 
 
 async def document(store):
@@ -147,13 +147,6 @@ async def document(store):
             (store.research_id,))]
         patch_attempts=([json.loads(r[0]) for r in db.execute('SELECT payload FROM paper_patch_attempts WHERE research_id=? ORDER BY rowid DESC LIMIT 20',(store.research_id,))]
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='paper_patch_attempts'").fetchone() else [])
-    from ai_system.research.method_facts import verified_methods,canonical_method_block
-    from types import SimpleNamespace
-    methods=verified_methods(store)
-    blocks={}
-    for task in {f['task_id'] for f in methods}:
-        try:blocks['solve:'+task]=canonical_method_block(methods,task)
-        except ValueError:pass
     source = 'paper.md'
     source_path = store.root / source
     try:
@@ -164,7 +157,7 @@ async def document(store):
     published = bool(source_current and not snapshot.get('paper_conflict') and store.delivery_ready(snapshot)
                      and all(section['validity'] == 'current' for section in snapshot['sections'].values()))
     available = {source, *snapshot.get('exports', [])} if published else set()
-    return {'title': state['analysis'].get('title', ''), 'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'verified_methods':methods,'verified_formula_blocks':blocks,'patch_attempts':patch_attempts,
+    return {'title': state['analysis'].get('title', ''), 'research_id': store.research_id, 'commit_seq': snapshot['commit_seq'],'source_hash':snapshot.get('paper_hash'),'patch_attempts':patch_attempts,
             'publication_notice': '源文件有人工修改，须先合并；当前目录展示登记正文，旧排版文件不作为当前版本。' if snapshot.get('paper_hash') and (not source_current or snapshot.get('paper_conflict')) else '',
             'artifacts': [p for p in ('paper.md', 'paper.tex', 'paper.pdf', 'paper.docx') if p in available and (store.root / p).is_file() and (store.root / p).stat().st_size],
             'outline': [{'key': key, 'title': title, 'level': level,
@@ -279,11 +272,9 @@ async def decide(store, proposal_id, apply, output_mode):
     reviewed=bool(proposal.get('source_issue')) or proposal.get('edit_kind')=='evidence' or proposal.get('generation_contract')=='scoped-anchored-edits-v2'
     if reviewed:
         from .paper_corrections import require_review,guard_correction
-        from ai_system.research.method_facts import canonical_method_block
         if proposal.get('review_issues'):raise ValueError('候选尚有审查问题，不能应用')
         for key,text in changes.items():
-            block=canonical_method_block(proposal['method_facts'],key.split(':',1)[1]) if key.startswith('solve:') and proposal.get('edit_kind')=='evidence' else None
-            guard_correction(snapshot['sections'][key]['text'],text,block,False)
+            guard_correction(snapshot['sections'][key]['text'],text,False,wording=proposal.get('edit_kind')!='evidence')
         require_review(store,proposal,state)
     rendered = publication_text(render_citations(store.root,ctx.registry.render(assemble(state))))
     if REF_PATTERN.search(rendered):
@@ -316,10 +307,6 @@ async def decide(store, proposal_id, apply, output_mode):
                 _, active = source_info(store, current)
                 if current['commit_seq'] != proposal['base_commit'] or digest(active) != proposal['source_hash']:
                     raise ResearchConflict('编译期间论文发生变化，未覆盖最新版本，请刷新后重试')
-                if reviewed:
-                    from ai_system.research.method_facts import verified_methods
-                    if digest(verified_methods(store))!=proposal['method_facts_hash']:
-                        raise ResearchConflict('编译期间已核验方法改变，未覆盖当前论文')
                 issue_proof=None
                 if proposal.get('source_issue'):
                     from .issue_edits import require_review as require_issue_review

@@ -35,11 +35,11 @@ def validate_scientific_checkpoint(store,values):
         if task['retired'] or task['kind']=='verify':continue
         if task['execution_status']!='succeeded' or task['validity']!='current' or (values.get('solutions') or {}).get(key)!=experiment_report(snapshot, task):raise ValueError('检查点求解结果与当前执行记录不一致')
         if (values.get('designs') or {}).get(key)!=experiment_design(snapshot, task):raise ValueError('检查点设计/冻结方案已变化')
-        from ai_system.modules.experiments.store import ExperimentStore
-        exploration=ExperimentStore(store).read(key,task['revision']) if (experiment_design(snapshot, task) or {}).get('experiment_id') else None
+        from ai_system.modules.experiments.legacy_comparisons import LegacyComparisons
+        exploration=LegacyComparisons(store).read(key,task['revision']) if (experiment_design(snapshot, task) or {}).get('experiment_id') else None
         if exploration:
-            from ai_system.modules.experiments.store import ExperimentStore
-            if ExperimentStore(store).policy()['version']!=exploration['policy_version']:raise ValueError('旧审查之后比较配置已变化')
+            from ai_system.modules.experiments.legacy_comparisons import LegacyComparisons
+            if LegacyComparisons(store).policy()['version']!=exploration['policy_version']:raise ValueError('旧审查之后比较配置已变化')
         attempt=snapshot['executions'][task['execution_id']]
         if store._inputs(snapshot,task,store.file_inputs())!=attempt['input_refs'] or digest(protocol(snapshot,key))!=attempt['protocol_hash']:raise ValueError('检查点对应输入/冻结验收已变化')
         from .domain import execution_lineage,current_results

@@ -210,20 +210,21 @@ if (require.main === module) (async () => {
       kind: 'number', run_id: 'run_one', figure_path: null }],
     artifacts: [], runs: [], claims: [], delivery: { ready: true, blockers: [] }, delivery_stages: {},
   }
-  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress', 'desktop starts with research beside chat')
-  progressWork.state.openProgress()
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'paper', 'desktop starts with paper beside chat')
+  progressWork.state.handleMainPaperClick()
   assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
-  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress')
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'paper')
   assert.equal(progressWork.state.panelSession.value.splitRatio, 0.45)
-  assert.equal(progressWork.state.stageText.value, '已有实验结果，问题尚未形成判断', 'available results do not imply a question judgment')
+  assert.equal(progressWork.state.stageText.value, '已有运行记录与输出，论文产物尚不可用', 'execution outputs do not require a registered answer')
   progressWork.state.researchSnapshot.value.questions[0].judgment = '当前样本的预测值已记录，外推范围尚待验证。'
-  assert.equal(progressWork.state.stageText.value, '已记录问题判断，论文产物尚不可用')
-  progressWork.state.openProgress()
+  assert.equal(progressWork.state.stageText.value, '已有运行记录与输出，论文产物尚不可用')
+  progressWork.state.handleMainPaperClick()
   assert.equal(
-    progressWork.state.panelSession.value.panels.filter((tab) => tab.kind === 'progress').length,
+    progressWork.state.panelSession.value.panels.filter((tab) => tab.kind === 'paper').length,
     1,
   )
-  assert.equal(progressWork.sent.length, 0, 'viewing progress never resumes research')
+  assert.equal(progressWork.state.openProgress,undefined)
+  assert.equal(progressWork.sent.length, 0, 'opening the paper never resumes research')
   await progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
   assert.equal(progressWork.sent.at(-1).action, 'revise_research')
   assert.equal(progressWork.sent.at(-1).revision.scope[0], 'Q1')
@@ -237,15 +238,15 @@ if (require.main === module) (async () => {
   env.width.value = 620
   env.isMobile.value = true
   const narrowWork = await env.work('narrow')
-  narrowWork.state.openProgress()
-  assert.equal(narrowWork.state.panelSession.value.activeId, 'progress')
+  narrowWork.state.handleMainPaperClick()
+  assert.equal(narrowWork.state.panelSession.value.activeId, 'paper')
   assert.equal(narrowWork.state.panelSession.value.secondaryActiveId, null)
   assert.ok(narrowWork.state.panelSession.value.panels.some((tab) => tab.kind === 'chat'))
   narrowWork.stop()
   env.width.value = 1400
   env.isMobile.value = false
   console.log(
-    'PASS: progress opens beside chat on desktop, as a tab on narrow screens, without starting a run',
+    'PASS: paper opens beside chat on desktop, as a tab on narrow screens; retired research entry is absent',
   )
 
   let actionStatus = 'completed'

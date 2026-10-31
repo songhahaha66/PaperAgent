@@ -159,10 +159,6 @@
       </button>
       <p v-else>{{ source.path }}，{{ isZh ? '文件不可用' : 'Unavailable' }}</p>
     </div>
-    <section v-if="question?.next_step">
-      <h3>{{ isZh ? '下一步' : 'Next step' }}</h3>
-      <p>{{ question.next_step }}</p>
-    </section>
     <details v-if="experiment.issues.length">
       <summary>核查意见与故障历史</summary>
       <h3>{{ isZh ? '本次实验的问题' : 'Findings' }}</h3>

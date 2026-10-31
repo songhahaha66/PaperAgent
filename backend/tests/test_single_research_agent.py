@@ -39,22 +39,19 @@ def test_materials_and_six_python_steps_stay_in_one_live_agent(tmp_path):
             code="from pathlib import Path\nvalue=0\nPath('outputs/intermediate').mkdir(parents=True,exist_ok=True)" if not steps else ''
             code+="\nvalue+=1\nprint('value',value)\nPath('outputs/intermediate/value.txt').write_text(str(value))"
             return tool('research_run_python',{'question_id':qid,'code':code,'title':'累计计算'},str(len(rows)))
-        if rows[-1].name!='research_update_answer':
-            assert 'value 6' in last['observation']
-            return tool('research_update_answer',{'question_id':qid,'statement':'当前累计值为6，校验见输出和结果文件',
-                'coverage':'answered'},'answer')
+        assert 'value 6' in last['observation']
         return tool('research_deliver',{'title':'计算结果','reason':'已完成当前问题'},'deliver')
     ctx=make_context(tmp_path,respond)
     runtime=ResearchRuntime(tmp_path,'single-agent');runtime.configure({'request_limit':20,'compact_paper':False})
     assert not asyncio.run(prepare_action(ctx))
     state=ctx.research.snapshot()
-    assert ctx.planner_llm.calls==10 and runtime.status()['used']==10
+    assert ctx.planner_llm.calls==9 and runtime.status()['used']==9
     assert not state['experiments'] and not state['executions']
     assert len(ctx.fs._manifest['runs'])==6
     assert all(r['question_id']==qid for r in ctx.fs._manifest['runs'].values())
     assert (tmp_path/'outputs/intermediate/value.txt').read_text()=='6'
     assert state['publication']['stage']=='export' and not ctx.kernels._kernels
-    assert state['questions'][qid]['stop_reason']==''
+    assert not {'judgment','coverage','stop_reason'} & state['questions'][qid].keys()
     assert not any(a['capability']=='experiments.execute' for a in state['activity'])
     assert not state['artifacts']
     assert all(ctx.fs.exists(r['stdout']) for r in ctx.fs._manifest['runs'].values())
@@ -82,7 +79,6 @@ def test_recovery_reads_saved_files_without_replaying_previous_code(tmp_path):
             'code':"from pathlib import Path\nv=int(Path('outputs/intermediate/base.txt').read_text())\nassert v==6\nprint(v*2)"},'new-code')
         if len(rows)==1:
             assert '12' in json.loads(rows[-1].content)['observation']
-            return tool('research_update_answer',{'question_id':qid,'statement':'派生值为12','coverage':'answered','stop_reason':'从保存的6计算完成'},'answer')
         return tool('research_deliver',{'title':'恢复结果'},'deliver')
     resume(ctx.research);ctx.planner_llm=ResearchToolsModel(respond=resumed)
     assert not asyncio.run(prepare_action(ctx))

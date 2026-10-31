@@ -61,7 +61,7 @@ def safe_diagnostic(root, value, limit=400):
     """Bound existing error_detail output; remove secrets, prompt dumps and paths.
 
     Activity exceptions already use review_cache.error_detail (validation errors
-    omit input values). Credential patterns extend supervised.diagnostic's rules
+    omit input values). Credential patterns cover common authorization and token forms
     to quoted config values; no raw input/output/config object is projected.
     """
     if not isinstance(value, str): return ''

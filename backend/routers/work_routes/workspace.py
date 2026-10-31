@@ -604,21 +604,30 @@ async def experience_list(work_id:str,db:Session=Depends(get_db),current_user:in
 @router.get('/{work_id}/experiments')
 async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     _require_workspace_access(db,work_id,current_user)
-    from ai_system.modules.experiments.store import ExperimentStore
+    # Compatibility reader only: viewing history never creates a store or policy.
     from ai_system.research.store import ResearchStore,digest
     from ai_system.research.validation import protocol
-    from ai_system.modules.experiments.supervised import metadata
-    store=ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')
-    comparisons=ExperimentStore(store);policy=comparisons.policy();records=comparisons.list()
-    files=store.file_inputs()
-    for record in records:
-        source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
-        task=(source or {}).get('experiments',{}).get(record['task_id'])
-        record['input_current']=files==record['file_inputs'] and (record.get('policy_version') is None or policy['version']==record['policy_version']) and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'] and (not record.get('intent_hash') or digest(task.get('experiment'))==record['intent_hash']))
-    return {'policy':policy,'files':metadata(store.root),'comparisons':records}
+    store=ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons',read_only=True)
+    policy={'enabled':False,'spec':None,'version':0};records=[]
+    if store.path.is_file():
+        with store._connect() as conn:
+            tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'experiment_policy' in tables:
+                row=conn.execute('SELECT version,payload FROM experiment_policy WHERE id=1').fetchone()
+                if row:policy={**json.loads(row['payload']),'version':row['version'],'enabled':False}
+            if 'experiment_comparisons' in tables:
+                records=[json.loads(row[0]) for row in conn.execute('SELECT payload FROM experiment_comparisons ORDER BY rowid DESC LIMIT 30')]
+        files=store.file_inputs()
+        for record in records:
+            source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
+            task=(source or {}).get('experiments',{}).get(record['task_id'])
+            record['historical']=True
+            record['input_current']=files==record['file_inputs'] and (record.get('policy_version') is None or policy['version']==record['policy_version']) and bool(task and task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'] and (not record.get('intent_hash') or digest(task.get('experiment'))==record['intent_hash']))
+    return {'policy':policy,'files':[],'comparisons':records}
 
 
 class ResearchSetupRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     request_limit:int|None=Field(default=None,ge=1)
     timeout_seconds:float|None=Field(default=None,gt=0)
     output_token_limit:int|None=Field(default=None,ge=1)
@@ -630,8 +639,6 @@ class ResearchSetupRequest(BaseModel):
     literature_query:str=Field(default='',max_length=300)
     source_urls:list[str]=Field(default_factory=list,max_length=3)
     skill_keys:list[str]=Field(default_factory=list,max_length=25)
-    compare:bool=False
-    comparison_spec:dict|None=None
 
 
 @router.put('/{work_id}/research-setup')
@@ -643,7 +650,6 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
     from ai_system.research.store import ResearchStore
     from ai_system.research.runtime import ResearchRuntime
     from ai_system.research.literature import LiteratureService
-    from ai_system.modules.experiments.store import ExperimentStore,SupervisedSpec
     from ai_system.modules.methods import validate_skill_policy
     from services.research_experience import ExperienceScope
     from services.literature_fetch import public_url
@@ -652,12 +658,10 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
     if thread.exists():raise HTTPException(409,'研究已经开始；入口配置不会覆盖检查点，请使用对应面板明确修订')
     try:
         urls=[public_url(u) for u in request.source_urls]
-        spec=SupervisedSpec.model_validate(request.comparison_spec).model_dump() if request.comparison_spec else None
         skill=validate_skill_policy({'mode':'selected' if request.skill_keys else 'auto','selected':request.skill_keys,'disabled':[]})
         runtime=ResearchRuntime(root)
         runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper','output_token_limit','total_token_limit','cost_limit_usd')})
         skills=ResearchStore(root,'workspace-skills');skills.set_skill_preferences(skill,skills.skill_preferences()['version'])
-        ExperimentStore(skills).set_policy(request.compare,spec)
         ExperienceScope(current_user,work_id).set_enabled(request.reuse_experience)
         library=LiteratureService(root);library.store.set_policy(request.literature_mode)
         for url in urls:

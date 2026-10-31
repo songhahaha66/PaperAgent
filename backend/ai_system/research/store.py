@@ -465,23 +465,6 @@ class ResearchStore:
             self._save(db, state, "attempt_committed", receipt)
             return receipt
 
-    def report_comparison_failure(self,record,order):
-        """Only confirmed execution/contract failures enter the existing repair loop."""
-        from ai_system.modules.experiments.store import ExperimentStore
-        saved=ExperimentStore(self).read(order.task_id,order.revision)
-        if not saved or saved['id']!=record['id'] or saved['status']!='no_valid':return
-        bad=[r for r in saved['branches'] if r['status'] in {'code_error','contract_error','execution_error','timeout'}]
-        if not bad and not saved.get('protocol_error'):return
-        with self._transaction() as db:
-            state=self._read(db);task=state['experiments'][order.task_id]
-            if task['execution_id']!=order.attempt_id or task['revision']!=order.revision:return
-            details='；'.join(f"候选 {r['index']+1}: {r.get('error','契约失败')}" for r in bad)
-            message=f"比较 {saved['id']} 的已确认执行/协议问题：{details or saved['reason']}。保留两支记录，不据此判定方法无效。"
-            issue=self._record_issue(state,IssueReport(task_id=order.task_id,category='execution',message=message),
-                'confirmed',producer_attempt=order.attempt_id,source='comparison')
-            self._confirm_issue(state,issue,refute=False)
-            self._save(db,state,'comparison_issue',{'comparison_id':saved['id'],'issue_id':issue['id']})
-
     def _commit_reviews(self, state, result, available):
         # Historical reviews remain advisory; execution records stand on their own.
         for review in result.reviews:
@@ -600,8 +583,6 @@ class ResearchStore:
                 state['executions'][task['execution_id']]['validity']='stale'
             elif task['execution_status']=='pending':
                 task['retired']=True
-        for qid in {state['experiments'][key]['question_id'] for key in affected}:
-            state['questions'][qid].update(judgment='',artifact_refs=[],next_step=reason)
         state['publication']=None
         for key, section in state["sections"].items():
             if not key.startswith("solve:") or set(section["task_refs"]) & affected:

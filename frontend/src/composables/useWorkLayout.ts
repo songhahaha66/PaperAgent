@@ -30,11 +30,11 @@ export function useWorkLayout(workId: Ref<string>, snapshot?: Ref<ResearchSnapsh
   const initial = panelSession.value
   if (fresh) {
     initial.panels.push({
-      id: 'progress',
-      kind: 'progress',
+      id: 'paper',
+      kind: 'paper',
       group: isMobile.value ? 'main' : 'secondary',
     })
-    if (!isMobile.value) initial.secondaryActiveId = 'progress'
+    if (!isMobile.value) initial.secondaryActiveId = 'paper'
     initial.focusedGroup = 'main'
     initial.splitRatio = 0.45
   }
@@ -89,38 +89,20 @@ export function useWorkLayout(workId: Ref<string>, snapshot?: Ref<ResearchSnapsh
       paper: { label: isZh.value ? '论文' : 'Paper', icon: 'file-1' },
       figures: { label: ui.value.figures, icon: 'chart-line' },
       files: { label: ui.value.files, icon: 'folder-open' },
-      progress: { label: isZh.value ? '研究' : 'Research', icon: 'task' },
     }[panel.kind]
   }
   const panelOptions = computed(() =>
-    (['progress', 'paper', 'figures', 'files'] as const).map((kind) => ({
+    (['paper', 'figures', 'files'] as const).map((kind) => ({
       content: panelPresentation({ kind }).label,
       value: kind,
     })),
   )
-  function openProgress() {
-    const state = panelSession.value
-    const side = !stackedPanes.value
-    const hadSecondary = !!state.secondaryActiveId
-    panelStore.open(workId.value, 'progress', undefined, side ? 'secondary' : 'main')
-    if (side && !hadSecondary) {
-      state.splitAxis = 'horizontal'
-      state.secondaryFirst = false
-      state.splitRatio = 0.64
-    }
-  }
   function openPanel(kind: string, group: PanelGroup) {
     panelStore.open(workId.value, kind as PanelKind, undefined, group)
   }
   function rememberPanelScroll(id: string, event: Event) {
     const target = event.target as HTMLElement
     if (id === 'files' && !target.classList.contains('fm-body')) return
-    if (
-      id === 'progress' &&
-      !target.classList.contains('research-status') &&
-      !target.classList.contains('progress-panel')
-    )
-      return
     if (isPanelVisible(id)) panelSession.value.scroll[id] = target.scrollTop
   }
   function openFiles() {
@@ -159,12 +141,6 @@ export function useWorkLayout(workId: Ref<string>, snapshot?: Ref<ResearchSnapsh
     }
     if (isPanelVisible('figures') && figureScroller.value)
       figureScroller.value.scrollTop = panelSession.value.scroll.figures || 0
-    if (isPanelVisible('progress')) {
-      const scroller =
-        document.querySelector<HTMLElement>('.research-status') ||
-        document.querySelector<HTMLElement>('.progress-panel')
-      if (scroller) scroller.scrollTop = panelSession.value.scroll.progress || 0
-    }
     if (isPanelVisible('files')) {
       const scroller = document.querySelector<HTMLElement>('.files-section .fm-body')
       if (scroller) scroller.scrollTop = panelSession.value.scroll.files || 0
@@ -207,7 +183,6 @@ export function useWorkLayout(workId: Ref<string>, snapshot?: Ref<ResearchSnapsh
     figureScroller,
     displayPanels,
     panelOptions,
-    openProgress,
     openObject,
     openPanel,
     rememberPanelScroll,

@@ -81,8 +81,7 @@ def attach_question(state, experiment, *, question_id=None, statement=None, titl
     if question_id is None:
         question_id = 'question:' + experiment['task_id']
         questions[question_id] = {'id': question_id, 'title': title or statement or experiment['objective'],
-            'question': statement or experiment['objective'], 'judgment': '', 'artifact_refs': [],
-            'limitations': [], 'next_step': '', 'judgments': [], 'version':1, 'answer_status':'unanswered'}
+            'question': statement or experiment['objective'], 'version':1}
     experiment['question_id'] = question_id
     return questions[question_id]
 

@@ -44,7 +44,7 @@ def test_one_export_delivers_existing_file_without_answer_registration(tmp_path,
     assert state['outcome']=='completed' and state['publication']['stage']=='completed'
     assert state['exports']==['paper.md' if mode=='markdown' else 'paper.docx']
     assert set(state['delivery_stages'])=={'export'}
-    assert questions(state)[0]['answer_gaps'], 'incomplete answer metadata stays visible'
+    assert not {'judgment','coverage','answer_gaps'} & questions(state)[0].keys()
     assert not workspace_path(tmp_path,'.system/validation.json').exists()
     assert not state['executions'] and not ctx.kernels._kernels
 
