@@ -167,6 +167,7 @@ async def upload_attachment(
     from services.file_services.workspace_files import workspace_file_service
     from services.file_services.workspace_layout import relative_parts
     require_current(work)
+    db.close()
     original_filename = file.filename or ''
     try:
         if len(relative_parts(original_filename)) != 1:

@@ -88,7 +88,7 @@ def test_api_review_flow_and_ownership(paper, monkeypatch):
     store, _ = paper
     app = FastAPI(); app.include_router(workspace.router)
     app.dependency_overrides[get_current_user] = lambda: 7
-    app.dependency_overrides[get_db] = lambda: object()
+    app.dependency_overrides[get_db] = lambda: SimpleNamespace(close=lambda: None)
     monkeypatch.setattr(workspace.crud, 'get_work', lambda *args: SimpleNamespace(architecture_version=2, created_by=7, output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service, 'get_workspace_path', lambda *args: store.root)
     with TestClient(app) as client:

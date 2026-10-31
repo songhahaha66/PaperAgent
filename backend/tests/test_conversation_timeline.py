@@ -116,10 +116,13 @@ def test_reference_resolver_uses_existing_work_authorization(monkeypatch, tmp_pa
     monkeypatch.setattr('services.data_services.crud.get_work', lambda *_: SimpleNamespace(created_by=7))
     monkeypatch.setattr(chat, 'get_workspace_path', lambda _: root)
     request = chat.ExecutionReferences(reply_id=reply.id, segment_ids=[])
+    closed = []
+    db = SimpleNamespace(close=lambda: closed.append(True))
     with pytest.raises(HTTPException) as denied:
-        asyncio.run(chat.get_execution_references('work', request, 8, None))
+        asyncio.run(chat.get_execution_references('work', request, 8, db))
     assert denied.value.status_code == 403 and not reads
-    assert asyncio.run(chat.get_execution_references('work', request, 7, None)) == {'reply_id': reply.id, 'executions': []}
+    assert asyncio.run(chat.get_execution_references('work', request, 7, db)) == {'reply_id': reply.id, 'executions': []}
+    assert closed == [True]
 
 
 def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):

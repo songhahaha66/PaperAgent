@@ -183,7 +183,7 @@ def web(monkeypatch, tmp_path):
     app = FastAPI()
     app.include_router(chat.router)
     app.dependency_overrides[get_current_user] = lambda: 7
-    app.dependency_overrides[get_db] = lambda: None
+    app.dependency_overrides[get_db] = lambda: SimpleNamespace(close=lambda: None)
     with TestClient(app) as client:
         yield client, work, calls, statuses, saved, root
     chat.task_manager._tasks.clear()

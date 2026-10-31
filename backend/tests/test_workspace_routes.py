@@ -30,7 +30,7 @@ def client():
     app = FastAPI()
     app.include_router(workspace.router)
     app.dependency_overrides[get_current_user] = lambda: 7
-    app.dependency_overrides[get_db] = lambda: object()
+    app.dependency_overrides[get_db] = lambda: SimpleNamespace(close=lambda: None)
     with TestClient(app) as test_client:
         yield test_client
 
