@@ -12,4 +12,6 @@ Direct Python steps use the existing manifest run receipts (`runs.py`), never cl
 
 ResearchStore owns current questions, requirements and versions; manifests own actual direct run receipts and files; LangGraph checkpoints own conversation position. File transfer retries preserve run identity. User amendments in new direct sessions return to the same Agent without an extra experiment-planning model. Domain checks remain calculation code and semantic review stays advisory. Historical registration references and old document edits remain readable.
 
+Legacy acceptance verdicts and review findings do not gate scheduling, writing or delivery. Dependencies use execution completion and current input versions. Recoverable tool errors retain a failed action receipt and return to the Agent with their diagnostic; they are not replayed automatically on resume. Budget exhaustion, repeated failures and uncertain external execution still require a safe stop or explicit recovery.
+
 Offline evals inspect actual published files instead of registered number strings. `python -m evals.microgrid <source.xlsx> <result1.xlsx>` checks the supplied microgrid Q1 against an independent LP and daily energy balance with explicitly documented efficiency/timing assumptions. It is a task-specific evaluation, not a production acceptance gate or a verifier for Q2–4.

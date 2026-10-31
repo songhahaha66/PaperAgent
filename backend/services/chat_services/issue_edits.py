@@ -110,12 +110,6 @@ def require_binding(store,request,*,writing=True):
     return value
 
 
-def ready(store):
-    state=store.snapshot()
-    return all(t['retired'] or t['acceptance']=='accepted' and t['validity']=='current' for t in state['experiments'].values()) and not any(
-        i['blocking'] and i['status'] not in TERMINAL and (i['category']!='writing' or i.get('section')=='paper') for i in research_findings(state))
-
-
 def review_material(store,state,llm,binding):
     from .paper_corrections import proposal_context
     value=require_binding(store,binding);key=value['section'];selected={**state,'sections':{key:state['sections'][key]}}

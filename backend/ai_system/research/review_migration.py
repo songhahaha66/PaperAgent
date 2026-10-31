@@ -33,7 +33,7 @@ def validate_scientific_checkpoint(store,values):
     if analysis.get('subproblems')!=[t['subproblem'] for t in snapshot['experiments'].values() if t['kind']!='verify']:raise ValueError('检查点研究任务已变化')
     for key,task in snapshot['experiments'].items():
         if task['retired'] or task['kind']=='verify':continue
-        if task['acceptance']!='accepted' or task['validity']!='current' or (values.get('solutions') or {}).get(key)!=experiment_report(snapshot, task):raise ValueError('检查点求解结果与当前验收不一致')
+        if task['execution_status']!='succeeded' or task['validity']!='current' or (values.get('solutions') or {}).get(key)!=experiment_report(snapshot, task):raise ValueError('检查点求解结果与当前执行记录不一致')
         if (values.get('designs') or {}).get(key)!=experiment_design(snapshot, task):raise ValueError('检查点设计/冻结方案已变化')
         from ai_system.modules.experiments.store import ExperimentStore
         exploration=ExperimentStore(store).read(key,task['revision']) if (experiment_design(snapshot, task) or {}).get('experiment_id') else None

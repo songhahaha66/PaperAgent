@@ -259,7 +259,7 @@ class ResearchStore:
             changed = set()
             for key, task in state["experiments"].items():
                 attempt = state["executions"].get(task["execution_id"])
-                if task["acceptance"] == "accepted" and attempt:
+                if task["execution_status"] == "succeeded" and attempt:
                     previous = {k: v for k, v in attempt["input_refs"].items() if not k.startswith(("task:", "assumption:", "continuation"))}
                     current = files if task.get('input_files') is None else {p: files.get(p, '<missing>') for p in task['input_files']}
                     if previous != current:
@@ -277,15 +277,11 @@ class ResearchStore:
         with self._transaction() as db:
             state = self._read(db)
             task = state["experiments"][task_id]
-            if task["retired"] or task["execution_status"] != "pending":
+            if task["retired"] or task["execution_status"] != "pending" or task['validity'] != 'current':
                 raise ResearchConflict(f"任务 {task_id} 已领取或需要显式重试")
-            if any(state["experiments"][dep]["acceptance"] != "accepted" or
+            if any(state["experiments"][dep]["execution_status"] != "succeeded" or
                    state["experiments"][dep]["validity"] != "current" for dep in task["dependencies"]):
                 raise ResearchConflict(f"任务 {task_id} 的依赖尚未完成执行")
-            if any(state["assumptions"][aid]["status"] == "refuted" for aid in task["assumption_ids"]):
-                raise ResearchConflict("任务依赖的假设已被反证")
-            if any(i["blocking"] and i["status"] == "confirmed" and task_id in i["repair_targets"] for i in research_findings(state)):
-                raise ResearchConflict("任务需要先提交修复计划")
             refs = self._inputs(state, task, files)
             order = WorkOrder(attempt_id=uuid.uuid4().hex, task_id=task_id, revision=task["revision"],
                               input_digest=digest(refs), input_refs=refs, lease=uuid.uuid4().hex,
@@ -404,8 +400,6 @@ class ResearchStore:
                 self._save(db,state,'attempt_committed',receipt)
                 return receipt
             if current:
-                if result.acceptance == "accepted" and result.execution_status != "succeeded":
-                    raise ValueError("失败的执行不能标为完成")
                 # Audited intermediate values remain historical evidence even
                 # when the worker's registry replaced them during local repair.
                 all_evidence = {}
@@ -547,7 +541,7 @@ class ResearchStore:
                 continue
             if issue["source"] == "local_review" and issue["action"] != "recompute":
                 continue  # Only a fresh review or an independent check closes these findings.
-            if all(state["experiments"][key]["acceptance"] == "accepted" and
+            if all(state["experiments"][key]["execution_status"] == "succeeded" and
                    state["experiments"][key]["validity"] == "current" and state["experiments"][key]["revision"] >= revision
                    for key, revision in issue["repair_targets"].items()):
                 issue["status"] = "resolved"
@@ -575,7 +569,7 @@ class ResearchStore:
     @staticmethod
     def _active_registry(state):
         accepted = set().union(*(execution_lineage(state,t['execution_id']) for t in state['experiments'].values()
-                    if t['kind'] != 'verify' and not t['retired'] and t['acceptance'] == 'accepted' and t['validity'] == 'current'))
+                    if t['kind'] != 'verify' and not t['retired'] and t['execution_status'] == 'succeeded' and t['validity'] == 'current'))
         results = current_results(state)
         claims = [c["payload"] for c in state["claims"].values() if c["producer_attempt"] in accepted and c.get("active", True)]
         return {"results": results, "claims": claims, "results_by_id": {r["id"]: r for r in results}}

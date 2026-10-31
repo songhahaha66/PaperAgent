@@ -257,9 +257,8 @@ async def decide(store, proposal_id, apply, output_mode):
     if snapshot['commit_seq'] != proposal['base_commit'] or digest(source) != proposal['source_hash']:
         raise ResearchConflict('论文或研究版本已改变。候选和人工稿均已保留，请刷新后重新提出修改。')
     if proposal.get('source_issue'):
-        from .issue_edits import require_binding,ready
+        from .issue_edits import require_binding
         require_binding(store,proposal['source_issue'])
-        if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
     state = paper_state(store)
     changes=proposal.get('after_sections') or {proposal['section']:proposal['after']}
     if proposal.get('generation_contract')=='scoped-anchored-edits-v2':

@@ -15,5 +15,7 @@ def register(registry):
             from ai_system.research.control import graph_view
             value=await getattr(import_module('ai_system.modules.writing.'+owner),name)(
                 graph_view(ctx.research.snapshot(),root=ctx.workspace),SimpleNamespace(context=ctx))
-            return CapabilityProduct('paper',value)
+            failed=name=='export' and bool(value.get('issues'))
+            return CapabilityProduct('paper',value,'failed' if failed else None,
+                                     value['issues'][0].get('message') if failed else None)
         registry.register('writing','writing.'+name,'paper',run,Inputs)

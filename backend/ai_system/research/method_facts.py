@@ -25,7 +25,7 @@ def verified_methods(store):
     except (OSError,ValueError):return []
     for row in records:
         task=state['experiments'].get(row['task_id'])
-        if not task or task['retired'] or task['revision']!=row['revision'] or task['validity']!='current' or task['acceptance']!='accepted':continue
+        if not task or task['retired'] or task['revision']!=row['revision'] or task['validity']!='current' or task['execution_status']!='succeeded':continue
         if row.get('implementation_contract_version')!=1 or row.get('file_inputs')!=files or not policy or row.get('policy_version')!=policy[0]:continue
         if row.get('contract_hash')!=digest(protocol(state,row['task_id'])) or row.get('task_hash')!=digest(task['subproblem']):continue
         attempt=state['executions'].get(task['execution_id'])

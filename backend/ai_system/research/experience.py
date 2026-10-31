@@ -94,7 +94,7 @@ def card_for(state, attempt_id, root=None):
         (i['task_id'] in related or related.intersection(i.get('repair_targets',{}))) for i in research_findings(state))
     execution=result.get('execution_status')
     if empirical and any(c['outcome']=='failed' for c in checks):level='counterexample'
-    elif empirical and validation.get('outcome')=='accepted' and all(c['outcome']=='passed' for c in checks) and current and not blocking and a.get('acceptance')=='accepted' and execution=='succeeded':level='verified'
+    elif empirical and validation.get('outcome')=='accepted' and all(c['outcome']=='passed' for c in checks) and current and not blocking and execution=='succeeded':level='verified'
     elif execution=='failed':level='execution_error'
     else:level='unconfirmed'
     cancelled=bool(re.search(r'timeout|timed out|cancel|超时|执行超过.{0,12}秒|取消|中断',str(result.get('report',{}).get('error','')),re.I))

@@ -24,16 +24,6 @@ def test_repeat_commit_is_idempotent_and_mismatched_retry_rejected(tmp_path):
     assert len(store.registry_payload()["results"]) == 1
 
 
-def test_worker_verdict_does_not_create_a_second_acceptance_gate(tmp_path):
-    store = make_store(tmp_path)
-    finish(store, "Q1", acceptance="rejected")
-    snapshot = store.snapshot()
-    assert snapshot["experiments"]["Q1"]["execution_status"] == "succeeded"
-    assert snapshot["experiments"]["Q1"]["acceptance"] == "accepted"
-    assert "Q2" in ready_tasks(snapshot)
-    assert store.snapshot()["faults"], "the actual execution issue is still recorded"
-
-
 def test_file_correction_during_execution_rejects_result(tmp_path):
     store = make_store(tmp_path)
     data = tmp_path / "data"

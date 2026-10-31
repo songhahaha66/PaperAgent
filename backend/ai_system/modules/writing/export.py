@@ -87,4 +87,6 @@ async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
     except Exception as exc:
         await ctx.set_stage("export", "blocked", str(exc)[:80])
         await ctx.events.emit("paper_export", f"导出失败：{exc}")
+        if isinstance(exc,(ValueError,KeyError,FileNotFoundError)):
+            raise  # The Agent can correct tool inputs/files in its current conversation.
         return {"research_blocked": True, "message":f'导出失败：{exc}', "log": [f"export: failed ({exc})"]}

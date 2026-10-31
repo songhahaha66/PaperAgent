@@ -251,7 +251,7 @@ const statusText = computed(() => {
     return e.results.length
       ? '本次实验未完成，已有结果已保留。'
       : '本次实验未完成，代码与运行输出已保留。'
-  if (e.acceptance === 'accepted') return `已完成，${e.results.length} 项结果，${label(e.checking)}`
+  if (e.execution_status === 'succeeded') return `已完成，${e.results.length} 项结果，${label(e.checking)}`
   return `${label(e.computation)}，${label(e.checking)}`
 })
 const fileLabel = (kind: string) =>

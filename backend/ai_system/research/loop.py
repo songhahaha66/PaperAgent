@@ -5,11 +5,16 @@ import time
 from uuid import uuid4
 from langgraph.graph import END
 from langgraph.types import Send, interrupt
-from ai_system.modules.registry import invoke
+from ai_system.modules.registry import capabilities, CapabilityRequest
 from .store import digest
 from .planner import Planner, NoResearchProgress, decision_context, planning_failure_message
 
 PUBLICATION = ('validate', 'render', 'export')
+
+
+def _observed_action(action):
+    """A failed tool can finish its call without stopping the Agent."""
+    return not action or action['status']=='done' or (action['status']=='failed' and action.get('recoverable',False))
 
 
 def _set_action(state, capability, inputs, reason, *, target=None, key=None, observation_id=None, question_id=None):
@@ -46,7 +51,7 @@ async def prepare_action(ctx):
     snapshot=store.snapshot()
     current=snapshot['action']
     if current and current['status']=='planned':return current['capability']=='pause'
-    if current and current['status']=='failed':return True
+    if current and current['status']=='failed' and not current.get('recoverable'):return True
     if snapshot['outcome'] in {'completed','needs_attention'}:return False
     if current and current['status']=='waiting':return False
     if current and current['status']=='running':
@@ -55,7 +60,9 @@ async def prepare_action(ctx):
             experiment=snapshot['experiments'][current['target']]
             if experiment['execution_status'] not in {'running','pending'}:
                 with store._transaction() as db:
-                    state=store._read(db);state['action']['status']='done'
+                    state=store._read(db)
+                    failed=experiment['execution_status']!='succeeded'
+                    state['action'].update(status='failed' if failed else 'done',recoverable=failed)
                     store._save(db,state,'action_reconciled',{'id':current['id']})
             else:return True
         else:
@@ -102,7 +109,7 @@ def select(state, runtime):
     if state.get('research_blocked'):return END
     action=runtime.context.research.snapshot()['action']
     if runtime.context.research.snapshot()['outcome'] in {'completed','needs_attention'}:return END
-    if not action or action['status']=='done':return 'observe'
+    if _observed_action(action):return 'observe'
     if action['capability']=='pause':return END
     return Send('act',{'action_id':action['id']})
 
@@ -111,7 +118,7 @@ async def act(request, runtime):
     from .runtime import execution_scope
     ctx=runtime.context
     action=ctx.research.snapshot()['action']
-    if action['id']!=request['action_id'] or action['status']=='done':return {}
+    if _observed_action(action) or action['id']!=request['action_id']:return {}
     with execution_scope(action_id=action['id'],observation_id=action.get('observation_id'),
                          experiment_id=action.get('experiment_id') or action.get('target'),
                          question_id=action.get('question_id'),events=ctx.events,
@@ -125,7 +132,7 @@ async def act(request, runtime):
 async def _act(request, runtime):
     ctx=runtime.context;store=ctx.research
     action=store.snapshot()['action']
-    if action['id']!=request['action_id'] or action['status']=='done':return {}
+    if _observed_action(action) or action['id']!=request['action_id']:return {}
     name=action['capability']
     if name=='ask':
         with store._transaction() as db:
@@ -138,18 +145,24 @@ async def _act(request, runtime):
     with store._transaction() as db:
         state=store._read(db);state['action'].update(status='running',started_at=time.time())
         store._save(db,state,'action_started',{'id':action['id']})
+    from .runtime import ResearchRuntime
+    meter=ResearchRuntime(store.root,store.research_id)
+    operation='action:'+digest([name,action['inputs'],action.get('target'),store.file_inputs()])
     try:
+        if name.startswith('writing.'):
+            from services.chat_services.paper_project import snapshot as source_snapshot
+            operation=digest([operation,source_snapshot(ctx.workspace)['version']])
+        meter.check_guard(operation)
         inputs=action['inputs']
         if name=='experiments.execute':
             from .control import experiment_dispatch
             inputs={'branch':experiment_dispatch(ctx,action['target'])}
-        patch=await invoke(ctx,name,**inputs)
+        product=await capabilities().invoke(CapabilityRequest(name=name,inputs=inputs),ctx)
+        patch=product.value
         if name.startswith('writing.') and patch.get('issues'):
-            from .runtime import ResearchRuntime
             from services.chat_services.paper_project import snapshot as source_snapshot
             identity='publication:'+digest([source_snapshot(ctx.workspace)['version'],
                 [i.get('message','') for i in patch['issues']]])
-            meter=ResearchRuntime(ctx.research.root,ctx.research.research_id)
             meter.failed(identity,identity,'publication','正文与诊断没有变化，停止重复交付；草稿和日志已保存。')
             meter.check_guard(identity)
         if name=='experiments.inspect':
@@ -176,7 +189,10 @@ async def _act(request, runtime):
                         publication['stage']=PUBLICATION[next_index] if next_index<len(PUBLICATION) else 'completed'
                         if publication['stage']=='export' and ctx.output_mode=='markdown':publication['stage']='completed'
                     if state['publication'] and publication['stage']=='completed':state['outcome']='needs_attention' if patch.get('artifact_conflict') else 'completed'
-            state['action']['status']='failed' if patch.get('research_blocked') else 'done'
+            failed=product.execution_status in {'failed','interrupted'}
+            state['action']['status']='failed' if patch.get('research_blocked') or failed else 'done'
+            state['action']['recoverable']=failed and not patch.get('research_blocked')
+            if failed:state['action']['message']=product.execution_message or '本次执行未完成，请根据已有记录决定下一步。'
             if patch.get('research_blocked'):
                 from .runtime import action_failure_message
                 state['action']['message']=patch.get('message') or action_failure_message(action)
@@ -184,6 +200,8 @@ async def _act(request, runtime):
             state['action']['finished_at']=time.time()
             store._save(db,state,'action_finished',{'id':action['id'],'status':state['action']['status'],
                                                    'message':state['action'].get('message')})
+        if failed:meter.failed(operation,digest(product.execution_message),'execution',state['action']['message'])
+        else:meter.succeeded(operation)
         return patch if name=='experiments.execute' or name.startswith('writing.') else {'log':['completed '+name]}
     except asyncio.CancelledError:
         with store._transaction() as db:
@@ -193,11 +211,12 @@ async def _act(request, runtime):
     except (ValueError,KeyError,FileNotFoundError) as exc:
         from .review_cache import error_detail
         detail=error_detail(exc)
+        meter.failed(operation,digest(detail),'tool_input',detail)
         with store._transaction() as db:
             state=store._read(db)
             if name.startswith('writing.'):
                 state['publication']=None
-            state['action'].update(status='done',finished_at=time.time(),phase=name,error=detail,
+            state['action'].update(status='failed',recoverable=True,finished_at=time.time(),phase=name,error=detail,
                 error_type=type(exc).__name__,message=detail,result={'error':detail,'phase':name})
             store._save(db,state,'action_failed',{'id':action['id'],'phase':name,'message':detail,'recoverable':True})
         return {'log':[name+': '+detail]}
@@ -206,7 +225,7 @@ async def _act(request, runtime):
         from .review_cache import error_detail
         message = action_failure_message(action)+' 原因：'+error_detail(exc)
         with store._transaction() as db:
-            state=store._read(db);state['action'].update(status='failed',finished_at=time.time(),error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
+            state=store._read(db);state['action'].update(status='failed',recoverable=False,finished_at=time.time(),error=str(exc)[:3000],error_type=type(exc).__name__,message=message)
             store._save(db,state,'action_failed',state['action'])
         raise RuntimeError(message) from exc
 
@@ -218,7 +237,7 @@ def resume(store, **_):
             # Explicit continuation consumes the pause; the next observation
             # still enforces the existing shared request budget.
             action.update(status='done',finished_at=time.time())
-        elif action and action['status'] in {'failed','running','interrupted'}:
+        elif action and not _observed_action(action) and action['status'] in {'failed','running','interrupted'}:
             if action['capability'].startswith('writing.') and action.get('error_type')=='RepeatedOperationBlocked':
                 state['publication']=None
                 action['status']='done'

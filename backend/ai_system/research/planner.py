@@ -26,9 +26,8 @@ def ready_tasks(snapshot):
     experiments = snapshot['experiments']
     return [key for key, item in experiments.items() if not item['retired']
         and item['execution_status'] == 'pending' and item['validity']=='current'
-        and all(experiments[dep]['acceptance']=='accepted' and experiments[dep]['validity']=='current'
-                for dep in item['dependencies'])
-        and all(snapshot['assumptions'][aid]['status']!='refuted' for aid in item['assumption_ids'])]
+        and all(experiments[dep]['execution_status']=='succeeded' and experiments[dep]['validity']=='current'
+                for dep in item['dependencies'])]
 
 
 def report_context(report, *, full=False):
@@ -79,7 +78,7 @@ def decision_context(store, snapshot):
 def preserved_progress(snapshot):
     runs={a['run_id'] for a in snapshot.get('activity', []) if a.get('run_id')}
     if runs:return f'已保留 {len(runs)} 次计算的代码、日志和实际结果文件。'
-    count=sum(e['acceptance']=='accepted' and e['validity']=='current' for e in snapshot['experiments'].values())
+    count=sum(e['execution_status']=='succeeded' and e['validity']=='current' for e in snapshot['experiments'].values())
     return f'已保留 {count} 项实验成果和全部执行记录。' if snapshot['executions'] else '原题和当前研究记录已保存，尚未开始实验。'
 
 
@@ -131,6 +130,7 @@ def working_context(ctx):
             'questions':rows,'runs':runs,'files':known_files(ctx)[:30],
             'file_tools':'research_list_files / research_search_files / research_read_artifact；Python沙箱不保证有正文副本',
             'document':{'path':main.name,'version':hashlib.sha256(main.read_bytes()).hexdigest(),'nonempty':bool(main.stat().st_size)} if main.is_file() else {},
+            'last_action':{k:(state.get('action') or {}).get(k) for k in ('capability','status','target','message','error_type')},
             'document_diagnostics':(state.get('action') or {}).get('result',{}).get('issues',[])}
 
 
