@@ -40,9 +40,8 @@ def test_model_progress_commits_before_tool_and_survives_refresh(tmp_path):
 def test_failed_worker_report_is_failed_activity_even_when_call_returns(tmp_path, monkeypatch):
     from ai_system.graph.context import GraphContext
     from ai_system.research.store import ResearchStore
-    from ai_system.research.control import experiment_dispatch
+    from ai_system.research.loop import _action, act, select
     from ai_system.modules.experiments.planning import experiment_design
-    from ai_system.modules.registry import invoke
     from research_tools_helpers import add_experiment
     from services.chat_services.conversation_timeline import TIMELINE
     manager, root, reply, _ = writer(tmp_path)
@@ -57,8 +56,10 @@ def test_failed_worker_report_is_failed_activity_even_when_call_returns(tmp_path
     async def run():
         token = TIMELINE.set(reply)
         try:
-            result = await invoke(ctx, 'experiments.execute', branch=experiment_dispatch(ctx, eid))
-            assert '_execution_outcome' not in result
+            action = _action(ctx.research,'experiments.execute',{},'计算样本均值',target=eid)
+            await act({'action_id':action['id']},SimpleNamespace(context=ctx))
+            assert ctx.research.snapshot()['action']['status']=='failed'
+            assert select({},SimpleNamespace(context=ctx))=='observe'
         finally:
             TIMELINE.reset(token)
             await ctx.kernels.close()

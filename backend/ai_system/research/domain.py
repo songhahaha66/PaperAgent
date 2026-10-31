@@ -54,7 +54,7 @@ def current_results(state, experiment_ids=None, *, task_id=None, results=()):
     for eid, experiment in state['experiments'].items():
         if experiment_ids is not None and eid not in experiment_ids:continue
         if experiment['retired'] or experiment['validity']!='current':continue
-        if eid!=task_id and (experiment['kind']=='verify' or experiment['acceptance']!='accepted'):continue
+        if eid!=task_id and (experiment['kind']=='verify' or experiment['execution_status']!='succeeded'):continue
         ranks.update({aid:index for index,aid in enumerate(execution_lineage(state,experiment['execution_id']))})
     entries={ref:entry for ref,entry in state['artifacts'].items()
              if entry['type']=='result' and entry['active'] and entry['producer_attempt'] in ranks}

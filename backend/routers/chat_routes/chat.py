@@ -265,6 +265,12 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                 self.sender = asyncio.create_task(self.send_updates())
                 self.timer = None
                 self.loop = asyncio.get_running_loop()
+                from services.chat_services.research_push import ResearchPush
+                self.research_push=ResearchPush(
+                    lambda:research_snapshot(workspace_dir,self.work_id,'in_progress'),self.publish_snapshot)
+
+            async def publish_snapshot(self, kind, content):
+                await self.on_json_block({'type':kind,'content':content},snapshot=True)
 
             @property
             def json_blocks(self): return self.writer.reply['json_blocks']
@@ -303,7 +309,14 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             async def on_message_complete(self, role, content):
                 self.writer.flush()
 
-            async def on_json_block(self, block):
+            async def on_json_block(self, block, *, snapshot=False):
+                if not snapshot and block.get('type') in {'research_state','research_activity'}:
+                    self.research_push.schedule()
+                    return
+                if block.get('type')=='research_snapshot' and not snapshot:
+                    # A terminal authoritative snapshot must not be followed by an
+                    # older in-progress projection still rendering in a worker.
+                    await self.research_push.close()
                 if block.get('type') in TRANSIENT_BLOCK_TYPES:
                     # Invalidation payloads are never execution rows.
                     with self.writer.lock:
@@ -316,6 +329,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                     self.writer.block(block)
 
             async def finalize(self, status, notice=None):
+                await self.research_push.close()
                 if self.timer: self.timer.cancel()
                 self.writer.finish(status, notice)
                 # Publish callbacks queued with call_soon_threadsafe must enter FIFO first.

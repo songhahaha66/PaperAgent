@@ -56,6 +56,20 @@ class KernelPool:
         kernels, self._kernels = list(self._kernels.values()), {}
         await asyncio.gather(*(k.close() for k in kernels), return_exceptions=True)
 
+    async def disconnect(self) -> None:
+        # Client cleanup must not replace an already committed business result.
+        # Failed objects stay reachable for retry; outer task cancellation still
+        # propagates normally from gather rather than being swallowed here.
+        kernels=list(self._kernels.items())
+        results=await asyncio.gather(*(k.disconnect() for _,k in kernels),return_exceptions=True)
+        for (key,kernel),result in zip(kernels,results):
+            if isinstance(result,Exception):
+                logger.warning('断开内核 %s 未完成（%s）；保留对象及持久句柄供重试',key,type(result).__name__)
+            elif isinstance(result,BaseException):
+                raise result
+            elif self._kernels.get(key) is kernel:
+                self._kernels.pop(key)
+
 
 class EventSink:
     """把阶段进度推给前端（复用 stream_manager.send_json_block），没有 stream_manager 时只写日志"""

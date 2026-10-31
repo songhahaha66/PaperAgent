@@ -11,7 +11,7 @@ CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
     'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.create_question':'建立研究问题','research.edit_question':'修改研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
-    'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用未完成',
+    'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用失败',
     'research.run_python':'运行研究代码','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
     'writing.edit':'编辑研究正文','research.delegate':'执行独立子任务',
@@ -178,7 +178,7 @@ def research_history(store, snapshot):
     labels={'question_updated':'问题已更新','experiment_created':'已安排实验','experiment_continued':'继续实验',
             'delivery_requested':'开始交付','research_observed':'问题判断已更新','attempt_committed':'实验执行结束',
             'inputs_changed':'输入已改变','research_revised':'研究要求已修改',
-            'recovery_requested':'恢复研究','action_failed':'操作未完成',
+            'recovery_requested':'恢复研究','action_failed':'操作失败',
             'clarification_requested':'等待补充信息','action_interrupted':'研究已暂停',
             'action_prepared':'暂停研究','activity_finished':'研究已暂停'}
     with store._connect() as db:

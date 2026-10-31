@@ -38,7 +38,12 @@ def create_session(workspace_dir, *, settings=None, work_id=None, experiment_id=
 
 def create_kernel(workspace_dir, *, timeout=180, fs=None, settings=None, work_id=None, experiment_id=None, execution_scope=None):
     settings = settings or SandboxSettings.from_env()
+    cache_key=None
+    if experiment_id not in {None,'default','research'}:
+        import hashlib
+        from pathlib import Path
+        cache_key=hashlib.sha256((str(Path(workspace_dir).absolute())+'\0'+experiment_id).encode()).hexdigest()
     session = create_session(workspace_dir, settings=settings, work_id=work_id,
-                             experiment_id=experiment_id)
+                             experiment_id=experiment_id,cache_key=cache_key)
     return RemoteKernel(workspace_dir, session, settings, timeout=timeout, fs=fs,
                         execution_scope=execution_scope)

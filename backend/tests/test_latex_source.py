@@ -171,10 +171,40 @@ def test_compile_failure_returns_to_research_without_replaying_calculation(nativ
     async def failed(ctx):return {'issues':[{'message':'编译错误，读取日志后修正'}],'exports':[]}
     monkeypatch.setattr('ai_system.modules.writing.export._latex',failed)
     with store._transaction() as db:
-        state=store._read(db);state['publication']={'stage':'export','repair_inputs':[],'repairs':0}
+        state=store._read(db);state['publication']={'stage':'export','repair_inputs':[],'repairs':0};state['outcome']='running'
         action=loop._set_action(state,'writing.export',{},'导出当前源码')
         store._save(db,state,'test_compile_failure',{})
     asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))
     assert store.snapshot()['publication'] is None
     assert store.snapshot()['action']['result']['issues']
+    assert store.snapshot()['executions']==before
+    # A tool exception must also reach the live Agent, with a failed receipt.
+    async def unavailable(ctx):raise ValueError('controlled export failure')
+    monkeypatch.setattr('ai_system.modules.writing.export._latex',unavailable)
+    with store._transaction() as db:
+        state=store._read(db);state['publication']={'stage':'export'}
+        action=loop._set_action(state,'writing.export',{},'导出当前源码')
+        store._save(db,state,'retry_export',{})
+    asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))
+    assert store.snapshot()['action']['status']=='failed'
+    assert loop.select({},SimpleNamespace(context=ctx))=='observe'
+    assert asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))=={}
+    loop.resume(store)
+    assert store.snapshot()['action']['status']=='failed'
+    from langchain_core.messages import ToolMessage
+    from research_tools_helpers import ResearchToolsModel,tool
+    ctx.fs.register_file('part.tex',kind='document',created_by='ai',visibility='user')
+    def respond(messages):
+        rows=[m for m in messages if isinstance(m,ToolMessage)]
+        assert all(m.status!='error' for m in rows), [m.content for m in rows]
+        if not rows:
+            assert any('controlled export failure' in str(m.content) for m in messages)
+            return tool('research_read_artifact',{'path':'part.tex'},'read')
+        if len(rows)==1:
+            return tool('writing_edit',{'path':'part.tex','content':'修正后的正文，保留结果与局限。'},'edit')
+        return tool('research_deliver',{'title':'修正后的报告'},'deliver')
+    ctx.planner_llm=ResearchToolsModel(respond=respond)
+    assert not asyncio.run(loop.prepare_action(ctx))
+    assert '修正后的正文' in (store.root/'part.tex').read_text()
+    assert store.snapshot()['action']['capability']=='writing.validate'
     assert store.snapshot()['executions']==before

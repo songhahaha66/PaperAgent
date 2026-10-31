@@ -102,22 +102,24 @@ def test_receipt_is_required_idempotent_and_tamper_evident(tmp_path):
     with pytest.raises(ValueError,match='校验'):verify_run(fs,run)
 
 
-def test_project_lock_covers_edit_and_other_executor(tmp_path):
+def test_runtime_lock_does_not_block_document_edits(tmp_path):
     async def check():
         root=tmp_path/'private/project-files'/'project'
         async with execution_lock(root):
-            with pytest.raises(HTTPException):
-                with edit_lock(root):pass
+            with edit_lock(root):pass
         with edit_lock(root):pass
     asyncio.run(check())
 
 
-def test_uncertain_container_lease_blocks_edits(tmp_path):
+def test_uncertain_container_lease_blocks_runtime_access_only(tmp_path):
     import time
     root=tmp_path/'private/project-files'/'project';lease=private_root(root)/'sandbox-lease.json';lease.parent.mkdir(parents=True)
     lease.write_text(json.dumps({'expires_at':time.time()+60,'sandbox_id':'uncertain'}))
-    with pytest.raises(HTTPException,match='TTL'):
-        with edit_lock(root):pass
+    with edit_lock(root):pass
+    async def check():
+        with pytest.raises(HTTPException,match='TTL'):
+            async with execution_lock(root):pass
+    asyncio.run(check())
 
 
 @pytest.mark.parametrize('name', ['../escape','/absolute','a/../escape','a\\escape'])
@@ -249,8 +251,7 @@ def test_mock_volume_kernel_streams_seals_and_serializes_session(tmp_path):
         first=await kernel.execute('3',on_event=event)
         assert first.ok and not first.delivery_error
         verify_run(kernel.fs,first.run_id)
-        with pytest.raises(HTTPException):
-            with edit_lock(root):pass
+        with edit_lock(root):pass
         second=await kernel.execute('4')
         assert second.ok and session.calls==['3','4']
         assert kernel.fs.read_text(f'runs/{first.run_id}/artifacts/outputs/result.csv')=='3'

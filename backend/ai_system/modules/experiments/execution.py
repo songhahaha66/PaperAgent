@@ -257,7 +257,7 @@ def build_tools(
                 operation.update(error_type='DeliveryIncomplete',message='计算已结束，文件交付未完成；已有结果保留，请重试文件同步。')
             if not result.ok:
                 operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
-                                 message='执行超时，内核已重启。' if result.timed_out else result.error)
+                                 message=result.error)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok,
                         "delivery_error":result.delivery_error or publication_note})
         await ctx.events.emit(

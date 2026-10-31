@@ -3,7 +3,6 @@ from services.file_services.workspace_layout import workspace_path
 
 from .domain import experiment_report, experiment_design
 
-from ai_system.research.domain import findings as research_findings
 import asyncio
 import json
 import shutil
@@ -35,7 +34,7 @@ async def observe(state, runtime):
     try:
         await recover_outputs(ctx)
     finally:
-        await ctx.kernels.close()  # Recovery must release the lease before compilation.
+        await ctx.kernels.disconnect()
     if ctx.experience_scope is not None:
         try:
             from ai_system.modules.registry import invoke
@@ -75,7 +74,7 @@ def graph_view(snapshot, root=None):
         'questions':questions(snapshot), 'requirements':snapshot['spec']['requirements'],
         'assumptions':[a for a in snapshot['assumptions'].values() if a['status']!='retired']},
         'solutions':{key:experiment_report(snapshot, t) for key,t in snapshot['experiments'].items()
-                     if t['acceptance']=='accepted' and t['validity']=='current' and not t['retired']},
+                     if t['report_ref'] and t['validity']=='current' and not t['retired']},
         'designs':{key:experiment_design(snapshot, t) for key,t in snapshot['experiments'].items() if experiment_design(snapshot, t)},
         'sections':{} if snapshot['spec'].get('output_mode')=='latex' else {key:s['text'] for key,s in snapshot['sections'].items() if s['validity']=='current'},
         'section_contexts':{} if snapshot['spec'].get('output_mode')=='latex' else {key:s.get('context_hash') for key,s in snapshot['sections'].items() if s['validity']=='current'},
@@ -155,11 +154,11 @@ def public_snapshot(snapshot, *, work_status=None, source_root=None):
 
 
 def requirement_status(snapshot, requirement):
-    """An old accepted execution does not certify a later requirement version."""
+    """An old execution does not cover a later requirement version."""
     if snapshot['outcome']!='completed':return 'pending'
     for eid in requirement['task_ids']:
         task=snapshot['experiments'][eid]
-        if task['retired'] or task['acceptance']!='accepted' or task['validity']!='current':continue
+        if task['retired'] or task['execution_status']!='succeeded' or task['validity']!='current':continue
         attempt=snapshot['executions'].get(task['execution_id']) or {}
         frozen=attempt.get('experience_basis',{}).get('requirements',[])
         if any(r['id']==requirement['id'] and r.get('revision',1)==requirement.get('revision',1) for r in frozen):
@@ -176,8 +175,7 @@ def public_task(snapshot, task, ready=None, work_status=None):
 
 
 def current_validation(snapshot, task):
-    # Rejected work is invalidated immediately; retain its verdict for this
-    # revision, but never label an older revision's checks as current.
+    # Historical checks are advisory; never label an older revision as current.
     attempt = next((a for a in reversed(snapshot["executions"].values())
                     if a["task_id"] == task["task_id"] and a["revision"] == task["revision"]), {})
     return attempt.get("validation")
@@ -334,15 +332,13 @@ async def execute(branch, runtime):
         snapshot = ctx.research.snapshot()
         committed = snapshot["experiments"][key]
         await ctx.events.emit("research_state", public_snapshot(snapshot,source_root=ctx.research.root))
-        accepted = (receipt["published"] and committed["execution_id"] == order.attempt_id and committed["acceptance"] == "accepted"
+        completed = (receipt["published"] and committed["execution_id"] == order.attempt_id and committed["execution_status"] == "succeeded"
                     and committed["validity"] == "current")
-        if accepted:
+        if completed:
             code = local.workspace / "code" / f"{key}_solution.py"
             if code.exists():
                 ctx.fs.write_text(f"code/{key}_solution.py", code.read_text(encoding="utf-8"))
-        clear = accepted and not any(i["task_id"] == key and i["blocking"] and i["status"] not in {"resolved", "dismissed", "superseded"}
-                                     for i in research_findings(snapshot))
-        if clear:
+        if completed:
             await ctx.events.emit("paper_solved", f"{key} 执行结束，结果文件与代码已保存")
         else:
             await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '本轮未完成，请查看执行记录'}")

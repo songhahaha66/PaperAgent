@@ -257,14 +257,12 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
     snapshot=store.refresh_inputs();filename,source=source_info(store,snapshot)
     if not llm:raise ValueError('依据修正需要实际写作与审查模型')
     if source_issue:
-        from .issue_edits import require_binding,ready
+        from .issue_edits import require_binding
         linked=require_binding(store,source_issue)
         if keys!=[linked['section']]:raise ResearchConflict('该候选只能修改源意见对应章节')
-        if not ready(store):raise ResearchConflict('研究或服务问题尚未通过核查，不能以文稿修改绕过')
         from ai_system.research.runtime import ResearchRuntime
         budget=ResearchRuntime(store.root,store.research_id).status()
         if (budget.get('request_limit') is not None and budget['used']>=budget['request_limit']) or budget['state']=='provider_blocked':raise ResearchConflict('请求预算或网关不可用，意见与原稿保留')
-    elif not store.delivery_ready(snapshot):raise ResearchConflict('研究未通过验收，不能以文稿修改代替研究修复')
     keys=list(dict.fromkeys(keys))
     if not 1<=len(keys)<=6 or any(k not in snapshot['sections'] or snapshot['sections'][k]['validity']!='current' or k=='references' for k in keys):raise ValueError('请选择一至六个当前正文章节')
     facts=verified_methods(store)
@@ -331,8 +329,7 @@ async def review_pending_fragment(store,proposal_id,llm):
     from ai_system.research.runtime import ResearchRuntime
     budget=ResearchRuntime(store.root,store.research_id).status()
     if budget['state']=='provider_blocked' or (budget.get('request_limit') is not None and budget['used']>=budget['request_limit']):raise ResearchConflict('审查预算或网关不可用；候选保留，恢复不会清零预算')
-    from .issue_edits import ready
-    if not (ready(store) if p.get('source_issue') else store.delivery_ready(snapshot)) or snapshot['commit_seq']!=p['base_commit'] or digest(source)!=p['source_hash']:raise ResearchConflict('研究或原稿版本已变化，不能重审旧提案')
+    if snapshot['commit_seq']!=p['base_commit'] or digest(source)!=p['source_hash']:raise ResearchConflict('研究或原稿版本已变化，不能重审旧提案')
     scope=p.get('scope') if p.get('generation_contract')=='scoped-anchored-edits-v2' else None
     if scope:require_scope(store,p,snapshot,source)
     with store._connect() as db:

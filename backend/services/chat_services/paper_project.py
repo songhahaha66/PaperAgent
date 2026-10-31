@@ -81,7 +81,7 @@ def safe_path(root, name, *, writing=False, verified_snapshot=False):
     return path
 
 
-def files(root, main=None, *, verified_snapshot=False):
+def files(root, main=None, *, verified_snapshot=False, missing=None):
     """Follow local TeX dependencies, without exposing unrelated workspace files."""
     root = Path(root)
     main = main or meta(root).get('main') or ('paper.tex' if (root/'paper.tex').is_file() else 'paper.md')
@@ -117,6 +117,17 @@ def files(root, main=None, *, verified_snapshot=False):
                     selected=next((candidate+suffix for candidate in candidates for suffix in suffixes
                                    if safe_path(root,candidate+suffix,verified_snapshot=verified_snapshot).is_file()),None)
                     if selected:pending.append(selected)
+                    elif missing is not None and not any(c in item for c in '#\\'):
+                        missing.append({'file':name,'line':None,'message':'缺少论文依赖：'+relative,
+                                        'context':'请绑定实际文件；占位框不能替代图片、表格或章节。'})
+        elif text is not None and path.suffix == '.md':
+            for item in re.findall(r'!\[[^\]]*\]\(([^)]+)\)',text):
+                item=item.strip().split(' "',1)[0].strip('<>')
+                if '://' in item:continue
+                relative=(Path(name).parent/item).as_posix()
+                dependency=safe_path(root,relative,verified_snapshot=verified_snapshot)
+                if dependency.is_file():pending.append(relative)
+                elif missing is not None:missing.append({'file':name,'line':None,'message':'缺少论文图片：'+relative,'context':''})
         if len(found) > 200:
             raise ValueError('论文项目超过 200 个文件')
     if main.endswith('.tex'):
@@ -135,14 +146,32 @@ def files(root, main=None, *, verified_snapshot=False):
 
 def snapshot(root):
     entries = files(root)
-    version = digest({name: row['version'] for name,row in sorted(entries.items())})
+    from services.file_services.workspace_layout import safe_join
+    bindings_path=workspace_path(Path(root),'.system/paper-project/assets.json')
+    bindings=json.loads(bindings_path.read_text()) if bindings_path.exists() else {}
+    resources={}
+    for name,origin in bindings.items():
+        path=safe_join(Path(root),name)
+        from ai_system.sandbox.file_limits import bounded_hash
+        resources[name]={**origin,'sha256':bounded_hash(path,20_000_000),'size':path.stat().st_size,
+                         'origin_sha256':origin['sha256']}
+    identity={name: row['version'] for name,row in sorted(entries.items())}
+    version = digest({'files':identity,'resources':resources} if resources else identity)
     archive = workspace_path(Path(root), VERSIONS) / version
     archive.mkdir(parents=True, exist_ok=True)
+    from ai_system.sandbox.content_store import ContentStore
+    content=ContentStore(root,20_000_000)
     for name,row in entries.items():
         target = archive/name
         if not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(safe_path(root,name),target)
+            source=safe_path(root,name)
+            raw=source.read_bytes()
+            actual=digest(raw.decode('utf-8')) if row['text'] is not None else hashlib.sha256(raw).hexdigest()
+            if actual!=row['version']:raise ResearchConflict('论文依赖在快照期间改变，请重试')
+            content.link_archive(content.put(source,hashlib.sha256(raw).hexdigest()),target)
+    for name,row in resources.items():
+        content.link_archive(content.put(safe_join(Path(root),name),row['sha256']),archive/name)
+    if resources:atomic_text(archive/'resources.json',json.dumps(resources,ensure_ascii=False))
     manifest = (archive/'manifest.json')
     if not manifest.exists():
         atomic_text(manifest,json.dumps({name:{k:v for k,v in row.items() if k!='text'} for name,row in entries.items()}))
@@ -370,6 +399,15 @@ async def compile_project(store):
             import traceback
             result.log_path=f'{BUILD_DIR}/compile.log'
             atomic_text(staging/result.log_path,traceback.format_exc())
+        from ai_system.sandbox.content_store import ContentStore
+        content=ContentStore(store.root,20_000_000)
+        if result.success:
+            try:
+                pdf_hash=content.put(staging/result.pdf_path)
+                archive=workspace_path(store.root,VERSIONS)/version
+                content.link_archive(pdf_hash,archive/'paper.pdf')
+            except Exception as exc:
+                result.error='PDF 归档未完成：'+str(exc)+'。上次成功 PDF 已保留。'
         log=staging/(result.log_path or f'{BUILD_DIR}/{Path(main).stem}.log')
         log_path=f'{BUILD_DIR}/{version}/{time.time_ns()}/compile.log'
         atomic_text(store.root/log_path,log.read_text(errors='replace') if log.is_file() else result.error or '编译完成')
@@ -382,9 +420,16 @@ async def compile_project(store):
                 compilation.update(success=False,error_summary='编译期间源码已更新，请重新编译。上次成功 PDF 已保留。')
                 data['compile']={**compilation,'state':'stale','message':compilation['error_summary']}
             elif result.success:
-                target=store.root/'paper.pdf';tmp=target.with_suffix('.pdf.paper-tmp')
-                shutil.copyfile(staging/result.pdf_path,tmp);tmp.replace(target)
+                target=store.root/'paper.pdf'
+                # The immutable PDF is bound to this exact source/assets version.
+                build=json.dumps({'source_version':version,'pdf_sha256':pdf_hash,
+                    'pages':result.pages,'warnings':result.warnings,'diagnostics':result.diagnostics,
+                    'log_path':log_path},ensure_ascii=False)
+                atomic_text(archive/'builds'/f'{pdf_hash}.json',build)
+                atomic_text(archive/'build.json',build)
+                content.materialize(pdf_hash,target)
                 data['pdf_version']=version
+                data['pdf_sha256']=pdf_hash
                 data['compile']={**compilation,'state':'current','message':'PDF 已与当前源码同步'}
                 state=store._read(db)
                 closed=[]

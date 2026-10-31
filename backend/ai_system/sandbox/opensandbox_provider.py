@@ -61,26 +61,62 @@ class OpenSandboxSession:
         self.lease_id = uuid.uuid4().hex
 
     def _save_lease(self, lease):
-        from services.file_services.file_helper import atomic_write
-        data = json.loads(self.lease_path.read_text()) if self.lease_path.exists() else {}
-        leases = data.get('leases', {})
-        if data and 'leases' not in data:
-            # A prior unconfirmed container cannot be forgotten during upgrade.
-            leases['previous'] = data
-        leases[self.lease_id] = lease
-        data = {'leases': leases, 'expires_at': max(row['expires_at'] for row in leases.values())}
-        atomic_write(self.lease_path, lambda f: f.write(json.dumps(data).encode()))
+        from .runtime_manager import LeaseLedger
+        LeaseLedger.save(self.lease_path,self.lease_id,{**lease,'cache_key':getattr(self,'cache_key',None)})
 
     def _remove_lease(self):
-        from services.file_services.file_helper import atomic_write
-        data = json.loads(self.lease_path.read_text())
-        leases = data['leases']
-        leases.pop(self.lease_id, None)
-        if not leases:
-            self.lease_path.unlink()
-        else:
-            data['expires_at'] = max(row['expires_at'] for row in leases.values())
-            atomic_write(self.lease_path, lambda f: f.write(json.dumps(data).encode()))
+        from .runtime_manager import LeaseLedger
+        LeaseLedger.remove(self.lease_path,self.lease_id)
+
+    def _config(self):
+        from opensandbox.config import ConnectionConfig
+        from opensandbox.transport import RetryPolicy
+        url=urlsplit(self.settings.endpoint)
+        return ConnectionConfig(domain=url.netloc,protocol=url.scheme,api_key=self.settings.api_key,
+            use_server_proxy=True,retry_policy=RetryPolicy.disabled(),
+            request_timeout=timedelta(seconds=max(300,self.settings.startup_timeout)))
+
+    async def attach(self, handle):
+        from opensandbox import Sandbox
+        from code_interpreter import CodeInterpreter
+        from .runtime_manager import RuntimeGone
+        self.lease_id=handle['lease_id']
+        self.host=_WorkSandbox()
+        try:
+            self.sandbox=await Sandbox.connect(handle['sandbox_id'],connection_config=self._config())
+            self.host.sandbox=self.sandbox
+            self.interpreter=await CodeInterpreter.create(sandbox=self.sandbox)
+            self.host.interpreter=self.interpreter
+            self.context=await self.interpreter.codes.get_context(handle['context_id'])
+        except Exception as exc:
+            await self.disconnect()
+            if getattr(exc,'status_code',None)==404:
+                # A missing context does not prove the container is gone.
+                if self.sandbox is not None:raise RuntimeError('原 Python 上下文已失效，请显式重置运行时') from exc
+                self._remove_lease()
+                raise RuntimeGone('原沙箱已不存在') from exc
+            raise
+        self.id=self.sandbox.id
+        self.context_restored=True
+
+    async def disconnect(self):
+        calls=[]
+        if self.interpreter:calls.append(self.interpreter.aclose())
+        if self.sandbox:calls.append(self.sandbox.close())
+        results=await asyncio.gather(*calls,return_exceptions=True)
+        for result in results:
+            if isinstance(result,BaseException):raise result
+
+    async def attach_for_destroy(self, handle):
+        from opensandbox import Sandbox
+        self.lease_id=handle['lease_id']
+        try:self.sandbox=await Sandbox.connect(handle['sandbox_id'],connection_config=self._config())
+        except Exception as exc:
+            if getattr(exc,'status_code',None)!=404:raise
+            self._remove_lease()
+            return
+        self.host=_WorkSandbox(sandbox=self.sandbox)
+        self.id=self.sandbox.id
 
     async def start(self):
         try:
@@ -91,11 +127,7 @@ class OpenSandboxSession:
             from code_interpreter import CodeInterpreter
         except ImportError as exc:
             raise RuntimeError("远端沙箱需要客户端依赖：uv sync --extra sandbox") from exc
-        url = urlsplit(self.settings.endpoint)
-        config = ConnectionConfig(domain=url.netloc, protocol=url.scheme,
-            api_key=self.settings.api_key, use_server_proxy=True,
-            retry_policy=RetryPolicy.disabled(),
-            request_timeout=timedelta(seconds=max(300, self.settings.startup_timeout)))
+        config = self._config()
         self.host = _WorkSandbox()
         await self._create(config, Sandbox, NetworkPolicy)
         self.id = self.sandbox.id
@@ -122,6 +154,7 @@ class OpenSandboxSession:
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
         self._save_lease(lease)
+        if callback:=getattr(self,'on_created',None):callback(self.sandbox.id)
         await self.sandbox.files.write_file('/tmp/paperagent_runtime.py', Path(__file__).with_name('runtime_helpers.py').read_bytes())
         await self.sandbox.files.write_file('/tmp/paperagent_transfer.py', Path(__file__).with_name('transfer_worker.py').read_bytes())
         self.interpreter = await CodeInterpreter.create(sandbox=self.sandbox)

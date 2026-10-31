@@ -12,18 +12,22 @@ def checksum(path):
 
 
 def freeze_inputs(fs, run_id, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
+    from .content_store import ContentStore
+    content = ContentStore(fs.root, max_file_bytes)
     info = fs.get_run_info(run_id)
     frozen = {}
     # Attempt inputs are already the task-selected inputs. Do not copy outputs or project history.
     from .transfer import input_files
     for relative,path in input_files(fs).items():
         target = fs.run_dir(run_id) / 'inputs' / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(target, lambda f, p=path: bounded_copy(p, f, max_file_bytes))
+        version = content.put(path)
+        content.link_archive(version, target)
         frozen[relative] = bounded_hash(target, max_file_bytes)
         if frozen[relative] != bounded_hash(path, max_file_bytes):
             raise ValueError('冻结输入期间文件发生变化，拒绝执行')
     info['input_hashes'] = frozen
+    info['input_snapshot_id'] = content.snapshot({name: {'sha256': version,
+        'size': (fs.run_dir(run_id) / 'inputs' / name).stat().st_size} for name, version in frozen.items()})
     fs._save_manifest()
 
 

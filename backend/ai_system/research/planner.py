@@ -16,7 +16,7 @@ research_run_python 返回真实输出、错误和文件路径。复用变量与
 文件同步由系统重试；执行结果未知时不得自动重放代码。恢复后先读取已有日志和结果，不假定旧Python内存还存在。
 所有模型请求共用项目运行预算。预算不足时保留已完成成果和未完成部分，不通过换编号或重新开始绕过限制。
 用实际工具返回的ID；参数错误在当前上下文纠正。每个原始问题保留已答、部分或未答、适用范围和停止原因。
-研究、正文均由你负责：用writing_edit直接保存Markdown或原生TeX，长稿按文件分步编辑；已有文件先读取，系统自动绑定读取回执的版本保护人工修改，不要复制哈希。不要用Python生成论文。正文与答案完成后可直接给出最终回复或research_deliver，两者进入相同的文件、引用、编译和导出流程；明确局限后可以交付部分结果，不必重复复核。
+研究、正文均由你负责：用writing_edit直接保存Markdown或原生TeX，长稿按文件分步编辑；已有文件先读取，系统自动绑定读取回执的版本保护人工修改，不要复制哈希。不要用Python生成论文。引用图表前可用writing_use_asset绑定实际文件及版本。原生TeX定稿前用writing_preview查看真正的PDF与警告，分批查看关键图表页；按需research_delegate purpose=document_review委派只读复核固定source_version和pdf_sha256，复核与主会话共用预算，正文仍由你改。模型无图像能力时明确仅检查PDF文本。编译成功不代表图表或结论正确。正文与答案完成后给出最终回复或research_deliver，进入相同交付流程；明确局限后可以交付部分结果。
 需要独立调查或复核时research_delegate：isolated提供明确任务与材料；fork继承已有上下文接手工作。不要将连续纠错拆给多个Agent，子任务结果仍由你整合。
 确需用户提供必要信息才 research_ask_user；无可行路径时 research_pause。交付、提问或启动独立比较后等待真实结果。
 """
@@ -26,9 +26,8 @@ def ready_tasks(snapshot):
     experiments = snapshot['experiments']
     return [key for key, item in experiments.items() if not item['retired']
         and item['execution_status'] == 'pending' and item['validity']=='current'
-        and all(experiments[dep]['acceptance']=='accepted' and experiments[dep]['validity']=='current'
-                for dep in item['dependencies'])
-        and all(snapshot['assumptions'][aid]['status']!='refuted' for aid in item['assumption_ids'])]
+        and all(experiments[dep]['execution_status']=='succeeded' and experiments[dep]['validity']=='current'
+                for dep in item['dependencies'])]
 
 
 def report_context(report, *, full=False):
@@ -79,7 +78,7 @@ def decision_context(store, snapshot):
 def preserved_progress(snapshot):
     runs={a['run_id'] for a in snapshot.get('activity', []) if a.get('run_id')}
     if runs:return f'已保留 {len(runs)} 次计算的代码、日志和实际结果文件。'
-    count=sum(e['acceptance']=='accepted' and e['validity']=='current' for e in snapshot['experiments'].values())
+    count=sum(e['execution_status']=='succeeded' and e['validity']=='current' for e in snapshot['experiments'].values())
     return f'已保留 {count} 项实验成果和全部执行记录。' if snapshot['executions'] else '原题和当前研究记录已保存，尚未开始实验。'
 
 
@@ -131,6 +130,7 @@ def working_context(ctx):
             'questions':rows,'runs':runs,'files':known_files(ctx)[:30],
             'file_tools':'research_list_files / research_search_files / research_read_artifact；Python沙箱不保证有正文副本',
             'document':{'path':main.name,'version':hashlib.sha256(main.read_bytes()).hexdigest(),'nonempty':bool(main.stat().st_size)} if main.is_file() else {},
+            'last_action':{k:(state.get('action') or {}).get(k) for k in ('capability','status','target','message','error_type')},
             'document_diagnostics':(state.get('action') or {}).get('result',{}).get('issues',[])}
 
 
@@ -148,12 +148,14 @@ class Planner:
         from .runtime import execution_scope
         from .views import activity
         from .review_cache import error_detail
-        registry=capabilities();tools=[];mapping={}
+        registry=capabilities();tools=[];mapping={};read_tools=set()
         for capability in sorted(registry.model_capabilities(),key=lambda c:c.name):
             name=capability.name.replace('.','_');mapping[name]=capability.name
+            if capability.access=='read':read_tools.add(name)
             async def call(_name=capability.name,**kwargs):return await invoke(ctx,_name,**kwargs)
             tools.append(StructuredTool(name=name,description=capability.purpose,args_schema=capability.inputs,coroutine=call))
         lock=asyncio.Lock()
+        read_slots=asyncio.Semaphore(4)
         known_revision=ctx.research.snapshot()["revision"]
         def input_version():
             main=ctx.workspace/('paper.tex' if ctx.output_mode=='latex' else 'paper.md')
@@ -166,7 +168,7 @@ class Planner:
         async def feedback(request,handler):
             nonlocal known_revision,known_inputs,last_tool_feedback
             call=request.tool_call;name=call['name'];key='research-tool:'+ctx.research.research_id+':'+call['id']
-            async with (ctx.delegation_slots if name=='research_delegate' else lock):
+            async with (ctx.delegation_slots if name=='research_delegate' else read_slots if name in read_tools else lock):
                 from .runtime import ResearchRuntime
                 meter=ResearchRuntime(ctx.research.root,ctx.research.research_id)
                 snapshot=ctx.research.snapshot()
@@ -190,7 +192,9 @@ class Planner:
                         if name=='writing_edit' and result.get('path')==('paper.tex' if ctx.output_mode=='latex' else 'paper.md'):
                             known_inputs={**known_inputs,'document':result['version']}
                         last_tool_feedback='；'.join(result.get('answer_gaps',[])) if isinstance(result,dict) else ''
-                        return ToolMessage(content=json.dumps(result,ensure_ascii=False,default=str),tool_call_id=call['id'],name=name)
+                        from ai_system.modules.writing.document import tool_content
+                        failed=isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}
+                        return ToolMessage(content=tool_content(ctx,result,ctx.coder_llm),tool_call_id=call['id'],name=name,status='error' if failed else 'success')
                     except (ValueError,KeyError,FileNotFoundError) as exc:
                         detail=error_detail(exc);last_tool_feedback=detail
                         meter.failed(operation,digest(detail),'tool_input',detail)
@@ -214,7 +218,7 @@ class Planner:
             observations=[]
             resumed_now=resume_note
             if resume_note:
-                observations.append(HumanMessage(content='继续原会话；Python内存可能已释放。通过工作区文件工具读取已有代码和结果，不重放已完成运行。'))
+                observations.append(HumanMessage(content='继续原会话；工具会优先重连原Python上下文，并报告context_restored和runtime_epoch；只有确认重连成功才依赖原变量。旧运行以回执为准，不重放已完成计算。'))
                 resume_note=False
             if pending_diagnostic:
                 observations.append(HumanMessage(content=pending_diagnostic));pending_diagnostic=''
@@ -259,7 +263,7 @@ class Planner:
         common={'original_request':context['source']['requirement'],'available_method_keys':context['available_method_keys'],
                 'skill_policy':context['skill_policy'],'inputs':context['inputs'],'materials':context['materials'],
                 'template_requirements':ctx.template_requirements,'compact_paper':ctx.compact_paper}
-        messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False))]
+        messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False),id='initial-request:'+ctx.research.research_id)]
         result=None
         try:
             from .session import session_saver,run_session
@@ -272,7 +276,7 @@ class Planner:
                 result=await run_session(agent,ctx.research.research_id+'-lead',messages,on_resume=resumed)
             return result
         finally:
-            await ctx.kernels.close()  # Release the execution lease before document compilation.
+            await ctx.kernels.disconnect()
             history=result['messages'] if result else recorder.messages
             if history:
                 from ai_system.modules.experiments.execution import save_transcript

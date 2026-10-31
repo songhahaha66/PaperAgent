@@ -34,7 +34,7 @@ def _project_progress(work):
             snapshot=ResearchStore(root,saved['thread_id'],read_only=True).snapshot()
             questions=(snapshot or {}).get('questions',{})
             answered={t['question_id'] for t in (snapshot or {}).get('experiments',{}).values()
-                      if not t['retired'] and t['acceptance']=='accepted' and t['validity']=='current'}
+                      if not t['retired'] and t['execution_status']=='succeeded' and t['validity']=='current'}
             if questions:progress=round(100*len(answered)/len(questions))
     # A read projection must not dirty the ORM session or infer scientific
     # completion from a document's size or an old Markdown status label.

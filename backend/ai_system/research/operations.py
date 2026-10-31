@@ -225,6 +225,8 @@ def read_question(ctx,inputs):
 
 
 def register(registry):
+    from .runtime_tools import register as register_runtime
+    register_runtime(registry)
     def register_tool(name,handler,inputs,purpose):
         async def run(ctx,values):return CapabilityProduct('research_state',handler(ctx,values))
         registry.register('research','research.'+name,'research_state',run,inputs,model_callable=True,purpose=purpose)

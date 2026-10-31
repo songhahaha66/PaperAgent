@@ -30,10 +30,10 @@ def check_state(snapshot, task, attempt, issues):
     revised = (report_artifact(snapshot,task) or {}).get('review') or {}
     if (revised.get('report_hash') == report_fingerprint(experiment_report(snapshot,task) or {}) and
             revised.get('attempt_id') == task.get('execution_id') and not revised.get('issues') and
-            task['acceptance']=='accepted' and task['validity']=='current'):
+            task['execution_status']=='succeeded' and task['validity']=='current'):
         return 'passed'
     if (reviews and reviews[-1].get('report_hash') == report_fingerprint(report)
-            and not reviews[-1].get('issues') and task.get('acceptance') == 'accepted'
+            and not reviews[-1].get('issues') and task.get('execution_status') == 'succeeded'
             and task.get('validity') == 'current'):
         return 'passed'
     # Deterministic checks alone do not certify a semantic review.

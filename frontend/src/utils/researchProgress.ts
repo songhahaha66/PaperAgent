@@ -26,7 +26,7 @@ export const executionLabel = (status: string) =>
     http_response: '接收模型响应',
     completed: '完成',
     done: '完成',
-    failed: '未完成',
+    failed: '失败',
     interrupted: '已中断',
     truncated: '生成截断',
     cancelled: '已取消',
@@ -75,12 +75,13 @@ export function taskState(task: ResearchTask, workStatus: string) {
 
 export function taskLabel(state: string, zh: boolean) {
   const labels: Record<string, string[]> = {
+    completed: ['执行完成', 'Completed'],
     accepted: ['运行已结束', 'Run finished'],
     running: ['执行中', 'Running'],
     interrupted: ['已中断，待恢复', 'Interrupted, resume needed'],
     needs_plan: ['方法待调整', 'Plan change needed'],
     failed: ['执行未成功', 'Failed, retry needed'],
-    waiting: ['等待依赖结果', 'Waiting for prerequisite checks'],
+    waiting: ['等待依赖结果', 'Waiting for prerequisite results'],
     blocked: ['需修正假设或输入', 'Assumptions or inputs need correction'],
     rework: ['待返工', 'Rework needed'],
     ready: ['可执行', 'Ready'],

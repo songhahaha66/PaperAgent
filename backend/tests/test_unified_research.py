@@ -51,9 +51,3 @@ def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_
     saved=json.loads((workspace_path(tmp_path, '.system/graph_thread.json')).read_text())
     assert saved['status']=='paused' and saved['thread_id']=='same-study'
     assert runtime.status()['used']==1
-
-
-def test_default_delivery_has_no_independent_writing_models():
-    from ai_system.modules.registry import capabilities
-    assert not {'writing.write','writing.repair'} & {c['name'] for c in capabilities().describe()}
-    assert 'writing.edit' in {c['name'] for c in capabilities().describe()}

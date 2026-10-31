@@ -86,7 +86,7 @@ def section_doubts(state, ctx):
             and i['category'] not in {'service','execution','coverage'}
             and (i['status'] in {'suspected','inconclusive'} or i['category']=='writing' and i['status']=='confirmed')
             and not i['repair_targets'] and i['id'] not in investigated
-            and snapshot['experiments'][i['task_id']]['acceptance']=='accepted' and snapshot['experiments'][i['task_id']]['validity']=='current'}
+            and snapshot['experiments'][i['task_id']]['execution_status']=='succeeded' and snapshot['experiments'][i['task_id']]['validity']=='current'}
     generated={key:i['review_scope']['generated_by_review'] for key,i in doubts.items()
                if i['source']=='review-task:sections' and i.get('review_scope',{}).get('generated_by_review')}
     if generated:

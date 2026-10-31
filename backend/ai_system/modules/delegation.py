@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import shutil
+from pathlib import Path
 from typing import Literal
 from pydantic import Field
 from langchain_core.messages import HumanMessage
@@ -14,9 +15,13 @@ class DelegateInput(Inputs):
     task_id: str | None = Field(default=None,description='继续已有子任务时使用返回的task_id。')
     context_mode: Literal['isolated','fork'] = 'isolated'
     files: list[str] = Field(default_factory=list,description='子任务必需的原始资料或已保存结果文件路径。')
+    purpose: Literal['research','document_review'] = 'research'
+    source_version: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
+    pdf_sha256: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
 
 
 async def delegate(ctx, inputs):
+    if inputs.get('purpose')=='document_review':return await review_document(ctx,inputs)
     from langchain.agents import create_agent
     from langchain.agents.middleware import wrap_tool_call
     from langchain_core.messages import ToolMessage
@@ -35,6 +40,7 @@ async def delegate(ctx, inputs):
     with store._connect() as db:
         row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,key)).fetchone()
     record=json.loads(row[0]) if row else None
+    if record and record.get('purpose')=='document_review':raise ValueError('只读复核子任务不能改为计算任务，请创建新任务')
     if inputs['task_id'] and record is None:raise ValueError('子任务不存在')
     sources={}
     for name in inputs['files']:
@@ -57,12 +63,14 @@ async def delegate(ctx, inputs):
     local=GraphContext.create(str(folder),planner_llm=ctx.planner_llm,coder_llm=ctx.coder_llm,
                               experience_scope=ctx.experience_scope)
     local.research=store
+    aliases={name:('outputs/imported/'+version+'/'+Path(name).name if name.startswith('outputs/research/') else name)
+             for name,version in sources.items()}
     for name in sources:
-        target=local.fs.abs(name)
+        target=local.fs.abs(aliases[name])
         if not record:
             target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(ctx.fs.canonical_artifact(name),target)
-        local.fs.register_file(name,kind='data',visibility='user')
+        local.fs.register_file(aliases[name],kind='data',visibility='user')
     record={**(record or {}),'task_id':tid,'task':inputs['task'],'context_mode':inputs['context_mode'],
             'inputs':sources,'initial_task':(record or {}).get('initial_task',inputs['task']),'status':'running'}
     def save():
@@ -109,7 +117,7 @@ async def delegate(ctx, inputs):
             '不要改写主论文，不再委派。返回实际结论、使用的条件、结果文件路径、已做的校验、错误和未知。'
             '执行成功不代表结论正确，检查失败必须明确说明。不要假定恢复后Python变量还存在。')
     history=list(getattr(ctx,'agent_messages',[])) if inputs['context_mode']=='fork' and not row else []
-    messages=[*history,HumanMessage(content=json.dumps({'task':inputs['task'],'files':sources,'runtime_note':'本次调用使用新Python上下文；已有文件仍在，读取必要代码和文件，不重放已完成运行。'},ensure_ascii=False))]
+    messages=[*history,HumanMessage(content=json.dumps({'task':inputs['task'],'files':sources,'local_paths':aliases,'runtime_note':'新子任务使用独立Python上下文；继续已有子任务时优先重连原上下文，未确认恢复时只复用文件。不要重放已完成运行。'},ensure_ascii=False))]
     try:
         if record.get('model_task')!=inputs['task'] or 'answer' not in record:
             from ai_system.graph.tracing import labelled
@@ -152,9 +160,95 @@ async def delegate(ctx, inputs):
         raise
     finally:
         save()
-        await local.kernels.close()
+        await local.kernels.disconnect()
+
+
+async def review_document(ctx, inputs):
+    """An optional read-only task in the existing session/checkpoint/budget system."""
+    import copy
+    from langchain.agents import create_agent
+    from langchain_core.tools import StructuredTool
+    from langchain_core.messages import ToolMessage
+    from langchain.agents.middleware import wrap_tool_call
+    from ai_system.graph.compaction import ContextMiddleware
+    from ai_system.research.session import session_saver,run_session
+    from ai_system.research.runtime import execution_links,execution_scope
+    from ai_system.research.files import resolve,text_file
+    from ai_system.sandbox.content_store import ContentStore
+    from services.chat_services import paper_project as project
+    from services.file_services.workspace_layout import workspace_path
+    from .writing.document import render_pages,tool_content
+    version,pdf_hash=inputs['source_version'],inputs['pdf_sha256']
+    if not version or not pdf_hash:raise ValueError('先writing_preview取得实际source_version和pdf_sha256，再委派只读复核')
+    archive=workspace_path(ctx.workspace,project.VERSIONS)/version
+    build=archive/'builds'/f'{pdf_hash}.json'
+    if not build.is_file():raise ValueError('指定版本没有已完成的PDF构建')
+    tid=inputs['task_id'] or hashlib.sha256((execution_links().get('action_id') or json.dumps(inputs,sort_keys=True)).encode()).hexdigest()[:20]
+    if len(tid)!=20 or any(c not in '0123456789abcdef' for c in tid):raise ValueError('task_id无效')
+    store=ctx.research;key='delegation:'+tid
+    with store._connect() as db:row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,key)).fetchone()
+    previous=json.loads(row[0]) if row else None
+    if inputs['task_id'] and previous is None:raise ValueError('复核子任务不存在')
+    if previous and (previous.get('purpose'),previous.get('source_version'),previous.get('pdf_sha256'))!=('document_review',version,pdf_hash):
+        raise ValueError('子任务不能换版本，请创建新复核任务')
+    content=ContentStore(ctx.workspace,20_000_000)
+    sources=dict(previous.get('inputs',{})) if previous else {}
+    if previous and set(inputs['files'])-set(sources):raise ValueError('已有复核任务不能更换材料')
+    if not previous:
+        for name in inputs['files']:sources[name]=await asyncio.to_thread(content.put,resolve(ctx,name))
+    record={**(previous or {}),'task_id':tid,'purpose':'document_review','task':inputs['task'],
+            'source_version':version,'pdf_sha256':pdf_hash,'inputs':sources,'status':'running'}
+    def save():
+        with store._transaction() as db:db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
+            (store.research_id,key,tid,json.dumps(record,ensure_ascii=False)))
+    if previous and previous.get('status')=='completed' and previous['task']==inputs['task']:
+        return CapabilityProduct('research_state',{**previous,'current':project.snapshot(ctx.workspace)['version']==version})
+    manifest=json.loads((archive/'manifest.json').read_text());seen=set(record.get('reviewed_pages',[]))
+    async def pages(pages:list[int]):
+        if not 1<=len(pages)<=4:raise ValueError('每次读取1至4页')
+        value=await asyncio.to_thread(render_pages,ctx.workspace,version,pdf_hash,pages)
+        seen.update(pages);record['reviewed_pages']=sorted(seen);save()
+        return value
+    async def read(path:str,start:int=0,limit:int=12000):
+        if path in manifest:source=archive/path
+        elif path in sources:source=content.path(sources[path])
+        else:raise ValueError('只能读取固定版本源码与指定材料')
+        _,text=await asyncio.to_thread(text_file,source,Path(path).suffix)
+        start=max(0,start);limit=min(max(limit,1),24000)
+        return {'path':path,'source_version':version,'excerpt':text[start:start+limit],'total_chars':len(text)}
+    tools=[StructuredTool.from_function(coroutine=pages,name='view_pdf_pages',description='读取固定PDF的实际页面；每次1至4页，页码从1开始。'),
+           StructuredTool.from_function(coroutine=read,name='read_file',description='读取固定版本正文和分配材料，返回文本。')]
+    @wrap_tool_call
+    async def visual(request,handler):
+        # StructuredTool serializes dictionaries; images hydrate only for the model.
+        try:message=await handler(request)
+        except (ValueError,KeyError,FileNotFoundError) as exc:
+            return ToolMessage(content=str(exc),tool_call_id=request.tool_call['id'],name=request.tool_call['name'],status='error')
+        if request.tool_call['name']=='view_pdf_pages':
+            value=json.loads(message.content)
+            return message.model_copy(update={'content':tool_content(ctx,value,ctx.coder_llm)})
+        return message
+    local=copy.copy(ctx);local.agent_messages=[]
+    prompt=('你是主研究Agent按需调用的只读论文复核者，复用同一总预算。只检查指定固定版本，不能编辑正文、运行计算或再委派。'
+            '先查看实际PDF页，再按疑点读取源码和指定材料。区分排版、原要求缺项、数值与计算口径疑点；没有图像能力时明确仅做文本复核。'
+            '返回具体问题：source_version、pdf_sha256、页码、严重程度、类别、观察到什么、支持材料、建议主Agent怎么核实；说明已看页码与未检查范围。'
+            '没有依据不能说计算通过。建议仅供主Agent判断，不生成改稿或自动验收结论。')
+    save()
+    try:
+        with execution_scope(step='论文只读复核',subject=tid):
+            async with session_saver(ctx) as saver:
+                agent=create_agent(model=ctx.coder_llm,tools=tools,system_prompt=prompt,checkpointer=saver,
+                    middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-review-'+tid,pinned={
+                        'source_version':version,'pdf_sha256':pdf_hash,'files':list(manifest),'materials':sources}),visual])
+                result=await run_session(agent,store.research_id+'-review-'+tid,[HumanMessage(content=inputs['task'])])
+        record.update(status='completed',answer=str(result['messages'][-1].content),reviewed_pages=sorted(seen))
+    except BaseException:
+        record['status']='interrupted';raise
+    finally:save()
+    return CapabilityProduct('research_state',{**record,'current':project.snapshot(ctx.workspace)['version']==version,
+        'advisory':True,'note':'复核意见绑定该版本；由主Agent决定修改，未自动判定论文通过。'})
 
 
 def register(registry):
     registry.register('research','research.delegate','research_state',delegate,DelegateInput,model_callable=True,
-        purpose='按需委派独立调查、计算或复核，返回实际结论与文件；isolated独立上下文，fork继承当前会话。指定files；用task_id继续原子任务。连续建模纠错由主会话完成。')
+        purpose='按需委派调查、计算或只读PDF复核，复用现有会话和总预算。document_review需writing_preview返回的source_version和pdf_sha256；只能看固定版本与指定材料，不能改论文或运行代码。用task_id继续子任务。')
