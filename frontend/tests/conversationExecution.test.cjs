@@ -143,7 +143,7 @@ test('manually collapsed errors keep their diagnostic details', async (t) => {
     false,
     'manual collapse persists through error updates',
   )
-  assert.match(text(host.root), /未完成/, 'failure stays visible even when manually folded')
+  assert.match(text(host.root), /失败/, 'failure stays visible even when manually folded')
   heading().props.onClick()
   await flush()
   assert.match(
@@ -166,7 +166,7 @@ test('later success never relabels an earlier failure', async (t) => {
   heading().props.onClick()
   await flush()
   assert.match(text(host.root), /original error/)
-  assert.match(text(host.root), /未完成/, 'the earlier attempt retains its own status')
+  assert.match(text(host.root), /失败/, 'the earlier attempt retains its own status')
   assert.doesNotMatch(text(host.root), /后续已完成/)
   heading().props.onClick()
 })
@@ -304,7 +304,7 @@ test('retry progress follows the latest step and retains old errors', async (t) 
   assert.doesNotMatch(group().props.class, /failed/)
   assert.doesNotMatch(
     text(host.root),
-    /未完成|执行超时/,
+    /失败|执行超时/,
     'an earlier timeout does not pin the compact group to failure',
   )
   state.segments = [...state.segments, step('save', 'running', '保存计算结果')]
@@ -329,7 +329,7 @@ test('retry progress follows the latest step and retains old errors', async (t) 
   )
   assert.match(
     text(host.root),
-    /计算基本统计量未完成/,
+    /计算基本统计量失败/,
     'history preserves each attempt’s own status',
   )
   heading().props.onClick()
@@ -343,7 +343,7 @@ test('retry progress follows the latest step and retains old errors', async (t) 
   await flush()
   assert.match(
     text(heading()),
-    /导出结果未完成4 次操作/,
+    /导出结果失败4 次操作/,
     'a failure of the latest step still appears',
   )
   assert.match(group().props.class, /failed/)
