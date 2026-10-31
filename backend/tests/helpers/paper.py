@@ -12,7 +12,7 @@ def accepted_store(root):
     submit(store, 'Q3', {'independent': 3})
     submit(store, 'Q2', {'allocation': 8, 'residual': 0})
     before=store.snapshot()
-    assert not store.delivery_ready(before), 'Execution results alone do not answer the user questions'
+    assert any(q['answer_gaps'] for q in questions(before)), 'Execution results alone do not record question answers'
     results=store.registry_payload()['results']
     for question in questions(before):
         if question.get('retired'):continue
@@ -27,6 +27,15 @@ def accepted_store(root):
     assert store.delivery_ready(after)
     assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
     return store
+
+
+def selection(store, quote, occurrence=0, file='paper.md'):
+    from services.chat_services import paper_project
+    doc=paper_project.snapshot(store.root)
+    text=next(r['text'] for r in doc['files'] if r['path']==file)
+    start=-1
+    for _ in range(occurrence+1): start=text.index(quote,start+1)
+    return {'file':file,'version':doc['version'],'start':start,'end':start+len(quote),'quote':quote}
 
 def render_native_paper(store, state):
     """Build file-project fixtures through the same registry/citation renderers."""

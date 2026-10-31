@@ -3,7 +3,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import asyncio
-import json
 import shutil
 from types import SimpleNamespace
 
@@ -12,23 +11,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from ai_system.research.models import ResearchConflict
 from services.chat_services import paper_editor as editor
-from helpers.paper import accepted_store
 from services.file_services.workspace_layout import workspace_path
-from ai_system.modules.writing.validation import assemble
-from ai_system.modules.writing.sections import section_plan
-from ai_system.research.control import graph_view
-
-
-@pytest.fixture
-def paper(tmp_path):
-    store = accepted_store(tmp_path)
-    state = graph_view(store.snapshot())
-    sections = {key: '原来的表述说明研究范围与局限。' * 8 for key, _, _ in section_plan(state) if key != 'solve_heading'}
-    state['sections'] = sections
-    store.save_sections(sections, [])
-    store.publish_paper(assemble(state))
-    workspace_path(tmp_path,'.system/graph_thread.json').write_text(json.dumps({'thread_id': store.research_id, 'engine_version': 'research-v3'}))
-    return store, state
 
 
 def candidate(store):

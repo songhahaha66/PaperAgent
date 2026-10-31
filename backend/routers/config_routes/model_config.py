@@ -87,7 +87,7 @@ async def model_readiness(current_user: int = Depends(auth.get_current_user), db
                        'base_url': config.base_url, 'timeout_seconds': config.timeout_seconds}
         except ValueError:
             roles[role] = False
-    return {"roles": roles, "ready": all(roles.values()),
+    return {"roles": roles, "ready": all(roles[role] for role in ('brain','code','writing')),
             'research_ready': all(roles[role] for role in ('brain','code','writing')),
             'jev': jev}
 

@@ -131,13 +131,6 @@
           >查看已准备的工作区与失败原因</router-link
         >
         <div v-if="modelConfigLoaded && !modelsReady" class="composer-meta">
-          <p v-if="jevMissing">
-            {{
-              isZh
-                ? '自动聊天需要配置 Jev。明确操作按钮不依赖 Jev。'
-                : 'Automatic chat requires Jev configuration. Explicit action buttons do not require Jev.'
-            }}
-          </p>
           <router-link to="/api-config">
             <t-icon name="setting" />{{ isZh ? '配置模型连接' : 'Set up a model connection' }}
           </router-link>
@@ -305,7 +298,6 @@ function fillDataExample() {
 const loadingTemplates = ref(false),
   creating = ref(false),
   modelsReady = ref(false),
-  jevMissing = ref(false),
   modelConfigLoaded = ref(false),
   creationError = ref('')
 const formats = computed(() => [
@@ -421,7 +413,6 @@ onMounted(async () => {
   try {
     const readiness = await modelConfigAPI.readiness()
     modelsReady.value = readiness.ready
-    jevMissing.value = !readiness.roles.jev
   } catch {
     modelsReady.value = false
   } finally {

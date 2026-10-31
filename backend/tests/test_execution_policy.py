@@ -115,9 +115,34 @@ def test_repeated_error_cannot_evade_guard_by_alternating_with_another_error(tmp
     assert runtime.stop_reason()['kind']=='repeated_failure'
 
 
-def test_resume_cannot_bypass_pending_confirmation():
-    from services.chat_services.research_session import ResearchSnapshot,resolve_action
-    snapshot=ResearchSnapshot(work_id='pending',work_status='waiting',research_id='study',engine_version='research-v3',graph_status='interrupted')
-    with pytest.raises(ValueError, match='等待必要信息'):
-        asyncio.run(resolve_action('resume','继续',snapshot))
-    assert asyncio.run(resolve_action('confirm','确认方案',snapshot))=='confirm'
+def test_recoverable_attempt_failure_does_not_stop_the_research(tmp_path):
+    runtime=ResearchRuntime(tmp_path)
+    runtime.note_stop('running','研究执行中')
+    assert runtime.failed('old-code','shape','execution','shape mismatch')==1
+    assert runtime.guard('old-code')['count']==1
+    assert runtime.stop_reason()['kind']=='running'
+    runtime.succeeded('fixed-code')
+    assert runtime.stop_reason()['kind']=='running'
+    assert runtime.guard('old-code')['count']==1, 'the failed attempt remains available'
+    # Read a legacy first-failure projection without changing any model history.
+    with runtime.store._transaction() as db:
+        runtime._stop(db,{'kind':'execution','message':'old failure','operation':'old-code'})
+    runtime.succeeded('another-fixed-code')
+    assert runtime.stop_reason() is None
+    with runtime.store._transaction() as db:
+        runtime._stop(db,{'kind':'execution','message':'old failure','operation':'old-code'})
+    runtime.failed('old-code','shape','execution','shape mismatch')
+    assert runtime.stop_reason() is None
+
+
+def test_only_an_actual_block_or_terminal_failure_sets_the_stop_reason(tmp_path):
+    runtime=ResearchRuntime(tmp_path)
+    for _ in range(3):runtime.failed('operation','same-error','execution','execution failed')
+    assert runtime.stop_reason() is None
+    with pytest.raises(RepeatedOperationBlocked):runtime.check_guard('operation')
+    assert runtime.stop_reason()['operation']=='operation'
+    runtime.succeeded('operation')
+    assert runtime.stop_reason() is None
+    runtime.failed('provider','auth','authentication','authentication failed',terminal=True)
+    runtime.failed('other-code','shape','execution','shape mismatch')
+    assert runtime.stop_reason()['kind']=='authentication'

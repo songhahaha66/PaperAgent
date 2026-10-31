@@ -53,6 +53,7 @@ members = []
 dev = ["pytest-timeout>=2.4.0"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 required_plugins = ["pytest-timeout>=2.4.0"]
 timeout = 60
 # Terminate even if an async task swallows cancellation or teardown blocks.

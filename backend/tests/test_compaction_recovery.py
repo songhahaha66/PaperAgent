@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage,HumanMessage,ToolMessage,messages_
 from ai_system.config.generation import ModelContextLimit,ModelContextOverflow
 from ai_system.graph.compaction import ContextMiddleware
 from ai_system.research.runtime import execution_links
-from test_context_delivery import context,Request
+from helpers.context import delivery_context as context, ContextRequest as Request
 from research_tools_helpers import ResearchToolsModel,tool
 
 
@@ -173,7 +173,7 @@ def test_real_client_overflow_compacts_and_resumes_without_executing_code_twice(
     from ai_system.modules.registry import invoke
     from ai_system.core_handlers.llm_providers import MeteredChatOpenAI
     from ai_system.research.runtime import budget_scope,ResearchRuntime
-    from test_generation_budgets import response
+    from helpers.model_response import response
     requests=[];main=0
     def wire(request):
         nonlocal main

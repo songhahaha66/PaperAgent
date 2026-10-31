@@ -3,8 +3,7 @@ from services.file_services.workspace_layout import workspace_path
 import asyncio
 from types import SimpleNamespace
 import pytest
-from test_paper_editor import paper
-from test_review_cache import no_network
+from helpers.review import no_network
 from services.chat_services import paper_editor as editor,paper_corrections as edits
 from ai_system.modules.writing import consistency as consistency
 from ai_system.modules.writing.validation import assemble
@@ -82,7 +81,7 @@ def test_model_cannot_expand_scope_change_numbers_or_add_citations(scoped,monkey
 def test_scoped_apply_pdf_failure_preserves_old_files_and_versions(scoped,monkeypatch,conflict):
     from helpers.paper import render_native_paper
     from services.chat_services import paper_project as project
-    from test_paper_interactions import selection
+    from helpers.paper import selection
     v=scoped;v.store.publish_paper(render_native_paper(v.store,v.state),filename='paper.tex');(v.store.root/'paper.pdf').write_bytes(b'previous PDF')
     before=v.store.snapshot();original=(v.store.root/'paper.tex').read_bytes()
     bound=selection(v.store,v.old,file='paper.tex');replacement='主要局限源于数据规模和实验设计。'

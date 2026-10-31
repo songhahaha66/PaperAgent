@@ -132,7 +132,7 @@ def public_snapshot(snapshot, *, work_status=None, source_root=None):
         from services.chat_services.paper_project import snapshot as source_snapshot
         path=workspace_path(Path(source_root), '.system/validation.json')
         checked=json.loads(path.read_text()) if path.exists() else {}
-        if checked.get('source_version')!=source_snapshot(source_root)['version']:
+        if (snapshot.get('export_source_version') or checked.get('source_version'))!=source_snapshot(source_root)['version']:
             stages={k:({**stage,'status':'pending','note':'源码已更新，需检查当前版本'}
                        if k in {'validate','render','export'} and stage['status']=='completed' else stage)
                     for k,stage in stages.items()}

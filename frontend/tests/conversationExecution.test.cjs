@@ -281,6 +281,15 @@ test('delivery phase stays active until files are delivered', async (t) => {
   assert.doesNotMatch(text(heading()), /完成/)
 })
 
+test('a paused reply cannot keep an old execution spinning', async (t) => {
+  const { state, host, heading } = await mount(t)
+  state.replyStatus = 'paused'
+  await flush()
+  assert.match(text(heading()), /已中断/)
+  assert.doesNotMatch(host.find(node => node.kind === 'section').props.class, /running/)
+  assert.equal(state.segments[0].execution.status, 'running', 'the display does not rewrite saved history')
+})
+
 test('retry progress follows the latest step and retains old errors', async (t) => {
   const { state, host, heading, button, opened, results, response } = await mount(t)
   const step = (id, status, label, extra = {}) => ({

@@ -9,6 +9,24 @@
 
 一个行为优先由一条完整流程验证。辅助工具、展示文案、内部结构和简单转换不单独铺开测试；新增回归应能说明具体故障和用户后果。权限与输入安全的参数化用例保留不同攻击路径。
 
+## 场景索引
+
+这些文件是入口示例，并非完整文件清单；有些场景跨越多个模块。
+
+| 场景 | 主要检查 | 示例 |
+| --- | --- | --- |
+| 研究与计算 | 原始材料、研究问题、持续执行的 Python、结果与来源、后续计算 | `test_single_research_agent.py`、`test_paper_graph.py`、`test_context_sessions.py` |
+| 中断与恢复 | 暂停、取消、重连、请求失败和上下文压缩后恢复；不重复执行代码或重置预算 | `test_execution_policy.py`、`test_compaction_recovery.py`、`test_research_delivery_recovery.py` |
+| 沙箱与文件 | 执行记录、文件版本、上传下载失败、损坏输出、交付重试、沙箱切换 | `test_kernel.py`、`test_api_workspace_transfer.py`、`test_sandbox_factory.py` |
+| 写作与导出 | Word/LaTeX/PDF、图表和引用、编辑审查、人工修改冲突、发布失败回滚 | `test_export.py`、`test_paper_interactions.py`、`test_scoped_paper_edits.py` |
+| 权限与安全 | 用户和项目隔离、登录、路径穿越、符号链接、外部 URL 与凭据保护 | `test_passkey.py`、`test_workspace_routes.py`、`test_security_regressions.py`、`test_literature.py` |
+| 产品状态与配置 | 研究进度、消息记录、个人经验、模型配置和请求/费用预算 | `test_conversation_timeline.py`、`test_experience_api.py`、`test_generation_budgets.py` |
+| 前端工作区 | 标签和分屏、草稿与阅读位置、消息流、结果预览、配置和断线恢复 | `frontend/tests/workInteractions.test.cjs`、`conversationStream.test.cjs`、`workPreview.test.cjs` |
+
+前端测试使用组件及模块测试环境，不是完整浏览器端到端测试。离线测试不能判断真实模型回答的正确性、远端沙箱部署或生产服务之间的连通性；这些需要另行验收。
+
+共享测试搭建应放在 `tests/helpers/` 或 `conftest.py`，避免从其他 `test_*.py` 导入。测试必须能单独运行，不能依赖其他测试文件的收集顺序。
+
 从 `backend/` 运行测试。安装沙箱 SDK 以覆盖文件 API 适配器；沙箱协议测试使用独立文件树的替身，不需要远端服务：
 
 ```sh

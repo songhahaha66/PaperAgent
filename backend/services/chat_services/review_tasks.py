@@ -7,7 +7,7 @@ from contextlib import closing
 from ai_system.research.store import ResearchStore,digest
 from ai_system.research.control import paper_state
 from ai_system.research.models import IssueReport,ResearchConflict
-from ai_system.research.review_cache import ReviewCache,ReviewInProgress,ReviewSuperseded,review_context,science_version
+from ai_system.research.review_cache import ReviewCache,ReviewInProgress,ReviewSuperseded,review_context,science_version,retired_review
 from ai_system.research.review_migration import context_from_store
 from ai_system.research.runtime import ResearchRuntime,budget_scope
 from ai_system.graph.state import ClaimAudit,ConsistencyReview
@@ -47,11 +47,9 @@ def records(store):
 
 
 def valid_result(row,store=None):
+    if retired_review(row):return False
     if row['state']!='completed' or row.get('result_hash')!=digest(row.get('result')):return False
     if row['stage']=='sections' and not row.get('context',{}).get('section_coverage',{}).get('complete',True):return False
-    if row.get('source')=='segmented-aggregate':
-        from ai_system.research.segmented_review import verify_proof
-        return bool(store and verify_proof(store,row))
     return True
 
 
@@ -85,9 +83,8 @@ def adopted_review(store,current,rows):
 def expire_leases(store):
     cache=ReviewCache(store)
     for row in records(store):
+        if retired_review(row):continue
         if row['state']=='running' and row.get('lease',{}).get('expires_at',row.get('started_at',0)+120)<time.time():
-            if row['stage'] in {'section_blocks','section_global','issue_target'}:
-                cache.failed(row,RuntimeError('interrupted'),diagnostic={'reason':'lease_expired','recoverable':True});continue
             if row['source']=='recovery-intent':current=intent_context(store,row['stage'])==row['context']
             elif row['context'].get('extra',{}).get('non_blocking',False):current=candidate_current(store,row)
             else:current=matches(row,material(store,row['stage']),row['stage']) if row['stage'] in LABELS else False
@@ -115,11 +112,10 @@ def status(store):
     store.refresh_inputs();expire_leases(store);rows=records(store);snapshot=store.snapshot();runtime=ResearchRuntime(store.root,store.research_id);budget=runtime.status();tasks=[]
     from ai_system.research.citations import citation_issues
     state=paper_state(store)
-    prerequisites=bool(store.registry_payload(snapshot)['results'])
     for stage,label in LABELS.items():
         current=material(store,stage);context={'policy':'review-recovery-intent-v1','stage':stage,'version_material':current,'extra':{'non_blocking':True}}
         version=digest(context);same=[r for r in rows if r['source']=='recovery-intent' and r['context_hash']==version]
-        root=[r for r in rows if r['stage']==stage and r['source']!='recovery-intent' and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
+        root=[r for r in rows if r['stage']==stage and r['source']!='recovery-intent' and not retired_review(r) and not r['context'].get('extra',{}).get('non_blocking',False) and matches(r,current,stage)]
         coverage={'reconcile':'当前登记结论与研究契约','sections':'当前版本重要结论、已知矛盾与登记依据的一致性','citations':'当前引用句与登记原文支持性'}[stage]
         item={'stage':stage,'label':label,'version':version,'state':'pending','coverage':coverage,'record_id':None,'reason':None,'can_resume':True}
         applicable=(stage!='reconcile' or len(context_from_store(store,'version').registry.claims)>=2) and (stage=='reconcile' or bool(state['sections']))
@@ -146,7 +142,6 @@ def status(store):
             item.update(state='pending',can_resume=False,reason='源文件有人工修改，先合并原稿')
         if item['can_resume']:
             if current['source_conflict']:item.update(can_resume=False,reason='源文件有人工修改，先合并原稿')
-            elif not prerequisites:item.update(can_resume=False,reason='先完成当前研究任务的验收/重算')
             elif budget['state']=='provider_blocked':item.update(can_resume=False,reason='网关鉴权或额度拒绝，先修复配置')
             elif budget.get('request_limit') is not None and budget['used']>=budget['request_limit']:item.update(can_resume=False,reason=f"请求预算不足（{budget['used']}/{budget['request_limit']}），进度保留，追加授权后可恢复")
         tasks.append(item)
@@ -191,7 +186,7 @@ async def execute(store,stage,llm):
     if stage=='citations':
         from ai_system.research.citations import audit_citations,citation_issues
         await audit_citations(store.root,list(state['sections'].values()),llm,active=True)
-        reports=[IssueReport(task_id=next(iter(store.snapshot()['experiments'])),category='writing',section=k,message=m) for k,t in state['sections'].items() for m in citation_issues(store.root,t)]
+        reports=[IssueReport(category='writing',section=k,message=m) for k,t in state['sections'].items() for m in citation_issues(store.root,t)]
     elif stage=='sections':
         from ai_system.modules.writing.consistency import audit_sections
         reports=await audit_sections(state,ctx,force=True)
@@ -265,7 +260,7 @@ def start(store,stage,version,command_id,llm=None,*,model_factory=None):
     except ReviewInProgress as active:return {'id':active.record['id'],'state':'running','deduplicated':True}
     with store._transaction() as db:
         state=store._read(db)
-        issue=store._record_issue(state,IssueReport(task_id=next(iter(state['experiments'])),category='service',section='review-task:'+record['id'],message=LABELS[stage]+'待完成；恢复不会清零预算'),'confirmed',source='review-task:'+stage)
+        issue=store._record_issue(state,IssueReport(category='service',section='review-task:'+record['id'],message=LABELS[stage]+'待完成；恢复不会清零预算'),'confirmed',source='review-task:'+stage)
         issue['review_scope']={'stage':stage,'context_hash':record['context_hash'],'failed_review_id':record['id']}
         store._save(db,state,'review_task_started',{'review_id':record['id'],'version':version,'stage':stage,'issue_id':issue['id']})
     worker=asyncio.create_task(_run(store,stage,record,llm));ACTIVE.add(worker);worker.add_done_callback(ACTIVE.discard)

@@ -102,18 +102,18 @@ def test_failed_attempt_is_not_published_and_resume_preserves_accepted_predecess
 
 
 def test_resume_after_delivery_failure_preserves_all_committed_attempts(tmp_path, monkeypatch):
-    import ai_system.modules.writing.validation as build_module
+    import ai_system.modules.writing.export as build_module
     agent = agent_for(tmp_path)
-    writer = build_module.render
+    writer = build_module.export
 
     async def fail_delivery(state, runtime):
         raise RuntimeError("writer temporarily unavailable")
 
-    monkeypatch.setattr(build_module, "render", fail_delivery)
+    monkeypatch.setattr(build_module, "export", fail_delivery)
     assert "任务执行失败" in asyncio.run(agent.run(TASK))
     store = ResearchStore(agent.workspace_dir, agent._load_thread())
     from ai_system.research.runs import direct_runs
     attempts = direct_runs(store)
-    monkeypatch.setattr(build_module, "render", writer)
+    monkeypatch.setattr(build_module, "export", writer)
     assert "paper.md" in asyncio.run(agent.resume_failed())
     assert direct_runs(store) == attempts

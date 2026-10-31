@@ -570,18 +570,22 @@ if (require.main === module) (async () => {
     'PASS: work progress uses experiment and model records and rejects stale snapshots across recovery',
   )
 
-  let resolveReadiness
-  const ready=new Promise(resolve=>{resolveReadiness=resolve})
-  const beforeReady=await env.work('leaving-before-readiness',true,[],{},()=>ready)
-  const pending=beforeReady.state.sendMessage('Do not send after leaving before readiness')
-  beforeReady.stop();resolveReadiness({roles:{jev:true}});await pending
-  assert.equal(beforeReady.sent.length,0)
-  assert.equal(beforeReady.sockets.length,0,'Unmounting before readiness resolves must not create a socket')
+  let classifierChecks=0
+  const noClassifier=await env.work('no-classifier',false,[],{},async()=>{
+    classifierChecks++
+    throw new Error('Jev unavailable')
+  })
+  await noClassifier.state.sendMessage('Explain the current result')
+  assert.equal(classifierChecks,0,'Sending a message must not request Jev readiness')
+  assert.equal(noClassifier.sent.length,1)
+  assert.equal(noClassifier.sent[0].message,'Explain the current result')
+  noClassifier.stop()
+  console.log('PASS: ordinary messages reach the workspace socket without a classifier connection')
 
   const leaving = await env.work('leaving', true)
   const send = leaving.state.sendMessage('Do not send after leaving')
   await flush()
-  assert.equal(leaving.connected.length,1,'Readiness completed and connection is pending before leaving')
+  assert.equal(leaving.connected.length,1,'Connection is pending before leaving')
   leaving.stop()
   leaving.connected[0]()
   await send

@@ -8,7 +8,7 @@ from ai_system.modules.registry import invoke
 from ai_system.research.views import execution
 from services.chat_services.chat_history_manager import ChatHistoryManager
 from services.chat_services.conversation_timeline import ReplyWriter, TIMELINE, public_reply, resolve_executions
-from test_context_sessions import context
+from helpers.context import session_context as context
 
 
 def conversation(tmp_path):

@@ -4,8 +4,7 @@ import asyncio,hashlib,json
 from types import SimpleNamespace
 import pytest
 from sklearn.linear_model import LinearRegression,Ridge
-from test_paper_editor import paper
-from test_review_cache import no_network
+from helpers.review import no_network
 from ai_system.research.method_facts import verified_methods,canonical_method_block
 from ai_system.modules.experiments.store import ExperimentStore
 from ai_system.research.store import digest

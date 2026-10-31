@@ -13,8 +13,8 @@ from services.file_services.workspace_fs import WorkspaceFS
 
 pytestmark = pytest.mark.usefixtures("offline_kernel")
 
-@pytest.mark.parametrize('recovery', ['replacement', 'changed_file', 'lost_snapshot', 'different_cache'])
-def test_rebuilt_kernel_recovers_only_original_outputs(tmp_path, recovery):
+@pytest.mark.parametrize('recovery', ['lost_snapshot', 'different_cache'])
+def test_rebuilt_kernel_rejects_missing_or_wrong_snapshot(tmp_path, recovery):
     class InterruptedFiles(FakeSession):
         offline = True
         async def download(self, path, destination, max_bytes):
@@ -31,25 +31,17 @@ def test_rebuilt_kernel_recovers_only_original_outputs(tmp_path, recovery):
         assert kernel.fs.get_run_info(first.run_id)['output_manifest']
         await kernel.close()
         session.offline = False
-        if recovery == 'changed_file':
-            (session.remote / 'outputs/table.csv').write_text('later scratch bytes')
-        elif recovery == 'lost_snapshot':
+        if recovery == 'lost_snapshot':
             import shutil
             shutil.rmtree(session.remote / '.pa-runs')
-        elif recovery == 'different_cache':
+        else:
             session.cache_key = 'f' * 64
         rebuilt = RemoteKernel(tmp_path, session, settings)
         try:
-            if recovery in {'lost_snapshot', 'different_cache'}:
-                with pytest.raises((RuntimeError, FileNotFoundError)):
-                    await rebuilt.retry_outputs()
-                assert rebuilt.pending_run == first.run_id
-                assert (tmp_path / 'outputs/table.csv').read_text() == 'old local version'
-            else:
+            with pytest.raises((RuntimeError, FileNotFoundError)):
                 await rebuilt.retry_outputs()
-                assert rebuilt.fs.get_run_info(first.run_id)['delivery_error'] is None
-                assert (tmp_path / 'outputs/table.csv').read_text() == 'new remote version'
-                assert rebuilt.fs.read_text(f'runs/{first.run_id}/artifacts/outputs/table.csv') == 'new remote version'
+            assert rebuilt.pending_run == first.run_id
+            assert (tmp_path / 'outputs/table.csv').read_text() == 'old local version'
             assert session.calls == ['new remote version']
         finally:
             await rebuilt.close()

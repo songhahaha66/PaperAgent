@@ -453,6 +453,8 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                         )
                 elif action == "revise_research":
                     await main_agent.revise_research(change=problem, **revision_command.model_dump())
+                elif action == "message":
+                    await main_agent.send_message(problem, question_id=subproblem_id)
                 elif action == "resume":
                     await main_agent.resume_failed()
                 else:
@@ -655,29 +657,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 subproblem_id = message_data.get('subproblem_id')
                 if subproblem_id is not None and not isinstance(subproblem_id, str):
                     raise ValueError('问题范围无效')
-                recent_dialogue = []
-                intent_judge = None
-                if requested_action == 'auto':
-                    from services.chat_services.chat_history_manager import ChatHistoryManager
-                    from ai_system.judge import JevJudge
-                    from ai_system.config.environment import DatabaseConfigManager
-                    def load_intent_config():
-                        config_db = next(get_db())
-                        try:
-                            return DatabaseConfigManager(config_db).get_model_config('jev', user_id)
-                        finally:
-                            config_db.close()
-                    intent_config = await asyncio.to_thread(load_intent_config)
-                    intent_judge = JevJudge(model=intent_config.model_id, api_key=intent_config.api_key,
-                                            base_url=intent_config.base_url, timeout=intent_config.timeout_seconds)
-                    recent_dialogue = await asyncio.to_thread(ChatHistoryManager().get_messages, work_id, 6)
-                try:
-                    action = await resolve_action(requested_action, problem, snapshot, recent_dialogue,
-                                                  scope=subproblem_id, judge=intent_judge,
-                                                  timeout_seconds=intent_config.timeout_seconds if intent_judge is not None else 30)
-                finally:
-                    if intent_judge is not None:
-                        await intent_judge.aclose()
+                action = await resolve_action(requested_action, problem, snapshot)
                 if action != 'ask':
                     if task_manager.get_active_task(work_id):
                         raise ValueError('当前有任务正在执行，请等待完成')
@@ -689,16 +669,6 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                     from pydantic import ValidationError
                     try:
                         revision=message_data.get('revision')
-                        if revision is None and message_data.get('action','auto')=='auto':
-                            from uuid import uuid4
-                            from services.chat_services.research_session import revision_experiment_scope
-                            expected=message_data.get('scope_context')
-                            if expected is not None and (not isinstance(expected,dict) or
-                                    expected.get('research_id')!=snapshot.research_id or
-                                    expected.get('base_revision')!=snapshot.research_revision):
-                                raise ValueError('研究版本已改变，请刷新后重试')
-                            revision={'command_id':uuid4().hex,'research_id':snapshot.research_id,
-                                      'base_revision':snapshot.research_revision,'scope':revision_experiment_scope(snapshot,subproblem_id)}
                         revision_command = ResearchRevisionCommand.model_validate(revision)
                     except ValidationError:
                         raise ValueError("增量修改需要有效的命令标识、研究标识和基础版本")
@@ -709,6 +679,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         raise ValueError("修改范围包含未知或重复任务")
                     if revision_command.research_id != snapshot.research_id:
                         raise ValueError("研究标识已改变，请刷新后重试")
+                if action == "message" and subproblem_id is not None:
+                    if subproblem_id not in {q['id'] for q in snapshot.questions if not q.get('retired')}:
+                        raise ValueError("问题范围已改变，请刷新后重试")
+                    expected=message_data.get('scope_context')
+                    if expected is not None and (not isinstance(expected,dict) or
+                            expected.get('research_id')!=snapshot.research_id or
+                            expected.get('base_revision')!=snapshot.research_revision):
+                        raise ValueError('研究版本已改变，请刷新后重试')
                 if action == "ask":
                     subproblem_id = subproblem_id or infer_question_scope(problem, snapshot)
                     scoped_snapshot(snapshot, subproblem_id)

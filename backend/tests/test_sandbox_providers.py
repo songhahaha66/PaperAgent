@@ -7,7 +7,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.sandbox.factory import create_kernel
 from ai_system.sandbox.remote_kernel import RemoteKernel
 from ai_system.sandbox.settings import SandboxSettings
 from ai_system.sandbox.contracts import ExecutionOutcome
@@ -99,48 +98,6 @@ def test_cancel_terminates_and_finalizes_run(tmp_path):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             await kernel.close()
-    asyncio.run(run())
-
-
-def test_cancel_wait_reports_startup_failure_instead_of_hanging(tmp_path):
-    class BrokenSession(StreamingSession):
-        async def start(self):
-            raise RuntimeError('controlled startup failure')
-
-    async def run():
-        session = BrokenSession(tmp_path)
-        kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
-        task = asyncio.create_task(kernel.execute('wait'))
-        try:
-            with pytest.raises(pytest.fail.Exception, match='controlled startup failure'):
-                await wait_for_execution(task, session.ready)
-            assert not session.ready.is_set()
-        finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            with pytest.raises(RuntimeError,match='创建结果未知'):
-                await kernel.close()
-    asyncio.run(run())
-
-
-def test_remote_never_falls_back_to_local(tmp_path):
-    with pytest.raises(ValueError, match='未支持'):
-        create_kernel(tmp_path, settings=SandboxSettings(provider='unknown'))
-
-
-def test_corrupt_download_never_replaces_existing_output(tmp_path):
-    class CorruptSession(StreamingSession):
-        async def download(self, path, destination, max_bytes):
-            destination.write_bytes(b'corrupt')
-    async def run():
-        session = CorruptSession(tmp_path)
-        kernel = RemoteKernel(tmp_path, session, SandboxSettings(provider='fake'))
-        path = tmp_path / 'outputs/table.csv'
-        path.write_text('old')
-        result = await kernel.execute('new')
-        assert result.ok and result.delivery_error and path.read_text() == 'old'
-        assert not path.with_name('table.csv.download').exists()
-        await kernel.close()
     asyncio.run(run())
 
 

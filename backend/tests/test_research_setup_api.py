@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from auth.auth import get_current_user
 from database.database import get_db
 from routers.work_routes import workspace
-from test_experiences import env
+from helpers.experience import env
 
 
 @pytest.fixture

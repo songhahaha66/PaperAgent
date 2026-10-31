@@ -255,9 +255,11 @@ def build_tools(
                         'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
             if result.delivery_error or publication_note:
                 operation.update(error_type='DeliveryIncomplete',message='计算已结束，文件交付未完成；已有结果保留，请重试文件同步。')
+            if result.recovery_note:
+                operation['message'] = result.recovery_note
             if not result.ok:
-                operation.update(error_type='TimeoutError' if result.timed_out else 'PythonExecutionError',
-                                 message=result.error)
+                operation.update(error_type='TimeoutError' if result.timed_out else 'SandboxLost' if result.failure_kind=='sandbox_lost' else 'PythonExecutionError',
+                                 message=result.error or result.recovery_note)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok,
                         "delivery_error":result.delivery_error or publication_note})
         await ctx.events.emit(
@@ -266,6 +268,8 @@ def build_tools(
         )
         observation = clip(result.to_observation(), OBSERVATION_CHARS)
         if publication_note: observation += '\n' + publication_note
+        if result.failure_kind == 'sandbox_lost':
+            return observation
         if result.failure_kind == 'transport_unknown':
             return observation + '\n连接中断，执行是否完成无法确认。保留已收到输出，提交阻碍交回研究层；不要自动重放相同代码。'
         if result.failure_kind == 'delivery':

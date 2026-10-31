@@ -197,7 +197,7 @@ class ReplyWriter:
         if not isinstance(content, dict): return
         identity, text = content.get('id'), content.get('text')
         if not isinstance(identity, str) or not re.fullmatch(r'[a-f0-9]{64}', identity): return
-        if not isinstance(text, str) or not text.strip() or len(text) > 800: return
+        if not isinstance(text, str) or not text.strip(): return
         with self.lock:
             if self.reply['metadata']['status'] != 'running': return
             key = 'commentary:' + identity
@@ -216,11 +216,21 @@ class ReplyWriter:
         with self.lock:
             if self.reply['metadata']['status'] != 'running': return
             block = public_block(self.root, block)
-            row = {'id': uuid4().hex, 'type': 'event', 'block': block}
             self.reply['json_blocks'].append(block)
+            rows = self.reply['segments']
+            # The last model message can be both public commentary and the
+            # final answer. Replace it in place so live deltas and replay show
+            # one copy while keeping the completion event.
+            previous = rows[-1] if rows else None
+            duplicate = (block['type'] == 'main_agent_complete' and isinstance(block['content'], str)
+                         and previous and previous.get('phase') == 'commentary'
+                         and previous.get('text', '').strip() == block['content'].strip())
+            row = {'id': previous['id'] if duplicate else uuid4().hex, 'type': 'event', 'block': block}
             if block['type'] == 'main_agent_complete' and isinstance(block['content'], str):
-                self.reply['content'] += ('\n\n' if self.reply['content'] else '') + block['content']
-            self.reply['segments'].append(row)
+                if not duplicate:
+                    self.reply['content'] += ('\n\n' if self.reply['content'] else '') + block['content']
+            if duplicate: rows[-1] = row
+            else: rows.append(row)
             self.dirty[row['id']] = row
             self.flush()
 

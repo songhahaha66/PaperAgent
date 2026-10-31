@@ -66,11 +66,24 @@ def section_coverage(sections):
 class ReviewCoverageIncomplete(ValueError):pass
 
 
+def execution_review_context(ctx):
+    from ai_system.research.views import execution_context
+    from ai_system.research.runs import run_context
+    from services.file_services.workspace_layout import workspace_path
+    runs=run_context(ctx.research)[-12:]
+    for row in runs:
+        for key,label in [('input_path','code'),('stdout_path','output')]:
+            path=workspace_path(ctx.research.root,row[key]) if row.get(key) else None
+            if path is not None and path.is_file():
+                with path.open(encoding='utf-8',errors='replace') as stream:text=stream.read(6001)
+                row[label]={'excerpt':text[:6000],'truncated':len(text)>6000}
+    return json.dumps({'experiments':execution_context(ctx.research),'direct_runs':runs},ensure_ascii=False)
+
+
 def reconcile_prompt(state,ctx):
     subproblems = "\n".join(f"- {sp['id']} {sp['title']}：{sp['question']}" for sp in state["analysis"]["subproblems"])
     contract = ctx.research.snapshot()
-    from ai_system.research.views import execution_context
-    records=json.dumps(execution_context(ctx.research),ensure_ascii=False)
+    records=execution_review_context(ctx)
     return f"# 实际执行输出、报告与结果文件\n{records}\n\n# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
 
 
@@ -86,7 +99,8 @@ def section_doubts(state, ctx):
             and i['category'] not in {'service','execution','coverage'}
             and (i['status'] in {'suspected','inconclusive'} or i['category']=='writing' and i['status']=='confirmed')
             and not i['repair_targets'] and i['id'] not in investigated
-            and snapshot['experiments'][i['task_id']]['execution_status']=='succeeded' and snapshot['experiments'][i['task_id']]['validity']=='current'}
+            and (i['task_id'] is None or snapshot['experiments'].get(i['task_id'],{}).get('execution_status')=='succeeded'
+                 and snapshot['experiments'][i['task_id']]['validity']=='current')}
     generated={key:i['review_scope']['generated_by_review'] for key,i in doubts.items()
                if i['source']=='review-task:sections' and i.get('review_scope',{}).get('generated_by_review')}
     if generated:
@@ -128,13 +142,13 @@ def section_audit_prompt(state,ctx,*,force=False):
         body = "\n\n".join(f"## 章节 key: {k}\n{sections[k]}" for k in keys)
     refs = (set(ctx.registry.results) if state.get('source_version') else set(find_refs(body))) | {ref for c in ctx.registry.claims.values() for ref in c.evidence}
     evidence = ResultRegistry(ctx.fs, results={rid: r for rid, r in ctx.registry.results.items() if rid in refs})
-    from ai_system.research.views import execution_context
-    records=json.dumps(execution_context(ctx.research),ensure_ascii=False)
+    records=execution_review_context(ctx)
     prompt = (
         f"# 实际执行输出、报告与结果文件\n{records}\n\n"
         f"# 主要结论\n{ctx.registry.claims_table()}\n\n# 已登记证据（包含辅助结果）\n{evidence.to_prompt_table()}\n\n"
         f"# 统一口径\n{json.dumps(state.get('consistency') or [], ensure_ascii=False)}\n\n# 待检查的章节\n{body}\n\n"
         f"section 只能填这些 key：{json.dumps(keys)}\n"
+        "全文或文件级意见的 task_id 留空；只有明确关联所提供实验的意见才填写实验编号。\n"
         f"# 研究契约\n{json.dumps({'requirements': state['analysis']['requirements'], 'assumptions': state['analysis']['assumptions']}, ensure_ascii=False)}"
     )
     if state.get('source_version'):
@@ -161,7 +175,7 @@ def section_audit_prompt(state,ctx,*,force=False):
 def validate_findings(issues,state,ctx):
     tasks={s['id'] for s in state['analysis']['subproblems']}
     for issue in issues:
-        if issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.research.snapshot()['artifacts']):raise ValueError('审查问题超出所提供的任务或执行记录范围')
+        if issue.task_id is not None and issue.task_id not in tasks or not set(issue.evidence_refs)<=set(ctx.research.snapshot()['artifacts']):raise ValueError('审查问题超出所提供的任务或执行记录范围')
 
 
 async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False,force=False) -> List[IssueReport]:
@@ -200,9 +214,9 @@ async def audit_sections(state: PaperState, ctx: GraphContext,*,candidate=False,
         if ctx.research is not None and not candidate:
             failures=[i for i in research_findings(ctx.research.snapshot()) if i['source']=='review:sections' and i['category']=='service' and i['status'] not in {'resolved','dismissed','superseded'}]
             if failures:return []  # A persisted failure remains a publication blocker.
-        return [IssueReport(task_id=state["analysis"]["subproblems"][0]["id"], category="service", message=f"章节审查未完成：{error_detail(exc)}")]
+        return [IssueReport(category="service", message=f"章节审查未完成：{error_detail(exc)}")]
     reports = [
-        issue.research_issue or IssueReport(task_id=issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else state["analysis"]["subproblems"][0]["id"],
+        issue.research_issue or IssueReport(task_id=issue.section.split(":", 1)[1] if issue.section.startswith("solve:") else None,
                     category="writing", section=issue.section, message=f"与结论表不一致：{issue.problem}")
         for issue in audit.issues
         if issue.section in keys and ((issue.research_issue and issue.research_issue.category=='coverage') or

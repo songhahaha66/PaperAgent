@@ -4,7 +4,6 @@ from pathlib import Path
 import httpx,pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from ai_system.research.runtime import ResearchRuntime,budget_scope,request_hook,response_hook,ResearchBudgetExhausted
-from test_experiences import TASK
 from ai_system.graph.context import GraphContext
 
 
@@ -23,8 +22,8 @@ def test_actual_send_budget_is_shared_durable_and_stops_before_transport(tmp_pat
 
 def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     from types import SimpleNamespace
-    from ai_system.modules.writing.validation import render
-    from test_literature import seed
+    from ai_system.modules.writing.export import prepare_source
+    from helpers.literature import seed
     from helpers.contracts import problem, TASK
     _,_,evidence=seed(tmp_path)
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
@@ -32,10 +31,9 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     ctx.research=accepted_store(tmp_path)
     state={'analysis':problem().model_dump(),'task':TASK,
            'sections':{'restatement':'未经核查的主张 {{C:'+evidence['id']+'}}'}}
-    with pytest.raises(ValueError,match='发布前文献引用未获原文支持'):
-        asyncio.run(render(state,SimpleNamespace(context=ctx)))
+    result=prepare_source(state,ctx)
+    assert result['issues'] and '原文支持核查' in str(result['issues'])
     assert not (tmp_path/'paper.md').exists()
-    assert (workspace_path(tmp_path, '.system/paper_raw.md')).exists()
 
 
 def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_path):

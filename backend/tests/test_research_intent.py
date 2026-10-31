@@ -1,67 +1,53 @@
-"""Offline routing contracts with fixed Choices, not classifier accuracy tests."""
+"""Natural messages use the existing Agent session without an intent model."""
 import asyncio
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from ai_system.judge.base import Answers, ChoiceAnswer
 from services.chat_services import research_session as chat
 
 
-class FixedChoice:
-    def __init__(self, intent):
-        self.intent = intent
-        self.calls = []
-
-    async def ask(self, state, questions):
-        self.calls.append((state, questions))
-        return Answers(judge='jev:offline', choices={
-            'intent': ChoiceAnswer(self.intent, {self.intent: 1}, None)})
-
-
 def snapshot(**changes):
-    return chat.ResearchSnapshot(work_id='work', work_status='paused', has_research=True,
-        engine_version='research-v3', research_id='study', research_revision=1,
-        experiments=[{'task_id': 'Q1'}]).model_copy(update=changes)
+    return chat.ResearchSnapshot(work_id='work',work_status='paused',has_research=True,
+        engine_version='research-v3',research_id='study',research_revision=1).model_copy(update=changes)
 
 
-def test_explicit_controls_never_call_jev_or_reinterpret_the_message():
-    judge = FixedChoice('clarify')
-    for action in ('ask', 'run', 'resume', 'revise_research', 'confirm', 'revise'):
-        state = snapshot(**({'work_status': 'waiting', 'pending_question': '数据范围？'}
-                            if action in {'confirm', 'revise'} else {}))
-        assert asyncio.run(chat.resolve_action(action, '继续', state, judge=judge)) == action
-    assert not judge.calls
-    with pytest.raises(ValueError, match='等待必要信息'):
-        asyncio.run(chat.resolve_action('resume', '继续', snapshot(work_status='waiting'), judge=judge))
+def test_ordinary_messages_need_no_jev_and_do_not_infer_restarts(monkeypatch):
+    monkeypatch.delenv('TYPESAFE_API_KEY',raising=False)
+    def forbidden(*args,**kwargs):raise AssertionError('chat must not instantiate Jev')
+    monkeypatch.setattr('ai_system.judge.JevJudge',forbidden)
+    for text in ('继续','解释这个结果','把预测区间改成最后七天','重新开始是什么意思？'):
+        state=snapshot(work_status='completed')
+        before=state.model_dump()
+        assert asyncio.run(chat.resolve_action('auto',text,state))=='message'
+        assert state.model_dump()==before
 
 
-def test_direct_research_can_receive_explicit_requirements_without_experiments():
-    state = snapshot(experiments=[], questions=[{'id': 'Q1', 'retired': False}])
-    judge = FixedChoice('clarify')
-    assert asyncio.run(chat.resolve_action('revise_research', '交齐已有结果文件', state, judge=judge)) == 'revise_research'
-    assert not judge.calls
-    with pytest.raises(ValueError, match='不能修订'):
-        chat.validate_action('revise_research', state.model_copy(update={'research_id': None}))
+def test_first_message_starts_research_and_waiting_reply_uses_same_thread():
+    assert asyncio.run(chat.resolve_action('auto','分析附件',snapshot(has_research=False,research_id=None)))=='run'
+    assert asyncio.run(chat.resolve_action('auto','按模板分析',snapshot(has_research=True,research_id=None)))=='run'
+    assert asyncio.run(chat.resolve_action('auto','2025年',snapshot(work_status='waiting',graph_status='interrupted')))=='confirm'
 
 
-def test_failures_and_ambiguous_or_inapplicable_choices_leave_state_unchanged(monkeypatch):
-    state = snapshot()
-    before = state.model_dump()
+def test_missing_jev_does_not_disable_model_readiness(monkeypatch):
+    from types import SimpleNamespace
+    from routers.config_routes.model_config import model_readiness
+    def config(self,role,user_id):
+        if role=='jev':raise ValueError('not configured')
+        return SimpleNamespace(api_key='offline-fixture',model_id='offline')
+    monkeypatch.setattr('ai_system.config.environment.DatabaseConfigManager.get_model_config',config)
+    result=asyncio.run(model_readiness(current_user=1,db=SimpleNamespace()))
+    assert result['ready'] and result['research_ready'] and not result['roles']['jev']
 
-    class Unavailable:
-        async def ask(self, *_):
-            raise RuntimeError('offline failure')
 
-    for judge, error in ((Unavailable(), '暂时不可用'), (FixedChoice('invalid'), '暂时不可用'),
-                         (FixedChoice('clarify'), '请明确'), (FixedChoice('answer'), '没有明确')):
-        with pytest.raises(ValueError, match=error):
-            asyncio.run(chat.resolve_action('auto', '好的', state, judge=judge))
-        assert state.model_dump() == before
-    monkeypatch.delenv('TYPESAFE_API_KEY', raising=False)
-    with pytest.raises(ValueError, match='未配置'):
-        asyncio.run(chat.resolve_action('auto', '继续', state))
-    assert state.model_dump() == before
+def test_explicit_controls_keep_their_meaning():
+    for action in ('ask','run','resume','revise_research','confirm','revise'):
+        state=snapshot(**({'work_status':'waiting'} if action in {'confirm','revise'} else {}))
+        assert asyncio.run(chat.resolve_action(action,'继续',state))==action
+    with pytest.raises(ValueError,match='等待必要信息'):
+        asyncio.run(chat.resolve_action('resume','继续',snapshot(work_status='waiting')))
+    with pytest.raises(ValueError,match='不支持恢复'):
+        asyncio.run(chat.resolve_action('auto','继续',snapshot(engine_version='old')))
+
+
+@pytest.mark.parametrize('message',['',' ',None,'x'*20001])
+def test_invalid_message_is_rejected_before_running(message):
+    with pytest.raises(ValueError,match='有效消息'):
+        asyncio.run(chat.resolve_action('auto',message,snapshot()))

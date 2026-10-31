@@ -6,8 +6,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from types import SimpleNamespace
 import pytest
-from test_review_cache import no_network
-from test_paper_editor import paper
+from helpers.review import no_network
 from ai_system.research.review_migration import context_from_store
 from ai_system.graph.state import ClaimAudit, ClaimIssue
 from ai_system.research.models import ResearchConflict
@@ -206,5 +205,5 @@ def test_compile_failure_returns_to_research_without_replaying_calculation(nativ
     ctx.planner_llm=ResearchToolsModel(respond=respond)
     assert not asyncio.run(loop.prepare_action(ctx))
     assert '修正后的正文' in (store.root/'part.tex').read_text()
-    assert store.snapshot()['action']['capability']=='writing.validate'
+    assert store.snapshot()['action']['capability']=='writing.export'
     assert store.snapshot()['executions']==before

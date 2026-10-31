@@ -2,7 +2,7 @@
 import asyncio,copy
 from types import SimpleNamespace
 import pytest
-from test_review_cache import env,no_network
+from helpers.review import env,no_network
 from ai_system.modules.writing import consistency
 from ai_system.graph.state import ClaimAudit,ClaimIssue
 from ai_system.research import segmented_review as legacy
@@ -99,7 +99,15 @@ def historical_receipt(v):
 
 @pytest.mark.parametrize('damage',['missing','duplicate','hash','version','global','result'])
 def test_incomplete_or_corrupt_historical_proofs_are_not_success(env,damage):
-    record=copy.deepcopy(historical_receipt(env));proof=record['provenance'];plan=record['context']['extra']['segmented_plan']
+    # Recreate a frozen legacy receipt without reopening retired flows in production.
+    from unittest.mock import patch
+    with patch('ai_system.research.review_cache.retired_review', return_value=False):
+        record=copy.deepcopy(historical_receipt(env))
+    assert legacy.verify_proof(env.store,record)
+    assert not review_tasks.valid_result(record,env.store)
+    with pytest.raises(ValueError,match='历史审查记录'):
+        ReviewCache(env.store).reuse(record)
+    proof=record['provenance'];plan=record['context']['extra']['segmented_plan']
     if damage=='missing':proof['blocks'].pop()
     elif damage=='duplicate':proof['blocks'][-1]=proof['blocks'][0]
     elif damage=='hash':plan['blocks'][0]['text']+='altered'

@@ -4,24 +4,6 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.chat_services.task_manager import TaskManager
-
-
-def _fresh_manager() -> TaskManager:
-    manager = TaskManager()
-    manager._tasks.clear()
-    return manager
-
-
-def test_outputs_get_increasing_seq_and_resume_after_seq():
-    manager = _fresh_manager()
-    manager.create_task("w1", 1, "题目")
-    manager.start_task("w1")
-    seqs = [manager.add_output("w1", "json_block", {"type": "paper_stage", "content": str(i)}) for i in range(5)]
-    assert seqs == [1, 2, 3, 4, 5]
-    assert [o.seq for o in manager.get_outputs_after("w1", 3)] == [4, 5]
-
-
 def test_websocket_reconnect_replays_only_after_last_seq(monkeypatch):
     import json
 

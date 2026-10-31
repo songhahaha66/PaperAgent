@@ -27,7 +27,7 @@ def snapshot(store):
     return research_snapshot(store.root, 'test-outcomes', 'paused')
 
 
-def test_advisory_review_failure_retains_results_and_unanswered_research_is_not_publishable(tmp_path):
+def test_advisory_review_failure_and_missing_answer_metadata_do_not_gate_export(tmp_path):
     store = make_store(tmp_path)
     submit(store, fault=True)
     before = store.snapshot()
@@ -36,10 +36,11 @@ def test_advisory_review_failure_retains_results_and_unanswered_research_is_not_
     assert task['computation'] == 'succeeded'
     assert task['availability'] == 'current' and task['results']
     assert task['checking'] == 'service_failed'
-    assert task['issues'] and not view.delivery['ready']
+    assert task['issues'] and view.delivery['ready']
+    assert any(q.get('answer_gaps') for q in view.questions)
     assert store.snapshot() == before, 'projection must not change evidence or issue gates'
-    with pytest.raises(ResearchConflict):
-        store.publish_paper('unchecked')
+    path,conflict=store.publish_paper('# 已有结果与局限\n答案登记尚未完成。')
+    assert path=='paper.md' and not conflict
 
 
 def test_historical_metric_rules_do_not_reject_new_execution(tmp_path):

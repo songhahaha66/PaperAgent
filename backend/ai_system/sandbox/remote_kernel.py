@@ -27,25 +27,45 @@ class RemoteKernel:
         self._lock = asyncio.Lock()
         from .execution_scope import KernelExecutionScope
         self.execution_scope = execution_scope or KernelExecutionScope(self.workspace_dir)
+        self._lifetime_note = None
         import hashlib
         self.owner=hashlib.sha256((str(self.workspace_dir)+'\0'+getattr(session,'experiment_id','default')).encode()).hexdigest()
         self.pending_run = next((rid for rid, row in reversed(self.fs._manifest.get('runs', {}).items())
                                  if row.get('delivery_error') and (row.get('runtime_owner')==self.owner or row.get('cache_key')==session.cache_key)
                                  and rid not in self.fs._manifest.get('inherited_runs', [])), None)
 
-    async def _start(self):
-        import time
-        if self._started and (self.runtime.handle or {}).get('expires_at',0)<=time.time():
-            await self.session.disconnect()
-            self._started=False
-            self.transfer.seen=None
-        if self._started:
-            return
-        await self.runtime.start()
-        self._started = True
+    def _save_storage(self):
         self.fs._manifest['storage'] = {'kind': 'api-execution-cache',
             'cache_key': self.session.cache_key, 'sandbox_root': self.session.root}
         self.fs._save_manifest()
+
+    async def _abandon_for_replacement(self):
+        self._started = False
+        self.transfer.seen = None
+        await self.runtime.abandon()
+
+    async def _rebuild(self):
+        await self._abandon_for_replacement()
+        await self.runtime.start()
+        self._started = True
+        self._save_storage()
+
+    async def _start(self, needed=None):
+        from .lifetime import REPLACED_NOTE
+        needed = self.timeout if needed is None else needed
+        if not self._started:
+            await self.runtime.start()
+            self._started = True
+            self._save_storage()
+        # One replacement per call. A sandbox created moments ago is kept even
+        # when its grant is shorter than the call; rebuilding it would loop.
+        if await self.runtime.prepare(needed) == 'replace':
+            await self._abandon_for_replacement()
+            if self._lifetime_note != '计算沙箱已到期/已断开，已自动重建并重试':
+                self._lifetime_note = REPLACED_NOTE
+            await self.runtime.start()
+            self._started = True
+            self._save_storage()
 
     def _freeze_inputs(self, run_id):
         from .evidence import freeze_inputs
@@ -76,6 +96,7 @@ class RemoteKernel:
             self.transfer.seen=None
 
     async def execute(self, code, *, on_event=None):
+        from .lifetime import RETRIED_NOTE, RETRY_FAILED_PREFIX
         async with self._lock, self.execution_scope.operation(self, self.timeout):
             if self.pending_run:
                 return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
@@ -83,6 +104,32 @@ class RemoteKernel:
             if len(code.encode('utf-8')) > self.settings.max_file_bytes:
                 from .file_limits import FileLimitExceeded
                 raise FileLimitExceeded('执行代码超过单文件上限；代码尚未提交')
+            note = None
+            result = None
+            for attempt in range(2):
+                if note:
+                    self._lifetime_note = note
+                result = await self._execute_attempt(code, on_event=on_event)
+                if result.failure_kind != 'sandbox_lost' or attempt:
+                    break
+                try:
+                    await self._rebuild()
+                except Exception as exc:
+                    result.error = '重建失败：' + self._safe_error(exc)
+                    result.recovery_note = result.error
+                    result.failure_kind = 'sandbox_lost'
+                    self._lifetime_note = None
+                    return result
+                note = RETRIED_NOTE
+            if note and result.failure_kind == 'sandbox_lost':
+                result.error = RETRY_FAILED_PREFIX + (result.error or '计算沙箱仍不可用')
+                result.recovery_note = result.error
+            elif note or self._lifetime_note:
+                result.recovery_note = result.recovery_note or self._lifetime_note or note
+            self._lifetime_note = None
+            return result
+
+    async def _execute_attempt(self, code, *, on_event=None):
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)
             self.fs.save_run_stdout(run_id, "")
@@ -206,9 +253,13 @@ class RemoteKernel:
             except Exception as exc:
                 abnormal = submitted and not execution_finished
                 # Provider failures can contain connection headers. Never echo API keys.
+                from .lifetime import readable_sandbox_error, replayable_sandbox_loss
                 if execution_finished:
                     result.delivery_error=self._safe_error(exc)
                     self.pending_run=run_id
+                elif replayable_sandbox_loss(exc, execution_finished=False):
+                    result.failure_kind = 'sandbox_lost'
+                    result.error = readable_sandbox_error(exc) or self._safe_error(exc)
                 else:
                     result.error = self._safe_error(exc)
                     from .file_limits import FileLimitExceeded
@@ -220,7 +271,12 @@ class RemoteKernel:
                     compute_state=('code_error' if result.error else 'succeeded') if execution_finished else
                                   'timed_out' if submitted and result.timed_out else 'unknown' if submitted else 'not_started',
                     delivery_state='pending' if result.delivery_error else 'available' if execution_finished else 'not_started')
-                if abnormal:
+                if result.failure_kind == 'sandbox_lost':
+                    # The server already dropped this runtime. Destroying it can stick
+                    # the lease in an unconfirmed state and block the one rebuild.
+                    self._started = False
+                    self.transfer.seen = None
+                elif abnormal:
                     try:
                         await asyncio.wait_for(self.session.interrupt(), 5)
                         if self._started:

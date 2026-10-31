@@ -64,6 +64,7 @@ async def edit(ctx, inputs):
     result_version=hashlib.sha256(text.encode()).hexdigest()
     with ctx.research._transaction() as db:
         state=ctx.research._read(db)
+        if state.get('conversation_input'):state['conversation_input']['manuscript_edited']=True
         main='paper.tex' if ctx.output_mode=='latex' else 'paper.md'
         if name==main:
             state['document']={'path':main,'version':result_version}

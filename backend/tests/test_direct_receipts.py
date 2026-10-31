@@ -6,7 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage,ToolMessage
 from ai_system.modules.registry import invoke,capabilities
 from ai_system.research.runtime import execution_scope
-from test_context_sessions import context
+from helpers.context import session_context as context, ContextRequest as Request
 
 
 @pytest.mark.usefixtures('offline_kernel')
@@ -46,10 +46,6 @@ def test_retained_tool_history_keeps_executable_code_and_reasoning(tmp_path):
         messages += [tool('research_run_python',{'code':code},str(i)),
                      ToolMessage(content=json.dumps({'input_path':path,'run_id':f'run_{i}'}),tool_call_id=str(i),name='research_run_python')]
         messages[-2].additional_kwargs['reasoning_content']='offline reasoning'
-    class Request:
-        tools=[]
-        def __init__(self,messages):self.messages=messages
-        def override(self,**kw):return Request(kw['messages'])
     sent=[]
     async def handler(r):sent.extend(r.messages)
     model=ResearchToolsModel(respond=lambda m:AIMessage(content='notes'))

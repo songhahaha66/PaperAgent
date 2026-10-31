@@ -3,7 +3,7 @@ Template contract extraction for paper generation.
 
 The contract is a compact, model-readable summary of the uploaded template
 bone structure and explicit formatting requirements. It is stored in the
-workspace so the paper pipeline can follow it (ai_system/graph/outline.py).
+workspace so the research Agent can follow it while drafting.
 """
 
 from __future__ import annotations

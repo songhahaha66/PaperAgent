@@ -6,7 +6,7 @@ from ai_system.modules.registry import invoke
 from ai_system.modules.writing.draft import DraftEdit,observed_version
 from ai_system.research.loop import prepare_action,resume
 from ai_system.research.runtime import ModelServiceError
-from test_context_sessions import context
+from helpers.context import session_context as context
 from research_tools_helpers import ResearchToolsModel,tool
 
 

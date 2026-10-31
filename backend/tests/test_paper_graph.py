@@ -76,11 +76,11 @@ def test_graph_end_to_end_offline(tmp_path):
     assert paper.startswith('# '+_analysis().title) and '政策评估' in paper
     assert '{{' not in paper and '12.345' not in paper
     assert not ctx.planner_llm.text_calls
-    assert '{{R:' not in workspace_path(ws,'.system/paper_raw.md').read_text()
+    assert not workspace_path(ws,'.system/paper_raw.md').exists(), 'current source is delivered without a second raw manuscript copy'
     from ai_system.research.control import public_snapshot
     progress=public_snapshot(business)
     assert not progress['experiments'] and all(q['coverage']=='answered' for q in progress['questions'])
-    assert progress['delivery_stages']['render']['status']=='completed'
+    assert progress['delivery_stages']['export']['status']=='completed'
     assert not (ws/'plan.json').exists()
 
 

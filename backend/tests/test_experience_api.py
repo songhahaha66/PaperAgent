@@ -6,7 +6,7 @@ from auth.auth import get_current_user
 from database.database import get_db
 from routers.work_routes import workspace
 from routers import experience_routes
-from test_experiences import env, submit
+from helpers.experience import env, submit
 
 
 @pytest.fixture

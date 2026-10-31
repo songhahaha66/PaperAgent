@@ -180,6 +180,7 @@ export interface ResearchExperiment {
 }
 export type ResearchAction =
   | 'auto'
+  | 'message'
   | 'ask'
   | 'run'
   | 'resume'

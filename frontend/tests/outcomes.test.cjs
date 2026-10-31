@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict')
 const {loadModule,vue,flush}=require('./moduleHarness.cjs')
-const {hostRenderer}=require('./vueHost.cjs')
+const {hostRenderer,mountSetup}=require('./vueHost.cjs')
 const text=n=>[n.text||'',...(n.children||[]).map(text)].join('')
 const copy={'@/lang/studio':{useStudioCopy:()=>({isZh:vue.ref(true)})}}
 ;(async()=>{
@@ -29,7 +29,10 @@ const copy={'@/lang/studio':{useStudioCopy:()=>({isZh:vue.ref(true)})}}
  const project={research_id:'draft',main:'paper.tex',version:'v1',has_source:false,files:[],compile:{state:'untracked',message:'尚未编译'},pdf_available:false,sources:[],threads:[],executions:[],changes:[]}
  const reads=[]
  const paper=await loadModule('src/components/PaperEditor.vue',{vue,...copy,'@/api/paper':{paperProjectAPI:{read:async(work)=>{reads.push(work);return project}}}},{},true)
- const empty=hostRenderer(),paperApp=empty.renderer.createApp(paper.default,{workId:'new',latex:true,snapshot:{has_research:true,artifacts:[]}});paperApp.mount(empty.root);await flush()
+ const empty=hostRenderer(),paperApp=empty.renderer.createApp(paper.default,{workId:'new',latex:true,snapshot:{has_research:true,artifacts:[]}})
+ paperApp.component('t-icon',{render:()=>null})
+ paperApp.component('t-loading',{setup:(_,context)=>()=>context.slots.default?.()})
+ paperApp.mount(empty.root);await flush()
  assert.deepEqual(reads,['new'])
  assert.match(text(empty.root),/论文源码尚未生成/)
  assert.match(text(empty.root),/无需等待整项研究审查完成/)
@@ -41,14 +44,14 @@ const copy={'@/lang/studio':{useStudioCopy:()=>({isZh:vue.ref(true)})}}
  project.has_source=true
  project.files=[{path:'paper.tex',version:'file-v1',text:'未验收的草稿正文',size:30}]
  const draftModule=await loadModule('src/components/PaperEditor.vue',{vue,'@/api/paper':{paperProjectAPI:{read:async()=>project}}})
- const scope=vue.effectScope()
- const draft=scope.run(()=>draftModule.default.setup({workId:'new',latex:true,snapshot:{has_research:true,artifacts:[]}},{expose(){},emit(){}}))
+ const mounted=mountSetup(draftModule.default,{workId:'new',latex:true,snapshot:{has_research:true,artifacts:[]}},{expose(){},emit(){}})
+ const draft=mounted.state
  await flush()
  assert.equal(draft.project.value.files.length,1)
  draft.setView('source')
  assert.equal(draft.view.value,'source')
  assert.equal(draft.draft.value,'未验收的草稿正文')
  assert.equal(draft.selectedFile.value.path,'paper.tex')
- scope.stop()
+ mounted.unmount()
  console.log('PASS: experiments retain sourced results and hide uninterpreted variables through service failure; empty papers and unpublished drafts use the file project API')
 })().catch(e=>{console.error(e);process.exitCode=1})

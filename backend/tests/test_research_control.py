@@ -37,7 +37,7 @@ def test_file_correction_during_execution_rejects_result(tmp_path):
     assert task['execution_status']==attempt['execution_status']=='succeeded'
     assert task['validity']==attempt['validity']=='stale' and task['revision']==2
     assert attempt['result']['results']==result.results
-    assert not store.registry_payload()['results'] and not store.delivery_ready(state)
+    assert not store.registry_payload()['results'], 'stale results remain unavailable to the Agent and manuscript references'
     with pytest.raises(ResearchConflict,match='显式重试'):store.claim('Q1')
 
 

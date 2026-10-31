@@ -8,18 +8,12 @@ from ai_system.config.generation import GenerationSettings,ModelGenerationLimit,
 from ai_system.core_handlers.llm_providers import MeteredChatOpenAI,create_llm_from_model_config
 from ai_system.research.runtime import ResearchRuntime,budget_scope,ResearchBudgetExhausted,BudgetUnavailable
 from ai_system.research.store import ResearchStore
+from helpers.model_response import response
 
 
 def client(handler,streaming=False):
     return MeteredChatOpenAI(model='unknown-gateway-model',api_key='offline',base_url='https://offline.invalid/v1',
         max_tokens=16000,streaming=streaming,http_async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-
-
-def response(finish='stop',tokens=10):
-    return {'id':'offline','object':'chat.completion','created':1,'model':'unknown-gateway-model',
-        'choices':[{'index':0,'message':{'role':'assistant','content':'done'},'finish_reason':finish}],
-        'usage':{'prompt_tokens':20,'completion_tokens':tokens,'total_tokens':20+tokens,
-                 'completion_tokens_details':{'reasoning_tokens':max(0,tokens-1)}}}
 
 
 def test_explicit_connection_policy_reaches_gateway_without_thinking_heuristic():

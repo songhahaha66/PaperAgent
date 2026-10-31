@@ -130,7 +130,7 @@ def _title(markdown: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def word_inputs(workspace, markdown, docx_name='paper.docx', template_docx=None):
+def word_inputs(workspace, markdown, docx_name='paper.docx', template_docx=None, *, source_version=None):
     """Only embedded local assets and the chosen reference cross the API."""
     from ai_system.sandbox.transfer import relative
     names=set()
@@ -149,7 +149,8 @@ def word_inputs(workspace, markdown, docx_name='paper.docx', template_docx=None)
 
 @sandbox_operation(input_selector=word_inputs)
 async def export_docx(
-    workspace: Path, markdown: str, docx_name: str = "paper.docx", template_docx: Optional[Path] = None
+    workspace: Path, markdown: str, docx_name: str = "paper.docx", template_docx: Optional[Path] = None,
+    *, source_version: str | None = None,
 ) -> DocxResult:
     """在工作空间根目录转换（图片路径相对工作空间）"""
     from services.file_services.workspace_layout import safe_join
@@ -167,5 +168,10 @@ async def export_docx(
     await pandoc(prepare_markdown(markdown), workspace, args)
     from services.file_services.workspace_layout import safe_join
     from services.file_services.file_helper import atomic_write
+    # sandbox_operation holds the project execution lock through this replacement.
+    if source_version is not None:
+        import hashlib
+        if hashlib.sha256(safe_join(workspace,'paper.md').read_bytes()).hexdigest()!=source_version:
+            raise ValueError('正文在导出期间改变，已保留原 Word 文件，请导出当前版本')
     atomic_write(safe_join(workspace, docx_name), lambda f: f.write((workspace/".build/export.docx").read_bytes()))
     return DocxResult(docx_path=docx_name, reference=kind)

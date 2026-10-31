@@ -84,8 +84,9 @@ def answer_gaps(question):
 def delivery_status(state):
     from .views import questions
     rows=[q for q in questions(state) if not q.get('retired')]
-    blockers=[{'task_id':q['id'],'message':message,'action':'research','tool':'research_update_answer'}
-              for q in rows for message in q['answer_gaps']]
-    if not rows:blockers.append({'task_id':None,'message':'尚未建立用户要回答的问题。','action':'research','tool':'research_create_question'})
+    # Answer completeness is visible in the question records, not a file-export gate.
+    # Legacy findings are advisory; execution and file readiness are checked
+    # when delivering the current source, not inferred from old verdicts.
+    blockers=[]
     return {'ready':not blockers,'blockers':blockers,
         'questions':[{k:q.get(k) for k in ('id','title','coverage','stop_reason','answer_status','answer_gaps')} for q in rows]}
