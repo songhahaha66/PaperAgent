@@ -38,9 +38,15 @@ def validate_render_current_native(store):
     return ctx
 
 
-def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_exports(tmp_path):
+def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_exports(tmp_path, monkeypatch):
     from services.chat_services import paper_project as project
     from ai_system.research.models import IssueReport
+    import ai_system.export.latex as latex
+    async def compile_fixture(cmd, cwd, **kwargs):
+        assert cmd[0] == 'xelatex' and '-no-shell-escape' in cmd
+        (cwd / '.build/latex/paper.pdf').write_bytes(b'%PDF-verified-fixture')
+        return 0, 'Output written on paper.pdf (1 page).', ''
+    monkeypatch.setattr(latex, 'run_command', compile_fixture)
     store=accepted_store(tmp_path)
     with store._transaction() as db:
         state=store._read(db);state['spec']['output_mode']='latex';store._save(db,state,'fixture_native_output',{})
