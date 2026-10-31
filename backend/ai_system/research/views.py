@@ -2,15 +2,15 @@
 from services.file_services.workspace_layout import workspace_path
 import re
 from .store import digest
-from .domain import findings, experiment_scope, current_result_refs
+from .domain import findings
 from .progress import issue_next_step
-from .questions import answer_gaps
 from ai_system.graph.registry import find_refs
 
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
+    'research.update_plan':'更新研究计划',
     'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.create_question':'建立研究问题','research.edit_question':'修改研究问题','research.schedule_experiment':'安排实验',
-    'research.continue_experiment':'继续实验','research.update_answer':'更新问题答案','research.read_question':'读取问题与依据',
+    'research.continue_experiment':'继续实验','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用失败',
     'research.run_python':'运行研究代码','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
@@ -21,43 +21,29 @@ LABELS = {'experience.candidates':'更新经验索引','experience.search':'查�
 
 
 def questions(snapshot):
-    """Read-only question projection; preserve history for existing clients.
-
-    Empty judgments stay empty. Available results never imply an answer, and
-    recorded judgments retain their limitations and unresolved issues.
-    """
+    """Topics locate existing runs and historical experiments; no answer ledger."""
     rows=[]
     for question in snapshot['questions'].values():
-        experiments=[e for e in snapshot['experiments'].values() if e['question_id']==question['id'] and not e['retired']]
-        ids={e['task_id'] for e in experiments} | set(question.get('related_experiment_ids', []))
-        experiments=[e for eid,e in snapshot['experiments'].items() if eid in ids]
-        scope=experiment_scope(snapshot['experiments'], ids)
-        available=current_result_refs(snapshot, scope)
+        ids={e['task_id'] for e in snapshot['experiments'].values()
+             if e['question_id']==question['id'] and not e['retired']}
+        ids.update(question.get('related_experiment_ids', []))
         issues=[i for i in findings(snapshot) if i['task_id'] in ids and i['status'] not in CLOSED]
-        stale = (any(snapshot['artifacts'].get(ref,{}).get('content_hash') != version for ref,version in question.get('basis_versions',{}).items())
-                 or any(snapshot['experiments'].get(eid,{}).get('report_ref') != version for eid,version in question.get('interpretation_versions',{}).items()))
-        row={**question,
-            'answer_status':'needs_update' if stale else question.get('answer_status','current' if question.get('judgment') else 'unanswered'),
-            'experiment_ids':[e['task_id'] for e in experiments],
-            'dependency_experiment_ids':sorted(scope - ids),
-            'available_artifact_refs':sorted(available),
-            'unavailable_artifact_refs':[ref for ref in question['artifact_refs'] if ref not in available],
-            'sources':list(dict.fromkeys(r['source_quote'] for r in snapshot['spec']['requirements'] if ids.intersection(r['task_ids']))),
-            'issues':[{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues]}
-        row['answer_gaps']=answer_gaps(row)
-        if row['answer_gaps'] and (row.get('judgment') or row.get('coverage') in {'answered','partial'}):row['answer_status']='needs_update'
+        row={k:question[k] for k in ('id','title','question','version','retired','reason','history') if k in question}
+        if 'history' in row:
+            row['history']=[{k:v for k,v in entry.items() if k in {'id','title','question','version','retired','reason'}}
+                            for entry in row['history']]
+        row.update(experiment_ids=sorted(ids),
+            sources=list(dict.fromkeys(r['source_quote'] for r in snapshot['spec']['requirements'] if ids.intersection(r['task_ids']))),
+            issues=[{'id':i['id'],'message':i['message'],'next_step':issue_next_step(i,snapshot)} for i in issues])
         rows.append(row)
     return rows
 
 
 def question_context(rows, *, include_history=False):
-    """Share current judgments and their evidence scope without report/history copies."""
-    fields = ('id', 'title', 'question', 'judgment', 'artifact_refs', 'limitations', 'next_step',
-              'experiment_ids', 'dependency_experiment_ids', 'available_artifact_refs',
-              'unavailable_artifact_refs', 'sources', 'issues', 'answer_status', 'coverage', 'stop_reason', 'answer_gaps', 'retired', 'version')
-    if include_history:fields += ('history','judgments')
-    return [{key: row[key] for key in fields if key in row} for row in rows]
-
+    """Research topics only; answers live in the conversation and manuscript."""
+    fields=('id','title','question','experiment_ids','sources','issues','retired','version')
+    if include_history:fields+=('history',)
+    return [{key:row[key] for key in fields if key in row} for row in rows]
 
 
 def result_context(snapshot,item):
@@ -176,7 +162,7 @@ def research_history(store, snapshot):
     """Important journal facts only. Missing historical clocks/links stay unknown."""
     import json
     labels={'question_updated':'问题已更新','experiment_created':'已安排实验','experiment_continued':'继续实验',
-            'delivery_requested':'开始交付','research_observed':'问题判断已更新','attempt_committed':'实验执行结束',
+            'delivery_requested':'开始交付','attempt_committed':'实验执行结束',
             'inputs_changed':'输入已改变','research_revised':'研究要求已修改',
             'recovery_requested':'恢复研究','action_failed':'操作失败',
             'clarification_requested':'等待补充信息','action_interrupted':'研究已暂停',
@@ -208,7 +194,7 @@ def research_history(store, snapshot):
             'action_id':data.get('action_id'),'observation_id':data.get('observation_id'),
             'question_id':question_id,'experiment_id':eid,'recorded_at':data.get('recorded_at') or data.get('finished_at') or data.get('interruption_detected_at'),
             'reason':data.get('reason') or data.get('message') or data.get('purpose') or '',
-            'artifact_refs':refs,'judgments':data.get('judgments',[])})
+            'artifact_refs':refs})
     return sorted(result, key=lambda row: row["recorded_at"] or 0, reverse=True)[:100]
 
 

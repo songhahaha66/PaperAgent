@@ -14,14 +14,27 @@ def add_question(store,question,**values):
     return operations.update_question(SimpleNamespace(research=store),QuestionUpdate(question=question,**values).model_dump())['question_id']
 
 
-def add_experiment(store,question=None,*,question_id=None,method='fixed arithmetic',conditions='fixed source',evaluation='exact result',title=''):
+def add_experiment(store,question=None,*,question_id=None,method='fixed arithmetic',conditions='fixed source',evaluation='exact result',title='',dependency_ids=(),plan=None):
+    """Seed an imported experiment for historical reader/worker unit tests only."""
     qid=question_id or add_question(store,question)
-    result=operations.schedule_experiment(SimpleNamespace(research=store),operations.ExperimentInput(
-        question_id=qid,title=title,plan={'conditions':conditions,'evaluation':evaluation,'candidates':[{'name':title or method,'instruction':method}]}).model_dump())
-    # These worker fixtures claim/commit manually; integration tests use Agent
-    # dispatch, act and solve_join to verify the actual handoff instead.
-    _manual_worker_handoff(store)
-    return result['experiment_id']
+    design=plan or {'conditions':conditions,'evaluation':evaluation,
+        'candidates':[{'name':title or method,'instruction':method}]}
+    with store._transaction() as db:
+        state=store._read(db);q=state['questions'][qid]
+        key='E'+str(max((int(k[1:]) for k in state['experiments'] if k.startswith('E') and k[1:].isdigit()),default=0)+1)
+        requirement_ids=[r['id'] for r in state['spec']['requirements']]
+        task={'task_id':key,'question_id':qid,'revision':1,'objective':q['question'],
+            'source':state['spec']['requirement'],'dependencies':list(dependency_ids),'requirement_ids':requirement_ids,
+            'assumption_ids':[],'kind':'compute','retired':False,'execution_status':'pending',
+            'acceptance':'pending','validity':'current','execution_id':None,'report_ref':None,
+            'method_instruction':method,'experiment':design,'investigates':[],'reason':'historical test fixture',
+            'subproblem':{'id':key,'title':title or method,'question':q['question'],'kind':'compute',
+                          'depends_on':list(dependency_ids),'deliverables':[]}}
+        state['experiments'][key]=task
+        for requirement in state['spec']['requirements']:requirement['task_ids'].append(key)
+        store._bind_assumption_inputs(state)
+        store._save(db,state,'fixture_imported_experiment',{'experiment_id':key})
+    return key
 
 
 def _manual_worker_handoff(store):
@@ -32,14 +45,16 @@ def _manual_worker_handoff(store):
 
 
 def continue_experiment(store,experiment_id,information_need='修复原实验执行，复用已有上游结果'):
-    result=operations.continue_experiment(SimpleNamespace(research=store),operations.ContinueInput(
-        experiment_id=experiment_id,information_need=information_need).model_dump())
+    """Seed a historical continuation; live Agents use the generic Python tool."""
+    with store._transaction() as db:
+        state=store._read(db);task=state['experiments'].get(experiment_id)
+        if not task or task['retired'] or task['validity']!='current':raise ValueError('实验不存在或已失效')
+        if task.get('execution_id'):
+            task['continuation']={'parent_attempt':task['execution_id'],'information_need':information_need}
+        task['execution_status']='pending'
+        store._save(db,state,'fixture_continuation',{'experiment_id':experiment_id})
     _manual_worker_handoff(store)
-    return result
-
-
-def answer(store,**values):
-    return operations.update_answer(SimpleNamespace(research=store),operations.AnswerUpdate(**values).model_dump())
+    return {'experiment_id':experiment_id,'question_id':task['question_id'],'action_id':None}
 
 
 def record_writing_inputs(ctx,source,subproblems,*,reports=None,designs=None):
@@ -108,9 +123,6 @@ def research_step(messages,plan,transform=lambda text:text):
         if isinstance(value.get('question'),dict):questions[value['question_id']]=value['question']
         for run in value.get('runs',[]):runs[run['run_id']]=run
         if value.get('run_id'):runs[value['run_id']]=value
-        for judgment in value.get('judgments',[]):
-            q=questions[judgment['question_id']]
-            q.update(judgment,judgment=judgment['statement'],answer_status='current')
     def call(name,args):
         from uuid import uuid4
         return tool(name,args,'fixture-research-'+uuid4().hex)
@@ -126,17 +138,15 @@ def research_step(messages,plan,transform=lambda text:text):
             code=("forecast = 1234.5678\nprint('forecast', forecast)\nprint('saving',0.085)" if not own else
                   "import matplotlib.pyplot as plt\nplt.plot([1,2,3])")
             return call('research_run_python',{'question_id':question['id'],'code':code,'title':target.title})
-        if not question.get('judgment') or question.get('answer_status')=='needs_update' or not question.get('coverage'):
-            text='本次条件下的实际结果：'+'；'.join(r.get('observation',r.get('output_tail','')) for r in own)
-            partial=question.get('answer_status')=='needs_update'
-            return call('research_update_answer',{'question_id':question['id'],'statement':text,
-                'coverage':'partial' if partial else 'answered','stop_reason':'已汇总实际输出；未执行条件仍未知。',
-                'limitations':['仅覆盖已执行条件。']})
-    body='# '+plan.title+'\n\n'+'\n\n'.join('## '+q['title']+'\n'+q.get('judgment','') for q in questions.values())
+    def question_text(q):
+        own=[r for r in runs.values() if r.get('question_id')==q['id']
+             and (r.get('execution_status') or r.get('status')) in {'success','succeeded'}]
+        return '本次条件下的实际结果：'+'；'.join(r.get('observation',r.get('output_tail','')) for r in own)+'。仅限已执行条件，未执行条件仍未知。'
+    body='# '+plan.title+'\n\n'+'\n\n'.join('## '+q['title']+'\n'+question_text(q) for q in questions.values())
     common=next((json.loads(m.content) for m in messages if isinstance(m,HumanMessage) and str(m.content).startswith('{') and 'template_requirements' in json.loads(m.content)),{})
     if common.get('template_requirements'):
         from ai_system.graph.outline import template_outline
-        body='# '+plan.title+'\n\n'+'\n\n'.join('## '+item['title']+'\n'+('\n'.join(q['title']+'：'+q.get('judgment','') for q in questions.values())) for item in template_outline(common['template_requirements']))
+        body='# '+plan.title+'\n\n'+'\n\n'.join('## '+item['title']+'\n'+('\n'.join(q['title']+'：'+question_text(q) for q in questions.values())) for item in template_outline(common['template_requirements']))
     if context['source'].get('output_mode')=='latex':
         from ai_system.export.latex import native_document,escape_plain
         body=native_document(plan.title,escape_plain(body),'')
@@ -146,4 +156,4 @@ def research_step(messages,plan,transform=lambda text:text):
     if context.get('document',{}).get('version')!=hashlib.sha256(body.encode()).hexdigest() and not edits:
         return call('writing_edit',{'path':'paper.tex' if context['source'].get('output_mode')=='latex' else 'paper.md',
             'expected_version':context.get('document',{}).get('version'),'content':body})
-    return call('research_deliver',{'title':plan.title,'reason':'各问题已有带实际来源的答案与局限，开始研究级交付。'})
+    return call('research_deliver',{'title':plan.title,'reason':'实际输出与局限已写入正文，交付当前文件。'})

@@ -10,7 +10,6 @@ from ai_system.research.models import WorkerResult, ReviewRecord
 from ai_system.research.review_migration import context_from_store
 from ai_system.research.store import ResearchStore
 from ai_system.research.validation import report_fingerprint
-from research_tools_helpers import answer
 from services.file_services.workspace_layout import workspace_path
 
 
@@ -41,12 +40,7 @@ def env(tmp_path):
         'requirement_evidence':[{'requirement_id':'RQ1','evidence_refs':['R1']}]}
     store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',results=results,claims=claims,report=report,
         reviews=[ReviewRecord(report_hash=report_fingerprint(report),issues=[])]))
-    before=store.snapshot()
-    answer(store,question_id=before['experiments']['Q1']['question_id'],
-        statement='本次输入下score为 {{R:R1}}，满足有限数检查。',artifact_refs=['R1'],
-        coverage='answered',stop_reason='冻结的有限数检查已通过。',limitations=['该检查不证明模型效果或外推有效性。'])
     snapshot=store.snapshot()
-    assert snapshot['executions']==before['executions'] and snapshot['artifacts']==before['artifacts']
     assert store.delivery_ready(snapshot)
     state=graph_view(snapshot)
     state.update(sections={'abstract':'摘要正文。'*30,'evaluation':'证据局限。'*30},consistency=[])

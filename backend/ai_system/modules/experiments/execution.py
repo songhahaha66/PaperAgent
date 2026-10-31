@@ -301,26 +301,6 @@ def build_tools(
     return tools
 
 
-async def solve(branch, runtime):
-    """Only an explicit CSV comparison gets an independent execution branch."""
-    from .planning import experiment_design
-    plan=branch.get('experiment') or {}
-    design=experiment_design(plan) if plan else branch.get('design') or {}
-    if not plan.get('csv'):
-        return {'report':{'status':'failed','summary':'普通计算由主研究Agent直接执行，已有运行与文件可复用。',
-                          'error':'请在主循环使用 research_run_python'},'design':design}
-    from .supervised import compare
-    from .handoff import publish_comparison
-    ctx=runtime.context
-    branch={**branch,'design':design}
-    try:
-        record=await compare(ctx,branch)
-        report=await publish_comparison(ctx,branch,record,[])
-        return {'report':report,'design':design}
-    finally:
-        await ctx.kernels.close()
-
-
 def save_transcript(ctx: GraphContext, name: str, messages: List) -> None:
     """求解对话落盘（.system/transcripts/），读 trace 时能看到每一步模型写了什么、调用了什么工具"""
     try:

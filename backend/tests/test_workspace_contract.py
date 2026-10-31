@@ -273,7 +273,7 @@ def test_application_wide_version_gate(tmp_path,monkeypatch,version,path,expecte
     @app.get('/api/workspace/{work_id}/export',dependencies=[Depends(routers.project_route_access)])
     @app.get('/api/workspace/{work_id}/files',dependencies=[Depends(routers.project_route_access)])
     def endpoint(work_id):return {'id':work_id}
-    app.dependency_overrides[get_db]=lambda:object()
+    app.dependency_overrides[get_db]=lambda:SimpleNamespace(close=lambda:None)
     with TestClient(app) as client:
         assert client.get(path,headers={'Authorization':'Bearer unit-test'}).status_code==expected
 

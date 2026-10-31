@@ -127,10 +127,8 @@ def section_doubts(state, ctx):
 def section_audit_prompt(state,ctx,*,force=False):
     sections = state.get("sections") or {}
     keys = [k for k in sections if k!='references' and sections.get(k)]
-    from ai_system.research.method_facts import method_context
-    methods=method_context(getattr(ctx,'research',None))
     if not keys:return None
-    applicable=bool(state.get('solutions') or ctx.registry.claims or methods or force or state.get('consistency'))
+    applicable=bool(state.get('solutions') or ctx.registry.claims or force or state.get('consistency'))
     if not applicable and getattr(ctx,'research',None) is not None:
         applicable=any(i['category']=='writing' and i.get('section') in keys and
             i['status'] not in {'resolved','dismissed','superseded'} for i in research_findings(ctx.research.snapshot()))
@@ -158,7 +156,6 @@ def section_audit_prompt(state,ctx,*,force=False):
                    '不要推测 PDF 坐标与源码位置。\n# 项目依赖文本\n'+json.dumps(
                        {r['path']:r['text'] for r in state.get('source_files', [])
                         if r['text'] is not None and not r['path'].endswith('.tex')}, ensure_ascii=False))
-    prompt+=methods
     doubts=section_doubts(state,ctx)
     if doubts:
         prompt+='\n# 必须逐项重新核对的旧章节疑点\n'+json.dumps(list(doubts.values()),ensure_ascii=False)

@@ -7,7 +7,9 @@
       @create-new-task="resetDraft"
     />
     <main class="home-main">
-      <header v-if="!isMobile" class="home-header"><span>PaperAgent</span></header>
+      <header v-if="!isMobile" class="home-header">
+        <span class="paperagent-wordmark">PaperAgent</span>
+      </header>
       <section
         class="home-content"
         :class="{ 'has-history': recentWorks.length }"
@@ -388,7 +390,7 @@ async function startWork() {
     }
     await researchSetupAPI.save(draft.work_id, defaultResearchSetup())
     historyStore.upsert(draft)
-    panelStore.open(draft.work_id, 'progress', undefined, 'secondary')
+    panelStore.open(draft.work_id, 'paper', undefined, 'secondary')
     localStorage.setItem(`pendingQuestion:${draft.work_id}`, question.value.trim())
     await router.push(`/work/${draft.work_id}`)
   } catch (error) {

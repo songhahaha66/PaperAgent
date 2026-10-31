@@ -138,6 +138,7 @@ async def test_model_connection(
             try:key = DatabaseConfigManager(db).get_model_config('jev', current_user).api_key
             except ValueError:
                 raise HTTPException(status_code=400, detail='请填写 Jev API 密钥或保存个人 Jev 连接') from None
+        db.close()
         try:
             async with AsyncTypeSafeClient(api_key=key, model=config.model_id.strip() or DEFAULT_MODEL,
                     base_url=config.base_url.strip() or DEFAULT_BASE_URL,
@@ -158,6 +159,7 @@ async def test_model_connection(
     from ai_system.core_handlers.llm_providers import create_llm_from_model_config
     connection = SimpleNamespace(model_id=config.model_id.strip(), base_url=config.base_url.strip(), api_key=key,
         provider=getattr(saved, "provider", "openai"), thinking_enabled=config.thinking_enabled, generation_settings=config.generation_settings.model_dump())
+    db.close()
     try:
         llm = create_llm_from_model_config(connection, streaming=False,
             timeout=20, max_retries=0)

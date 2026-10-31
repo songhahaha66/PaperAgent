@@ -19,7 +19,9 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     own = seed(ctx, [], name='answer')
     unrelated = seed(ctx, [], sid='Q2', name='unrelated', value='12')
     state = record_writing_inputs(ctx,'研究给定计算结果',_analysis().model_dump()['subproblems'])
-    request = json.dumps(decision_context(ctx.research,ctx.research.snapshot())[1],ensure_ascii=False)
+    snapshot=ctx.research.snapshot()
+    snapshot['action']={'question_id':snapshot['experiments']['Q1']['question_id']}
+    request = json.dumps(decision_context(ctx.research,snapshot)[1],ensure_ascii=False)
     assert '{{R:' + own.id + '}}' in request
     assert '{{R:' + unrelated.id + '}}' not in request
     assert '{{F:F1}}' not in request
@@ -36,5 +38,7 @@ def test_writing_context_has_only_real_scoped_references_and_no_phantom_figure(t
     continue_experiment(ctx.research,'Q1','登记已有实际图表')
     ctx.research.commit(WorkerResult(order=ctx.research.claim('Q1'),execution_status='succeeded',acceptance='accepted',
         report={'status':'completed','summary':'已登记实际图表'},results=[asdict(figure)]))
-    request = json.dumps(decision_context(ctx.research,ctx.research.snapshot())[1],ensure_ascii=False)
+    snapshot=ctx.research.snapshot()
+    snapshot['action']={'question_id':snapshot['experiments']['Q1']['question_id']}
+    request = json.dumps(decision_context(ctx.research,snapshot)[1],ensure_ascii=False)
     assert '{{F:' + figure.id + '}}' in request

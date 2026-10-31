@@ -187,31 +187,6 @@ class ReviewRecord(Contract):
     evidence: list[dict[str, Any]] = Field(default_factory=list, description="审查实际引用的本次尝试证据，保留返工前已被替换的值")
 
 
-class CandidateMethod(Contract):
-    name: str = Field(min_length=1, max_length=120, description='用户可读的方法名称，不使用任务编号或内部变量名')
-    instruction: str = Field(min_length=1, max_length=3000, description='实际要执行的方法、参数或假设；不能由执行者静默换成其他候选')
-    method_keys: list[str] = Field(default_factory=list, max_length=4, description='可选的方法资源引用，仅使用available_method_keys中的真实编号；普通代码算法可留空，不把算法名称编造成资源编号')
-
-
-class ExperimentPlan(Contract):
-    conditions: str = Field(min_length=1, max_length=2000, description='比较前固定的数据范围、输入、实验条件与适用边界')
-    evaluation: str = Field(min_length=1, max_length=2000, description='共同评价标准、指标方向及平局/不可比时的处理；不能用模型预估分冒充实测')
-    candidates: list[CandidateMethod] = Field(min_length=1, max_length=2)
-    csv: dict | None = Field(default=None, description='仅适用CSV监督学习比较时填写SupervisedSpec；普通代码和仿真留空，每个任务执行一个候选')
-
-    @model_validator(mode='after')
-    def execution_contract(self):
-        if len({c.name for c in self.candidates})!=len(self.candidates):raise ValueError('候选方法名称不能重复')
-        if self.csv is None:
-            if len(self.candidates)!=1:raise ValueError('普通实验每个任务执行一个候选，其他候选按需建立独立任务')
-        else:
-            from ai_system.modules.experiments.store import SupervisedSpec
-            self.csv=SupervisedSpec.model_validate(self.csv).model_dump()
-            if not self.csv['applicable'] or len(self.candidates)!=2:
-                raise ValueError('CSV比较工具需要适用的共同协议及两项候选；其他研究使用普通实验')
-        return self
-
-
 class ResearchRevision(Contract):
     command_id: str
     base_revision: int = Field(ge=1)

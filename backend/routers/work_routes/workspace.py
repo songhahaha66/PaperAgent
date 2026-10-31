@@ -46,6 +46,7 @@ async def download_workspace_file(
     """下载工作空间中的文件"""
     try:
         _require_workspace_access(db, work_id, current_user)
+        db.close()
 
         return workspace_file_service.file_response(work_id, file_path)
 
@@ -88,6 +89,7 @@ async def get_workspace_image(
     """获取工作空间中的图片文件"""
     try:
         _require_workspace_access(db, work_id, current_user)
+        db.close()
         
         return workspace_file_service.file_response(work_id, file_path, image=True)
 
@@ -131,6 +133,7 @@ async def upload_file_to_workspace(
     """上传文件到工作空间"""
     try:
         _require_workspace_access(db, work_id, current_user)
+        db.close()
         
         return workspace_file_service.upload_file(work_id, file_path, file)
     except HTTPException:
@@ -193,9 +196,11 @@ async def export_workspace(
     """导出工作空间为ZIP文件"""
     try:
         project = _require_workspace_access(db, work_id, current_user, exporting=True)
+        legacy = project.architecture_version != 2
+        db.close()
 
         # 生成ZIP文件
-        zip_path = workspace_file_service.export_workspace(work_id, legacy=project.architecture_version != 2)
+        zip_path = workspace_file_service.export_workspace(work_id, legacy=legacy)
 
         # 返回ZIP文件
         return FileResponse(
@@ -282,6 +287,7 @@ async def get_paper_document(work_id: str, db: Session = Depends(get_db), curren
     if not (workspace_path(root, '.system/graph_thread.json')).exists():
         return paper_editor.empty_document()
     store = _paper_store(db, work_id, current_user)
+    db.close()
     try:
         return await paper_editor.document(store)
     except ValueError as exc:
@@ -309,7 +315,10 @@ async def recover_review_task(work_id:str,request:ReviewTaskRequest,db:Session=D
     store=_paper_store(db,work_id,current_user,mutation=True)
     if request.research_id!=store.research_id:raise HTTPException(409,'研究标识已变化，请刷新')
     from services.chat_services import review_tasks
-    try:return review_tasks.start(store,request.stage,request.version,request.command_id,model_factory=lambda:_paper_writing_model(db,current_user))
+    try:
+        result=review_tasks.start(store,request.stage,request.version,request.command_id,model_factory=lambda:_paper_writing_model(db,current_user))
+        db.close()
+        return result
     except (ValueError,ResearchConflict) as exc:raise HTTPException(409,str(exc))
 
 
@@ -323,6 +332,7 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
     llm = None
     if request.source_issue is not None or request.content is None or '{{C:' in request.content:
         llm = _paper_writing_model(db,current_user)
+    db.close()
     try:
         from ai_system.research.runtime import budget_scope, ResearchBudgetExhausted
         from ai_system.graph.tracing import LLMCallTrace
@@ -354,7 +364,8 @@ async def propose_paper_edit(work_id: str, request: PaperEditRequest, db: Sessio
 @router.post('/{work_id}/paper/proposals/{proposal_id}')
 async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecision, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
     store = _paper_store(db, work_id, current_user, mutation=True)
-    if crud.get_work(db, work_id).output_mode == 'latex':
+    output_mode = crud.get_work(db, work_id).output_mode or 'markdown'
+    if output_mode == 'latex':
         raise HTTPException(409, 'LaTeX 请使用源码评论与文件修改集')
     if request.research_id != store.research_id:
         raise HTTPException(409, '研究标识已改变，请刷新论文')
@@ -364,13 +375,15 @@ async def decide_paper_edit(work_id: str, proposal_id: str, request: PaperDecisi
             from ai_system.graph.tracing import LLMCallTrace
             from services.chat_services.paper_corrections import review_pending_fragment
             llm=_paper_writing_model(db,current_user);trace=LLMCallTrace()
+            db.close()
             if hasattr(llm,'model_copy'):
                 callbacks=getattr(llm,'callbacks',None)
                 llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
             try:
                 with budget_scope(store.root,store.research_id):return await review_pending_fragment(store,proposal_id,llm)
             finally:trace.dump(workspace_path(store.root, '.system/editor_llm_calls.json'))
-        return await paper_editor.decide(store, proposal_id, request.decision == 'apply', crud.get_work(db, work_id).output_mode or 'markdown')
+        db.close()
+        return await paper_editor.decide(store, proposal_id, request.decision == 'apply', output_mode)
     except (ValueError, ResearchConflict) as exc:
         raise HTTPException(409, str(exc))
 
@@ -481,6 +494,7 @@ async def literature_policy(work_id: str, request: LiteraturePolicy, db: Session
 @router.post('/{work_id}/literature/search')
 async def literature_search(work_id: str, request: LiteratureQuery, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
     service = _literature(work_id,db,current_user,True)
+    db.close()
     try:
         from ai_system.modules.registry import invoke
         from types import SimpleNamespace
@@ -492,6 +506,7 @@ async def literature_search(work_id: str, request: LiteratureQuery, db: Session=
 @router.post('/{work_id}/literature/import')
 async def literature_import(work_id: str, request: LiteratureURL, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
     service = _literature(work_id,db,current_user,True)
+    db.close()
     try:
         from ai_system.modules.registry import invoke
         from types import SimpleNamespace
@@ -512,6 +527,7 @@ async def literature_source(work_id: str, source_id: str, db: Session=Depends(ge
 @router.post('/{work_id}/literature/sources/{source_id}/fetch')
 async def literature_fetch(work_id: str, source_id: str, db: Session=Depends(get_db), current_user: int=Depends(get_current_user)):
     service = _literature(work_id,db,current_user,True)
+    db.close()
     try:
         return await service.fetch_source(source_id)
     except ValueError as exc:
@@ -543,10 +559,12 @@ async def literature_check(work_id: str, evidence_id: str, request: LiteratureCl
         service.store.evidence(evidence_id)
         config = setup_environment_from_db(db).config_manager
         model = config.get_model_config('writing',current_user)
+        llm = create_llm_from_model_config(model)
+        db.close()
         text = request.claim+' {{C:'+evidence_id+'}}'
         from ai_system.research.runtime import budget_scope
         with budget_scope(service.store.root):
-            checks = await audit_citations(service.store.root,[text],create_llm_from_model_config(model))
+            checks = await audit_citations(service.store.root,[text],llm)
         row = claims_in(text,service.store)[0]
         return service.store.review(row['key']) or (checks[0] if checks else {'status':'insufficient','reason':'核查未完成'})
     except ValueError as exc:
@@ -586,21 +604,30 @@ async def experience_list(work_id:str,db:Session=Depends(get_db),current_user:in
 @router.get('/{work_id}/experiments')
 async def comparison_list(work_id:str,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     _require_workspace_access(db,work_id,current_user)
-    from ai_system.modules.experiments.store import ExperimentStore
+    # Compatibility reader only: viewing history never creates a store or policy.
     from ai_system.research.store import ResearchStore,digest
     from ai_system.research.validation import protocol
-    from ai_system.modules.experiments.supervised import metadata
-    store=ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons')
-    comparisons=ExperimentStore(store);policy=comparisons.policy();records=comparisons.list()
-    files=store.file_inputs()
-    for record in records:
-        source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
-        task=(source or {}).get('experiments',{}).get(record['task_id'])
-        record['input_current']=files==record['file_inputs'] and (record.get('policy_version') is None or policy['version']==record['policy_version']) and (not task or task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'] and (not record.get('intent_hash') or digest(task.get('experiment'))==record['intent_hash']))
-    return {'policy':policy,'files':metadata(store.root),'comparisons':records}
+    store=ResearchStore(workspace_file_service.get_workspace_path(work_id),'workspace-comparisons',read_only=True)
+    policy={'enabled':False,'spec':None,'version':0};records=[]
+    if store.path.is_file():
+        with store._connect() as conn:
+            tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'experiment_policy' in tables:
+                row=conn.execute('SELECT version,payload FROM experiment_policy WHERE id=1').fetchone()
+                if row:policy={**json.loads(row['payload']),'version':row['version'],'enabled':False}
+            if 'experiment_comparisons' in tables:
+                records=[json.loads(row[0]) for row in conn.execute('SELECT payload FROM experiment_comparisons ORDER BY rowid DESC LIMIT 30')]
+        files=store.file_inputs()
+        for record in records:
+            source=ResearchStore(store.root,record['research_id'],read_only=True).snapshot()
+            task=(source or {}).get('experiments',{}).get(record['task_id'])
+            record['historical']=True
+            record['input_current']=files==record['file_inputs'] and (record.get('policy_version') is None or policy['version']==record['policy_version']) and bool(task and task['revision']==record['revision'] and digest(protocol(source,record['task_id']))==record['contract_hash'] and (not record.get('intent_hash') or digest(task.get('experiment'))==record['intent_hash']))
+    return {'policy':policy,'files':[],'comparisons':records}
 
 
 class ResearchSetupRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     request_limit:int|None=Field(default=None,ge=1)
     timeout_seconds:float|None=Field(default=None,gt=0)
     output_token_limit:int|None=Field(default=None,ge=1)
@@ -612,19 +639,17 @@ class ResearchSetupRequest(BaseModel):
     literature_query:str=Field(default='',max_length=300)
     source_urls:list[str]=Field(default_factory=list,max_length=3)
     skill_keys:list[str]=Field(default_factory=list,max_length=25)
-    compare:bool=False
-    comparison_spec:dict|None=None
 
 
 @router.put('/{work_id}/research-setup')
 async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Depends(get_db),current_user:int=Depends(get_current_user)):
     _require_workspace_access(db,work_id,current_user)
     if task_manager.get_running_task(work_id):raise HTTPException(409,'研究执行中不能修改入口配置')
+    db.close()
     import json
     from ai_system.research.store import ResearchStore
     from ai_system.research.runtime import ResearchRuntime
     from ai_system.research.literature import LiteratureService
-    from ai_system.modules.experiments.store import ExperimentStore,SupervisedSpec
     from ai_system.modules.methods import validate_skill_policy
     from services.research_experience import ExperienceScope
     from services.literature_fetch import public_url
@@ -633,12 +658,10 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
     if thread.exists():raise HTTPException(409,'研究已经开始；入口配置不会覆盖检查点，请使用对应面板明确修订')
     try:
         urls=[public_url(u) for u in request.source_urls]
-        spec=SupervisedSpec.model_validate(request.comparison_spec).model_dump() if request.comparison_spec else None
         skill=validate_skill_policy({'mode':'selected' if request.skill_keys else 'auto','selected':request.skill_keys,'disabled':[]})
         runtime=ResearchRuntime(root)
         runtime.configure({k:getattr(request,k) for k in ('request_limit','timeout_seconds','compact_paper','output_token_limit','total_token_limit','cost_limit_usd')})
         skills=ResearchStore(root,'workspace-skills');skills.set_skill_preferences(skill,skills.skill_preferences()['version'])
-        ExperimentStore(skills).set_policy(request.compare,spec)
         ExperienceScope(current_user,work_id).set_enabled(request.reuse_experience)
         library=LiteratureService(root);library.store.set_policy(request.literature_mode)
         for url in urls:
@@ -710,7 +733,9 @@ async def paper_project_state(work_id: str, db: Session = Depends(get_db), curre
     try:
         project=paper_project.describe(store)
         main=next((f for f in project['files'] if f['path']==project['main']), {})
-        draft = await paper_editor.document(store) if crud.get_work(db,work_id).output_mode != 'latex' else None
+        output_mode = crud.get_work(db,work_id).output_mode
+        db.close()
+        draft = await paper_editor.document(store) if output_mode != 'latex' else None
         return {**project,'research_id':store.research_id,'sources':paper_sources.cards(store),
                 **({'draft_sections':draft['sections']} if draft else {}),
                 'has_source':bool((main.get('text') or '').strip())}
@@ -745,6 +770,7 @@ async def paper_change_decision(work_id: str, change_id: str, request: PaperChan
     store=_paper_store(db,work_id,current_user)
     _paper_identity(store,request.research_id)
     from services.chat_services import paper_project
+    db.close()
     try:return await paper_project.decide(store,change_id,request.decision)
     except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
 
@@ -754,6 +780,7 @@ async def paper_compile(work_id: str, request: dict, db: Session = Depends(get_d
     store=_paper_store(db,work_id,current_user)
     _paper_identity(store,request.get('research_id'))
     from services.chat_services import paper_project
+    db.close()
     try:return await paper_project.compile_project(store)
     except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
 
@@ -787,6 +814,9 @@ async def paper_comment(work_id: str, request: PaperCommentRequest, background_t
         llm=_paper_writing_model(db,current_user)
         record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote,request.read_version,
                                             references=[r.model_dump() for r in request.references])
+        # FastAPI background tasks can outlive the response handler and its
+        # yield dependency; release the read transaction before scheduling.
+        db.close()
         if created:background_tasks.add_task(_execute_paper_comment,store,record['id'],llm)
         return record
     except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
@@ -802,5 +832,7 @@ async def paper_comment_resume(work_id: str, execution_id: str, request: dict, b
     record=next((r for r in records if r['id']==execution_id),None)
     if not record:raise HTTPException(404,'执行记录不存在')
     if record['state'] not in {'failed','pending','running'}:return record
-    background_tasks.add_task(_execute_paper_comment,store,execution_id,_paper_writing_model(db,current_user),True)
+    llm=_paper_writing_model(db,current_user)
+    db.close()
+    background_tasks.add_task(_execute_paper_comment,store,execution_id,llm,True)
     return record

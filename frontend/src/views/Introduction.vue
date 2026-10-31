@@ -3,7 +3,7 @@
     <div class="custom-header">
       <div class="header-left">
         <img src="/logo.png" alt="Logo" width="36" />
-        <h1 class="header-title">PaperAgent</h1>
+        <h1 class="header-title paperagent-wordmark">PaperAgent</h1>
       </div>
       <div class="header-right">
         <t-button
@@ -28,7 +28,27 @@
       <div class="left-section">
         <div class="hero-content">
           <h1 class="main-title">{{ t('introduction.title') }}</h1>
-          <p class="main-subtitle">{{ t('introduction.subtitle') }}</p>
+          <p class="main-subtitle">
+            {{ t('introduction.subtitle') }}
+          </p>
+          <p class="main-subtitle">
+            {{ t('introduction.automate') }}
+            <span class="rotating-text-wrapper">
+              <span
+                v-for="(text, index) in rotatingTexts"
+                :key="index"
+                :class="[
+                  'rotating-text',
+                  {
+                    active: currentTextIndex === index,
+                    leaving: previousTextIndex === index,
+                  },
+                ]"
+              >
+                {{ text }}
+              </span>
+            </span>
+          </p>
 
           <div class="cta-buttons">
             <t-button theme="primary" size="large" @click="goToLogin">
@@ -78,15 +98,39 @@
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { onMounted } from 'vue'
+import { onMounted, ref, onUnmounted, computed } from 'vue'
 
 const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 
+// 副标题轮播文字
+const rotatingTexts = computed(() => [
+  t('introduction.typesetting'),
+  t('introduction.charts'),
+  t('introduction.code'),
+  t('introduction.word'),
+])
+const currentTextIndex = ref(0)
+const previousTextIndex = ref(-1)
+let textRotateInterval: number | null = null
+
+// 如果用户已登录，直接跳转到主页
 onMounted(() => {
   if (authStore.isAuthenticated) {
     router.push('/home')
+  }
+
+  // 副标题文字轮播 - 每2秒切换
+  textRotateInterval = window.setInterval(() => {
+    previousTextIndex.value = currentTextIndex.value
+    currentTextIndex.value = (currentTextIndex.value + 1) % rotatingTexts.value.length
+  }, 2000)
+})
+
+onUnmounted(() => {
+  if (textRotateInterval) {
+    clearInterval(textRotateInterval)
   }
 })
 
@@ -138,7 +182,7 @@ const goToRegister = () => {
 }
 
 .header-title {
-  font-size: 17px;
+  font-size: 1.5rem;
   color: var(--pa-ink);
   margin: 0;
 }
@@ -170,7 +214,7 @@ const goToRegister = () => {
 }
 
 .main-title {
-  font-size: 22px;
+  font-size: 3.5rem;
   font-weight: 700;
   color: var(--pa-ink);
   margin: 0 0 16px 0;
@@ -178,10 +222,44 @@ const goToRegister = () => {
 }
 
 .main-subtitle {
-  font-size: 15px;
+  font-size: 1.25rem;
   color: var(--pa-muted);
   margin: 0 0 40px 0;
   line-height: 1.6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.rotating-text-wrapper {
+  position: relative;
+  display: inline-block;
+  height: 1.6em;
+  width: 160px;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+
+.rotating-text {
+  position: absolute;
+  left: 0;
+  right: 0;
+  opacity: 0;
+  transform: translateY(100%);
+  transition: all 0.5s ease-in-out;
+  color: var(--pa-info);
+  font-weight: 600;
+}
+
+.rotating-text.active {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.rotating-text.leaving {
+  opacity: 0;
+  transform: translateY(-100%);
 }
 
 .cta-buttons {
@@ -210,6 +288,13 @@ const goToRegister = () => {
   border-radius: var(--pa-radius-card);
   padding: 30px 20px;
   text-align: center;
+  transition: all 0.3s ease;
+  border: none;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--pa-shadow-overlay);
 }
 
 /* 四种不同颜色的卡片 - 浅色调 */
@@ -235,14 +320,14 @@ const goToRegister = () => {
 
 .feature-card h3 {
   color: var(--pa-ink);
-  font-size: 17px;
+  font-size: 1.25rem;
   margin: 0 0 12px 0;
   font-weight: 600;
 }
 
 .feature-card p {
   color: var(--pa-muted);
-  font-size: 15px;
+  font-size: 0.95rem;
   line-height: 1.6;
   margin: 0;
 }
@@ -279,11 +364,11 @@ const goToRegister = () => {
   }
 
   .main-title {
-    font-size: 22px;
+    font-size: 2.5rem;
   }
 
   .main-subtitle {
-    font-size: 15px;
+    font-size: 1.1rem;
   }
 }
 
@@ -299,11 +384,11 @@ const goToRegister = () => {
   }
 
   .main-title {
-    font-size: 22px;
+    font-size: 2rem;
   }
 
   .main-subtitle {
-    font-size: 15px;
+    font-size: 1rem;
   }
 
   .cta-buttons {
@@ -325,11 +410,11 @@ const goToRegister = () => {
   }
 
   .feature-card h3 {
-    font-size: 15px;
+    font-size: 1.1rem;
   }
 
   .feature-card p {
-    font-size: 15px;
+    font-size: 0.9rem;
   }
 }
 </style>

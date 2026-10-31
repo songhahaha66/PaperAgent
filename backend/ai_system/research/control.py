@@ -3,7 +3,6 @@ from services.file_services.workspace_layout import workspace_path
 
 from .domain import experiment_report, experiment_design
 
-import asyncio
 import json
 import shutil
 import hashlib
@@ -11,7 +10,7 @@ import hashlib
 
 from ..graph.registry import Claim, Result
 from ..graph.context import GraphContext
-from .models import WorkerResult, ResearchConflict, IssueReport
+from .models import ResearchConflict
 from .planner import ready_tasks
 from .assumptions import assumption_scope
 from .progress import task_progress
@@ -103,13 +102,11 @@ def paper_state(store):
     return source_state(store,state) if is_latex(store) else state
 
 
-def experiment_dispatch(ctx, key):
-    """Workers receive system-built context, never a model-supplied branch."""
+def historical_experiment_context(ctx, key):
+    """Read an imported experiment for historical review; never dispatch it."""
     snapshot=ctx.research.snapshot()
     task=snapshot['experiments'][key]
-    from ai_system.modules.experiments.store import ExperimentStore
-    comparison=ExperimentStore(ctx.research).read(key,task['revision']) if (task.get('experiment') or {}).get('csv') else None
-    return {'resume_comparison':bool(comparison and comparison.get('recovery_requested')),'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
+    return {'source':task.get('source') or snapshot['spec']['requirement']+'\n'+'\n'.join(snapshot['spec']['amendments']), 'subproblem':task['subproblem'],
         'task_revision':task['revision'], 'experiment':task.get('experiment'),
         'data_profile':snapshot['materials']['profile'], 'feedback':task.get('method_instruction',''),
         'clarifications':snapshot.get('clarifications',[]),
@@ -141,6 +138,7 @@ def public_snapshot(snapshot, *, work_status=None, source_root=None):
         for key, stage in stages.items()}
     return {key: snapshot[key] for key in ("engine_version", "schema_version", "research_id", "revision", "commit_seq", "outcome")} | {
         "questions": questions(snapshot), "evidence_uses":evidence_uses(snapshot,source_root),
+        "progress_plan": snapshot.get('progress_plan'),
         "runtime":execution(snapshot,work_status,source_root),
         "delivery": delivery_status(snapshot),
         "delivery_summary": delivery_summary(snapshot, stages),
@@ -266,103 +264,3 @@ def worker_context(ctx, order):
     # Progress belongs to the coordinator. Attempts only emit local messages.
     local.set_stage = ctx.set_stage
     return local
-
-
-async def execute(branch, runtime):
-    from ai_system.modules.experiments.execution import solve
-    from types import SimpleNamespace
-
-    ctx = runtime.context
-    key = branch["subproblem"]["id"]
-    try:
-        task=ctx.research.snapshot()['experiments'][key]
-        if branch.get('task_revision',task['revision'])!=task['revision'] or branch['subproblem']!=task['subproblem']:
-            raise ResearchConflict('行动所依据的研究版本已改变，请重新观察')
-        if branch.get('experiment')!=task.get('experiment'):
-            raise ResearchConflict('候选方法或评价条件与当前任务记录不符，请重新观察')
-        order = ctx.research.claim(key)
-    except ResearchConflict as exc:
-        await ctx.events.stage(str(exc))
-        return {'_execution_outcome': {'status': 'interrupted', 'message': str(exc)}}
-    await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
-    local = None
-    receipt = None
-    captured_paths = None
-    next_file_event = 0
-
-    async def publish_outputs():
-        nonlocal captured_paths, next_file_event
-        if captured_paths is None:
-            from ai_system.sandbox.artifacts import capture_run_files
-            captured_paths = capture_run_files(local.fs, ctx.fs, run_ids=[
-                rid for rid in local.fs._manifest['runs']
-                if rid not in local.fs._manifest.get('inherited_runs', [])])
-        # Resume interrupted notifications without capturing the same files again.
-        while next_file_event < len(captured_paths):
-            await ctx.events.file_changed(captured_paths[next_file_event])
-            next_file_event += 1
-
-    try:
-        prepared=branch.get('design') or {}
-        if prepared.get('experience_refs'):
-            if prepared.get('experience_files',ctx.research.file_inputs())!=ctx.research.file_inputs():
-                raise ResearchConflict('确认前后数据改变，请重新设计')
-            ctx.research.bind_experiences(order,prepared['experience_refs'])
-        frozen=ctx.research.snapshot()['executions'][order.attempt_id]['experience_basis']
-        branch={**branch,'research_contract':{**branch['research_contract'],
-                'requirements':frozen['requirements'],'checks':[]}}
-        local = worker_context(ctx, order)
-        solved = await solve(branch, SimpleNamespace(context=local))
-        report,design = solved['report'],solved['design']
-        if task.get('experiment') and design.get('experiment')!=task['experiment']:
-            raise ResearchConflict('执行报告中的候选方法或评价条件与冻结任务不符')
-        # Execution status describes completion, never scientific correctness.
-        # Code, stdout/stderr and output files are archived independently of prose.
-        await publish_outputs()
-        report['files'] = list(captured_paths or [])
-        result = WorkerResult(order=order,
-            execution_status="succeeded" if report["status"] == "completed" else "failed",
-            acceptance="accepted" if report["status"] == "completed" else "inconclusive",
-            report=report, design=design,
-            issues=([IssueReport(task_id=key, category="execution", message=report.get("error") or "本轮执行未完成")]
-                    if report["status"] != "completed" else [])
-                + [IssueReport.model_validate(i) for i in report.get("research_issues", [])])
-        receipt = ctx.research.commit(result)
-        refresh_registry(ctx)
-        snapshot = ctx.research.snapshot()
-        committed = snapshot["experiments"][key]
-        await ctx.events.emit("research_state", public_snapshot(snapshot,source_root=ctx.research.root))
-        completed = (receipt["published"] and committed["execution_id"] == order.attempt_id and committed["execution_status"] == "succeeded"
-                    and committed["validity"] == "current")
-        if completed:
-            code = local.workspace / "code" / f"{key}_solution.py"
-            if code.exists():
-                ctx.fs.write_text(f"code/{key}_solution.py", code.read_text(encoding="utf-8"))
-        if completed:
-            await ctx.events.emit("paper_solved", f"{key} 执行结束，结果文件与代码已保存")
-        else:
-            await ctx.events.stage(f"{key} 已提交，{receipt.get('reason') or '本轮未完成，请查看执行记录'}")
-        return {"log": [f"commit {key}: {receipt}"], '_execution_outcome': {
-            'status': 'completed' if result.execution_status == 'succeeded' else 'failed',
-            'message': report.get('error')}}
-    except asyncio.CancelledError:
-        raise  # Recovery records cancellation and acquires a new lease.
-    except Exception as exc:
-        if receipt is not None:
-            await ctx.events.stage(f"{key} 已提交，结果视图更新失败，将在恢复时重建：{exc}")
-            return {"log": [f"projection {key} failed after commit: {exc}"], '_execution_outcome': {
-                'status': 'completed' if result.execution_status == 'succeeded' else 'failed',
-                'message': report.get('error')}}
-        ctx.research.commit(WorkerResult(order=order, execution_status="failed", acceptance="inconclusive",
-            report={"status": "failed", "error": str(exc)}, issues=[IssueReport(task_id=key, category="execution", message=str(exc))]))
-        await ctx.events.emit("research_state", public_snapshot(ctx.research.snapshot(),source_root=ctx.research.root))
-        await ctx.events.stage(f"{key} 执行失败：{exc}")
-        return {"log": [f"attempt {key} failed: {exc}"], '_execution_outcome': {'status': 'failed', 'message': str(exc)}}
-    finally:
-        if local:
-            try:
-                # Code output is available even when later interpretation fails.
-                # Publication of a file does not accept the experiment's conclusions.
-                await publish_outputs()
-            finally:
-                await local.kernels.close()

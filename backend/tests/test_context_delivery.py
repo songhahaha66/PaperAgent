@@ -103,7 +103,6 @@ def test_final_reply_can_deliver_without_answer_metadata_but_waits_for_files(tmp
     assert ctx.research.snapshot()['publication']['stage']=='export'
     async def pending():
         q=await invoke(ctx,'research.create_question',question='结果是多少？')
-        await invoke(ctx,'research.update_answer',question_id=q['question_id'],statement='结果6',coverage='answered')
         rid=ctx.fs.create_run();ctx.fs.get_run_info(rid).update(scope='research',research_id=ctx.research.research_id,status='success',delivery_error='not downloaded')
         with pytest.raises(ValueError,match='尚未确认'):
             await invoke(ctx,'research.deliver',reason='准备交付')
@@ -119,7 +118,6 @@ def test_historical_unknown_execution_does_not_block_current_delivery(tmp_path):
     (tmp_path/'paper.md').write_text('# 当前结果\n结果为6；早期初始化中断未作为结果依据。')
     async def run():
         q=await invoke(ctx,'research.create_question',question='结果是多少？')
-        await invoke(ctx,'research.update_answer',question_id=q['question_id'],statement='结果6',coverage='answered')
         rid=ctx.fs.create_run()
         old=ctx.fs.get_run_info(rid)
         old.update(scope='research',research_id=ctx.research.research_id,status='error',

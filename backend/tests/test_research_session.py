@@ -62,12 +62,6 @@ def seed(root):
         store.commit(WorkerResult(order=order,execution_status='succeeded',acceptance='accepted',
             report={'status':'completed','requirement_evidence':[{'requirement_id':'RQ'+str(i+1),'evidence_refs':[row['id']]}]},
             results=[row],claims=projection['claims'] if key=='Q1' else []))
-    from research_tools_helpers import answer
-    current=store.snapshot()
-    for i,key in enumerate(('Q1','Q2')):
-        answer(store,coverage='answered',stop_reason='已回答本次给定样本范围，推广证据仍未知',question_id=current['experiments'][key]['question_id'],
-            statement='本次记录显示 {{R:'+projection['results'][i]['id']+'}}，仅限所提供样本',
-            artifact_refs=[projection['results'][i]['id']],limitations=['没有外推证据'])
     store.publish_paper('# 研究\n已有报告，不得改写')
     migrate_project(root)
     return workspace_bytes(root)
@@ -183,7 +177,7 @@ def web(monkeypatch, tmp_path):
     app = FastAPI()
     app.include_router(chat.router)
     app.dependency_overrides[get_current_user] = lambda: 7
-    app.dependency_overrides[get_db] = lambda: None
+    app.dependency_overrides[get_db] = lambda: SimpleNamespace(close=lambda: None)
     with TestClient(app) as client:
         yield client, work, calls, statuses, saved, root
     chat.task_manager._tasks.clear()

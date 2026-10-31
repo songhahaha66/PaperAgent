@@ -135,35 +135,26 @@ def test_real_agent_publishes_plain_text_around_its_tool_call(tmp_path):
     assert any(row.get('text') == '先检查已有文件。' for update in updates for row in update['segments'])
 
 
-def test_failed_worker_report_is_failed_activity_even_when_call_returns(tmp_path, monkeypatch):
+def test_failed_direct_execution_is_failed_activity_even_when_call_returns(tmp_path):
     from ai_system.graph.context import GraphContext
     from ai_system.research.store import ResearchStore
-    from ai_system.research.loop import _action, act, select
-    from ai_system.modules.experiments.planning import experiment_design
-    from research_tools_helpers import add_experiment
+    from ai_system.modules.registry import invoke
     from services.chat_services.conversation_timeline import TIMELINE
-    manager, root, reply, _ = writer(tmp_path)
-    ctx = GraphContext.create(str(root), planner_llm=None)
-    ctx.research = ResearchStore(root, 'failed-worker')
+    manager,root,reply,_=writer(tmp_path)
+    ctx=GraphContext.create(str(root),planner_llm=None)
+    ctx.research=ResearchStore(root,'failed-direct')
     ctx.research.initialize('Compute a small sample mean.')
-    eid = add_experiment(ctx.research, 'What is the mean?')
-    async def solve(branch, runtime):
-        return {'report': {'status': 'failed', 'error': 'Model service unavailable', 'summary': 'Saved calculations'},
-                'design': experiment_design(branch['experiment'])}
-    monkeypatch.setattr('ai_system.modules.experiments.execution.solve', solve)
-    async def run():
-        token = TIMELINE.set(reply)
+    async def scenario():
+        token=TIMELINE.set(reply)
         try:
-            action = _action(ctx.research,'experiments.execute',{},'计算样本均值',target=eid)
-            await act({'action_id':action['id']},SimpleNamespace(context=ctx))
-            assert ctx.research.snapshot()['action']['status']=='failed'
-            assert select({},SimpleNamespace(context=ctx))=='observe'
+            result=await invoke(ctx,'research.run_python',code='pass',title='计算样本均值')
+            assert '占位' in result['observation']
         finally:
             TIMELINE.reset(token)
             await ctx.kernels.close()
-    asyncio.run(run())
-    assert ctx.research.snapshot()['experiments'][eid]['execution_status'] == 'failed'
-    row = next(s['execution'] for s in manager.get_messages('work')[0]['segments']
-               if s.get('execution', {}).get('capability') == 'experiments.execute')
-    assert row['status'] == 'failed' and row['finished_at']
-    assert row['message'] == 'Model service unavailable'
+    asyncio.run(scenario())
+    assert not ctx.research.snapshot()['experiments']
+    row=next(s['execution'] for s in manager.get_messages('work')[0]['segments']
+             if s.get('execution',{}).get('capability')=='research.run_python')
+    assert row['status']=='failed' and row['finished_at']
+    assert '占位' in row['message']

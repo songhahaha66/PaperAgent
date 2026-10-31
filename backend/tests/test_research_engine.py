@@ -60,9 +60,9 @@ def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(
     forecast_qid,policy_qid = forecast,policy
     assert revised['questions'][forecast_qid] == original['questions'][forecast_qid]
     assert revised['questions'][policy_qid]['version'] > original['questions'][policy_qid]['version']
-    assert revised['questions'][policy_qid]['coverage'] == 'partial'
-    assert '未执行条件仍未知' in revised['questions'][policy_qid]['stop_reason']
-    assert original['questions'][forecast_qid]['judgment'] in revised['sections']['document']['text']
+    assert 'coverage' not in revised['questions'][policy_qid]
+    assert '未执行条件仍未知' in revised['sections']['document']['text']
+    assert original['questions'][forecast_qid]['title'] in revised['sections']['document']['text']
     assert revised["outcome"] in {"completed", "needs_attention"}
     before = len(revised["executions"])
     written = len(agent.llm.text_calls)

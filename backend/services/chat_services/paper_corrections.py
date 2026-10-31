@@ -9,12 +9,11 @@ from ai_system.graph.llm_utils import as_messages,call_structured
 from ai_system.modules.writing.consistency import audit_sections,section_audit_prompt,AUDIT_SYSTEM
 from ai_system.modules.writing.validation import check_sections
 from ai_system.graph.registry import REF_PATTERN,publication_text
-from ai_system.text_syntax import math_spans, strip_math
+from ai_system.text_syntax import math_spans
 from ai_system.graph.state import ClaimAudit
 from ai_system.research.store import digest
 from ai_system.research.models import ResearchConflict
 from ai_system.research.control import refresh_registry,paper_state
-from ai_system.research.method_facts import verified_methods,canonical_method_block
 from ai_system.research.review_cache import ReviewCache,review_context,run_review
 from ai_system.research.citations import audit_citations,citation_issues
 from ai_system.research.literature import CITATION
@@ -26,7 +25,6 @@ class AnchoredEdit(BaseModel):
     section:str
     old:str=Field(min_length=1,max_length=7000)
     replacement:str=Field(default='',max_length=7000)
-    verified_method:bool=False
 
 
 class CorrectionEdits(BaseModel):
@@ -39,15 +37,14 @@ def unique_span(text,old):
     return start,start+len(old)
 
 
-def apply_edits(before,answer,blocks,*,normalize=True):
+def apply_edits(before,answer,*,normalize=True):
     grouped={k:[] for k in before}
     for edit in answer.edits:
         if edit.section not in before:raise ValueError('局部修改超出所选章节')
         original=before[edit.section]
         start,end=unique_span(original,edit.old)
-        if edit.verified_method and (edit.section not in blocks or edit.replacement):raise ValueError('方法修正只能插入该任务的项目核验说明')
         if any(start<e and end>s for s,e,_ in grouped[edit.section]):raise ValueError('修改片段不能重叠')
-        grouped[edit.section].append((start,end,blocks[edit.section] if edit.verified_method else edit.replacement))
+        grouped[edit.section].append((start,end,edit.replacement))
     after={}
     for key,edits in grouped.items():
         if not edits:raise ValueError('所选章节必须有明确局部修改')
@@ -155,7 +152,7 @@ async def generate_fragment(store,key,section,source,instruction,llm,request,rec
         with labelled('paper-edit:fragment'):
             answer=await call_structured(request_model(llm,'auxiliary'),FragmentReplacement,as_messages(system,json.dumps(payload,ensure_ascii=False)),validate=validate,retries=0)
         edits=CorrectionEdits(edits=[AnchoredEdit(section=key,old=scope['old'],replacement=answer.replacement)])
-        after=apply_edits({key:section['text']},edits,{},normalize=False)
+        after=apply_edits({key:section['text']},edits,normalize=False)
         assert after[key]==section['text'][:scope['start']]+answer.replacement+section['text'][scope['end']:]
         finish_patch(store,record,'generated',replacement_hash=digest(answer.replacement),**diagnostics)
         return after,edits,scope,record
@@ -165,14 +162,10 @@ async def generate_fragment(store,key,section,source,instruction,llm,request,rec
         raise PatchFailure(record['id'],'truncated' if truncated else 'contract_failed',scope,truncated and not recovery_of) from None
 
 
-def guard_correction(before,after,canonical,latex):
-    from .paper_editor import guard_wording
-    if not canonical:
+def guard_correction(before,after,latex,*,wording=True):
+    if wording:
+        from .paper_editor import guard_wording
         return guard_wording(before,after,latex)
-    if after.count(canonical)!=1:raise ValueError('方法修正须完整保留项目提供的已核验公式说明，且只出现一次')
-    signature=lambda s:(Counter(REF_PATTERN.findall(s)),Counter(CITATION.findall(s)),
-        Counter(re.findall(r'\d+(?:\.\d+)?',strip_math(REF_PATTERN.sub('',CITATION.sub('',s))))))
-    if signature(before)!=signature(after):raise ValueError('依据修正不能改变实验数字、证据或来源引用')
     if not after.strip() or len(after)>100000:raise ValueError('候选正文长度无效')
     from ai_system.export.latex import fragment_issues
     if latex and fragment_issues(after):raise ValueError('；'.join(fragment_issues(after)))
@@ -201,7 +194,6 @@ def review_binding(store,state,llm,scope=None,source_issue=None):
 def require_review(store,proposal,state):
     """Recheck the exact candidate review and provenance before publication."""
     from types import SimpleNamespace
-    if digest(verified_methods(store))!=proposal['method_facts_hash']:raise ResearchConflict('已核验的方法设置已改变，须重新生成候选')
     if proposal.get('source_issue'):
         from .issue_edits import require_review as require_issue_review
         return require_issue_review(store,proposal,state)
@@ -241,9 +233,9 @@ def require_scope(store,proposal,snapshot,source):
     current=resolve_scope(key,snapshot['sections'][key],source,{k:saved[k] for k in ('section_revision','section_hash','source_hash','old')})
     if current!=saved or proposal.get('origin')!='model':raise ResearchConflict('局部提案的定位或版本哈希不匹配')
     answer=CorrectionEdits.model_validate({'edits':proposal['generation_edits']})
-    if len(answer.edits)!=1 or answer.edits[0].old!=saved['old'] or answer.edits[0].section!=key or answer.edits[0].verified_method:
+    if len(answer.edits)!=1 or answer.edits[0].old!=saved['old'] or answer.edits[0].section!=key:
         raise ResearchConflict('局部提案超出已绑定的片段范围')
-    expected=apply_edits({key:snapshot['sections'][key]['text']},answer,{},normalize=False)
+    expected=apply_edits({key:snapshot['sections'][key]['text']},answer,normalize=False)
     if proposal.get('after_sections')!=expected:raise ResearchConflict('候选包含未选择片段的改动')
     with store._connect() as db:
         row=db.execute('SELECT payload FROM paper_patch_attempts WHERE id=? AND research_id=?',(proposal['patch_attempt_id'],store.research_id)).fetchone()
@@ -265,20 +257,17 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         if (budget.get('request_limit') is not None and budget['used']>=budget['request_limit']) or budget['state']=='provider_blocked':raise ResearchConflict('请求预算或网关不可用，意见与原稿保留')
     keys=list(dict.fromkeys(keys))
     if not 1<=len(keys)<=6 or any(k not in snapshot['sections'] or snapshot['sections'][k]['validity']!='current' or k=='references' for k in keys):raise ValueError('请选择一至六个当前正文章节')
-    facts=verified_methods(store)
-    if not facts and not wording:raise ValueError('当前研究没有可用于依据修正的项目核验方法记录，请使用研究修改')
     state=paper_state(store);ctx=proposal_context(store,state,llm)
     before={k:snapshot['sections'][k]['text'] for k in keys}
-    blocks={k:canonical_method_block(facts,k.split(':',1)[1]) for k in keys if k.startswith('solve:') and not wording}
     answer=None;scope=None;attempt=None
     if contents is None:
         if not fragment_scope or len(keys)!=1 or not wording:raise ValueError('自动改写仅支持一个明确选择的短片段；多节或公式修正请直接编辑候选并审查')
         after,answer,scope,attempt=await generate_fragment(store,keys[0],snapshot['sections'][keys[0]],source,instruction,llm,fragment_scope,recovery_of)
-        guard_correction(before[keys[0]],after[keys[0]],None,filename.endswith('.tex'))
+        guard_correction(before[keys[0]],after[keys[0]],filename.endswith('.tex'))
     else:
         if set(contents)!=set(keys):raise ValueError('手动候选必须与所选章节逐一对应')
         after={k:publication_text(v) for k,v in contents.items()}
-        for k,text in after.items():guard_correction(before[k],text,blocks.get(k),filename.endswith('.tex'))
+        for k,text in after.items():guard_correction(before[k],text,filename.endswith('.tex'),wording=wording)
     checks=await audit_citations(store.root,list(after.values()),llm)
     combined={**state,'sections':{**state['sections'],**after}}
     if any(CITATION.search(t) for t in after.values()) and 'references' in combined['sections']:
@@ -298,7 +287,6 @@ async def propose_correction(store,keys,instruction,llm,contents=None,*,fragment
         'section_revision':snapshot['sections'][primary]['revision'],'citation_checks':checks,
         'citation_issues':list(dict.fromkeys(m for t in after.values() for m in citation_issues(store.root,t))),
         'review_issues':[*issues,{'section':primary,'message':'候选已保存，审查尚未完成；刷新后可恢复'}],'review_state':'pending',
-        'method_facts':facts,'method_facts_hash':digest(facts),
         'review_id':None,'review_context_hash':digest(context),
         'review_model_id':getattr(llm,'model_name',None) or getattr(llm,'model',None)}
     with store._transaction() as db:

@@ -9,7 +9,25 @@ from contextlib import closing
 
 from .domain import FAULT_CATEGORIES, SCHEMA_VERSION
 
-MIGRATION_VERSION = 11
+MIGRATION_VERSION = 12
+
+
+def retire_answer_registration(state):
+    """Keep original answers in history, remove the live answer bookkeeping."""
+    from copy import deepcopy
+    fields={'judgment','judgments','artifact_refs','limitations','next_step','answer_status',
+            'answer_gaps','coverage','stop_reason','basis_versions','interpretation_versions',
+            'available_artifact_refs','unavailable_artifact_refs','dependency_experiment_ids'}
+    for question in state.get('questions',{}).values():
+        if fields.intersection(question):
+            state.setdefault('legacy_records',[]).append({'source':'retired-question-answer','raw':deepcopy(question)})
+        for record in [question,*question.get('history',[])]:
+            for name in fields:record.pop(name,None)
+    action=state.get('action') or {}
+    if action.get('capability') in {'experiments.execute','experiments.compare','research.update_answer',
+                                    'research.schedule_experiment','research.continue_experiment'}:
+        state.setdefault('legacy_records',[]).append({'source':'retired-research-action','raw':deepcopy(action)})
+        state['action']=None
 
 
 def migrate_runtime(db, root):
@@ -145,7 +163,6 @@ def migrate_interpretations(state):
         q.setdefault('version',1)
         q.setdefault('history',[])
         q.setdefault('related_experiment_ids',[])
-        q.setdefault('answer_status','needs_update' if q.get('judgment') else 'unanswered')
     for issue in [*state['feedback'],*state['faults']]:
         if not issue.get('repair_targets') and (issue['source'] in {'local_review','reconcile','sections'}
                 or issue['source'].startswith(('review:','review-task:'))):
@@ -184,6 +201,7 @@ def migrate_workspace(store):
                 if state['schema_version']==4:migrate_interpretations(state)
                 else:retire_legacy_workflow(state)
                 retire_evidence_acceptance(state)
+                retire_answer_registration(state)
                 if (state.get('publication') or {}).get('stage') in {'write','repair'}:
                     state.setdefault('legacy_records',[]).append({'source':'retired-publication','raw':state['publication']})
                     state['publication']=None
@@ -237,9 +255,6 @@ def migrate_workspace(store):
                     question = attach_question(state, experiment, statement=statement,
                         title=statement or experiment['subproblem'].get('title'))
                     groups[group] = question['id']
-                if experiment.get('report'):
-                    question = state['questions'][experiment['question_id']]
-                    question['judgment'] = experiment['report'].get('summary', '')
             for artifact in state['artifacts'].values():
                 execution = state['executions'][artifact['producer_attempt']]
                 artifact.update(experiment_id=execution['task_id'], type='result')
@@ -269,6 +284,8 @@ def migrate_workspace(store):
                         (f'commands/{row[0]}/{command[0]}',json.dumps(list(command),ensure_ascii=False).encode()))
                     db.execute('DELETE FROM commands WHERE research_id=? AND id=?',(row[0],command[0]))
             migrate_interpretations(state)
+            retire_evidence_acceptance(state)
+            retire_answer_registration(state)
             state["schema_version"] = SCHEMA_VERSION
             db.execute("UPDATE research SET payload=? WHERE id=?", (json.dumps(state, ensure_ascii=False), row[0]))
         names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}

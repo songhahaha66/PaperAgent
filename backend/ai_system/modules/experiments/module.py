@@ -1,19 +1,6 @@
 """Execution tools used by the single research controller."""
-from types import SimpleNamespace
-from ai_system.modules.registry import CapabilityProduct, BranchInputs, Inputs
+from ai_system.modules.registry import CapabilityProduct, Inputs
 from pydantic import Field
-
-
-async def compare(ctx, inputs):
-    from .supervised import compare
-    return CapabilityProduct("experiment", await compare(ctx, inputs["branch"]))
-
-
-async def execute(ctx, inputs):
-    from ai_system.research.control import execute
-    result = await execute(inputs["branch"], SimpleNamespace(context=ctx))
-    outcome = result.pop('_execution_outcome', {})
-    return CapabilityProduct("research_state", result, outcome.get('status'), outcome.get('message'))
 
 
 async def inspect_materials(ctx, inputs):
@@ -83,5 +70,3 @@ def register(registry):
         model_callable=True,purpose='直接在研究主循环的持久Python内核计算，返回实际输出与结果文件；无需另建计划、子Agent或申请尝试次数。')
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
                       model_callable=True, purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览保留原始文件路径与结构，不代替后续计算。')
-    for name, product, handler in (("compare", "experiment", compare), ("execute", "research_state", execute)):
-        registry.register("experiments", f"experiments.{name}", product, handler, BranchInputs)

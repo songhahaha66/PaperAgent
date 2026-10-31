@@ -95,7 +95,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
     app=FastAPI()
     app.include_router(chat.router)
     app.dependency_overrides[get_current_user]=lambda:7
-    app.dependency_overrides[get_db]=lambda:None
+    app.dependency_overrides[get_db]=lambda:SimpleNamespace(close=lambda:None)
     with TestClient(app) as client:
         with client.websocket_connect('/api/chat/ws/pause-test') as ws:
             ws.send_json({'token':'test'})

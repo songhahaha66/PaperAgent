@@ -39,7 +39,7 @@ def study(tmp_path):
                              results=[asdict(value),asdict(aux)],claims=[asdict(claim)]))
     qid=store.snapshot()['experiments'][eid]['question_id']
     with store._transaction() as db:
-        state=store._read(db);state['questions'][qid].update(judgment='Current answer',artifact_refs=[value.id],answer_status='current',coverage='answered',stop_reason='All supplied source rows are accounted for')
+        state=store._read(db);state['questions'][qid].update(reason='Historical research fixture')
         store._save(db,state,'test_answer',{})
     return SimpleNamespace(store=store,eid=eid,qid=qid,value=value,aux=aux,registry=registry,run=run,order=order)
 
@@ -56,7 +56,7 @@ def test_edit_changes_current_claims_and_history_without_a_run(study):
     assert 'Narrower' in study.store.registry_payload()['claims'][0]['statement']
     assert any(not c['active'] for c in after['claims'].values())
     assert any(a['type']=='report' and a['report']==experiment_report(before,task) for a in after['artifacts'].values())
-    assert questions(after)[0]['answer_status']=='needs_update'
+    assert 'answer_status' not in questions(after)[0]
     assert study.store.delivery_ready(after), 'answer freshness stays visible without blocking file export'
 
 
@@ -69,43 +69,21 @@ def test_interpretation_version_conflict_preserves_parallel_update(study):
     assert study.store.snapshot()==changed
 
 
-def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path,monkeypatch):
-    """Actual subprocess kernels, controlled worker report, no external models."""
-    from ai_system.research.control import execute, experiment_dispatch
-    from ai_system.modules.experiments.planning import experiment_design
+def test_continuation_reads_saved_input_and_runs_only_new_calculation(tmp_path):
+    """Generic direct runs reuse saved files without an experiment dispatcher."""
+    from ai_system.modules.registry import invoke
     async def run():
         ctx=GraphContext.create(str(tmp_path),planner_llm=None)
-        ctx.research=ResearchStore(tmp_path,'kernel-continuation')
+        ctx.research=ResearchStore(tmp_path,'direct-continuation')
         ctx.research.initialize('Count the supplied observations and derive a scaled count.')
-        eid=add_experiment(ctx.research,'What can be concluded?',method='count and scale',conditions='fixed observations',evaluation='exact arithmetic')
-        async def solve(branch,runtime):
-            local=runtime.context
-            if branch.get('continuation'):
-                code="from pathlib import Path\nv=int(Path('outputs/intermediate/base.txt').read_text())\nprint(v*2)"
-                name,value='scaled count','24'
-            else:
-                code="from pathlib import Path\nPath('outputs/intermediate').mkdir(parents=True,exist_ok=True)\nPath('outputs/intermediate/base.txt').write_text('12')\nprint(12)"
-                name,value='base count','12'
-            result=await local.kernels.get(eid).execute(code)
-            assert result.ok
-            report={'summary':'Observed '+value,'approach':'count and scale','status':'completed','key_findings':[]}
-            return {'report':report,'design':experiment_design(branch['experiment'])}
-        monkeypatch.setattr('ai_system.modules.experiments.execution.solve',solve)
         try:
-            await execute(experiment_dispatch(ctx,eid),SimpleNamespace(context=ctx))
-            first=ctx.research.snapshot();assert first['experiments'][eid]['acceptance']=='accepted'
-            with ctx.research._transaction() as db:
-                state=ctx.research._read(db);task=state['experiments'][eid]
-                task.update(continuation={'parent_attempt':task['execution_id'],'information_need':'Need scaled count'},execution_status='pending')
-                ctx.research._save(db,state,'continue_requested',{})
-            await execute(experiment_dispatch(ctx,eid),SimpleNamespace(context=ctx))
-            final=ctx.research.snapshot()
-            assert final['experiments'][eid]['acceptance']=='accepted'
-            assert len(final['experiments'])==1 and len(final['executions'])==2
-            assert not ctx.research.registry_payload()['results']
-            outputs=[ctx.fs.read_text(r['stdout']) for r in ctx.fs._manifest['runs'].values()]
-            assert any('12' in t for t in outputs) and any('24' in t for t in outputs)
+            first=await invoke(ctx,'research.run_python',code="from pathlib import Path\nPath('outputs/intermediate').mkdir(parents=True,exist_ok=True)\nPath('outputs/intermediate/base.txt').write_text('12')\nprint(12)")
+            second=await invoke(ctx,'research.run_python',code="from pathlib import Path\nv=int(Path('outputs/intermediate/base.txt').read_text())\nprint(v*2)")
+            assert '12' in first['observation'] and '24' in second['observation']
+            state=ctx.research.snapshot()
+            assert not state['experiments'] and not state['executions'] and not state['claims']
             assert len(ctx.fs._manifest['runs'])==2
+            assert first['run_id']!=second['run_id']
         finally:await ctx.kernels.close()
     asyncio.run(run())
 

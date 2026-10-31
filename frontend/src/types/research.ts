@@ -1,31 +1,23 @@
+export interface ResearchPlan {
+  steps: {
+    title: string
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked'
+    note: string
+    kind: 'work' | 'delivery'
+  }[]
+  updated_at: number
+}
+
 export interface ResearchQuestion {
   id: string
   title: string
   question: string
   version?: number
   retired?: boolean
-  answer_status?: string
-  answer_gaps?: string[]
-  coverage?: 'answered' | 'partial' | 'unanswered' | null
-  stop_reason?: string
   history?: { question: string; reason?: string }[]
   experiment_ids: string[]
   sources: string[]
-  judgment: string
-  next_step: string
   issues: { id: string; message: string; next_step: string }[]
-  artifact_refs: string[]
-  limitations: string[]
-  judgments: {
-    recorded_at?: number
-    observation_id?: string
-    action_id?: string
-    question_id: string
-    statement: string
-    artifact_refs: string[]
-    limitations: string[]
-    next_step: string
-  }[]
 }
 export interface EvidenceUse {
   ref: string
@@ -77,7 +69,6 @@ export interface ResearchHistory {
   recorded_at?: number | null
   reason: string
   artifact_refs: string[]
-  judgments: ResearchQuestion['judgments']
 }
 export interface ReadableResult {
   id: string
@@ -198,6 +189,7 @@ export interface ResearchResult {
   figure_path: string | null
 }
 export interface ResearchSnapshot {
+  progress_plan?: ResearchPlan | null
   snapshot_at?: number | null
   inputs?: string[]
   questions?: ResearchQuestion[]
@@ -298,7 +290,18 @@ export interface ResearchSnapshot {
   graph_status: string | null
   has_research: boolean
   results: ResearchResult[]
-  runs: { id: string; status: string; input_path: string | null; stdout_path: string | null }[]
+  runs: {
+    id: string
+    question_id?: string | null
+    title?: string
+    status: string
+    created_at?: string | null
+    finished_at?: string | null
+    input_path: string | null
+    stdout_path: string | null
+    stderr_path?: string | null
+    files?: string[]
+  }[]
   claims: {
     id: string
     subproblem_id: string

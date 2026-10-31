@@ -7,18 +7,19 @@ from .store import digest
 from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 
 PROMPT = """你是持续工作的研究Agent，自己读取材料、运行代码、观察结果、修订方法并回答用户。
+读清需求并确定做法后，用research_update_plan列出简短的总体工作计划。完成一个阶段、开始下一阶段或调整方案时更新完整计划，保留已完成项；提问、暂停或最终回复前同步实际状态。已有progress_plan时接着推进，不重新归零。按阶段更新，不为每次读文件或工具调用单列工作项；尚未完成的计算、写作保持待完成。如包含系统导出，将最后一项kind设为delivery并保持pending，系统会按实际交付结果更新它。
 工作区文件用research_list_files定位、research_search_files搜索、research_read_artifact分页读取。正文和日志在工作区工具中可读，Python仅负责计算，不能通过搜索沙箱根目录判断正文是否存在。
-先直接用 research_read_artifact 读取原始材料，不需要实验编号。用 research_create_question 列出原要求中的全部实质问题（可同轮分别调用），修改才用research_edit_question。用research_run_python在同一持久Python内核计算；公共数据分析可以省略question_id，不把代码挂到不相关问题下。
-research_run_python 返回真实输出、错误和文件路径。复用变量与已保存文件，必要时在代码中核对单位、数据范围、约束和预测时可用信息。实际数值直接写入 research_update_answer 的答案，不登记指标或R/F引用。
-用普通工具完成读取、计算和解释。只有需要明确比较不同方法/条件时才 research_schedule_experiment；普通方案记录后仍由你直接运行代码，CSV监督学习比较才进入独立分支。
+先直接用 research_read_artifact 读取原始材料，不需要实验编号。按需用research_create_question建立研究主题来组织运行；修改已有主题用research_edit_question。用research_run_python在同一持久Python内核计算；公共数据分析可以省略question_id，不把代码挂到不相关问题下。
+research_run_python 返回真实输出、错误和文件路径。复用变量与已保存文件，必要时在代码中核对单位、数据范围、约束和预测时可用信息。实际数值、适用条件、局限和未完成部分直接写入回复及正文。
+用research_list_skills查看可用方法指导，按需research_read_skill读取，再用research_run_python完成计算与方法比较；结果表、预测、图表保存为实际文件。方法指导不创建额外实验流程。
 普通计算仅保存运行回执，不做实验提交或验收。需要继续就读取已有代码和文件，不为读取、同步或排版重算。
 程序故障不证明方法无效，语义核查只供核实。无变化的重复读取、反复重算和没有新信息的核查应停止。
 文件同步由系统重试；执行结果未知时不得自动重放代码。恢复后先读取已有日志和结果，不假定旧Python内存还存在。
 所有模型请求共用项目运行预算。预算不足时保留已完成成果和未完成部分，不通过换编号或重新开始绕过限制。
-用实际工具返回的ID；参数错误在当前上下文纠正。每个原始问题保留已答、部分或未答、适用范围和停止原因。
-研究、正文均由你负责：用writing_edit直接保存Markdown或原生TeX，长稿按文件分步编辑；已有文件先读取，系统自动绑定读取回执的版本保护人工修改，不要复制哈希。不要用Python生成论文。引用图表前可用writing_use_asset绑定实际文件及版本。原生TeX定稿前用writing_preview查看真正的PDF与警告，分批查看关键图表页；按需research_delegate purpose=document_review委派只读复核固定source_version和pdf_sha256，复核与主会话共用预算，正文仍由你改。模型无图像能力时明确仅检查PDF文本。编译成功不代表图表或结论正确。正文与答案完成后给出最终回复或research_deliver，进入相同交付流程；明确局限后可以交付部分结果。
+用实际工具返回的ID；参数错误在当前上下文纠正。在回复和正文中说明实际完成内容、适用范围与尚未解决的问题。
+研究、正文均由你负责：用writing_edit直接保存Markdown或原生TeX，长稿按文件分步编辑；已有文件先读取，系统自动绑定读取回执的版本保护人工修改，不要复制哈希。不要用Python生成论文。引用图表前可用writing_use_asset绑定实际文件及版本。原生TeX定稿前用writing_preview查看真正的PDF与警告，分批查看关键图表页；按需research_delegate purpose=document_review委派只读复核固定source_version和pdf_sha256，复核与主会话共用预算，正文仍由你改。模型无图像能力时明确仅检查PDF文本。编译成功不代表图表或结论正确。正文完成后给出最终回复或research_deliver，进入相同交付流程；明确局限后可以交付部分结果。
 需要独立调查或复核时research_delegate：isolated提供明确任务与材料；fork继承已有上下文接手工作。不要将连续纠错拆给多个Agent，子任务结果仍由你整合。
-确需用户提供必要信息才 research_ask_user；无可行路径时 research_pause。交付、提问或启动独立比较后等待真实结果。
+确需用户提供必要信息才 research_ask_user；无可行路径时 research_pause。交付或提问后等待真实结果。
 """
 
 
@@ -44,14 +45,13 @@ def decision_context(store, snapshot):
     last=snapshot.get('action') or {}
     focused=last.get('question_id')
     selected=next((q for q in rows if q['id']==focused),None)
-    if selected is None:selected=next((q for q in rows if q.get('answer_gaps')),None)
     own=set(selected['experiment_ids']) if selected else {eid for q in rows for eid in q['experiment_ids']}
     scope=experiment_scope(snapshot['experiments'],own)
     records=experiment_context(snapshot,scope)
     sources=LiteratureStore(store.root).retrieve(selected['question'] if selected else snapshot['spec']['requirement'],limit=12)
     # Current question summaries stay global for goal coverage. Full records and
     # actual values are restricted to the selected question/dependency scope.
-    context={'source':snapshot['spec'],'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
+    context={'source':snapshot['spec'],'progress_plan':snapshot.get('progress_plan'),'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
         'experiments':[{**row,'record':report_context(row['record'])} for row in records],
         'literature':sources,'issues':[i for i in findings(snapshot) if (i['task_id'] is None or i['task_id'] in scope) and i['status'] not in {'resolved','dismissed','superseded'}],
         'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
@@ -59,8 +59,6 @@ def decision_context(store, snapshot):
         'user_message':snapshot.get('conversation_input'),
         'skill_policy':store.skill_preferences()['policy']}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
-    from ai_system.modules.experiments.store import ExperimentStore
-    context['comparisons']=[row for row in ExperimentStore(store).accepted_summaries(snapshot) if row.get('task_id') in scope]
     context['recent_operations']=[{k:a.get(k) for k in ('capability','question_id','experiment_id','status','message','error_type')} for a in snapshot.get('activity',[]) if a.get('capability')!='research.observe' and (a.get('question_id') in {None,selected['id'] if selected else None} or a.get('experiment_id') in scope)][-12:]
     if last.get('capability','').startswith('writing.'):
         context['document_diagnostics']=(last.get('result') or {}).get('issues',[])
@@ -71,9 +69,6 @@ def decision_context(store, snapshot):
     if main.is_file():
         import hashlib
         context['document']={'path':main.name,'version':hashlib.sha256(main.read_bytes()).hexdigest()}
-    if any((e.get('experiment') or {}).get('csv') for e in snapshot['experiments'].values()):
-        from ai_system.modules.experiments.store import SupervisedSpec
-        context['csv_comparison_protocol'] = SupervisedSpec.model_json_schema()
     return 'action:' + digest(context), context
 
 def preserved_progress(snapshot):
@@ -120,8 +115,6 @@ def working_context(ctx):
     from .runs import run_context
     from .files import known_files
     rows=question_context([q for q in questions(state) if not q.get('retired')])
-    for q in rows:
-        if len(q.get('judgment',''))>800:q['judgment']=q['judgment'][:800]+'…（research_read_question读取完整答案）'
     runs=run_context(ctx.research)[-6:]
     for r in runs:
         if r.get('error'):r['error']=r['error'][:500]
@@ -132,6 +125,7 @@ def working_context(ctx):
     import hashlib
     return {'source':{'requirement':state['spec']['requirement'],'amendments':state['spec']['amendments'],
                       'output_mode':state['spec'].get('output_mode')},
+            'progress_plan':state.get('progress_plan'),
             'questions':rows,'runs':runs,'files':known_files(ctx)[:30],
             'file_tools':'research_list_files / research_search_files / research_read_artifact；Python沙箱不保证有正文副本',
             'document':{'path':main.name,'version':hashlib.sha256(main.read_bytes()).hexdigest(),'nonempty':bool(main.stat().st_size)} if main.is_file() else {},
@@ -199,7 +193,7 @@ class Planner:
                         if isinstance(result,dict) and 'revision' in result:known_revision=result['revision']
                         if name=='writing_edit' and result.get('path')==('paper.tex' if ctx.output_mode=='latex' else 'paper.md'):
                             known_inputs={**known_inputs,'document':result['version']}
-                        last_tool_feedback='；'.join(result.get('answer_gaps',[])) if isinstance(result,dict) else ''
+                        last_tool_feedback=''
                         from ai_system.modules.writing.document import tool_content
                         failed=isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}
                         return ToolMessage(content=tool_content(ctx,result,ctx.coder_llm),tool_call_id=call['id'],name=name,status='error' if failed else 'success')

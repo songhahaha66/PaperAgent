@@ -33,7 +33,7 @@ def test_graph_end_to_end_offline(tmp_path):
     FakeModel.text_calls = []
     ws = _make_workspace(tmp_path)
     model = FakeModel()
-    # Legacy graph fixture; trusted supervised comparison has separate real-data tests.
+    # Real main-Agent graph with offline calculation fixtures.
     ctx = _context(ws, model)
     ctx.research = ResearchStore(ws, "t")
     ctx.research.initialize(TASK)
@@ -71,7 +71,7 @@ def test_graph_end_to_end_offline(tmp_path):
         files=[p for r in runs for p in r['files']]
         assert len(runs)==2 and any(p.endswith('.png') for p in files)
         assert all((ws/p).is_file() for p in files)
-        assert q['coverage']=='answered' and q['stop_reason']
+        assert not {'coverage','judgment','stop_reason'} & q.keys()
     paper=(ws/'paper.md').read_text(encoding='utf-8')
     assert paper.startswith('# '+_analysis().title) and '政策评估' in paper
     assert '{{' not in paper and '12.345' not in paper
@@ -79,7 +79,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert not workspace_path(ws,'.system/paper_raw.md').exists(), 'current source is delivered without a second raw manuscript copy'
     from ai_system.research.control import public_snapshot
     progress=public_snapshot(business)
-    assert not progress['experiments'] and all(q['coverage']=='answered' for q in progress['questions'])
+    assert not progress['experiments'] and all('coverage' not in q for q in progress['questions'])
     assert progress['delivery_stages']['export']['status']=='completed'
     assert not (ws/'plan.json').exists()
 

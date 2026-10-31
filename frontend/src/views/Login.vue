@@ -4,7 +4,7 @@
       <div class="login-header">
         <div class="title-with-logo">
           <img src="/logo.png" alt="PaperAgent Logo" class="logo" />
-          <h1>PaperAgent</h1>
+          <h1 class="paperagent-wordmark">PaperAgent</h1>
         </div>
         <p>{{ isLogin ? t('login.signInTitle') : t('login.signUpTitle') }}</p>
       </div>

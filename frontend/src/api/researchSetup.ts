@@ -1,5 +1,4 @@
 import { apiClient } from '@/utils/apiClient'
-import type { ComparisonSpec } from './experiments'
 export interface ResearchSetup {
   request_limit: number | null
   output_token_limit?: number | null
@@ -12,8 +11,6 @@ export interface ResearchSetup {
   literature_query: string
   source_urls: string[]
   skill_keys: string[]
-  compare: boolean
-  comparison_spec: ComparisonSpec | null
 }
 export const defaultResearchSetup = (): ResearchSetup => ({
   request_limit: null,
@@ -23,8 +20,6 @@ export const defaultResearchSetup = (): ResearchSetup => ({
   literature_query: '',
   source_urls: [],
   skill_keys: [],
-  compare: false,
-  comparison_spec: null,
 })
 export const researchSetupAPI = {
   save: (work: string, body: ResearchSetup) =>

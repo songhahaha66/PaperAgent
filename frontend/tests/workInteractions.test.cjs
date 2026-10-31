@@ -210,20 +210,21 @@ if (require.main === module) (async () => {
       kind: 'number', run_id: 'run_one', figure_path: null }],
     artifacts: [], runs: [], claims: [], delivery: { ready: true, blockers: [] }, delivery_stages: {},
   }
-  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress', 'desktop starts with research beside chat')
-  progressWork.state.openProgress()
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'paper', 'desktop starts with paper beside chat')
+  progressWork.state.handleMainPaperClick()
   assert.equal(progressWork.state.panelSession.value.activeId, 'chat')
-  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'progress')
+  assert.equal(progressWork.state.panelSession.value.secondaryActiveId, 'paper')
   assert.equal(progressWork.state.panelSession.value.splitRatio, 0.45)
-  assert.equal(progressWork.state.stageText.value, '已有实验结果，问题尚未形成判断', 'available results do not imply a question judgment')
+  assert.equal(progressWork.state.stageText.value, '已有运行记录与输出，论文产物尚不可用', 'execution outputs do not require a registered answer')
   progressWork.state.researchSnapshot.value.questions[0].judgment = '当前样本的预测值已记录，外推范围尚待验证。'
-  assert.equal(progressWork.state.stageText.value, '已记录问题判断，论文产物尚不可用')
-  progressWork.state.openProgress()
+  assert.equal(progressWork.state.stageText.value, '已有运行记录与输出，论文产物尚不可用')
+  progressWork.state.handleMainPaperClick()
   assert.equal(
-    progressWork.state.panelSession.value.panels.filter((tab) => tab.kind === 'progress').length,
+    progressWork.state.panelSession.value.panels.filter((tab) => tab.kind === 'paper').length,
     1,
   )
-  assert.equal(progressWork.sent.length, 0, 'viewing progress never resumes research')
+  assert.equal(progressWork.state.openProgress,undefined)
+  assert.equal(progressWork.sent.length, 0, 'opening the paper never resumes research')
   await progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
   assert.equal(progressWork.sent.at(-1).action, 'revise_research')
   assert.equal(progressWork.sent.at(-1).revision.scope[0], 'Q1')
@@ -237,15 +238,15 @@ if (require.main === module) (async () => {
   env.width.value = 620
   env.isMobile.value = true
   const narrowWork = await env.work('narrow')
-  narrowWork.state.openProgress()
-  assert.equal(narrowWork.state.panelSession.value.activeId, 'progress')
+  narrowWork.state.handleMainPaperClick()
+  assert.equal(narrowWork.state.panelSession.value.activeId, 'paper')
   assert.equal(narrowWork.state.panelSession.value.secondaryActiveId, null)
   assert.ok(narrowWork.state.panelSession.value.panels.some((tab) => tab.kind === 'chat'))
   narrowWork.stop()
   env.width.value = 1400
   env.isMobile.value = false
   console.log(
-    'PASS: progress opens beside chat on desktop, as a tab on narrow screens, without starting a run',
+    'PASS: paper opens beside chat on desktop, as a tab on narrow screens; retired research entry is absent',
   )
 
   let actionStatus = 'completed'
@@ -508,6 +509,7 @@ if (require.main === module) (async () => {
     commit_seq: 10,
     snapshot_at: 102,
     work_status: 'in_progress',
+    progress_plan: { steps: [{ title: '计算与分析', status: 'in_progress', note: '', kind: 'work' }], updated_at: 102 },
     questions: [{ id: 'question:E2', title: '验证预测误差', question: '固定区间的预测误差是多少？',
       experiment_ids: ['E2'], sources: [], judgment: '', next_step: '', issues: [],
       artifact_refs: [], limitations: [], judgments: [] }],
@@ -546,6 +548,7 @@ if (require.main === module) (async () => {
   )
   const olderSnapshot = {
     ...snapshot, commit_seq: 9, snapshot_at: 99, work_status: 'completed',
+    progress_plan: null,
     questions: [], experiments: [],
     runtime: { actions: [], models: [], decisions: [], history: [], updated_at: 90, models_updated_at: 90 },
   }
@@ -553,6 +556,7 @@ if (require.main === module) (async () => {
     type: 'json_block', block: { type: 'research_snapshot', content: olderSnapshot },
   }, 'progress-message')
   assert.equal(progress.state.researchSnapshot.value.commit_seq, 10, 'an older streamed snapshot cannot rewind progress')
+  assert.equal(progress.state.researchSnapshot.value.progress_plan.steps[0].title, '计算与分析', 'stale snapshots cannot erase the current plan')
   assert.equal(progress.state.currentWork.value.status, 'in_progress', 'a stale snapshot cannot end active research')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.id, 'model:2')
   await progress.state.stream.refreshResources(['research'])

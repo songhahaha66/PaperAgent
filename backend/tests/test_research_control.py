@@ -49,9 +49,8 @@ def test_recovery_uses_commits_and_reclaims_interrupted_attempt(tmp_path):
     recovered = ResearchStore(tmp_path, "research")
     recovered.recover()
     assert recovered.registry_payload() == before
-    from ai_system.research.operations import continue_experiment
-    from types import SimpleNamespace
-    continue_experiment(SimpleNamespace(research=recovered),{'experiment_id':'Q2','information_need':'显式恢复中断的执行，不重跑已接受的上游结果'})
+    from research_tools_helpers import continue_experiment
+    continue_experiment(recovered,'Q2','显式恢复中断的历史执行，不重跑已有上游结果')
     replacement = recovered.claim("Q2")
     assert replacement.attempt_id != abandoned.attempt_id
     assert replacement.revision == abandoned.revision

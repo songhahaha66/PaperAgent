@@ -91,9 +91,6 @@ def revise_interpretation(store, task_id, version, edit=None, decisions=()):
                     'evidence':list(dict.fromkeys(find_refs(finding['statement'])))},
                     'producer_attempt':task['execution_id'], 'experiment_id':task_id,
                     'active':True, 'status':'current', 'report_ref':task['report_ref'], 'assumption_refs':{}}
-            for q in state['questions'].values():
-                if q.get('judgment') and (q['id'] == task['question_id'] or set(q.get('artifact_refs', [])) & allowed):
-                    q['answer_status'] = 'needs_update'
             state['revision'] += 1
             state['publication'] = None
             state['outcome'] = 'running'
@@ -116,7 +113,7 @@ async def check_report(ctx, inputs):
     """Return specific doubts for the owner to verify, accept, reject or retain."""
     from ai_system.modules.registry import CapabilityProduct
     from ai_system.modules.experiments.review import review_solution
-    from .control import experiment_dispatch
+    from .control import historical_experiment_context
     snapshot = ctx.research.snapshot(); task = snapshot['experiments'][inputs['task_id']]
     if interpretation_version(snapshot, task) != inputs['version']:
         raise ResearchConflict('核查目标版本已改变')
@@ -127,7 +124,7 @@ async def check_report(ctx, inputs):
         info = ctx.fs.get_run_info(a['payload']['run_id']) or {}
         path = a['payload'].get('path')
         if path:runs.append({'run_id':a['payload']['run_id'], 'ok':info.get('status')=='success', 'code':ctx.fs.read_text(path)})
-    review = await review_solution(ctx, experiment_dispatch(ctx, inputs['task_id']), report, runs)
+    review = await review_solution(ctx, historical_experiment_context(ctx, inputs['task_id']), report, runs)
     scope=experiment_scope(snapshot['experiments'],{inputs['task_id']})
     supporting={ref for ref,a in snapshot['artifacts'].items() if a['experiment_id'] in scope}
     if any(i.task_id!=inputs['task_id'] or not set(i.evidence_refs)<=supporting for i in review.issues):

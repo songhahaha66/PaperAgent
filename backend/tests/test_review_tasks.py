@@ -102,7 +102,7 @@ def test_api_owner_research_and_budget_guards(setup,monkeypatch):
     (workspace_path(store.root, '.system/graph_thread.json')).write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
     app=FastAPI();app.include_router(workspace.router)
     app.dependency_overrides[get_current_user]=lambda:7
-    app.dependency_overrides[get_db]=lambda:object()
+    app.dependency_overrides[get_db]=lambda:SimpleNamespace(close=lambda:None)
     monkeypatch.setattr(workspace.crud,'get_work',lambda *a:SimpleNamespace(architecture_version=2, created_by=7,output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda *a:store.root)
     rt=ResearchRuntime(store.root);rt.configure({'request_limit':0,'timeout_seconds':90})

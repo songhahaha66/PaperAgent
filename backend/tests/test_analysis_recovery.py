@@ -56,12 +56,12 @@ def test_schema_repairs_keep_raw_tool_and_json_candidates_with_bounded_history(m
 
 
 def test_dispatch_uses_committed_original_source_for_initial_and_recovered_workers(tmp_path):
-    from ai_system.research.control import experiment_dispatch
+    from ai_system.research.control import historical_experiment_context
     from helpers.contracts import store_for,TASK as original
     store=store_for(tmp_path);ctx=SimpleNamespace(research=store)
-    assert all(experiment_dispatch(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
+    assert all(historical_experiment_context(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
     store.claim('Q1');store.recover()
-    assert all(experiment_dispatch(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
+    assert all(historical_experiment_context(ctx,key)['source'].rstrip('\n')==original for key in ('Q1','Q3'))
 
 
 @pytest.mark.parametrize('raw_tool',[True,False])

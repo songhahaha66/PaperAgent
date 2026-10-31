@@ -40,15 +40,6 @@ def publish(study,key,value):
 def test_user_revision_without_scope_preserves_results_and_updates_only_its_question(study):
     from ai_system.research.models import Requirement
     publish(study,'Q1',8);publish(study,'Q2',12)
-    current=study.store.snapshot()
-    results=study.store.registry_payload()['results']
-    from research_tools_helpers import answer
-    for key in ('Q1','Q2'):
-        answer(study.store,question_id=current['experiments'][key]['question_id'],coverage='answered',
-            stop_reason='已回答本次给定样本范围，推广证据仍未知',
-            statement='当前数据下的结果 {{R:'+next(r['id'] for r in results if r['subproblem']==key)+'}}',
-            artifact_refs=[r['id'] for r in results if r['subproblem']==key],limitations=['仅限已执行条件'])
-
     before=study.store.snapshot();change='预测范围改为下周'
     requirement=Requirement(id='RQ3',statement=change,source_quote=change,kind='goal',task_ids=['Q1'])
     patch=planner.propose_revision(before,'range-change',before['revision'],change,None,[requirement])
@@ -57,7 +48,8 @@ def test_user_revision_without_scope_preserves_results_and_updates_only_its_ques
     assert after['experiments']==before['experiments']
     assert after['executions']==before['executions'] and after['artifacts']==before['artifacts']
     q1=before['experiments']['Q1']['question_id'];q2=before['experiments']['Q2']['question_id']
-    assert after['questions'][q1]['answer_status']=='needs_update'
+    assert after['questions'][q1]['version']>before['questions'][q1].get('version',1)
+    assert 'answer_status' not in after['questions'][q1]
     assert after['questions'][q2]==before['questions'][q2]
     assert after['spec']['requirement']==SOURCE
     assert after['spec']['requirements'][:2]==before['spec']['requirements']

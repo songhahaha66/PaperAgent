@@ -116,6 +116,7 @@ async def get_execution_references(work_id: str, request: ExecutionReferences,
     reply = next((m for m in chat_service.get_work_chat_history(work_id)
                   if m.get('id') == request.reply_id and m.get('role') == 'assistant'), None)
     if reply is None: raise HTTPException(status_code=404, detail='回复不存在')
+    db.close()
     try:
         rows = await asyncio.to_thread(resolve_executions, get_workspace_path(work_id), reply, request.segment_ids)
     except (OSError, ValueError, sqlite3.Error) as exc:
@@ -206,6 +207,7 @@ async def get_research_snapshot(
         status = work.status
         if status == "in_progress" and task_manager.get_task_status(work_id).get("status") not in {"pending", "running"}:
             status = "paused"  # A persisted running flag cannot revive a lost coordinator.
+        db.close()
         return await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, status)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -225,6 +227,8 @@ async def pause_work(
     task = task_manager.get_running_task(work_id)
     if not task:
         return {"work_status": work.status}
+    original_status = work.status
+    db.close()
     from ai_system.research.runtime import ResearchRuntime
     if task.action!='ask':ResearchRuntime(get_workspace_path(work_id)).note_stop('manual_pause','已手动暂停，进度与累计用量保留')
     task_manager.cancel_task(work_id, reason="paused")
@@ -233,28 +237,45 @@ async def pause_work(
             await asyncio.shield(task._async_task)
         except asyncio.CancelledError:
             pass
-    return {"work_status": work.status if task.action == "ask" else "paused"}
+    return {"work_status": original_status if task.action == "ask" else "paused"}
 
 
 async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                              subproblem_id, revision_command, original_status, task):
     """Own all execution resources independently of the submitting browser."""
     loop = asyncio.get_running_loop()
-    db = None
     ws_callback = None
     try:
-        # 为每次消息处理创建新的数据库会话，避免长连接问题
+        # Read relational metadata in one bounded scope. The Agent and chat
+        # history use file-backed storage and must not retain this transaction.
         def init_message_processing():
             db = next(get_db())
             try:
                 chat_service = ChatService(db)
-                session = chat_service.create_or_get_work_session(work_id, user_id)
-                return db, chat_service, session
-            except Exception:
+                chat_service.create_or_get_work_session(work_id, user_id)
+                workspace_dir = str(get_workspace_path(work_id))
+                env_manager = setup_environment_from_db(db, workspace_dir)
+                workspace_dir = env_manager.get_workspace_dir()
+                model_config = env_manager.config_manager.get_model_config('brain', user_id)
+                code_config = None if action == 'ask' else env_manager.config_manager.get_model_config('code', user_id)
+                writer_config = None if action == 'ask' else env_manager.config_manager.get_model_config('writing', user_id)
+                template_id, output_mode = None, 'markdown'
+                try:
+                    from services.data_services.crud import get_work
+                    work = get_work(db, work_id)
+                    if work:
+                        template_id = getattr(work, 'template_id', None)
+                        output_mode = getattr(work, 'output_mode', None) or output_mode
+                except Exception as exc:
+                    logger.warning('获取工作配置失败: %s', exc)
+                return chat_service, workspace_dir, model_config, code_config, writer_config, template_id, output_mode
+            finally:
                 db.close()
-                raise
 
-        db, chat_service, session = await loop.run_in_executor(None, init_message_processing)
+        (chat_service, workspace_dir, model_config, codeagent_model_config,
+         writer_model_config, template_id, output_mode) = await loop.run_in_executor(None, init_message_processing)
+        # Only file-backed history operations remain after initialization.
+        chat_service.db_session = None
 
         class WebSocketStreamCallback(SimpleStreamCallback):
             def __init__(self, work_id, chat_service):
@@ -337,16 +358,6 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                 await self.queue.join()
                 self.sender.cancel()
 
-        # 创建工作空间目录 - 使用统一路径配置
-        workspace_dir = str(get_workspace_path(work_id))
-
-        # 初始化AI环境与工作空间
-        env_manager = setup_environment_from_db(db, workspace_dir)
-        workspace_dir = env_manager.get_workspace_dir()
-        model_config = env_manager.config_manager.get_model_config("brain", user_id)
-        codeagent_model_config = None if action == "ask" else env_manager.config_manager.get_model_config("code", user_id)
-        writer_model_config = None if action == "ask" else env_manager.config_manager.get_model_config("writing", user_id)
-
         # 创建流式回调和管理器
         ws_callback = WebSocketStreamCallback(work_id, chat_service)
         stream_manager = StreamOutputManager(stream_callback=ws_callback)
@@ -392,22 +403,6 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
         else:
             logger.info("未提供 writing 配置，写作使用主模型")
             writer_llm = None
-
-        # 获取工作的模板ID和输出模式
-        template_id = None
-        output_mode = "markdown"  # 默认值
-        try:
-            from services.data_services.crud import get_work
-            work = get_work(db, work_id)
-            if work:
-                if hasattr(work, 'template_id') and work.template_id:
-                    template_id = work.template_id
-                    logger.info(f"工作 {work_id} 使用模板: {template_id}")
-                if hasattr(work, 'output_mode') and work.output_mode:
-                    output_mode = work.output_mode
-                    logger.info(f"工作 {work_id} 输出模式: {output_mode}")
-        except Exception as e:
-            logger.warning(f"获取工作配置失败: {e}")
 
         logger.info(f"工作 {work_id} 使用状态图流水线，输出 {output_mode}")
         from services.research_experience import ExperienceScope
@@ -542,11 +537,6 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
         if ws_callback:
             if ws_callback.timer: ws_callback.timer.cancel()
             ws_callback.sender.cancel()
-        if db is not None:
-            try:
-                db.close()
-            except Exception:
-                logger.exception('Closing chat task database failed: %s', task.task_id)
 
 
 @router.websocket("/ws/{work_id}")
@@ -765,6 +755,9 @@ async def generate_work_title(
                 model_config=model_config
             )
             llm = llm_handler.get_llm_instance()
+            # The title request may take minutes; update_work opens a fresh
+            # transaction after the model returns.
+            db.close()
 
             # 使用LangChain标准消息格式
             messages = [HumanMessage(content=title_prompt)]
