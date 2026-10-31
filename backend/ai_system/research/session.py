@@ -27,7 +27,9 @@ async def run_session(agent, session, messages, *, on_resume=None):
         saved=await agent.aget_state(config)
         if saved.values:
             if on_resume:on_resume(bool(saved.next))
-            value=None if saved.next else {'messages':messages[-1:]}
+            seen={m.id for m in saved.values.get('messages',[]) if m.id}
+            incoming=[m for m in messages[-1:] if not m.id or m.id not in seen]
+            value=None if saved.next else {'messages':incoming}
         else:value={'messages':messages}
         return await agent.ainvoke(value,config=config,durability='sync')
     finally:var_child_runnable_config.reset(token)

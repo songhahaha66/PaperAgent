@@ -145,7 +145,7 @@ class PaperGraphAgent:
             await self._emit("main_agent_error", error_msg)
             return error_msg
         finally:
-            await ctx.kernels.close()
+            await ctx.kernels.disconnect()
 
     async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
                               change: str, scope: list[str] | None = None, source_issue:dict|None=None) -> str:
@@ -228,7 +228,7 @@ class PaperGraphAgent:
                 config = {"configurable": {"thread_id": thread_id}}
                 return await self._resume_graph(graph, config, thread_id, ctx)
         finally:
-            await ctx.kernels.close()
+            await ctx.kernels.disconnect()
 
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
@@ -314,10 +314,9 @@ class PaperGraphAgent:
                     pending = (state or {}).get('action') or {}
                     if pending.get('capability') != 'ask' or pending.get('status') != 'waiting':
                         raise ValueError('待补充问题已改变，请重试')
-                    message = pending['inputs']['message']
-                    state.setdefault('clarifications',[]).append({'ref':'clarification:'+str(len(state.get('clarifications',[]))+1),'question':message,'response':user_input})
-                    if state['action']:state['action']['status']='done'
-                    store._save(db,state,'clarification_received',{'question':message,'response':user_input})
+                    action_id=pending['id']
+                from ai_system.research.clarifications import receive
+                receive(store,action_id,user_input)
                 return None, thread_id
             raise ValueError('当前没有等待补充信息的研究')
         if thread_id and not new_run:

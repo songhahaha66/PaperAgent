@@ -46,11 +46,12 @@ def info(name, limit):
 
 def inventory(kind, names, limit):
     if names is None:
-        roots = {'python':['outputs','code'], 'inputs':['data','attachment','code','outputs/intermediate'],
+        roots = {'python':['outputs','code'], 'runtime':[], 'inputs':['data','attachment','code','outputs/intermediate'],
                  'compiler':['.build/latex','.build/reference.docx','.build/export.docx']}[kind]
-        if kind == 'python':
+        if kind in {'python','runtime'}:
             roots = [p.name for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith('.')
-                     and p.name not in PRIVATE | {'data','attachment','__pycache__','node_modules'}]
+                     and p.name not in PRIVATE | {'__pycache__','node_modules'}
+                     and (kind=='runtime' or p.name not in {'data','attachment'})]
         names = []
         for name in roots:
             base = path(name)
@@ -61,9 +62,9 @@ def inventory(kind, names, limit):
                     for child in dirs:
                         if (Path(folder)/child).is_symlink(): raise ValueError('Cache symlink')
                     dirs[:] = [d for d in dirs if not d.startswith('.') and d not in PRIVATE | {'__pycache__','node_modules'}
-                               and not (kind=='python' and Path(folder)==ROOT/'outputs' and d=='research')]
+                               and not (kind in {'python','runtime'} and Path(folder)==ROOT/'outputs' and d=='research')]
                     names.extend((Path(folder)/f).relative_to(ROOT).as_posix() for f in files if not f.startswith('.'))
-        if kind == 'python':
+        if kind in {'python','runtime'}:
             names += [p.name for p in ROOT.iterdir() if p.is_file() and not p.name.startswith('.')
                       and p.name not in PRIVATE | {'paper.md','paper.tex','paper.pdf','paper.docx'}]
     if len(names) > 10000: raise ValueError('File inventory exceeds 10000 entries')
@@ -81,13 +82,25 @@ def freeze(run_id, baseline, kind, limit, names=None):
     try:
         for row in rows:
             source = path(row['path']); dest = temporary/'files'/row['path']; dest.parent.mkdir(parents=True,exist_ok=True)
+            blob = path('.pa-blobs/' + row['sha256'], True)
+            blob.parent.mkdir(parents=True,exist_ok=True)
             count = 0; digest = hashlib.sha256()
-            with source.open('rb') as incoming, dest.open('wb') as outgoing:
+            staged = temporary / ('blob-' + row['sha256'])
+            with source.open('rb') as incoming, staged.open('wb') as outgoing:
                 while chunk := incoming.read(min(1024*1024, limit-count+1)):
                     count += len(chunk)
                     if count > limit: raise ValueError('产物超过单文件上限')
                     digest.update(chunk); outgoing.write(chunk)
             if count != row['size'] or digest.hexdigest() != row['sha256']: raise ValueError('Output changed while freezing')
+            if blob.exists():
+                if blob.stat().st_size != count or hashlib.sha256(blob.read_bytes()).hexdigest() != row['sha256']:
+                    raise ValueError('Frozen content changed')
+            else:
+                staged.replace(blob)
+            staged.unlink(missing_ok=True)
+            os.link(blob,dest)
+            if kind=='runtime' and row['path'].split('/')[0] in {'data','attachment'}:
+                row['role']='runtime_input'
             row['snapshot'] = '.pa-runs/' + run_id + '/files/' + row['path']
         manifest = {'run_id':run_id,'files':rows}
         (temporary/'manifest.json').write_text(json.dumps(manifest))

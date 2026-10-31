@@ -63,17 +63,19 @@ class Capability:
     inputs: type[BaseModel]
     purpose: str = ''
     model_callable: bool = False
+    access: Literal['read','write'] = 'write'
 
 
 class ModuleRegistry:
     def __init__(self):
         self._capabilities = {}
 
-    def register(self, module, name, product, handler, inputs=Inputs, *, purpose='', model_callable=False):
+    def register(self, module, name, product, handler, inputs=Inputs, *, purpose='', model_callable=False, access='write'):
         if name in self._capabilities:
             raise ValueError(f"重复能力：{name}")
         if model_callable and not purpose.strip():raise ValueError('模型可调用能力必须声明用途和产物边界')
-        self._capabilities[name] = Capability(name, module, product, handler, inputs,purpose,model_callable)
+        if access not in {'read','write'}:raise ValueError('Invalid capability access')
+        self._capabilities[name] = Capability(name, module, product, handler, inputs,purpose,model_callable,access)
 
     def model_capabilities(self):
         return [c for c in self._capabilities.values() if c.model_callable]

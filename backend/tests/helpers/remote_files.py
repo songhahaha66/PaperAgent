@@ -75,5 +75,10 @@ class RemoteFiles:
         Path(destination).write_bytes(b'wrong bytes' if self.corrupt_download else raw)
 
     async def finalize(self,run_id):pass
+    async def attach(self,handle):
+        self.id=handle['sandbox_id'];self.context_id=handle['context_id']
+        self.started=True;self.closed=False;self.context_restored=True
+    async def attach_for_destroy(self,handle):await self.attach(handle)
+    async def disconnect(self):self.started=False
     async def interrupt(self):self.interrupted=True
     async def close(self):self.closed=True;self.started=False

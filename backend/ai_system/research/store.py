@@ -113,6 +113,11 @@ class ResearchStore:
             self._write_activity(db, item)
 
     def _write_activity(self, db, item):
+        if item.get('run_id') and isinstance(item.get('inputs'),dict) and 'code' in item['inputs']:
+            # The canonical code lives in this run's input.py. Progress rows retain
+            # its locator/hash, not another full copy of the program.
+            item={**item,'inputs':{k:v for k,v in item['inputs'].items() if k!='code'},
+                  'input_code_hash':digest(item['inputs']['code'])}
         db.execute('INSERT INTO research_activity VALUES (?,?,?,?,?) ON CONFLICT(research_id,id) DO UPDATE SET updated_at=excluded.updated_at,payload=excluded.payload',
                    (self.research_id, item['id'], item['started_at'], time.time(), json.dumps(item, ensure_ascii=False)))
 

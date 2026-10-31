@@ -48,8 +48,8 @@ class MemorySession(RemoteFiles):
         assert self.state['active']==0, 'pool must serialize actual computation'
         self.state['active']+=1
         try:
-            with pytest.raises(HTTPException):
-                with edit_lock(self.backend_root):pass
+            # Computation owns a runtime lock, not the manuscript lock.
+            with edit_lock(self.backend_root):pass
             await asyncio.sleep(0)
             self.calls.append(code)
             directory=self.path/'outputs/intermediate/comparisons/mock-comparison'
@@ -160,11 +160,21 @@ def test_independent_pool_wait_is_bounded_and_submits_no_code(comparison):
         other=KernelPool(c.ctx.workspace,c.ctx.fs,timeout=.02)
         try:
             await first.execute('ordinary step')
-            await first.execute('second step')
-            assert len(c.sessions['ordinary'].calls)==2
+            entered=asyncio.Event();release=asyncio.Event()
+            original=first.session.execute
+            async def busy(*args):
+                entered.set();await release.wait()
+                return await original(*args)
+            first.session.execute=busy
+            active=asyncio.create_task(first.execute('second step'))
+            await entered.wait()
             contender=other.get('other-pool')
             with pytest.raises(TimeoutError):await contender.execute('must not run')
             assert c.sessions['other-pool'].calls==[]
+            release.set();await active
+            assert len(c.sessions['ordinary'].calls)==2
+            # An idle retained interpreter no longer blocks another pool.
+            await contender.execute('independent idle access')
         finally:
             await other.close();await c.ctx.kernels.close()
     asyncio.run(check())
@@ -230,8 +240,12 @@ def test_closing_one_container_keeps_every_other_durable_lease(tmp_path):
     assert set(json.loads(path.read_text())['leases'])=={'first','second'}
     sessions[0]._remove_lease()
     assert set(json.loads(path.read_text())['leases'])=={'second'}
-    with pytest.raises(HTTPException,match='TTL'):
-        with edit_lock(root):pass
+    with edit_lock(root):pass
+    from services.file_services.workspace_lock import execution_lock
+    async def runtime_blocked():
+        with pytest.raises(HTTPException,match='TTL'):
+            async with execution_lock(root):pass
+    asyncio.run(runtime_blocked())
     async def cannot_destroy():raise ConnectionError('destroy unconfirmed')
     sessions[1].host=SimpleNamespace(sandbox=SimpleNamespace(destroy=cannot_destroy),interpreter=None)
     async def close_unconfirmed():
@@ -307,17 +321,18 @@ def test_pdf_version_check_and_publication_share_edit_lock(tmp_path,monkeypatch)
         publication_phase['pending']=True
         return LatexResult(tex_path=main,pdf_path='paper.pdf',log_path='.build/latex/compile.log',exit_code=0)
     monkeypatch.setattr('ai_system.export.latex.compile_pdf',fake_compile)
-    original_copy=paper_project.shutil.copyfile
+    from ai_system.sandbox.content_store import ContentStore
+    original_copy=ContentStore.materialize
     checked=[]
-    def copy(source,target,*args,**kwargs):
-        if Path(target).name=='paper.pdf.paper-tmp':
+    def copy(self,source,target,*args,**kwargs):
+        if Path(target)==root/'paper.pdf':
             # A normal file API write cannot slip between version check and replace.
             with pytest.raises(HTTPException) as busy:
                 WorkspaceFileService().write_file('project','paper.tex','racing edit')
             assert busy.value.status_code==409
             checked.append(True)
-        return original_copy(source,target,*args,**kwargs)
-    monkeypatch.setattr(paper_project.shutil,'copyfile',copy)
+        return original_copy(self,source,target,*args,**kwargs)
+    monkeypatch.setattr(ContentStore,'materialize',copy)
     result=asyncio.run(paper_project.compile_project(store))
     assert checked and publication_phase['checked'] and result['compile']['state']=='current'
     assert result['pdf_version']==before and paper_project.snapshot(root)['version']==before

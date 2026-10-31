@@ -118,7 +118,8 @@ def test_cancel_wait_reports_startup_failure_instead_of_hanging(tmp_path):
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            await kernel.close()
+            with pytest.raises(RuntimeError,match='创建结果未知'):
+                await kernel.close()
     asyncio.run(run())
 
 

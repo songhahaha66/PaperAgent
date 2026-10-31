@@ -100,9 +100,11 @@ def research_step(messages,plan,transform=lambda text:text):
     runs={r['run_id']:deepcopy(r) for r in context.get('runs',[])}
     for message in messages[context_index+1:]:
         if not isinstance(message,ToolMessage):continue
-        if message.status=='error':
+        try:value=json.loads(message.content)
+        except (ValueError,TypeError):
             raise AssertionError('Unexpected research fixture tool error: '+str(message.content))
-        value=json.loads(message.content)
+        if message.status=='error' and not (value.get('run_id') and value.get('execution_status') in {'failed','cancelled','interrupted'}):
+            raise AssertionError('Unexpected research fixture tool error: '+str(message.content))
         if isinstance(value.get('question'),dict):questions[value['question_id']]=value['question']
         for run in value.get('runs',[]):runs[run['run_id']]=run
         if value.get('run_id'):runs[value['run_id']]=value

@@ -37,6 +37,7 @@ dependencies = [
     "scikit-learn>=1.9.1",
     "defusedxml>=0.7.1",
     "langsmith>=0.8.18",
+    "pypdfium2>=5.13.0",
 ]
 
 [project.optional-dependencies]

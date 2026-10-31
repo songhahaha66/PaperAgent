@@ -18,10 +18,13 @@ def run_result(ctx, run_id, observation=None):
     if observation is None:
         observation = ctx.fs.read_text(info['stdout'])[-6000:] if info.get('stdout') and ctx.fs.exists(info['stdout']) else ''
     return {'run_id': run_id, 'question_id': info.get('question_id'), 'execution_status': status,
+            'failure_stage':info.get('failure_stage'),'submission_state':info.get('submission_state'),
+            'compute_state':info.get('compute_state'),'delivery_state':info.get('delivery_state'),
+            'runtime_epoch':info.get('runtime_epoch'),'context_restored':info.get('context_restored'),
             'observation': observation, 'error': info.get('error'), 'failure_kind': info.get('failure_kind'),
             'delivery_error': info.get('delivery_error') or info.get('publication_error'),
             'runtime_note': ('执行环境已中断，旧Python变量不可依赖；读取保存的代码和文件恢复，不重放已完成计算。'
-                             if info.get('failure_kind') in {'transport_unknown','timeout','cancelled','resource'} else None),
+                             if info.get('submission_state')!='not_submitted' and info.get('failure_kind') in {'transport_unknown','timeout','cancelled','resource'} else None),
             'input_path': info.get('input'), 'stdout_path': info.get('stdout'),
             'files': [path for path, meta in ctx.fs._manifest.get('files', {}).items()
                       if meta.get('source_run') == run_id and meta.get('visibility') == 'user']}

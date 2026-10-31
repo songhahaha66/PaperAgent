@@ -56,6 +56,10 @@ class KernelPool:
         kernels, self._kernels = list(self._kernels.values()), {}
         await asyncio.gather(*(k.close() for k in kernels), return_exceptions=True)
 
+    async def disconnect(self) -> None:
+        kernels,self._kernels=list(self._kernels.values()),{}
+        await asyncio.gather(*(k.disconnect() for k in kernels))
+
 
 class EventSink:
     """把阶段进度推给前端（复用 stream_manager.send_json_block），没有 stream_manager 时只写日志"""

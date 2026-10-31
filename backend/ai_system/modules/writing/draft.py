@@ -33,7 +33,6 @@ async def edit(ctx, inputs):
     if not name.endswith(('.md','.tex','.bib')):raise ValueError('正文仅支持 Markdown、TeX 或 BibTeX 文件')
     path=project.safe_path(ctx.workspace,name,writing=True)
     if name.startswith(('data/','attachment/','outputs/','code/')):raise ValueError('正文不能覆盖资料或计算产物')
-    await ctx.kernels.close()
     project.initialize(ctx.research)
     raw=path.read_bytes() if path.exists() else b''
     before=raw.decode('utf-8')

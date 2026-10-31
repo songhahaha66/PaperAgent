@@ -54,7 +54,7 @@ class CellResult:
         if self.error:
             parts.append(self.error.rstrip())
         if self.timed_out:
-            parts.append("执行超时，内核已重启，之前定义的变量都已丢失，需要重新加载数据。")
+            parts.append("请依据本次失败阶段与运行时状态恢复；不要重放已完成计算。")
         if len(parts) == 1:
             parts.append("（执行成功，无输出）")
         return "\n".join(parts)
@@ -146,7 +146,7 @@ class PythonKernel:
             except asyncio.TimeoutError:
                 await self._kill()
                 result = CellResult(
-                    ok=False, stdout="", error=f"执行超过 {self.timeout:.0f} 秒", run_id=run_id, timed_out=True
+                    ok=False, stdout="", error=f"执行超过 {self.timeout:.0f} 秒；测试内核已重置，变量都已丢失", run_id=run_id, timed_out=True
                 )
             except Exception as exc:
                 await self._kill()
@@ -170,6 +170,10 @@ class PythonKernel:
             self._proc.kill()
             await self._proc.wait()
         self._proc = None
+
+    async def disconnect(self):
+        # This subprocess backend is a test utility, not a reconnectable provider.
+        await self.close()
 
     async def close(self):
         if self._proc is not None and self._proc.returncode is None:

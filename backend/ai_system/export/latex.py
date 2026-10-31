@@ -100,9 +100,9 @@ def result_reference_issues(text: str) -> List[str]:
 def source_diagnostics(workspace: Path, tex_name: str, *, verified_snapshot=False) -> List[dict]:
     # Reuse the project's dependency discovery so split-file documents work too.
     from services.chat_services.paper_project import files
-    sources = {name: row['text'] for name,row in files(workspace, main=tex_name, verified_snapshot=verified_snapshot).items() if name.endswith('.tex')}
-    clean = '\n'.join(re.sub(r'(?m)(?<!\\)%.*$', '', text) for text in sources.values())
     diagnostics = []
+    sources = {name: row['text'] for name,row in files(workspace, main=tex_name, verified_snapshot=verified_snapshot,missing=diagnostics).items() if name.endswith('.tex')}
+    clean = '\n'.join(re.sub(r'(?m)(?<!\\)%.*$', '', text) for text in sources.values())
     commands = re.findall(r'\\(begin|end)\s*\{document\}', clean)
     if sorted(commands) != ['begin', 'end']:
         missing = ['\\'+cmd+'{document}' for cmd in ('begin','end') if cmd not in commands]
@@ -190,4 +190,6 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex", *, verified_
     result.pages = int(pages.group(1)) if pages else None
     missing = sorted(set(re.findall(r"Missing character: There is no (\S+)", log)))
     result.warnings = [f"缺字形：{' '.join(missing[:10])}"] if missing else []
+    result.warnings.extend(dict.fromkeys(line.strip() for line in log.splitlines()
+        if re.search(r'Overfull \\[hv]box',line)))
     return finish()

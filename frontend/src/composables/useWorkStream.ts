@@ -72,6 +72,7 @@ export function useWorkStream(options: {
   // 聊天相关状态
   const isStreaming = ref(false)
   const runningAction = ref<ResearchAction>('auto')
+  let lastResearchPush = 0
   const questionScope = ref<string | null>(null)
   let scopedVersion: { research_id: string; base_revision: number } | undefined
   function askSubproblem(id: string) {
@@ -345,6 +346,7 @@ export function useWorkStream(options: {
       }
       if (block?.type === 'research_snapshot') {
         if (block.content?.schema_version === 5 && block.content.work_id === workId.value) {
+          lastResearchPush = Date.now()
           invalidateSnapshot()
           applyResearchSnapshot(block.content as ResearchSnapshot)
         }
@@ -636,6 +638,7 @@ export function useWorkStream(options: {
       clockNow.value = Date.now()
       if (
         clockNow.value % 5000 < 1000 &&
+        clockNow.value - lastResearchPush > 15000 &&
         (isStreaming.value ||
           ['in_progress', 'running', 'processing'].includes(currentWork.value?.status || ''))
       )

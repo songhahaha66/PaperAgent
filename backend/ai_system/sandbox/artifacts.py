@@ -42,7 +42,7 @@ def publish_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
     return published
 
 
-def _copy_run_archive(source, target):
+def _copy_run_archive(source, target, *, content=None):
     from .evidence import checksum
     from services.file_services.workspace_layout import safe_join
     import json
@@ -63,7 +63,10 @@ def _copy_run_archive(source, target):
         validate(source)
     if any(path.is_symlink() for path in source.rglob('*')):
         raise ValueError('运行归档不允许符号链接')
-    shutil.copytree(source, target, dirs_exist_ok=True)
+    def copy(origin,destination):
+        content.link_archive(content.put(Path(origin)),Path(destination))
+        return destination
+    shutil.copytree(source, target, dirs_exist_ok=True,copy_function=copy if content else shutil.copy2)
     if receipt.exists():
         validate(target)
 
@@ -81,7 +84,8 @@ def capture_run_files(source_fs, target_fs, attempt_id=None, *, run_ids=None):
             source = source_fs.run_dir(run_id)
             target = target_fs.run_dir(run_id)
             if source.exists():
-                _copy_run_archive(source, target)
+                from .content_store import ContentStore
+                _copy_run_archive(source, target,content=ContentStore(target_fs.root,DEFAULT_MAX_FILE_BYTES))
             target_fs._manifest.setdefault('runs', {})[run_id] = deepcopy(info)
             for result_id, binding in source_fs._manifest.get('result_bindings', {}).items():
                 if binding['run_id'] == run_id:
@@ -117,7 +121,8 @@ def inherit_execution_files(source, target_fs, experiment_id, *, run_ids=None):
             origin = source_fs.run_dir(run_id)
             if origin.exists():
                 if any(p.is_symlink() for p in origin.rglob('*')): raise ValueError('运行记录不允许符号链接')
-                _copy_run_archive(origin, target_fs.run_dir(run_id))
+                from .content_store import ContentStore
+                _copy_run_archive(origin, target_fs.run_dir(run_id),content=ContentStore(target_fs.root,DEFAULT_MAX_FILE_BYTES))
             target_fs._manifest['runs'][run_id] = deepcopy(info)
         # Materialize original paths from immutable snapshots, even if the
         # previous attempt no longer has a mutable working copy.
@@ -126,8 +131,12 @@ def inherit_execution_files(source, target_fs, experiment_id, *, run_ids=None):
             if not artifact.startswith(prefix): raise ValueError('运行产物不属于对应 run')
             name = artifact.removeprefix(prefix)
             parts = PurePosixPath(name).parts
-            if not parts or any(p.startswith('.') for p in parts) or parts[0] in {'data','attachment','manifest.json','chat_history.json'}:
+            if not parts or any(p.startswith('.') for p in parts) or parts[0] in {'manifest.json','chat_history.json'}:
                 raise ValueError('非法实验交接路径')
+            if parts[0] in {'data','attachment'}:
+                # Generated input versions remain separate from original user
+                # materials during cross-task handoff as well as publication.
+                name='outputs/intermediate/imported/'+run_id+'/'+name
             origin = source_fs.abs(artifact)
             target = target_fs.abs(name)
             if origin.is_symlink(): raise ValueError('运行产物不允许符号链接')

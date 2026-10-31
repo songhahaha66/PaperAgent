@@ -19,19 +19,29 @@ class RemoteKernel:
         self.timeout = timeout
         self.session = session
         self.settings = settings
+        from .runtime_manager import RuntimeManager
+        self.runtime = RuntimeManager(self.workspace_dir,session,settings)
         self._started = False
         from .transfer import WorkspaceTransfer
         self.transfer = WorkspaceTransfer(self.fs,session,settings)
         self._lock = asyncio.Lock()
         from .execution_scope import KernelExecutionScope
         self.execution_scope = execution_scope or KernelExecutionScope(self.workspace_dir)
+        import hashlib
+        self.owner=hashlib.sha256((str(self.workspace_dir)+'\0'+getattr(session,'experiment_id','default')).encode()).hexdigest()
         self.pending_run = next((rid for rid, row in reversed(self.fs._manifest.get('runs', {}).items())
-                                 if row.get('delivery_error') and rid not in self.fs._manifest.get('inherited_runs', [])), None)
+                                 if row.get('delivery_error') and (row.get('runtime_owner')==self.owner or row.get('cache_key')==session.cache_key)
+                                 and rid not in self.fs._manifest.get('inherited_runs', [])), None)
 
     async def _start(self):
+        import time
+        if self._started and (self.runtime.handle or {}).get('expires_at',0)<=time.time():
+            await self.session.disconnect()
+            self._started=False
+            self.transfer.seen=None
         if self._started:
             return
-        await self.session.start()
+        await self.runtime.start()
         self._started = True
         self.fs._manifest['storage'] = {'kind': 'api-execution-cache',
             'cache_key': self.session.cache_key, 'sandbox_root': self.session.root}
@@ -60,9 +70,10 @@ class RemoteKernel:
 
     async def _stop(self):
         try:
-            await asyncio.wait_for(self.session.close(), 20)
+            await asyncio.wait_for(self.runtime.destroy(), 20)
         finally:
             self._started = False
+            self.transfer.seen=None
 
     async def execute(self, code, *, on_event=None):
         async with self._lock, self.execution_scope.operation(self, self.timeout):
@@ -77,7 +88,7 @@ class RemoteKernel:
             self.fs.save_run_stdout(run_id, "")
             self.fs.save_run_stderr(run_id, "")
             info = self.fs._manifest["runs"][run_id]
-            info.update(status="starting", provider=self.settings.provider, runtime_image=self.settings.image)
+            info.update(status="starting", provider=self.settings.provider, runtime_image=self.settings.image,runtime_owner=self.owner)
             self.fs._save_manifest()
             result = CellResult(ok=False, stdout="", error=None, run_id=run_id)
             sequence = 0
@@ -107,15 +118,32 @@ class RemoteKernel:
             abnormal = False
             cancelled = False
             execution_finished = False
+            submitted = False
+            phase = 'snapshot_inputs'
+            def stage(name):
+                nonlocal phase
+                import time
+                phase=name
+                info.update(phase=name,phase_started_at=time.time())
+                self.fs._save_manifest()
             await event("starting")
             try:
                 from .artifacts import output_hashes
-                info['local_output_baseline'] = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
-                self._freeze_inputs(run_id)
+                from services.file_services.workspace_lock import edit_lock
+                with edit_lock(self.workspace_dir):
+                    info['local_output_baseline'] = output_hashes(self.fs, max_file_bytes=self.settings.max_file_bytes)
+                    self._freeze_inputs(run_id)
+                stage('start_runtime')
                 await asyncio.wait_for(self._start(), self.settings.startup_timeout)
-                await asyncio.wait_for(self.transfer.sync_inputs(), self.settings.startup_timeout)
+                # Persist identity before any fallible preparation/transfer.
+                info.update(sandbox_id=self.session.id,context_id=self.session.context_id,
+                    cache_key=self.session.cache_key,runtime_epoch=(self.runtime.handle or {}).get('epoch'),
+                    submission_state='not_submitted',compute_state='not_started',delivery_state='pending')
+                stage('sync_inputs')
+                await asyncio.wait_for(self.transfer.sync_inputs(run_id), self.settings.startup_timeout)
+                stage('snapshot_remote_inputs')
                 await asyncio.wait_for(self.transfer.freeze_actual_inputs(run_id), self.settings.startup_timeout)
-                inventory=await self.session.inventory()
+                inventory=await self.session.inventory(kind='runtime')
                 info['output_baseline']={row['path']:row['sha256'] for row in inventory}
                 info['cache_key']=self.session.cache_key
                 info.update(status="running", sandbox_id=self.session.id,
@@ -124,20 +152,28 @@ class RemoteKernel:
                             pending_files=None)
                 self.fs._save_manifest()
                 await event("running")
+                stage('execute')
+                submitted=True
+                info.update(submission_state='submitting',compute_state='running')
+                self.fs._save_manifest()
                 outcome = await asyncio.wait_for(self.session.execute(code, run_id, output), self.timeout)
                 result.error = self._safe_error(outcome.error) if outcome.error else None
                 result.ok = result.error is None
                 result.failure_kind = 'code' if result.error else None
                 execution_finished = True
+                info.update(submission_state='acknowledged',compute_state='code_error' if result.error else 'succeeded')
                 # Commit the execution receipt before any fallible output preparation.
                 info.update(status='success' if result.ok else 'error', error=result.error,
                             failure_kind=result.failure_kind, finalize_pending=True,
                             delivery_error='计算已结束，文件交付尚未完成')
                 self.fs._save_manifest()
+                stage('finalize_outputs')
                 try:
                     await self._finalize(run_id)
                 except Exception as exc:
                     result.delivery_error = self._safe_error(exc)
+                    info['failure_stage']='finalize_outputs'
+                stage('deliver_outputs')
                 for attempt in range(2):
                     try:
                         result.files = await asyncio.wait_for(self._collect(run_id), 60)
@@ -152,22 +188,38 @@ class RemoteKernel:
                     result.delivery_error = '文件交付已中断，请调用 retry_outputs，不要重算。'
                     self.pending_run = run_id
                 else:
-                    cancelled = abnormal = True
+                    cancelled = True
+                    abnormal = submitted
                     result.error = "执行已取消"
                     result.failure_kind = 'cancelled'
                 raise
             except asyncio.TimeoutError:
-                abnormal = True
-                result.timed_out = True
-                result.failure_kind = 'timeout'
-                result.error = "沙箱启动或执行超时，内存变量已失效"
+                abnormal = submitted and not execution_finished
+                if execution_finished:
+                    result.delivery_error='计算已有完成回执，文件处理超时；请恢复交付，不重算'
+                    self.pending_run=run_id
+                else:
+                    result.timed_out = True
+                    result.failure_kind = 'timeout'
+                    result.error = ("代码执行超时，原内核将重置；已收到的结果保留" if submitted else
+                                    '执行前准备超时（'+phase+'）；代码尚未提交，健康内核保留，可重试准备')
             except Exception as exc:
-                abnormal = True
+                abnormal = submitted and not execution_finished
                 # Provider failures can contain connection headers. Never echo API keys.
-                result.error = self._safe_error(exc)
-                from .file_limits import FileLimitExceeded
-                result.failure_kind = 'resource' if isinstance(exc, FileLimitExceeded) else 'transport_unknown'
+                if execution_finished:
+                    result.delivery_error=self._safe_error(exc)
+                    self.pending_run=run_id
+                else:
+                    result.error = self._safe_error(exc)
+                    from .file_limits import FileLimitExceeded
+                    result.failure_kind = 'resource' if isinstance(exc, FileLimitExceeded) else 'transport_unknown' if submitted else 'preparation'
             finally:
+                info.update(failure_stage=('execute' if execution_finished and result.error else
+                    info.get('failure_stage') or phase) if result.error or result.delivery_error else None,
+                    submission_state=('acknowledged' if execution_finished else 'unknown' if submitted else 'not_submitted'),
+                    compute_state=('code_error' if result.error else 'succeeded') if execution_finished else
+                                  'timed_out' if submitted and result.timed_out else 'unknown' if submitted else 'not_started',
+                    delivery_state='pending' if result.delivery_error else 'available' if execution_finished else 'not_started')
                 if abnormal:
                     try:
                         await asyncio.wait_for(self.session.interrupt(), 5)
@@ -203,6 +255,7 @@ class RemoteKernel:
                     except Exception as exc:
                         result.delivery_error = self._safe_error(exc)
                         info['delivery_error'] = result.delivery_error
+                        info['delivery_state'] = 'pending'
                         self.fs._save_manifest()
                         self.pending_run = run_id
                 await event("finished", status=status, error=result.error, files=result.files,
@@ -223,28 +276,42 @@ class RemoteKernel:
             info = self.fs.get_run_info(run_id)
             if info.get('provider', 'opensandbox') != self.settings.provider:
                 raise RuntimeError('原执行属于另一沙箱平台；请恢复原平台配置取回文件，不会跨平台重跑')
+            if info.get('cache_key')!=self.session.cache_key:
+                raise RuntimeError('原执行缓存不可用；请恢复原缓存配置取回文件，不会重跑计算')
             # Persistent files survive containers. In-memory figures do not.
-            if info.get('finalize_pending'):
-                if not self._started or info.get('context_id') != getattr(self.session, 'context_id', None):
-                    raise RuntimeError('原 Python 内存已失效，无法确认尚未保存的图；保留真实未完成状态，不重跑')
-                await self._finalize(run_id)
             recovering = not self._started
             if recovering:
                 await asyncio.wait_for(self._start(), self.settings.startup_timeout)
                 if info.get('cache_key')!=self.session.cache_key:
                     raise RuntimeError('原执行缓存不可用；不会重跑计算')
+            if info.get('finalize_pending'):
+                if not self._started or info.get('context_id') != getattr(self.session, 'context_id', None):
+                    raise RuntimeError('原 Python 内存已失效，无法确认尚未保存的图；保留真实未完成状态，不重跑')
+                await self._finalize(run_id)
             info['files'] = await self._collect(run_id, recover=recovering)
             seal_run(self.fs, run_id)
             info['delivery_error'] = None
+            info['delivery_state'] = 'available'
+            if not info.get('error'):info['failure_stage']=None
             self.fs._save_manifest()
             self.pending_run = None
             return run_id
 
     async def close(self):
-        async with self._lock:
+        async with self._lock, self.execution_scope.operation(self,self.timeout):
             try:
                 await self._stop()
             finally:
+                await self.execution_scope.release(self)
+
+    async def disconnect(self):
+        """Release client resources without discarding the remote interpreter."""
+        async with self._lock:
+            try:
+                await self.runtime.disconnect()
+            finally:
+                self._started=False
+                self.transfer.seen=None
                 await self.execution_scope.release(self)
 
     async def __aenter__(self):

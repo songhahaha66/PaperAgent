@@ -63,13 +63,17 @@ class WorkspaceTransfer:
         self.input_names=input_names
         self.verified_snapshot=verified_snapshot
         self.fs=fs;self.session=session;self.settings=settings;self.compiler=compiler
+        from .content_store import ContentStore
+        self.content = ContentStore(fs.root, settings.max_file_bytes)
         self.seen=None
 
     def local_inputs(self):
         return {p:bounded_hash(source,self.settings.max_file_bytes) for p,source in input_files(self.fs,compiler=self.compiler,verified_snapshot=self.verified_snapshot,names=self.input_names).items()}
 
-    async def sync_inputs(self):
-        sources=input_files(self.fs,compiler=self.compiler,verified_snapshot=self.verified_snapshot,names=self.input_names)
+    async def sync_inputs(self, run_id=None):
+        sources=({name:self.fs.run_dir(run_id)/'inputs'/name
+                  for name in self.fs.get_run_info(run_id)['input_hashes']} if run_id else
+                 input_files(self.fs,compiler=self.compiler,verified_snapshot=self.verified_snapshot,names=self.input_names))
         desired={p:bounded_hash(source,self.settings.max_file_bytes) for p,source in sources.items()}
         previous=self.seen if self.seen is not None else await self.session.input_versions()
         check=desired if self.seen is None else {p:h for p,h in desired.items() if self.seen.get(p)!=h}
@@ -81,7 +85,8 @@ class WorkspaceTransfer:
         for path in set(previous)-set(desired):
             relative(path,compiler=self.compiler)
             await self.session.delete_input(path)
-        await self.session.save_input_versions(desired)
+        if previous != desired:
+            await self.session.save_input_versions(desired)
         self.seen=desired
         return desired
 
@@ -93,8 +98,12 @@ class WorkspaceTransfer:
         actual={row['path']:row['sha256'] for row in rows+extra}
         for name in actual:relative(name)
         baseline=info.get('input_hashes',{})
+        sizes={row['path']:row['size'] for row in rows+extra}
+        # Compare against archived bytes, not just this run's local input tree.
+        # A remote-generated data file may never have a public backend copy.
+        archived={name:version for name,version in actual.items() if self.content.has(version,sizes[name])}
         snapshot_id='input_'+run_id
-        manifest=await self.session.capture_inputs(snapshot_id,baseline,list(actual))
+        manifest=await self.session.capture_inputs(snapshot_id,archived,list(actual))
         if manifest.get('run_id')!=snapshot_id:raise ValueError('Input receipt mismatch')
         received=set()
         for row in manifest['files']:
@@ -104,18 +113,25 @@ class WorkspaceTransfer:
             if not isinstance(row['size'],int) or not 0<=row['size']<=self.settings.max_file_bytes:raise ValueError('Input exceeds single-file limit')
             received.add(name)
             await self.download(row,self.fs.run_dir(run_id)/'inputs'/name)
-        if received!={name for name,digest in actual.items() if baseline.get(name)!=digest}:raise ValueError('Incomplete input snapshot')
+        if not {name for name,digest in actual.items() if archived.get(name)!=digest} <= received:
+            raise ValueError('Incomplete input snapshot')
+        # Retrying a frozen snapshot may return files already received earlier.
+        for name,version in actual.items():
+            self.content.link_archive(version,self.fs.run_dir(run_id)/'inputs'/name)
         # Locally frozen files removed by prior live code are not actual inputs.
         for name in set(baseline)-set(actual):
             safe_join(self.fs.run_dir(run_id)/'inputs',name).unlink(missing_ok=True)
         info['input_hashes']=actual
+        info['input_snapshot_id']=self.content.snapshot({name:{'sha256':version,'size':sizes[name]}
+                                                        for name,version in actual.items()})
         self.fs._save_manifest()
 
     def validate(self, manifest, run_id):
         if manifest.get('run_id')!=run_id or not isinstance(manifest.get('files'),list):raise ValueError('Output receipt mismatch')
         seen=set()
         for row in manifest['files']:
-            path=output_path(row['path'],compiler=self.compiler)
+            path=(relative(row['path']) if not self.compiler and row.get('role')=='runtime_input'
+                  and row['path'].split('/')[0] in {'data','attachment'} else output_path(row['path'],compiler=self.compiler))
             if path in seen:raise ValueError('Duplicate output path')
             seen.add(path)
             if not isinstance(row['size'],int) or not 0<=row['size']<=self.settings.max_file_bytes:raise ValueError('Output exceeds single-file limit')
@@ -127,10 +143,13 @@ class WorkspaceTransfer:
         if recover:
             manifest=await self.session.frozen(run_id)
         else:
-            manifest=await self.session.capture(run_id,baseline,kind='compiler' if self.compiler else 'python')
+            manifest=await self.session.capture(run_id,baseline,kind='compiler' if self.compiler else 'runtime')
         return self.validate(manifest,run_id)
 
     async def download(self, row, target):
+        if self.content.has(row['sha256'],row['size']):
+            self.content.materialize(row['sha256'],target)
+            return
         target.parent.mkdir(parents=True,exist_ok=True)
         fd,name=tempfile.mkstemp(prefix='.download-',dir=target.parent);os.close(fd)
         temporary=Path(name)
@@ -139,7 +158,8 @@ class WorkspaceTransfer:
             if temporary.stat().st_size!=row['size'] or bounded_hash(temporary,self.settings.max_file_bytes)!=row['sha256']:
                 raise ValueError('Output size/checksum mismatch; original file preserved')
             # Commit through the pinned directory implementation, not a remotely controlled path.
-            atomic_write(target,lambda f:bounded_copy(temporary,f,self.settings.max_file_bytes))
+            self.content.put(temporary,row['sha256'])
+            self.content.materialize(row['sha256'],target)
         finally:temporary.unlink(missing_ok=True)
 
     async def deliver(self, run_id, manifest, local_baseline):
@@ -153,11 +173,20 @@ class WorkspaceTransfer:
                 if bounded_hash(target,self.settings.max_file_bytes)!=row['sha256']:raise ValueError('Cannot overwrite a different archived result')
             else:await self.download(row,target)
             self.fs.register_run_artifact(run_id,path)
-            current=bounded_hash(dest,self.settings.max_file_bytes) if dest.exists() else None
-            if current not in {local_baseline.get(path),row['sha256']}:
-                raise ValueError('本地工作副本已修改，归档保留；拒绝用远端结果覆盖人工修改')
-            if current!=row['sha256']:
-                atomic_write(dest,lambda f:bounded_copy(target,f,self.settings.max_file_bytes))
+            if path.split('/')[0] in {'data','attachment'}:
+                # Keep original user inputs authoritative. Derived versions are
+                # available through their run archives and explicit materialize.
+                files.append(archive)
+                info['files']=list(files)
+                self.fs._save_manifest()
+                continue
+            from services.file_services.workspace_lock import edit_lock
+            with edit_lock(self.fs.root):
+                current=bounded_hash(dest,self.settings.max_file_bytes) if dest.exists() else None
+                if current not in {local_baseline.get(path),row['sha256']}:
+                    raise ValueError('本地工作副本已修改，归档保留；拒绝用远端结果覆盖人工修改')
+                if current!=row['sha256']:
+                    atomic_write(dest,lambda f:bounded_copy(target,f,self.settings.max_file_bytes))
             self.fs.register_file(path,source_run=run_id,kind='code' if path.endswith('.py') else 'data')
             self.fs._manifest['files'][path].update(archive_path=archive,sha256=row['sha256'])
             files.append(archive)

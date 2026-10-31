@@ -33,8 +33,10 @@ def sandbox_operation(function=None, *, input_selector=None):
         root=Path(workspace).absolute()
         if _ACTIVE.get() is not None:
             return await function(root,*args,**kwargs)
-        async with execution_lock(root):
-            settings=SandboxSettings.from_env()
+        settings=SandboxSettings.from_env()
+        # Compilation has its own immutable input snapshot/cache; retained
+        # research leases do not own it or lock manuscript edits.
+        async with execution_lock(root,cache_key='compiler'):
             fs=WorkspaceFS(root)
             # Stable snapshot identity survives the local TemporaryDirectory name.
             from .transfer import input_files
@@ -45,12 +47,14 @@ def sandbox_operation(function=None, *, input_selector=None):
             semantic_args=json.dumps([args,kwargs],default=str,sort_keys=True).replace(str(root),'/workspace')
             cache_key=_digest(['compiler-api-v1',str(project_root(root)),settings.image,settings.cpu,settings.memory,function.__qualname__,inputs,semantic_args])
             session=create_session(root,settings=settings,cache_key=cache_key)
+            from .runtime_manager import RuntimeManager
+            runtime=RuntimeManager(project_root(root),session,settings)
             transfer=WorkspaceTransfer(fs,session,settings,compiler=True,verified_snapshot=verified_snapshot,input_names=input_names)
             records=workspace_path(project_root(root),'.system/compiler-receipts/'+cache_key)
             state={'session':session,'settings':settings,'transfer':transfer,'root':root,'records':records,'ordinals':{}}
             token=None
             try:
-                await asyncio.wait_for(session.start(),settings.startup_timeout)
+                await asyncio.wait_for(runtime.start(),settings.startup_timeout)
                 token=_ACTIVE.set(state)
                 return await function(root,*args,**kwargs)
             except Exception as exc:
@@ -59,9 +63,9 @@ def sandbox_operation(function=None, *, input_selector=None):
             finally:
                 if token is not None:_ACTIVE.reset(token)
                 try:
-                    await session.close()
+                    await runtime.destroy()
                 except Exception:
-                    raise RuntimeError('沙箱销毁未确认；持久租约将阻止后续修改直至 TTL 到期') from None
+                    raise RuntimeError('编译沙箱销毁未确认；保留原身份和租约，不会重放同一编译，请核实原运行或等待TTL') from None
     return wrapped
 
 

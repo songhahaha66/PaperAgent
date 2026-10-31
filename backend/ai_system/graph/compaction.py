@@ -34,6 +34,10 @@ def state_message(facts):
 
 
 def token_estimate(value):
+    if isinstance(value,list):return sum(token_estimate(v) for v in value)
+    if isinstance(value,dict):
+        if value.get('type') in {'image','image_url'}:return 1600
+        return sum(token_estimate(k)+token_estimate(v) for k,v in value.items())
     text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,default=str)
     return sum(1 if ord(c)>127 else .3 for c in text).__ceil__()
 
@@ -95,6 +99,11 @@ class ContextMiddleware(AgentMiddleware):
 
     def offload(self,message,*,old=False):
         if not isinstance(message,ToolMessage):return message
+        if isinstance(message.content,list):
+            if not old:return message
+            # Old page images are recoverable through version-bound preview tools.
+            text='\n'.join(p.get('text','') for p in message.content if isinstance(p,dict) and p.get('type')=='text')
+            message=message.model_copy(update={'content':text})
         raw=str(message.content)
         if token_estimate(raw)<=(500 if old else 4000):return message
         path=self.archive(raw)
@@ -103,7 +112,8 @@ class ContextMiddleware(AgentMiddleware):
             if not isinstance(data,dict):data={}
         except (ValueError,TypeError):data={}
         fields={'path','version','total_chars','question_id','experiment_id','run_id','execution_status',
-                'revision','status','input_path','stdout_path','failure_kind','error','delivery_error'}
+                'revision','status','input_path','stdout_path','failure_kind','error','delivery_error',
+                'source_version','pdf_sha256','total_pages','next_offset','next_start','total','read_tool'}
         data={k:v for k,v in data.items() if k in fields and token_estimate(v)<200}
         data.update(excerpt=raw[:240] if old else raw[:2000]+'\n…\n'+raw[-1000:],_full_output_path=path)
         return message.model_copy(update={'content':json.dumps(data,ensure_ascii=False)})

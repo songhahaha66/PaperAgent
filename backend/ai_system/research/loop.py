@@ -132,11 +132,8 @@ async def _act(request, runtime):
             state=store._read(db);state['action']['status']='waiting'
             store._save(db,state,'clarification_requested',action)
         response=interrupt({'type':'research_question','message':action['inputs']['message']})
-        with store._transaction() as db:
-            state=store._read(db);state.setdefault('clarifications',[]).append({
-                'ref':'clarification:'+str(len(state.get('clarifications',[]))+1),'question':action['inputs']['message'],'response':str(response)[:20000]})
-            state['action']['status']='done'
-            store._save(db,state,'clarification_received',{'response':str(response)[:20000]})
+        from .clarifications import receive
+        receive(store,action['id'],str(response))
         return {}
     with store._transaction() as db:
         state=store._read(db);state['action'].update(status='running',started_at=time.time())

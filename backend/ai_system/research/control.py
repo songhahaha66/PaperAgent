@@ -35,7 +35,7 @@ async def observe(state, runtime):
     try:
         await recover_outputs(ctx)
     finally:
-        await ctx.kernels.close()  # Recovery must release the lease before compilation.
+        await ctx.kernels.disconnect()
     if ctx.experience_scope is not None:
         try:
             from ai_system.modules.registry import invoke
