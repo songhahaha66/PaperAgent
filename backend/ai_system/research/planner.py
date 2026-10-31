@@ -85,9 +85,13 @@ def preserved_progress(snapshot):
 def planning_failure_message(error, snapshot):
     from .runtime import ModelServiceError,ResearchBudgetExhausted,RepeatedOperationBlocked
     from ai_system.config.generation import ModelGenerationLimit
+    from ai_system.sandbox.lifetime import readable_sandbox_error
     from langgraph.errors import GraphRecursionError
     from starlette.exceptions import HTTPException
-    if isinstance(error,GraphRecursionError):
+    sandbox_text=readable_sandbox_error(error)
+    if sandbox_text:
+        detail=sandbox_text
+    elif isinstance(error,GraphRecursionError):
         detail='研究工具循环达到图步骤上限，尚未完成下一行动；这不是费用额度耗尽。'
         last=next((a.get('message') for a in reversed(snapshot.get('activity',[]))
                    if a.get('status')=='failed' and a.get('capability')!='research.observe' and a.get('message')),None)
@@ -206,6 +210,13 @@ class Planner:
                                     item['inputs']=call
                                     raise ValueError(detail)
                             except ValueError:pass
+                        return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
+                    except Exception as exc:
+                        from ai_system.sandbox.lifetime import readable_sandbox_error
+                        detail=readable_sandbox_error(exc)
+                        if detail is None:
+                            raise
+                        last_tool_feedback=detail
                         return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
         pending_diagnostic=''
         resume_note=False

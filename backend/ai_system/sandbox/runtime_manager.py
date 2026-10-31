@@ -2,7 +2,9 @@
 
 The provider reports creation immediately, before interpreter initialization or
 file transfer. An ambiguous attach never silently creates a replacement.
+Confirmed expiry or loss may be abandoned so the next call can create one.
 """
+import asyncio
 import hashlib
 import json
 import time
@@ -11,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from services.file_services.workspace_layout import private_root, safe_join
 from services.file_services.file_helper import atomic_write
+from .lifetime import SandboxLifetimeCap, confirmed_sandbox_loss, granted_lifetime, renewal_seconds
 
 
 class RuntimeGone(RuntimeError):
@@ -57,6 +60,7 @@ class RuntimeManager:
         self.path=safe_join(private_root(Path(workspace)),'.system/runtimes/'+session.cache_key+'.json')
         self.handle=None
         session.on_created=self.created
+        session.on_expiry=self.note_expiry
         if self.path.exists():
             old=json.loads(self.path.read_text())
             if old.get('deployment')==self.deployment and old.get('expires_at',0)>time.time() and old.get('lease_id'):
@@ -69,6 +73,59 @@ class RuntimeManager:
     def created(self, sandbox_id):
         self.save(sandbox_id=sandbox_id,state='initializing')
 
+    def note_expiry(self, expires_at):
+        if self.handle is not None:
+            self.save(expires_at=float(expires_at))
+
+    async def prepare(self, needed):
+        """Renew a live sandbox. Return 'replace' when this one cannot cover the call."""
+        handle=self.handle or {}
+        expires=float(handle.get('expires_at') or 0)
+        required=float(needed)+30
+        if expires-time.time()>=required:
+            return 'ok'
+        born=handle.get('born_at')
+        renew=getattr(self.session,'renew',None)
+        if renew is None:
+            if born and time.time()-float(born)<5:
+                return 'ok'
+            return 'replace'
+        try:
+            epoch=await renew(renewal_seconds(self.settings, needed))
+        except SandboxLifetimeCap:
+            if born and time.time()-float(born)<5:
+                return 'ok'
+            return 'replace'
+        except Exception as exc:
+            if confirmed_sandbox_loss(exc):
+                return 'replace'
+            raise
+        if not isinstance(epoch,(int,float)):
+            epoch=epoch.timestamp() if hasattr(epoch,'timestamp') else time.time()+renewal_seconds(self.settings, needed)
+        epoch=float(epoch)
+        self.save(expires_at=epoch)
+        if epoch-time.time()+1<min(required,float(self.settings.max_timeout)):
+            if required>self.settings.max_timeout and epoch-time.time()>30:
+                return 'ok'
+            if born and time.time()-float(born)<5:
+                return 'ok'
+            return 'replace'
+        return 'ok'
+
+    async def abandon(self):
+        """Drop a sandbox the server has already taken back, so a new one can be created."""
+        try:
+            await asyncio.wait_for(self.session.disconnect(),5)
+        except (Exception, asyncio.TimeoutError):
+            pass
+        if hasattr(self.session,'_remove_lease'):
+            try:self.session._remove_lease()
+            except Exception:pass
+        if hasattr(self.session,'id'):
+            self.session.id=None
+        if self.handle:
+            self.save(state='lost',expires_at=time.time()-1)
+
     async def start(self):
         self.handle=json.loads(self.path.read_text()) if self.path.exists() else None
         old=self.handle or {}
@@ -79,7 +136,14 @@ class RuntimeManager:
             try:
                 await self.session.attach(old)
             except RuntimeGone:
-                self.save(state='lost')
+                self.save(state='lost',expires_at=time.time()-1)
+            except Exception as exc:
+                if not confirmed_sandbox_loss(exc):
+                    raise
+                self.save(state='lost',expires_at=time.time()-1)
+                if hasattr(self.session,'_remove_lease'):
+                    try:self.session._remove_lease()
+                    except Exception:pass
             else:
                 self.save(state='ready')
                 return
@@ -87,7 +151,8 @@ class RuntimeManager:
             raise RuntimeError('原沙箱创建或清理状态尚未确认，请核实原运行；不会重复创建')
         self.save(deployment=self.deployment,provider=self.settings.provider,cache_key=self.session.cache_key,
             epoch=old.get('epoch',0)+1,state='creating',sandbox_id=None,context_id=None,
-            lease_id=getattr(self.session,'lease_id',None),expires_at=time.time()+self.settings.lifetime+self.settings.startup_timeout)
+            lease_id=getattr(self.session,'lease_id',None),born_at=time.time(),
+            expires_at=time.time()+granted_lifetime(self.settings))
         try:
             await self.session.start()
         except BaseException:

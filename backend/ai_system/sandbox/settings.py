@@ -13,6 +13,9 @@ class SandboxSettings:
     cpu: str = "1"
     memory: str = "768Mi"
     lifetime: int = 1800
+    # OpenSandbox server.max_sandbox_timeout_seconds. One create/renew request
+    # cannot ask for more than this; the research runtime renews or replaces.
+    max_timeout: int = 3600
     startup_timeout: int = 120
     max_file_bytes: int = 64 * 1024 * 1024
     host_workspace_root: str = ""  # OpenSandbox-only; retained for env-file compatibility.
@@ -35,7 +38,7 @@ class SandboxSettings:
             if value is not None:
                 fields[name] = int(value) if isinstance(getattr(cls, name, None), int) else value
         settings = cls(**fields)
-        if any(getattr(settings, n) <= 0 for n in ("lifetime", "startup_timeout", "max_file_bytes", "max_log_bytes")):
+        if any(getattr(settings, n) <= 0 for n in ("lifetime", "max_timeout", "startup_timeout", "max_file_bytes", "max_log_bytes")):
             raise ValueError("沙箱限额必须为正数")
         # Authentication and endpoint syntax belong to the selected adapter;
         # another provider may use a different protocol or credential mechanism.

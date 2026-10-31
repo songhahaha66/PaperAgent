@@ -27,6 +27,8 @@ class SandboxSession(Protocol):
     """One isolated execution session for Python, compilation and file transfer.
 
     Implementations must not retry submitted code after an ambiguous failure.
+    Confirmed sandbox expiry or loss may rebuild once and retry that cell;
+    a missing completion receipt while the sandbox is still alive must not.
     close terminates remote computation, not just the client connection.
     root is the absolute POSIX workspace path inside the sandbox. File API
     paths are relative to it; backend host paths never cross this boundary.

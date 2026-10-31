@@ -114,6 +114,10 @@ def error_detail(error):
     """Keep actionable validation causes without dumping replies or HTTP secrets."""
     from pydantic import ValidationError
     from starlette.exceptions import HTTPException
+    from ai_system.sandbox.lifetime import readable_sandbox_error
+    sandbox_text=readable_sandbox_error(error)
+    if sandbox_text:
+        return sandbox_text[:2000]
     current=error;seen=set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))

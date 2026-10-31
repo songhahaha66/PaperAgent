@@ -39,10 +39,13 @@ class CellResult:
     files: List[str] = field(default_factory=list)
     delivery_error: Optional[str] = None
     failure_kind: Optional[str] = None
+    recovery_note: Optional[str] = None
 
     def to_observation(self) -> str:
         """给模型看的执行结果"""
         parts = [f"[run_id: {self.run_id}]"]
+        if self.recovery_note:
+            parts.append(self.recovery_note)
         if self.stdout.strip():
             parts.append(self.stdout.rstrip())
         if self.figures:

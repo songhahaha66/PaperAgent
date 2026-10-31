@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .contracts import ExecutionOutcome
+from .lifetime import SandboxLifetimeCap, cap_rejected, granted_lifetime, renewal_seconds
 from .settings import SandboxSettings
 
 
@@ -97,6 +98,7 @@ class OpenSandboxSession:
                 raise RuntimeGone('原沙箱已不存在') from exc
             raise
         self.id=self.sandbox.id
+        self.expires_at=handle.get('expires_at') or 0
         self.context_restored=True
 
     async def disconnect(self):
@@ -140,10 +142,14 @@ class OpenSandboxSession:
         from code_interpreter import CodeInterpreter
         from opensandbox.models import Volume, Host
         self.lease_path.parent.mkdir(parents=True, exist_ok=True)
-        lease = {'expires_at': time.time() + self.settings.lifetime + self.settings.startup_timeout, 'sandbox_id': None}
+        # The server starts the TTL when it accepts create. Do not add startup_timeout:
+        # that made the local clock later than the real recycle time.
+        grant = granted_lifetime(self.settings)
+        self.expires_at = time.time() + grant
+        lease = {'expires_at': self.expires_at, 'sandbox_id': None}
         self._save_lease(lease)
         self.sandbox = await Sandbox.create(self.settings.image, connection_config=config,
-            timeout=timedelta(seconds=self.settings.lifetime),
+            timeout=timedelta(seconds=grant),
             ready_timeout=timedelta(seconds=self.settings.startup_timeout),
             entrypoint=["/opt/code-interpreter/code-interpreter.sh"],
             resource={"cpu": self.settings.cpu, "memory": self.settings.memory},
@@ -155,6 +161,7 @@ class OpenSandboxSession:
         lease['sandbox_id'] = self.sandbox.id
         self._save_lease(lease)
         if callback:=getattr(self,'on_created',None):callback(self.sandbox.id)
+        if callback:=getattr(self,'on_expiry',None):callback(self.expires_at)
         await self.sandbox.files.write_file('/tmp/paperagent_runtime.py', Path(__file__).with_name('runtime_helpers.py').read_bytes())
         await self.sandbox.files.write_file('/tmp/paperagent_transfer.py', Path(__file__).with_name('transfer_worker.py').read_bytes())
         self.interpreter = await CodeInterpreter.create(sandbox=self.sandbox)
@@ -245,6 +252,57 @@ class OpenSandboxSession:
                     if size>max_bytes:raise ValueError('下载超过单文件上限')
                     target.write(chunk)
 
+    async def renew(self, seconds):
+        """Slide expiration to now + seconds, never beyond one server grant."""
+        seconds = int(seconds)
+        if seconds > self.settings.max_timeout:
+            raise SandboxLifetimeCap(f'单次沙箱寿命不能超过 {self.settings.max_timeout} 秒')
+        if seconds < 1:
+            raise SandboxLifetimeCap('续期时长无效')
+        try:
+            response = await self.sandbox.renew(timedelta(seconds=seconds))
+        except SandboxLifetimeCap:
+            raise
+        except Exception as exc:
+            if cap_rejected(exc):
+                raise SandboxLifetimeCap('服务器拒绝超过单次寿命上限的续期') from exc
+            raise
+        expires = getattr(response, 'expires_at', None)
+        epoch = expires.timestamp() if hasattr(expires, 'timestamp') else time.time() + seconds
+        self.expires_at = float(epoch)
+        if self.id:
+            self._save_lease({'expires_at': self.expires_at, 'sandbox_id': self.id})
+        if callback := getattr(self, 'on_expiry', None):
+            callback(self.expires_at)
+        return self.expires_at
+
+    async def extend(self, needed):
+        expires = float(getattr(self, 'expires_at', 0) or 0)
+        if expires - time.time() >= float(needed) + 30:
+            return expires
+        return await self.renew(renewal_seconds(self.settings, needed))
+
+    async def _sustain(self, needed):
+        """Keep renewing a live call so the server TTL cannot cut it off."""
+        try:
+            while True:
+                if not getattr(self, 'sandbox', None) or not hasattr(self.sandbox, 'renew'):
+                    return
+                expires = float(getattr(self, 'expires_at', 0) or 0)
+                remaining = expires - time.time()
+                lead = min(120.0, max(30.0, float(needed)))
+                if remaining <= lead:
+                    try:
+                        await self.renew(renewal_seconds(self.settings, needed))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        return
+                else:
+                    await asyncio.sleep(min(30.0, max(0.5, remaining - lead)))
+        except asyncio.CancelledError:
+            return
+
     async def execute(self, code, run_id, output):
         from opensandbox.models.execd import ExecutionHandlers
         callback_error = asyncio.get_running_loop().create_future()
@@ -266,6 +324,7 @@ class OpenSandboxSession:
         # interpreter's busy state after the previous SSE completion event.
         cell = ("import sys\nsys.path.insert(0, '/tmp')\nimport paperagent_runtime as _pa_runtime\n"
                 f"_pa_runtime.run_cell({code!r}, {run_id!r}, globals(), {self.root!r})")
+        holder = asyncio.create_task(self._sustain(self.settings.max_timeout))
         task = asyncio.create_task(self.interpreter.codes.run(cell, context=self.context,
             handlers=ExecutionHandlers(on_stdout=stdout, on_stderr=stderr, on_init=initialized, skip_accumulation=True)))
         try:
@@ -274,6 +333,8 @@ class OpenSandboxSession:
                 raise callback_error.result()
             result = await task
         finally:
+            holder.cancel()
+            await asyncio.gather(holder, return_exceptions=True)
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -310,6 +371,7 @@ class OpenSandboxSession:
         async def stdout(message): await emit('stdout', message)
         async def stderr(message): await emit('stderr', message)
         async def initialized(message): self.execution_id = message.id
+        holder = asyncio.create_task(self._sustain(max(timeout, self.settings.max_timeout)))
         task = asyncio.create_task(self.sandbox.commands.run(command,
             opts=RunCommandOpts(timeout=timedelta(seconds=timeout), working_directory=self.root),
             handlers=ExecutionHandlers(on_stdout=stdout, on_stderr=stderr, on_init=initialized, skip_accumulation=True)))
@@ -328,6 +390,8 @@ class OpenSandboxSession:
             exc.sandbox_stderr = ''.join(logs['stderr'])
             raise
         finally:
+            holder.cancel()
+            await asyncio.gather(holder, return_exceptions=True)
             if not task.done(): task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             failed.cancel()
