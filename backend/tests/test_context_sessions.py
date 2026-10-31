@@ -149,13 +149,13 @@ def test_child_delivery_retry_does_not_repeat_model_or_calculation(tmp_path,monk
 
 def test_manuscript_validation_needs_no_calculation_experiment(tmp_path):
     from ai_system.modules.registry import invoke
-    from ai_system.modules.writing.validation import validate
+    from ai_system.modules.writing.validation import check_sections
     from ai_system.research.control import graph_view
     ctx=context(tmp_path)
     async def run():
         await invoke(ctx,'writing.edit',content='# 文献讨论\n![missing](outputs/missing.png)')
-        result=await validate(graph_view(ctx.research.snapshot(),root=ctx.workspace),SimpleNamespace(context=ctx))
-        assert len(result['issues'])==1 and '图片文件不可用' in result['issues'][0]['message']
+        issues=check_sections(graph_view(ctx.research.snapshot(),root=ctx.workspace),ctx)
+        assert len(issues)==1 and '图片文件不可用' in issues[0]['message']
         assert not ctx.research.snapshot()['experiments']
     asyncio.run(run())
 

@@ -65,15 +65,29 @@
               <span>{{ call.label }}</span
               ><span>{{ activityStatus(call) }}</span
               ><time>{{ duration(call) }}</time>
-              <small v-if="call.context_usage" class="muted" title="按文本估算，实际计费用量见会话统计">
-                上下文约 {{ (call.context_usage.total_estimated_tokens ?? (call.context_usage.messages_estimated_tokens + call.context_usage.tools_estimated_tokens)).toLocaleString() }} tokens
+              <small
+                v-if="call.context_usage"
+                class="muted"
+                title="按文本估算，实际计费用量见会话统计"
+              >
+                上下文约
+                {{
+                  (
+                    call.context_usage.total_estimated_tokens ??
+                    call.context_usage.messages_estimated_tokens +
+                      call.context_usage.tools_estimated_tokens
+                  ).toLocaleString()
+                }}
+                tokens
                 <span v-if="call.context_usage.summarized_messages" class="context-note"
                   >已摘要 {{ call.context_usage.summarized_messages }} 条历史</span
                 >
               </small>
               <small v-if="call.generation_limit" class="muted">
                 生成上限 {{ call.generation_limit.toLocaleString() }} tokens
-                <span v-if="call.reasoning_tokens != null"> · 推理 {{ call.reasoning_tokens.toLocaleString() }}</span>
+                <span v-if="call.reasoning_tokens != null">
+                  · 推理 {{ call.reasoning_tokens.toLocaleString() }}</span
+                >
                 <span v-if="call.finish_reason"> · {{ call.finish_reason }}</span>
               </small>
               <button
@@ -107,8 +121,7 @@ import { computed, ref, onMounted, onUnmounted } from 'vue'
 import type { ResearchSnapshot, ResearchActivity, ResearchHistory } from '@/types/research'
 import {
   activityHeadline,
-  researchRunning,
-  callRunning,
+  researchExecution,
   executionDuration,
   activityStatus,
 } from '@/utils/researchProgress'
@@ -129,21 +142,16 @@ onMounted(() => {
 onUnmounted(() => {
   if (timer) clearInterval(timer)
 })
-const state = computed(() => props.workStatus || props.snapshot?.work_status)
-const running = computed(() => researchRunning(state.value))
-const paused = computed(() => ['paused', 'failed', 'cancelled'].includes(state.value || ''))
-const waiting = computed(() => state.value === 'waiting')
+const execution = computed(() => researchExecution(props.snapshot, props.workStatus))
+const state = computed(() => execution.value.status)
+const running = computed(() => execution.value.running)
+const paused = computed(() => execution.value.interrupted)
+const waiting = computed(() => execution.value.waiting)
 const calls = computed(() => [
   ...(props.snapshot?.runtime?.actions || []),
   ...(props.snapshot?.runtime?.models || []),
 ])
-const current = computed(() => {
-  if (!running.value) return undefined
-  const active =
-    props.snapshot?.runtime?.current ||
-    calls.value.filter(callRunning).sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0]
-  return active
-})
+const current = computed(() => execution.value.current)
 const currentScope = computed(
   () =>
     current.value?.subject ||
@@ -159,7 +167,9 @@ const headline = computed(() =>
           ? '执行已取消'
           : '研究已暂停'
       : running.value
-        ? current.value ? activityHeadline(current.value) : '研究执行中'
+        ? current.value
+          ? activityHeadline(current.value)
+          : '研究执行中'
         : state.value === 'completed'
           ? '本次执行已结束'
           : '当前研究',

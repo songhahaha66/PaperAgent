@@ -23,7 +23,7 @@ def test_optional_reviews_do_not_gate_results_or_relax_execution_ownership(tmp_p
         results=[{"id": "R1", "subproblem": "Q1", "name": "demand", "value": "8", "run_id": "run_test"}],
         reviews=[] if record_kind == "missing" else [record])
     store.commit(result)
-    assert not store.delivery_ready(store.snapshot())
+    assert store.delivery_ready(store.snapshot()), 'optional reviews and incomplete answer metadata do not gate export'
     state = store.snapshot()
     assert state['experiments']['Q1']['acceptance'] == 'accepted'
     assert [r['id'] for r in store.registry_payload()['results']] == ['R1']

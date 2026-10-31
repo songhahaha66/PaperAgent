@@ -2,20 +2,21 @@
   <section class="research-progress" aria-label="研究工作台">
     <nav v-if="questions.length > 1" class="questions" aria-label="选择研究问题">
       <button
-        v-for="(question, index) in questions"
+        v-for="question in questions"
         :key="question.id"
         :aria-pressed="selected?.id === question.id"
         @click="selectQuestion(question.id)"
       >
-        <span>{{ index + 1 }}</span
-        >{{ question.title }}
+        {{ question.title }}
       </button>
     </nav>
 
     <header class="overview">
       <div class="status-line" role="status">
         <span class="execution-state" :class="{ running, interrupted }">{{ executionState }}</span>
-        <span>{{ snapshot?.delivery_summary?.label || (hasReport ? '报告已生成' : '报告尚未生成') }}</span>
+        <span>{{
+          snapshot?.delivery_summary?.label || (hasReport ? '报告已生成' : '报告尚未生成')
+        }}</span>
       </div>
       <h2>{{ selected?.title || '研究' }}</h2>
       <div class="actions">
@@ -31,7 +32,9 @@
     </header>
 
     <div v-if="running || interrupted || status === 'waiting'" class="execution-note" role="status">
-      <strong v-if="running">{{ activeAction ? activityHeadline(activeAction) : '正在准备下一步' }}</strong>
+      <strong v-if="running">{{
+        activeAction ? activityHeadline(activeAction) : '正在准备下一步'
+      }}</strong>
       <p v-if="running && activeAction?.subject">{{ activeAction.subject }}</p>
       <p v-else-if="status === 'waiting'">等待补充必要信息，请在对话中回复。</p>
       <template v-else-if="interrupted">
@@ -228,11 +231,11 @@ import ResearchRuntime from './ResearchRuntime.vue'
 import type { ResearchSnapshot } from '@/types/research'
 import type { WorkObject } from '@/stores/workPanels'
 import {
-  currentActivity,
   activityHeadline,
   deliveryLabels,
   executionLabel,
-  researchRunning,
+  researchExecution,
+  orderedQuestions,
 } from '@/utils/researchProgress'
 import { evidenceMarkdown } from '@/utils/researchEvidence'
 const props = defineProps<{
@@ -254,13 +257,14 @@ const selectQuestion = (id: string) => {
   selectedId.value = id
   expanded.value = false
 }
-const questions = computed(() => props.snapshot?.questions?.filter((q) => !q.retired) || [])
+const questions = computed(() => orderedQuestions(props.snapshot?.questions || []))
 const selected = computed(
   () => questions.value.find((q) => q.id === selectedId.value) || questions.value[0],
 )
 const needsUpdate = computed(
-  () => selected.value?.answer_status === 'needs_update'
-    || (!!selected.value?.judgment && !!selected.value?.answer_gaps?.length),
+  () =>
+    selected.value?.answer_status === 'needs_update' ||
+    (!!selected.value?.judgment && !!selected.value?.answer_gaps?.length),
 )
 const longJudgment = computed(() => (selected.value?.judgment.length || 0) > 220)
 const previousJudgments = computed(() => {
@@ -274,15 +278,12 @@ const selectedExperiments = computed(
   () =>
     props.snapshot?.experiments?.filter((e) => selected.value?.experiment_ids.includes(e.id)) || [],
 )
-const status = computed(() => props.workStatus || props.snapshot?.work_status || '')
-const running = computed(() => researchRunning(status.value))
-const interrupted = computed(() => ['paused', 'failed', 'cancelled'].includes(status.value))
+const execution = computed(() => researchExecution(props.snapshot, props.workStatus))
+const status = computed(() => execution.value.status)
+const running = computed(() => execution.value.running)
+const interrupted = computed(() => execution.value.interrupted)
 const hasReport = computed(() => !!props.snapshot?.artifacts.length)
-const activeAction = computed(
-  () =>
-    props.snapshot?.runtime &&
-    (currentActivity(props.snapshot.runtime) || props.snapshot.runtime.current),
-)
+const activeAction = computed(() => execution.value.current)
 const executionState = computed(() => {
   if (running.value) return '正在执行'
   return (

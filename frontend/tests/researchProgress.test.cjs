@@ -14,7 +14,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     {},
     true,
   )
-  const { researchHeadline } = await loadModule('src/utils/researchProgress.ts', {})
+  const { researchHeadline, researchExecution, currentActivity, orderedQuestions } = await loadModule('src/utils/researchProgress.ts', {})
   const question = (id, title, experimentId, judgment = '') => ({
     id, title, question: title, experiment_ids: [experimentId], sources: [],
     judgment, artifact_refs: judgment ? ['R2'] : [], limitations: judgment ? ['仅适用于当前样本'] : [],
@@ -138,6 +138,33 @@ const { hostRenderer } = require('./vueHost.cjs')
   assert.doesNotMatch(mainText(host.root), /无关图/)
   host.find((node) => node.kind === 'button' && text(node).trim() === '预测图').props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(opened.at(-1))), { type: 'file', path: 'outputs/plot.png' })
+  const originalQuestions = [question('Q1', '问题3 滚动调整', ''),
+    question('Q2', '问题1 日前优化', ''), question('Q3', '问题2 预测', ''),
+    question('Q4', '问题4 波动电价', '')]
+  const originalOrder = originalQuestions.map((q) => q.id).join(',')
+  assert.equal(orderedQuestions(originalQuestions).map((q) => q.id).join(','), 'Q2,Q3,Q1,Q4')
+  assert.equal(originalQuestions.map((q) => q.id).join(','), originalOrder, 'display sorting never mutates model-visible questions')
+  const plainQuestions = [question('Q3', '预测能力如何？', ''), question('Q1', '怎样计算误差？', '')]
+  assert.equal(orderedQuestions(plainQuestions).map((q) => q.id).join(','), 'Q3,Q1', 'opaque IDs do not determine source order')
+  assert.equal(orderedQuestions([question('a','第十二问 方法',''), question('b','问题二 校验','')]).map(q => q.id).join(','), 'b,a')
+  snapshot.value = { ...snapshot.value, questions: originalQuestions, work_status: 'in_progress', artifacts: [],
+    runtime: { current: { id: 'stale', label: '旧操作', status: 'running', started_at: 1 },
+      actions: [{ id: 'stale', label: '旧操作', status: 'failed', finished_at: 2, started_at: 1 },
+        { id: 'retry', label: '重新计算', status: 'running', started_at: 3 }] } }
+  await flush()
+  const navigation = host.find(node => node.kind === 'nav')
+  assert.equal((navigation.children || []).filter(node => node.kind === 'button').map(node => text(node).trim()).join('|'),
+    '问题1 日前优化|问题2 预测|问题3 滚动调整|问题4 波动电价')
+  assert.equal(researchExecution(snapshot.value).current.id, 'retry')
+  assert.equal(researchHeadline(snapshot.value, 'in_progress', true), '重新计算')
+  assert.match(mainText(host.root), /重新计算/)
+  assert.match(mainText(host.root), /报告尚未生成/)
+  assert.match(mainText(host.root), /尚未形成结论/)
+  snapshot.value.runtime.actions[1] = { ...snapshot.value.runtime.actions[1], status: 'completed', finished_at: 4 }
+  await flush()
+  assert.equal(currentActivity(snapshot.value.runtime), null, 'a stale runtime.current cannot revive a finished call')
+  assert.equal(researchHeadline(snapshot.value, 'in_progress', true), '研究执行中', 'between calls is still an active research turn')
+  assert.equal(researchExecution(snapshot.value, 'paused').current, null)
   app.unmount()
   console.log('PASS: question selection, judgments, available results and invalidated judgment history use question records')
 })().catch((error) => {

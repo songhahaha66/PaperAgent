@@ -20,6 +20,12 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     status,
     segments,
   })
+  const publicAnswer = { id: 'public-answer', type: 'text', phase: 'commentary', text: '当前结果的解释。' }
+  let answer = timeline.applyReplyUpdate({ id: 'reply', content: '', segments: [] }, update(1, [publicAnswer]))
+  answer = timeline.applyReplyUpdate(answer, update(2, [{ id: 'public-answer', type: 'event',
+    block: { type: 'main_agent_complete', content: '当前结果的解释。' } }]))
+  assert.equal(answer.segments.length, 1, 'completion replaces the matching live commentary')
+  assert.equal(timeline.timelineGroups(answer)[0].segments[0].block.content, '当前结果的解释。')
   message = timeline.applyReplyUpdate(
     message,
     update(1, [

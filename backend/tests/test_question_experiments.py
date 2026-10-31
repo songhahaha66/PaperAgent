@@ -52,7 +52,8 @@ def test_multiple_methods_keep_ownership_and_failed_method_does_not_block_questi
     assert all('report' not in e and 'design' not in e for e in state['experiments'].values())
     assert {a['experiment_id'] for a in state['artifacts'].values()}=={first,second,bad}
     assert {'result','code','stdout','report'}<={a['type'] for a in state['artifacts'].values()}
-    assert not store.delivery_ready(state)  # Results alone are not a recorded answer.
+    assert not state['questions'][qid].get('judgment')
+    assert store.delivery_ready(state), 'answer metadata does not gate file export'
     refs=[r['id'] for r in store.registry_payload()['results']]
     answer(store,question_id=qid,statement='两项方法已得到固定验证输出',artifact_refs=refs,
         coverage='answered',stop_reason='已比较给定方法，仿真执行故障另行保留')

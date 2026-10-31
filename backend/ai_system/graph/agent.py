@@ -230,6 +230,22 @@ class PaperGraphAgent:
         finally:
             await ctx.kernels.disconnect()
 
+    async def send_message(self, message: str, *, question_id: str | None = None) -> str:
+        """Append a durable user turn to the existing research Agent session."""
+        self._require_current_thread()
+        store = ResearchStore(self.workspace_dir, self._load_thread())
+        with store._transaction() as db:
+            state = store._read(db)
+            if state.get('conversation_input'):
+                raise ValueError('上一条消息尚未处理完成，请先恢复当前任务')
+            if question_id is not None and (question_id not in state['questions'] or state['questions'][question_id].get('retired')):
+                raise ValueError('问题范围已改变，请刷新后重试')
+            state['conversation_input'] = {'id': 'user:' + uuid.uuid4().hex, 'message': message,
+                'question_id': question_id, 'outcome': state['outcome']}
+            state['outcome'] = 'running'
+            store._save(db, state, 'conversation_input', state['conversation_input'])
+        return await self.resume_failed()
+
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""
         business = ctx.research.snapshot()
@@ -330,6 +346,7 @@ class PaperGraphAgent:
         from ..research.runs import run_context
         state = ctx.research.snapshot()
         return {**graph_view(state), 'runs': run_context(ctx.research), 'exports': state.get('exports', []),
+                'reply': (state.get('action') or {}).get('result', {}).get('reply'),
                 'paper_path': state.get('paper_version') if state.get('paper_conflict') else None,
                 'artifact_conflict': state.get('paper_conflict', False),
                 'delivery_stages': state.get('delivery_stages', {}),
@@ -337,6 +354,8 @@ class PaperGraphAgent:
 
     @staticmethod
     def _final_message(result: Dict[str, Any], ctx: GraphContext) -> str:
+        if result.get('reply'):
+            return result['reply']
         if result.get("research_blocked"):
             export_stage = (result.get("delivery_stages") or {}).get("export", {})
             if export_stage.get("status") == "blocked":
@@ -360,5 +379,5 @@ class PaperGraphAgent:
             count = len(ctx.registry.for_subproblem(sp["id"]))
             lines.append(f"- {sp['id']} {sp['title']}：{'完成' if status == 'completed' else status}，计算结果已保存")
         lines.append("")
-        lines.append(f"校验剩余问题 {len(issues)} 个。" if issues else "引用有效性与文稿结构校验已完成。")
+        lines.append(f"另有 {len(issues)} 条待核实意见。" if issues else "正文与交付文件已保存。")
         return "\n".join(lines)

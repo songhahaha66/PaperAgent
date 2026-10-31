@@ -179,11 +179,6 @@ def update_answer(ctx,inputs):
 def deliver(ctx,inputs):
     def edit(state):
         _dispatchable(state)
-        from .questions import delivery_status
-        status=delivery_status(state)
-        if not status['ready']:
-            raise ValueError('尚不能交付：'+'；'.join(b['message'] for b in status['blockers'])+
-                             ' 请先用对应工具修复；仅修改交付 reason 不会补全答案。')
         main=ctx.research.root/('paper.tex' if state['spec']['output_mode']=='latex' else 'paper.md')
         if not main.is_file() or not main.read_text(encoding='utf-8').strip():
             raise ValueError('请先用writing_edit写入完整正文，再交付；系统不会另起模型重写论文。')
@@ -195,9 +190,9 @@ def deliver(ctx,inputs):
         from .loop import _set_action
         from .runtime import execution_links
         observation_id=execution_links().get('observation_id')
-        state['publication']={'stage':'validate','outline':[{'key':'section:'+str(i),'title':title} for i,title in enumerate(re.findall(r'^## (.+)$',main.read_text(encoding='utf-8'),re.M))],'title':inputs['title'],'reason':inputs['reason'],
+        state['publication']={'stage':'export','outline':[{'key':'section:'+str(i),'title':title} for i,title in enumerate(re.findall(r'^## (.+)$',main.read_text(encoding='utf-8'),re.M))],'title':inputs['title'],'reason':inputs['reason'],
             'observation_id':observation_id}
-        action=_set_action(state,'writing.validate',{},inputs['reason'],observation_id=observation_id)
+        action=_set_action(state,'writing.export',{},inputs['reason'],observation_id=observation_id)
         return {'action_id':action['id'],'reason':inputs['reason']}
     return _change(ctx,'delivery_requested',inputs,edit)
 

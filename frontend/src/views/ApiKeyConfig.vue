@@ -57,7 +57,7 @@
           </div>
         </t-card>
         <t-card
-          :title="isZh ? 'Jev 意图识别' : 'Jev intent routing'"
+          :title="isZh ? 'Jev 评测连接（可选）' : 'Jev evaluation connection (optional)'"
           class="connection-card jev-card"
         >
           <template #actions
@@ -74,8 +74,8 @@
           <p class="jev-note">
             {{
               isZh
-                ? '自动聊天使用 Jev 识别操作。未配置时自动聊天会提示配置，明确操作按钮不依赖 Jev。此连接独立于研究、计算和写作模型。'
-                : 'Automatic chat uses Jev to select an operation. Missing configuration blocks automatic routing; explicit action buttons do not require Jev. Research, computation and writing use their own models.'
+                ? '普通聊天直接进入研究 Agent，不需要此连接。Jev 可用于独立评测。'
+                : 'Chat goes directly to the research Agent and does not require this connection. Jev is available for separate evaluations.'
             }}
           </p>
           <p v-if="jevSource === 'deployment'" class="jev-note">

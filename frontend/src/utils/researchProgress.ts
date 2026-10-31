@@ -1,20 +1,73 @@
-import type { ResearchSnapshot, ResearchActivity } from '@/types/research'
+import type { ResearchSnapshot, ResearchActivity, ResearchQuestion } from '@/types/research'
 
 export const researchRunning = (status?: string) =>
   ['in_progress', 'running', 'processing'].includes(status || '')
 export const callRunning = (row: ResearchActivity) =>
   !row.finished_at && ['running', 'sent', 'http_response'].includes(row.status)
-export const currentActivity = (runtime: NonNullable<ResearchSnapshot['runtime']>) =>
-  [...(runtime.actions || []), ...(runtime.models || [])]
-    .filter(callRunning)
-    .sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0] || null
+export const currentActivity = (runtime: NonNullable<ResearchSnapshot['runtime']>) => {
+  const rows = [...(runtime.actions || []), ...(runtime.models || [])]
+  const current =
+    rows.filter(callRunning).sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0] || null
+  // An old convenience projection cannot revive an operation already finished
+  // in the actual rows. Older snapshots may carry only `current`.
+  return (
+    current ||
+    (runtime.current &&
+    !rows.some((row) => row.id === runtime.current?.id) &&
+    callRunning(runtime.current)
+      ? runtime.current
+      : null)
+  )
+}
+
+export function researchExecution(snapshot: ResearchSnapshot | null, workStatus?: string) {
+  const status = workStatus || snapshot?.work_status || 'created'
+  const running = researchRunning(status)
+  return {
+    status,
+    running,
+    interrupted: ['paused', 'failed', 'cancelled'].includes(status),
+    waiting: status === 'waiting',
+    current: running && snapshot?.runtime ? currentActivity(snapshot.runtime) : null,
+  }
+}
+
+function sourceQuestionNumber(question: ResearchQuestion) {
+  const pattern =
+    /^(?:问题\s*([0-9０-９一二三四五六七八九十两]+)|第\s*([0-9０-９一二三四五六七八九十两]+)\s*[问题]|question\s+(\d+)\b)/i
+  const match = question.title.trim().match(pattern) || question.question.trim().match(pattern)
+  if (!match) return null
+  const value = (match[1] || match[2] || match[3] || '').replace(/[０-９]/g, (digit) =>
+    String(digit.charCodeAt(0) - 0xff10),
+  )
+  if (/^\d+$/.test(value)) return Number(value)
+  const digits = '零一二三四五六七八九'
+  const digit = (text: string) => (text === '两' ? 2 : digits.indexOf(text))
+  const parts = value.split('十')
+  if (parts.length === 2)
+    return (parts[0] ? digit(parts[0]) : 1) * 10 + (parts[1] ? digit(parts[1]) : 0)
+  return value.length === 1 ? digit(value) : null
+}
+
+export function orderedQuestions(questions: ResearchQuestion[]) {
+  // Display only: never renumber IDs, mutate saved questions, or reorder the
+  // Agent's model-visible history/tools to fix a navigation issue.
+  return questions
+    .filter((question) => !question.retired)
+    .map((question, index) => ({ question, index, order: sourceQuestionNumber(question) }))
+    .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity) || a.index - b.index)
+    .map(({ question }) => question)
+}
 export function activityHeadline(row: ResearchActivity, zh = true) {
   if (row.kind === 'model')
     return row.status === 'http_response'
-      ? zh ? '正在接收模型响应' : 'Receiving model response'
-      : zh ? '等待模型响应' : 'Waiting for model response'
-  if (row.capability === 'experiments.execute')
-    return zh ? '正在处理实验' : 'Working on experiment'
+      ? zh
+        ? '正在接收模型响应'
+        : 'Receiving model response'
+      : zh
+        ? '等待模型响应'
+        : 'Waiting for model response'
+  if (row.capability === 'experiments.execute') return zh ? '正在处理实验' : 'Working on experiment'
   return row.label
 }
 export const executionLabel = (status: string) =>
@@ -104,15 +157,19 @@ export function researchHeadline(
   workStatus: string,
   zh: boolean,
 ) {
-  if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
-  if (researchRunning(workStatus) && snapshot?.runtime) {
-    const current = currentActivity(snapshot.runtime)
-    if (current) return activityHeadline(current, zh)
-  }
-  if (zh && snapshot?.delivery_summary?.state === 'incomplete') return snapshot.delivery_summary.label
+  const execution = researchExecution(snapshot, workStatus)
+  if (execution.waiting) return zh ? '等待补充研究信息' : 'Waiting for research input'
+  if (execution.current) return activityHeadline(execution.current, zh)
+  if (execution.running) return zh ? '研究执行中' : 'Research in progress'
+  if (zh && snapshot?.delivery_summary?.state === 'incomplete')
+    return snapshot.delivery_summary.label
   if (!snapshot && workStatus !== 'created')
     return zh ? '正在读取研究进度' : 'Loading research progress'
-  if (!snapshot?.experiments?.length && !snapshot?.questions?.length && !snapshot?.artifacts?.length) {
+  if (
+    !snapshot?.experiments?.length &&
+    !snapshot?.questions?.length &&
+    !snapshot?.artifacts?.length
+  ) {
     if (workStatus === 'waiting') return zh ? '等待补充研究信息' : 'Waiting for research input'
     if (workStatus === 'in_progress') return zh ? '正在分析问题' : 'Preparing research tasks'
     if (workStatus === 'failed')
@@ -122,7 +179,8 @@ export function researchHeadline(
     return zh ? '等待建立研究任务' : 'Waiting for research tasks'
   }
   const running = (snapshot.experiments || []).filter((t) => taskState(t, workStatus) === 'running')
-  if (running.length && researchRunning(workStatus)) return zh ? '正在处理实验' : 'Working on experiments'
+  if (running.length && researchRunning(workStatus))
+    return zh ? '正在处理实验' : 'Working on experiments'
   if (['paused', 'failed', 'cancelled'].includes(workStatus)) {
     for (const [key, label] of Object.entries(deliveryLabels)) {
       if (snapshot.delivery_stages?.[key]?.status === 'blocked')

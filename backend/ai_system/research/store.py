@@ -495,17 +495,18 @@ class ResearchStore:
 
     @staticmethod
     def _record_issue(state, report, status, producer_attempt=None, source="worker", target_revision=None):
-        if report.task_id not in state["experiments"]:
+        advisory = source in {'local_review','semantic_check','reconcile','sections'} or source.startswith(('review:','review-task:'))
+        task = state["experiments"].get(report.task_id)
+        if task is None and (report.task_id is not None or not advisory):
             raise ValueError("问题指向未知任务")
-        task = state["experiments"][report.task_id]
         known = set(state["artifacts"])
         if not set(report.evidence_refs) <= known:
             raise ValueError("问题引用了未知证据")
         if report.assumption_id and report.assumption_id not in state["assumptions"]:
             raise ValueError("问题指向未知假设")
-        revision = target_revision if target_revision is not None else task["revision"]
+        # Document-level review findings have no experiment or experiment revision.
+        revision = target_revision if target_revision is not None else task["revision"] if task else 0
         identity = digest({**report.model_dump(), "revision": revision, "source": source})[:24]
-        advisory = source in {'local_review','semantic_check','reconcile','sections'} or source.startswith(('review:','review-task:'))
         previous = next((i for i in research_findings(state) if i["id"] == identity), None)
         if previous:
             if (report.category in {"writing", "service"} or report.category=='coverage' and source=='sections' or source == "local_review" and previous["producer_attempt"] != producer_attempt) and previous["status"] in {"resolved", "dismissed", "superseded"}:
@@ -840,8 +841,9 @@ class ResearchStore:
             self._save(db, state, "paper_published", {"path": relative, "content_hash": digest(text), "conflict": conflict})
             return relative if conflict else filename, conflict
 
-    def register_exports(self, paths):
+    def register_exports(self, paths, *, source_version=None):
         with self._transaction() as db:
             state = self._read(db)
             state["exports"] = list(paths)
+            if source_version is not None:state['export_source_version']=source_version
             self._save(db, state, "exports_committed", {"paths": paths, "paper_hash": state.get("paper_hash")})

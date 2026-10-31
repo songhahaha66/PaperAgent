@@ -10,9 +10,14 @@ from .store import ResearchStore,digest
 from .models import IssueReport
 
 POLICY='review-context-cache-v1'
-STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查','section_blocks':'正文分块核查','section_global':'跨节结论核查','issue_target':'定位源意见判定'}
+STAGE_LABELS={'reconcile':'结论审查','sections':'章节审查','citations':'文献支持核查','fragment':'局部等义性审查'}
 PROCESS_ID=uuid.uuid4().hex
-SCIENCE_FIELDS=('inputs','tasks','contract_hash','evidence_hash','claims_hash','artifact_hashes','committed_evidence_hash','configuration_hash')
+SCIENCE_FIELDS=('inputs','tasks','contract_hash','evidence_hash','claims_hash','artifact_hashes','committed_evidence_hash','configuration_hash','direct_runs_hash')
+
+
+def retired_review(record):
+    """Retained historical rows are not reusable results of a current review."""
+    return record.get('source') in {'segmented-aggregate','issue-long-composition'} or record.get('stage') in {'section_blocks','section_global','issue_target'}
 
 
 def science_version(context):return digest({k:context.get(k) for k in SCIENCE_FIELDS})
@@ -67,6 +72,10 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
         run=manifest.get(row.get('run_id'),{})
         artifacts[key]={'status':run.get('status'),'input':_file(root,run.get('input')),'stdout':_file(root,run.get('stdout')),'artifact':_file(root,row.get('path'))}
     snapshot=snapshot or {}
+    from .runs import run_context
+    direct_runs=run_context(store)[-12:] if store else []
+    direct_runs_hash=digest([{**row,'versions':{path:_file(root,path)
+        for path in [row.get('input_path'),row.get('stdout_path'),*row['files']] if path}} for row in direct_runs])
     configuration={}
     if store:
         with closing(store._connect()) as db:
@@ -82,7 +91,7 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
                 row=db.execute('SELECT payload FROM literature_passages WHERE id=?',(int(cid),)).fetchone() if exists else None
             citations['C'+cid]=digest(json.loads(row[0])) if row else None
         except (AttributeError,ValueError,KeyError):citations['C'+cid]=None
-    consistency=digest(snapshot.get('consistency', [])) if stage in {'sections','fragment','section_blocks','section_global','issue_target'} else None
+    consistency=digest(snapshot.get('consistency', [])) if stage in {'sections','fragment'} else None
     from ai_system.modules.writing.consistency import section_coverage
     from services.chat_services.paper_project import is_latex, snapshot as source_snapshot
     source_version = source_snapshot(root)['version'] if store and is_latex(store) and stage!='reconcile' else None
@@ -95,7 +104,7 @@ def review_context(ctx,state,stage,system,prompt,schema,*,sections=None,extra=No
                               'assumptions':snapshot.get('assumptions',state.get('analysis',{}).get('assumptions',[]))}),
         'evidence_hash':digest(results),'claims_hash':digest(claims),'artifact_hashes':artifacts,
         'committed_evidence_hash':digest({'evidence':snapshot.get('artifacts',{}),'claims':snapshot.get('claims',{})}),
-        'configuration_hash':digest(configuration),
+        'configuration_hash':digest(configuration),'direct_runs_hash':direct_runs_hash,
         'section_hashes':{k:digest(v) for k,v in (sections or {}).items()},
         'committed_section_hashes':{} if source_version else {k:{p:v.get(p) for p in ('content_hash','context_hash','revision','validity')} for k,v in snapshot.get('sections',{}).items()} if sections is not None else {},
         'citation_sources':citations,'extra':extra or {}}
@@ -146,17 +155,13 @@ class ReviewCache:
             try:
                 record=json.loads(row[0])
                 if record['context']!=context or record['result_hash']!=digest(record['result']):continue
-                if record.get('source')=='segmented-aggregate':
-                    from .segmented_review import verify_proof
-                    if not verify_proof(self.store,record):continue
-                if record.get('source')=='issue-long-composition':
-                    from services.chat_services.long_issue_review import verify
-                    if not verify(self.store,record):continue
+                if retired_review(record):continue
                 return schema.model_validate(record['result']),record
             except (KeyError,ValueError,TypeError):continue
         return None
 
     def start(self,stage,context,source='model',*,command_id=None):
+        if retired_review({'stage':stage,'source':source}):raise ValueError('该审查流程已停用，请发起当前文稿审查')
         from .runtime import ResearchRuntime
         now=time.time();key=digest(context)
         record={'id':uuid.uuid4().hex,'stage':stage,'context':context,'context_hash':key,'started_at':now,'source':source,
@@ -201,16 +206,11 @@ class ReviewCache:
                 db.execute('UPDATE review_records SET payload=? WHERE id=?',(json.dumps(saved,ensure_ascii=False),record['id']))
 
     def complete(self,record,result,*,provenance=None,current_context=None):
+        if retired_review(record):raise ValueError('历史审查记录不能用于完成当前审查')
         if record['stage']=='sections' and not record['context'].get('section_coverage',{}).get('complete',True):
             from ai_system.modules.writing.consistency import ReviewCoverageIncomplete
             raise ReviewCoverageIncomplete('不完整章节审查不能登记为完成')
         record={**record,'result':result,'result_hash':digest(result),'completed_at':time.time(),'provenance':provenance or {}}
-        if record.get('source')=='segmented-aggregate':
-            from .segmented_review import verify_proof
-            if not verify_proof(self.store,record):raise ValueError('分段覆盖证明不完整，不能登记章节审查完成')
-        if record.get('source')=='issue-long-composition':
-            from services.chat_services.long_issue_review import verify
-            if not verify(self.store,record):raise ValueError('长节候选缺少分段覆盖或源意见定向判定证明')
         stale=False
         with self.store._transaction() as db:
             row=db.execute('SELECT state,payload FROM review_records WHERE id=? AND research_id=?',(record['id'],self.store.research_id)).fetchone()
@@ -268,9 +268,7 @@ class ReviewCache:
             expected=record['context'].get('version_material',{}).get('science')
             if expected and science_version(child['context'])!=expected:return False
             if coverage_material(child['stage'],child['context'])!=coverage_material(record['stage'],record['context']):return False
-            if child.get('source')=='segmented-aggregate':
-                from .segmented_review import verify_proof
-                if not verify_proof(self.store,child):return False
+            if retired_review(child):return False
         return True
 
     def failed(self,record,error,*,diagnostic=None,current_context=None):
@@ -285,9 +283,9 @@ class ReviewCache:
             db.execute('UPDATE review_records SET state=?,payload=? WHERE id=?',('superseded' if stale else 'failed',json.dumps(record,ensure_ascii=False),record['id']))
             if stale:return record
             state=self.store._read(db)
-            if state and state.get('experiments') and not record['context'].get('extra',{}).get('non_blocking',False):
-                task=next(iter(state['experiments']));label=STAGE_LABELS[record['stage']]
-                issue=self.store._record_issue(state,IssueReport(task_id=task,category='service',message=f'{label}未完成：{detail}',section=f"review:{record['stage']}:{record['context_hash']}"),'confirmed',source='review:'+record['stage'])
+            if state and not retired_review(record) and not record['context'].get('extra',{}).get('non_blocking',False):
+                label=STAGE_LABELS[record['stage']]
+                issue=self.store._record_issue(state,IssueReport(category='service',message=f'{label}未完成：{detail}',section=f"review:{record['stage']}:{record['context_hash']}"),'confirmed',source='review:'+record['stage'])
                 issue['review_scope']={'stage':record['stage'],'context_hash':record['context_hash'],'failed_review_id':record['id']}
                 self.store._save(db,state,'review_failed',{'review_id':record['id'],'issue_id':issue['id'],'stage':record['stage'],'context_hash':record['context_hash'],'error_code':code,'detail':detail})
         return record
@@ -311,14 +309,9 @@ class ReviewCache:
         return closed
 
     def reuse(self,record,*,current_context=None):
+        if retired_review(record):raise ValueError('历史审查记录不能用于完成当前审查')
         with self.store._transaction() as db:
             if current_context is not None and current_context()!=record['context']:raise ValueError('review_context_changed_before_reuse')
-            if record.get('source')=='segmented-aggregate':
-                from .segmented_review import verify_proof
-                if not verify_proof(self.store,record):raise ValueError('分段覆盖证明已失效')
-            if record.get('source')=='issue-long-composition':
-                from services.chat_services.long_issue_review import verify
-                if not verify(self.store,record):raise ValueError('长节候选覆盖或源意见判定证明已失效')
             state=self.store._read(db)
             closed=self._close_matching(state,record) if state else []
             replaced=self._supersede_services(db,state,record) if state else []
@@ -346,7 +339,7 @@ async def run_review(ctx,state,stage,schema,system,prompt,perform,*,sections=Non
             return answer
         heartbeat=asyncio.create_task(cache.heartbeat(record))
         answer=await perform()
-        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict','section_blocks':'issues','section_global':'issues','issue_target':'issues'}[stage]
+        verdict_field={'reconcile':'conflicts','sections':'issues','citations':'verdicts','fragment':'verdict'}[stage]
         if hasattr(answer,'model_fields_set') and verdict_field not in answer.model_fields_set:raise ValueError('review_reply_missing_verdict_field')
         if isinstance(answer,dict) and verdict_field not in answer:raise ValueError('review_reply_missing_verdict_field')
         answer=schema.model_validate(answer.model_dump() if hasattr(answer,'model_dump') else answer)

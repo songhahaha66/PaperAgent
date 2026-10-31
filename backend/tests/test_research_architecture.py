@@ -57,7 +57,7 @@ def test_edit_changes_current_claims_and_history_without_a_run(study):
     assert any(not c['active'] for c in after['claims'].values())
     assert any(a['type']=='report' and a['report']==experiment_report(before,task) for a in after['artifacts'].values())
     assert questions(after)[0]['answer_status']=='needs_update'
-    assert not study.store.delivery_ready(after)
+    assert study.store.delivery_ready(after), 'answer freshness stays visible without blocking file export'
 
 
 def test_interpretation_version_conflict_preserves_parallel_update(study):

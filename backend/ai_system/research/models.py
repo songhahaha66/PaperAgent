@@ -128,7 +128,7 @@ class AssumptionProposal(AssumptionDraft):
 
 
 class IssueReport(Contract):
-    task_id: str
+    task_id: str | None = None
     category: Literal["domain", "assumption", "model", "data", "evidence", "execution", "writing", "coverage", "service"]
     message: str = Field(min_length=1)
     evidence_refs: list[str] = Field(default_factory=list)

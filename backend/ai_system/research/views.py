@@ -362,9 +362,9 @@ def activity(ctx, capability, task_id=None, *, reuse_parent=None, **links):
 def delivery_summary(snapshot, stages=None):
     """Derived only from current durable stages; no second business state."""
     stages = snapshot.get('delivery_stages', {}) if stages is None else stages
-    # Markdown is delivered at render; Word and LaTeX require an export.
-    terminal = 'render' if snapshot.get('spec', {}).get('output_mode') == 'markdown' else 'export'
-    required = ('write', 'validate', 'render') + (('export',) if terminal == 'export' else ())
+    # New deliveries expose one operation; old stage records remain readable.
+    terminal = 'export' if 'export' in stages or snapshot.get('spec', {}).get('output_mode') != 'markdown' else 'render'
+    required = ('export',) if 'export' in stages else ('write','validate','render')
     failed = next((name for name in required
                    if stages.get(name, {}).get('status') in {'blocked', 'failed', 'interrupted'}), None)
     labels = {'write': '报告撰写', 'validate': '报告校验', 'render': '报告发布', 'export': '报告导出'}

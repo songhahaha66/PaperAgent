@@ -53,9 +53,10 @@ def decision_context(store, snapshot):
     # actual values are restricted to the selected question/dependency scope.
     context={'source':snapshot['spec'],'questions':question_context(rows),'current_question_id':selected['id'] if selected else None,
         'experiments':[{**row,'record':report_context(row['record'])} for row in records],
-        'literature':sources,'issues':[i for i in findings(snapshot) if i['task_id'] in scope and i['status'] not in {'resolved','dismissed','superseded'}],
+        'literature':sources,'issues':[i for i in findings(snapshot) if (i['task_id'] is None or i['task_id'] in scope) and i['status'] not in {'resolved','dismissed','superseded'}],
         'inputs':files,'materials':snapshot['materials']['profile'] if snapshot['materials']['inputs']==files else '',
         'last_action':{k:last.get(k) for k in ('id','capability','status','question_id','target','reason','message','error_type')},'clarifications':snapshot.get('clarifications',[]),
+        'user_message':snapshot.get('conversation_input'),
         'skill_policy':store.skill_preferences()['policy']}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
     from ai_system.modules.experiments.store import ExperimentStore
@@ -168,9 +169,11 @@ class Planner:
                     'document':hashlib.sha256(main.read_bytes()).hexdigest() if main.is_file() else None}
         known_inputs=input_version()
         last_tool_feedback=''
+        user_turn=context.get('user_message')
+        manuscript_edited=bool(user_turn and user_turn.get('manuscript_edited'))
         @wrap_tool_call
         async def feedback(request,handler):
-            nonlocal known_revision,known_inputs,last_tool_feedback
+            nonlocal known_revision,known_inputs,last_tool_feedback,manuscript_edited
             call=request.tool_call;name=call['name'];key='research-tool:'+ctx.research.research_id+':'+call['id']
             async with (ctx.delegation_slots if name=='research_delegate' else read_slots if name in read_tools else lock):
                 from .runtime import ResearchRuntime
@@ -189,8 +192,9 @@ class Planner:
                         # boundary, including extra fields and failed references.
                         from .session import invoke_once
                         result=await invoke_once(ctx,mapping[name],args,key)
+                        if name=='writing_edit':manuscript_edited=True
                         if isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}:
-                            meter.failed(operation,digest(result.get('observation','')),'execution','相同代码和输入重复失败；已有日志保留，请修改实现后继续。')
+                            meter.failed(operation,digest(result.get('observation','')),'execution','本次代码执行未完成；已有日志保留，请修改实现后继续。')
                         else:meter.succeeded(operation)
                         if isinstance(result,dict) and 'revision' in result:known_revision=result['revision']
                         if name=='writing_edit' and result.get('path')==('paper.tex' if ctx.output_mode=='latex' else 'paper.md'):
@@ -227,6 +231,9 @@ class Planner:
             from ai_system.modules.experiments.execution import recover_outputs
             await recover_outputs(ctx)
             observations=[]
+            if user_turn and not any(m.id==user_turn['id'] for m in state['messages']):
+                observations.append(HumanMessage(content=user_turn['message'] +
+                    ('\n当前选中问题：'+user_turn['question_id'] if user_turn.get('question_id') else ''),id=user_turn['id']))
             resumed_now=resume_note
             if resume_note:
                 observations.append(HumanMessage(content='继续原会话；工具会优先重连原Python上下文，并报告context_restored和runtime_epoch；只有确认重连成功才依赖原变量。旧运行以回执为准，不重放已完成计算。'))
@@ -264,6 +271,8 @@ class Planner:
                 from ai_system.graph.llm_utils import message_text
                 try:
                     if not message_text(reply).strip():raise ValueError('没有最终回复或工具操作，请继续未完成工作或明确暂停原因。')
+                    if user_turn and not manuscript_edited:
+                        return  # A conversational answer does not require a paper or an export.
                     await invoke(ctx,'research.deliver',title=ctx.research.snapshot()['spec']['requirement'].splitlines()[0][:80],
                                  reason=message_text(reply)[:2000])
                 except ValueError as exc:
@@ -275,6 +284,9 @@ class Planner:
                 'skill_policy':context['skill_policy'],'inputs':context['inputs'],'materials':context['materials'],
                 'template_requirements':ctx.template_requirements,'compact_paper':ctx.compact_paper}
         messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False),id='initial-request:'+ctx.research.research_id)]
+        if user_turn:
+            messages.append(HumanMessage(content=user_turn['message'] +
+                ('\n当前选中问题：'+user_turn['question_id'] if user_turn.get('question_id') else ''),id=user_turn['id']))
         result=None
         try:
             from .session import session_saver,run_session

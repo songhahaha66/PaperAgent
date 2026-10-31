@@ -1,5 +1,5 @@
 """
-阶段 8：直接编译原生 paper.tex，或将 Markdown 导出为 Word
+一次交付当前稿件：检查源文件、编译或转换、保存导出回执。
 
 - latex：直接编译已发布的 paper.tex 为 paper.pdf；
 - word：paper.docx，用户上传了 Word 模板时沿用模板的样式。
@@ -7,13 +7,12 @@
 编译或导出失败时保留源文件，并将交付阶段标记为阻塞。
 """
 
+import hashlib
 from langgraph.runtime import Runtime
 
 from ai_system.export import export_docx
 from ai_system.graph.context import TEMPLATE_DOCX, GraphContext
 from ai_system.graph.state import PaperState
-
-EXPORT_MODES = ("latex", "word")
 
 
 async def _latex(ctx: GraphContext) -> dict:
@@ -29,12 +28,11 @@ async def _latex(ctx: GraphContext) -> dict:
     if compilation['success']:
         pages = f"（{compilation['pages']} 页）" if compilation['pages'] else ""
         await ctx.events.file_changed('paper.pdf')
-        await ctx.set_stage("export", "completed", f"paper.pdf{pages}")
         note = f"LaTeX 排版完成：paper.tex，编译出 paper.pdf{pages}"
         if compilation['warnings']:
             note += "\n\n编译警告：" + "；".join(compilation['warnings'])
         await ctx.events.emit("paper_export", note)
-        return {"exports":['paper.tex','paper.pdf'],"log": ["export: paper.pdf"]}
+        return {"exports":['paper.tex','paper.pdf'],"source_version":compilation["source_version"],"log": ["export: paper.pdf"]}
 
     error=compilation['message']
     await ctx.set_stage("export", "blocked", error)
@@ -61,29 +59,94 @@ async def _latex(ctx: GraphContext) -> dict:
             ctx.research._save(db,snapshot,'latex_source_errors',{'issues':[i['id'] for i in issues]})
         from services.chat_services.issue_edits import bind_findings
         bind_findings(ctx.research,[i['id'] for i in issues],source['sections'],source_version=source['source_version'])
-        await ctx.events.stage('源码编译未通过，正在自动修正后重新检查')
+        await ctx.events.stage('源码编译未通过，诊断已交回研究 Agent')
         return {'issues':issues,'exports':['paper.tex'],'log':[f'export: {error}; repairing source']}
     return {"research_blocked": True, "exports":['paper.tex'],"message":error, "log": [f"export: {error}"]}
 
 
 async def _word(ctx: GraphContext, markdown: str) -> dict:
     template = ctx.workspace / TEMPLATE_DOCX
-    result = await export_docx(ctx.workspace, markdown, template_docx=template if template.exists() else None)
+    result = await export_docx(ctx.workspace, markdown, template_docx=template if template.exists() else None, source_version=hashlib.sha256(markdown.encode()).hexdigest())
     await ctx.events.file_changed(result.docx_path)
     style = "沿用上传模板的样式" if result.reference == "template" else "默认论文样式"
-    await ctx.set_stage("export", "completed", result.docx_path)
     await ctx.events.emit("paper_export", f"已导出 {result.docx_path}（{style}）")
     return {"exports":[result.docx_path],"log": [f"export: {result.docx_path} ({result.reference})"]}
 
 
+def prepare_source(state: PaperState, ctx: GraphContext) -> dict:
+    """Local file/reference checks only; no review model or answer-registration gate."""
+    from .validation import check_sections, assemble
+    from ai_system.graph.registry import REF_PATTERN, publication_text
+    from ai_system.research.citations import render_citations, literature_root
+    from services.chat_services.paper_project import source_state, snapshot as source_snapshot
+    native=ctx.output_mode=='latex'
+    name='paper.tex' if native else 'paper.md'
+    if native:
+        state=source_state(ctx.research,state)
+        raw=(ctx.workspace/name).read_text(encoding='utf-8')
+        version=state['source_version']
+    else:
+        path=ctx.workspace/name
+        raw=path.read_text(encoding='utf-8') if path.is_file() else assemble(state)
+        version=hashlib.sha256(raw.encode()).hexdigest()
+        state={**state,'document':{'path':name},'sections':{'document':raw}}
+    if not raw.strip():raise ValueError('正文为空，请先写入当前稿件')
+    issues=check_sections(state,ctx)
+    if issues:return {'issues':issues}
+    if native:
+        from services.chat_services.paper_sources import validate_references
+        for text in state['sections'].values():validate_references(ctx.workspace,text,text)
+        if version!=source_snapshot(ctx.workspace)['version']:raise ValueError('源码已改变，请导出当前版本')
+        rendered=raw
+    else:
+        rendered=publication_text(render_citations(literature_root(ctx),ctx.registry.render(raw),False))
+    if REF_PATTERN.search(rendered):raise ValueError('正文仍有未解析的历史结果引用')
+    if native:
+        path,conflict=name,False
+    else:
+        # Compare and publish under the edit lock so a concurrent edit is preserved.
+        from services.file_services.workspace_lock import edit_lock
+        with edit_lock(ctx.workspace):
+            active=ctx.workspace/name
+            if active.exists() and hashlib.sha256(active.read_bytes()).hexdigest()!=version:
+                raise ValueError('正文在导出期间改变，请读取当前版本')
+            path,conflict=ctx.research.publish_paper(rendered,filename=name)
+        version=hashlib.sha256(rendered.encode()).hexdigest()
+    ctx.fs.register_file(path,kind='document',created_by='ai',visibility='user')
+    return {'paper_path':path,'artifact_conflict':conflict,'source_version':version}
+
+
 async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
-    ctx = runtime.context
-    await ctx.set_stage("export", "in_progress")
-    await ctx.events.stage("LaTeX 排版并编译 PDF" if ctx.output_mode == "latex" else "导出 Word 文档")
+    ctx=runtime.context
+    await ctx.set_stage('export','in_progress')
     try:
-        result = await _latex(ctx) if ctx.output_mode == "latex" else await _word(ctx, (ctx.workspace / "paper.md").read_text(encoding="utf-8"))
-        ctx.research.register_exports(result.pop('exports'))
-        return result
+        from ai_system.research.runs import direct_runs
+        pending=[rid for rid,r in direct_runs(ctx.research,ctx.fs).items()
+                 if r.get('delivery_error') or r.get('publication_error') or r.get('status') in {'starting','running'}]
+        if pending:raise ValueError('运行或文件交付尚未完成：'+', '.join(pending))
+        prepared=prepare_source(state,ctx)
+        if prepared.get('issues'):
+            await ctx.set_stage('export','blocked','正文文件或引用不可用，请修正后导出')
+            return prepared
+        await ctx.events.file_changed(prepared['paper_path'])
+        if prepared['artifact_conflict']:
+            await ctx.set_stage('export','blocked','正文有人工修改，已保留两份稿件，等待合并')
+            return prepared
+        if ctx.output_mode=='latex':
+            result=await _latex(ctx)
+        elif ctx.output_mode=='word':
+            text=(ctx.workspace/'paper.md').read_text(encoding='utf-8')
+            if hashlib.sha256(text.encode()).hexdigest()!=prepared['source_version']:
+                raise ValueError('正文在导出期间改变，请导出当前版本')
+            result=await _word(ctx,text)
+        else:
+            result={'exports':['paper.md'],'log':['export: paper.md']}
+        paths=result.pop('exports')
+        version=result.pop('source_version',prepared['source_version'])
+        ctx.research.register_exports(paths,source_version=version if not result.get('issues') and not result.get('research_blocked') else None)
+        if not result.get('issues') and not result.get('research_blocked'):
+            await ctx.set_stage('export','completed',paths[-1] if paths else prepared['paper_path'])
+        return {**prepared,**result}
     except Exception as exc:
         await ctx.set_stage("export", "blocked", str(exc)[:80])
         await ctx.events.emit("paper_export", f"导出失败：{exc}")

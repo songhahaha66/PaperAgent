@@ -1,26 +1,14 @@
 import asyncio
-import json
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import pytest
 
-from ai_system.research.citations import (SupportBatch,SupportVerdict,audit_citations,citation_issues,
+from ai_system.research.citations import (audit_citations,citation_issues,
     claims_in,render_citations,bibliography,citation_usage)
 from ai_system.research.literature import literature_context
-from helpers.literature import seed
+from helpers.literature import Judge, seed
 from services.chat_services import paper_editor as editor
-
-
-class Judge:
-    def __init__(self,status='supported',quote=None):self.status=status;self.quote=quote;self.calls=0
-    def with_structured_output(self,*a,**k):return self
-    async def ainvoke(self,messages):
-        self.calls+=1
-        assert '不可信' in messages[0].content and '不是' not in messages[-1].content[:1]
-        rows=json.loads(messages[-1].content)
-        return SupportBatch(verdicts=[SupportVerdict(key=r['key'],status=self.status,reason='Scoped source support check',
-            supporting_quote=self.quote if self.quote is not None else r['excerpt']) for r in rows])
 
 
 def test_support_checks_are_source_bound_cached_and_unknown_refs_fail(tmp_path):

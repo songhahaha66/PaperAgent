@@ -148,9 +148,13 @@ watch(
   { immediate: true },
 )
 const rows = computed(() =>
-  props.segments.flatMap((s) =>
-    s.type === 'execution' ? [{ ...s.execution, ...details.value[s.id] }] : [],
-  ),
+  props.segments
+    .flatMap((s) => (s.type === 'execution' ? [{ ...s.execution, ...details.value[s.id] }] : []))
+    .map((row) =>
+      props.replyStatus && props.replyStatus !== 'running' && callRunning(row)
+        ? { ...row, status: 'interrupted' }
+        : row,
+    ),
 )
 const isFailed = (row: ExecutionDetail) =>
   ['failed', 'error', 'interrupted', 'cancelled'].includes(row.status)
@@ -189,7 +193,13 @@ type Entry =
 const entries = computed(() =>
   props.segments.flatMap<Entry>((s) => {
     if (s.type === 'execution')
-      return [{ id: s.id, type: 'execution' as const, row: details.value[s.id] || s.execution }]
+      return [
+        {
+          id: s.id,
+          type: 'execution' as const,
+          row: rows.value.find((row) => row.id === s.execution.id) || s.execution,
+        },
+      ]
     const text = note(s)
     return text ? [{ id: s.id, type: 'note' as const, text }] : []
   }),

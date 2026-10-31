@@ -25,16 +25,15 @@ pytestmark = pytest.mark.usefixtures("offline_kernel", "offline_compiler")
 
 def validate_render_current_native(store):
     """Use actual current-source validation/render; never fabricate its version."""
-    from ai_system.modules.writing import validation
+    from ai_system.modules.writing.export import export
     from ai_system.research.control import graph_view,refresh_registry
     ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
     refresh_registry(ctx)
     async def perform():
         state=graph_view(store.snapshot())
-        checked=await validation.validate(state,SimpleNamespace(context=ctx))
-        assert not checked['issues'] and not checked['research_blocked']
-        return await validation.render(state,SimpleNamespace(context=ctx))
+        return await export(state,SimpleNamespace(context=ctx))
     rendered=asyncio.run(perform())
+    assert not rendered.get('research_blocked') and not rendered.get('issues'), rendered
     assert rendered['paper_path']=='paper.tex'
     return ctx
 
@@ -47,7 +46,7 @@ def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_expo
         state=store._read(db);state['spec']['output_mode']='latex';store._save(db,state,'fixture_native_output',{})
     store.save_sections({'abstract':'已保存但尚未正式交付的正文。'},[])
     (workspace_path(tmp_path, '.system/graph_thread.json')).write_text(json.dumps({'thread_id':store.research_id,'engine_version':'research-v3'}))
-    (tmp_path/'paper.tex').write_text('论文草稿。')
+    (tmp_path/'paper.tex').write_text(r'\documentclass{article}\begin{document}Draft.\end{document}')
     (tmp_path/'paper.pdf').write_bytes(b'previous unregistered PDF')
     doc=project.describe(store)
     assert doc['main']=='paper.tex' and doc['files']
@@ -55,15 +54,15 @@ def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_expo
     # Native render uses project files, without the legacy publish_paper hash.
     assert not store.snapshot().get('paper_hash')
     validate_render_current_native(store)
-    assert store.snapshot()['delivery_stages']['render']['status']=='completed'
+    assert store.snapshot()['delivery_stages']['export']['status']=='completed'
     assert project.is_latex(store)
-    assert json.loads((workspace_path(tmp_path, '.system/validation.json')).read_text())['source_version']==project.snapshot(tmp_path)['version']
-    assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
+    assert store.snapshot()['export_source_version']==project.snapshot(tmp_path)['version']
+    assert set(research_snapshot(tmp_path,'work','completed').artifacts)=={'paper.tex','paper.pdf'}
     store.register_exports(['paper.tex','paper.pdf'])
-    assert research_snapshot(tmp_path,'work','completed').artifacts==['paper.tex']
+    assert set(research_snapshot(tmp_path,'work','completed').artifacts)=={'paper.tex','paper.pdf'}
     assert project.describe(store)['pdf_available'], 'old PDF preview remains, but registration alone does not validate its source version'
     store.report_issues([IssueReport(task_id='Q1',category='model',message='还需核验科学结论')],'local_review')
-    assert research_snapshot(tmp_path,'work','paused').artifacts==['paper.tex']
+    assert set(research_snapshot(tmp_path,'work','paused').artifacts)=={'paper.tex','paper.pdf'}
     assert store.delivery_ready(store.snapshot()), 'advisory findings cannot revoke recorded question answers'
     assert project.describe(store)['files'], 'an advisory finding must not hide the editable draft'
 

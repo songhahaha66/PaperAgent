@@ -264,7 +264,9 @@ class ResearchRuntime:
     def check_guard(self,key):
         guard=self.guard(key)
         if guard.get('blocked') or guard['count']>=3:
-            self.note_stop(guard.get('kind') if guard.get('blocked') else 'repeated_failure',guard.get('message') or '同一操作重复失败，已保存状态')
+            with self.store._transaction() as db:
+                self._stop(db,{'kind':guard.get('kind') if guard.get('blocked') else 'repeated_failure',
+                               'message':guard.get('message') or '同一操作重复失败，已保存状态','operation':key})
             raise RepeatedOperationBlocked(guard.get('message') or '同一操作重复失败，已停止无效重试；请检查输入或模型连接后恢复')
 
     def failed(self,key,signature,kind,message,*,terminal=False):
@@ -276,14 +278,27 @@ class ResearchRuntime:
             count=max(errors.values())
             value={'errors':errors,'signature':signature,'count':count,'blocked':terminal,'kind':kind,'message':message,'at':time.time()}
             db.execute('INSERT OR REPLACE INTO failure_guards VALUES (?,?)',(key,json.dumps(value)))
-            self._stop(db,{'kind':kind if terminal or count<3 else 'repeated_failure','message':message,'operation':key})
+            if terminal:
+                self._stop(db,{'kind':kind,'message':message,'operation':key})
+            else:
+                # Recoverable attempts belong to their operation, not the whole
+                # running session. Retire old first-failure stop projections too.
+                reason=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
+                if reason and json.loads(reason[0]).get('operation')==key:
+                    db.execute('DELETE FROM runtime_stop WHERE id=1')
         return count
 
     def succeeded(self,key):
         with self.store._transaction() as db:
             db.execute('DELETE FROM failure_guards WHERE id=?',(key,))
             reason=db.execute('SELECT payload FROM runtime_stop WHERE id=1').fetchone()
-            if reason and json.loads(reason[0]).get('operation')==key:db.execute('DELETE FROM runtime_stop WHERE id=1')
+            if reason:
+                reason=json.loads(reason[0]);operation=reason.get('operation')
+                guard=db.execute('SELECT payload FROM failure_guards WHERE id=?',(operation,)).fetchone() if operation else None
+                guard=json.loads(guard[0]) if guard else {}
+                legacy_attempt=(reason.get('kind') in {'execution','tool_input'} and guard
+                                and not guard.get('blocked') and guard.get('count',0)<3)
+                if operation==key or legacy_attempt:db.execute('DELETE FROM runtime_stop WHERE id=1')
 
     def requests(self):
         with closing(self.store._connect()) as db:return [json.loads(r[0]) for r in db.execute('SELECT payload FROM model_requests WHERE research_id=? ORDER BY sequence',(self.store.research_id,))]

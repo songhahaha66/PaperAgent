@@ -15,17 +15,9 @@ from auth.auth import get_current_user
 from database.database import get_db
 from routers.chat_routes import chat
 from services.chat_services.research_session import research_snapshot, answer_research_question, scoped_snapshot
-from ai_system.judge.base import Answers, ChoiceAnswer
 from services.chat_services.chat_history_manager import ChatHistoryManager
 from services.chat_services.chat_service import ChatService as DurableChatService
 
-
-class ReadOnlyChoice:
-    def __init__(self):self.close_calls=0
-    async def aclose(self):self.close_calls+=1
-    async def ask(self, state, questions):
-        return Answers(judge='jev:offline', choices={
-            'intent': ChoiceAnswer('question', {'question': 1}, None)})
 
 
 def workspace_bytes(root):
@@ -163,6 +155,10 @@ def web(monkeypatch, tmp_path):
             self.commit_completion()
             calls.append(("run", (text, kwargs)))
             await self.stream.send_json_block("main_agent_complete", "已完成")
+        async def send_message(self,text,**kwargs):
+            self.commit_completion()
+            calls.append(('message',(text,kwargs)))
+            await self.stream.send_json_block('main_agent_complete','已回复')
         async def resume_failed(self):
             self.commit_completion()
             calls.append(("resume", None))
@@ -233,14 +229,9 @@ def durable_reply(root, reply_id, status):
 
 
 def test_websocket_followup_never_constructs_graph_or_changes_research_status(web, monkeypatch):
-    judge=ReadOnlyChoice()
-    monkeypatch.setattr('ai_system.judge.JevJudge', lambda **kwargs: judge)
-    monkeypatch.setattr('ai_system.config.environment.DatabaseConfigManager.get_model_config',
-        lambda *args: SimpleNamespace(model_id='offline', api_key='unused', base_url='https://example.test/v1', timeout_seconds=30))
     client, work, calls, statuses, saved, root = web
     original = research_files(root)
-    events = exchange(client, {"problem": "解释 Q1 的结果", "subproblem_id": "Q1"})
-    assert judge.close_calls==1
+    events = exchange(client, {"problem": "解释 Q1 的结果", "action":"ask", "subproblem_id": "Q1"})
     assert events[0]["action"] == "ask"
     assert events[-1]["work_status"] == "completed"
     assert [name for name, _ in calls] == ["ask"]
@@ -256,6 +247,18 @@ def test_websocket_followup_never_constructs_graph_or_changes_research_status(we
     assert reply['content'] == '已有数值是 0.82 [R1]'
     assert 'research_context' in str(saved[-1]['segments'])
     assert original == research_files(root), 'conversation checkpoints must not mutate research evidence'
+
+
+def test_websocket_auto_reaches_existing_agent_without_loading_jev(web,monkeypatch):
+    def forbidden(*args,**kwargs):raise AssertionError('automatic chat must not load a classifier')
+    monkeypatch.setattr('ai_system.judge.JevJudge',forbidden)
+    client,work,calls,statuses,saved,root=web
+    qid=research_snapshot(root,'work','completed').questions[0]['id']
+    events=exchange(client,{'problem':'解释这个结果，并指出局限','subproblem_id':qid})
+    assert events[0]['action']=='message' and events[-1]['type']=='complete'
+    assert [name for name,_ in calls]==['graph','message']
+    assert calls[-1][1]==('解释这个结果，并指出局限',{'question_id':qid})
+    assert statuses==['in_progress','completed']
 
 
 @pytest.mark.parametrize("action,expected", [("run", "run"), ("resume", "resume"), ("confirm", "run"), ("revise", "run")])

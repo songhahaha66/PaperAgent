@@ -205,5 +205,5 @@ def test_compile_failure_returns_to_research_without_replaying_calculation(nativ
     ctx.planner_llm=ResearchToolsModel(respond=respond)
     assert not asyncio.run(loop.prepare_action(ctx))
     assert '修正后的正文' in (store.root/'part.tex').read_text()
-    assert store.snapshot()['action']['capability']=='writing.validate'
+    assert store.snapshot()['action']['capability']=='writing.export'
     assert store.snapshot()['executions']==before

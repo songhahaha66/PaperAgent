@@ -9,8 +9,6 @@ from ai_system.modules.registry import capabilities, CapabilityRequest
 from .store import digest
 from .planner import Planner, NoResearchProgress, decision_context, planning_failure_message
 
-PUBLICATION = ('validate', 'render', 'export')
-
 
 def _observed_action(action):
     """A failed tool can finish its call without stopping the Agent."""
@@ -41,7 +39,7 @@ def _action(store, capability, inputs, reason, **links):
 def _publication_action(ctx, snapshot):
     publication=snapshot['publication']
     if not publication or publication['stage']=='completed':return None
-    return _action(ctx.research,'writing.'+publication['stage'],{},publication.get('reason','整理研究成果'),
+    return _action(ctx.research,'writing.export',{},publication.get('reason','整理研究成果'),
                    observation_id=publication.get('observation_id'))
 
 
@@ -52,7 +50,7 @@ async def prepare_action(ctx):
     current=snapshot['action']
     if current and current['status']=='planned':return current['capability']=='pause'
     if current and current['status']=='failed' and not current.get('recoverable'):return True
-    if snapshot['outcome'] in {'completed','needs_attention'}:return False
+    if snapshot['outcome'] in {'completed','needs_attention'} and not snapshot.get('conversation_input'):return False
     if current and current['status']=='waiting':return False
     if current and current['status']=='running':
         # An experiment commit is the durable receipt, including a failed experiment.
@@ -75,8 +73,23 @@ async def prepare_action(ctx):
         from .views import activity
         from ai_system.graph.tracing import labelled
         with activity(ctx,'research.observe',observation_id=observation_id,action_id=key), labelled('observe'):
-            await Planner(ctx.planner_llm).run(ctx,context,observation_id)
+            result=await Planner(ctx.planner_llm).run(ctx,context,observation_id)
+        turn=context.get('user_message')
+        if turn:
+            from ai_system.graph.llm_utils import message_text
+            from ai_system.graph.commentary import public_progress
+            with store._transaction() as db:
+                state=store._read(db)
+                state.pop('conversation_input',None)
+                if (state.get('action') or {}).get('status')!='planned':
+                    reply='\n'.join(public_progress(message_text(result['messages'][-1])))
+                    if not reply:raise NoResearchProgress('本次没有可展示的回复，请继续处理。')
+                    state['action']={'id':key,'capability':'reply','status':'done','result':{'reply':reply},
+                                     'finished_at':time.time(),'observation_id':observation_id}
+                    if turn['outcome'] in {'completed','needs_attention'}:state['outcome']=turn['outcome']
+                store._save(db,state,'conversation_answered',{'id':turn['id']})
         current=store.snapshot()
+        if (current.get('action') or {}).get('capability')=='reply':return False
         if (current.get('action') or {}).get('status')!='planned':
             raise NoResearchProgress('本次未获得新信息或安排下一行动，记录已保存，请继续处理或补充必要信息。')
         await ctx.events.emit('research_activity',{'observation_id':observation_id})
@@ -108,6 +121,7 @@ async def prepare_action(ctx):
 def select(state, runtime):
     if state.get('research_blocked'):return END
     action=runtime.context.research.snapshot()['action']
+    if action and action['capability']=='reply' and action['status']=='done':return END
     if runtime.context.research.snapshot()['outcome'] in {'completed','needs_attention'}:return END
     if _observed_action(action):return 'observe'
     if action['capability']=='pause':return END
@@ -134,6 +148,13 @@ async def _act(request, runtime):
     action=store.snapshot()['action']
     if _observed_action(action) or action['id']!=request['action_id']:return {}
     name=action['capability']
+    # Existing checkpoints may still point at the old deterministic stages.
+    if name in {'writing.validate','writing.render'}:
+        name='writing.export'
+        with store._transaction() as db:
+            state=store._read(db);state['action']['capability']=name
+            if state.get('publication'):state['publication']['stage']='export'
+            store._save(db,state,'delivery_resumed',{'id':action['id']})
     if name=='ask':
         with store._transaction() as db:
             state=store._read(db);state['action']['status']='waiting'
@@ -172,7 +193,7 @@ async def _act(request, runtime):
         with store._transaction() as db:
             state=store._read(db)
             if name.startswith('writing.'):
-                publication=state['publication'];step=name.split('.')[1]
+                publication=state['publication']
                 if 'outline' in patch:publication['outline']=patch['outline']
                 if 'consistency' in patch:state['consistency']=patch['consistency']
                 if patch.get('research_restart'):
@@ -181,13 +202,11 @@ async def _act(request, runtime):
                     publication['stage']='completed'
                     state['outcome']='needs_attention'
                 elif not patch.get('research_blocked'):
-                    if step in {'validate','export'} and patch.get('issues'):
+                    if patch.get('issues'):
                         # Return diagnostics to the same research conversation.
                         state['publication']=None
                     else:
-                        next_index=PUBLICATION.index(step)+1
-                        publication['stage']=PUBLICATION[next_index] if next_index<len(PUBLICATION) else 'completed'
-                        if publication['stage']=='export' and ctx.output_mode=='markdown':publication['stage']='completed'
+                        publication['stage']='completed'
                     if state['publication'] and publication['stage']=='completed':state['outcome']='needs_attention' if patch.get('artifact_conflict') else 'completed'
             failed=product.execution_status in {'failed','interrupted'}
             state['action']['status']='failed' if patch.get('research_blocked') or failed else 'done'

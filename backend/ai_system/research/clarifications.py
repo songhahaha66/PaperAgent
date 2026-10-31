@@ -1,4 +1,5 @@
 """One idempotent writer for either supported graph-resume entry point."""
+from uuid import uuid4
 from .models import ResearchConflict
 
 
@@ -16,5 +17,7 @@ def receive(store, action_id, response):
         row={'ref':'clarification:'+str(len(rows)+1),'action_id':action_id,
              'question':action['inputs']['message'],'response':response}
         rows.append(row);action['status']='done'
+        state['conversation_input']={'id':'user:'+uuid4().hex,'message':response,
+                                     'question_id':None,'outcome':state['outcome']}
         store._save(db,state,'clarification_received',row)
         return row

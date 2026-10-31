@@ -53,7 +53,7 @@ def test_answer_without_scalar_refs_delivers_without_recomputation(tmp_path):
     model=ResearchToolsModel(respond=respond)
     ctx=GraphContext.create(str(tmp_path),planner_llm=model);ctx.research=store
     assert not asyncio.run(prepare_action(ctx))
-    assert model.calls==2 and store.snapshot()['publication']['stage']=='validate'
+    assert model.calls==2 and store.snapshot()['publication']['stage']=='export'
     assert store.snapshot()['executions']==executions
 
 

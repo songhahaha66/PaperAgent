@@ -76,7 +76,7 @@ def context(store,issue_id):
     if is_latex(store):return source_context(store,issue)
     key=issue.get('section');section=state['sections'].get(key);origin=issue.get('paper_origin') or {}
     same_origin=not origin.get('section_hash') or bool(section and origin['section_hash']==section['content_hash'])
-    if route(issue)=='research':
+    if route(issue)=='research' and issue['task_id'] is not None:
         task=state['experiments'].get(issue['task_id'],{})
         expected=issue.get('repair_targets',{}).get(issue['task_id'],issue.get('task_revision'))
         same_origin=same_origin and task.get('revision')==expected and not task.get('retired',True)
@@ -160,8 +160,6 @@ def resolve(state,p,record):
     issue.update(status='resolved',review_resolution={'policy':'issue-edit-review-v1','source_version':p['source_issue']['version'],'candidate_id':p['id'],
         'review_id':record['id'],'review_context_hash':record['context_hash'],'review_result_hash':record['result_hash'],
         'section_hash':state['sections'][p['section']]['content_hash'],'section_revision':state['sections'][p['section']]['revision']})
-    if record.get('source')=='issue-long-composition':
-        issue['review_resolution'].update({k:record['provenance'][k] for k in ('coverage_review_id','target_review_id')})
     state['outcome']='completed' if ResearchStore.delivery_ready(state) else 'blocked'
 
 

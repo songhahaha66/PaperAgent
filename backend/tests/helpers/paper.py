@@ -12,7 +12,7 @@ def accepted_store(root):
     submit(store, 'Q3', {'independent': 3})
     submit(store, 'Q2', {'allocation': 8, 'residual': 0})
     before=store.snapshot()
-    assert not store.delivery_ready(before), 'Execution results alone do not answer the user questions'
+    assert any(q['answer_gaps'] for q in questions(before)), 'Execution results alone do not record question answers'
     results=store.registry_payload()['results']
     for question in questions(before):
         if question.get('retired'):continue

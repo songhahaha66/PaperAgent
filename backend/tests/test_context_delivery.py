@@ -95,12 +95,12 @@ def test_natural_final_reply_uses_same_publication_without_recomputation(tmp_pat
     assert len(WorkspaceFS(str(tmp_path))._manifest['runs'])==4
 
 
-def test_final_reply_cannot_bypass_missing_answers_or_pending_delivery(tmp_path):
+def test_final_reply_can_deliver_without_answer_metadata_but_waits_for_files(tmp_path):
     from ai_system.research.loop import prepare_action
     ctx=context(tmp_path,ResearchToolsModel(respond=lambda _:AIMessage(content='完成了。')))
-    (tmp_path/'paper.md').write_text('# 有正文也不能假完成')
-    assert asyncio.run(prepare_action(ctx))
-    assert ctx.research.snapshot()['outcome']!='completed' and ctx.research.snapshot()['publication'] is None
+    (tmp_path/'paper.md').write_text('# 当前稿件，未完成部分已说明')
+    assert not asyncio.run(prepare_action(ctx))
+    assert ctx.research.snapshot()['publication']['stage']=='export'
     async def pending():
         q=await invoke(ctx,'research.create_question',question='结果是多少？')
         await invoke(ctx,'research.update_answer',question_id=q['question_id'],statement='结果6',coverage='answered')
@@ -110,7 +110,7 @@ def test_final_reply_cannot_bypass_missing_answers_or_pending_delivery(tmp_path)
         assert ctx.research.snapshot()['publication'] is None
     # A new instruction can repair the interrupted decision without replaying it.
     with ctx.research._transaction() as db:
-        state=ctx.research._read(db);state['action']=None;ctx.research._save(db,state,'test_recovery',{})
+        state=ctx.research._read(db);state['action']=None;state['publication']=None;ctx.research._save(db,state,'test_recovery',{})
     asyncio.run(pending())
 
 
@@ -125,7 +125,7 @@ def test_historical_unknown_execution_does_not_block_current_delivery(tmp_path):
         old.update(scope='research',research_id=ctx.research.research_id,status='error',
                    failure_kind='transport_unknown',error='早期初始化未确认，未采用其结果')
         await invoke(ctx,'research.deliver',reason='当前结果和正文已完成，保留早期失败记录。')
-        assert ctx.research.snapshot()['publication']['stage']=='validate'
+        assert ctx.research.snapshot()['publication']['stage']=='export'
         assert old['status']=='error' and old['failure_kind']=='transport_unknown'
         assert list(ctx.fs._manifest['runs'])==[rid]
     asyncio.run(run())

@@ -113,3 +113,36 @@ def test_repeated_error_cannot_evade_guard_by_alternating_with_another_error(tmp
     with pytest.raises(RepeatedOperationBlocked):ResearchRuntime(tmp_path).check_guard('operation')
     runtime.check_guard('genuinely-new-operation')
     assert runtime.stop_reason()['kind']=='repeated_failure'
+
+
+def test_recoverable_attempt_failure_does_not_stop_the_research(tmp_path):
+    runtime=ResearchRuntime(tmp_path)
+    runtime.note_stop('running','研究执行中')
+    assert runtime.failed('old-code','shape','execution','shape mismatch')==1
+    assert runtime.guard('old-code')['count']==1
+    assert runtime.stop_reason()['kind']=='running'
+    runtime.succeeded('fixed-code')
+    assert runtime.stop_reason()['kind']=='running'
+    assert runtime.guard('old-code')['count']==1, 'the failed attempt remains available'
+    # Read a legacy first-failure projection without changing any model history.
+    with runtime.store._transaction() as db:
+        runtime._stop(db,{'kind':'execution','message':'old failure','operation':'old-code'})
+    runtime.succeeded('another-fixed-code')
+    assert runtime.stop_reason() is None
+    with runtime.store._transaction() as db:
+        runtime._stop(db,{'kind':'execution','message':'old failure','operation':'old-code'})
+    runtime.failed('old-code','shape','execution','shape mismatch')
+    assert runtime.stop_reason() is None
+
+
+def test_only_an_actual_block_or_terminal_failure_sets_the_stop_reason(tmp_path):
+    runtime=ResearchRuntime(tmp_path)
+    for _ in range(3):runtime.failed('operation','same-error','execution','execution failed')
+    assert runtime.stop_reason() is None
+    with pytest.raises(RepeatedOperationBlocked):runtime.check_guard('operation')
+    assert runtime.stop_reason()['operation']=='operation'
+    runtime.succeeded('operation')
+    assert runtime.stop_reason() is None
+    runtime.failed('provider','auth','authentication','authentication failed',terminal=True)
+    runtime.failed('other-code','shape','execution','shape mismatch')
+    assert runtime.stop_reason()['kind']=='authentication'

@@ -29,7 +29,7 @@ def test_start_persists_source_materials_and_output_without_a_plan(tmp_path):
     assert snapshot['materials']['profile'] == ''
     assert ctx.research.initialize('do not replace source') == snapshot
     public = control.public_snapshot(snapshot)
-    assert public['requirements'][0]['status'] == 'pending' and not public['delivery']['ready']
+    assert public['requirements'][0]['status'] == 'pending' and public['delivery_summary']['state']=='pending'
     nodes = compile_graph().get_graph().nodes
     assert 'observe' in nodes and 'analyze' not in nodes
     from ai_system.modules.registry import capabilities
