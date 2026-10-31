@@ -100,8 +100,12 @@ class OpenSandboxSession:
         self.context_restored=True
 
     async def disconnect(self):
-        if self.interpreter:await self.interpreter.aclose()
-        if self.sandbox:await self.sandbox.close()
+        calls=[]
+        if self.interpreter:calls.append(self.interpreter.aclose())
+        if self.sandbox:calls.append(self.sandbox.close())
+        results=await asyncio.gather(*calls,return_exceptions=True)
+        for result in results:
+            if isinstance(result,BaseException):raise result
 
     async def attach_for_destroy(self, handle):
         from opensandbox import Sandbox

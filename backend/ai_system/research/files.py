@@ -3,12 +3,35 @@ import asyncio
 import fnmatch
 import hashlib
 import re
+from copy import copy, deepcopy
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 from pydantic import Field
 from ai_system.modules.registry import Inputs, CapabilityProduct
 
 
+@dataclass(frozen=True)
+class FileReadView:
+    fs: object
+    research: object
+    names: tuple[str, ...]
+
+
+def read_view(ctx):
+    """Called on the owning event loop before handing any work to a thread.
+
+    Copy nested bindings too: a shallow manifest copy still shares run/file rows.
+    Worker threads never receive the live GraphContext or its mutable manifest.
+    """
+    fs=copy(ctx.fs)
+    fs._manifest=deepcopy(ctx.fs._manifest)
+    from types import SimpleNamespace
+    frozen=SimpleNamespace(fs=fs,research=ctx.research)
+    return FileReadView(fs,ctx.research,tuple(known_files(frozen)))
+
+
 def known_files(ctx):
+    if isinstance(ctx,FileReadView):return list(ctx.names)
     names={p for p,m in ctx.fs._manifest.get('files',{}).items() if m.get('visibility')=='user'}
     if ctx.fs.root==ctx.research.root:
         names.update(ctx.research.file_inputs())
@@ -90,7 +113,8 @@ async def materialize_artifact(ctx,inputs):
 
 
 async def read_artifact(ctx, inputs):
-    path=await asyncio.to_thread(resolve,ctx,inputs['path'])
+    view=read_view(ctx)
+    path=await asyncio.to_thread(resolve,view,inputs['path'])
     version,text=await asyncio.to_thread(text_file,path)
     start=inputs['start'];end=start+inputs['limit']
     return CapabilityProduct('research_state',{'path':inputs['path'],'version':version,'total_chars':len(text),
@@ -99,14 +123,15 @@ async def read_artifact(ctx, inputs):
 
 
 async def list_files(ctx, inputs):
-    names=[p for p in await asyncio.to_thread(known_files,ctx) if fnmatch.fnmatchcase(p,inputs['pattern'])]
+    view=read_view(ctx)
+    names=[p for p in view.names if fnmatch.fnmatchcase(p,inputs['pattern'])]
     rows=[]
     for name in names[inputs['offset']:inputs['offset']+inputs['limit']]:
         try:
-            path=resolve(ctx,name)
+            path=await asyncio.to_thread(resolve,view,name)
             version=await asyncio.to_thread(lambda:hashlib.sha256(path.read_bytes()).hexdigest())
             rows.append({'path':name,'size':path.stat().st_size,'version':version,
-                         'source_run':(ctx.fs.get_file_meta(name) or {}).get('source_run'),'available':True})
+                         'source_run':(view.fs.get_file_meta(name) or {}).get('source_run'),'available':True})
         except (ValueError,FileNotFoundError) as exc:rows.append({'path':name,'available':False,'error':str(exc)})
     end=inputs['offset']+len(rows)
     return CapabilityProduct('research_state',{'files':rows,'total':len(names),'next_offset':end if end<len(names) else None,
@@ -114,11 +139,14 @@ async def list_files(ctx, inputs):
 
 
 async def search_files(ctx, inputs):
-    names=[p for p in await asyncio.to_thread(known_files,ctx) if fnmatch.fnmatchcase(p,inputs['pattern'])]
+    view=read_view(ctx)
+    names=[p for p in view.names if fnmatch.fnmatchcase(p,inputs['pattern'])]
     matches=[];errors=[];end=inputs['offset']
     for name in names[inputs['offset']:inputs['offset']+inputs['limit']]:
         end+=1
-        try:version,text=await asyncio.to_thread(text_file,resolve(ctx,name))
+        try:
+            path=await asyncio.to_thread(resolve,view,name)
+            version,text=await asyncio.to_thread(text_file,path)
         except (ValueError,FileNotFoundError) as exc:
             errors.append({'path':name,'error':str(exc)});continue
         pos=text.find(inputs['query'])

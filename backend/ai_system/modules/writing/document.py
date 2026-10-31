@@ -1,10 +1,8 @@
 """Version-bound document assets and actual PDF inspection, without another writer."""
 import asyncio
-import base64
 import hashlib
 import io
 import json
-import re
 import threading
 from contextlib import closing
 from pathlib import Path
@@ -85,7 +83,8 @@ def render_pages(root, version, pdf_hash, pages):
                         finally:bitmap.close()
                         from services.file_services.file_helper import atomic_write
                         atomic_write(target,lambda stream:stream.write(buffer.getvalue()))
-                images.append({'page':number,'path':name})
+                from ai_system.graph.images import page_ref
+                images.append(page_ref(root,{'page':number,'path':name}))
             total=len(document)
     return {'source_version':version,'pdf_sha256':pdf_hash,'total_pages':total,'pages':texts,
             'warnings':build.get('warnings',[]),'diagnostics':build.get('diagnostics',[]),'_images':images}
@@ -105,23 +104,13 @@ async def preview(ctx, inputs):
         await ctx.events.file_changed('paper.pdf')
     result=await asyncio.to_thread(render_pages,ctx.workspace,version,inputs['pdf_sha256'],inputs['pages'])
     result['current']=project.snapshot(ctx.workspace)['version']==version and project.meta(ctx.workspace).get('pdf_sha256')==result['pdf_sha256']
-    result['instruction']='此回执含实际PDF页面。逐页检查图表、截断、缺项及结论；编译成功不表示论文质量通过。可继续读取其余页，或按需research_delegate purpose=document_review复核固定版本。'
+    result['instruction']='页面按此PDF版本保存。以本次visual_pages为实际附图范围，未附图时仅检查文本。逐页检查图表、截断、缺项及结论；编译成功不表示质量通过。可继续writing_preview读取，或research_delegate purpose=document_review复核固定版本。'
     return CapabilityProduct('paper',result)
 
 
 def tool_content(ctx, value, llm):
-    """Keep only image locators in operation receipts; hydrate at model boundary."""
-    if not isinstance(value,dict) or not value.get('_images'):return json.dumps(value,ensure_ascii=False,default=str)
-    public={k:v for k,v in value.items() if k!='_images'}
-    if not (getattr(llm,'profile',None) or {}).get('image_inputs'):
-        public['visual_review']='当前模型未声明图像输入能力，仅返回实际PDF文本；不能声称已检查图像和排版。'
-        return json.dumps(public,ensure_ascii=False,default=str)
-    blocks=[{'type':'text','text':json.dumps(public,ensure_ascii=False,default=str)}]
-    for row in value['_images']:
-        if not re.fullmatch(r'\.system/paper-project/previews/[a-f0-9]{64}/[0-9]+\.png',row['path']):raise ValueError('PDF预览路径无效')
-        data=workspace_path(ctx.workspace,row['path']).read_bytes()
-        blocks.append({'type':'image_url','image_url':{'url':'data:image/png;base64,'+base64.b64encode(data).decode()}})
-    return blocks
+    """Durable tool messages contain refs only; request middleware hydrates them."""
+    return json.dumps(value,ensure_ascii=False,default=str)
 
 
 def register(registry):

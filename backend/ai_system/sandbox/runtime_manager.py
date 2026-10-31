@@ -96,9 +96,12 @@ class RuntimeManager:
         self.save(state='ready',sandbox_id=self.session.id,context_id=self.session.context_id)
 
     async def disconnect(self):
-        await self.session.disconnect()
+        try:await self.session.disconnect()
+        except Exception as exc:
+            if self.handle:self.save(client_cleanup_error=type(exc).__name__)
+            raise
         if self.handle and self.handle.get('state')=='ready':
-            self.save(state='detached')
+            self.save(state='detached',client_cleanup_error=None)
 
     async def destroy(self):
         if self.handle is None and self.path.exists():self.handle=json.loads(self.path.read_text())

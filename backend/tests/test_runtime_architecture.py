@@ -138,9 +138,15 @@ def test_actual_pdf_pages_and_model_images_are_version_bound(tmp_path):
     result=render_pages(tmp_path,version,pdf_hash,[2])
     assert result['total_pages']==2 and result['_images'][0]['page']==2
     ctx=SimpleNamespace(workspace=tmp_path)
-    image=tool_content(ctx,result,SimpleNamespace(profile={'image_inputs':True}))
+    from ai_system.graph.images import ImageProjection
+    from langchain_core.messages import ToolMessage
+    receipt=ToolMessage(content=tool_content(ctx,result,None),tool_call_id='preview')
+    assert 'base64' not in receipt.content
+    media=ImageProjection(tmp_path,SimpleNamespace(profile={'image_inputs':True,'image_tokens_per_image':4096}),{})
+    image=media.hydrate(media.view([receipt],max_tokens=10000))[0].content
     assert image[1]['image_url']['url'].startswith('data:image/png;base64,')
-    assert '仅返回实际PDF文本' in tool_content(ctx,result,SimpleNamespace(profile={}))
+    text=ImageProjection(tmp_path,SimpleNamespace(profile={}),{}).view([receipt],max_tokens=10000)[0]
+    assert '不能声称已做视觉检查' in text.content
     with pytest.raises(ValueError,match='超出范围'):render_pages(tmp_path,version,pdf_hash,[3])
     with pytest.raises(FileNotFoundError):render_pages(tmp_path,'b'*64,pdf_hash,[1])
 
@@ -172,7 +178,8 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
             assert receipts[0].content[1]['type']=='image_url'
             return tool('read_file',{'path':'paper.tex'},'review-source')
         return AIMessage(content='第1页已看；仅复核提供的版本，未执行计算。')
-    model=ResearchToolsModel(respond=child,profile={'image_inputs':True,'max_input_tokens':128000})
+    model=ResearchToolsModel(respond=child,profile={'image_inputs':True,'max_input_tokens':128000},
+        metadata={'generation_settings':{'image_tokens_per_image':4096}})
     ctx=context(tmp_path);ctx.coder_llm=model
     (tmp_path/'paper.tex').write_text(r'\begin{document}Known manuscript\end{document}')
     version=project.snapshot(tmp_path)['version'];pdf=tmp_path/'paper.pdf'
@@ -186,6 +193,7 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
         value=await invoke(ctx,'research.delegate',purpose='document_review',task='逐页检查实际稿件',
             source_version=version,pdf_sha256=pdf_hash)
         assert value['status']=='completed' and value['advisory'] and value['reviewed_pages']==[1]
+        assert b'data:image/png;base64' not in workspace_path(tmp_path,'.system/graph.sqlite').read_bytes()
         assert (tmp_path/'paper.tex').read_text()==r'\begin{document}Known manuscript\end{document}'
         calls=model.calls
         cached=await invoke(ctx,'research.delegate',purpose='document_review',task_id=value['task_id'],

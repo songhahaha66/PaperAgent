@@ -1,11 +1,13 @@
 """Bound active context; canonical messages, tool arguments and receipts stay intact."""
 import json
+import asyncio
 import logging
 from copy import deepcopy
 from typing import Any, Callable, Awaitable, Annotated
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage, messages_to_dict
 from pydantic import BaseModel, ConfigDict, Field
+from .images import ImageProjection,image_value
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +35,16 @@ def state_message(facts):
                         additional_kwargs={'context_snapshot':True})
 
 
-def token_estimate(value):
-    if isinstance(value,list):return sum(token_estimate(v) for v in value)
+def token_estimate(value,*,image_counter=None):
+    if isinstance(value,list):return sum(token_estimate(v,image_counter=image_counter) for v in value)
     if isinstance(value,dict):
-        if value.get('type') in {'image','image_url'}:return 1600
-        return sum(token_estimate(k)+token_estimate(v) for k,v in value.items())
+        if value.get('type')=='image_ref':return value['tokens']
+        if value.get('type') in {'image','image_url'} and ('image_url' in value or 'source' in value):
+            if image_counter is None:
+                from ..config.generation import ModelContextLimit
+                raise ModelContextLimit('图片计量需要指定模型，不能使用固定token常数。')
+            return image_counter(value)
+        return sum(token_estimate(k,image_counter=image_counter)+token_estimate(v,image_counter=image_counter) for k,v in value.items())
     text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,default=str)
     return sum(1 if ord(c)>127 else .3 for c in text).__ceil__()
 
@@ -99,6 +106,15 @@ class ContextMiddleware(AgentMiddleware):
 
     def offload(self,message,*,old=False):
         if not isinstance(message,ToolMessage):return message
+        images=None
+        value=image_value(message)
+        if value is not None:
+            images=value['_images']
+            if old:
+                value.pop('_images')
+                value['image_refs']=images
+                value['visual_review']='历史页图已移出当前上下文；需要时按source_version、pdf_sha256、页码重新writing_preview，原图保留。'
+                message=message.model_copy(update={'content':json.dumps(value,ensure_ascii=False)})
         if isinstance(message.content,list):
             if not old:return message
             # Old page images are recoverable through version-bound preview tools.
@@ -115,6 +131,9 @@ class ContextMiddleware(AgentMiddleware):
                 'revision','status','input_path','stdout_path','failure_kind','error','delivery_error',
                 'source_version','pdf_sha256','total_pages','next_offset','next_start','total','read_tool'}
         data={k:v for k,v in data.items() if k in fields and token_estimate(v)<200}
+        if images is not None:
+            data['image_refs' if old else '_images']=images
+            if old:data['visual_review']='历史页图已移出；按此固定版本重新writing_preview可读取原图。'
         data.update(excerpt=raw[:240] if old else raw[:2000]+'\n…\n'+raw[-1000:],_full_output_path=path)
         return message.model_copy(update={'content':json.dumps(data,ensure_ascii=False)})
 
@@ -153,6 +172,12 @@ class ContextMiddleware(AgentMiddleware):
             saved={'format':5,'cut':start,'hash':signature(start),'offloads':{}}
             cut=start
         previous=json.dumps(saved,ensure_ascii=False,sort_keys=True)
+        media=ImageProjection(self.ctx.workspace,self.llm,saved.setdefault('image_offloads',{}))
+        def estimate(value):return token_estimate(value,image_counter=media.native_tokens)
+        route=digest([type(self.llm).__module__,getattr(self.llm,'model_name',None),getattr(self.llm,'model',None),
+                      str(getattr(self.llm,'openai_api_base',None) or getattr(self.llm,'base_url',None)),
+                      static_hash,media.policy.__dict__,'vision-rules-20261031'])
+        anchor=saved.get('usage_anchor') or {}
         prior=saved.get('wire',[])
         def persist():
             nonlocal previous
@@ -197,7 +222,17 @@ class ContextMiddleware(AgentMiddleware):
             facts=point.get('snapshot')
             current=[state_message(facts)] if facts is not None else []
             return prefix+corrections+memory+current+messages[end:]
-        def size(rows):return overhead+token_estimate(messages_to_dict(rows))
+        def size(rows):
+            priced=media.view(rows,max_tokens=max(0,safe-overhead))
+            estimated=overhead+estimate(messages_to_dict(priced))
+            # Reuse actual usage only for an unchanged route and complete prefix.
+            # An omitted image, compaction or model switch invalidates the anchor.
+            if anchor.get('route')==route:
+                wire=[digest(messages_to_dict([m])) for m in priced]
+                prefix=anchor['wire']
+                if wire[:len(prefix)]==prefix:
+                    estimated=max(estimated,anchor['actual']+estimated-anchor['estimated'])
+            return estimated
         masked=0;summarized_now=False;summary_status='not_needed';selected_target=low
 
         def shrink_observations():
@@ -299,7 +334,7 @@ class ContextMiddleware(AgentMiddleware):
 
         async def send():
             nonlocal previous,prior
-            bounded=view()
+            bounded=media.view(view(),max_tokens=max(0,safe-overhead))
             if size(bounded)>safe:
                 raise ModelContextLimit(f'完整请求约{size(bounded)} tokens超过安全输入上限{safe}；原始记录已保留。')
             wire=[digest(messages_to_dict([m])) for m in bounded]
@@ -313,16 +348,25 @@ class ContextMiddleware(AgentMiddleware):
             saved.update(wire=wire,static_hash=static_hash)
             persist()
             prior=wire
-            stats={'messages_estimated_tokens':token_estimate(messages_to_dict(bounded)),
+            stats={'messages_estimated_tokens':estimate(messages_to_dict(bounded)),
                    'tools_estimated_tokens':tools,'total_estimated_tokens':size(bounded),
                    'input_limit':limit,'high_watermark':high,'low_watermark':low,'safe_input_limit':safe,
                    'compaction_target':selected_target,'summary_status':summary_status,
-                   'original_messages_estimated_tokens':token_estimate(messages_to_dict(self.messages)),
+                   'original_messages_estimated_tokens':media.original_tokens(self.messages,estimate),
+                   'image_meter':media.policy.strategy,'image_offloaded_occurrences':len(media.omitted),
                    'summarized_messages':max(0,cut-start),'offloaded_observations':len(saved['offloads']),
                    'cache_phase':phase,'reused_prefix_messages':common}
             with execution_scope(context_usage=stats):
-                response=await handler(request.override(messages=bounded))
+                wire_messages=await asyncio.to_thread(media.hydrate,bounded)
+                response=await handler(request.override(messages=wire_messages))
                 ensure_complete(response)
+                for reply in reversed(getattr(response,'result',None) or [response]):
+                    actual=(getattr(reply,'usage_metadata',None) or {}).get('input_tokens')
+                    if isinstance(actual,int) and actual>0:
+                        saved['usage_anchor']={'route':route,'wire':wire,'actual':actual,
+                            'estimated':overhead+estimate(messages_to_dict(bounded))}
+                        persist()
+                        break
                 return response
         try:return await send()
         except ModelContextOverflow:

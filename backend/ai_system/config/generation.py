@@ -18,6 +18,9 @@ class GenerationSettings(BaseModel):
     context_window:int|None=Field(default=None,ge=1024,le=10000000)
     reasoning_effort:Literal['minimal','low','medium','high','xhigh','max']|None=None
     prices:TokenPrices|None=None
+    image_inputs:bool|None=None
+    image_tokens_per_image:int|None=Field(default=None,ge=1,le=1000000,
+        description='自定义视觉模型的单图token保守上界；已适配模型使用其原生规则。')
 
     @model_validator(mode='after')
     def room_for_input(self):

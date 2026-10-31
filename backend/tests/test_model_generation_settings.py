@@ -39,6 +39,20 @@ def test_unknown_gateway_capacity_is_not_inferred_from_the_endpoint_name():
         create_llm_from_model_config(config)
 
 
+def test_vision_settings_reach_the_actual_model_projection_without_network_calls():
+    from ai_system.graph.images import vision_policy
+    config = SimpleNamespace(model_id='deepseek-flash', base_url='https://api.deepseek.com/v1',
+                             api_key='offline', generation_settings={})
+    native = create_llm_from_model_config(config)
+    assert vision_policy(native).enabled and vision_policy(native).tokens(1600,1600) == 1024
+    config.model_id='custom-vision';config.base_url='https://gateway.invalid/v1'
+    config.generation_settings={'image_inputs':True,'image_tokens_per_image':4096}
+    custom = create_llm_from_model_config(config)
+    assert vision_policy(custom).enabled and vision_policy(custom).tokens(1600,1600) == 4096
+    config.generation_settings={'image_inputs':False}
+    assert not vision_policy(create_llm_from_model_config(config)).enabled
+
+
 def test_capacity_lookup_and_save_validation_through_real_routes():
     from fastapi import FastAPI
     from sqlalchemy import create_engine
