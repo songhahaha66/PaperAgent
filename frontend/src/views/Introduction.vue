@@ -3,7 +3,7 @@
     <div class="custom-header">
       <div class="header-left">
         <img src="/logo.png" alt="Logo" width="36" />
-        <h1 class="header-title">PaperAgent</h1>
+        <h1 class="header-title paperagent-wordmark">PaperAgent</h1>
       </div>
       <div class="header-right">
         <t-button

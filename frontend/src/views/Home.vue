@@ -7,7 +7,9 @@
       @create-new-task="resetDraft"
     />
     <main class="home-main">
-      <header v-if="!isMobile" class="home-header"><span>PaperAgent</span></header>
+      <header v-if="!isMobile" class="home-header">
+        <span class="paperagent-wordmark">PaperAgent</span>
+      </header>
       <section
         class="home-content"
         :class="{ 'has-history': recentWorks.length }"

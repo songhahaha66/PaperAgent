@@ -15,7 +15,7 @@
     </div>
     <div v-else class="sidebar-header">
       <div class="header-title">
-        <h2>PaperAgent</h2>
+        <h2 class="paperagent-wordmark">PaperAgent</h2>
         <img src="/logo.png" alt="PaperAgent Logo" class="header-logo" />
       </div>
       <div class="header-controls">
@@ -137,7 +137,7 @@
       <SidebarToggleIcon />
     </button>
     <router-link to="/home" class="mobile-brand"
-      ><img src="/logo.png" alt="" /><span>PaperAgent</span></router-link
+      ><img src="/logo.png" alt="" /><span class="paperagent-wordmark">PaperAgent</span></router-link
     >
     <div class="mobile-account">
       <AccountMenu :collapsed="true" placement="bottom-right" @navigate="closeSidebarOnMobile" />
@@ -327,7 +327,6 @@ onUnmounted(() => {
   min-width: 0;
 }
 .header-title h2 {
-  font-family: var(--td-font-family);
   font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.4px;

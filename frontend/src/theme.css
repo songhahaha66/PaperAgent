@@ -1,3 +1,11 @@
+@font-face {
+  font-family: 'Libre Baskerville';
+  src: url('/LibreBaskerville-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 /* Theme owns all design values. studio.css only contains shared component rules.
  * Radius: inline/code 4; controls/navigation 8; cards/composers 12; overlays 16.
  * Heights: compact actions 28; standard controls 36; large form controls 40.
@@ -10,6 +18,7 @@
 }
 
 :root {
+  --pa-brand-font: 'Libre Baskerville', Georgia, serif;
   --pa-message-user-bg: #e8f3ff;
   --pa-message-user-ink: #1d3b5c;
   --pa-radius-inline: 4px;
@@ -24,6 +33,10 @@
   --pa-control-height-lg: 40px;
   --pa-document-paper: #fff;
   --pa-document-ink: #252a27;
+}
+
+.paperagent-wordmark {
+  font-family: var(--pa-brand-font);
 }
 
 :root,
