@@ -62,6 +62,35 @@ class Capability:
     access: Literal['read','write'] = 'write'
 
 
+def activity_inputs(name, inputs):
+    """Keep writing metadata without copying manuscripts or replacement text."""
+    if not name.startswith('writing.'):
+        return inputs
+    if name == 'writing.edit':
+        return {'path': inputs.get('path', 'paper.md'),
+                'edit_mode': 'replace' if inputs.get('old_text') is not None else 'write'}
+    if name == 'writing.preview':
+        pages = inputs.get('pages', [1])
+        return {'pages': [page for page in pages[:4] if type(page) is int] if isinstance(pages, list) else [],
+                'historical': bool(inputs.get('source_version'))}
+    if name == 'writing.use_asset':
+        return {key: inputs[key] for key in ('source', 'destination') if key in inputs}
+    return {}
+
+
+def activity_output(name, value):
+    if not name.startswith('writing.'):
+        return value
+    if name == 'writing.preview':
+        return {**{key: value[key] for key in ('total_pages', 'compiled', 'current') if key in value},
+                'pages': [page['page'] for page in value.get('pages', []) if isinstance(page, dict) and type(page.get('page')) is int],
+                'warnings': [warning[:400] for warning in value.get('warnings', [])[:20] if isinstance(warning, str)],
+                'warning_count': len(value.get('warnings', []))}
+    keys = {'writing.edit': ('path',), 'writing.use_asset': ('path',),
+            'writing.propose_edits': ('status',), 'writing.export': ('exports',)}.get(name, ())
+    return {key: value[key] for key in keys if key in value}
+
+
 class ModuleRegistry:
     def __init__(self):
         self._capabilities = {}
@@ -91,7 +120,7 @@ class ModuleRegistry:
             from ai_system.research.views import activity
             branch=request.inputs.get('branch') or {}
             task_id=request.inputs.get('task_id') or request.inputs.get('experiment_id') or branch.get('subproblem',{}).get('id')
-            with activity(ctx,request.name,task_id,inputs=request.inputs if not request.name.startswith('writing.') else {},**({'question_id':request.inputs['question_id']} if request.inputs.get('question_id') else {})) as execution:
+            with activity(ctx,request.name,task_id,inputs=activity_inputs(request.name,request.inputs),**({'question_id':request.inputs['question_id']} if request.inputs.get('question_id') else {})) as execution:
                 with capability_span(request.name, capability.module, request.inputs) as span:
                     result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
                     if inspect.isawaitable(result):
@@ -103,8 +132,8 @@ class ModuleRegistry:
                         if result.execution_status != 'completed':
                             execution.setdefault('error_type','ExecutionIncomplete')
                             execution.setdefault('message',result.execution_message or '本次操作未完成，已有输出已保留。')
-                    if isinstance(result.value,dict) and not request.name.startswith('writing.'):
-                        execution['output'] = {**execution.get('output',{}), **result.value}
+                    if isinstance(result.value,dict):
+                        execution['output'] = {**execution.get('output',{}), **activity_output(request.name,result.value)}
                         if result.value.get('question_id'):execution['question_id']=result.value['question_id']
                         if result.value.get('experiment_id'):execution['experiment_id']=result.value['experiment_id']
                     if isinstance(result.value,dict) and result.value.get('research_blocked'):

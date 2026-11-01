@@ -61,6 +61,9 @@
           >
             <p v-if="entry.row.detail">{{ entry.row.detail }}</p>
             <p v-if="entry.row.message">{{ entry.row.message }}</p>
+            <ul v-if="entry.row.warnings?.length" class="execution-warnings" aria-label="编译警告">
+              <li v-for="(warning, index) in entry.row.warnings" :key="index">{{ warning }}</li>
+            </ul>
             <pre v-if="entry.row.output_tail" class="execution-output">{{
               entry.row.output_tail
             }}</pre>
@@ -76,7 +79,7 @@
               未产生标准输出。
             </p>
             <div class="step-links">
-              <button v-if="entry.row.file" @click="$emit('file', entry.row.file)">
+              <button v-if="entry.row.file" :title="entry.row.file" @click="$emit('file', entry.row.file)">
                 {{ entry.row.file.split('/').pop() }}
               </button>
               <button
@@ -87,11 +90,12 @@
                 {{ (entry.row.result_ids?.length || 0) > 1 ? `查看结果 ${index + 1}` : '查看结果' }}
               </button>
               <button v-if="entry.row.script_file" @click="$emit('file', entry.row.script_file)">
-                代码
+                查看执行代码
               </button>
               <button
                 v-for="path in entry.row.files || []"
                 :key="path"
+                :title="path"
                 @click="$emit('file', path)"
               >
                 {{ path.split('/').pop() }}
@@ -342,6 +346,10 @@ time {
 }
 .current-note {
   margin: 4px 0 0 14px;
+}
+.execution-warnings {
+  padding-left: 18px;
+  margin: 6px 0;
 }
 ol {
   list-style: none;

@@ -120,18 +120,25 @@ def render_pages(root, version, pdf_hash, pages):
 
 
 async def preview(ctx, inputs):
+    from ai_system.research.views import activity_metadata
     version=inputs['source_version']
+    compiled=False
     if version is None:
         current=await asyncio.to_thread(project.snapshot,ctx.workspace)
         if not current['main'].endswith('.tex'):raise ValueError('当前实际PDF预览支持TeX项目；Markdown请先按项目输出格式导出')
         data=project.meta(ctx.workspace)
         if data.get('pdf_version')!=current['version'] or not data.get('pdf_sha256') or data.get('compile',{}).get('state')!='current':
+            activity_metadata(ctx,'writing.preview',preview_stage='compiling',compiled=True)
             data=await project.compile_project(ctx.research)
+            compiled=True
         if not data.get('compile',{}).get('success') or data.get('pdf_version')!=current['version']:
-            return CapabilityProduct('paper',{'status':'failed','execution_status':'failed','compile':data.get('compile',{})},'failed','当前稿件尚未编译成功')
+            return CapabilityProduct('paper',{'status':'failed','execution_status':'failed','compile':data.get('compile',{}),
+                'compiled':compiled,'warnings':data.get('compile',{}).get('warnings',[])},'failed','当前稿件尚未编译成功')
         version=current['version']
         await ctx.events.file_changed('paper.pdf')
+    activity_metadata(ctx,'writing.preview',preview_stage='reading',compiled=compiled)
     result=await asyncio.to_thread(render_pages,ctx.workspace,version,inputs['pdf_sha256'],inputs['pages'])
+    result['compiled']=compiled
     result['current']=project.snapshot(ctx.workspace)['version']==version and project.meta(ctx.workspace).get('pdf_sha256')==result['pdf_sha256']
     result['instruction']='页面按此PDF版本保存。以本次visual_pages为实际附图范围，未附图时仅检查文本。逐页检查图表、截断、缺项及结论；编译成功不表示质量通过。可继续writing_preview读取，或research_delegate purpose=document_review复核固定版本。'
     return CapabilityProduct('paper',result)

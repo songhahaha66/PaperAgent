@@ -85,11 +85,47 @@ def safe_diagnostic(root, value, limit=400):
     return text[:limit]
 
 
+def page_range(pages):
+    if not isinstance(pages, list):return ''
+    numbers = sorted({p for p in pages if type(p) is int and p > 0})[:4]
+    groups = []
+    for number in numbers:
+        if groups and number == groups[-1][-1] + 1: groups[-1].append(number)
+        else: groups.append([number])
+    return '、'.join(str(g[0]) if len(g) == 1 else f'{g[0]}–{g[-1]}' for g in groups)
+
+
 def operation_detail(root, item):
     # Describe recorded inputs and receipts, never invent progress from elapsed time.
     capability = item.get('capability')
     inputs, output = item.get('inputs') or {}, item.get('output') or {}
-    if capability == 'read_file':
+    if capability == 'writing.preview':
+        pages = page_range(output.get('pages') or inputs.get('pages') or [])
+        parts = [f'第 {pages} 页'] if pages else []
+        if type(output.get('total_pages')) is int: parts.append(f"共 {output['total_pages']} 页")
+        if inputs.get('historical'): parts.append('历史版本')
+        if item.get('status') == 'running':
+            stage = output.get('preview_stage')
+            if stage == 'compiling': parts.append('正在编译 LaTeX')
+            elif stage == 'reading': parts.append('正在读取 PDF 页面')
+        elif item.get('status') == 'completed' and type(output.get('warning_count')) is int:
+            parts.append(f"{output['warning_count']} 条编译警告")
+        return '；'.join(parts)
+    if capability == 'writing.edit':
+        if item.get('status') == 'completed':return '已保存局部修改。' if inputs.get('edit_mode') == 'replace' else '已保存文件。'
+        if item.get('status') == 'running':return '正在替换指定原文。' if inputs.get('edit_mode') == 'replace' else '正在保存文件。'
+    if capability == 'writing.use_asset':
+        source = safe_file(root, inputs.get('source'))
+        if source:return f"来源：{source}" + ('；已绑定固定版本。' if item.get('status') == 'completed' else '')
+    if capability == 'writing.propose_edits' and output.get('status') == 'pending':
+        return '修改建议已生成，等待接受；正文尚未修改。'
+    if capability == 'research.list_files' and type(output.get('total')) is int:
+        return f"已列出 {len(output.get('files', []))} 个文件，共 {output['total']} 个。"
+    if capability == 'research.search_files' and 'matches' in output:
+        return f"本批搜索找到 {len(output['matches'])} 个匹配文件。"
+    if capability == 'research.delegate':
+        return safe_diagnostic(root, inputs.get('task', ''), limit=240)
+    if capability in {'read_file', 'research.read_artifact'}:
         total = output.get('total_chars')
         if total is not None:return f"已读取 {len(output.get('excerpt', ''))} 个字符，文件共 {total} 个字符。"
         start, size = inputs.get('start'), inputs.get('limit')
@@ -105,6 +141,20 @@ def operation_detail(root, item):
     return ''
 
 
+def run_files(root, fs, run_id):
+    """Prefer immutable published paths and collapse aliases of the same artifact."""
+    files = []; seen = set()
+    entries = sorted(fs._manifest.get('files', {}).items(),
+                     key=lambda pair: (not pair[0].startswith('outputs/research/'), pair[0]))
+    for value, meta in entries:
+        archive = meta.get('archive_path')
+        if meta.get('source_run') != run_id or meta.get('visibility') != 'user' or not archive:continue
+        path = safe_file(root, value)
+        if path and archive not in seen:
+            seen.add(archive); files.append(path)
+    return files
+
+
 def execution_projection(root, research_id, item, *, fs=None):
     from ai_system.research.views import LABELS
     row = {key: item[key] for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id',
@@ -114,11 +164,15 @@ def execution_projection(root, research_id, item, *, fs=None):
                label=item.get('display_label') or LABELS.get(item.get('capability'), '执行步骤'),
                status=item.get('status', 'unknown'), started_at=item.get('started_at'))
     row['detail'] = operation_detail(root, item)
+    output = item.get('output') or {}
+    if item.get('capability') == 'writing.preview':
+        if output.get('compiled'): row['label'] = '编译并预览论文 PDF'
+        row['warnings'] = [safe_diagnostic(root, warning) for warning in output.get('warnings', [])[:20] if isinstance(warning, str)]
     if item.get('error_type') or row['status'] in {'failed','error'}:
         reason = safe_diagnostic(root, item.get('message')) if item.get('error_type') else ''
         row['message'] = reason or '未记录具体错误；已有产物保留，可查看执行输出。'
     inputs = item.get('inputs') or {}
-    file = safe_file(root, item.get('display_file') or (inputs.get('path') if isinstance(inputs, dict) else None))
+    file = safe_file(root, item.get('display_file') or output.get('path') or inputs.get('path') or inputs.get('destination'))
     if file:
         row['file'] = file
         row['label'] += ' · ' + Path(file).name
@@ -130,10 +184,9 @@ def execution_projection(root, research_id, item, *, fs=None):
         row['output_file'] = safe_file(root, info.get('stdout'), nonempty=True)
         row['script_file'] = safe_file(root, info.get('input'))
         row['error_file'] = safe_file(root, info.get('stderr'), nonempty=True)
-        row['files'] = [path for value,meta in fs._manifest.get('files',{}).items()
-                        if meta.get('source_run')==run_id and meta.get('visibility')=='user'
-                        and meta.get('archive_path') and (path:=safe_file(root,value))]
-    output = item.get('output') or {}
+        row['files'] = run_files(root, fs, run_id)
+        if row['files'] and not row['detail'] and row['status'] != 'running':
+            row['detail'] = f"已保留 {len(row['files'])} 个结果文件。"
     if item.get('capability') in {'run_python','research.run_python'} and isinstance(output.get('output_tail'), str):
         row['output_tail'] = output['output_tail'][-6000:]
     refs = output.get('artifact_refs', []) if isinstance(output, dict) else []
