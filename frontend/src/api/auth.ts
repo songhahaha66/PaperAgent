@@ -16,8 +16,14 @@ export interface UserResponse {
   id: number
   email: string
   username: string
+  avatar_url?: string | null
   created_at: string
   is_active: boolean
+}
+
+export interface UserProfileUpdate {
+  username?: string
+  avatar_url?: string | null
 }
 
 export interface TokenResponse {
@@ -70,6 +76,13 @@ class AuthAPI {
     })
   }
 
+  async updateProfile(data: UserProfileUpdate): Promise<UserResponse> {
+    return this.request<UserResponse>('/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    })
+  }
+
   async getPasskeyRegisterOptions(): Promise<PasskeyOptionsResponse> {
     return this.request<PasskeyOptionsResponse>('/passkey/register/options', {
       method: 'POST',
@@ -98,10 +111,7 @@ class AuthAPI {
     })
   }
 
-  async verifyPasskeyLogin(
-    challengeId: string,
-    credential: object,
-  ): Promise<TokenResponse> {
+  async verifyPasskeyLogin(challengeId: string, credential: object): Promise<TokenResponse> {
     return this.request<TokenResponse>('/passkey/login/verify', {
       method: 'POST',
       body: JSON.stringify({

@@ -16,7 +16,10 @@
       :aria-expanded="visible"
       :aria-controls="panelId"
     >
-      <span class="account-avatar">{{ userName.charAt(0).toUpperCase() }}</span>
+      <span class="account-avatar">
+        <img v-if="auth.currentUser?.avatar_url" :src="auth.currentUser.avatar_url" alt="" />
+        <template v-else>{{ userName.charAt(0).toUpperCase() }}</template>
+      </span>
       <span v-if="!collapsed" class="account-trigger-details"
         ><strong :title="userName">{{ userName }}</strong></span
       >
@@ -37,6 +40,9 @@
         </div>
         <div class="account-divider" />
         <nav :aria-label="isZh ? '账户设置' : 'Account settings'">
+          <button class="account-action" @click="openProfile">
+            <t-icon name="user" /><span>{{ isZh ? '个人资料' : 'Profile' }}</span>
+          </button>
           <button class="account-action" @click="navigate('/passkey')">
             <t-icon name="secured" /><span>{{ t('sidebar.passkeys') }}</span>
           </button>
@@ -52,6 +58,7 @@
       </section>
     </template>
   </t-popup>
+  <ProfileSettings v-if="showProfile" @close="closeProfile" />
 </template>
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
@@ -59,6 +66,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import LanguageSwitcher from './LanguageSwitcher.vue'
+import ProfileSettings from './ProfileSettings.vue'
 withDefaults(defineProps<{ collapsed: boolean; placement?: 'top-left' | 'bottom-right' }>(), {
   placement: 'top-left',
 })
@@ -69,6 +77,15 @@ const auth = useAuthStore(),
 const visible = ref(false),
   trigger = ref<HTMLButtonElement | null>(null)
 const panelId = useId()
+const showProfile = ref(false)
+function closeProfile() {
+  showProfile.value = false
+  trigger.value?.focus()
+}
+function openProfile() {
+  visible.value = false
+  showProfile.value = true
+}
 const isZh = computed(() => locale.value.startsWith('zh'))
 const userName = computed(() => auth.currentUser?.username || t('common.user'))
 const popupStyle = {
@@ -127,6 +144,12 @@ function logout() {
 .account-trigger-details {
   min-width: 0;
   flex: 1;
+}
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
 }
 .account-trigger-details strong {
   display: block;
