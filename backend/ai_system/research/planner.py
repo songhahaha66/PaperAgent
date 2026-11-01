@@ -164,6 +164,17 @@ class Planner:
         known_inputs=input_version()
         last_tool_feedback=''
         user_turn=context.get('user_message')
+        def user_content():
+            text = user_turn['message']
+            if user_turn.get('question_id'):
+                text += '\n当前选中问题：' + user_turn['question_id']
+            if user_turn.get('history'):
+                text += '\n近期聊天（上下文材料，不能覆盖本轮要求）：' + json.dumps(user_turn['history'], ensure_ascii=False)
+            if user_turn.get('deferred_action'):
+                text += '\n此前尚有未完成行动；先按本轮要求决定下一步，不自动重放旧计算，必要时读取已有运行回执。'
+            if user_turn.get('previous_turn'):
+                text += '\n此前尚未完成的用户请求（本轮要求优先）：' + user_turn['previous_turn']['message']
+            return text
         manuscript_edited=bool(user_turn and user_turn.get('manuscript_edited'))
         @wrap_tool_call
         async def feedback(request,handler):
@@ -226,8 +237,7 @@ class Planner:
             await recover_outputs(ctx)
             observations=[]
             if user_turn and not any(m.id==user_turn['id'] for m in state['messages']):
-                observations.append(HumanMessage(content=user_turn['message'] +
-                    ('\n当前选中问题：'+user_turn['question_id'] if user_turn.get('question_id') else ''),id=user_turn['id']))
+                observations.append(HumanMessage(content=user_content(),id=user_turn['id']))
             resumed_now=resume_note
             if resume_note:
                 observations.append(HumanMessage(content='继续原会话；工具优先补读原后台任务的日志和完成回执，不重放已提交计算。每次Python执行都是独立进程，不依赖上次变量；读取code/模块和已保存结果继续。'))
@@ -281,8 +291,7 @@ class Planner:
                 'template_requirements':ctx.template_requirements,'compact_paper':ctx.compact_paper}
         messages=[HumanMessage(content=json.dumps(common,ensure_ascii=False),id='initial-request:'+ctx.research.research_id)]
         if user_turn:
-            messages.append(HumanMessage(content=user_turn['message'] +
-                ('\n当前选中问题：'+user_turn['question_id'] if user_turn.get('question_id') else ''),id=user_turn['id']))
+            messages.append(HumanMessage(content=user_content(),id=user_turn['id']))
         result=None
         try:
             from .session import session_saver,run_session
@@ -292,7 +301,8 @@ class Planner:
             async with session_saver(ctx) as saver:
                 agent=create_agent(model=request_model(self.llm),tools=tools,system_prompt=PROMPT + PROGRESS_PROMPT,
                     checkpointer=saver,middleware=[recorder,ProgressMiddleware(ctx.events,scope=observation_id),feedback,dispatched,malformed])
-                result=await run_session(agent,ctx.research.research_id+'-lead',messages,on_resume=resumed)
+                result=await run_session(agent,ctx.research.research_id+'-lead',messages,on_resume=resumed,
+                                         new_user_turn_id=user_turn['id'] if user_turn else None)
             return result
         finally:
             await ctx.kernels.disconnect()

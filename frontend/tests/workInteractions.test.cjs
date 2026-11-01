@@ -40,8 +40,8 @@ async function environment() {
         })
         return this.connection
       }
-      sendMessage(message, _model, action, subproblemId, revision, _scope, requestId) {
-        sent.push({ workId: this.workId, message, action, subproblemId, revision })
+      sendMessage(message, _model, action, subproblemId, revision, _scope, requestId, sourceIssue) {
+        sent.push({ workId: this.workId, message, action, subproblemId, revision, ...(sourceIssue ? { sourceIssue } : {}) })
         this.message?.({ type: 'start', task_id: `task-${sent.length}`, reply_id: `reply-${sent.length}`, request_id: requestId, action })
       }
       disconnect() {
@@ -226,8 +226,18 @@ if (require.main === module) (async () => {
   assert.equal(progressWork.state.openProgress,undefined)
   assert.equal(progressWork.sent.length, 0, 'opening the paper never resumes research')
   await progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
-  assert.equal(progressWork.sent.at(-1).action, 'revise_research')
-  assert.equal(progressWork.sent.at(-1).revision.scope[0], 'Q1')
+  assert.equal(progressWork.sent.at(-1).action, 'auto')
+  assert.equal(progressWork.sent.at(-1).subproblemId, 'Q1')
+  assert.equal(progressWork.sent.at(-1).revision, undefined, 'the server classifies and constructs revision commands')
+  assert.equal(progressWork.state.stageText.value, '正在理解你的消息')
+  assert.equal(progressWork.state.primaryAction.value.label, '停止回复')
+  progressWork.sockets[0].message({ type: 'message_routed', task_id: 'task-1', action: 'ask', work_status: 'completed' })
+  assert.equal(progressWork.state.stageText.value, '正在分析已有材料')
+  assert.equal(progressWork.state.currentWork.value.status, 'completed', 'read-only answers preserve research status')
+  progressWork.sockets[0].message({ type: 'message_routed', task_id: 'stale-task', action: 'message', work_status: 'in_progress' })
+  assert.equal(progressWork.state.runningAction.value, 'ask', 'a stale route cannot change the active turn')
+  progressWork.sockets[0].message({ type: 'message_routed', task_id: 'task-1', action: 'revise_research', work_status: 'in_progress' })
+  assert.equal(progressWork.state.primaryAction.value.label, '暂停')
   assert.equal(progressWork.state.messageAction, undefined, 'the composer has no persistent revision mode')
   assert.equal(progressWork.state.questionScope.value, null)
   progressWork.state.handleStreamMessage({ type: 'complete', work_status: 'paused' }, progressWork.state.chatMessages.value.at(-1).id)
@@ -287,6 +297,8 @@ if (require.main === module) (async () => {
   await primary.state.sendMessage('Necessary information supplied.', 'auto')
   assert.equal(primary.sent.at(-1).action, 'auto')
   assert.equal(primary.state.primaryAction.value.kind, 'pause', 'execution takes precedence over confirmation and existing output')
+  assert.equal(primary.state.primaryAction.value.label, '停止回复', 'classification has not started research')
+  primary.sockets.at(-1).message({ type: 'message_routed', task_id: 'task-1', action: 'confirm', work_status: 'in_progress' })
   assert.equal(primary.state.primaryAction.value.label, '暂停')
   primary.state.pausing.value = true
   await primary.state.handlePrimaryAction()
@@ -444,7 +456,7 @@ if (require.main === module) (async () => {
   assert.equal(restored.sent.at(-1).action, 'run')
   restored.stop()
   console.log('PASS: one-line submission respects IME and streaming continues across split tabs')
-  console.log('PASS: scoped follow-up and explicit research send different backend actions')
+  console.log('PASS: contextual messages share one entry; explicit restart remains a separate control')
 
   const recovery = await env.work('recovery')
   await recovery.state.loadWork()

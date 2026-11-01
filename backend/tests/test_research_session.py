@@ -136,6 +136,11 @@ def web(monkeypatch, tmp_path):
         async def astream(self, messages):
             calls.append(("ask", messages))
             yield SimpleNamespace(content="已有数值是 0.82 [R1]")
+    async def classify(*args, **kwargs):
+        from ai_system.graph.message_graph import MessageIntent
+        calls.append(('classify', None))
+        return MessageIntent(intent='answer')
+    monkeypatch.setattr('ai_system.graph.message_graph.classify_message', classify)
     class Agent:
         def __init__(self, llm, stream, *args, **kwargs):
             calls.append(("graph", None))
@@ -243,16 +248,79 @@ def test_websocket_followup_never_constructs_graph_or_changes_research_status(we
     assert original == research_files(root), 'conversation checkpoints must not mutate research evidence'
 
 
-def test_websocket_auto_reaches_existing_agent_without_loading_jev(web,monkeypatch):
-    def forbidden(*args,**kwargs):raise AssertionError('automatic chat must not load a classifier')
+def test_websocket_auto_classifies_before_readonly_answer_without_loading_jev(web,monkeypatch):
+    def forbidden(*args,**kwargs):raise AssertionError('automatic chat must not load Jev')
     monkeypatch.setattr('ai_system.judge.JevJudge',forbidden)
     client,work,calls,statuses,saved,root=web
     qid=research_snapshot(root,'work','completed').questions[0]['id']
     events=exchange(client,{'problem':'解释这个结果，并指出局限','subproblem_id':qid})
-    assert events[0]['action']=='message' and events[-1]['type']=='complete'
-    assert [name for name,_ in calls]==['graph','message']
-    assert calls[-1][1]==('解释这个结果，并指出局限',{'question_id':qid})
+    assert events[0]['action']=='auto' and events[-1]['type']=='complete'
+    assert [name for name,_ in calls]==['classify','ask']
+    assert next(e for e in events if e['type']=='message_routed')['action']=='ask'
+    assert statuses==[]
+
+
+def test_question_while_waiting_preserves_pending_clarification(web):
+    from ai_system.research.store import ResearchStore
+    client,work,calls,statuses,saved,root=web
+    store=ResearchStore(root,'research-1')
+    with store._transaction() as db:
+        state=store._read(db)
+        state['action']={'id':'waiting-year','capability':'ask','status':'waiting','inputs':{'message':'使用哪一年？'}}
+        store._save(db,state,'test_waiting',{})
+    work.status='waiting'
+    original=store.snapshot()
+    events=exchange(client,{'problem':'为什么需要年份？','request_id':'explain-year'})
+    assert events[-1]['type']=='complete' and events[-1]['work_status']=='waiting'
+    assert [name for name,_ in calls]==['classify','ask'] and statuses==[]
+    assert store.snapshot()==original
+
+
+@pytest.mark.parametrize('intent,expected', [('work','message'),('amend','revise_research'),('resume','resume'),('respond','run')])
+def test_auto_dispatches_execution_after_classification(web,monkeypatch,intent,expected):
+    from ai_system.graph.message_graph import MessageIntent
+    from routers.chat_routes import chat
+    client,work,calls,statuses,saved,root=web
+    async def classify(*args,**kwargs):
+        calls.append(('classify',None))
+        assert statuses==[], 'classification must precede work status changes'
+        return MessageIntent(intent=intent)
+    monkeypatch.setattr('ai_system.graph.message_graph.classify_message',classify)
+    async def revise(self,**kwargs):
+        self.commit_completion()
+        calls.append(('revise_research',kwargs))
+        await self.stream.send_json_block('main_agent_complete','需求已更新')
+    monkeypatch.setattr(chat.PaperGraphAgent,'revise_research',revise,raising=False)
+    if intent=='resume':work.status='failed'
+    if intent=='respond':work.status='waiting'
+    events=exchange(client,{'problem':'使用2025年并继续','request_id':'execute-'+intent})
+    assert events[0]['action']=='auto' and events[-1]['type']=='complete'
+    assert [name for name,_ in calls]==['classify','graph',expected]
     assert statuses==['in_progress','completed']
+    if intent=='amend':
+        options=calls[-1][1]
+        assert options['base_revision']>0 and options['command_id']=='user:execute-amend'
+        assert options['replace_pending'] is True
+
+
+def test_classification_failure_and_stop_preserve_research_state(web,monkeypatch):
+    from routers.chat_routes import chat
+    client,work,calls,statuses,saved,root=web
+    entered=asyncio.Event()
+    async def classify(*args,**kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+    monkeypatch.setattr('ai_system.graph.message_graph.classify_message',classify)
+    with client.websocket_connect('/api/chat/ws/work') as ws:
+        ws.send_json({'token':'test'});ws.receive_json()
+        ws.send_json({'problem':'先解释结果','request_id':'stop-routing'})
+        start=ws.receive_json()
+        assert start['type']=='start' and start['action']=='auto' and start['work_status']=='completed'
+        client.portal.call(entered.wait)
+        response=client.post('/api/chat/work/work/pause')
+        assert response.json()['work_status']=='completed'
+    assert calls==[] and statuses==[] and work.status=='completed'
+    assert chat.task_manager.get_task('work').status.value=='cancelled'
 
 
 @pytest.mark.parametrize("action,expected", [("run", "run"), ("resume", "resume"), ("confirm", "run"), ("revise", "run")])
@@ -289,13 +357,20 @@ def test_corrupt_records_reject_message_without_running_or_resetting(web):
     with sqlite3.connect(workspace_path(root, '.system/research.sqlite')) as db:assert db.execute('SELECT payload FROM research').fetchone()[0]=='{'
 
 
-@pytest.mark.parametrize("destination", ["https://example.test/v1", "https://api.deepseek.com.evil.test", "http://api.deepseek.com", "https://api.deepseek.com@evil.test", "", "http://aigw.saurlax.com/v1", "https://aigw.saurlax.com.evil.test/v1", "https://aigw.saurlax.com:444/v1", "https://aigw.saurlax.com@evil.test/v1"])
-def test_approval_does_not_extend_to_other_model_destinations(tmp_path, monkeypatch, destination):
-    monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
+def test_readonly_answer_uses_configured_model_without_legacy_opt_in(tmp_path, monkeypatch):
+    monkeypatch.delenv('AI_RESEARCH_CONTEXT_ENABLED', raising=False)
     seed(tmp_path)
-    with pytest.raises(PermissionError, match="仅授权"):
-        asyncio.run(answer_research_question(None, None, research_snapshot(tmp_path, "work", "completed"),
-            tmp_path, "解释结果", [], destination_url=destination))
+    seen=[]
+    class Model:
+        async def astream(self, messages):
+            seen.extend(messages)
+            yield SimpleNamespace(content='已有结果')
+    class Stream:
+        async def send_json_block(self, *args): pass
+        async def _output(self, *args): pass
+    asyncio.run(answer_research_question(Model(), Stream(), research_snapshot(tmp_path, 'work', 'completed'),
+                                         tmp_path, '解释结果', [], destination_url='https://configured.example/v1'))
+    assert seen
 
 
 def test_multiple_browsers_observe_turns_reconnect_and_continue_after_submitter_leaves(web, monkeypatch):

@@ -191,15 +191,6 @@
                       ><t-icon name="attach"
                     /></t-button>
                     <t-button
-                      v-if="researchSnapshot?.research_id && currentWork?.status !== 'waiting' && !paperContexts.length"
-                      type="button"
-                      theme="default"
-                      variant="text"
-                      :disabled="isStreaming || loading || !inputValue.trim()"
-                      @click="sendMessage(undefined, 'revise_research')"
-                      >{{ isZh ? '补充要求' : 'Update requirements' }}</t-button
-                    >
-                    <t-button
                       type="submit"
                       theme="primary"
                       shape="circle"
@@ -286,11 +277,6 @@
                   />
                   <div v-else class="figure-placeholder"><t-icon name="image" /></div>
                   <span>{{ figure.name }}</span>
-                </button>
-                <button
-                  @click.stop="askPaper(`请解释图表 ${figure.path} 的数据、计算依据和局限。`)"
-                >
-                  {{ isZh ? '追问依据' : 'Ask about evidence' }}
                 </button>
               </div>
             </div>
@@ -472,7 +458,7 @@ async function refreshPaper() {
 function askPaper(message: string, task?: string) {
   questionScope.value = task || null
   layout.activateChat()
-  sendMessage(message, 'ask')
+  sendMessage(message)
 }
 function revisePaper(
   message: string,
@@ -481,12 +467,12 @@ function revisePaper(
 ) {
   questionScope.value = task || null
   layout.activateChat()
-  sendMessage(message, 'revise_research', sourceIssue)
+  sendMessage(message, 'auto', sourceIssue)
 }
 function preparePlanRevision(message: string, task: string) {
   questionScope.value = task
   layout.activateChat()
-  return sendMessage(message, 'revise_research')
+  return sendMessage(message)
 }
 const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
 const {
@@ -590,7 +576,8 @@ const primaryAction = computed(() => {
   if (!currentWork.value) return null
   if (isStreaming.value) {
     const label =
-      runningAction.value === 'ask' ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
+      ['auto', 'ask', 'clarify'].includes(runningAction.value)
+        ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
     return { kind: 'pause', icon: 'pause', label, title: label } as const
   }
   if (currentWork.value.status === 'waiting') {

@@ -77,6 +77,35 @@ class ChatHistoryManager:
         with self._database(work_id, write=True) as db:
             self._write_message(db, message)
 
+    def begin_turn(self, work_id, message_id, content):
+        """A request keeps its user-message identity across retries."""
+        with self._database(work_id, write=True) as db:
+            row = db.execute('SELECT payload FROM chat_messages WHERE id=?', (message_id,)).fetchone()
+            if row:
+                message = json.loads(row[0])
+                if message['role'] != 'user' or message['content'] != content:
+                    raise ValueError('消息标识已被其他内容使用')
+                if message.get('metadata', {}).get('turn_status') == 'completed':
+                    raise ValueError('这条消息已处理，请查看聊天记录')
+                return message
+            message = {'id': message_id, 'role': 'user', 'content': content,
+                       'timestamp': datetime.now().isoformat(), 'metadata': {'turn_status': 'pending'},
+                       'json_blocks': [], 'message_type': 'text'}
+            self._write_message(db, message)
+            return message
+
+    def save_turn_routing(self, work_id, message_id, routing):
+        self.update_turn(work_id, message_id, routing=routing)
+
+    def update_turn(self, work_id, message_id, **metadata):
+        with self._database(work_id, write=True) as db:
+            row = db.execute('SELECT payload FROM chat_messages WHERE id=?', (message_id,)).fetchone()
+            if not row:
+                raise ValueError('消息记录不存在')
+            message = json.loads(row[0])
+            message.setdefault('metadata', {}).update(metadata)
+            self._write_message(db, message)
+
     @staticmethod
     def _write_message(db, message):
         db.execute('INSERT INTO chat_messages(id,payload) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',

@@ -21,12 +21,13 @@ from services.chat_services.task_manager import task_manager
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import StreamOutputManager, SimpleStreamCallback
 from ai_system.graph.agent import PaperGraphAgent
+from ai_system.graph.message_graph import build_message_graph, MessageContext
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
 from config.paths import get_workspace_path
 from services.chat_services.research_session import (
     research_snapshot, resolve_action, scoped_snapshot, infer_question_scope, answer_research_question, ResearchRevisionCommand,
-    ResearchContextPermissionError,
+    SourceIssueReference, validate_action,
 )
 from ..utils import route_guard
 
@@ -230,18 +231,19 @@ async def pause_work(
     original_status = work.status
     db.close()
     from ai_system.research.runtime import ResearchRuntime
-    if task.action!='ask':ResearchRuntime(get_workspace_path(work_id)).note_stop('manual_pause','已手动暂停，进度与累计用量保留')
+    readonly = task.action in {'auto', 'ask', 'clarify'}
+    if not readonly:ResearchRuntime(get_workspace_path(work_id)).note_stop('manual_pause','已手动暂停，进度与累计用量保留')
     task_manager.cancel_task(work_id, reason="paused")
     if task._async_task:
         try:
             await asyncio.shield(task._async_task)
         except asyncio.CancelledError:
             pass
-    return {"work_status": original_status if task.action == "ask" else "paused"}
+    return {"work_status": original_status if readonly else "paused"}
 
 
 async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
-                             subproblem_id, revision_command, original_status, task):
+                             subproblem_id, revision_command, original_status, task, source_issue=None):
     """Own all execution resources independently of the submitting browser."""
     loop = asyncio.get_running_loop()
     ws_callback = None
@@ -364,9 +366,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
 
         # 创建任务记录；task_id 告诉前端，断线重连时据此续传
         task.action = action
-        start_status = original_status if action == "ask" else "in_progress"
-        if action != "ask":
-            await loop.run_in_executor(None, set_work_status, work_id, start_status)
+        start_status = original_status
 
 
         # 创建支持多AI提供商的LLM处理器
@@ -406,63 +406,97 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
 
         logger.info(f"工作 {work_id} 使用状态图流水线，输出 {output_mode}")
         from services.research_experience import ExperienceScope
-        main_agent = None if action == "ask" else PaperGraphAgent(
-            llm_handler.get_llm_instance(),
-            stream_manager,
-            workspace_dir,
-            work_id,
-            template_id,
-            codeagent_llm,
-            output_mode=output_mode,
-            writer_llm=writer_llm,
-            experience_scope=ExperienceScope(user_id,work_id)
-        )
-
-        # 立即保存用户消息到持久化存储，确保历史记录顺序正确
-        await asyncio.to_thread(chat_service.add_message, work_id, 'user', problem)
-        logger.info(f"[PERSISTENCE] 用户消息已立即保存到持久化存储")
+        turn = await asyncio.to_thread(chat_service.history_manager.begin_turn, work_id,
+                                       'user:' + (task.request_id or task.task_id), problem)
+        history = await asyncio.to_thread(chat_service.get_work_chat_history, work_id, 10)
+        history = [m for m in history if m.get('id') != turn['id']][-8:]
 
         ws_callback.writer = ReplyWriter(chat_service.history_manager, work_id, task.task_id,
                                            workspace_dir, ws_callback.publish)
         task.reply_id = ws_callback.writer.id
         ws_callback.timer = asyncio.create_task(ws_callback.flush_text())
         task_manager.start_task(work_id)
-        await manager.send(work_id, {'type': 'start', 'request_id': task.request_id, 'message': '正在回答...' if action == "ask" else '开始研究...',
+        await manager.send(work_id, {'type': 'start', 'request_id': task.request_id, 'message': '正在理解消息...' if action == 'auto' else '正在处理...',
                                      'task_id': task.task_id, 'reply_id': task.reply_id, 'action': action, 'work_status': start_status, 'started_at': task.started_at})
 
         async def run_ai_task():
+            nonlocal action, subproblem_id, revision_command
             timeline_token = TIMELINE.set(ws_callback.writer)
             try:
-                if action == "ask":
-                    history = await loop.run_in_executor(
-                        None, chat_service.get_work_chat_history, work_id, 9,
-                    )
-                    history = [m for m in history if m.get('id') != ws_callback.writer.id][-8:]
-                    from config.paths import get_workspace_path
-                    from ai_system.research.runtime import budget_scope
-                    with budget_scope(get_workspace_path(work_id)):
-                        await answer_research_question(
-                            llm_handler.get_llm_instance(), stream_manager, snapshot, workspace_dir,
-                            problem, history, subproblem_id,
-                            destination_url=getattr(model_config, "base_url", "") or "",
-                        )
-                elif action == "revise_research":
-                    await main_agent.revise_research(change=problem, **revision_command.model_dump())
-                elif action == "message":
-                    await main_agent.send_message(problem, question_id=subproblem_id)
-                elif action == "resume":
-                    await main_agent.resume_failed()
-                else:
-                    graph_input = problem
-                    await main_agent.run(graph_input, action='answer' if action in {'confirm', 'revise'} else 'run',
-                                         new_run=action == 'run' and snapshot.has_research)
+                async def execute(route):
+                    nonlocal action, subproblem_id, revision_command
+                    selected = route['action']
+                    scope = route['scope']
+                    if selected == 'ask':
+                        scoped_snapshot(snapshot, scope)
+                    if selected not in {'ask', 'clarify'}:
+                        waiting = snapshot.graph_status == 'interrupted' or snapshot.work_status == 'waiting'
+                        if not (selected == 'revise_research' and requested_action == 'auto' and waiting):
+                            validate_action(selected, snapshot)
+                        current = await asyncio.to_thread(research_snapshot, workspace_dir, work_id, original_status)
+                        if (current.research_id, current.commit_seq) != (snapshot.research_id, snapshot.commit_seq):
+                            raise ValueError('研究状态已改变，请发送新消息；已有记录保留')
+                    # Only a resolved execution branch may change research status.
+                    if selected == 'revise_research' and revision_command is None:
+                        revision_scope = [scope] if scope else None
+                        if scope and snapshot.experiments:
+                            question = next((q for q in snapshot.questions if q['id'] == scope), None)
+                            if question:
+                                revision_scope = question['experiment_ids'] or None
+                        revision_command = ResearchRevisionCommand(
+                            command_id=turn['id'], research_id=route['research_id'],
+                            base_revision=route['base_revision'], scope=revision_scope, source_issue=source_issue)
+                    await asyncio.to_thread(chat_service.history_manager.update_turn, work_id, turn['id'],
+                                            turn_status='executing', reply_id=task.reply_id)
+                    action, subproblem_id = selected, scope
+                    task.action = action
+                    status = original_status if action in {'ask', 'clarify'} else 'in_progress'
+                    if action not in {'ask', 'clarify'}:
+                        await asyncio.to_thread(set_work_status, work_id, status)
+                    await manager.send(work_id, {'type': 'message_routed', 'task_id': task.task_id,
+                        'reply_id': task.reply_id, 'action': action, 'work_status': status})
+                    if action == 'clarify':
+                        await stream_manager._output(route['clarification'])
+                        return
+                    if action == 'ask':
+                        from ai_system.research.runtime import budget_scope
+                        with budget_scope(get_workspace_path(work_id)):
+                            await answer_research_question(
+                                llm_handler.get_llm_instance(), stream_manager, snapshot, workspace_dir,
+                                problem, history, subproblem_id,
+                                destination_url=getattr(model_config, 'base_url', '') or '')
+                        return
+                    main_agent = PaperGraphAgent(llm_handler.get_llm_instance(), stream_manager,
+                        workspace_dir, work_id, template_id, codeagent_llm, output_mode=output_mode,
+                        writer_llm=writer_llm, experience_scope=ExperienceScope(user_id, work_id))
+                    if action == 'revise_research':
+                        options = {'replace_pending': True} if requested_action == 'auto' else {}
+                        await main_agent.revise_research(change=problem, **revision_command.model_dump(), **options)
+                    elif action == 'message':
+                        question_id = subproblem_id
+                        experiment = next((e for e in snapshot.experiments if e['task_id'] == question_id), None)
+                        if experiment:
+                            question_id = experiment.get('question_id')
+                        await main_agent.send_message(problem, question_id=question_id,
+                                                      message_id=turn['id'], history=history, replace_pending=True)
+                    elif action == 'resume':
+                        await main_agent.resume_failed()
+                    else:
+                        await main_agent.run(problem, action='answer' if action in {'confirm', 'revise'} else 'run',
+                                             new_run=action == 'run' and snapshot.has_research)
+
+                requested_action = action
+                await build_message_graph().ainvoke({}, context=MessageContext(
+                    llm=llm_handler.get_llm_instance(), workspace=workspace_dir, snapshot=snapshot,
+                    message=problem, history=history, scope=subproblem_id, requested_action=requested_action,
+                    history_manager=chat_service.history_manager, work_id=work_id, turn=turn, execute=execute))
 
                 # 停在"确认建模方案"时工作是待确认，不是已完成
                 failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
                 from ai_system.research.views import completed_work_status
-                work_status = original_status if action == 'ask' else ('failed' if failed_blocks else
+                work_status = original_status if action in {'ask', 'clarify'} else ('failed' if failed_blocks else
                     await asyncio.to_thread(completed_work_status, workspace_dir))
-                if action != "ask":
+                if action not in {'ask', 'clarify'}:
                     await loop.run_in_executor(None, set_work_status, work_id, work_status)
                     try:
                         evidence = await asyncio.to_thread(research_snapshot, workspace_dir, work_id, work_status)
@@ -471,6 +505,8 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                         logger.warning("研究快照暂不可读，保留任务完成状态: %s", work_id)
 
                 await ws_callback.finalize('failed' if failed_blocks else 'completed')
+                await asyncio.to_thread(chat_service.history_manager.update_turn, work_id, turn['id'],
+                                        turn_status='failed' if failed_blocks else 'completed')
 
                 # 标记任务完成
                 task_manager.complete_task(work_id)
@@ -487,14 +523,16 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             except asyncio.CancelledError:
                 logger.info(f"AI任务被取消: {work_id}")
 
-                task = task_manager.get_task(work_id)
-                interrupted_status = original_status if action == "ask" else ('paused' if task and task.cancel_reason == 'paused' else 'failed' if task and task.error else 'cancelled')
+                stopped_task = task_manager.get_task(work_id)
+                readonly = action in {'auto', 'ask', 'clarify'}
+                interrupted_status = original_status if readonly else ('paused' if stopped_task and stopped_task.cancel_reason == 'paused' else 'failed' if stopped_task and stopped_task.error else 'cancelled')
                 notices = {'paused': '任务已暂停，进度已保存。可从断点继续。',
                            'failed': '任务意外中断，已有结果已保存。可从断点继续。',
                            'cancelled': '任务已取消，已有结果已保存。可从断点继续。'}
-                await ws_callback.finalize('cancelled' if action == 'ask' else interrupted_status, '回复已停止。' if action == 'ask' else notices[interrupted_status])
+                await ws_callback.finalize('cancelled' if readonly else interrupted_status, '回复已停止。' if readonly else notices[interrupted_status])
+                await asyncio.to_thread(chat_service.history_manager.update_turn, work_id, turn['id'], turn_status='cancelled')
 
-                if action != "ask":
+                if not readonly:
                     await loop.run_in_executor(None, set_work_status, work_id, interrupted_status)
                 try:
                     await manager.send(work_id, {'type': 'complete', 'work_status': interrupted_status, 'reload_history': True})
@@ -504,14 +542,18 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             except Exception as e:
                 logger.error(f"AI任务执行失败: {e}")
 
-                await ws_callback.finalize('failed', '回答失败，请重试。' if action == 'ask' else '任务执行失败，已有结果已保存。可从断点继续。')
+                readonly = action in {'auto', 'ask', 'clarify'}
+                await ws_callback.finalize('failed', '消息处理失败，请重试。' if readonly else '任务执行失败，已有结果已保存。可从断点继续。')
+                await asyncio.to_thread(chat_service.history_manager.update_turn, work_id, turn['id'], turn_status='failed')
 
-                if action != "ask":
+                if not readonly:
                     await loop.run_in_executor(None, set_work_status, work_id, 'failed')
                 task_manager.fail_task(work_id, str(e))
 
                 # 通知前端（之前这里调用了不存在的方法，失败时前端会一直停在"生成中"）
-                await manager.send(work_id, {'type': 'error', 'reply_id': ws_callback.writer.id, 'reload_history': True, 'message': (str(e) if isinstance(e, ResearchContextPermissionError) else '回答失败，请重试') if action == 'ask' else '任务执行失败，已有记录已保存。', 'work_status': original_status if action == 'ask' else 'failed'})
+                await manager.send(work_id, {'type': 'error', 'reply_id': ws_callback.writer.id, 'reload_history': True,
+                    'message': str(e) if isinstance(e, ValueError) else '消息处理失败，请重试。',
+                    'work_status': original_status if readonly else 'failed'})
                 raise
             finally:
                 TIMELINE.reset(timeline_token)
@@ -528,11 +570,11 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             if ws_callback and ws_callback.writer:
                 await ws_callback.finalize('failed', '任务初始化失败，请重试。')
             task_manager.fail_task(work_id, '任务初始化失败')
-            if action != 'ask':
+            if action not in {'auto', 'ask', 'clarify'}:
                 await asyncio.to_thread(set_work_status, work_id, 'failed')
             await manager.send(work_id, {'type': 'error', 'task_id': task.task_id,
                 'message': '任务初始化失败，请重试。', 'reload_history': True,
-                'work_status': original_status if action == 'ask' else 'failed'})
+                'work_status': original_status if action in {'auto', 'ask', 'clarify'} else 'failed'})
     finally:
         if ws_callback:
             if ws_callback.timer: ws_callback.timer.cancel()
@@ -669,8 +711,11 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                         raise ValueError("修改范围包含未知或重复任务")
                     if revision_command.research_id != snapshot.research_id:
                         raise ValueError("研究标识已改变，请刷新后重试")
-                if action == "message" and subproblem_id is not None:
-                    if subproblem_id not in {q['id'] for q in snapshot.questions if not q.get('retired')}:
+                if action in {'auto', 'message'} and subproblem_id is not None:
+                    known = {q['id'] for q in snapshot.questions if not q.get('retired')}
+                    if action == 'auto':
+                        known.update(e['task_id'] for e in snapshot.experiments)
+                    if subproblem_id not in known:
                         raise ValueError("问题范围已改变，请刷新后重试")
                     expected=message_data.get('scope_context')
                     if expected is not None and (not isinstance(expected,dict) or
@@ -680,6 +725,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 if action == "ask":
                     subproblem_id = subproblem_id or infer_question_scope(problem, snapshot)
                     scoped_snapshot(snapshot, subproblem_id)
+                source_issue = (SourceIssueReference.model_validate(message_data['source_issue'])
+                                if message_data.get('source_issue') is not None else None)
             except ValueError as exc:
                 await manager.send_to(work_id, websocket, {"type": "error", "scope": "command", 'request_id': request_id, "message": str(exc)})
                 continue
@@ -693,7 +740,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             task.request_id = request_id
             ai_task = asyncio.create_task(_execute_chat_task(
                 work_id, user_id, problem, action, snapshot, subproblem_id,
-                revision_command, original_status, task))
+                revision_command, original_status, task, source_issue))
             task_manager.set_async_task(work_id, ai_task)
 
     except WebSocketDisconnect:

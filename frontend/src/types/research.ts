@@ -173,6 +173,7 @@ export type ResearchAction =
   | 'auto'
   | 'message'
   | 'ask'
+  | 'clarify'
   | 'run'
   | 'resume'
   | 'confirm'

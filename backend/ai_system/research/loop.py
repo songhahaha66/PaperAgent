@@ -71,12 +71,17 @@ async def prepare_action(ctx):
             with store._transaction() as db:
                 state=store._read(db)
                 state.pop('conversation_input',None)
+                reply=None
                 if (state.get('action') or {}).get('status')!='planned':
                     reply='\n'.join(public_progress(message_text(result['messages'][-1])))
                     if not reply:raise NoResearchProgress('本次没有可展示的回复，请继续处理。')
                     state['action']={'id':key,'capability':'reply','status':'done','result':{'reply':reply},
                                      'finished_at':time.time(),'observation_id':observation_id}
                     if turn['outcome'] in {'completed','needs_attention'}:state['outcome']=turn['outcome']
+                receipt={'message':turn['message'],'reply':reply}
+                db.execute('INSERT OR IGNORE INTO commands VALUES (?,?,?,?)',
+                    (store.research_id, 'conversation:'+turn['id'], digest(turn['message']),
+                     json.dumps(receipt,ensure_ascii=False)))
                 store._save(db,state,'conversation_answered',{'id':turn['id']})
         current=store.snapshot()
         if (current.get('action') or {}).get('capability')=='reply':return False

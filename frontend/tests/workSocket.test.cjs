@@ -52,7 +52,8 @@ const { loadModule, flush } = require('./moduleHarness.cjs')
     ready = true
   })
   const first = sockets[0]
-  handler.sendMessage('question', undefined, 'ask', undefined, undefined, undefined, 'request')
+  const sourceIssue = { id: 'issue-one', version: 'a'.repeat(64) }
+  handler.sendMessage('question', undefined, 'auto', 'Q1', undefined, undefined, 'request', sourceIssue)
   first.open()
   await flush()
   assert.equal(ready, false, 'TCP open is not an authenticated subscription')
@@ -60,6 +61,10 @@ const { loadModule, flush } = require('./moduleHarness.cjs')
   first.receive({ type: 'auth_success', task: { status: 'none' } })
   await pending
   assert.equal(first.sent[1].request_id, 'request')
+  assert.equal(first.sent[1].action, 'auto')
+  assert.equal(first.sent[1].subproblem_id, 'Q1')
+  assert.deepEqual(first.sent[1].source_issue, sourceIssue)
+  assert.equal(first.sent[1].revision, undefined)
   first.receive({ type: 'start', task_id: 'one' })
   first.receive({ type: 'content', task_id: 'one', seq: 1, content: 'A' })
   first.receive({ type: 'content', task_id: 'one', seq: 1, content: 'duplicate' })

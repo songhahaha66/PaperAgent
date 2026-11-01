@@ -268,6 +268,7 @@ export class WebSocketChatHandler {
     revision?: ResearchRevisionCommand,
     scopeContext?: { research_id: string; base_revision: number },
     requestId?: string,
+    sourceIssue?: { id: string; version: string },
   ) {
     if (this.disposed) return
     const message = {
@@ -278,6 +279,7 @@ export class WebSocketChatHandler {
       revision,
       scope_context: scopeContext,
       request_id: requestId,
+      source_issue: sourceIssue,
     }
     if (!this.authenticated || this.ws?.readyState !== WebSocket.OPEN) {
       this.messageQueue.push(message)

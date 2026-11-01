@@ -77,11 +77,15 @@ def test_chat_releases_project_connection_while_agent_runs(tmp_path, monkeypatch
     monkeypatch.setattr(chat, 'research_snapshot', lambda *args: SimpleNamespace(model_dump=lambda: {}))
     chat.task_manager._tasks.clear()
 
+    from services.chat_services.research_session import ResearchSnapshot
+    initial_snapshot = ResearchSnapshot(work_id='work', work_status='created')
+    monkeypatch.setattr(chat, 'research_snapshot', lambda *args: initial_snapshot)
+
     async def scenario():
         task = chat.task_manager.create_task('work', 7, 'run', action=action)
         task.request_id = 'request'
         running = asyncio.create_task(chat._execute_chat_task(
-            'work', 7, 'run', action, SimpleNamespace(has_research=False), None, None, 'created', task))
+            'work', 7, 'run', action, initial_snapshot, None, None, 'created', task))
         chat.task_manager.set_async_task('work', running)
         try:
             await asyncio.wait_for(started.wait(), 5)

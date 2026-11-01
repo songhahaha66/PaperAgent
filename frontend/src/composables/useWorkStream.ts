@@ -127,17 +127,21 @@ export function useWorkStream(options: {
           : 'Enter a new research goal, then choose Run research again.',
       )
   }
-  const stageText = computed(() =>
-    isStreaming.value && runningAction.value === 'ask'
-      ? isZh.value
-        ? '正在分析已有结果'
-        : 'Reviewing existing results'
-      : researchHeadline(
+  const stageText = computed(() => {
+    if (isStreaming.value) {
+      if (runningAction.value === 'auto')
+        return isZh.value ? '正在理解你的消息' : 'Understanding your message'
+      if (runningAction.value === 'ask')
+        return isZh.value ? '正在分析已有材料' : 'Reviewing existing materials'
+      if (runningAction.value === 'clarify')
+        return isZh.value ? '正在确认你的需求' : 'Clarifying your request'
+    }
+    return researchHeadline(
           researchSnapshot.value,
           currentWork.value?.status || 'created',
           isZh.value,
-        ),
-  )
+        )
+  })
   const elapsedText = computed(() => {
     if (!isStreaming.value || !taskStartedAt.value) return ''
     const seconds = Math.max(0, Math.floor((clockNow.value - taskStartedAt.value) / 1000))
@@ -262,6 +266,16 @@ export function useWorkStream(options: {
         }
         // Every join reconciles missed turns, even when no task remains in memory.
         refresh.schedule(['history', 'research', 'files'], 0)
+        return
+      }
+      if (data.type === 'message_routed') {
+        if (data.task_id && activeTaskId && data.task_id !== activeTaskId) return
+        runningAction.value = data.action || 'auto'
+        applyWorkStatus(data.work_status)
+        if (data.action === 'run') {
+          invalidateSnapshot()
+          researchSnapshot.value = null
+        }
         return
       }
       if (data.type === 'start' || data.type === 'reconnect') {
@@ -611,6 +625,7 @@ export function useWorkStream(options: {
       revision,
       subproblemId && action === 'auto' ? scopedVersion : undefined,
       pendingCommand?.id,
+      sourceIssue,
     )
     if (handler && pendingCommand) pendingCommand.sent = true
     scopedVersion = undefined
