@@ -141,7 +141,10 @@ async def recover_outputs(ctx):
     owned.update(direct_runs(ctx.research, ctx.fs))
     if not owned:return
     inventory=ctx.fs._manifest.get('runs',{})
-    pending={rid for rid in owned if (inventory.get(rid) or {}).get('delivery_error')}
+    pending={rid for rid in owned if (inventory.get(rid) or {}).get('delivery_error') or
+             ((inventory.get(rid) or {}).get('execution_mode') == 'process' and
+              ((inventory.get(rid) or {}).get('submission_state') in {'submitting', 'unknown'} or
+               (inventory.get(rid) or {}).get('status') in {'starting', 'running'}))}
     if pending:
         from ai_system.research.views import activity
         with activity(ctx,'retry_outputs'):
@@ -198,7 +201,9 @@ def build_tools(
             return json.dumps(value,ensure_ascii=False)
 
     async def run_python(code: str, title: str = '') -> str:
-        """在持久 Python 内核中执行代码，返回输出、错误回溯和自动保存的图片文件名。
+        """在沙箱独立 Python 进程中执行代码，返回落盘日志、错误和自动保存的图片。
+
+        每次执行不保留内存变量；复用逻辑请保存到 code/ 并 import，复用结果请读取已保存文件。
 
         title: 给用户看的简短操作名称，如“计算线性趋势预测”或“保存预测结果表”。说明代码实际用途，不含内部编号。可省略。
         """
@@ -238,6 +243,16 @@ def build_tools(
                         result.delivery_error=None
                         info=ctx.fs.get_run_info(result.run_id) or {}
                         result.files=info.get('files',result.files)
+                        if info.get('execution_mode') == 'process' and info.get('process_receipt'):
+                            result.ok = info.get('status') == 'success'
+                            result.error = info.get('error')
+                            result.timed_out = info.get('status') == 'timeout'
+                            result.failure_kind = info.get('failure_kind')
+                            result.exit_code = info.get('exit_code')
+                            result.duration_seconds = info.get('duration_seconds')
+                            logs = [(ctx.fs.run_dir(result.run_id) / (name + '.log')).read_text(encoding='utf-8')
+                                    for name in ('stdout', 'stderr')]
+                            result.stdout = '\n'.join(filter(None, logs))[-20000:]
                         break
                     except (OSError,ValueError,RuntimeError,TimeoutError):
                         pass
@@ -279,7 +294,7 @@ def build_tools(
         return observation
 
     async def retry_outputs() -> str:
-        """仅重试上次计算的文件同步，不重新执行代码。"""
+        """查询原后台任务并补读日志和文件，不重新执行代码。"""
         if not hasattr(kernel, 'retry_outputs'):
             return '当前执行器没有待同步的远端文件。'
         run_id = await kernel.retry_outputs()

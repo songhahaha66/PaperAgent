@@ -40,6 +40,8 @@ class CellResult:
     delivery_error: Optional[str] = None
     failure_kind: Optional[str] = None
     recovery_note: Optional[str] = None
+    exit_code: Optional[int] = None
+    duration_seconds: Optional[float] = None
 
     def to_observation(self) -> str:
         """给模型看的执行结果"""

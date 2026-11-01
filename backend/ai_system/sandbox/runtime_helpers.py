@@ -25,6 +25,7 @@ def setup(root="/workspace"):
     ROOT.mkdir(parents=True, exist_ok=True)
     os.chdir(ROOT)
     import sys
+    sys.path.insert(0, str(ROOT))
     sys.path.insert(0, str(ROOT / "code"))
     import matplotlib
     matplotlib.use("Agg", force=True)

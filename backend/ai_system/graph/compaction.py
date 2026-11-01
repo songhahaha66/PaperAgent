@@ -84,10 +84,11 @@ def public_journal(messages, locators):
 
 
 class ContextMiddleware(AgentMiddleware):
-    def __init__(self,ctx,llm,session,*,pinned=None):
+    def __init__(self,ctx,llm,session,*,pinned=None,tail=None):
         super().__init__()
         self.ctx,self.llm,self.session=ctx,llm,session
         self.messages=[];self.pinned=pinned
+        self.tail=tail
 
     async def abefore_model(self,state,runtime):
         from ai_system.research.runtime import ACTIVE_BUDGET
@@ -146,6 +147,9 @@ class ContextMiddleware(AgentMiddleware):
         store=self.ctx.research
         self.messages=list(request.messages)
         self.ctx.agent_messages=self.messages
+        # Dynamic reminders join this request after context projection. They
+        # count toward its budget but never enter canonical history or notes.
+        tail_messages=self.tail(self.messages) if self.tail else []
         schemas=[convert_to_openai_tool(t) for t in request.tools]
         tools=token_estimate(schemas)
         system=getattr(request,'system_message',None)
@@ -221,7 +225,7 @@ class ContextMiddleware(AgentMiddleware):
             memory=([HumanMessage(content='历史方法笔记（非待办或当前事实）：'+note+('\n旧轮次原文：'+archive if archive else ''))] if note or archive else [])
             facts=point.get('snapshot')
             current=[state_message(facts)] if facts is not None else []
-            return prefix+corrections+memory+current+messages[end:]
+            return prefix+corrections+memory+current+messages[end:]+tail_messages
         def size(rows):
             priced=media.view(rows,max_tokens=max(0,safe-overhead))
             estimated=overhead+estimate(messages_to_dict(priced))

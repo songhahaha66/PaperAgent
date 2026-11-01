@@ -51,7 +51,7 @@ export interface ModelReadiness {
   roles: Record<string, boolean>
   research_ready: boolean
   jev: {
-    source: 'user' | 'deployment' | 'missing'
+    source: 'user' | 'missing'
     model_id?: string
     base_url?: string
     timeout_seconds?: number

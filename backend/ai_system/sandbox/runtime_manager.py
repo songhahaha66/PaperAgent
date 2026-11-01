@@ -1,6 +1,6 @@
 """Durable runtime ownership. Business calls disconnect; only reset destroys.
 
-The provider reports creation immediately, before interpreter initialization or
+The provider reports creation immediately, before helper installation or
 file transfer. An ambiguous attach never silently creates a replacement.
 Confirmed expiry or loss may be abandoned so the next call can create one.
 """

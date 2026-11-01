@@ -9,7 +9,7 @@ from ai_system.graph.commentary import PROGRESS_PROMPT, ProgressMiddleware
 PROMPT = """你是持续工作的研究Agent，自己读取材料、运行代码、观察结果、修订方法并回答用户。
 读清需求并确定做法后，用research_update_plan列出简短的总体工作计划。完成一个阶段、开始下一阶段或调整方案时更新完整计划，保留已完成项；提问、暂停或最终回复前同步实际状态。已有progress_plan时接着推进，不重新归零。按阶段更新，不为每次读文件或工具调用单列工作项；尚未完成的计算、写作保持待完成。如包含系统导出，将最后一项kind设为delivery并保持pending，系统会按实际交付结果更新它。
 工作区文件用research_list_files定位、research_search_files搜索、research_read_artifact分页读取。正文和日志在工作区工具中可读，Python仅负责计算，不能通过搜索沙箱根目录判断正文是否存在。
-先直接用 research_read_artifact 读取原始材料，不需要实验编号。按需用research_create_question建立研究主题来组织运行；修改已有主题用research_edit_question。用research_run_python在同一持久Python内核计算；公共数据分析可以省略question_id，不把代码挂到不相关问题下。
+先直接用 research_read_artifact 读取原始材料，不需要实验编号。按需用research_create_question建立研究主题来组织运行；修改已有主题用research_edit_question。用research_run_python在独立Python进程计算；每次执行不共享内存变量，公共逻辑保存到code/模块，数据和模型结果保存为文件后复用；公共数据分析可以省略question_id，不把代码挂到不相关问题下。
 research_run_python 返回真实输出、错误和文件路径。复用变量与已保存文件，必要时在代码中核对单位、数据范围、约束和预测时可用信息。实际数值、适用条件、局限和未完成部分直接写入回复及正文。
 用research_list_skills查看可用方法指导，按需research_read_skill读取，再用research_run_python完成计算与方法比较；结果表、预测、图表保存为实际文件。方法指导不创建额外实验流程。
 普通计算仅保存运行回执，不做实验提交或验收。需要继续就读取已有代码和文件，不为读取、同步或排版重算。
@@ -230,7 +230,7 @@ class Planner:
                     ('\n当前选中问题：'+user_turn['question_id'] if user_turn.get('question_id') else ''),id=user_turn['id']))
             resumed_now=resume_note
             if resume_note:
-                observations.append(HumanMessage(content='继续原会话；工具会优先重连原Python上下文，并报告context_restored和runtime_epoch；只有确认重连成功才依赖原变量。旧运行以回执为准，不重放已完成计算。'))
+                observations.append(HumanMessage(content='继续原会话；工具优先补读原后台任务的日志和完成回执，不重放已提交计算。每次Python执行都是独立进程，不依赖上次变量；读取code/模块和已保存结果继续。'))
                 resume_note=False
             if pending_diagnostic:
                 observations.append(HumanMessage(content=pending_diagnostic));pending_diagnostic=''
@@ -273,7 +273,9 @@ class Planner:
                     if prompted_for_action:raise NoResearchProgress(str(exc)) from exc
                     prompted_for_action=True
                     return {'messages':[HumanMessage(content='最终回复尚不能交付：'+str(exc))],'jump_to':'model'}
-        recorder=ContextMiddleware(ctx,self.llm,ctx.research.research_id+'-lead')
+        from .plan import plan_reminder
+        recorder=ContextMiddleware(ctx,self.llm,ctx.research.research_id+'-lead',
+                                   tail=lambda messages:plan_reminder(ctx,messages))
         common={'original_request':context['source']['requirement'],'available_method_keys':context['available_method_keys'],
                 'skill_policy':context['skill_policy'],'inputs':context['inputs'],'materials':context['materials'],
                 'template_requirements':ctx.template_requirements,'compact_paper':ctx.compact_paper}

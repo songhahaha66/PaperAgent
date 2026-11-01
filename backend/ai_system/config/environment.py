@@ -81,7 +81,7 @@ class DatabaseConfigManager:
         return config
 
     def get_jev_config(self, user_id: int):
-        """Resolve one user's Jev connection; never mutate SDK environment globals."""
+        """Resolve only this user's saved Jev connection, without deployment fallback."""
         from models.models import ModelConfig
         from types import SimpleNamespace
         from typesafe_sdk.constants import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT
@@ -96,13 +96,7 @@ class DatabaseConfigManager:
                 api_key=saved.api_key.strip(), model_id=(saved.model_id or '').strip() or DEFAULT_MODEL,
                 base_url=(saved.base_url or '').strip() or DEFAULT_BASE_URL,
                 timeout_seconds=saved.timeout_seconds if saved.timeout_seconds is not None else DEFAULT_TIMEOUT)
-        key = (os.getenv('TYPESAFE_API_KEY') or '').strip()
-        if not key:
-            raise ValueError('Jev 未配置，请在模型设置中填写 Jev 密钥。明确操作按钮不依赖 Jev。')
-        return SimpleNamespace(type='jev', source='deployment', is_active=True, api_key=key,
-            model_id=(os.getenv('TYPESAFE_DEFAULT_MODEL') or '').strip() or DEFAULT_MODEL,
-            base_url=(os.getenv('TYPESAFE_BASE_URL') or '').strip() or DEFAULT_BASE_URL,
-            timeout_seconds=DEFAULT_TIMEOUT)
+        raise ValueError('Jev 未配置，请在模型设置中填写 Jev 密钥。明确操作按钮不依赖 Jev。')
 
     def get_api_key(self, system_type: str, user_id: int, provider: Optional[str] = None) -> str:
         """获取指定系统类型的API密钥"""

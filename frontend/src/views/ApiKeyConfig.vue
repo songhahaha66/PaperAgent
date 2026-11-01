@@ -62,13 +62,7 @@
         >
           <template #actions
             ><span class="connection-state">{{
-              jevSource === 'deployment'
-                ? isZh
-                  ? '部署默认'
-                  : 'Deployment default'
-                : jevReady
-                  ? ui.configured
-                  : ui.unconfigured
+              jevReady ? ui.configured : ui.unconfigured
             }}</span></template
           >
           <p class="jev-note">
@@ -76,13 +70,6 @@
               isZh
                 ? '普通聊天直接进入研究 Agent，不需要此连接。Jev 可用于独立评测。'
                 : 'Chat goes directly to the research Agent and does not require this connection. Jev is available for separate evaluations.'
-            }}
-          </p>
-          <p v-if="jevSource === 'deployment'" class="jev-note">
-            {{
-              isZh
-                ? '当前使用部署默认连接。保存个人密钥后优先使用个人配置。'
-                : 'Using the deployment default. A saved personal connection takes precedence.'
             }}
           </p>
           <ConnectionFields :form="forms.jev" :disabled="loading || !!savingRole" :ui="ui" jev />
@@ -111,9 +98,7 @@
               theme="default"
               variant="outline"
               :loading="testingJev"
-              :disabled="
-                loading || !!savingRole || (!valid(forms.jev) && jevSource !== 'deployment')
-              "
+              :disabled="loading || !!savingRole || !valid(forms.jev)"
               @click="testJevConnection"
               >{{ ui.test }}</t-button
             >
@@ -204,7 +189,6 @@ const forms = reactive<Record<Role, Form>>({
   writing: { apiKey: '', baseUrl: '', modelId: '' },
   jev: { apiKey: '', baseUrl: 'https://api.typesafe.ai', modelId: 'jev-latest' },
 })
-const jevSource = ref<'user' | 'deployment' | 'missing'>('missing')
 const jevReady = ref(false),
   testingJev = ref(false)
 const jevFeedback = ref(''),
@@ -398,12 +382,6 @@ async function testConnection() {
 async function loadJevReadiness() {
   const readiness = await modelConfigAPI.readiness()
   jevReady.value = !!readiness.roles.jev
-  jevSource.value = readiness.jev.source
-  if (!forms.jev.id && readiness.jev.source === 'deployment') {
-    forms.jev.modelId = readiness.jev.model_id || 'jev-latest'
-    forms.jev.baseUrl = readiness.jev.base_url || 'https://api.typesafe.ai'
-    forms.jev.timeoutSeconds = readiness.jev.timeout_seconds ?? null
-  }
 }
 async function testJevConnection() {
   if (testingJev.value) return

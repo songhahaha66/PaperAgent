@@ -129,15 +129,12 @@ async def test_model_connection(
     saved = crud.get_model_config_by_type(db, config.type, current_user)
     if config.type == 'jev':
         # This path must never probe an OpenAI-compatible endpoint.
-        from ai_system.config.environment import DatabaseConfigManager
         from ai_system.judge import JevJudge, Choice
         from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
         from typesafe_sdk.constants import DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT
         key = (config.api_key or '').strip() or ((saved.api_key or '').strip() if saved else '')
         if not key:
-            try:key = DatabaseConfigManager(db).get_model_config('jev', current_user).api_key
-            except ValueError:
-                raise HTTPException(status_code=400, detail='请填写 Jev API 密钥或保存个人 Jev 连接') from None
+            raise HTTPException(status_code=400, detail='请填写 Jev API 密钥或保存个人 Jev 连接')
         db.close()
         try:
             async with AsyncTypeSafeClient(api_key=key, model=config.model_id.strip() or DEFAULT_MODEL,

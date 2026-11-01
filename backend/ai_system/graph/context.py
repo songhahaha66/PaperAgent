@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class KernelPool:
-    """主研究会话及显式比较分支的持久内核；provider 管理远端租约，业务状态仍在 Store"""
+    """主研究会话及比较分支的沙箱会话池；每次运行独立进程，provider 管理租约。"""
 
     def __init__(self, workspace: Path, fs: WorkspaceFS, timeout: float = 180.0, *, work_id=None, experiment_id=None):
         self.workspace = workspace

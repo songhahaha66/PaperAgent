@@ -14,7 +14,7 @@ import asyncio
 
 
 RENEW_MARGIN = 30
-REPLACED_NOTE = '计算沙箱达到单次寿命上限，已提前更换并继续。工作区文件已恢复；原 Python 内存不再保留。'
+REPLACED_NOTE = '计算沙箱达到单次寿命上限，已提前更换并继续。工作区文件已恢复；后续计算使用独立进程。'
 RETRIED_NOTE = '计算沙箱已到期/已断开，已自动重建并重试'
 RETRY_FAILED_PREFIX = '计算沙箱已到期/已断开，已自动重建并重试，仍然失败：'
 

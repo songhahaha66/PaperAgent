@@ -1,9 +1,41 @@
 """The main Agent's current work plan, independent of topics and delivery."""
 import time
+import json
 from typing import Literal
 
 from pydantic import ConfigDict, Field, model_validator
 from ai_system.modules.registry import Inputs
+
+
+PLAN_TOOL_DESCRIPTION = (
+    '创建或更新总体研究计划，提交完整工作项与实际状态，更新时保留已完成项。'
+    '同一时间最多只能有一个步骤标记为 in_progress。'
+    '完成一个步骤后立即将其标记为 completed，不要等到所有步骤做完才统一更新。'
+    '开始下一题、下一步骤或下一阶段前，先更新计划，将对应步骤标记为 in_progress。'
+    '调整方案以及提问、暂停或最终回复前，同步计划的实际状态；未完成的工作不能标为 completed。'
+)
+PLAN_REMINDER_INTERVAL = 10
+
+
+def plan_reminder(ctx, messages):
+    """A request-only tail, derived from canonical history across compaction/resume."""
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    calls = 0
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage):
+            continue
+        if message.name == 'research_update_plan' and message.status != 'error':
+            break
+        calls += 1
+    if calls < PLAN_REMINDER_INTERVAL:
+        return []
+    plan = ctx.research.snapshot().get('progress_plan')
+    current = json.dumps(plan['steps'], ensure_ascii=False) if plan else '尚未保存总体研究计划'
+    return [HumanMessage(
+        content=f'计划可能已过期：已连续 {calls} 次工具调用未成功更新计划。\n当前计划：{current}\n'
+                '请核对当前目标与实际进展，按需用 research_update_plan 更新计划，再继续工作。',
+        additional_kwargs={'plan_reminder': True})]
 
 
 class PlanStep(Inputs):
