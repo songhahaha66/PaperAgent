@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from schemas import schemas
 from services import crud
 from auth import auth
 from database.database import get_db
+from services.user_profile import normalize_avatar
 
 from ..utils import route_guard
 from .passkey import router as passkey_router
@@ -50,4 +52,31 @@ async def get_current_user_info(current_user: int = Depends(auth.get_current_use
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
+    return user
+
+
+@router.patch("/me", response_model=schemas.UserResponse)
+async def update_current_user_profile(
+    profile: schemas.UserProfileUpdate,
+    current_user: int = Depends(auth.get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = crud.get_user_by_id(db, current_user)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    changes = profile.model_dump(exclude_unset=True)
+    if 'avatar_url' in changes:
+        changes['avatar_url'] = normalize_avatar(changes['avatar_url'])
+    if 'username' in changes:
+        existing = crud.get_user_by_username(db, changes['username'])
+        if existing and existing.id != user.id:
+            raise HTTPException(status_code=409, detail="Username is already taken")
+    for key, value in changes.items():
+        setattr(user, key, value)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Username is already taken") from exc
+    db.refresh(user)
     return user

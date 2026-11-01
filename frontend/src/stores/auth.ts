@@ -1,6 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { authAPI, type UserResponse, type UserRegisterData, type UserLoginData } from '@/api/auth'
+import {
+  authAPI,
+  type UserResponse,
+  type UserRegisterData,
+  type UserLoginData,
+  type UserProfileUpdate,
+} from '@/api/auth'
 import i18n from '@/lang'
 
 export const useAuthStore = defineStore(
@@ -94,6 +100,12 @@ export const useAuthStore = defineStore(
       }
     }
 
+    async function updateProfile(data: UserProfileUpdate) {
+      const updated = await authAPI.updateProfile(data)
+      user.value = updated
+      return updated
+    }
+
     // 用户登出
     function logout() {
       user.value = null
@@ -138,6 +150,7 @@ export const useAuthStore = defineStore(
       register,
       login,
       loginWithToken,
+      updateProfile,
       logout,
       loadCurrentUser,
       initializeAuth, // 新增：导出初始化方法

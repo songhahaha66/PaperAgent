@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 from typing import Literal, Optional, List
 from datetime import datetime
 from ai_system.config.generation import GenerationSettings
@@ -15,6 +15,7 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(UserBase):
+    avatar_url: Optional[str] = None
     id: int
     created_at: datetime
     is_active: bool
@@ -25,6 +26,22 @@ class UserResponse(UserBase):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+class UserProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    username: Optional[str] = Field(default=None, max_length=50)
+    avatar_url: Optional[str] = Field(default=None, max_length=2_800_000)
+
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, value):
+        if value is None:
+            raise ValueError('Username cannot be null')
+        value = value.strip()
+        if not 2 <= len(value) <= 50 or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError('Username must contain 2–50 characters without control characters')
+        return value
 
 
 class PasskeyLoginOptionsRequest(BaseModel):
