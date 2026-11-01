@@ -109,10 +109,10 @@ export function useWorkSession(workId: Ref<string>) {
 
   // 加载工作信息
   const loadWork = async (dependencies: {
-    loadFiles: () => Promise<void>
-    loadHistory: () => Promise<void>
-    resume: () => Promise<void>
-    sendMessage: (content: string, action: ResearchAction) => Promise<void>
+    loadFiles: () => Promise<unknown>
+    loadHistory: () => Promise<unknown>
+    resume: () => Promise<unknown>
+    sendMessage: (content: string, action: ResearchAction) => Promise<unknown>
   }) => {
     if (disposed || loading.value || !workId.value || !authStore.token) return
 
@@ -147,7 +147,7 @@ export function useWorkSession(workId: Ref<string>) {
 
   // 检查并自动发送第一句话
   const checkAndAutoSendFirstMessage = async (
-    sendMessage: (content: string, action: ResearchAction) => Promise<void>,
+    sendMessage: (content: string, action: ResearchAction) => Promise<unknown>,
   ) => {
     const pendingKey = `pendingQuestion:${workId.value}`
     const pendingQuestion =
@@ -169,7 +169,7 @@ export function useWorkSession(workId: Ref<string>) {
   const generateWorkTitle = async (question: string) => {
     try {
       // 调用标题生成API，会自动更新数据库
-      const response = await chatAPI.generateTitle(authStore.token!, workId.value!, question)
+      const response = await chatAPI.generateTitle(workId.value!, question)
 
       if (disposed) return
       // 更新本地状态

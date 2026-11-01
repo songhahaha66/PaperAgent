@@ -3,9 +3,7 @@
 """
 
 from pathlib import Path
-import json
 import logging
-from datetime import datetime
 from typing import Optional
 
 from .workspace_fs import WorkspaceFS, WORKSPACE_DIRECTORIES
@@ -22,7 +20,7 @@ class WorkspaceStructureManager:
     @classmethod
     def create_workspace_structure(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None, output_mode: str = "markdown") -> None:
         """创建统一的工作空间目录结构和初始文件
-        
+
         Args:
             workspace_path: 工作空间路径
             work_id: 工作ID
@@ -44,7 +42,7 @@ class WorkspaceStructureManager:
     @classmethod
     def _create_workspace_files(cls, workspace_path: Path, work_id: str, template_id: Optional[int] = None, output_mode: str = "markdown") -> None:
         """创建工作空间初始文件
-        
+
         Args:
             workspace_path: 工作空间路径
             work_id: 工作ID
@@ -66,25 +64,25 @@ class WorkspaceStructureManager:
             # 未知模式：默认创建 paper.md
             logger.warning(f"未知的输出模式 '{output_mode}'，默认创建 paper.md")
             cls._create_paper_md(workspace_path, template_id)
-    
+
     @classmethod
     def _create_paper_md(cls, workspace_path: Path, template_id: Optional[int] = None) -> None:
         """创建 paper.md 文件
-        
+
         Args:
             workspace_path: 工作空间路径
             template_id: 可选的模板ID，如果提供则使用模板内容
-            
+
         Note:
             不抛出异常，失败时记录日志并创建空文件
         """
         paper_md_path = workspace_path / "paper.md"
-        
+
         # 如果文件已存在，不覆盖
         if paper_md_path.exists():
             logger.info(f"paper.md 已存在，跳过创建: {paper_md_path}")
             return
-        
+
         try:
             # 尝试获取模板内容
             content = None
@@ -93,7 +91,7 @@ class WorkspaceStructureManager:
                     from .template_files import template_file_service
                     from database.database import SessionLocal
                     from models.models import PaperTemplate
-                    
+
                     # 从数据库获取模板信息
                     db = SessionLocal()
                     try:
@@ -106,17 +104,17 @@ class WorkspaceStructureManager:
                 except Exception as e:
                     logger.warning(f"获取模板 {template_id} 内容失败，将使用默认内容: {e}")
                     content = None
-            
+
             if content is None:
                 content = ""
                 logger.info("无模板内容，创建空 paper.md，由 Agent 生成骨架")
-            
+
             # 写入文件
             with open(paper_md_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-            
+
             logger.info(f"成功创建 paper.md: {paper_md_path}")
-            
+
         except Exception as e:
             # 如果写入失败，尝试创建最小化的空文件
             logger.error(f"创建 paper.md 失败: {e}")

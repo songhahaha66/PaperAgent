@@ -101,24 +101,26 @@ def test_cancel_terminates_and_finalizes_run(tmp_path):
     asyncio.run(run())
 
 
-def test_opensandbox_callback_error_stops_even_when_sdk_swallows_handlers(tmp_path):
+@pytest.mark.parametrize('error', [ValueError, OSError])
+def test_opensandbox_output_failure_keeps_job_for_cleanup_without_replaying_logs(tmp_path, error):
     pytest.importorskip('opensandbox')
-    from types import SimpleNamespace
+    import base64
     from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
     async def run():
-        stopped = asyncio.Event()
-        async def sdk_run(code, context, handlers):
-            try:
-                await handlers.on_stdout(SimpleNamespace(text='too much'))
-                await asyncio.sleep(10)
-            finally:
-                stopped.set()
+        async def submit(code,run_id,*,timeout):
+            session.active_job=run_id
+        async def status(op,run_id,offsets):
+            return {'job_id':run_id,'done':None,'logs':{
+                'stdout':{'data':base64.b64encode(b'too much').decode(),'offset':8,'size':8},
+                'stderr':{'data':'','offset':0,'size':0}}}
         async def output(channel, text):
-            raise ValueError('quota')
+            raise error('quota')
         session = OpenSandboxSession(
             SandboxSettings(api_key='fake',host_workspace_root='/server-only/cache'), workspace_dir=tmp_path)
-        session.interpreter = SimpleNamespace(codes=SimpleNamespace(run=sdk_run))
-        with pytest.raises(ValueError, match='quota'):
+        session.submit=submit
+        session._job_rpc=status
+        with pytest.raises(error, match='quota'):
             await asyncio.wait_for(session.execute('print(1)', 'run-test', output), 1)
-        assert stopped.is_set()
+        assert session.active_job=='run-test'
+        assert session._cursor('run-test')['offsets']['stdout']==8
     asyncio.run(run())

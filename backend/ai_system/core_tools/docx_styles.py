@@ -1,21 +1,11 @@
-"""
-Word style fingerprint and before/after comparison.
-
-Typesetting needs two observations of the same document family:
-1. Template: page setup, named styles, header/footer, heading/body samples.
-2. Finished paper: the same fingerprint, then a deterministic diff.
-
-Vision can comment on rendered look, but XML style drift is the hard gate.
-"""
+"""Extract Word template style fingerprints for the document contract."""
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 import zipfile
 
@@ -34,47 +24,6 @@ PRIORITY_STYLES = (
     "Heading 3",
     "Heading 4",
 )
-PT_TOLERANCE = 1.6
-
-# Template headings often include “成稿后删除此括号” instructions.
-# Finished papers are supposed to drop those parentheses; keep the core title.
-_DELETABLE_HEADING_PAREN = re.compile(
-    r"[（(][^（）()]{0,120}成稿后删除[^（）()]{0,120}[）)]\s*$"
-)
-
-
-def canonical_heading_text(text: str) -> str:
-    return _DELETABLE_HEADING_PAREN.sub("", (text or "").strip()).strip()
-
-
-def heading_outlines_equivalent(
-    expected: Sequence[Tuple[str, str]],
-    actual: Sequence[Tuple[str, str]],
-) -> bool:
-    return not heading_outline_issues(expected, actual)
-
-
-def heading_outline_issues(
-    expected: Sequence[Tuple[str, str]],
-    actual: Sequence[Tuple[str, str]],
-) -> List[str]:
-    issues: List[str] = []
-    for idx, ((expected_style, expected_text), (actual_style, actual_text)) in enumerate(
-        zip(expected, actual),
-        start=1,
-    ):
-        if expected_style != actual_style or canonical_heading_text(expected_text) != canonical_heading_text(
-            actual_text
-        ):
-            issues.append("标题层级/顺序/文本与模板不一致")
-            issues.append(f"第 {idx} 个标题应为 {expected_text}，当前为 {actual_text}")
-            break
-    if len(expected) != len(actual):
-        if not issues:
-            issues.append("标题层级/顺序/文本与模板不一致")
-        issues.append(f"标题数量不一致：模板 {len(expected)} 个，当前 {len(actual)} 个")
-    return issues
-
 
 @dataclass
 class StyleFingerprint:
@@ -181,229 +130,6 @@ def extract_style_fingerprint(docx_path: Path) -> StyleFingerprint:
     except Exception as exc:
         logger.warning("提取样式档案失败: %s", exc, exc_info=True)
         return StyleFingerprint()
-
-
-def compare_style_fingerprints(
-    expected: StyleFingerprint,
-    actual: StyleFingerprint,
-) -> List[str]:
-    issues: List[str] = []
-
-    for key, label in (
-        ("width_pt", "页面宽度"),
-        ("height_pt", "页面高度"),
-        ("left_pt", "左边距"),
-        ("right_pt", "右边距"),
-        ("top_pt", "上边距"),
-        ("bottom_pt", "下边距"),
-    ):
-        exp = expected.page.get(key)
-        act = actual.page.get(key)
-        if exp is None or act is None:
-            continue
-        if abs(float(exp) - float(act)) > PT_TOLERANCE:
-            issues.append(f"{label}不一致：模板 {exp}pt，当前 {act}pt")
-
-    if expected.has_header and not actual.has_header:
-        issues.append("成品丢失了模板页眉")
-    if expected.has_footer and not actual.has_footer:
-        issues.append("成品丢失了模板页脚")
-
-    for name, exp_attrs in expected.styles.items():
-        act_attrs = actual.styles.get(name)
-        if act_attrs is None:
-            issues.append(f"成品缺少样式定义: {name}")
-            continue
-        for field_name, label in (
-            ("eastAsia", "中文字体"),
-            ("ascii", "西文字体"),
-            ("size_pt", "字号"),
-            ("bold", "加粗"),
-            ("alignment", "对齐"),
-            ("line_spacing", "行距"),
-            ("first_indent_pt", "首行缩进"),
-        ):
-            exp = exp_attrs.get(field_name)
-            act = act_attrs.get(field_name)
-            if exp in (None, "", "None") or act in (None, "", "None"):
-                continue
-            if field_name in {"size_pt", "line_spacing", "first_indent_pt"}:
-                try:
-                    if abs(float(exp) - float(act)) > PT_TOLERANCE:
-                        issues.append(f"样式 {name} 的{label}不一致：模板 {exp}，当前 {act}")
-                except (TypeError, ValueError):
-                    if str(exp) != str(act):
-                        issues.append(f"样式 {name} 的{label}不一致：模板 {exp}，当前 {act}")
-            elif str(exp) != str(act):
-                issues.append(f"样式 {name} 的{label}不一致：模板 {exp}，当前 {act}")
-
-    return issues
-
-
-def compare_docx_styles(expected_path: Path, actual_path: Path) -> List[str]:
-    return compare_style_fingerprints(
-        extract_style_fingerprint(expected_path),
-        extract_style_fingerprint(actual_path),
-    )
-
-
-def format_style_comparison(
-    expected: StyleFingerprint,
-    actual: StyleFingerprint,
-    issues: Iterable[str],
-) -> str:
-    issues = list(issues)
-    lines = [
-        expected.format_report("模板样式").rstrip(),
-        "",
-        actual.format_report("成品样式").rstrip(),
-        "",
-        "## 样式对照结果",
-    ]
-    if issues:
-        lines.append(f"- 发现 {len(issues)} 处样式漂移：")
-        lines.extend(f"  - {item}" for item in issues)
-    else:
-        lines.append("- 页面、页眉页脚和关键样式定义与模板一致。")
-    return "\n".join(lines) + "\n"
-
-
-def save_style_profile(workspace_path: Path, fingerprint: StyleFingerprint) -> Path:
-    path = Path(workspace_path) / PROFILE_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(fingerprint.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return path
-
-
-def infer_body_format(doc, style_name: str = "Normal") -> Dict[str, Any]:
-    """
-    Resolve the fonts/spacing that new body text should inherit.
-
-    Complex course templates often leave Normal empty and put 宋体/小四
-    on real paragraphs. Style definitions alone are not enough.
-    """
-    attrs: Dict[str, Any] = {}
-    try:
-        attrs.update(_style_definition(doc.styles[style_name]))
-    except KeyError:
-        pass
-
-    votes: Dict[str, List[Any]] = {
-        "eastAsia": [],
-        "ascii": [],
-        "size_pt": [],
-        "line_spacing": [],
-        "first_indent_pt": [],
-        "alignment": [],
-    }
-    for para in getattr(doc, "paragraphs", []):
-        style = (para.style.name if para.style else "") or ""
-        if style != style_name:
-            continue
-        text = para.text.strip()
-        if not text:
-            sample = _paragraph_effective(para)
-            if sample.get("line_spacing") not in (None, ""):
-                votes["line_spacing"].append(sample["line_spacing"])
-            continue
-        if text.startswith(("图", "表")):
-            continue
-        sample = _paragraph_effective(para)
-        size_pt = sample.get("size_pt")
-        if size_pt is not None:
-            try:
-                if float(size_pt) >= 15.5:
-                    continue
-            except (TypeError, ValueError):
-                pass
-        if sample.get("bold") and size_pt:
-            try:
-                if float(size_pt) >= 15:
-                    continue
-            except (TypeError, ValueError):
-                pass
-        for key in votes:
-            value = sample.get(key)
-            if value not in (None, "", "None"):
-                votes[key].append(value)
-
-    for key, values in votes.items():
-        if not values:
-            continue
-        chosen = _majority(values)
-        if attrs.get(key) in (None, "", "None"):
-            attrs[key] = chosen
-        elif key in {"eastAsia", "ascii", "size_pt"}:
-            attrs[key] = chosen
-    return attrs
-
-
-def apply_body_paragraph_format(doc, paragraph, *, style_name: str = "Normal") -> None:
-    """Copy inferred body spacing/alignment onto a newly inserted paragraph."""
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt
-
-    attrs = infer_body_format(doc, style_name=style_name)
-    alignment = str(attrs.get("alignment") or "")
-    if alignment in {"JUSTIFY", "3"}:
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-    elif alignment in {"CENTER", "1"}:
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    elif alignment in {"RIGHT", "2"}:
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    elif alignment in {"LEFT", "0"}:
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
-
-    if attrs.get("line_spacing") not in (None, ""):
-        try:
-            paragraph.paragraph_format.line_spacing = float(attrs["line_spacing"])
-        except (TypeError, ValueError):
-            pass
-    if attrs.get("first_indent_pt") not in (None, ""):
-        try:
-            paragraph.paragraph_format.first_line_indent = Pt(float(attrs["first_indent_pt"]))
-        except (TypeError, ValueError):
-            pass
-
-
-def apply_body_run_format(doc, run, *, style_name: str = "Normal", is_code: bool = False) -> None:
-    """Copy template body fonts onto a newly inserted run."""
-    from docx.oxml.ns import qn
-    from docx.shared import Pt
-
-    if is_code:
-        run.font.name = "Courier New"
-        run.font.size = Pt(10)
-        try:
-            run._element.rPr.rFonts.set(qn("w:eastAsia"), "Courier New")
-        except Exception:
-            pass
-        return
-
-    attrs = infer_body_format(doc, style_name=style_name)
-    if attrs.get("ascii"):
-        run.font.name = attrs["ascii"]
-    if attrs.get("size_pt"):
-        try:
-            run.font.size = Pt(float(attrs["size_pt"]))
-        except (TypeError, ValueError):
-            pass
-    if attrs.get("bold") is True:
-        run.font.bold = True
-    east_asia = attrs.get("eastAsia") or attrs.get("ascii")
-    if east_asia:
-        try:
-            r_pr = run._element.get_or_add_rPr()
-            r_fonts = r_pr.get_or_add_rFonts()
-            r_fonts.set(qn("w:eastAsia"), east_asia)
-            ascii_name = attrs.get("ascii") or east_asia
-            r_fonts.set(qn("w:ascii"), ascii_name)
-            r_fonts.set(qn("w:hAnsi"), ascii_name)
-        except Exception:
-            logger.debug("写入 eastAsia 字体失败", exc_info=True)
 
 
 def _style_definition(style) -> Dict[str, Any]:
@@ -536,19 +262,6 @@ def _format_attrs(attrs: Dict[str, Any]) -> str:
             suffix = "pt" if key.endswith("_pt") else ""
             parts.append(f"{label}={attrs[key]}{suffix}")
     return ", ".join(parts) or "（沿用主题默认值）"
-
-
-def _majority(values: List[Any]) -> Any:
-    counts: Dict[str, int] = {}
-    keyed: Dict[str, Any] = {}
-    for value in values:
-        if isinstance(value, float):
-            key = f"{round(value, 2)}"
-        else:
-            key = str(value)
-        counts[key] = counts.get(key, 0) + 1
-        keyed.setdefault(key, value)
-    return keyed[max(counts, key=counts.get)]
 
 
 def _truncate(text: str, limit: int) -> str:

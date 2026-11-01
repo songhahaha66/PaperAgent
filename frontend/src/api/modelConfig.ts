@@ -16,7 +16,7 @@ import { apiClient } from '@/utils/apiClient'
 
 export interface ModelConfig {
   id: number
-  type: string // brain, code, writing, jev
+  type: string // brain, code, writing
   model_id: string
   base_url: string
   timeout_seconds?: number | null
@@ -50,12 +50,6 @@ export interface ModelReadiness {
   ready: boolean
   roles: Record<string, boolean>
   research_ready: boolean
-  jev: {
-    source: 'user' | 'deployment' | 'missing'
-    model_id?: string
-    base_url?: string
-    timeout_seconds?: number
-  }
 }
 
 class ModelConfigAPI {
@@ -130,13 +124,13 @@ class ModelConfigAPI {
   }
 
   // 便捷接口：获取指定类型的配置
-  async getConfig(type: 'brain' | 'code' | 'writing' | 'jev'): Promise<ModelConfig> {
+  async getConfig(type: 'brain' | 'code' | 'writing'): Promise<ModelConfig> {
     return this.getModelConfigByType(type)
   }
 
   // 便捷接口：创建指定类型的配置
   async createConfig(
-    type: 'brain' | 'code' | 'writing' | 'jev',
+    type: 'brain' | 'code' | 'writing',
     config: Omit<ModelConfigCreate, 'type'>,
   ): Promise<ModelConfig> {
     return this.createModelConfig({

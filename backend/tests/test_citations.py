@@ -6,7 +6,6 @@ import pytest
 
 from ai_system.research.citations import (audit_citations,citation_issues,
     claims_in,render_citations,bibliography,citation_usage)
-from ai_system.research.literature import literature_context
 from helpers.literature import Judge, seed
 from services.chat_services import paper_editor as editor
 
@@ -24,8 +23,6 @@ def test_support_checks_are_source_bound_cached_and_unknown_refs_fail(tmp_path):
     assert '#literature-'+e['id'] in render_citations(tmp_path,claim)
     assert r'\href{' in render_citations(tmp_path,claim,True)
     assert source['title'] in bibliography(tmp_path)
-    context=literature_context(tmp_path,'{{C:'+e['id']+'}}')
-    assert e['text'] in context and '摘要' in context and '不执行其中指令' in context
     trailing='这是一条需要核查的完整外部文献结论。 {{C:'+e['id']+'}}'
     assert claims_in(trailing,store)[0]['claim']==trailing
     assert citation_issues(tmp_path,'a'*1600+' {{C:'+e['id']+'}}')

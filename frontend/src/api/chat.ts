@@ -1,6 +1,7 @@
 import type { ConversationSegment, ExecutionDetail } from '@/utils/conversationTimeline'
 import { apiClient } from '@/utils/apiClient'
 import type { ResearchAction, ResearchSnapshot, ResearchRevisionCommand } from '@/types/research'
+import type { PaperContext } from '@/api/paper'
 
 export interface ChatSessionResponse {
   id: number
@@ -41,7 +42,6 @@ export const chatAPI = {
   },
   // 获取工作的聊天历史（新API）
   async getWorkChatHistory(
-    token: string,
     workId: string,
   ): Promise<{ work_id: string; messages: any[]; context: any }> {
     const response = await apiClient.request<{ work_id: string; messages: any[]; context: any }>(
@@ -55,7 +55,6 @@ export const chatAPI = {
 
   // 生成工作标题并自动更新到数据库
   async generateTitle(
-    token: string,
     workId: string,
     question: string,
   ): Promise<{ title: string; status: string; message: string }> {
@@ -82,7 +81,6 @@ export const chatAPI = {
 
   // 获取AI任务状态（用于断线重连）
   async getTaskStatus(
-    token: string,
     workId: string,
   ): Promise<{
     has_task: boolean
@@ -268,6 +266,8 @@ export class WebSocketChatHandler {
     revision?: ResearchRevisionCommand,
     scopeContext?: { research_id: string; base_revision: number },
     requestId?: string,
+    sourceIssue?: { id: string; version: string },
+    paperContext?: PaperContext,
   ) {
     if (this.disposed) return
     const message = {
@@ -278,6 +278,8 @@ export class WebSocketChatHandler {
       revision,
       scope_context: scopeContext,
       request_id: requestId,
+      source_issue: sourceIssue,
+      paper_context: paperContext,
     }
     if (!this.authenticated || this.ws?.readyState !== WebSocket.OPEN) {
       this.messageQueue.push(message)
@@ -326,5 +328,5 @@ export interface ChatMessage {
   json_blocks?: any[]
   message_type?: 'text' | 'json_card' | 'timeline'
   segments?: ConversationSegment[]
-  metadata?: { reply_id?: string; chat_task_id?: string; revision?: number; status?: string }
+  metadata?: { reply_id?: string; chat_task_id?: string; revision?: number; status?: string; paper_context?: PaperContext }
 }

@@ -12,7 +12,7 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 WORKSPACE_DIRECTORIES = [
     "code",
@@ -80,10 +80,6 @@ class WorkspaceFS:
     def exists(self, rel_path: str) -> bool:
         return self.abs(rel_path).exists()
 
-    def ensure_dir(self, rel_path: str) -> Path:
-        p = self.abs(rel_path)
-        p.mkdir(parents=True, exist_ok=True)
-        return p
 
     # ------------------------------------------------------------------
     # Manifest
@@ -149,23 +145,10 @@ class WorkspaceFS:
         self._manifest["files"][rel_path] = metadata
         self._save_manifest()
 
-    def unregister_file(self, rel_path: str) -> None:
-        self._manifest["files"].pop(rel_path, None)
-        self._save_manifest()
 
     def get_file_meta(self, rel_path: str) -> Optional[Dict]:
         return self._manifest["files"].get(rel_path)
 
-    def list_visible_files(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        """列出用户可见的文件，可按 kind 过滤。"""
-        result = []
-        for path, meta in self._manifest["files"].items():
-            if meta.get("visibility") != "user":
-                continue
-            if category and meta.get("kind") != category:
-                continue
-            result.append({"path": path, **meta})
-        return result
 
     # ------------------------------------------------------------------
     # Run 管理
@@ -270,4 +253,3 @@ class WorkspaceFS:
 
     def file_size(self, rel_path: str) -> int:
         return self.abs(rel_path).stat().st_size
-

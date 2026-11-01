@@ -157,24 +157,11 @@
                     :placeholder="ui.inputHint"
                     :aria-label="isZh ? '研究消息' : 'Research message'"
                     :autosize="{ minRows: 1, maxRows: 6 }"
-                    :disabled="isStreaming || paperSending || loading"
+                    :disabled="isStreaming || loading"
                     class="work-message-input"
                     @keydown="handleComposerKeydown"
                   />
                   <div class="composer-controls">
-                    <button
-                      v-if="questionScope"
-                      type="button"
-                      class="question-scope"
-                      @click="questionScope = null"
-                    >
-                      {{
-                        researchSnapshot?.questions?.find((q) => q.id === questionScope)?.title ||
-                        researchSnapshot?.experiments?.find((e) => e.task_id === questionScope)
-                          ?.title ||
-                        '当前引用范围'
-                      }}<t-icon name="close" />
-                    </button>
                     <input
                       ref="chatFileInput"
                       type="file"
@@ -185,25 +172,16 @@
                       theme="default"
                       variant="text"
                       shape="circle"
-                      :disabled="isStreaming || paperSending || loading"
+                      :disabled="isStreaming || loading"
                       :aria-label="isZh ? '添加附件' : 'Add attachment'"
                       @click="chatFileInput?.click()"
                       ><t-icon name="attach"
                     /></t-button>
                     <t-button
-                      v-if="researchSnapshot?.research_id && currentWork?.status !== 'waiting' && !paperContexts.length"
-                      type="button"
-                      theme="default"
-                      variant="text"
-                      :disabled="isStreaming || loading || !inputValue.trim()"
-                      @click="sendMessage(undefined, 'revise_research')"
-                      >{{ isZh ? '补充要求' : 'Update requirements' }}</t-button
-                    >
-                    <t-button
                       type="submit"
                       theme="primary"
                       shape="circle"
-                      :disabled="isStreaming || paperSending || loading || !inputValue.trim()"
+                      :disabled="isStreaming || loading || !inputValue.trim()"
                       :aria-label="isZh ? '发送消息' : 'Send message'"
                       ><template #icon><t-icon name="arrow-up" /></template
                     ></t-button>
@@ -267,7 +245,6 @@
           </section>
           <section
             v-else-if="panel.kind === 'figures'"
-            ref="figureScroller"
             class="figures-panel"
             @scroll="rememberPanelScroll('figures', $event)"
           >
@@ -287,11 +264,6 @@
                   <div v-else class="figure-placeholder"><t-icon name="image" /></div>
                   <span>{{ figure.name }}</span>
                 </button>
-                <button
-                  @click.stop="askPaper(`请解释图表 ${figure.path} 的数据、计算依据和局限。`)"
-                >
-                  {{ isZh ? '追问依据' : 'Ask about evidence' }}
-                </button>
               </div>
             </div>
           </section>
@@ -303,7 +275,7 @@
             :active="active"
             :work-id="workId"
             :latex="currentWork?.output_mode === 'latex'"
-            :refresh-key="(researchSnapshot?.commit_seq || 0) + paperRefresh"
+            :refresh-key="researchSnapshot?.commit_seq || 0"
             :disabled="isStreaming"
             @open-file="handleWorkspaceFileSelect"
             :citation-request="citationRequest"
@@ -311,8 +283,6 @@
             :issue-request="issueRequest"
             @updated="refreshPaper"
             @quote="attachPaperQuote"
-            @ask="askPaper"
-            @research="revisePaper"
           />
           <WorkDocument
             v-if="
@@ -342,7 +312,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { DialogPlugin, MessagePlugin } from 'tdesign-vue-next'
-import { paperProjectAPI, type PaperComposerContext } from '@/api/paper'
+import type { PaperComposerContext } from '@/api/paper'
 import { workspaceAPI } from '@/api/workspace'
 import { useAuthStore } from '@/stores/auth'
 import { useWorkHistoryStore } from '@/stores/workHistory'
@@ -375,7 +345,6 @@ const {
   loadError,
   loadErrorText,
   researchSnapshot,
-  applyResearchSnapshot,
 } = session
 const layout = useWorkLayout(workId, researchSnapshot)
 const {
@@ -387,7 +356,6 @@ const {
   toggleSidebar,
   inputValue,
   atBottom,
-  figureScroller,
   displayPanels,
   panelOptions,
   openObject,
@@ -469,32 +437,15 @@ function openLiteratureEvidence(event: Event) {
 async function refreshPaper() {
   await stream.refreshResources(['research', 'files'])
 }
-function askPaper(message: string, task?: string) {
-  questionScope.value = task || null
-  layout.activateChat()
-  sendMessage(message, 'ask')
-}
-function revisePaper(
-  message: string,
-  task?: string,
-  sourceIssue?: { id: string; version: string },
-) {
-  questionScope.value = task || null
-  layout.activateChat()
-  sendMessage(message, 'revise_research', sourceIssue)
-}
-function preparePlanRevision(message: string, task: string) {
-  questionScope.value = task
-  layout.activateChat()
-  return sendMessage(message, 'revise_research')
-}
-const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles })
+const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles,
+  onMessageRejected: (_message, context) => {
+    if (context) paperContexts.value = context.references.map(reference => ({...reference, work_id: workId.value, research_id: context.research_id, thread_id: context.thread_id}))
+  },
+})
 const {
   chatMessages,
   isStreaming,
   runningAction,
-  questionScope,
-  askSubproblem,
   pausing,
   connectionState,
   needsRecovery,
@@ -507,21 +458,13 @@ const {
   pauseTask,
   reconnectTask,
   sendMessage: streamSendMessage,
-  handleStreamMessage,
 } = stream
 const paperContexts = ref<PaperComposerContext[]>([])
-const paperSubmitting = ref(false),
-  paperCommentError = ref(''),
-  paperRefresh = ref(0)
-let paperRequest: { signature: string; id: string } | null = null
+const paperCommentError = ref('')
 watch(workId, () => {
   paperContexts.value = []
-  paperRequest = null
   paperCommentError.value = ''
 })
-const paperSending = computed(
-  () => paperSubmitting.value || chatMessages.value.some((m) => m.paper_execution && m.isStreaming),
-)
 async function attachPaperQuote(context: PaperComposerContext) {
   if (context.work_id !== workId.value) return
   if (paperContexts.value.some((item) => JSON.stringify(item) === JSON.stringify(context))) return
@@ -536,42 +479,16 @@ async function attachPaperQuote(context: PaperComposerContext) {
   document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus()
 }
 async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
-  // Ordinary messages and explicit actions share the workspace socket.
-  // Quoted paper comments retain their versioned comment endpoint.
   if (args.length || !paperContexts.value.length) return streamSendMessage(...args)
-  if (paperSending.value || isStreaming.value || loading.value || !inputValue.value.trim()) return
-  const contexts = [...paperContexts.value],
-    context = contexts[0]!,
-    text = inputValue.value.trim(),
-    work = workId.value
-  const body = {
+  if (isStreaming.value || loading.value || !inputValue.value.trim()) return false
+  const contexts = [...paperContexts.value], context = contexts[0]!
+  const sent = await streamSendMessage(undefined, 'auto', undefined, {
     research_id: context.research_id,
-    message: text,
-    references: contexts.map(({ selection, read_quote, read_version, quote }) => ({
-      selection,
-      read_quote,
-      read_version,
-      quote,
-    })),
+    references: contexts.map(({ selection, read_quote, read_version, quote }) => ({ selection, read_quote, read_version, quote })),
     thread_id: contexts.length === 1 ? context.thread_id : null,
-  }
-  const signature = JSON.stringify(body)
-  if (paperRequest?.signature !== signature) paperRequest = { signature, id: crypto.randomUUID() }
-  paperSubmitting.value = true
-  paperCommentError.value = ''
-  try {
-    await paperProjectAPI.comment(work, { ...body, request_id: paperRequest.id })
-    paperRequest = null
-    inputValue.value = ''
-    paperContexts.value = paperContexts.value.filter((item) => !contexts.includes(item))
-    paperRefresh.value++
-    await stream.loadChatHistory(true)
-  } catch (cause) {
-    paperCommentError.value =
-      cause instanceof Error ? cause.message : '评论提交未确认，重试将复用同一请求。'
-  } finally {
-    paperSubmitting.value = false
-  }
+  })
+  if (sent) paperContexts.value = paperContexts.value.filter(item => !contexts.includes(item))
+  return sent
 }
 const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
   workId,
@@ -590,7 +507,8 @@ const primaryAction = computed(() => {
   if (!currentWork.value) return null
   if (isStreaming.value) {
     const label =
-      runningAction.value === 'ask' ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
+      ['auto', 'ask', 'clarify'].includes(runningAction.value)
+        ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
     return { kind: 'pause', icon: 'pause', label, title: label } as const
   }
   if (currentWork.value.status === 'waiting') {
@@ -1106,19 +1024,6 @@ onUnmounted(() => {
   }
 }
 
-.question-scope {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 0;
-  border-radius: var(--pa-radius-inline);
-  padding: 4px 7px;
-  background: var(--pa-accent-soft);
-  color: var(--pa-accent);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
 </style>
 
 <style scoped>

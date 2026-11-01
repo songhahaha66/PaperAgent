@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class KernelPool:
-    """主研究会话及显式比较分支的持久内核；provider 管理远端租约，业务状态仍在 Store"""
+    """主研究会话及比较分支的沙箱会话池；每次运行独立进程，provider 管理租约。"""
 
     def __init__(self, workspace: Path, fs: WorkspaceFS, timeout: float = 180.0, *, work_id=None, experiment_id=None):
         self.workspace = workspace
@@ -66,9 +66,8 @@ class KernelPool:
 class EventSink:
     """把阶段进度推给前端（复用 stream_manager.send_json_block），没有 stream_manager 时只写日志"""
 
-    def __init__(self, stream_manager=None, *, publish_files=True):
+    def __init__(self, stream_manager=None):
         self.stream_manager = stream_manager
-        self.publish_files = publish_files
 
     async def emit(self, block_type: str, content: Any) -> None:
         logger.info("[paper-graph] %s: %s", block_type, str(content)[:200])
@@ -83,8 +82,7 @@ class EventSink:
         await self.emit("paper_stage", text)
 
     async def file_changed(self, path: str) -> None:
-        if self.publish_files:
-            await self.emit("file_changed", path)
+        await self.emit("file_changed", path)
 
 
 EXPORT_STAGE_TITLES = {"latex": "LaTeX 排版并编译 PDF", "word": "导出 Word 文档"}
@@ -104,14 +102,8 @@ class GraphContext:
     events: EventSink
     planner_llm: Any
     coder_llm: Any
-    writer_llm: Any
-    delivery_fs: Any = None
-    delivery_events: Any = None
     research: Any = None
     experience_scope: Any = None
-    experience_store: Any = None
-    experience_order: Any = None
-    source_workspace: Any = None
     compact_paper: bool = False
     skill_policy: Any = None
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
@@ -127,7 +119,6 @@ class GraphContext:
         workspace_dir: str,
         planner_llm,
         coder_llm=None,
-        writer_llm=None,
         stream_manager=None,
         **options,
     ) -> "GraphContext":
@@ -155,7 +146,6 @@ class GraphContext:
             events=EventSink(stream_manager),
             planner_llm=planner_llm,
             coder_llm=request_model(coder_llm or planner_llm),
-            writer_llm=writer_llm or planner_llm,
             **options,
         )
 

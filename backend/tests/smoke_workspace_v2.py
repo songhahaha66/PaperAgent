@@ -40,14 +40,15 @@ async def check(output):
         success(first)
         assert 'TOTAL 6' in first.stdout, 'Uploaded CSV did not produce the expected total'
         passed('Python execution and uploaded CSV')
-        second = await kernel.execute("import matplotlib.pyplot as plt\nprint('STATE', x*2)\npd.DataFrame({'value':[x,x*2]}).to_csv('outputs/result.csv',index=False)\nplt.plot([1,2],[x,x*2])\nplt.show()")
+        kernel.fs.write_text('code/common.py', 'value = 21\n')
+        second = await kernel.execute("import pandas as pd\nimport matplotlib.pyplot as plt\nfrom common import value\nprint('FRESH', 'x' not in globals())\nprint('STATE', value*2)\npd.DataFrame({'value':[value,value*2]}).to_csv('outputs/result.csv',index=False)\nplt.plot([1,2],[value,value*2])\nplt.show()")
         success(second)
-        assert 'STATE 42' in second.stdout and second.figures, 'Python state or figure delivery missing'
+        assert 'STATE 42' in second.stdout and 'FRESH True' in second.stdout and second.figures, 'Process isolation, module reuse or figure delivery missing'
         assert (root / 'outputs/result.csv').read_text().strip() == 'value\n21\n42'
         assert all(kernel.fs.abs(path).is_file() for path in second.figures)
-        passed('Persistent Python state, CSV and figure downloads')
+        passed('Independent processes, saved module reuse, CSV and figure downloads')
         kernel.fs.write_text('data/input.csv', 'value\n7\n8\n')
-        changed = await kernel.execute("print('UPDATED', pd.read_csv('data/input.csv')['value'].sum())")
+        changed = await kernel.execute("import pandas as pd\nprint('UPDATED', pd.read_csv('data/input.csv')['value'].sum())")
         success(changed)
         assert 'UPDATED 15' in changed.stdout, 'Updated CSV did not reach the sandbox'
         passed('Incremental input update')

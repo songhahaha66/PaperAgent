@@ -46,7 +46,6 @@ class PaperGraphAgent:
         template_id: Optional[int] = None,
         codeagent_llm=None,
         output_mode: str = "markdown",
-        writer_llm=None,
         **options,
     ):
         if not workspace_dir:
@@ -67,7 +66,6 @@ class PaperGraphAgent:
         self.work_id = work_id
         self.template_id = template_id
         self.codeagent_llm = codeagent_llm
-        self.writer_llm = writer_llm
         self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
@@ -103,7 +101,6 @@ class PaperGraphAgent:
             self.workspace_dir,
             planner_llm=self.llm,
             coder_llm=self.codeagent_llm,
-            writer_llm=self.writer_llm,
             stream_manager=self.stream_manager,
             **self.options,
         )
@@ -148,7 +145,8 @@ class PaperGraphAgent:
             await ctx.kernels.disconnect()
 
     async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
-                              change: str, scope: list[str] | None = None, source_issue:dict|None=None) -> str:
+                              change: str, scope: list[str] | None = None, source_issue:dict|None=None,
+                              replace_pending: bool = False, paper_context: dict | None = None) -> str:
         """Apply an idempotent revision, then selectively resume this research."""
         if not change.strip():
             raise ValueError('修改内容不能为空')
@@ -160,7 +158,7 @@ class PaperGraphAgent:
         if not snapshot:
             raise ValueError("研究尚未生成可修订任务")
         pending = snapshot.get('action') or {}
-        if pending.get('capability') == 'ask' and pending.get('status') == 'waiting':
+        if pending.get('capability') == 'ask' and pending.get('status') == 'waiting' and not replace_pending:
             raise ValueError('当前等待必要信息，请先回答待补充问题')
         if not snapshot['experiments']:
             if source_issue:raise ValueError('历史实验意见请使用对应实验的修订入口')
@@ -211,7 +209,8 @@ class PaperGraphAgent:
             output = self._final_message(self.last_result, ctx)
             await self._emit("main_agent_complete", output)
             return output
-        return await self.resume_failed()
+        return await self.send_message(change, message_id='revision:' + command_id, replace_pending=True,
+                                       paper_context=paper_context)
 
     async def resume_failed(self) -> str:
         """从当前运行记录恢复，不回放历史计算。"""
@@ -230,21 +229,68 @@ class PaperGraphAgent:
         finally:
             await ctx.kernels.disconnect()
 
-    async def send_message(self, message: str, *, question_id: str | None = None) -> str:
+    async def send_message(self, message: str, *, question_id: str | None = None,
+                           message_id: str | None = None, history: list | None = None,
+                           replace_pending: bool = False, paper_context: dict | None = None) -> str:
         """Append a durable user turn to the existing research Agent session."""
         self._require_current_thread()
         store = ResearchStore(self.workspace_dir, self._load_thread())
+        if message_id:
+            from contextlib import closing
+            with closing(store._connect()) as db:
+                row = db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',
+                                 (store.research_id, 'conversation:' + message_id)).fetchone()
+            if row:
+                receipt = json.loads(row[0])
+                if receipt['message'] != message:
+                    raise ValueError('消息标识已被其他内容使用')
+                if receipt['reply'] is not None:
+                    await self._emit('main_agent_complete', receipt['reply'])
+                    return receipt['reply']
+                # The turn has already scheduled an action, e.g. an export.
+                # Continue that action without injecting the request again.
+                output = await self.resume_failed()
+                self._save_message_receipt(store, message_id, message, output)
+                return output
         with store._transaction() as db:
             state = store._read(db)
-            if state.get('conversation_input'):
-                raise ValueError('上一条消息尚未处理完成，请先恢复当前任务')
+            pending_turn = state.get('conversation_input')
+            previous_turn = None
+            if pending_turn and (not message_id or pending_turn['id'] != message_id):
+                if not replace_pending:
+                    raise ValueError('上一条消息尚未处理完成，请先恢复当前任务')
+                previous_turn = {k: pending_turn[k] for k in ('id', 'message', 'outcome') if k in pending_turn}
+                pending_turn = None
             if question_id is not None and (question_id not in state['questions'] or state['questions'][question_id].get('retired')):
                 raise ValueError('问题范围已改变，请刷新后重试')
-            state['conversation_input'] = {'id': 'user:' + uuid.uuid4().hex, 'message': message,
-                'question_id': question_id, 'outcome': state['outcome']}
-            state['outcome'] = 'running'
-            store._save(db, state, 'conversation_input', state['conversation_input'])
-        return await self.resume_failed()
+            if not pending_turn:
+                # The message router has chosen new work. Preserve the old
+                # action in the turn but do not replay it ahead of that request.
+                state['conversation_input'] = {'id': message_id or 'user:' + uuid.uuid4().hex,
+                    'message': message, 'question_id': question_id, 'outcome': state['outcome'],
+                    'paper_context': paper_context,
+                    'history': [{'role': m['role'], 'content': str(m.get('content', ''))[-2000:]}
+                                for m in (history or [])[-8:] if m.get('role') in {'user', 'assistant'}],
+                    'previous_turn': previous_turn,
+                    'deferred_action': {k: v for k, v in (state.get('action') or {}).items()
+                                        if k in {'id', 'capability', 'status', 'target', 'message'}}
+                                       if (state.get('action') or {}).get('status') != 'done' else None}
+                state['action'] = None
+                state['publication'] = None
+                state['outcome'] = 'running'
+                store._save(db, state, 'conversation_input', state['conversation_input'])
+        output = await self.resume_failed()
+        if message_id:
+            self._save_message_receipt(store, message_id, message, output)
+        return output
+
+    @staticmethod
+    def _save_message_receipt(store, message_id, message, reply):
+        from ..research.store import digest
+        with store._transaction() as db:
+            db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
+                (store.research_id, 'conversation:' + message_id, digest(message),
+                 json.dumps({'message': message, 'reply': reply}, ensure_ascii=False)))
 
     async def _resume_graph(self, graph, config, thread_id: str, ctx: GraphContext) -> str:
         """聊天和评测共用：业务提交决定有效工作，checkpoint 只记录执行位置。"""

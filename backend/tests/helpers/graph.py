@@ -10,19 +10,15 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 
-
 from ai_system.graph import GraphContext
 from ai_system.graph.state import (
-    CandidateSet,
     ClaimAudit,
     ClaimIssue,
     Conflict,
     ConsistencyReview,
-    MethodPick,
-    ModelCandidate,
     ResultReview,
-    Subproblem,
 )
+from helpers.legacy_graph import CandidateSet, MethodPick, ModelCandidate, Subproblem
 from ai_system.research.models import Requirement, Assumption, IssueReport
 from ai_system.research.planner import AmendmentSpec
 

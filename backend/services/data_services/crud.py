@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from models import models
 from schemas import schemas
@@ -9,11 +8,7 @@ from ..file_services.template_files import template_file_service
 from .utils import ensure_owner, model_to_dict
 from config.paths import get_workspace_path
 import uuid
-import json
-import os
 from pathlib import Path
-from datetime import datetime
-import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -34,14 +29,14 @@ def create_user(db: Session, user: schemas.UserCreate):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
+
     # 检查用户名是否已存在
     if get_user_by_username(db, user.username):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already taken"
         )
-    
+
     # 创建新用户
     hashed_password = auth.get_password_hash(user.password)
     db_user = models.User(
@@ -49,7 +44,7 @@ def create_user(db: Session, user: schemas.UserCreate):
         username=user.username,
         password_hash=hashed_password
     )
-    
+
     try:
         db.add(db_user)
         db.commit()
@@ -80,24 +75,14 @@ def get_system_config(db: Session):
         db.refresh(config)
     return config
 
-def update_system_config(db: Session, is_allow_register: bool):
-    """更新系统配置"""
-    config = get_system_config(db)
-    config.is_allow_register = is_allow_register
-    db.commit()
-    db.refresh(config)
-    return config
 
 # ModelConfig相关的CRUD操作
 def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id: int):
     """创建模型配置"""
     try:
-        if config.type!='jev':
-            from ai_system.config.generation import validate_context_window
-            try:validate_context_window(config.model_id,config.generation_settings)
-            except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from None
-        if config.type == 'jev' and not config.api_key.strip():
-            raise HTTPException(status_code=400, detail='请填写 Jev API 密钥')
+        from ai_system.config.generation import validate_context_window
+        try:validate_context_window(config.model_id,config.generation_settings)
+        except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from None
         # 检查是否已存在相同类型的配置（同一用户下）
         existing_config = db.query(models.ModelConfig).filter(
             models.ModelConfig.type == config.type,
@@ -136,18 +121,18 @@ def create_model_config(db: Session, config: schemas.ModelConfigCreate, user_id:
 
 def get_model_config(db: Session, config_id: int):
     """根据ID获取模型配置（不包含api_key）"""
-    return db.query(models.ModelConfig).filter(models.ModelConfig.id == config_id).first()
+    return db.query(models.ModelConfig).filter(models.ModelConfig.id == config_id, models.ModelConfig.type.in_(("brain", "code", "writing"))).first()
 
 def get_model_config_by_type(db: Session, config_type: str, user_id: int = None):
     """根据类型获取模型配置（不包含api_key）"""
-    query = db.query(models.ModelConfig).filter(models.ModelConfig.type == config_type)
+    query = db.query(models.ModelConfig).filter(models.ModelConfig.type == config_type, models.ModelConfig.type.in_(("brain", "code", "writing")))
     if user_id is not None:
         query = query.filter(models.ModelConfig.created_by == user_id)
     return query.first()
 
 def get_all_model_configs(db: Session, skip: int = 0, limit: int = 100, user_id: int = None):
     """获取所有模型配置（不包含api_key）"""
-    query = db.query(models.ModelConfig)
+    query = db.query(models.ModelConfig).filter(models.ModelConfig.type.in_(("brain", "code", "writing")))
     if user_id is not None:
         query = query.filter(models.ModelConfig.created_by == user_id)
     return query.offset(skip).limit(limit).all()
@@ -174,11 +159,10 @@ def update_model_config(db: Session, config_id: int, config_update: schemas.Mode
         if 'api_key' in update_data and not (update_data['api_key'] or '').strip():
             update_data.pop('api_key')
 
-        if db_config.type!='jev':
-            from ai_system.config.generation import validate_context_window
-            try:validate_context_window(update_data.get('model_id',db_config.model_id),
-                                        update_data.get('generation_settings',db_config.generation_settings))
-            except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from None
+        from ai_system.config.generation import validate_context_window
+        try:validate_context_window(update_data.get('model_id',db_config.model_id),
+                                    update_data.get('generation_settings',db_config.generation_settings))
+        except ValueError as exc:raise HTTPException(status_code=400,detail=str(exc)) from None
 
         for field, value in update_data.items():
             setattr(db_config, field, value)
@@ -225,7 +209,7 @@ def delete_model_config(db: Session, config_id: int, user_id: int = None):
 def clear_all_model_configs(db: Session, user_id: int = None):
     """清空所有模型配置"""
     try:
-        query = db.query(models.ModelConfig)
+        query = db.query(models.ModelConfig).filter(models.ModelConfig.type.in_(("brain", "code", "writing")))
         if user_id is not None:
             query = query.filter(models.ModelConfig.created_by == user_id)
         query.delete()
@@ -241,7 +225,7 @@ def clear_all_model_configs(db: Session, user_id: int = None):
 # 模板相关的CRUD操作
 def create_paper_template(db: Session, template: schemas.PaperTemplateCreate, user_id: int, file_content: str = "", is_binary: bool = False):
     """创建论文模板
-    
+
     Args:
         db: 数据库会话
         template: 模板创建数据
@@ -304,7 +288,7 @@ def update_paper_template(db: Session, template_id: int, template_update: schema
         not_found_detail="Template not found",
         forbidden_detail="Not authorized to modify this template",
     )
-    
+
     # 更新字段
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
@@ -316,7 +300,7 @@ def update_paper_template(db: Session, template_id: int, template_update: schema
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Template update failed: {str(e)}"
         )
-    
+
     db.commit()
     db.refresh(db_template)
     return db_template
@@ -329,7 +313,7 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
         not_found_detail="Template not found",
         forbidden_detail="Not authorized to delete this template",
     )
-    
+
     # Existing projects own independent copies. Detach only the library reference.
     db.query(models.Project).filter(models.Project.template_id == template_id).update({'template_id': None})
 
@@ -338,7 +322,7 @@ def delete_paper_template(db: Session, template_id: int, user_id: int):
         template_file_service.delete_file(db_template.file_path)
     from ..file_services.template_contract import delete_template_analysis
     delete_template_analysis(template_id)
-    
+
     # 删除数据库记录
     db.delete(db_template)
     db.commit()
@@ -362,7 +346,7 @@ def get_template_file_content(db: Session, template_id: int, user_id: int) -> st
             not_found_detail="Template not found",
             forbidden_detail="Not authorized to access this template",
         )
-    
+
     try:
         return template_file_service.get_template_file_content(template_id)
     except HTTPException:
@@ -393,7 +377,7 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
     try:
         # 生成唯一工作ID
         work_id = generate_work_id()
-        
+
         # 创建工作记录
         db_work = models.Project(
             work_id=work_id,
@@ -405,22 +389,22 @@ def create_work(db: Session, work: schemas.WorkCreate, user_id: int):
             created_by=user_id,
             architecture_version=2
         )
-        
+
         db.add(db_work)
         db.flush()
-        
+
         # 创建工作空间目录结构和初始文件
         from ..file_services.workspace_structure import WorkspaceStructureManager
         candidate_path = get_workspace_path(work_id)
         candidate_path.mkdir(parents=True, exist_ok=False)
         base_path = candidate_path
         WorkspaceStructureManager.create_workspace_structure(
-            base_path, 
-            work_id, 
+            base_path,
+            work_id,
             template_id=db_work.template_id,
             output_mode=db_work.output_mode  # 传递输出模式
         )
-        
+
         db.commit()
         db.refresh(db_work)
         return db_work
@@ -441,23 +425,16 @@ def get_work(db: Session, work_id: str):
     """根据工作ID获取工作"""
     return db.query(models.Project).filter(models.Project.work_id == work_id).first()
 
-async def get_work_async(db: AsyncSession, work_id: str):
-    """异步版本：根据工作ID获取工作"""
-    # 使用异步select查询
-    from sqlalchemy import select
-    stmt = select(models.Project).where(models.Project.work_id == work_id)
-    result = await db.execute(stmt)
-    return result.scalar_one_or_none()
 
-def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100, 
+def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100,
                    status: str = None, search: str = None):
     """获取用户的工作列表，支持筛选和搜索"""
     query = db.query(models.Project).filter(models.Project.created_by == user_id)
-    
+
     # 状态筛选
     if status:
         query = query.filter(models.Project.status == status)
-    
+
     # 搜索筛选
     if search:
         search_filter = f"%{search}%"
@@ -466,13 +443,13 @@ def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100,
             (models.Project.description.ilike(search_filter)) |
             (models.Project.tags.ilike(search_filter))
         )
-    
+
     # 按更新时间倒序排列
     query = query.order_by(models.Project.updated_at.desc())
-    
+
     total = query.count()
     works = query.offset(skip).limit(limit).all()
-    
+
     return {
         "works": works,
         "total": total,
@@ -488,18 +465,18 @@ def update_work(db: Session, work_id: str, work_update: schemas.WorkUpdate, user
         not_found_detail="Project not found",
         forbidden_detail="Not authorized to modify this work",
     )
-    
+
     from ..file_services.project_access import require_current
     require_current(db_work)
     try:
         # 使用model_dump()替代dict()以兼容新版本Pydantic
         update_data = model_to_dict(work_update, exclude_unset=True)
-        
+
         if 'template_id' in update_data or 'output_mode' in update_data:
             raise HTTPException(400, '模板和输出模式在项目创建时固定，请新建项目')
         for field, value in update_data.items():
             setattr(db_work, field, value)
-        
+
         db.commit()
         db.refresh(db_work)
         return db_work
@@ -518,7 +495,7 @@ def delete_work(db: Session, work_id: str, user_id: int):
         not_found_detail="Project not found",
         forbidden_detail="Not authorized to delete this work",
     )
-    
+
     from ..file_services.project_access import require_current
     require_current(db_work)
     try:
@@ -553,10 +530,10 @@ def update_work_status(db: Session, work_id: str, status: str, user_id: int = No
             not_found_detail="Project not found",
             forbidden_detail="Not authorized to modify this work",
         )
-    
+
     try:
         db_work.status = status
-        
+
         db.commit()
         db.refresh(db_work)
         return db_work
@@ -566,5 +543,3 @@ def update_work_status(db: Session, work_id: str, status: str, user_id: int = No
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Project status update failed: {str(e)}"
         )
-
-

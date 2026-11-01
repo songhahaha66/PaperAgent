@@ -30,6 +30,8 @@ async def edit(ctx, inputs):
     from ai_system.research.models import ResearchConflict
     from ai_system.research.store import digest
     name=inputs['path']
+    if (ctx.research.snapshot().get('conversation_input') or {}).get('paper_context'):
+        raise ValueError('本轮带有论文引用，请使用writing_propose_edits提出修改集，等待用户接受')
     if not name.endswith(('.md','.tex','.bib')):raise ValueError('正文仅支持 Markdown、TeX 或 BibTeX 文件')
     path=project.safe_path(ctx.workspace,name,writing=True)
     if name.startswith(('data/','attachment/','outputs/','code/')):raise ValueError('正文不能覆盖资料或计算产物')

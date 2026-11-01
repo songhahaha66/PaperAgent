@@ -12,7 +12,7 @@ def direct_runs(store, fs=None, question_id=None):
 def run_result(ctx, run_id, observation=None):
     info = ctx.fs.get_run_info(run_id) or {}
     status = ('interrupted' if info.get('delivery_error') or info.get('publication_error') or info.get('failure_kind') == 'transport_unknown'
-              or info.get('status') not in {'success', 'error', 'cancelled'} else
+              or info.get('status') not in {'success', 'error', 'cancelled', 'timeout'} else
               'succeeded' if info['status'] == 'success' else
               'cancelled' if info['status'] == 'cancelled' else 'failed')
     if observation is None:
@@ -21,6 +21,8 @@ def run_result(ctx, run_id, observation=None):
             'failure_stage':info.get('failure_stage'),'submission_state':info.get('submission_state'),
             'compute_state':info.get('compute_state'),'delivery_state':info.get('delivery_state'),
             'runtime_epoch':info.get('runtime_epoch'),'context_restored':info.get('context_restored'),
+            'execution_mode':info.get('execution_mode'),'exit_code':info.get('exit_code'),
+            'duration_seconds':info.get('duration_seconds'),
             'observation': observation, 'error': info.get('error'), 'failure_kind': info.get('failure_kind'),
             'delivery_error': info.get('delivery_error') or info.get('publication_error'),
             'runtime_note': ('执行环境已中断，旧Python变量不可依赖；读取保存的代码和文件恢复，不重放已完成计算。'

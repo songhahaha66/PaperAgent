@@ -6,7 +6,7 @@ import asyncio
 import json
 import pytest
 from ai_system.graph.context import GraphContext
-from ai_system.research.control import worker_context
+from helpers.legacy_research import worker_context
 from helpers.paper import accepted_store
 
 SELECTED = {'mode': 'selected', 'selected': ['regression'], 'disabled': ['arima']}

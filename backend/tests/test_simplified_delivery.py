@@ -132,6 +132,95 @@ def test_failed_conversation_turn_survives_recovery_without_duplicate_input(tmp_
     assert not store.snapshot()['executions']
 
 
+def test_completed_message_id_is_not_executed_twice(tmp_path):
+    ctx=context(tmp_path);store=ctx.research;store.set_outcome('completed')
+    workspace_path(tmp_path,'.system/graph_thread.json').write_text(json.dumps(
+        {'thread_id':store.research_id,'engine_version':'research-v3','status':'done'}))
+    workspace_path(tmp_path,'.system/graph.sqlite').touch()
+    model=ResearchToolsModel(respond=lambda _: AIMessage(content='已处理本轮要求。'))
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
+    async def run():
+        first=await agent.send_message('处理新要求',message_id='user:stable')
+        assert await agent.send_message('处理新要求',message_id='user:stable') == first
+    asyncio.run(run())
+    assert model.calls==1
+
+
+def test_consumed_turn_retry_resumes_delivery_without_reinjecting_request(tmp_path):
+    from ai_system.research.store import digest
+    ctx=context(tmp_path);store=ctx.research;store.set_outcome('completed')
+    workspace_path(tmp_path,'.system/graph_thread.json').write_text(json.dumps(
+        {'thread_id':store.research_id,'engine_version':'research-v3','status':'done'}))
+    workspace_path(tmp_path,'.system/graph.sqlite').touch()
+    with store._transaction() as db:
+        db.execute('INSERT INTO commands VALUES (?,?,?,?)',(store.research_id,'conversation:user:consumed',
+            digest('修改并导出'),json.dumps({'message':'修改并导出','reply':None})))
+    def forbidden(_):
+        pytest.fail('an already consumed turn must not ask the model to modify the paper again')
+    model=ResearchToolsModel(respond=forbidden)
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
+    async def run():
+        first=await agent.send_message('修改并导出',message_id='user:consumed')
+        assert await agent.send_message('修改并导出',message_id='user:consumed')==first
+    asyncio.run(run())
+    assert model.calls==0 and not store.snapshot().get('conversation_input')
+
+
+def test_amendment_supersedes_pending_question_and_keeps_one_revision(tmp_path):
+    ctx=context(tmp_path);store=ctx.research
+    workspace_path(tmp_path,'.system/graph_thread.json').write_text(json.dumps(
+        {'thread_id':store.research_id,'engine_version':'research-v3','status':'interrupted'}))
+    workspace_path(tmp_path,'.system/graph.sqlite').touch()
+    with store._transaction() as db:
+        state=store._read(db)
+        state['action']={'id':'ask-year','capability':'ask','status':'waiting','inputs':{'message':'使用哪一年？'}}
+        store._save(db,state,'test_waiting',{})
+    original=store.snapshot()
+    model=ResearchToolsModel(respond=lambda _: AIMessage(content='已记录新范围，原问题无需再回答。'))
+    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
+    async def run():
+        options=dict(command_id='amend-one',research_id=store.research_id,base_revision=original['revision'],
+                     change='不按年份筛选，使用所有已有数据',replace_pending=True)
+        await agent.revise_research(**options)
+        await agent.revise_research(**options)
+    asyncio.run(run())
+    state=store.snapshot()
+    assert state['spec']['amendments']==['不按年份筛选，使用所有已有数据']
+    assert state.get('clarifications',[])==[], 'a changed requirement is not an answer to the old question'
+    assert state['action']['capability']=='reply' and not state.get('conversation_input')
+    assert model.calls==1
+
+
+def test_new_user_turn_preempts_tools_scheduled_by_old_turn(tmp_path):
+    from langchain.agents import create_agent
+    from langchain_core.messages import ToolMessage
+    from langchain_core.tools import StructuredTool
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from ai_system.research.session import run_session
+    calls=[]
+    async def write_marker(value: str):
+        calls.append(value)
+        return value
+    def respond(messages):
+        if any(m.id=='new-turn' for m in messages):
+            assert any(isinstance(m,ToolMessage) and m.tool_call_id=='old-write' for m in messages)
+            return AIMessage(content='已按新要求停止旧操作。')
+        return tool('write_marker',{'value':'must-not-execute'},'old-write')
+    model=ResearchToolsModel(respond=respond)
+    async def run():
+        async with AsyncSqliteSaver.from_conn_string(str(tmp_path/'sessions.sqlite')) as saver:
+            agent=create_agent(model,tools=[StructuredTool.from_function(coroutine=write_marker,
+                description='Write a marker')],checkpointer=saver,interrupt_before=['tools'])
+            await run_session(agent,'lead',[HumanMessage(content='旧要求',id='old-turn')])
+            saved=await agent.aget_state({'configurable':{'thread_id':'lead'}})
+            assert saved.next==('tools',) and calls==[]
+            result=await run_session(agent,'lead',[HumanMessage(content='先别执行旧操作',id='new-turn')],
+                                     new_user_turn_id='new-turn')
+            assert result['messages'][-1].content=='已按新要求停止旧操作。'
+    asyncio.run(run())
+    assert calls==[] and model.calls==2
+
+
 @pytest.mark.usefixtures('offline_compiler')
 def test_word_export_preserves_old_output_if_source_changes_during_conversion(tmp_path,monkeypatch):
     from ai_system.export import docx

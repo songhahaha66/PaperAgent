@@ -113,13 +113,13 @@ def read_question(ctx,inputs):
 
 
 def register(registry):
-    from .plan import PlanUpdate, update_plan
+    from .plan import PLAN_TOOL_DESCRIPTION, PlanUpdate, update_plan
     from .runtime_tools import register as register_runtime
     register_runtime(registry)
     def register_tool(name,handler,inputs,purpose):
         async def run(ctx,values):return CapabilityProduct('research_state',handler(ctx,values))
         registry.register('research','research.'+name,'research_state',run,inputs,model_callable=True,purpose=purpose)
-    register_tool('update_plan',update_plan,PlanUpdate,'创建或更新总体研究计划；制定计划、切换阶段、调整方案及暂停或结束前调用，提交完整工作项与实际状态。')
+    register_tool('update_plan',update_plan,PlanUpdate,PLAN_TOOL_DESCRIPTION)
     register_tool('create_question',update_question,QuestionCreate,'新建一个用户问题，返回系统分配的编号；不接收question_id。可在同轮为多问分别调用。')
     register_tool('edit_question',update_question,QuestionEdit,'修改已有问题，须提供返回的question_id与当前base_version。')
     async def legacy_question(ctx, values):return CapabilityProduct('research_state', update_question(ctx, values))

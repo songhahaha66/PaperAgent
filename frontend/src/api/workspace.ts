@@ -188,7 +188,6 @@ export const workspaceFileAPI = {
     token: string,
     workId: string,
     path: string = '',
-    recursive: boolean = true,
   ): Promise<FileInfo[]> {
     const params = new URLSearchParams()
     if (path) params.append('path', path)
@@ -215,7 +214,7 @@ export const workspaceFileAPI = {
   },
 
   // 获取图片文件URL
-  getImageUrl(token: string, workId: string, filePath: string): string {
+  getImageUrl(workId: string, filePath: string): string {
     let decoded = filePath
     try {
       decoded = decodeURIComponent(filePath)

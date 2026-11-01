@@ -11,6 +11,9 @@
           formatDateTime(message.datetime)
         }}</time>
         <div class="chat-markdown">
+          <blockquote v-for="(reference, index) in message.metadata?.paper_context?.references || []" :key="`quote-${index}`">
+            {{ reference.quote }}
+          </blockquote>
           <template v-for="group in timelineGroups(message)" :key="group.id">
             <ConversationExecution
               v-if="group.execution"
@@ -133,7 +136,7 @@ interface ChatMessage {
   json_blocks?: any[]
   message_type?: string
   segments?: ConversationSegment[]
-  metadata?: { status?: string }
+  metadata?: { status?: string; paper_context?: import('@/api/paper').PaperContext }
 }
 
 // Props
@@ -446,22 +449,7 @@ const formatDateTime = (datetime: string) => {
   line-height: 1.7;
 }
 
-:deep(.t-chat__message-content pre) {
-  background-color: var(--pa-surface-muted);
-  border: 1px solid var(--pa-line);
-  border-radius: var(--pa-radius-inline);
-  padding: 12px;
-  margin: 8px 0;
-  overflow-x: auto;
-}
 
-:deep(.t-chat__message-content code) {
-  background-color: var(--pa-surface-muted);
-  padding: 2px 4px;
-  border-radius: var(--pa-radius-inline);
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-}
 
 .answer-sources {
   display: flex;

@@ -15,12 +15,6 @@ class QuestionUpdate(Contract):
     retire_source_ids: list[str] = Field(default_factory=list)
 
 
-def projected_questions(snapshot, updates):
-    state = deepcopy(snapshot)
-    apply_questions(state, updates)
-    return state['questions']
-
-
 def apply_questions(state, updates):
     resolved=[]
     for update in updates:

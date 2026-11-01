@@ -1,6 +1,5 @@
 """A completion receipt covers the code and its figures in one request."""
 import asyncio
-from types import SimpleNamespace
 import pytest
 from ai_system.sandbox import runtime_helpers as runtime
 
@@ -36,19 +35,22 @@ def test_cell_saves_and_closes_real_figures_before_returning(tmp_path,monkeypatc
     assert path.read_bytes().startswith(b'\x89PNG\r\n\x1a\n') and not plt.get_fignums()
 
 
-def test_adapter_does_not_submit_a_second_cell_for_finalization(tmp_path):
+def test_adapter_submits_once_and_finalization_uses_the_process_receipt(tmp_path):
     from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
     from ai_system.sandbox.settings import SandboxSettings
+    from ai_system.sandbox.contracts import ExecutionOutcome
     calls=[]
-    async def sdk_run(code,*,context,handlers):
-        calls.append(code)
-        return SimpleNamespace(complete=True,error=None,result=[])
+    async def submit(code,run_id,*,timeout):
+        calls.append((code,run_id,timeout))
+    async def poll(run_id,output):
+        return ExecutionOutcome(exit_code=0,duration_seconds=.1)
     async def output(channel,text):pass
     async def run():
         session=OpenSandboxSession(SandboxSettings(api_key='fake',host_workspace_root='/cache'),workspace_dir=tmp_path)
-        session.interpreter=SimpleNamespace(codes=SimpleNamespace(run=sdk_run))
+        session.submit=submit
+        session.poll=poll
         result=await session.execute('print(42)','one',output)
         await session.finalize('one')
         assert result.error is None and len(calls)==1
-        assert 'run_cell' in calls[0] and repr('print(42)') in calls[0]
+        assert calls==[('print(42)','one',180)] and session.context_id is None
     asyncio.run(run())

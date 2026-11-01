@@ -8,9 +8,7 @@
     uv run python -m evals all   --pipeline research-no-planner ...                   # 消融：不使用研究层模型决策
 
 生成模型：EVAL_MODEL / EVAL_API_KEY / EVAL_PROVIDER(默认 openai) / EVAL_BASE_URL / EVAL_EXTRA_BODY（JSON，如 {"thinking": {"type": "disabled"}}）
-判分：--judge jev（需要 TYPESAFE_API_KEY，--jev-model 固定版本）
       --judge llm（EVAL_JUDGE_MODEL / EVAL_JUDGE_API_KEY / ...，应与生成模型不同）
-      --judge auto（默认：有 Jev key 用 Jev，否则用 LLM 判分）
 """
 
 import argparse
@@ -23,26 +21,20 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from ai_system.judge import JevJudge, LLMJudge, jev_available  # noqa: E402
+from ai_system.judge import LLMJudge  # noqa: E402
 
 from .mmbench import DEFAULT_SUBSET  # noqa: E402
 from .runner import PIPELINES, ModelSpec, load_problems, run_problem, score_problem, summarize  # noqa: E402
 
-DEFAULT_JEV_MODEL = "jev-1.14.0"
 
-
-def build_judge(kind: str, jev_model: str):
+def build_judge(kind: str):
     if kind == "none":
         return None
-    if kind == "jev" or (kind == "auto" and jev_available()):
-        if not jev_available():
-            raise SystemExit("--judge jev 需要设置 TYPESAFE_API_KEY")
-        return JevJudge(model=jev_model)
     spec = ModelSpec.from_env("EVAL_JUDGE")
     if spec is None:
         if kind == "llm":
             raise SystemExit("--judge llm 需要设置 EVAL_JUDGE_MODEL 和 EVAL_JUDGE_API_KEY")
-        logging.warning("没有 Jev key，也没有 EVAL_JUDGE_* 配置：只计算确定性指标")
+        logging.warning("没有 EVAL_JUDGE_* 配置：只计算确定性指标")
         return None
     return LLMJudge(spec.create_llm(streaming=False, temperature=0), label=f"llm:{spec.label}")
 
@@ -65,7 +57,7 @@ async def main(args) -> None:
             logging.info("%s 完成：%.0fs，论文=%s", problem.id, record["seconds"], record["paper_exists"])
 
     if args.command in ("score", "all"):
-        judge = build_judge(args.judge, args.jev_model)
+        judge = build_judge(args.judge)
         for problem in problems:
             if not (out_dir / problem.id / "run.json").exists():
                 logging.warning("跳过 %s：还没有运行记录", problem.id)
@@ -85,8 +77,7 @@ def parse_args(argv=None):
     parser.add_argument("--bench", required=True, help="本地 MMBench 目录（含 problem/ 与 dataset/）")
     parser.add_argument("--out", required=True, help="本次评测的输出目录")
     parser.add_argument("--problems", default="", help="逗号分隔的题号，默认 10 题子集")
-    parser.add_argument("--judge", choices=["auto", "jev", "llm", "none"], default="auto")
-    parser.add_argument("--jev-model", default=DEFAULT_JEV_MODEL, help="固定 Jev 版本，保证前后可比")
+    parser.add_argument("--judge", choices=["auto", "llm", "none"], default="auto")
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run.json 的题目")
     parser.add_argument("--resume", action="store_true", help="从已提交研究状态恢复未完成任务")
     return parser.parse_args(argv)

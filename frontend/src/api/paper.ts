@@ -107,9 +107,6 @@ export const paperProjectAPI = {
   read: (work: string) => projectRequest<PaperProject>(work, 'project'),
   locate: (work: string, quote: string) =>
     projectRequest<{ candidates: SourceSelection[] }>(work, 'locate', { quote }),
-  comment: (work: string, body: object) => projectRequest<PaperExecution>(work, 'comments', body),
-  resume: (work: string, id: string, research_id: string) =>
-    projectRequest<PaperExecution>(work, `executions/${id}/resume`, { research_id }),
   propose: (work: string, body: object) => projectRequest<PaperChange>(work, 'changes', body),
   decide: (work: string, id: string, research_id: string, decision: string) =>
     projectRequest<PaperChange>(work, `changes/${id}`, { research_id, decision }),
@@ -125,5 +122,11 @@ export interface PaperReference {
 export interface PaperComposerContext extends PaperReference {
   work_id: string
   research_id: string
+  thread_id: string | null
+}
+
+export interface PaperContext {
+  research_id: string
+  references: PaperReference[]
   thread_id: string | null
 }

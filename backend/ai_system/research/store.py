@@ -17,7 +17,7 @@ from contextlib import contextmanager, closing
 from pathlib import Path
 
 from . import ENGINE_VERSION
-from .models import Assumption, ResearchRevision, ResearchConflict, WorkerResult, WorkOrder, Issue, IssueReport, ContentFeedback, RuntimeFault
+from .models import Assumption, ResearchRevision, ResearchConflict, WorkerResult, WorkOrder, IssueReport, ContentFeedback, RuntimeFault
 from .validation import bind_requirements, validate_spec, protocol, fingerprint
 
 DB_PATH = ".system/research.sqlite"

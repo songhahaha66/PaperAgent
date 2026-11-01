@@ -454,9 +454,8 @@ def describe(store):
     compile_state=data.get('compile',{'state':'untracked','message':'尚未记录编译版本；已有 PDF 仅供参考，请编译以同步源码。'})
     if data.get('pdf_version') and data['pdf_version']!=doc['version'] and compile_state['state']=='current':
         compile_state={'state':'stale','message':'源码已更新，PDF 仍为上次成功版本。'}
-    from .paper_comments import is_live
     executions=read_records(store,'paper_executions')
-    executions=[{**r,'state':'interrupted'} if r['state']=='running' and not is_live(r) else r for r in executions]
+    executions=[{**r,'state':'interrupted'} if r['state'] in {'pending','running'} else r for r in executions]
     return {**doc,'compile':compile_state,'pdf_available':pdf.is_file() and bool(pdf.stat().st_size),
             'pdf_version':data.get('pdf_version'),'feedback':[{k:r.get(k) for k in ('id','message','section','task_id','status','paper_origin')} for r in (store.snapshot() or {}).get('feedback',[]) if r['status'] not in {'resolved','dismissed','superseded'}],'threads':read_records(store,'paper_threads'),
             'executions':executions,'changes':read_records(store,'paper_changes'),

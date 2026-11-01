@@ -32,7 +32,7 @@ async def delegate(ctx, inputs):
     from ai_system.research.session import session_saver,run_session
     from ai_system.research.runtime import execution_links,execution_scope
     from services.file_services.workspace_layout import workspace_path
-    from ai_system.research.feedback import read_artifact
+    from ai_system.research.files import read_artifact
     store=ctx.research
     tid=inputs['task_id'] or hashlib.sha256((execution_links().get('action_id') or inputs['task']).encode()).hexdigest()[:20]
     if len(tid)!=20 or any(c not in '0123456789abcdef' for c in tid):raise ValueError('task_id无效，请使用返回的子任务编号')

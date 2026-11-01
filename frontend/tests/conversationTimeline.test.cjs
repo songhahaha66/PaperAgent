@@ -152,14 +152,6 @@ const text = (node) => [node.text || '', ...(node.children || []).map(text)].joi
     'src/components/JsonChatRenderer.vue',
     {
       vue,
-      '@tdesign-vue-next/chat': {
-        ChatItem: {
-          setup:
-            (_, { slots }) =>
-            () =>
-              vue.h('article', {}, slots.content?.()),
-        },
-      },
       '@/components/MarkdownRenderer.vue': {
         default: {
           props: ['content'],

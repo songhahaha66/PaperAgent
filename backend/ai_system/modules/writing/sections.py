@@ -1,6 +1,6 @@
 """Read-only document/editor helpers; research sessions own all drafting."""
 import re
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 
 from ai_system.graph.context import GraphContext

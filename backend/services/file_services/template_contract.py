@@ -26,7 +26,6 @@ from ai_system.core_tools.docx_images import (
 from ai_system.core_tools.docx_styles import (
     PROFILE_PATH,
     extract_style_fingerprint,
-    save_style_profile,
 )
 
 logger = logging.getLogger(__name__)
@@ -302,19 +301,6 @@ def _copy_template_to_workspace(source_path: Path, workspace_path: Path, output_
         backup.parent.mkdir(parents=True, exist_ok=True)
         if not backup.exists():
             shutil.copyfile(source_path, backup)
-
-
-def _capture_template_assets(source_path: Path, workspace_path: Path, output_mode: str) -> None:
-    if output_mode != "word" or source_path.suffix.lower() != ".docx":
-        return
-    try:
-        extract_docx_images(source_path, workspace_path / "template" / "images")
-    except Exception as exc:
-        logger.warning("提取模板图片失败: %s", exc)
-    try:
-        save_style_profile(workspace_path, extract_style_fingerprint(source_path))
-    except Exception as exc:
-        logger.warning("保存模板样式档案失败: %s", exc)
 
 
 def _write_contract(workspace_path: Path, contract: str) -> None:

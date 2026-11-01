@@ -4,7 +4,7 @@ from services.file_services.workspace_layout import workspace_path
 from ai_system.research.domain import findings as research_findings
 import asyncio,json,time
 from contextlib import closing
-from ai_system.research.store import ResearchStore,digest
+from ai_system.research.store import digest
 from ai_system.research.control import paper_state
 from ai_system.research.models import IssueReport,ResearchConflict
 from ai_system.research.review_cache import ReviewCache,ReviewInProgress,ReviewSuperseded,review_context,science_version,retired_review

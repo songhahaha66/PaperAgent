@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 RETRIES = 2
-from ..config.generation import request_model,ensure_complete,ModelGenerationLimit
+from ..config.generation import request_model, ensure_complete
 
 
 def structured_model(llm: Any, schema: Type[T], *, include_raw: bool = False):
@@ -132,24 +132,6 @@ def message_text(message: Any) -> str:
     if isinstance(content, list):
         return "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
     return str(content or "")
-
-
-async def call_text(llm: Any, messages: List[BaseMessage]) -> str:
-    last_error: Exception | None = None
-    from ..research.runtime import ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError
-    for attempt in range(RETRIES + 1):
-        try:
-            reply=await llm.ainvoke(messages)
-            ensure_complete(reply)
-            text = message_text(reply).strip()
-            if text:
-                return text
-            raise ValueError("模型返回了空内容")
-        except Exception as exc:
-            if isinstance(exc,(ResearchBudgetExhausted,RepeatedOperationBlocked,ModelServiceError)) or not isinstance(exc,ValueError):raise
-            last_error = exc
-            logger.warning("文本生成第 %d 次失败: %s", attempt + 1, type(exc).__name__)
-    raise ValueError(f"文本生成失败: {last_error}") from last_error
 
 
 def clip(text: str, limit: int) -> str:

@@ -10,11 +10,11 @@ async function environment() {
     '@/stores/auth': { useAuthStore: () => auth },
   })
   const store = storeModule.useWorkPanelsStore(pinia.createPinia())
-  async function work(id, deferred = false, loadFailures = [], taskAPI = {}, readiness = async () => ({roles:{jev:true}})) {
+  async function work(id, deferred = false, loadFailures = [], taskAPI = {}, readiness = async () => ({roles:{brain:true}})) {
     const cleanup = [],
       sockets = [],
       sent = [],
-      connected = [], paperComments = []
+      connected = []
     const scope = vue.effectScope()
     class Socket {
       constructor(workId) {
@@ -40,8 +40,8 @@ async function environment() {
         })
         return this.connection
       }
-      sendMessage(message, _model, action, subproblemId, revision, _scope, requestId) {
-        sent.push({ workId: this.workId, message, action, subproblemId, revision })
+      sendMessage(message, _model, action, subproblemId, revision, _scope, requestId, sourceIssue, paperContext) {
+        sent.push({ workId: this.workId, message, action, subproblemId, revision, ...(sourceIssue ? { sourceIssue } : {}), ...(paperContext ? { paperContext } : {}) })
         this.message?.({ type: 'start', task_id: `task-${sent.length}`, reply_id: `reply-${sent.length}`, request_id: requestId, action })
       }
       disconnect() {
@@ -76,7 +76,6 @@ async function environment() {
         '@/composables/useBreakpoint': {
           useBreakpoint: () => ({ isMobile, width }),
         },
-        '@/api/paper':{paperProjectAPI:{comment:async(_work,body)=>{paperComments.push(body);return {id:body.request_id,thread_id:'thread'}},read:async()=>({executions:paperComments.map(body=>({id:body.request_id,state:'completed',answer:'基于当前原文的回复'}))})}},
         '@/api/researchSetup': {researchSetupAPI:{settings:async()=>({})}},
         '@/api/modelConfig': {modelConfigAPI:{readiness}},
         '@/api/chat': {
@@ -161,7 +160,6 @@ async function environment() {
       sent,
       route,
       connected,
-      paperComments,
       stop() {
         cleanup.forEach((callback) => callback())
         scope.stop()
@@ -225,12 +223,21 @@ if (require.main === module) (async () => {
   )
   assert.equal(progressWork.state.openProgress,undefined)
   assert.equal(progressWork.sent.length, 0, 'opening the paper never resumes research')
-  await progressWork.state.preparePlanRevision('先比较新方法的影响', 'Q1')
-  assert.equal(progressWork.sent.at(-1).action, 'revise_research')
-  assert.equal(progressWork.sent.at(-1).revision.scope[0], 'Q1')
+  await progressWork.state.sendMessage('先比较新方法的影响')
+  assert.equal(progressWork.sent.at(-1).action, 'auto')
+  assert.equal(progressWork.sent.at(-1).subproblemId, undefined)
+  assert.equal(progressWork.sent.at(-1).revision, undefined, 'the server classifies and constructs revision commands')
+  assert.equal(progressWork.state.stageText.value, '正在理解你的消息')
+  assert.equal(progressWork.state.primaryAction.value.label, '停止回复')
+  progressWork.sockets[0].message({ type: 'message_routed', task_id: 'task-1', action: 'ask', work_status: 'completed' })
+  assert.equal(progressWork.state.stageText.value, '正在分析已有材料')
+  assert.equal(progressWork.state.currentWork.value.status, 'completed', 'read-only answers preserve research status')
+  progressWork.sockets[0].message({ type: 'message_routed', task_id: 'stale-task', action: 'message', work_status: 'in_progress' })
+  assert.equal(progressWork.state.runningAction.value, 'ask', 'a stale route cannot change the active turn')
+  progressWork.sockets[0].message({ type: 'message_routed', task_id: 'task-1', action: 'revise_research', work_status: 'in_progress' })
+  assert.equal(progressWork.state.primaryAction.value.label, '暂停')
   assert.equal(progressWork.state.messageAction, undefined, 'the composer has no persistent revision mode')
-  assert.equal(progressWork.state.questionScope.value, null)
-  progressWork.state.handleStreamMessage({ type: 'complete', work_status: 'paused' }, progressWork.state.chatMessages.value.at(-1).id)
+  progressWork.state.stream.handleStreamMessage({ type: 'complete', work_status: 'paused' }, progressWork.state.chatMessages.value.at(-1).id)
   await progressWork.state.sendMessage('继续')
   assert.equal(progressWork.sent.at(-1).action, 'auto', 'ordinary continuation cannot inherit the preceding revision action')
   assert.equal(progressWork.sent.at(-1).revision, undefined)
@@ -287,6 +294,8 @@ if (require.main === module) (async () => {
   await primary.state.sendMessage('Necessary information supplied.', 'auto')
   assert.equal(primary.sent.at(-1).action, 'auto')
   assert.equal(primary.state.primaryAction.value.kind, 'pause', 'execution takes precedence over confirmation and existing output')
+  assert.equal(primary.state.primaryAction.value.label, '停止回复', 'classification has not started research')
+  primary.sockets.at(-1).message({ type: 'message_routed', task_id: 'task-1', action: 'confirm', work_status: 'in_progress' })
   assert.equal(primary.state.primaryAction.value.label, '暂停')
   primary.state.pausing.value = true
   await primary.state.handlePrimaryAction()
@@ -300,7 +309,7 @@ if (require.main === module) (async () => {
   assert.equal(primary.sent.at(-1).action, 'resume')
   assert.equal(primary.state.primaryAction.value.kind, 'pause')
   actionStatus = 'completed'
-  primary.state.handleStreamMessage({ type: 'complete', work_status: 'completed' }, primary.state.chatMessages.value.at(-1).id)
+  primary.state.stream.handleStreamMessage({ type: 'complete', work_status: 'completed' }, primary.state.chatMessages.value.at(-1).id)
   assert.equal(primary.state.primaryAction.value.kind, 'download')
   primary.state.currentWork.value.status = 'paused'
   primary.state.researchSnapshot.value.engine_version = 'legacy'
@@ -410,10 +419,9 @@ if (require.main === module) (async () => {
   assert.equal(restored.state.isStreaming.value, false)
   assert.equal(restored.state.panelSession.value.secondaryActiveId, 'files')
   assert.equal(restored.state.researchSnapshot.value.work_id, 'first')
-  restored.state.askSubproblem('Q2')
   await restored.state.sendMessage('解释这些结果')
   assert.equal(restored.sent.at(-1).action, 'auto')
-  assert.equal(restored.sent.at(-1).subproblemId, 'Q2')
+  assert.equal(restored.sent.at(-1).subproblemId, undefined)
   const replyId = restored.state.chatMessages.value.at(-1).id
   const pushed = {
     ...JSON.parse(JSON.stringify(restored.state.researchSnapshot.value)),
@@ -427,7 +435,7 @@ if (require.main === module) (async () => {
   assert.equal(restored.state.researchSnapshot.value.delivery_summary.label, pushed.delivery_summary.label)
   restored.sockets.at(-1).message({ type: 'json_block', block: { type: 'research_snapshot', content: { ...pushed, commit_seq: 7, snapshot_at: 7 } } })
   assert.equal(restored.state.researchSnapshot.value.commit_seq, 8, 'older pushes cannot roll the page back')
-  restored.state.handleStreamMessage(
+  restored.state.stream.handleStreamMessage(
     {
       type: 'json_block',
       block: { type: 'research_snapshot', content: { schema_version: 5, work_id: 'another-work' } },
@@ -439,12 +447,12 @@ if (require.main === module) (async () => {
     'first',
     'other work evidence is ignored',
   )
-  restored.state.handleStreamMessage({ type: 'complete', work_status: 'completed' }, replyId)
+  restored.state.stream.handleStreamMessage({ type: 'complete', work_status: 'completed' }, replyId)
   await restored.state.sendMessage('重新研究这个问题', 'run')
   assert.equal(restored.sent.at(-1).action, 'run')
   restored.stop()
   console.log('PASS: one-line submission respects IME and streaming continues across split tabs')
-  console.log('PASS: scoped follow-up and explicit research send different backend actions')
+  console.log('PASS: contextual messages share one entry; explicit restart remains a separate control')
 
   const recovery = await env.work('recovery')
   await recovery.state.loadWork()
@@ -482,10 +490,8 @@ if (require.main === module) (async () => {
     false,
     'unsupported records must not offer an action the backend rejects',
   )
-  recovery.state.questionScope.value = 'Q1'
   recovery.state.prepareNewResearch()
   assert.equal(recovery.state.messageAction, undefined)
-  assert.equal(recovery.state.questionScope.value, null)
   assert.equal(
     recovery.sent.length,
     0,
@@ -529,7 +535,7 @@ if (require.main === module) (async () => {
     },
   }
   progress.state.currentWork.value.status = 'in_progress'
-  progress.state.applyResearchSnapshot(snapshot)
+  progress.state.session.applyResearchSnapshot(snapshot)
   assert.equal(progress.state.stageText.value, '等待模型响应')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.label, '等待模型响应')
   assert.equal(progress.state.researchSnapshot.value.runtime.current.question_id, 'question:E2')
@@ -552,7 +558,7 @@ if (require.main === module) (async () => {
     questions: [], experiments: [],
     runtime: { actions: [], models: [], decisions: [], history: [], updated_at: 90, models_updated_at: 90 },
   }
-  progress.state.handleStreamMessage({
+  progress.state.stream.handleStreamMessage({
     type: 'json_block', block: { type: 'research_snapshot', content: olderSnapshot },
   }, 'progress-message')
   assert.equal(progress.state.researchSnapshot.value.commit_seq, 10, 'an older streamed snapshot cannot rewind progress')
@@ -577,10 +583,10 @@ if (require.main === module) (async () => {
   let classifierChecks=0
   const noClassifier=await env.work('no-classifier',false,[],{},async()=>{
     classifierChecks++
-    throw new Error('Jev unavailable')
+    throw new Error('model unavailable')
   })
   await noClassifier.state.sendMessage('Explain the current result')
-  assert.equal(classifierChecks,0,'Sending a message must not request Jev readiness')
+  assert.equal(classifierChecks,0,'Sending a message must not request an extra model connection')
   assert.equal(noClassifier.sent.length,1)
   assert.equal(noClassifier.sent[0].message,'Explain the current result')
   noClassifier.stop()

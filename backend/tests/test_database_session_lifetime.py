@@ -69,7 +69,6 @@ def test_chat_releases_project_connection_while_agent_runs(tmp_path, monkeypatch
     monkeypatch.setattr('ai_system.research.views.completed_work_status', lambda _: 'completed')
     async def send(*args, **kwargs): pass
     async def answer(*args, **kwargs):
-        assert kwargs['destination_url'] == 'https://example.test/v1'
         started.set()
         await release.wait()
     monkeypatch.setattr(chat, 'answer_research_question', answer)
@@ -77,11 +76,15 @@ def test_chat_releases_project_connection_while_agent_runs(tmp_path, monkeypatch
     monkeypatch.setattr(chat, 'research_snapshot', lambda *args: SimpleNamespace(model_dump=lambda: {}))
     chat.task_manager._tasks.clear()
 
+    from services.chat_services.research_session import ResearchSnapshot
+    initial_snapshot = ResearchSnapshot(work_id='work', work_status='created')
+    monkeypatch.setattr(chat, 'research_snapshot', lambda *args: initial_snapshot)
+
     async def scenario():
         task = chat.task_manager.create_task('work', 7, 'run', action=action)
         task.request_id = 'request'
         running = asyncio.create_task(chat._execute_chat_task(
-            'work', 7, 'run', action, SimpleNamespace(has_research=False), None, None, 'created', task))
+            'work', 7, 'run', action, initial_snapshot, None, None, 'created', task))
         chat.task_manager.set_async_task('work', running)
         try:
             await asyncio.wait_for(started.wait(), 5)
@@ -95,24 +98,6 @@ def test_chat_releases_project_connection_while_agent_runs(tmp_path, monkeypatch
     finally:
         chat.task_manager._tasks.clear()
         engine.dispose()
-
-
-def test_paper_comment_returns_connection_before_background_execution(tmp_path, monkeypatch):
-    engine, sessions = database(tmp_path)
-    from services.data_services.crud import get_work
-    from services.chat_services import paper_comments
-    store = SimpleNamespace(research_id='study', root=tmp_path)
-    monkeypatch.setattr(workspace, '_paper_store', lambda db, work_id, user_id: (get_work(db, work_id), store)[1])
-    monkeypatch.setattr(workspace, '_paper_writing_model', lambda db, user_id: db.query(ModelConfig).first().model_id)
-    monkeypatch.setattr(paper_comments, 'create', lambda *args, **kwargs: ({'id': 'execution'}, True))
-    background = BackgroundTasks()
-    request = workspace.PaperCommentRequest(research_id='study', request_id='one', message='解释此段')
-    with sessions() as db:
-        response = asyncio.run(workspace.paper_comment('work', request, background, db, 7))
-        assert response['id'] == 'execution'
-        assert len(background.tasks) == 1
-        assert engine.pool.checkedout() == 0, 'background task retained the projects connection'
-    engine.dispose()
 
 
 def test_chat_initialization_failure_releases_connection(tmp_path, monkeypatch):

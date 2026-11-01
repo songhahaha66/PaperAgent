@@ -5,19 +5,14 @@
 1–10 分按 5 个等级段（1-2 / 3-4 / 5-6 / 7-8 / 9-10）离散成 Score 的 5 级，
 期望等级再映射回 1–10：score_10 = 1.5 + 2 * level。
 
-每个维度单独发一次请求，state 只放与该维度相关的章节（Jev 在无关内容多时准确率下降）。
+每个维度单独发一次请求，使用有长度上限的论文全文。
 """
 
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from ai_system.judge import Judge, Score
 
-# 每次请求中论文正文的最大字符数（中文约 1 token/字，Jev 单问题上下文 32k token）
-MAX_PAPER_CHARS = 20000
-# 过滤后正文少于此长度时，改为发送整篇论文
-MIN_FILTERED_CHARS = 800
 # 置信度低于此值的子项需要人工复核
 LOW_CONFIDENCE = 0.5
 
@@ -33,8 +28,6 @@ class SubCriterion:
 class Dimension:
     key: str
     name: str
-    # 章节标题关键词（中英文），用来挑选相关正文
-    section_keywords: Tuple[str, ...]
     subcriteria: Tuple[SubCriterion, ...]
 
 
@@ -42,7 +35,6 @@ DIMENSIONS: Tuple[Dimension, ...] = (
     Dimension(
         key="analysis",
         name="问题分析",
-        section_keywords=("摘要", "重述", "问题分析", "summary", "abstract", "restatement", "analysis of the problem", "problem analysis", "introduction"),
         subcriteria=(
             SubCriterion(
                 "definition",
@@ -61,7 +53,6 @@ DIMENSIONS: Tuple[Dimension, ...] = (
     Dimension(
         key="rigor",
         name="建模严谨性",
-        section_keywords=("假设", "符号", "模型", "建模", "assumption", "notation", "model"),
         subcriteria=(
             SubCriterion(
                 "assumptions",
@@ -80,7 +71,6 @@ DIMENSIONS: Tuple[Dimension, ...] = (
     Dimension(
         key="practicality",
         name="实用与科学性",
-        section_keywords=("模型", "求解", "建立", "评价", "推广", "model", "solution", "solving", "strength", "weakness", "evaluation"),
         subcriteria=(
             SubCriterion(
                 "practicality",
@@ -99,7 +89,6 @@ DIMENSIONS: Tuple[Dimension, ...] = (
     Dimension(
         key="results",
         name="结果与偏差分析",
-        section_keywords=("结果", "求解", "灵敏度", "敏感性", "误差", "偏差", "检验", "评价", "result", "sensitivity", "error", "bias", "validation", "strength", "weakness"),
         subcriteria=(
             SubCriterion(
                 "results",
@@ -115,37 +104,6 @@ DIMENSIONS: Tuple[Dimension, ...] = (
         ),
     ),
 )
-
-
-_HEADING = re.compile(r"^(#{1,6})\s+(.*)$", re.MULTILINE)
-
-
-def split_sections(markdown: str) -> List[Tuple[str, str]]:
-    """按 Markdown 标题切分，返回 [(标题, 含标题的正文)]；标题前的内容标题为空串"""
-    matches = list(_HEADING.finditer(markdown))
-    if not matches:
-        return [("", markdown)]
-    sections = []
-    if matches[0].start() > 0:
-        sections.append(("", markdown[: matches[0].start()]))
-    for i, m in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(markdown)
-        sections.append((m.group(2).strip(), markdown[m.start():end]))
-    return sections
-
-
-def select_sections(markdown: str, keywords: Tuple[str, ...]) -> str:
-    """挑出标题含关键词的章节；太短时退回整篇。结果截断到 MAX_PAPER_CHARS"""
-    picked = [
-        body for title, body in split_sections(markdown)
-        if title and any(k in title.lower() for k in keywords)
-    ]
-    text = "\n".join(picked)
-    if len(text) < MIN_FILTERED_CHARS:
-        text = markdown
-    if len(text) > MAX_PAPER_CHARS:
-        text = text[:MAX_PAPER_CHARS] + "\n\n[...论文其余部分因长度限制省略...]"
-    return text
 
 
 def level_to_ten(level: float) -> float:
@@ -189,20 +147,13 @@ class PaperScore:
 MAX_FULL_PAPER_CHARS = 150000
 
 
-def paper_for_judge(judge: Judge, paper: str, keywords: Tuple[str, ...]) -> str:
-    """Jev 单题上下文 32k，只喂相关章节；LLM 判分读全文"""
-    if getattr(judge, "name", "") == "jev":
-        return select_sections(paper, keywords)
-    return paper[:MAX_FULL_PAPER_CHARS]
-
-
 async def score_paper(judge: Judge, background: str, requirement: str, paper: str) -> PaperScore:
     result = PaperScore(judge=judge.name)
     for dim in DIMENSIONS:
         state = {
             "problem_background": background,
             "problem_requirement": requirement,
-            "paper": paper_for_judge(judge, paper, dim.section_keywords),
+            "paper": paper[:MAX_FULL_PAPER_CHARS],
         }
         questions = {
             sub.key: Score(instructions=sub.instructions, criteria=list(sub.levels))

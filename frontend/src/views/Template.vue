@@ -328,7 +328,6 @@ import DocxViewer from '@/components/DocxViewer.vue'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 
 import { useStudioCopy } from '@/lang/studio'
-import { formatWorkDate } from '@/utils/dates'
 const { ui, isZh } = useStudioCopy()
 defineProps<{ embedded?: boolean }>()
 const { isMobile } = useBreakpoint()
@@ -361,7 +360,7 @@ const createNewTask = () => {
 const activeHistoryId = ref<number | null>(null)
 
 // 选择历史工作
-const selectHistory = (id: number) => {
+const selectHistory = (_id: number) => {
   router.push('/home')
   // 在主页中实现选中历史工作的逻辑
 }
@@ -526,8 +525,7 @@ const deleteTemplate = async (template: PaperTemplate) => {
   console.log('开始删除模板:', template.id)
 
   try {
-    const result = await templateAPI.deleteTemplate(authStore.token, template.id)
-    console.log('删除成功:', result)
+    await templateAPI.deleteTemplate(authStore.token, template.id)
     MessagePlugin.success('模板删除成功')
     loadTemplates() // 重新加载列表
   } catch (error: any) {
@@ -771,7 +769,7 @@ const confirmForceDelete = async () => {
   if (!authStore.token || !templateToDelete.value) return
 
   try {
-    const result = await templateAPI.forceDeleteTemplate(authStore.token, templateToDelete.value.id)
+    await templateAPI.forceDeleteTemplate(authStore.token, templateToDelete.value.id)
     MessagePlugin.success("模板已删除，已有项目副本保留")
     loadTemplates() // 重新加载列表
     showDeleteConfirmDialog.value = false

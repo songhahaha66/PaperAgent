@@ -56,76 +56,7 @@
             >
           </div>
         </t-card>
-        <t-card
-          :title="isZh ? 'Jev 评测连接（可选）' : 'Jev evaluation connection (optional)'"
-          class="connection-card jev-card"
-        >
-          <template #actions
-            ><span class="connection-state">{{
-              jevSource === 'deployment'
-                ? isZh
-                  ? '部署默认'
-                  : 'Deployment default'
-                : jevReady
-                  ? ui.configured
-                  : ui.unconfigured
-            }}</span></template
-          >
-          <p class="jev-note">
-            {{
-              isZh
-                ? '普通聊天直接进入研究 Agent，不需要此连接。Jev 可用于独立评测。'
-                : 'Chat goes directly to the research Agent and does not require this connection. Jev is available for separate evaluations.'
-            }}
-          </p>
-          <p v-if="jevSource === 'deployment'" class="jev-note">
-            {{
-              isZh
-                ? '当前使用部署默认连接。保存个人密钥后优先使用个人配置。'
-                : 'Using the deployment default. A saved personal connection takes precedence.'
-            }}
-          </p>
-          <ConnectionFields :form="forms.jev" :disabled="loading || !!savingRole" :ui="ui" jev />
-          <p class="jev-note">
-            {{
-              isZh
-                ? '密钥不回显，编辑时留空保留原密钥。连接检查会发送一次 Jev 请求，可能产生费用。'
-                : 'Saved keys are never returned. Leave the key blank to keep it. Checking the connection sends a Jev request and may incur a charge.'
-            }}
-          </p>
-          <t-alert
-            v-if="jevFeedback"
-            :theme="jevFeedbackError ? 'error' : 'success'"
-            :message="jevFeedback"
-            class="connection-feedback"
-          />
-          <div class="connection-actions">
-            <t-button
-              theme="primary"
-              :loading="savingRole === 'jev'"
-              :disabled="loading || !valid(forms.jev) || !!savingRole"
-              @click="saveRole('jev')"
-              >{{ ui.save }}</t-button
-            >
-            <t-button
-              theme="default"
-              variant="outline"
-              :loading="testingJev"
-              :disabled="
-                loading || !!savingRole || (!valid(forms.jev) && jevSource !== 'deployment')
-              "
-              @click="testJevConnection"
-              >{{ ui.test }}</t-button
-            >
-            <t-button
-              v-if="forms.jev.id"
-              theme="danger"
-              variant="text"
-              @click="confirmDelete('jev')"
-              >{{ ui.delete }}</t-button
-            >
-          </div>
-        </t-card>
+
         <section class="advanced-config">
           <button
             class="advanced-toggle"
@@ -181,7 +112,7 @@ import { modelConfigAPI, type ModelConfig, type GenerationSettings } from '@/api
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useStudioCopy } from '@/lang/studio'
 import { isDeepSeekEndpoint } from '@/utils/modelProvider'
-type Role = 'brain' | 'code' | 'writing' | 'jev'
+type Role = 'brain' | 'code' | 'writing'
 interface Form {
   id?: number
   apiKey: string
@@ -202,13 +133,7 @@ const forms = reactive<Record<Role, Form>>({
   brain: { apiKey: '', baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-flash' },
   code: { apiKey: '', baseUrl: '', modelId: '' },
   writing: { apiKey: '', baseUrl: '', modelId: '' },
-  jev: { apiKey: '', baseUrl: 'https://api.typesafe.ai', modelId: 'jev-latest' },
 })
-const jevSource = ref<'user' | 'deployment' | 'missing'>('missing')
-const jevReady = ref(false),
-  testingJev = ref(false)
-const jevFeedback = ref(''),
-  jevFeedbackError = ref(false)
 const loading = ref(true),
   saving = ref(false),
   testing = ref(false),
@@ -227,7 +152,6 @@ const ConnectionFields = defineComponent({
   props: {
     form: { type: Object, required: true },
     disabled: Boolean,
-    jev: Boolean,
     ui: { type: Object, required: true },
   },
   setup(props) {
@@ -249,11 +173,11 @@ const ConnectionFields = defineComponent({
           [
             'baseUrl',
             'endpoint',
-            props.jev ? 'https://api.typesafe.ai' : 'https://api.deepseek.com/v1',
+            'https://api.deepseek.com/v1',
             'text',
           ],
-          ['modelId', 'modelId', props.jev ? 'jev-latest' : 'deepseek-flash', 'text'],
-          ['timeoutSeconds', 'requestTimeout', props.jev ? '10' : '600', 'number'],
+          ['modelId', 'modelId', 'deepseek-flash', 'text'],
+          ['timeoutSeconds', 'requestTimeout', '600', 'number'],
         ]
           .map(([key, label, placeholder, type]) =>
             h('label', { class: 'connection-field' }, [
@@ -261,8 +185,8 @@ const ConnectionFields = defineComponent({
                 'span',
                 label === 'requestTimeout'
                   ? isZh.value
-                    ? `模型请求超时（秒，留空为 ${props.jev ? '10' : '600'}）`
-                    : `Request timeout (seconds, blank for ${props.jev ? '10' : '600'})`
+                    ? `模型请求超时（秒，留空为 600）`
+                    : `Request timeout (seconds, blank for 600)`
                   : props.ui[label as string],
               ),
               h(Input, {
@@ -280,7 +204,7 @@ const ConnectionFields = defineComponent({
             ]),
           )
           .concat(
-            !props.jev ? [h(ModelGenerationControls, {
+            [h(ModelGenerationControls, {
               modelId: props.form.modelId,
               baseUrl: props.form.baseUrl,
               modelValue: props.form.generationSettings,
@@ -289,7 +213,7 @@ const ConnectionFields = defineComponent({
               isZh: isZh.value,
               'onUpdate:modelValue': (value: GenerationSettings) => { props.form.generationSettings = value },
               'onUpdate:thinkingEnabled': (value: boolean) => { props.form.thinkingEnabled = value },
-            })] : [],
+            })],
           ),
       )
   },
@@ -319,7 +243,7 @@ function adopt(config: ModelConfig) {
     id: config.id,
     apiKey: '',
     baseUrl: config.base_url || '',
-    modelId: config.model_id || (config.type === 'jev' ? 'jev-latest' : ''),
+    modelId: config.model_id || '',
     timeoutSeconds: config.timeout_seconds ?? null,
     thinkingEnabled: config.thinking_enabled ?? false,
     generationSettings: { ...config.generation_settings },
@@ -333,7 +257,6 @@ async function persist(role: Role) {
     timeout_seconds: form.timeoutSeconds ?? null,
     thinking_enabled: !!form.thinkingEnabled,
     generation_settings: form.generationSettings ?? {},
-    ...(role === 'jev' ? { is_active: true } : {}),
     ...(form.apiKey.trim() ? { api_key: form.apiKey.trim() } : {}),
   }
   const result = form.id
@@ -349,7 +272,7 @@ async function saveDefault() {
     await persist('brain')
     if (applyAll.value) {
       const configs = await modelConfigAPI.applyDefault()
-      configs.filter((config) => config.type !== 'jev').forEach(adopt)
+      configs.forEach(adopt)
     }
     feedbackError.value = false
     feedback.value = ui.value.saveSuccess
@@ -365,7 +288,6 @@ async function saveRole(role: Role) {
   savingRole.value = role
   try {
     await persist(role)
-    if (role === 'jev') await loadJevReadiness()
     MessagePlugin.success(ui.value.saveSuccess)
   } catch {
     MessagePlugin.error(ui.value.saveFailed)
@@ -395,42 +317,6 @@ async function testConnection() {
     testing.value = false
   }
 }
-async function loadJevReadiness() {
-  const readiness = await modelConfigAPI.readiness()
-  jevReady.value = !!readiness.roles.jev
-  jevSource.value = readiness.jev.source
-  if (!forms.jev.id && readiness.jev.source === 'deployment') {
-    forms.jev.modelId = readiness.jev.model_id || 'jev-latest'
-    forms.jev.baseUrl = readiness.jev.base_url || 'https://api.typesafe.ai'
-    forms.jev.timeoutSeconds = readiness.jev.timeout_seconds ?? null
-  }
-}
-async function testJevConnection() {
-  if (testingJev.value) return
-  testingJev.value = true
-  jevFeedback.value = ''
-  try {
-    await modelConfigAPI.testConnection({
-      type: 'jev',
-      model_id: forms.jev.modelId.trim(),
-      base_url: forms.jev.baseUrl.trim(),
-      timeout_seconds: forms.jev.timeoutSeconds ?? null,
-      ...(forms.jev.apiKey.trim() ? { api_key: forms.jev.apiKey.trim() } : {}),
-    })
-    jevFeedbackError.value = false
-    jevFeedback.value = isZh.value ? 'Jev 连接检查通过' : 'Jev connection check passed'
-  } catch (error) {
-    jevFeedbackError.value = true
-    jevFeedback.value =
-      error instanceof Error
-        ? error.message
-        : isZh.value
-          ? 'Jev 连接检查失败'
-          : 'Jev connection check failed'
-  } finally {
-    testingJev.value = false
-  }
-}
 function confirmDelete(role: Role) {
   const dialog = DialogPlugin.confirm({
     header: ui.value.deleteTitle,
@@ -441,10 +327,6 @@ function confirmDelete(role: Role) {
       try {
         await modelConfigAPI.deleteModelConfig(forms[role].id!)
         forms[role] = { apiKey: '', baseUrl: '', modelId: '' }
-        if (role === 'jev') {
-          forms.jev = { apiKey: '', baseUrl: 'https://api.typesafe.ai', modelId: 'jev-latest' }
-          await loadJevReadiness()
-        }
         dialog.destroy()
       } catch {
         MessagePlugin.error(ui.value.saveFailed)
@@ -452,12 +334,6 @@ function confirmDelete(role: Role) {
     },
   })
 }
-watch(
-  () => [forms.jev.apiKey, forms.jev.baseUrl, forms.jev.modelId, forms.jev.timeoutSeconds],
-  () => {
-    jevFeedback.value = ''
-  },
-)
 watch(
   () => [forms.brain.apiKey, forms.brain.baseUrl, forms.brain.modelId, forms.brain.thinkingEnabled, JSON.stringify(forms.brain.generationSettings)],
   () => {
@@ -467,7 +343,7 @@ watch(
 onMounted(async () => {
   try {
     const configs = await modelConfigAPI.getAllModelConfigs()
-    configs.filter((c) => ['brain', 'code', 'writing', 'jev'].includes(c.type)).forEach(adopt)
+    configs.filter((c) => ['brain', 'code', 'writing'].includes(c.type)).forEach(adopt)
     const b = configs.find((c) => c.type === 'brain')
     applyAll.value =
       !b ||
@@ -479,7 +355,6 @@ onMounted(async () => {
             c.base_url === b.base_url &&
             !!c.thinking_enabled === !!b.thinking_enabled && JSON.stringify(c.generation_settings ?? {}) === JSON.stringify(b.generation_settings ?? {}),
         )
-    await loadJevReadiness()
   } catch {
     MessagePlugin.error(ui.value.saveFailed)
   } finally {
@@ -521,15 +396,6 @@ onMounted(async () => {
   border-color: var(--pa-line);
   border-radius: var(--pa-radius-card);
   box-shadow: none;
-}
-.jev-card {
-  margin-top: 20px;
-}
-.jev-note {
-  color: var(--pa-muted);
-  font-size: 13px;
-  line-height: 1.8;
-  margin: 0 0 22px;
 }
 .connection-card :deep(.t-card__header) {
   padding: 22px 26px;

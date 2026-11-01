@@ -67,6 +67,6 @@ async def run_code(ctx, inputs):
 
 def register(registry):
     registry.register('experiments','research.run_python','research_state',run_code,CodeInput,
-        model_callable=True,purpose='直接在研究主循环的持久Python内核计算，返回实际输出与结果文件；无需另建计划、子Agent或申请尝试次数。')
+        model_callable=True,purpose='直接在沙箱独立Python进程计算，返回实际输出与结果文件；每次执行不共享内存变量，复用code/模块和落盘结果。无需另建计划、子Agent或申请尝试次数。')
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
                       model_callable=True, purpose='用确定性代码查看当前已提供材料，返回inputs与profile；概览保留原始文件路径与结构，不代替后续计算。')

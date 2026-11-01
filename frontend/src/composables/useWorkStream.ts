@@ -1,10 +1,11 @@
 import { createWorkspaceRefresh } from '@/composables/workspaceRefresh'
-import { ref, shallowRef, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, computed, watch, onMounted, onUnmounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { workspaceAPI } from '@/api/workspace'
 import { chatAPI, WebSocketChatHandler, type ChatMessage } from '@/api/chat'
 import type { ResearchAction, ResearchSnapshot } from '@/types/research'
+import type { PaperContext } from '@/api/paper'
 import { applyReplyUpdate } from '@/utils/conversationTimeline'
 import { researchHeadline } from '@/utils/researchProgress'
 import { useStudioCopy } from '@/lang/studio'
@@ -33,6 +34,7 @@ export function useWorkStream(options: {
     | 'activateChat'
   >
   refreshFiles: () => Promise<void>
+  onMessageRejected?: (message: string, context?: PaperContext) => void
 }) {
   const {
     workId,
@@ -73,20 +75,6 @@ export function useWorkStream(options: {
   const isStreaming = ref(false)
   const runningAction = ref<ResearchAction>('auto')
   let lastResearchPush = 0
-  const questionScope = ref<string | null>(null)
-  let scopedVersion: { research_id: string; base_revision: number } | undefined
-  function askSubproblem(id: string) {
-    questionScope.value = id
-    const snapshot = researchSnapshot.value
-    scopedVersion =
-      snapshot?.research_id && snapshot.research_revision
-        ? { research_id: snapshot.research_id, base_revision: snapshot.research_revision }
-        : undefined
-    activateChat()
-    nextTick(() =>
-      document.querySelector<HTMLTextAreaElement>('.work-message-input textarea')?.focus(),
-    )
-  }
   const webSocketHandler = shallowRef<WebSocketChatHandler | null>(null)
   const pausing = ref(false)
   const connectionState = ref<'idle' | 'live' | 'reconnecting' | 'lost'>('idle')
@@ -117,7 +105,6 @@ export function useWorkStream(options: {
         : ui.value.pausedHint,
   )
   function prepareNewResearch() {
-    questionScope.value = null
     activateChat()
     if (inputValue.value.trim()) void sendMessage(inputValue.value, 'run')
     else
@@ -127,17 +114,21 @@ export function useWorkStream(options: {
           : 'Enter a new research goal, then choose Run research again.',
       )
   }
-  const stageText = computed(() =>
-    isStreaming.value && runningAction.value === 'ask'
-      ? isZh.value
-        ? '正在分析已有结果'
-        : 'Reviewing existing results'
-      : researchHeadline(
+  const stageText = computed(() => {
+    if (isStreaming.value) {
+      if (runningAction.value === 'auto')
+        return isZh.value ? '正在理解你的消息' : 'Understanding your message'
+      if (runningAction.value === 'ask')
+        return isZh.value ? '正在分析已有材料' : 'Reviewing existing materials'
+      if (runningAction.value === 'clarify')
+        return isZh.value ? '正在确认你的需求' : 'Clarifying your request'
+    }
+    return researchHeadline(
           researchSnapshot.value,
           currentWork.value?.status || 'created',
           isZh.value,
-        ),
-  )
+        )
+  })
   const elapsedText = computed(() => {
     if (!isStreaming.value || !taskStartedAt.value) return ''
     const seconds = Math.max(0, Math.floor((clockNow.value - taskStartedAt.value) / 1000))
@@ -176,7 +167,7 @@ export function useWorkStream(options: {
   // One subscription lasts for the workspace view, across all turns.
   const reconnectMessageId = ref<string | null>(null)
   let activeTaskId: string | null = null
-  let pendingCommand: { id: string; userId: string; replyId: string; sent: boolean } | null = null
+  let pendingCommand: { id: string; userId: string; replyId: string; sent: boolean; message: string; paperContext?: PaperContext } | null = null
   let socketReady: Promise<WebSocketChatHandler | null> | null = null
 
   const checkAndResumeRunningTask = async () => {
@@ -264,6 +255,16 @@ export function useWorkStream(options: {
         refresh.schedule(['history', 'research', 'files'], 0)
         return
       }
+      if (data.type === 'message_routed') {
+        if (data.task_id && activeTaskId && data.task_id !== activeTaskId) return
+        runningAction.value = data.action || 'auto'
+        applyWorkStatus(data.work_status)
+        if (data.action === 'run') {
+          invalidateSnapshot()
+          researchSnapshot.value = null
+        }
+        return
+      }
       if (data.type === 'start' || data.type === 'reconnect') {
         bindTask(data)
         if (data.type === 'start') {
@@ -276,6 +277,8 @@ export function useWorkStream(options: {
       if (data.type === 'error' && data.scope === 'command') {
         if (pendingCommand && data.request_id === pendingCommand.id) {
           const pending = pendingCommand
+          if (!inputValue.value.trim()) inputValue.value = pending.message
+          options.onMessageRejected?.(pending.message, pending.paperContext)
           chatMessages.value = chatMessages.value.filter(
             (m) => m.id !== pending.userId && m.id !== pending.replyId,
           )
@@ -312,7 +315,7 @@ export function useWorkStream(options: {
     connectionState.value = 'lost'
     if (!isStreaming.value || !authStore.token || !workId.value) return
     try {
-      const taskStatus = await chatAPI.getTaskStatus(authStore.token, workId.value)
+      const taskStatus = await chatAPI.getTaskStatus(workId.value)
       if (isDisposed()) return
       if (taskStatus.has_task && ['pending', 'running'].includes(taskStatus.status || '')) {
         MessagePlugin.warning('与服务器的连接已断开，任务仍在后台运行，刷新页面可继续查看进度')
@@ -359,7 +362,7 @@ export function useWorkStream(options: {
       activeTaskId = null
       reconnectMessageId.value = null
       for (const message of chatMessages.value) {
-        if (!message.paper_execution) message.isStreaming = false
+        message.isStreaming = false
       }
       void loadChatHistory()
       refresh.schedule(['research', 'files'], 0)
@@ -414,15 +417,6 @@ export function useWorkStream(options: {
   }
 
   let historyGeneration = 0
-  let paperHistoryTimer: ReturnType<typeof setTimeout> | undefined
-  function schedulePaperHistory() {
-    if (!chatMessages.value.some((m) => m.paper_execution && m.isStreaming) || isDisposed()) return
-    if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
-    paperHistoryTimer = setTimeout(() => {
-      if (isStreaming.value) schedulePaperHistory()
-      else void loadChatHistory()
-    }, 1500)
-  }
   // Read one display history; comment messages are projected by the server.
   async function readChatHistory(throwOnError = false) {
     if (
@@ -435,13 +429,11 @@ export function useWorkStream(options: {
 
     const generation = ++historyGeneration
     const requestedWork = workId.value
-    if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
     try {
       // 使用新的work聊天历史API
-      const historyData = await chatAPI.getWorkChatHistory(authStore.token, workId.value)
+      const historyData = await chatAPI.getWorkChatHistory(workId.value)
 
       if (isDisposed() || requestedWork !== workId.value || generation !== historyGeneration) return
-      const hadPendingPaper = chatMessages.value.some((m) => m.paper_execution && m.isStreaming)
       // 转换消息格式
       const live = new Map(
         chatMessages.value
@@ -464,24 +456,18 @@ export function useWorkStream(options: {
           paper_execution: msg.paper_execution,
           isStreaming:
             msg.role === 'assistant' &&
-            (['pending', 'running'].includes(msg.paper_execution?.state) ||
-              msg.metadata?.status === 'running'),
+            msg.metadata?.status === 'running',
         }
       })
 
       for (const message of live.values()) {
         if (!chatMessages.value.some((m) => m.id === message.id)) chatMessages.value.push(message)
       }
-      schedulePaperHistory()
-      if (hadPendingPaper && !chatMessages.value.some((m) => m.paper_execution && m.isStreaming)) {
-        await refresh.request(['files', 'research'])
-      }
       atBottom.value = panelSession.value.followChat
       await restorePanelScroll()
     } catch (error) {
       console.error('加载聊天历史失败:', error)
       if (isDisposed() || requestedWork !== workId.value || generation !== historyGeneration) return
-      schedulePaperHistory()
       if (throwOnError) throw error
     }
   }
@@ -503,9 +489,10 @@ export function useWorkStream(options: {
     messageContent?: string,
     action: ResearchAction = 'auto',
     sourceIssue?: { id: string; version: string },
+    paperContext?: PaperContext,
   ) => {
     const content = messageContent || inputValue.value.trim()
-    if (!content || isStreaming.value || isDisposed() || !authStore.token) return
+    if (!content || isStreaming.value || isDisposed() || !authStore.token) return false
 
     // 添加用户消息
     const userMessage: ChatMessageDisplay = {
@@ -514,6 +501,7 @@ export function useWorkStream(options: {
       content: content,
       datetime: new Date().toLocaleString(),
       avatar: USER_AVATAR,
+      ...(paperContext ? { metadata: { paper_context: paperContext } } : {}),
     }
 
     atBottom.value = true
@@ -521,12 +509,7 @@ export function useWorkStream(options: {
     inputValue.value = ''
 
     activateChat()
-    const resolvedAction = action
-    const scope = ['auto', 'ask', 'revise_research'].includes(resolvedAction)
-      ? questionScope.value || undefined
-      : undefined
-    questionScope.value = null
-    await sendRealMessage(content, resolvedAction, userMessage.id, scope, sourceIssue)
+    return await sendRealMessage(content, action, userMessage.id, sourceIssue, paperContext)
   }
 
   // 发送真实消息（WebSocket）
@@ -534,10 +517,10 @@ export function useWorkStream(options: {
     message: string,
     action: ResearchAction,
     userMessageId: string,
-    subproblemId?: string,
     sourceIssue?: { id: string; version: string },
+    paperContext?: PaperContext,
   ) => {
-    if (!authStore.token || isDisposed()) return
+    if (!authStore.token || isDisposed()) return false
 
     isStreaming.value = true
     runningAction.value = action
@@ -552,6 +535,8 @@ export function useWorkStream(options: {
       userId: userMessageId,
       replyId: aiMessageId,
       sent: false,
+      message,
+      paperContext,
     }
     const aiMessage: ChatMessageDisplay = {
       id: aiMessageId,
@@ -566,7 +551,8 @@ export function useWorkStream(options: {
 
     try {
       // 使用WebSocket发送消息
-      await sendMessageViaWebSocket(message, action, subproblemId, sourceIssue)
+      await sendMessageViaWebSocket(message, action, sourceIssue, paperContext)
+      return true
     } catch (error) {
       console.error('发送消息失败:', error)
       const messageIndex = chatMessages.value.findIndex((m) => m.id === aiMessageId)
@@ -580,14 +566,17 @@ export function useWorkStream(options: {
       isStreaming.value = false
       pendingCommand = null
       if (!isDisposed()) MessagePlugin.error('发送消息失败')
+      if (!inputValue.value.trim()) inputValue.value = message
+      options.onMessageRejected?.(message, paperContext)
+      return false
     }
   }
 
   const sendMessageViaWebSocket = async (
     message: string,
     action: ResearchAction,
-    subproblemId?: string,
     sourceIssue?: { id: string; version: string },
+    paperContext?: PaperContext,
   ) => {
     const handler = await connectWorkSocket()
     await handler?.connect()
@@ -599,7 +588,6 @@ export function useWorkStream(options: {
             command_id: crypto.randomUUID(),
             research_id: snapshot.research_id,
             base_revision: snapshot.research_revision,
-            scope: subproblemId ? [subproblemId] : undefined,
             ...(sourceIssue ? { source_issue: sourceIssue } : {}),
           }
         : undefined
@@ -607,13 +595,14 @@ export function useWorkStream(options: {
       message,
       undefined,
       action,
-      subproblemId,
+      undefined,
       revision,
-      subproblemId && action === 'auto' ? scopedVersion : undefined,
+      undefined,
       pendingCommand?.id,
+      sourceIssue,
+      paperContext,
     )
     if (handler && pendingCommand) pendingCommand.sent = true
-    scopedVersion = undefined
   }
 
   function scheduleResearchRefresh() {
@@ -646,7 +635,6 @@ export function useWorkStream(options: {
     }, 1000)
   })
   onUnmounted(() => {
-    if (paperHistoryTimer) clearTimeout(paperHistoryTimer)
     if (elapsedTimer) clearInterval(elapsedTimer)
     refresh.dispose()
     webSocketHandler.value?.disconnect()
@@ -673,8 +661,6 @@ export function useWorkStream(options: {
     chatMessages,
     isStreaming,
     runningAction,
-    questionScope,
-    askSubproblem,
     pausing,
     connectionState,
     needsRecovery,

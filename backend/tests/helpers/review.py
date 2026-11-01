@@ -19,8 +19,8 @@ def no_network(monkeypatch):
         raise AssertionError('Real HTTP is forbidden in offline review tests')
     async def refuse_async(*args, **kwargs):
         raise AssertionError('Real HTTP is forbidden in offline review tests')
-    monkeypatch.setattr(httpx.Client, 'send', refuse)
-    monkeypatch.setattr(httpx.AsyncClient, 'send', refuse_async)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', refuse)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', refuse_async)
 
 
 @pytest.fixture

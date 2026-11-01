@@ -49,7 +49,6 @@ async def main(owner_work=None, resume_work=None):
         writer.text('验收中已修正报告的排版、图引用和样本来源表述；现在从交付阶段恢复，保留原有计算与文件。\n')
     class Callback(SimpleStreamCallback):
         async def on_content(self, content): writer.text(content)
-        async def on_message_complete(self, role, content): writer.flush()
         async def on_json_block(self, block):
             if block['type'] in {'research_commentary','paper_stage','main_agent_error','main_agent_complete'}:
                 print(block['type'] + ': ' + str(block['content'])[:500], flush=True)
@@ -57,7 +56,7 @@ async def main(owner_work=None, resume_work=None):
                 writer.block(block)
     stream = StreamOutputManager(Callback())
     agent = PaperGraphAgent(llms['brain'], stream, str(root), work_id,
-        codeagent_llm=llms['code'], writer_llm=llms['writing'], output_mode='latex')
+        codeagent_llm=llms['code'], output_mode='latex')
     token = TIMELINE.set(writer)
     try:
         await agent.run(QUESTION, action='resume' if resume_work else 'run')

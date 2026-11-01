@@ -77,27 +77,48 @@ class ChatHistoryManager:
         with self._database(work_id, write=True) as db:
             self._write_message(db, message)
 
+    def begin_turn(self, work_id, message_id, content, paper_context=None):
+        """A request keeps its user-message identity across retries."""
+        with self._database(work_id, write=True) as db:
+            row = db.execute('SELECT payload FROM chat_messages WHERE id=?', (message_id,)).fetchone()
+            if row:
+                message = json.loads(row[0])
+                if (message['role'] != 'user' or message['content'] != content or
+                    message.get('metadata', {}).get('paper_context') != paper_context):
+                    raise ValueError('消息标识已被其他内容使用')
+                if message.get('metadata', {}).get('turn_status') == 'completed':
+                    raise ValueError('这条消息已处理，请查看聊天记录')
+                return message
+            message = {'id': message_id, 'role': 'user', 'content': content,
+                       'timestamp': datetime.now().isoformat(), 'metadata': {'turn_status': 'pending'},
+                       'json_blocks': [], 'message_type': 'text'}
+            if paper_context:
+                message['metadata']['paper_context'] = paper_context
+            self._write_message(db, message)
+            return message
+
+    def save_turn_routing(self, work_id, message_id, routing):
+        self.update_turn(work_id, message_id, routing=routing)
+
+    def update_turn(self, work_id, message_id, **metadata):
+        with self._database(work_id, write=True) as db:
+            row = db.execute('SELECT payload FROM chat_messages WHERE id=?', (message_id,)).fetchone()
+            if not row:
+                raise ValueError('消息记录不存在')
+            message = json.loads(row[0])
+            message.setdefault('metadata', {}).update(metadata)
+            self._write_message(db, message)
+
     @staticmethod
     def _write_message(db, message):
         db.execute('INSERT INTO chat_messages(id,payload) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload',
                    (str(message['id']), json.dumps(message, ensure_ascii=False)))
 
-    def update_context(self, work_id, context_updates):
-        with self._database(work_id, write=True) as db:
-            history = json.loads(db.execute('SELECT payload FROM chat_metadata WHERE id=1').fetchone()[0])
-            history.setdefault('context', {}).update(context_updates)
-            db.execute('UPDATE chat_metadata SET payload=? WHERE id=1', (json.dumps(history, ensure_ascii=False),))
 
     def get_messages(self, work_id, limit=None):
         messages = self.get_work_history(work_id)['messages']
         return messages[-limit:] if limit else messages
 
-    def clear_history(self, work_id):
-        with self._database(work_id, write=True) as db:
-            db.execute('DELETE FROM chat_messages')
-            history = default_history(work_id)
-            history.pop('messages')
-            db.execute('UPDATE chat_metadata SET payload=? WHERE id=1', (json.dumps(history, ensure_ascii=False),))
 
     def upsert_reply(self, work_id, reply):
         with self._database(work_id, write=True) as db:

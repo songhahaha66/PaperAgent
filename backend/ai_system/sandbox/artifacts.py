@@ -1,5 +1,4 @@
 """Publish captured execution files without promoting them to scientific evidence."""
-from services.file_services.file_helper import open_read
 from .file_limits import DEFAULT_MAX_FILE_BYTES, bounded_hash, bounded_copy
 from services.file_services.workspace_layout import workspace_path
 import shutil
@@ -154,25 +153,6 @@ def inherit_execution_files(source, target_fs, experiment_id, *, run_ids=None):
     return selected
 
 
-def publish_reference(source_fs, target_fs, item):
-    """Resolve a figure to its immutable run file; no experiment-specific renaming."""
-    if not item.get('path'):
-        return
-    run_id = item['run_id']
-    info = source_fs.get_run_info(run_id) or {}
-    import hashlib
-    source = source_fs.abs(item['path'])
-    if not source.is_file():
-        raise FileNotFoundError('引用文件不存在：' + item['path'])
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    for rel in info.get('artifacts', []):
-        original = source_fs.abs(rel)
-        if original.is_file() and hashlib.sha256(original.read_bytes()).hexdigest() == digest:
-            item['path'] = 'outputs/research/' + run_id + '/' + rel.split('/artifacts/', 1)[1]
-            return
-    raise ValueError('引用缺少已归档运行产物，不能登记')
-
-
 def output_hashes(fs, *, max_file_bytes=DEFAULT_MAX_FILE_BYTES):
     import os
     from .transfer import output_path
@@ -217,4 +197,3 @@ def capture_local_outputs(fs, run_id, before, *, expected=None, max_file_bytes=D
         fs.register_file(path, source_run=run_id, kind='code' if path.endswith('.py') else 'data')
         saved.append(path)
     return saved
-

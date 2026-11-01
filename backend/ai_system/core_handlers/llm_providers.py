@@ -6,7 +6,7 @@ AI提供商抽象层
 import logging
 import httpx
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List, Mapping, cast
+from typing import Dict, Any, List, Mapping
 from urllib.parse import urlparse
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.messages import AIMessageChunk

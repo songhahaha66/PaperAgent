@@ -21,10 +21,6 @@ class Inputs(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-class BranchInputs(Inputs):
-    branch: dict = Field(min_length=1)
-
-
 class LiteratureInputs(Inputs):
     question: str = Field(min_length=1)
     title: str = ''
@@ -80,14 +76,6 @@ class ModuleRegistry:
     def model_capabilities(self):
         return [c for c in self._capabilities.values() if c.model_callable]
 
-    def research_tools(self):
-        return [{'name':c.name,'purpose':c.purpose,'inputs':c.inputs.model_json_schema(),'product':c.product}
-                for c in self._capabilities.values() if c.model_callable]
-
-    def validate_research_tool(self,name,inputs):
-        capability=self._capabilities.get(name)
-        if not capability or not capability.model_callable:raise ValueError('该能力未显式开放给研究控制器')
-        return capability.inputs.model_validate(inputs)
 
     def describe(self):
         return [{"name": c.name, "module": c.module, "product": c.product, "inputs": c.inputs.model_json_schema()}

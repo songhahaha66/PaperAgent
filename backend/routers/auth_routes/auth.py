@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from models import models
 from schemas import schemas
 from services import crud
 from auth import auth
@@ -23,7 +22,7 @@ async def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User registration is currently disabled"
         )
-    
+
     return crud.create_user(db=db, user=user)
 
 @router.post("/login", response_model=schemas.Token)
@@ -37,7 +36,7 @@ async def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_d
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     access_token = auth.create_access_token(data={"user_id": user.id})
     return {"access_token": access_token, "token_type": "bearer"}
 

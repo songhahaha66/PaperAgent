@@ -63,14 +63,6 @@ const labels: Record<string, string> = {
   superseded: '被新版本替代',
   not_required: '当前无需执行',
 }
-const stageLabels: Record<string, string> = {
-  reconcile: '结论口径',
-  sections: '章节一致性',
-  citations: '文献支持',
-  fragment: '局部等义',
-  section_blocks: '正文分块',
-  section_global: '跨节结论',
-}
 let version = 0,
   operation = 0,
   timer: ReturnType<typeof setInterval> | undefined

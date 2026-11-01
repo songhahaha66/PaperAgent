@@ -138,20 +138,6 @@ def skill_detail(key):
     return {**item, 'instructions': (Path(__file__).with_name('skills') / (item['key'] + '.md')).read_text(encoding='utf-8')}
 
 
-def methods_catalog(policy=None) -> str:
-    allowed = allowed_method_keys(policy)
-    return "\n".join(f"- {m.key}: {m.name}（{m.category}）适用：{m.use_when}" for m in METHODS if m.key in allowed)
-
-
-def skill_policy_prompt(policy=None):
-    policy = policy or DEFAULT_SKILL_POLICY
-    if policy == DEFAULT_SKILL_POLICY:
-        return ''
-    return ('用户技能约束：' + ('仅允许选用 ' + ', '.join(policy['selected']) if policy['mode'] == 'selected' else '按适用条件自动检索')
-            + '；禁用：' + (', '.join(policy['disabled']) or '无')
-            + '。禁用技能不得在候选或求解中使用；若所选方法不适用，应说明数据或适用条件缺口，不可悄悄更换方法。')
-
-
 def describe(keys: List[str], policy=None) -> str:
     allowed = allowed_method_keys(policy)
     texts = []

@@ -5,7 +5,6 @@ whole research commit and active source, including changes made outside this UI.
 """
 from services.file_services.workspace_layout import workspace_path, safe_join
 from services.file_services.workspace_lock import edit_lock
-import asyncio
 import json
 import re
 import shutil
